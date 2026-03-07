@@ -1,0 +1,1117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Natvis visualizers for:
+    · TagPtr<T, Alignment>
+    · pP::StableVector<T, TAllocator>
+    · pP::StableVectorIterator<T, TAllocator>
+    · mem::Arena<TAllocator>
+
+  Placement options (pick one):
+    Per-project  : add this file to your .vcxproj — it is picked up automatically.
+    User-wide    : copy to %USERPROFILE%\Documents\Visual Studio <ver>\Visualizers\
+    VS-wide      : copy to <VS install>\Common7\Packages\Debugger\Visualizers\
+
+  Tested with MSVC / Visual Studio 2022 v17.x.
+  Enable "Tools → Options → Debugging → Load natvis files from project" if the
+  per-project placement is not loading automatically.
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  StableVector slice layout (for reference)                      │
+  │                                                                 │
+  │  sliceIndex_(i)    = max(3, bit_width(i)) - 3                  │
+  │  sliceOffset_(s)   = s ? (1 << (2+s)) : 0                      │
+  │  sliceCapacity_(s) = 1 << (3+s)          [allocation size]     │
+  │                                                                 │
+  │  Slice  │ Global offset │ Items stored   │ Alloc size           │
+  │  ───────┼───────────────┼────────────────┼──────────            │
+  │    0    │     0         │   [0  … 7]     │    8                 │
+  │    1    │     8         │   [8  … 15]    │   16                 │
+  │    2    │    16         │   [16 … 31]    │   32                 │
+  │    3    │    32         │   [32 … 63]    │   64                 │
+  │    s    │  1<<(2+s)     │  8·2^(s-1) el. │  1<<(3+s)           │
+  │                                                                 │
+  │  num_slices = bit_width(m_capacity) - 3  (m_capacity ≥ 8 always│
+  │  is a power of two, so bit_width = log2+1).                    │
+  │                                                                 │
+  │  Consecutive slices allocated in one composite block are tagged:│
+  │    TAG_composite_slice_start_    = 1   (first slice of block)   │
+  │    TAG_composite_slice_continue_ = 2   (subsequent slices)      │
+  │    (no tag)                      = 0   (standalone allocation)  │
+  └─────────────────────────────────────────────────────────────────┘
+-->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+    <!-- ================================================================
+         TagPtr<T, TTag, Alignment>
+
+         $T1 = T           (pointee type)
+         $T2 = TTag        (often an enum type)
+         $T3 = Alignment   (std::align_val_t NTTP)
+
+         m_packed layout:
+           bits [extra_bits-1 : 0] = tag  (FLAG_MASK = Alignment-1)
+           bits [63 : extra_bits]  = addr (PTR_MASK  = ~FLAG_MASK)
+         ================================================================ -->
+    <Type Name="pP::TagPtr&lt;*,*,*&gt;">
+
+        <!-- ── Summary ─────────────────────────────────────────────────── -->
+        <DisplayString Condition="m_packed == 0">nullptr</DisplayString>
+
+        <DisplayString Condition="(m_packed &amp; ~FLAG_MASK) == 0">
+            nullptr [tag={($T2)(m_packed &amp;amp; FLAG_MASK)}]
+        </DisplayString>
+
+        <DisplayString>
+            {($T1*)(m_packed &amp;amp; ~FLAG_MASK)} [tag={($T2)(m_packed &amp;amp; FLAG_MASK)}]
+        </DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+            <Item Name="[pointer]" Condition="(m_packed &amp; ~FLAG_MASK) != 0">
+                ($T1*)(m_packed &amp;amp; ~FLAG_MASK)
+            </Item>
+            <Item Name="[pointer]" Condition="(m_packed &amp; ~FLAG_MASK) == 0">
+                ($T1*)0
+            </Item>
+
+            <Item Name="[tag]">($T2)(m_packed &amp;amp; FLAG_MASK)</Item>
+            <Item Name="[packed]">m_packed,x</Item>
+            <Item Name="[extra_bits]">extra_bits</Item>
+
+            <!-- Individual tag bits — one row per available bit -->
+            <CustomListItems MaxItemsPerView="64">
+                <Variable Name="i" InitialValue="(std::uint64_t)0"/>
+                <Variable Name="bits" InitialValue="(std::uint64_t)extra_bits"/>
+                <Loop Condition="i &lt; bits">
+                    <Item Name="[flag bit {i}]">(m_packed &gt;&gt; i) &amp;amp; (std::uint64_t)1</Item>
+                    <Exec>++i</Exec>
+                </Loop>
+            </CustomListItems>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================
+         pP::StableVectorIterator<T, TAllocator>
+
+         $T1 = T            (value_type; const T for const_iterator)
+         $T2 = TAllocator
+
+         Key fields:
+           m_index          — current global index; 0xFFFFFFFF = end
+           m_slice_ptr      — base pointer for the current slice (cached)
+           m_slice_offset   — global index of the first element in that slice
+           m_slice_capacity — allocated size of the current slice
+           m_vector         — owning StableVector*
+
+         The iterator caches slice info so dereference is branch-free for
+         sequential accesses within a slice.  The natvis DisplayString uses
+         the same cached state rather than re-computing from scratch.
+         ================================================================ -->
+    <Type Name="pP::StableVectorIterator&lt;*,*&gt;">
+
+        <!-- ── Summary ─────────────────────────────────────────────────── -->
+        <!-- Uninitialised (default-constructed) -->
+        <DisplayString Condition="m_vector == 0">
+            {uninitialized iterator}
+        </DisplayString>
+
+        <!-- End sentinel: m_index == umax_v == 0xFFFFFFFF (u32 max) -->
+        <DisplayString Condition="m_index == 0xFFFFFFFFu">
+            end (size={m_vector->m_size})
+        </DisplayString>
+
+        <!-- Normal iterator with cached slice pointer -->
+        <DisplayString Condition="m_slice_ptr != 0">
+            [{m_index}] = {m_slice_ptr[m_index - m_slice_offset]}
+        </DisplayString>
+
+        <!-- Fallback: index only (slice cache not yet populated) -->
+        <DisplayString>[{m_index}]</DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+            <!-- Current element — the primary thing you want to see -->
+            <Item Name="[value]"
+                  Condition="m_index != 0xFFFFFFFFu &amp;&amp; m_slice_ptr != 0">
+                m_slice_ptr[m_index - m_slice_offset]
+            </Item>
+
+            <Item Name="[index]">
+                m_index == 0xFFFFFFFFu
+                ? (m_vector ? m_vector->m_size : 0u)
+                : m_index
+            </Item>
+
+            <!-- Cached slice state — useful when debugging iterator bugs -->
+            <Synthetic Name="[slice cache]">
+                <DisplayString>
+                    slice base={m_slice_ptr}, offset={m_slice_offset}, cap={m_slice_capacity}
+                </DisplayString>
+                <Expand>
+                    <Item Name="base">m_slice_ptr</Item>
+                    <Item Name="offset">m_slice_offset</Item>
+                    <Item Name="capacity">m_slice_capacity</Item>
+                </Expand>
+            </Synthetic>
+
+            <Item Name="[vector]">m_vector</Item>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================
+         pP::StableVector<T, TAllocator>
+
+         $T1 = T
+         $T2 = TAllocator
+
+         Internal layout:
+           m_slices   — heap array of TagPtr<T>, one entry per slice
+           m_capacity — total element capacity (always a power of 2 ≥ 8,
+                        or 0 for a default-constructed empty vector)
+           m_size     — number of live elements
+
+         Slices are accessed by index using the formulas above.
+         Slices in the same composite allocation share a contiguous block;
+         TagPtr tag bits encode whether a slice is standalone (0),
+         the first slice of a composite (1), or a continuation (2).
+
+         The flat element view (the default "watch" expansion) iterates
+         i from 0 to m_size-1, crossing slice boundaries by tracking the
+         global offset at which the next slice begins:
+           · Slice 0→1 boundary: global index 8
+           · Slice s→s+1 boundary: 1 << (3 + s)   for s ≥ 1
+         ================================================================ -->
+    <Type Name="pP::StableVector&lt;*,*&gt;">
+
+        <!-- ── Summary ─────────────────────────────────────────────────── -->
+        <DisplayString Condition="m_size == 0">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_size}, capacity={m_capacity} }}</DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+            <!-- Scalar metadata -->
+            <Item Name="[size]">m_size</Item>
+            <Item Name="[capacity]">m_capacity</Item>
+
+            <!-- ── Flat element list ──────────────────────────────────────
+                 Iterates all live elements as [0] … [m_size-1] regardless
+                 of which physical slice they live in.
+
+                 Variables:
+                   i        — current global element index
+                   si       — current slice index
+                   next_at  — first global index belonging to the NEXT slice
+                   ptr      — current element address as uintptr_t
+                   mask     — cached PTR_MASK (= ~FLAG_MASK, strips tag bits)
+
+                 LLDB / Jetvis compatibility notes:
+                   · $T1 substitution is NOT supported inside <Variable
+                     InitialValue>. The workaround is to carry the raw
+                     address as uintptr_t and cast to ($T1*) only inside
+                     <Item> expressions, where template-param substitution
+                     IS performed by Jetvis.
+                   · Variable names declared inside <CustomListItems> are NOT
+                     visible in a top-level <Loop Condition="..."> under
+                     Jetvis. The workaround is an unconditional <Loop> with a
+                     <Break> guard at the very top of the body.
+
+                 Boundary transition:
+                   Slice 0 ends at index 8  → next_at(1) = 8
+                   Slice s ends at 1<<(3+s) → next_at(s+1) = 1 << (3 + s)
+                 ─────────────────────────────────────────────────────────── -->
+            <CustomListItems MaxItemsPerView="512" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) == 0">
+                <Variable Name="i"
+                          InitialValue="(unsigned int)0"/>
+                <Variable Name="si"
+                          InitialValue="(unsigned int)0"/>
+                <Variable Name="sl_off"
+                          InitialValue="(unsigned int)0"/>
+                <Variable Name="next_at"
+                          InitialValue="(unsigned int)8"/>
+                <Variable Name="slices_arr"
+                          InitialValue="(slice_t*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                <!--
+                  Use an unconditional <Loop> + top-of-body <Break> instead of
+                  <Loop Condition="i < m_size"> because Jetvis cannot resolve
+                  the variable 'i' in the Condition attribute.
+                -->
+                <Loop>
+                    <Break Condition="i &gt;= m_size"/>
+
+                    <!-- Dereference ptr as $T1*: $T1 substitution works in <Item>. -->
+                    <Item Name="[{i}]">((value_type*)(slices_arr[si].m_packed &amp; ~slices_arr[si].FLAG_MASK))[i -
+                        sl_off]
+                    </Item>
+
+                    <Exec>++i</Exec>
+
+                    <!--
+                      Cross the slice boundary when i reaches the first index of
+                      the next slice AND there are still elements to show.
+                    -->
+                    <If Condition="i == next_at &amp;&amp; i &lt; m_size">
+                        <Exec>++si</Exec>
+                        <Exec>sl_off = next_at</Exec>
+                        <!--
+                          Next boundary: 1 << (3 + si).
+                          si=1 → next_at = 16; si=2 → 32; si=3 → 64; etc.
+                        -->
+                        <Exec>next_at = (unsigned int)((uintptr_t)1u &lt;&lt; (3u + si))</Exec>
+                    </If>
+                </Loop>
+            </CustomListItems>
+
+            <ArrayItems Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) != 0">
+                <Size>m_size</Size>
+                <ValuePointer>(value_type*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)</ValuePointer>
+            </ArrayItems>
+
+            <!-- ── Slice-structure view ────────────────────────────────────
+                 Shows one row per physical slice so you can inspect the
+                 internal segmented layout, tag bits, and allocation boundaries.
+                 The loop terminates when the slice's starting global offset
+                 reaches m_capacity (no more slices exist beyond that point).
+
+                 Variables:
+                   si          — current slice index
+                   sl_off      — global offset of the current slice
+                   sl_next_off — global offset of the NEXT slice (used to
+                                 advance sl_off after emitting the current row)
+
+                 Slice offsets:
+                   slice 0:  0
+                   slice 1:  8   = 1 << 3
+                   slice 2:  16  = 1 << 4
+                   slice s:  1 << (2 + s)   for s >= 1
+                 ─────────────────────────────────────────────────────────── -->
+            <Synthetic Name="[slice structure]" Condition="m_size &gt; 0">
+                <DisplayString>
+                    {m_capacity} cap, {__log2(m_capacity)-2} slice(s), {(ESliceArrayTag_)(m_slices.m_packed &amp;
+                    m_slices.FLAG_MASK)}
+                </DisplayString>
+                <Expand>
+                    <CustomListItems Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) != 0">
+                        <Variable Name="slice_ptr"
+                                  InitialValue="(value_type*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+                        <Item Name="[uniq slice]  range=0...{m_capacity} standalone={(void*)slice_ptr} : {m_capacity * sizeof($T1)} bytes">
+                            slice_ptr,[m_capacity]
+                        </Item>
+                    </CustomListItems>
+                    <CustomListItems MaxItemsPerView="64" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) == 0">
+                        <Variable Name="si" InitialValue="(unsigned int)0"/>
+                        <Variable Name="sl_off" InitialValue="(unsigned int)0"/>
+                        <!-- next slice starts at offset 8 (sliceOffset_(1)) -->
+                        <Variable Name="sl_next_off" InitialValue="(unsigned int)8"/>
+                        <Variable Name="sl_composite_si" InitialValue="(unsigned int)0"/>
+                        <Variable Name="sl_composite_off" InitialValue="(unsigned int)0"/>
+                        <Variable Name="slices_arr"
+                                  InitialValue="(slice_t*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                        <!--
+                          Unconditional <Loop> + top-of-body <Break> — same workaround
+                          as the flat element list above: Jetvis cannot resolve
+                          <Variable> names in a top-level <Loop Condition>.
+                        -->
+                        <Loop>
+                            <Break Condition="sl_off &gt;= m_capacity || slices_arr == 0"/>
+
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 0">
+                                <Item Name="[slice {si}]  range={sl_off}...{sl_next_off} standalone={(void*)(slices_arr[si].m_packed &amp; ~slices_arr[si].FLAG_MASK)} : {(sl_next_off - sl_off) * sizeof($T1)} bytes">
+                                    (value_type*)(slices_arr[si].m_packed &amp; ~slices_arr[si].FLAG_MASK),[sl_next_off
+                                    -
+                                    sl_off]
+                                </Item>
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 1">
+                                <Exec>sl_composite_si = si</Exec>
+                                <Exec>sl_composite_off = sl_off</Exec>
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 2">
+                                <!-- middle block -->
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 3">
+                                <Item Name="[slice {sl_composite_si}:{si}]  range={sl_composite_off}...{sl_next_off} composite={(void*)(slices_arr[sl_composite_si].m_packed &amp; ~slices_arr[sl_composite_si].FLAG_MASK)} : {(sl_next_off - sl_composite_off) * sizeof($T1)} bytes">
+                                    (value_type*)(slices_arr[sl_composite_si].m_packed &amp;
+                                    ~slices_arr[sl_composite_si].FLAG_MASK),[sl_next_off - sl_composite_off]
+                                </Item>
+                            </If>
+
+                            <!-- Advance to next slice. -->
+                            <Exec>++si</Exec>
+                            <Exec>sl_off = sl_next_off</Exec>
+                            <!--
+                              Next slice offset = 1 << (2 + si) for si >= 1.
+                              After incrementing si, the next next offset = 1 << (3 + si).
+                              For the transition 1→2: sl_next_off = 1<<(3+1) = 16.
+                              For the transition 2→3: sl_next_off = 1<<(3+2) = 32.
+                            -->
+                            <Exec>sl_next_off = (unsigned int)((uintptr_t)1u &lt;&lt; (3u + si))</Exec>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+       pP::SparseVector<T, TAllocator>
+
+       $T1 = T
+       $T2 = TAllocator
+
+       SparseVector inherits the segmented-slice storage of StableVector
+       but wraps every element in SparseVectorItem<T>, which overlays a
+       free-list link and a live-element value in a union, and carries a
+       payload word with two sub-fields:
+
+         m_payload.m_seed  (8 bits)  — generation counter written on alloc,
+                                       zeroed on free; 0 means "never used
+                                       or currently free".
+         m_payload.m_skip  (24 bits) — PLF jump-counting distance: 0 on a
+                                       live slot; on a free slot, the number
+                                       of contiguous free slots in the run
+                                       that this slot is an endpoint of
+                                       (see plflib.org/matt_bentley_-_the_
+                                       low_complexity_jump-counting_pattern).
+
+       Slot liveness:   m_skip == 0  &&  m_seed != 0
+       Slot free:       m_skip != 0  (m_seed is 0 when truly free)
+
+       Free list (singly-linked, O(1) push-head and push-tail):
+         m_free_head            — index of the first free slot,
+                                  or 0xFFFFFFFF when empty
+         m_free_tail            — index of the last  free slot,
+                                  or 0xFFFFFFFF when empty
+         item.m_free_list
+              .m_next_free      — index of the next free slot in the chain,
+                                  or 0xFFFFFFFF at the tail
+
+       Middle-block free slots (both neighbours also free) are pushed to
+       the tail of the free list and skipped during allocation because
+       their skip distances cannot be updated in O(1).
+
+       m_size_alive  — live (non-freed) element count
+       m_seed_alloc  — monotonic 8-bit counter; each alloc stamps the
+                       new slot with the current value then increments it,
+                       so stale SparseKeyId handles can be detected.
+
+       Slice layout (identical to StableVector):
+         Slice 0:  indices [0,   8)   — 8  slots
+         Slice 1:  indices [8,  16)   — 8  slots
+         Slice s:  indices [1<<(2+s), 1<<(3+s))   for s ≥ 1
+       ================================================================ -->
+    <Type Name="pP::SparseVector&lt;*,*&gt;">
+
+        <!-- ── Summary ──────────────────────────────────────────────────── -->
+        <!-- "empty" when no live elements exist; otherwise live count and
+             total slot capacity (not m_size, which counts allocated slots). -->
+        <DisplayString Condition="m_size_alive == 0">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_size_alive}, capacity={m_capacity} }}</DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+            <!-- Scalar metadata -->
+            <Item Name="[size]">m_size_alive</Item>
+            <!-- live elements only          -->
+            <Item Name="[capacity]">m_capacity</Item>
+            <!-- total slot capacity         -->
+            <Item Name="[slots allocated]">m_size</Item>
+            <!-- live + free-listed slots    -->
+
+            <!-- ── Flat live-element list ──────────────────────────────────── -->
+            <CustomListItems MaxItemsPerView="512" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) == 0">
+                <Variable Name="i" InitialValue="(unsigned int)0"/>
+                <Variable Name="si" InitialValue="(unsigned int)0"/>
+                <Variable Name="sl_off" InitialValue="(unsigned int)0"/>
+                <Variable Name="next_at" InitialValue="(unsigned int)8"/>
+                <Variable Name="slices_arr" InitialValue="(slice_t*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+                <Variable Name="p_item" InitialValue="(sparse_vector_item*)0"/>
+
+                <Loop>
+                    <Break Condition="i &gt;= m_size"/>
+
+                    <Exec>
+                        p_item = &amp;((sparse_vector_item*)(slices_arr[si].m_packed &amp; ~slices_arr[si].FLAG_MASK))[i
+                        - sl_off]
+                    </Exec>
+
+                    <If Condition="p_item-&gt;m_payload.m_skip == 0 &amp;&amp; p_item-&gt;m_payload.m_seed != 0">
+                        <Item Name="[{i}]">*(value_type*)&amp;p_item->m_storage</Item>
+                    </If>
+
+                    <Exec>++i</Exec>
+
+                    <If Condition="i == next_at &amp;&amp; i &lt; m_size">
+                        <Exec>++si</Exec>
+                        <Exec>sl_off = next_at</Exec>
+                        <Exec>next_at = (unsigned int)((uintptr_t)1u &lt;&lt; (3u + si))</Exec>
+                    </If>
+                </Loop>
+            </CustomListItems>
+
+            <CustomListItems MaxItemsPerView="512" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) != 0">
+                <Variable Name="i" InitialValue="(unsigned int)0"/>
+                <Variable Name="slice_ptr"
+                          InitialValue="(sparse_vector_item*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                <Loop>
+                    <Break Condition="i &gt;= m_size"/>
+
+                    <If Condition="slice_ptr[i].m_payload.m_skip == 0 &amp;&amp; slice_ptr[i].m_payload.m_seed != 0">
+                        <Item Name="[{i}]">*(value_type*)&amp;slice_ptr[i].m_storage</Item>
+                    </If>
+
+                    <Exec>++i</Exec>
+                </Loop>
+            </CustomListItems>
+
+            <!-- ── Free-list chain ──────────────────────────────────────────── -->
+            <!--
+              Free list: singly-linked via item.m_free_list.m_next_free (u32).
+              Sentinel for "no next" / "list empty" is 0xFFFFFFFF (none_v).
+              Head = m_free_head, tail = m_free_tail.
+
+              The slice cursor (fl_si / fl_sl_off / fl_next) must be walked forward
+              each iteration because free-list links jump to arbitrary slot indices,
+              unlike the sequential flat-element walk.
+
+              All pointer work is done as uintptr_t (fl_raw) and cast to the
+              concrete SparseVectorItem<$T1>* type only inside <Item>/<If>/<Exec>
+              expressions, where $T1 substitution is supported by Jetvis.
+            -->
+
+            <Synthetic Name="[free list]" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) == 0">
+                <DisplayString>
+                    free slots: {m_size - m_size_alive}, tail={m_free_tail}
+                </DisplayString>
+                <Expand>
+                    <CustomListItems MaxItemsPerView="512">
+                        <Variable Name="head" InitialValue="m_free_tail"/>
+                        <Variable Name="index" InitialValue="0"/>
+                        <Variable Name="si" InitialValue="0"/>
+                        <Variable Name="off" InitialValue="0"/>
+                        <Variable Name="node" InitialValue="(const sparse_vector_item*)0"/>
+                        <Variable Name="slices_arr"
+                                  InitialValue="(slice_t*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                        <Loop Condition="head != 0xFFFFFFFFu">
+                            <Exec>si = __log2(head) + 1</Exec>
+                            <Exec>si = (si &lt; 3 ? 3 : si) - 3</Exec>
+                            <Exec>off = si &gt; 0 ? 1u &lt;&lt; (2 + si) : 0</Exec>
+                            <Exec>
+                                node = &amp;((sparse_vector_item*)(slices_arr[si].m_packed &amp;
+                                ~slices_arr[si].FLAG_MASK))[head - off]
+                            </Exec>
+                            <Item Name="[{index}] head={head} slice={si} next={node->m_free_list.m_next_free}">
+                                node->m_payload
+                            </Item>
+                            <Exec>++index</Exec>
+                            <Exec>head = node->m_free_list.m_next_free</Exec>
+                            <If Condition="head == m_free_tail">
+                                <Break/>
+                            </If>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+            <Synthetic Name="[free list]" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) != 0">
+                <DisplayString>
+                    free slots: {m_size - m_size_alive}, tail={m_free_tail}
+                </DisplayString>
+                <Expand>
+                    <CustomListItems MaxItemsPerView="512">
+                        <Variable Name="head" InitialValue="m_free_tail"/>
+                        <Variable Name="index" InitialValue="0"/>
+                        <Variable Name="node" InitialValue="(const sparse_vector_item*)0"/>
+                        <Variable Name="slice_ptr"
+                                  InitialValue="(sparse_vector_item*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                        <Loop Condition="head != 0xFFFFFFFFu">
+                            <Exec>node = &amp;slice_ptr[head]</Exec>
+                            <Item Name="[{index}] next={node->m_free_list.m_next_free}">
+                                node->m_payload
+                            </Item>
+                            <Exec>head = node->m_free_list.m_next_free</Exec>
+                            <Exec>++index</Exec>
+                            <If Condition="head == m_free_tail">
+                                <Break/>
+                            </If>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+            <!-- ── Slice-structure view ───────────────────────────────────
+                   Ported verbatim from StableVector<>, re-typed to
+                   SparseVectorItem<T> so that pointer casts and sizeof
+                   expressions reflect the actual stored element type.
+
+                   Shows one row per physical allocation (standalone slice or
+                   composite block) with its global slot range, raw pointer,
+                   allocation tag, and byte footprint.
+
+                   Tag bits in m_packed (low 2 bits of the stored pointer):
+                     0 → standalone slice  — independent allocation
+                     1 → first slice of a composite block
+                     2 → continuation slice inside a composite block
+
+                   Composite slices 1..N share a single heap allocation whose
+                   base pointer is stored in the first (tag=1) slice; only when
+                   the last continuation slice (tag=2) is reached is the full
+                   composite range emitted as a single row.
+
+                   Variables:
+                     si              — current slice index
+                     sl_off          — global offset of the current slice
+                     sl_next_off     — global offset of the next slice
+                     sl_count        — row counter for the displayed label
+                     sl_composite_si — slice index of the most recent tag=1 slice
+                     sl_composite_off— global offset of that composite's first slot
+              ─────────────────────────────────────────────────────────────── -->
+            <Synthetic Name="[slice structure]" Condition="m_size &gt; 0">
+                <DisplayString>
+                    {m_capacity} cap, {__log2(m_capacity)-2} slice(s), {(ESliceArrayTag_)(m_slices.m_packed &amp;
+                    m_slices.FLAG_MASK)}
+                </DisplayString>
+                <Expand>
+                    <CustomListItems Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) != 0">
+                        <Variable Name="slice_ptr"
+                                  InitialValue="(sparse_vector_item*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+                        <Item Name="[uniq slice]  range=0...{m_capacity} standalone={(void*)slice_ptr} : {m_capacity * sizeof(sparse_vector_item)} bytes">
+                            slice_ptr,[m_capacity]
+                        </Item>
+                    </CustomListItems>
+                    <CustomListItems MaxItemsPerView="64" Condition="(m_slices.m_packed &amp; m_slices.FLAG_MASK) == 0">
+                        <Variable Name="si" InitialValue="(unsigned int)0"/>
+                        <Variable Name="sl_off" InitialValue="(unsigned int)0"/>
+                        <!-- next slice starts at offset 8 (sliceOffset_(1)) -->
+                        <Variable Name="sl_next_off" InitialValue="(unsigned int)8"/>
+                        <Variable Name="sl_composite_si" InitialValue="(unsigned int)0"/>
+                        <Variable Name="sl_composite_off" InitialValue="(unsigned int)0"/>
+                        <Variable Name="slices_arr"
+                                  InitialValue="(slice_t*)(m_slices.m_packed &amp; ~m_slices.FLAG_MASK)"/>
+
+                        <!--
+                                  Unconditional <Loop> + top-of-body <Break> — same workaround
+                                  as the flat element list above: Jetvis cannot resolve
+                                  <Variable> names in a top-level <Loop Condition>.
+                                -->
+                        <Loop>
+                            <Break Condition="sl_off &gt;= m_capacity || slices_arr == 0"/>
+
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 0">
+                                <Item Name="[slice {si}]  range={sl_off}...{sl_next_off} standalone={(void*)(slices_arr[si].m_packed &amp; ~slices_arr[si].FLAG_MASK)} : {(sl_next_off - sl_off) * sizeof($T1)} bytes">
+                                    (sparse_vector_item*)(slices_arr[si].m_packed &amp;
+                                    ~slices_arr[si].FLAG_MASK),[sl_next_off -
+                                    sl_off]
+                                </Item>
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 1">
+                                <Exec>sl_composite_si = si</Exec>
+                                <Exec>sl_composite_off = sl_off</Exec>
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 2">
+                                <!-- middle block -->
+                            </If>
+                            <If Condition="(slices_arr[si].m_packed &amp; 3) == 3">
+                                <Item Name="[slice {sl_composite_si}:{si}]  range={sl_composite_off}...{sl_next_off} composite={(void*)(slices_arr[sl_composite_si].m_packed &amp; ~slices_arr[sl_composite_si].FLAG_MASK)} : {(sl_next_off - sl_composite_off) * sizeof($T1)} bytes">
+                                    (sparse_vector_item*)(slices_arr[sl_composite_si].m_packed &amp;
+                                    ~slices_arr[sl_composite_si].FLAG_MASK),[sl_next_off - sl_composite_off]
+                                </Item>
+                            </If>
+
+                            <!-- Advance to next slice. -->
+                            <Exec>++si</Exec>
+                            <Exec>sl_off = sl_next_off</Exec>
+                            <!--
+                                        Next slice offset = 1 << (2 + si) for si >= 1.
+                                        After incrementing si, the next next offset = 1 << (3 + si).
+                                        For the transition 1→2: sl_next_off = 1<<(3+1) = 16.
+                                        For the transition 2→3: sl_next_off = 1<<(3+2) = 32.
+                                      -->
+                            <Exec>sl_next_off = (unsigned int)((uintptr_t)1u &lt;&lt; (3u + si))</Exec>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+            <!-- ── Sparse internals ───────────────────────────────────────
+                   Exposes the three scalar fields that govern slot recycling
+                   and handle validation, plus the full inherited StableVector
+                   state via an ExpandedItem reinterpret-cast (slices, raw
+                   slot array, StableVector's own slice-structure view).
+                   'nd' suppresses the StableVector DisplayString so the node
+                   expands inline without a redundant summary string.
+              ─────────────────────────────────────────────────────────────── -->
+            <Synthetic Name="[sparse internals]" Condition="m_size &gt; 0">
+                <DisplayString>free_tail={m_free_tail}, alloc_seed={m_seed_alloc}
+                </DisplayString>
+                <Expand>
+                    <!-- Last free slot index; appending new free slots here is O(1). -->
+                    <Item Name="m_free_tail">m_free_tail</Item>
+                    <!-- 8-bit monotonic counter; wraps at 255, never re-uses 0
+                               so that zero always means "unallocated". -->
+                    <Item Name="m_seed_alloc">m_seed_alloc</Item>
+                </Expand>
+            </Synthetic>
+
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+     pP::details::SparseVectorItem<T>
+
+     $T1 = T
+
+     Each slot in a SparseVector is stored as a SparseVectorItem<T>.
+     The struct is a union of a live value and a free-list link, plus
+     a payload word that encodes the slot's state:
+
+       m_payload.m_seed  (8 bits)  — generation fingerprint; non-zero
+                                     on a live slot, zero on a free slot.
+       m_payload.m_skip  (24 bits) — PLF jump-counting run length:
+                                     0  → slot is live (m_storage is valid)
+                                     >0 → slot is free; value is the
+                                          length of the contiguous free
+                                          run this slot is an endpoint of.
+
+     Union members (mutually exclusive, gated by m_skip):
+       m_storage                   — live T value   (when m_skip == 0)
+       m_free_list.m_next_free     — index of the next free slot in the
+                                     intrusive singly-linked free chain,
+                                     or 0xFFFFFFFF (none_v) at the tail
+                                     (when m_skip != 0)
+     ================================================================ -->
+    <Type Name="pP::details::SparseVectorItem&lt;*&gt;">
+
+        <!-- ── Summary ──────────────────────────────────────────────────── -->
+
+        <!-- Live slot: show the contained value directly. -->
+        <DisplayString Condition="m_payload.m_skip == 0 &amp;&amp; m_payload.m_seed != 0">
+            {*($T1*)&amp;m_storage} [seed:{(char)m_payload.m_seed}]
+        </DisplayString>
+
+        <!-- Free slot, tail of the free chain (no successor). -->
+        <DisplayString Condition="m_payload.m_skip != 0 &amp;&amp; m_free_list.m_next_free == 0xFFFFFFFFu">
+            {{ free: skip={m_payload.m_skip}, next=[tail] }}
+        </DisplayString>
+
+        <!-- Free slot with a successor in the free chain. -->
+        <DisplayString Condition="m_payload.m_skip != 0">
+            {{ free: skip={m_payload.m_skip}, next={m_free_list.m_next_free} }}
+        </DisplayString>
+
+        <!-- Uninitialised slot (seed == 0, skip == 0): has never been
+             allocated; sits beyond m_size but within m_capacity. -->
+        <DisplayString>{{ uninitialized }}</DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+
+            <!-- ── Live slot ──────────────────────────────────────────────
+                 Show the value and the generation seed so the caller can
+                 verify handle fingerprints without leaving this node.
+            ─────────────────────────────────────────────────────────────── -->
+
+            <!-- The contained value; only valid when the slot is live. -->
+            <Item Name="[value]" Condition="m_payload.m_skip == 0 &amp;&amp; m_payload.m_seed != 0">
+                *($T1*)&amp;m_storage
+            </Item>
+
+            <!-- Generation seed used to build / validate SparseKeyId
+                 fingerprints.  Non-zero on a live slot, zero on a free slot. -->
+            <Item Name="[seed]" Condition="m_payload.m_skip == 0 &amp;&amp; m_payload.m_seed != 0">
+                (char)m_payload.m_seed
+            </Item>
+
+            <!-- ── Free slot ───────────────────────────────────────────────
+                 Show the PLF skip distance and the free-list link so the
+                 free-chain and jump-counting state are both visible from a
+                 single slot node without navigating up to SparseVector.
+            ─────────────────────────────────────────────────────────────── -->
+
+            <!-- PLF jump-counting run length: the number of contiguous free
+                 slots in the run whose endpoints this slot belongs to.
+                 The iterator uses this to leap over free runs in O(1)
+                 instead of scanning slot by slot. -->
+            <Item Name="[skip]" Condition="m_payload.m_skip != 0">
+                m_payload.m_skip
+            </Item>
+
+            <!-- Index of the next free slot in the singly-linked free chain.
+                 0xFFFFFFFF means this slot is the tail of the list. -->
+            <Item Name="[next_free]"
+                  Condition="m_payload.m_skip != 0 &amp;&amp; m_free_list.m_next_free != 0xFFFFFFFFu">
+                m_free_list.m_next_free
+            </Item>
+
+            <!-- Explicit tail marker; shown instead of [next_free] when
+                 this slot is the last entry in the free chain. -->
+            <Item Name="[next_free]"
+                  Condition="m_payload.m_skip != 0 &amp;&amp; m_free_list.m_next_free == 0xFFFFFFFFu">
+                "tail"
+            </Item>
+
+            <!-- Raw payload word for low-level inspection; always shown so
+                 you can read both m_seed and m_skip simultaneously and
+                 check for unexpected bit-field overlap or corruption. -->
+            <Item Name="[payload]">m_payload</Item>
+
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+       pP::details::SparseVectorIterator<T, TAllocator>
+
+       $T1 = T
+       $T2 = TAllocator
+
+       Wraps a StableVectorIterator (m_stable_it) extended to skip over
+       free / uninitialised slots using the PLF jump-counting skip field
+       (m_payload.m_skip).  The iterator always points at a live
+       SparseVectorItem<T>, or holds the canonical end sentinel.
+
+       Key fields of m_stable_it:
+         m_vector        — pointer to the owning SparseVector
+         m_index         — current global slot index;
+                           0xFFFFFFFF (none_v / umax_v) is the end sentinel
+         m_slice_ptr     — typed pointer to the base of the current slice
+         m_slice_offset  — global index of the first slot in that slice
+       ================================================================ -->
+    <Type Name="pP::details::SparseVectorIterator&lt;*,*&gt;">
+
+        <!-- ── Summary ──────────────────────────────────────────────────── -->
+
+        <!-- Iterator was default-constructed and never bound to a vector. -->
+        <DisplayString Condition="m_stable_it.m_vector == 0">
+            {uninitialized iterator}
+        </DisplayString>
+
+        <!-- Past-the-end sentinel: show the owning vector's live count so
+             the end() iterator is informative in the watch window. -->
+        <DisplayString Condition="m_stable_it.m_index == 0xFFFFFFFFu">
+            end (size={m_stable_it.m_vector-&gt;m_size_alive})
+        </DisplayString>
+
+        <!-- Normal dereferenceable state: slot index and the live value.
+             m_slice_ptr is non-null once the iterator has resolved its
+             current slice (always true after construction). -->
+        <DisplayString Condition="m_stable_it.m_slice_ptr != 0">
+            [{m_stable_it.m_index}] = { *($T1*)&amp;(m_stable_it.m_slice_ptr[m_stable_it.m_index -
+            m_stable_it.m_slice_offset].m_storage) }
+        </DisplayString>
+
+        <!-- Fallback: index is valid but slice pointer not yet resolved
+             (transitional state during iterator construction). -->
+        <DisplayString>[{m_stable_it.m_index}]</DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+            <!-- Current live value; guard on both "not end" and "slice resolved". -->
+            <Item Name="[value]" Condition="m_stable_it.m_index != 0xFFFFFFFFu &amp;&amp; m_stable_it.m_slice_ptr != 0">
+                *($T1*)&amp;(m_stable_it.m_slice_ptr[m_stable_it.m_index - m_stable_it.m_slice_offset].m_storage)
+            </Item>
+
+            <!-- Normalize the end sentinel to the allocated slot count so
+                   the displayed index is always a meaningful number, never
+                   the raw 0xFFFFFFFF magic value. -->
+            <Item Name="[index]">
+                m_stable_it.m_index == 0xFFFFFFFFu ? (m_stable_it.m_vector ? m_stable_it.m_vector-&gt;m_size : 0u) :
+                m_stable_it.m_index
+            </Item>
+
+            <!-- PLF skip distance at the current slot.  Should always be 0
+                   for a valid dereferenceable iterator; non-zero here indicates
+                   the iterator is pointing at a free/middle-block slot, which
+                   is a bug in the skip-advancement logic of operator++ .-->
+            <Item Name="[skip]" Condition="m_stable_it.m_index != 0xFFFFFFFFu &amp;&amp; m_stable_it.m_slice_ptr != 0">
+                m_stable_it.m_slice_ptr[m_stable_it.m_index - m_stable_it.m_slice_offset].m_payload.m_skip
+            </Item>
+
+            <!-- Full embedded StableVectorIterator state for low-level
+                   inspection (m_vector, m_index, m_slice_ptr, m_slice_offset). -->
+            <Item Name="[stable_it]">m_stable_it</Item>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         THashMap<TKey, TValue, TEqualTo, THasher, TAllocator>
+
+         $T1 = TKey
+         $T2 = TValue, maybe void for a set
+         $T3 = std::equal_to<TKey>
+         $T4 = std::hash<TKey>
+         $T5 = Allocator
+
+         Implements a naive robin hood hash table with metadata out-of-core.
+         The capacity is awlays a power of 2.
+    -->
+    <Type Name="pP::HashMap&lt;*,*,*,*,*&gt;">
+        <DisplayString Condition="m_capacity_pow2_m1 == 0">{{ empty }}</DisplayString>
+        <DisplayString Condition="m_capacity_pow2_m1 != 0">{{ size={m_size} capacity={m_capacity_pow2_m1 ? m_capacity_pow2_m1 + 1 : 0} }}</DisplayString>
+
+        <Expand>
+            <Item Name="[size]">m_size</Item>
+            <Item Name="[capacity]">m_capacity_pow2_m1 ? m_capacity_pow2_m1 + 1 : 0</Item>
+
+            <CustomListItems MaxItemsPerView="5000">
+                <Variable Name="i" InitialValue="0"/>
+                <Variable Name="n" InitialValue="m_capacity_pow2_m1 == 0 ? 0 : m_capacity_pow2_m1 + 1"/>
+                <Size>m_size</Size>
+                <Loop>
+                    <Break Condition="i == n"/>
+                    <If Condition="m_metadata[i].m_psl != 0">
+                        <Item Name="[{i}]">m_values[i]</Item>
+                    </If>
+                    <Exec>i++</Exec>
+                </Loop>
+            </CustomListItems>
+
+            <Synthetic Name="[Metrics]">
+                <DisplayString>Load: {(float)m_size / (float)(m_capacity_pow2_m1 + 1)}</DisplayString>
+                <Expand>
+                    <Item Name="[Load Factor]">(float)m_size / (float)(m_capacity_pow2_m1 + 1)</Item>
+                    <Item Name="[H1 Bits]">(unsigned)bits_h1_v</Item>
+                    <Item Name="[PSL Bits]">(unsigned)bits_psl_v</Item>
+                    <Item Name="[Capacity Mask]">m_capacity_pow2_m1,x</Item>
+                </Expand>
+            </Synthetic>
+
+            <Synthetic Name="[Raw Slots]">
+                <Expand>
+                    <CustomListItems>
+                        <Variable Name="i" InitialValue="0" />
+                        <Variable Name="n" InitialValue="m_capacity_pow2_m1 ? m_capacity_pow2_m1 + 1 : 0" />
+                        <Loop>
+                            <Break Condition="i == n" />
+                            <Item Name="[{i}] (H1={m_metadata[i].m_h1}, PSL={(int)m_metadata[i].m_psl - 1})" Condition="m_metadata[i].m_psl != 0">
+                                m_values[i]
+                            </Item>
+                            <Item Name="[{i}] (empty)" Condition="m_metadata[i].m_psl == 0">
+                                m_metadata[i]
+                            </Item>
+                            <Exec>i++</Exec>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+        </Expand>
+    </Type>
+
+    <Type Name="pP::HashMap&lt;*,*,*,*,*&gt;::Metadata">
+        <DisplayString Condition="m_psl == 0">Empty</DisplayString>
+        <DisplayString Condition="m_psl != 0">{{ PSL={ (int)m_psl - 1 }, H1={ (int)m_h1 } }}</DisplayString>
+        <Expand>
+            <Item Name="PSL (Probe Sequence Length)">(int)m_psl - 1</Item>
+            <Item Name="H1 (Partial Hash bits)">(int)m_h1</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::details::HashMapIterator&lt;*,*,*,*,*&gt;">
+        <DisplayString Condition="m_slot == 0xFFFFFFFF">end()</DisplayString>
+        <DisplayString Condition="m_slot != 0xFFFFFFFF">{m_hash_table->m_values[m_slot]}</DisplayString>
+        <Expand>
+            <Item Name="[Slot Index]">m_slot</Item>
+            <Item Name="[Value]">m_hash_table->m_values[m_slot]</Item>
+            <Item Name="[Metadata]">m_hash_table->m_metadata[m_slot]</Item>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mem::Arena<TAllocator>
+
+         $T1 = TAllocator
+
+         Memory model
+         ────────────
+         The arena maintains a singly-linked stack of slabs, most-recent
+         first.  Each slab is a raw contiguous buffer whose first bytes
+         are consumed by a SlabHeader:
+
+           ┌──────────────────────────────────────────────────────┐
+           │ SlabHeader (16 bytes on x64)                         │
+           │   [0] m_size_bytes  : size_t   — total slab bytes    │
+           │   [8] m_next        : void*    — older slab or null  │
+           ├──────────────────────────────────────────────────────┤
+           │ usable payload                                       │
+           │   bytes [slab_overhead_size … m_capacity)            │
+           └──────────────────────────────────────────────────────┘
+
+         Fields (Arena instance):
+           m_slab     — void*, base of the CURRENT (newest) slab
+           m_capacity — u32,  total byte size of the current slab
+           m_offset   — u32,  write cursor; starts at slab_overhead_size
+
+         slab_overhead_size = sizeof(SlabHeader) = 16 bytes (x64).
+           · It is a static constexpr u32 member, accessible in natvis
+             expressions as `slab_overhead_size`.
+
+         Derived quantities used throughout:
+           used   = m_offset - slab_overhead_size   (bytes allocated in current slab)
+           free   = m_capacity - m_offset           (bytes remaining in current slab)
+           usable = m_capacity - slab_overhead_size (net payload capacity)
+
+         Slab chain: SlabHeader is a private nested struct; MSVC's natvis
+         evaluator can access private types via raw memory reads without
+         requiring the type name.  For portability across x64 builds we                      poi
+         read the chain fields at their fixed offsets:
+           m_size_bytes : *(unsigned __int64*)slab          (offset 0, 8 bytes)
+           m_next       : *(void**)((char*)slab + 8)        (offset 8, 8 bytes)
+         Both offsets are correct for any x64 ABI (MSVC, Clang-cl).
+         ================================================================ -->
+    <Type Name="pP::mem::Arena&lt;*&gt;">
+
+        <!-- ── Summary ─────────────────────────────────────────────────── -->
+
+        <!-- Fully uninitialised / moved-from -->
+        <DisplayString Condition="m_slab == 0">
+            {{ uninitialized }}
+        </DisplayString>
+
+        <!-- Active slab, nothing allocated yet, no exhausted slabs -->
+        <DisplayString
+                Condition="m_offset == slab_overhead_size
+                   &amp;&amp; *(void**)((unsigned char*)m_slab + 8) == 0">
+            {{ empty, {m_capacity - slab_overhead_size} bytes available }}
+        </DisplayString>
+
+        <!-- Active slab only (common case after reset) -->
+        <DisplayString
+                Condition="*(void**)((unsigned char*)m_slab + 8) == 0">
+            {{ {m_offset - slab_overhead_size} / {m_capacity - slab_overhead_size} bytes used }}
+        </DisplayString>
+
+        <!-- Active slab + at least one exhausted slab behind it -->
+        <DisplayString>
+            {{ {m_offset - slab_overhead_size} / {m_capacity - slab_overhead_size} bytes used (+ exhausted slabs) }}
+        </DisplayString>
+
+        <!-- ── Expand ───────────────────────────────────────────────────── -->
+        <Expand>
+
+            <!-- ── Scalar usage summary ──────────────────────────────────── -->
+            <!--
+              [bytes used]    — payload bytes committed in the current slab
+              [bytes free]    — payload bytes still available without a new push
+              [capacity]      — total usable payload size of the current slab
+              [fill %]        — how full the current slab is (integer, 0-100)
+                                Guarded against the degenerate case where
+                                usable == 0 (a slab sized exactly == overhead).
+              [watermark]     — raw pointer to the current allocation frontier;
+                                matches what watermark() would return.
+                                Cast to void* so the debugger shows it as an
+                                address you can inspect in the Memory window.
+            -->
+            <Item Name="[bytes used]">
+                m_offset - slab_overhead_size
+            </Item>
+            <Item Name="[bytes free]">
+                m_capacity - m_offset
+            </Item>
+            <Item Name="[capacity]">
+                m_capacity - slab_overhead_size
+            </Item>
+            <Item Name="[fill %]"
+                  Condition="m_slab != 0 &amp;&amp; m_capacity &gt; slab_overhead_size">
+                int(((m_offset - slab_overhead_size) * 1000.0 + 0.5) / (m_capacity - slab_overhead_size))/10.0f,g
+            </Item>
+            <Item Name="[watermark]" Condition="m_slab != 0">
+                (void*)((unsigned char*)m_slab + m_offset)
+            </Item>
+
+            <!-- ── Slab chain ─────────────────────────────────────────────
+                 One row per slab, newest first (index 0 = current slab).
+                 Each row shows:
+                   · The slab base address                   (for Memory window)
+                   · The slab's total byte size              (from m_size_bytes)
+                   · The usable payload start address        (base + overhead)
+                   · Fill annotation:
+                       – index 0: actual m_offset used in name tag
+                       – index > 0: "exhausted" — these slabs were pushed aside
+                         by pushSlab_() and their content is fully committed.
+
+                 Variables:
+                   slab    — current slab base pointer (void*)
+                   sidx    — slab index (0 = newest)
+                   overhead — cached copy of slab_overhead_size (u32), read
+                              once so the static member is not re-evaluated
+                              on every iteration.
+                 ─────────────────────────────────────────────────────────── -->
+            <Synthetic Name="[slab chain]" Condition="m_slab != 0">
+                <!--
+                  Summary line: show active slab fill and whether older slabs exist.
+                  The ternary uses int comparisons; natvis evaluates lazily so the
+                  void** dereference is only reached when m_slab != 0.
+                -->
+                <DisplayString
+                        Condition="*(void**)((unsigned char*)m_slab + 8) == 0">
+                    1 slab: {m_offset - slab_overhead_size} / {m_capacity - slab_overhead_size} bytes
+                </DisplayString>
+                <DisplayString>
+                    multiple slabs (active: {m_offset - slab_overhead_size} / {m_capacity - slab_overhead_size}
+                    bytes)
+                </DisplayString>
+
+                <Expand>
+                    <CustomListItems MaxItemsPerView="64">
+                        <!--
+                          Cache slab_overhead_size once.  Reading a static constexpr
+                          via an instance is reliable in MSVC's natvis evaluator but
+                          doing it inside a tight loop adds unnecessary re-evaluation.
+                        -->
+                        <Variable Name="overhead"
+                                  InitialValue="(unsigned int)slab_overhead_size"/>
+                        <Variable Name="slab"
+                                  InitialValue="(void*)m_slab"/>
+                        <Variable Name="sidx"
+                                  InitialValue="(unsigned int)0"/>
+
+                        <Loop Condition="slab != 0">
+                            <!--
+                              Current slab (sidx == 0): annotate with live fill info.
+                              Name shows bytes used / usable so it is readable without
+                              expanding the row.  Value is the usable-payload base pointer
+                              so the Memory window lets you inspect raw contents directly.
+                            -->
+                            <Item
+                                    Name="[slab {sidx}]  {*(unsigned __int64*)slab} bytes  ({m_offset - overhead} used, {m_capacity - m_offset} free)"
+                                    Condition="sidx == 0">
+                                (void*)((unsigned char*)slab + overhead)
+                            </Item>
+
+                            <!--
+                              Exhausted slabs (sidx > 0): pushed aside when the arena
+                              needed more space.  They are fully written; we can only
+                              report their size since m_offset belongs to the current slab.
+                              ownsExhausted_() would find marks inside these, but the
+                              natvis viewer just needs the address range.
+                            -->
+                            <Item
+                                    Name="[slab {sidx}]  {*(unsigned __int64*)slab} bytes  (exhausted)"
+                                    Condition="sidx != 0">
+                                (void*)((unsigned char*)slab + overhead)
+                            </Item>
+
+                            <!-- Advance: read m_next at offset 8 from the current slab base. -->
+                            <Exec>slab = *(void**)((unsigned char*)slab + 8)</Exec>
+                            <Exec>++sidx</Exec>
+                        </Loop>
+                    </CustomListItems>
+                </Expand>
+            </Synthetic>
+
+            <!-- ── Uninitialized fallback ─────────────────────────────────── -->
+            <Synthetic Name="[slab chain]" Condition="m_slab == 0">
+                <DisplayString>no slabs allocated</DisplayString>
+            </Synthetic>
+
+        </Expand>
+    </Type>
+
+</AutoVisualizer>

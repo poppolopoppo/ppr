@@ -1,0 +1,20 @@
+{
+  "name": "ppr",
+  "version-string": "0.1.0",
+  "description": "C++ Video Game with Slang, GLFW, and C++20 Modules",
+  "builtin-baseline": "544a4c5c297e60e4ac4a5a1810df66748d908869",
+  "dependencies": [
+    "fmt",
+    "zlib",
+    "libdeflate",
+    "zstd",
+    "lcms",
+    "simdjson",
+    "glfw3",
+    "vulkan-headers"
+  ]
+}
+
+
+
+

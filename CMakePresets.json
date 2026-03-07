@@ -1,0 +1,169 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "description": "Default configuration using Ninja Multi-Config and vcpkg for dependencies (manifest mode)",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CPM_SOURCE_CACHE": "${sourceDir}/out/cpm_cache",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/out/vcpkg_installed"
+      }
+    },
+    {
+      "name": "developer",
+      "description": "Developer mode with warnings as errors and sanitizers",
+      "inherits": "default",
+      "cacheVariables": {
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+      }
+    },
+    {
+      "name": "vcpkg",
+      "inherits": "default",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "windows-default",
+      "description": "Base Windows configuration for MSVC and Clang.",
+      "hidden": true,
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_POLICY_DEFAULT_CMP0091": "NEW"
+      }
+    },
+    {
+      "name": "unix-like-default",
+      "description": "Base Linux configuration for GCC and Clang.",
+      "hidden": true,
+      "inherits": "vcpkg",
+      "condition": {
+        "type": "inList",
+        "string": "${hostSystemName}",
+        "list": [
+          "Darwin",
+          "Linux"
+        ]
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
+          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
+        }
+      }
+    },
+    {
+      "name": "msvc-dev",
+      "displayName": "MSVC Developer",
+      "description": "Build with MSVC and developer mode enabled.",
+      "inherits": "windows-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+      }
+    },
+    {
+      "name": "msvc-rel",
+      "displayName": "MSVC Release",
+      "description": "Target Windows with the msvc compiler, release build type",
+      "inherits": "windows-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "PPR_ENABLE_DEVELOPER_MODE": "OFF"
+      }
+    },
+    {
+      "name": "clang-cl-dev",
+      "displayName": "Clang-cl Developer",
+      "description": "Target Windows with the clang-cl compiler, debug build type",
+      "inherits": "windows-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "PPR_ENABLE_DEVELOPER_MODE": "OM"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "intelliSenseMode": "windows-clang-x64"
+        }
+      }
+    },
+    {
+      "name": "clang-cl-rel",
+      "displayName": "Clang-cl Release",
+      "description": "Release build with Clang/LLVM on Windows.",
+      "inherits": "windows-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "PPR_ENABLE_DEVELOPER_MODE": "OFF"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "intelliSenseMode": "windows-clang-x64"
+        }
+      }
+    },
+    {
+      "name": "gcc-dev",
+      "displayName": "GCC Developer **DO NOT WORK WITH MODULES**",
+      "hidden": true,
+      "description": "Target Unix-like OS with the gcc compiler",
+      "inherits": "unix-like-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+      }
+    },
+    {
+      "name": "gcc-rel",
+      "displayName": "GCC Release **DO NOT WORK WITH MODULES**",
+      "hidden": true,
+      "description": "Release build with GCC.",
+      "inherits": "unix-like-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "PPR_ENABLE_DEVELOPER_MODE": "OFF"
+      }
+    },
+    {
+      "name": "clang-dev",
+      "displayName": "Clang Developer",
+      "description": "Debug build with Clang",
+      "inherits": "unix-like-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+      }
+    },
+    {
+      "name": "clang-rel",
+      "displayName": "Clang Release",
+      "description": "Release build with Clang",
+      "inherits": "unix-like-default",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "PPR_ENABLE_DEVELOPER_MODE": "OFF"
+      }
+    }
+  ]
+}
