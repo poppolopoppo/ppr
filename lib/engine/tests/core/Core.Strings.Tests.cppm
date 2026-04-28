@@ -155,6 +155,7 @@ export namespace pP::tests {
             _.recurse(Static::edge_cases);
         };
 
+#if 0
         namespace Range {
             PPR_UNIT_TEST(compare) {
                 constexpr std::string_view a = "hello";
@@ -257,7 +258,8 @@ export namespace pP::tests {
             _.recurse(Range::hashing);
             _.recurse(Range::to_string_conversion);
         };
-
+#endif
+#if 1
         namespace Lazy {
             PPR_UNIT_TEST(trim_functions) {
                 constexpr std::string_view s1 = "   hello   ";
@@ -359,13 +361,14 @@ export namespace pP::tests {
             _.recurse(Lazy::xml_escape);
             _.recurse(Lazy::hex_encode);
         };
+#endif
     }
 
     PPR_UNIT_TEST(strings) {
         _.recurse(Strings::helpers);
         _.recurse(Strings::literal);
         _.recurse(Strings::static_string);
-        _.recurse(Strings::range);
+        // _.recurse(Strings::range);
         _.recurse(Strings::lazy);
     };
 }

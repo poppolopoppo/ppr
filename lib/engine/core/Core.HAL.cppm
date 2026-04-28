@@ -251,22 +251,22 @@ export namespace pP {
     // and fall back to a portable implementation.
     // -----------------------------------------------------------------------------
     namespace views {
-    #if defined(__cpp_lib_ranges_enumerate) && __cpp_lib_ranges_enumerate >= 202302L
+#if defined(__cpp_lib_ranges_enumerate) && __cpp_lib_ranges_enumerate >= 202302L
 
         // Use the real thing
         using std::views::enumerate;
 
-    #else
+#else
 
         // Fallback: enumerate = zip(iota, range)
-        inline constexpr auto enumerate = []<std::ranges::input_range R>(R&& r) {
+        inline constexpr auto enumerate = []<std::ranges::input_range R>(R &&r) {
             using std::views::iota;
             using std::views::zip;
 
             return zip(iota(std::size_t{0}), std::forward<R>(r));
         };
 
-    #endif
+#endif
     } // namespace views
 }
 
@@ -329,40 +329,73 @@ export namespace pP::hal {
     // native strings
     // ------------------------------------------------------------------
 
+    [[nodiscard]] std::size_t transcode(std::string_view ansi, char8_t *p_dst, std::size_t capacity) noexcept;
+
+    [[nodiscard]] std::size_t transcode(std::string_view ansi, wchar_t *p_dst, std::size_t capacity) noexcept;
+
+    [[nodiscard]] std::size_t transcode(std::wstring_view wide, char8_t *p_dst, std::size_t capacity) noexcept;
+
+    [[nodiscard]] std::size_t transcode(std::u8string_view utf8, wchar_t *p_dst, std::size_t capacity) noexcept;
+
+    [[nodiscard]] std::size_t transcode(std::wstring_view wide, char *p_dst, std::size_t capacity) noexcept;
+
+    [[nodiscard]] std::size_t transcode(std::u8string_view utf8, char *p_dst, std::size_t capacity) noexcept;
+
+    template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
+    [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
+        noexcept(std::is_same_v<SrcCharT, DstCharT>) {
+        if constexpr (std::is_same_v<DstCharT, SrcCharT>) {
+            return src;
+        }
+
+        const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
+        std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
+        [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
+        return dst;
+    }
+
     namespace native {
         using string = std::filesystem::path::string_type;
         using char_t = string::value_type;
         using string_view = std::basic_string_view<char_t>;
 
-        inline constexpr bool is_utf8 = std::is_same_v<char_t, char>;
+        inline constexpr bool is_wchar_v = std::is_same_v<char_t, wchar_t>;
 
         template<typename... ArgsT>
-        using format_string = std::conditional_t<is_utf8, std::format_string<ArgsT...>, std::wformat_string<ArgsT...> >;
-        using format_context = std::conditional_t<is_utf8, std::format_context, std::wformat_context>;
+        using format_string = std::conditional_t<is_wchar_v, std::wformat_string<ArgsT...>, std::format_string<ArgsT...> >;
+        using format_context = std::conditional_t<is_wchar_v, std::wformat_context, std::format_context>;
         using format_args = std::basic_format_args<format_context>;
 
-        [[nodiscard]] std::size_t utf8(const string_view &native_str, char *out_buffer, std::size_t buffer_size) noexcept;
-
-        [[nodiscard]] std::size_t from(const std::string_view &utf8_str, char_t *out_buffer, std::size_t buffer_size) noexcept;
-
-        [[nodiscard]] decltype(auto) utf8(const string_view &native_str) noexcept(is_utf8) {
-            if constexpr (is_utf8) {
-                return native_str;
-            } else {
-                char buffer[2048];
-                const std::size_t len = utf8(native_str, buffer, sizeof(buffer));
-                return std::string(buffer, len);
-            }
+        [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, std::size_t buffer_size) noexcept {
+            return transcode(native_str, out_buffer, buffer_size);
         }
 
-        [[nodiscard]] decltype(auto) from(const std::string_view &utf8_str) noexcept(is_utf8) {
-            if constexpr (is_utf8) {
-                return utf8_str;
-            } else {
-                char_t buffer[2048];
-                const std::size_t len = from(utf8_str, buffer, sizeof(buffer));
-                return string(buffer, len);
-            }
+        [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, std::size_t buffer_size) noexcept {
+            return transcode(native_str, out_buffer, buffer_size);
+        }
+
+        [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+            return transcode(ansi_str, out_buffer, buffer_size);
+        }
+
+        [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+            return transcode(utf8_str, out_buffer, buffer_size);
+        }
+
+        [[nodiscard]] inline decltype(auto) ansi(const string_view &native_str) {
+            return toString<char>(native_str);
+        }
+
+        [[nodiscard]] inline decltype(auto) utf8(const string_view &native_str) {
+            return toString<char8_t>(native_str);
+        }
+
+        [[nodiscard]] inline decltype(auto) from(const std::string_view &ansi_str) {
+            return toString<char_t>(ansi_str);
+        }
+
+        [[nodiscard]] inline decltype(auto) from(const std::u8string_view &utf8_str) {
+            return toString<char_t>(utf8_str);
         }
 
         template<details::TChar CharT>
@@ -414,45 +447,5 @@ export namespace pP::hal {
     template<typename... ArgsT>
     constexpr void outputDebugFmt(const std::format_string<ArgsT...> &, ArgsT &&...) noexcept {
     }
-#endif
-}
-
-// ------------------------------------------------------------------
-// std::formatter<> specializations for native strings
-// ------------------------------------------------------------------
-
-export namespace std {
-    template<pP::details::TChar CharT>
-    struct formatter<filesystem::path, CharT> : formatter<std::basic_string_view<CharT>, CharT> {
-        template<class OutT>
-        auto format(const filesystem::path &p, basic_format_context<OutT, CharT> &ctx) const {
-            return formatter<std::basic_string_view<CharT>, CharT>::format(pP::hal::native::format<CharT>(p.native()), ctx);
-        }
-    };
-
-    template<pP::details::TChar CharT>
-    struct formatter<filesystem::directory_entry, CharT> : formatter<filesystem::path, CharT> {
-        template<class OutT>
-        auto format(const filesystem::directory_entry &p, basic_format_context<OutT, CharT> &ctx) const {
-            return formatter<filesystem::path, CharT>::format(p.path(), ctx);
-        }
-    };
-
-#if defined(_MSC_VER)
-    template<>
-    struct formatter<string_view, pP::hal::native::char_t> : formatter<pP::hal::native::string_view, pP::hal::native::char_t> {
-        template<class OutT>
-        auto format(const string_view &p, basic_format_context<OutT, pP::hal::native::char_t> &ctx) const {
-            return formatter<pP::hal::native::string_view, pP::hal::native::char_t>::format(pP::hal::native::from(p), ctx);
-        }
-    };
-
-    template<>
-    struct formatter<pP::hal::native::string_view> : formatter<string_view> {
-        template<class OutT>
-        auto format(const pP::hal::native::string_view &p, basic_format_context<OutT, pP::hal::native::char_t> &ctx) const {
-            return formatter<string_view, char>::format(pP::hal::native::utf8(p), ctx);
-        }
-    };
 #endif
 }

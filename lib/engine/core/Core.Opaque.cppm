@@ -239,7 +239,7 @@ export namespace std {
         auto format(const pP::opaque::Value &value, FormatContextT &ctx) const
             -> decltype(ctx.out()) {
             return visit(
-                overloaded(
+                pP::overloaded(
                     [&]<pP::details::TChar StringCharT>(const basic_string_view<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
                                          inner_value);
@@ -280,8 +280,9 @@ export namespace std {
         using super_t = range_formatter<pP::opaque::KeyValue, CharT>;
 
         constexpr formatter() noexcept {
-            super_t::set_brackets(PPR_LITERAL_FOR(CharT, "{"),
-                                  PPR_LITERAL_FOR(CharT, "}"));
+            constexpr std::basic_string_view<CharT> bracket_open = PPR_LITERAL_FOR(CharT, "{");
+            constexpr std::basic_string_view<CharT> bracket_close = PPR_LITERAL_FOR(CharT, "}");
+            super_t::set_brackets(bracket_open, bracket_close);
         }
     };
 }

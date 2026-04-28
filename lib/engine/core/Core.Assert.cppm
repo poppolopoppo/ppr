@@ -51,33 +51,6 @@ namespace pP {
 
     private:
         class Handler {
-        public:
-            Handler(const Handler &) = delete;
-
-            Handler &operator =(const Handler &) = delete;
-
-            Handler(Handler &&) = delete;
-
-            Handler &operator =(Handler &&) = delete;
-
-            [[nodiscard]] static Handler &get() noexcept {
-                static Handler g_handler;
-                return g_handler;
-            }
-
-            // returns previous policy
-            Policy &&setFailurePolicy(Policy &&on_assert_failure) noexcept {
-                const std::lock_guard guard(m_barrier);
-                std::swap(on_assert_failure, m_on_assert_failure);
-                return std::move(on_assert_failure);
-            }
-
-            void onAssertFailure(const Assertion &condition) {
-                const std::lock_guard guard(m_barrier);
-                return m_on_assert_failure(condition);
-            }
-
-        private:
             Handler() noexcept = default;
 
             static void defaultAssertFailure_(const Assertion &condition) {
@@ -106,6 +79,32 @@ namespace pP {
 
             std::mutex m_barrier{};
             Policy m_on_assert_failure{&defaultAssertFailure_};
+
+        public:
+            Handler(const Handler &) = delete;
+
+            Handler &operator =(const Handler &) = delete;
+
+            Handler(Handler &&) = delete;
+
+            Handler &operator =(Handler &&) = delete;
+
+            [[nodiscard]] static Handler &get() noexcept {
+                alignas(hal::cacheline_size_v) static Handler g_handler;
+                return g_handler;
+            }
+
+            // returns previous policy
+            Policy &&setFailurePolicy(Policy &&on_assert_failure) noexcept {
+                const std::lock_guard guard(m_barrier);
+                std::swap(on_assert_failure, m_on_assert_failure);
+                return std::move(on_assert_failure);
+            }
+
+            void onAssertFailure(const Assertion &condition) {
+                const std::lock_guard guard(m_barrier);
+                return m_on_assert_failure(condition);
+            }
         };
     };
 #endif
@@ -351,7 +350,7 @@ namespace pP {
             }
 
 #if PPR_ENABLE_ASSERTIONS
-            void onAssertFailure(const Assertion &condition);
+            void onAssertFailure(const Assertion &condition) const;
 #endif
         };
     };
@@ -360,14 +359,14 @@ namespace pP {
 export template<pP::details::TChar CharT>
 struct std::formatter<pP::UnitTest::Id, CharT> {
     template<typename FormatParseContextT>
-    constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+    static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
         return ctx.begin();
     }
 
     template<typename FormatContextT>
     auto format(const pP::UnitTest::Id &value, FormatContextT &ctx) const -> decltype(ctx.out()) {
-        auto outp = ctx.out();
-        return value.format<CharT>(outp);
+        auto output = ctx.out();
+        return value.format<CharT>(output);
     }
 };
 
@@ -414,7 +413,7 @@ pP::UnitTest::RunImpl::~RunImpl() {
 }
 
 #if PPR_ENABLE_ASSERTIONS
-void pP::UnitTest::RunImpl::onAssertFailure(const Assertion &condition) {
+void pP::UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
     const std::stacktrace backtrace = std::stacktrace::current(9);
 
     hal::outputDebugFmt("{}({}): Assertion failed with \"{}\"\n"

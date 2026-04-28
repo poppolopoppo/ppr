@@ -4,6 +4,7 @@ module;
 export module engine.core:strings;
 
 import :assert;
+import :arena;
 import :containers;
 
 import std;
@@ -246,12 +247,15 @@ export namespace pP {
         // Construct from a string literal — used by all named escape arms.
         // The array is copied into m_buf at construction time; no pointer escapes.
         template<std::size_t N> requires (N - 1u <= nCapacity)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_glyph(const CharT (&lit)[N]) noexcept : m_len{N - 1u} {
             std::copy_n(lit, N - 1u, m_buf.begin());
         }
 
         // Construct from a single character — used by the passthrough default arm.
         // Stores the value, never the address of the caller's variable.
+        //
+        // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_glyph(CharT ch) noexcept : m_len{1} { // NOLINT(*-explicit-*)
             m_buf[0] = ch;
         }
@@ -265,6 +269,7 @@ export namespace pP {
             return {m_buf.data(), m_len};
         }
 
+        // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator std::basic_string_view<CharT>() const noexcept {
             return {m_buf.data(), m_len};
         }
@@ -399,10 +404,12 @@ export namespace pP {
         using value_type = std::ranges::range_value_t<CharactersT>;
         using iterator = std::ranges::iterator_t<CharactersT>;
 
+        // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_range(CharactersT &&view) noexcept
             : m_view(std::forward<CharactersT>(view)) {
         }
 
+        // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_range(const CharactersT &view) noexcept
             : m_view(view) {
         }
@@ -675,10 +682,71 @@ export namespace pP {
 }
 
 // ------------------------------------------------------------------
-// std::formatter<> specialization for CaseFoldView
+// std::formatter<> specialization for CaseFoldView, native strings and file-system
 // ------------------------------------------------------------------
 
 export namespace std {
+    template<pP::details::TChar StrCharT, pP::details::TChar OutCharT>
+        requires (!std::is_same_v<StrCharT, OutCharT>)
+    struct formatter<std::basic_string_view<StrCharT>, OutCharT> : formatter<std::basic_string_view<OutCharT>, OutCharT> {
+        using super_t = formatter<std::basic_string_view<OutCharT>, OutCharT>;
+
+        template<class OutIteratorT>
+        auto format(const basic_string_view<StrCharT> str, basic_format_context<OutIteratorT, OutCharT> &ctx) const {
+            const auto watermark = pP::mem::ScratchPad::watermark();
+            PPR_DEFER {
+                pP::mem::ScratchPad::restore(watermark);
+            };
+
+            const std::basic_string tmp = pP::hal::toString<OutCharT, StrCharT>(
+                str, pP::mem::STL<OutCharT, pP::mem::ScratchPad>{});
+            return super_t::format(tmp, ctx);
+        }
+    };
+
+    // Explicit specialization for char to avoid MSVC internal type issues
+    template<>
+    struct formatter<filesystem::path, char> : formatter<std::string_view, char> {
+        template<class OutT>
+        auto format(const filesystem::path &p, std::basic_format_context<OutT, char> &ctx) const {
+            const auto watermark = pP::mem::ScratchPad::watermark();
+            PPR_DEFER {
+                pP::mem::ScratchPad::restore(watermark);
+            };
+            auto tmp = pP::hal::toString<char>(
+                pP::hal::native::string_view(p.native()),
+                pP::mem::STL<char, pP::mem::ScratchPad>{});
+            return formatter<std::string_view, char>::format(tmp, ctx);
+        }
+    };
+
+    // Explicit specialization for wchar_t
+    template<>
+    struct formatter<filesystem::path, wchar_t> : formatter<std::wstring_view, wchar_t> {
+        template<class OutT>
+        auto format(const filesystem::path &p, std::basic_format_context<OutT, wchar_t> &ctx) const {
+            return formatter<std::wstring_view, wchar_t>::format(p.native(), ctx);
+        }
+    };
+
+    // Explicit specialization for directory_entry with char
+    template<>
+    struct formatter<filesystem::directory_entry, char> : formatter<filesystem::path, char> {
+        template<class OutT>
+        auto format(const filesystem::directory_entry &p, std::basic_format_context<OutT, char> &ctx) const {
+            return formatter<filesystem::path, char>::format(p.path(), ctx);
+        }
+    };
+
+    // Explicit specialization for directory_entry with wchar_t
+    template<>
+    struct formatter<filesystem::directory_entry, wchar_t> : formatter<filesystem::path, wchar_t> {
+        template<class OutT>
+        auto format(const filesystem::directory_entry &p, std::basic_format_context<OutT, wchar_t> &ctx) const {
+            return formatter<filesystem::path, wchar_t>::format(p.path(), ctx);
+        }
+    };
+
     template<pP::details::TChar CharT>
     struct formatter<pP::CaseFoldChar<CharT>, CharT>
             : formatter<CharT, CharT> {
@@ -696,7 +764,7 @@ export namespace std {
     struct formatter<pP::basic_string_range<CharactersT>, CharT> {
         using char_type = pP::basic_string_range<CharactersT>::value_type;
 
-        constexpr auto parse(std::basic_format_parse_context<CharT> &ctx) {
+        static constexpr auto parse(std::basic_format_parse_context<CharT> &ctx) {
             return ctx.begin();
         }
 
