@@ -21,7 +21,7 @@ namespace pP::mem {
         using ref_mask_t = BitmaskRef<word_t>;
 
     public:
-        static constexpr u32 word_bit_count = mask_t::bit_count;
+        static constexpr u32 word_bit_count = mask_t::bit_count_v;
 
         struct BuildInfos {
             u32 m_tree_depth{0};
@@ -57,8 +57,15 @@ namespace pP::mem {
     private:
         word_t *m_bits{nullptr};
 
-        [[nodiscard]] constexpr word_t &wordAt_(const u32 at) noexcept { return m_bits[at]; }
-        [[nodiscard]] constexpr const word_t &wordAt_(const u32 at) const noexcept { return m_bits[at]; }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr word_t &wordAt_(const u32 at) noexcept {
+            PPR_ASSUME(m_bits);
+            return m_bits[at];
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr const word_t &wordAt_(const u32 at) const noexcept {
+            PPR_ASSUME(m_bits);
+            return m_bits[at];
+        }
 
         [[nodiscard]] constexpr u32 countOnes_(const BuildInfos &infos, u32 up_to) const noexcept {
             PPR_ASSERT(up_to <= infos.m_desired_size && "Count up to size exceeds desired size");
@@ -276,7 +283,7 @@ namespace pP::mem {
                 bit = bit * word_bit_count + jmp;
 
                 if (infos.m_tree_depth - 1u == d) {
-                    const u32 n_contiguous = std::min(requested_count, std::min((m >> jmp).countTrailingZeros(), mask_t::bit_count - jmp));
+                    const u32 n_contiguous = std::min(requested_count, std::min((m >> jmp).countTrailingZeros(), mask_t::bit_count_v - jmp));
                     PPR_ASSERT(n_contiguous > 0u);
                     mask_t alloc_m = mask_t::setFirstN(n_contiguous) << jmp;
                     PPR_ASSERT((m & alloc_m).none());
@@ -390,301 +397,250 @@ namespace pP::mem {
     // ------------------------------------------------------------------
     // OS page pooling allocator
     // ------------------------------------------------------------------
+    namespace os {
+        export class PagePool {
+            static constexpr u32 bundle_max_count = 16u;
 
-    export class PagePool {
-        static constexpr u32 bundle_max_count = 16u;
+            using FullBundle = std::array<u32, bundle_max_count>;
 
-        using FullBundle = std::array<u32, bundle_max_count>;
-
-        struct PartialBundle { // NOLINT(*-pro-type-member-init)
-            std::array<u32, bundle_max_count - 1u> m_arr;
-            u32 m_count{0u};
+            struct PartialBundle { // NOLINT(*-pro-type-member-init)
+                std::array<u32, bundle_max_count - 1u> m_arr;
+                u32 m_count{0u};
 
 #if PPR_ENABLE_ASSERTIONS
-            ~PartialBundle() noexcept {
-                PPR_ASSERT(m_count == 0u);
-            }
+                ~PartialBundle() noexcept {
+                    PPR_ASSERT(m_count == 0u);
+                }
 #endif
 
-            [[nodiscard]] bool isEmpty() const noexcept {
-                return m_count == 0u;
-            }
-
-            [[nodiscard]] bool isFull() const noexcept {
-                return m_count == std::size(m_arr);
-            }
-
-            void pushFront(const u32 page_index) noexcept {
-                PPR_ASSERT(m_count < std::size(m_arr));
-                m_arr[m_count++] = page_index;
-            }
-
-            [[nodiscard]] u32 popFront() noexcept {
-                PPR_ASSERT(m_count > 0u);
-                return m_arr[--m_count];
-            }
-
-            [[nodiscard]] auto view(this auto &&self) noexcept {
-                return self.m_arr | std::views::take(self.m_count);
-            }
-        };
-
-        std::mutex m_barrier;
-
-        // cold storage, never modified and same cache-line than mutex
-        std::byte *const m_reserved_space;
-        const std::size_t m_page_size;
-        const BitmapTree::BuildInfos m_tree_infos;
-        BitmapTree m_committed_pages;
-
-        [[maybe_unused]]
-        const u8 m_padding_for_alignment[hal::cacheline_size - (sizeof(m_barrier) + sizeof(m_reserved_space) + sizeof(m_page_size) +
-                                                                sizeof(m_tree_infos) + sizeof(m_committed_pages)) % hal::cacheline_size]{};
-
-        // hot storage, bundles are voluntarily isolated inside their respective cache lines
-        alignas(hal::cacheline_size) PartialBundle m_partial_bundle;
-        alignas(hal::cacheline_size) FullBundle m_full_bundle{};
-
-        [[nodiscard]] PPR_FORCE_INLINE void *pageAt_(const u32 page_index) const noexcept {
-            PPR_ASSERT(page_index < m_tree_infos.m_desired_size);
-            return m_reserved_space + page_index * m_page_size;
-        }
-
-        [[nodiscard]] PPR_FORCE_INLINE u32 pageIndex_(const void *const ptr) const noexcept {
-            const auto p = std::bit_cast<std::uintptr_t>(ptr);
-            const auto r = std::bit_cast<std::uintptr_t>(m_reserved_space);
-            PPR_ASSERT(p >= r && p + m_page_size <= r + m_tree_infos.m_desired_size * m_page_size);
-            return checked_cast<u32>((p - r) / m_page_size);
-        }
-
-        // the full bundle is always sorted
-        [[nodiscard]] PPR_FORCE_INLINE bool hasFullBundle_() const noexcept {
-            return m_full_bundle[0u] < m_tree_infos.m_desired_size;
-        }
-
-        PPR_FORCE_INLINE static constexpr auto runListAssumeSorted_(std::span<const u32> indices) {
-            return indices
-                   | std::views::chunk_by([](const u32 a, const u32 b) constexpr noexcept { return b == a + 1; })
-                   | std::views::transform([](auto run) constexpr noexcept {
-                       return std::pair{run.front(), static_cast<u32>(std::ranges::distance(run))};
-                   });
-        }
-
-        void decommitFullBundle_() {
-            for (auto [page_first, page_count]: runListAssumeSorted_(m_full_bundle)) {
-                if (page_first < m_tree_infos.m_desired_size) {
-                    bool can_decommit_pages = false;
-                    for (u32 i = 0u; i < page_count; i++) {
-                        can_decommit_pages |= m_committed_pages.deallocate(m_tree_infos, page_first + i);
-                    }
-
-                    if (can_decommit_pages) [[unlikely]] {
-                        void *const free_bucket = pageAt_(alignBackward(page_first, BitmapTree::word_bit_count));
-                        hal::pageDecommit(free_bucket, m_page_size * BitmapTree::word_bit_count);
-                    }
-                } else {
-                    break;
+                [[nodiscard]] bool isEmpty() const noexcept {
+                    return m_count == 0u;
                 }
+
+                [[nodiscard]] bool isFull() const noexcept {
+                    return m_count == std::size(m_arr);
+                }
+
+                void pushFront(const u32 page_index) noexcept {
+                    PPR_ASSERT(m_count < std::size(m_arr));
+                    m_arr[m_count++] = page_index;
+                }
+
+                [[nodiscard]] u32 popFront() noexcept {
+                    PPR_ASSERT(m_count > 0u);
+                    return m_arr[--m_count];
+                }
+
+                [[nodiscard]] auto view(this auto &&self) noexcept {
+                    return self.m_arr | std::views::take(self.m_count);
+                }
+            };
+
+            std::mutex m_barrier;
+
+            // cold storage, never modified and same cache-line than mutex
+            std::byte *const m_reserved_space;
+            const std::size_t m_page_size;
+            const BitmapTree::BuildInfos m_tree_infos;
+            BitmapTree m_committed_pages;
+
+            [[maybe_unused]]
+            const std::byte m_padding_for_alignment[hal::cacheline_size_v - (sizeof(m_barrier) + sizeof(m_reserved_space) + sizeof(m_page_size) +
+                                                                             sizeof(m_tree_infos) + sizeof(m_committed_pages)) % hal::cacheline_size_v]{};
+
+            // hot storage, bundles are voluntarily isolated inside their respective cache lines
+            alignas(hal::cacheline_size_v) PartialBundle m_partial_bundle;
+            alignas(hal::cacheline_size_v) FullBundle m_full_bundle{};
+
+            [[nodiscard]] PPR_FORCE_INLINE void *pageAt_(const u32 page_index) const noexcept {
+                PPR_ASSERT(page_index < m_tree_infos.m_desired_size);
+                return m_reserved_space + page_index * m_page_size;
             }
 
-            m_full_bundle.fill(umax_v);
-        }
+            [[nodiscard]] PPR_FORCE_INLINE u32 pageIndex_(const void *const ptr) const noexcept {
+                const auto p = std::bit_cast<std::uintptr_t>(ptr);
+                const auto r = std::bit_cast<std::uintptr_t>(m_reserved_space);
+                PPR_ASSERT(p >= r && p + m_page_size <= r + m_tree_infos.m_desired_size * m_page_size);
+                return checked_cast<u32>((p - r) / m_page_size);
+            }
 
-        [[nodiscard]] std::allocation_result<void *>
-        reclaimFullBundle_() {
-            void *free_page = nullptr;
-            for (u32 i = 0u; i < bundle_max_count; i++) {
-                const u32 page_index = m_full_bundle[i];
-                m_full_bundle[i] = umax_v;
+            // the full bundle is always sorted
+            [[nodiscard]] PPR_FORCE_INLINE bool hasFullBundle_() const noexcept {
+                return m_full_bundle[0u] < m_tree_infos.m_desired_size;
+            }
 
-                if (page_index < m_tree_infos.m_desired_size) [[likely]] {
-                    if (free_page) [[likely]] {
-                        m_partial_bundle.pushFront(page_index);
+            PPR_FORCE_INLINE static constexpr auto runListAssumeSorted_(std::span<const u32> indices) {
+                return indices
+                       | std::views::chunk_by([](const u32 a, const u32 b) constexpr noexcept { return b == a + 1; })
+                       | std::views::transform([](auto run) constexpr noexcept {
+                           return std::pair{run.front(), static_cast<u32>(std::ranges::distance(run))};
+                       });
+            }
+
+            void decommitFullBundle_() {
+                for (auto [page_first, page_count]: runListAssumeSorted_(m_full_bundle)) {
+                    if (page_first < m_tree_infos.m_desired_size) {
+                        bool can_decommit_pages = false;
+                        for (u32 i = 0u; i < page_count; i++) {
+                            can_decommit_pages |= m_committed_pages.deallocate(m_tree_infos, page_first + i);
+                        }
+
+                        if (can_decommit_pages) [[unlikely]] {
+                            void *const free_bucket = pageAt_(alignBackward(page_first, BitmapTree::word_bit_count));
+                            hal::pageDecommit(free_bucket, m_page_size * BitmapTree::word_bit_count);
+                        }
                     } else {
-                        free_page = pageAt_(page_index);
+                        break;
                     }
-                } else {
-                    break;
                 }
+
+                m_full_bundle.fill(umax_v);
             }
 
-            return {free_page, m_page_size};
-        }
+            [[nodiscard]] std::allocation_result<void *>
+            reclaimFullBundle_() {
+                void *free_page = nullptr;
+                for (u32 i = 0u; i < bundle_max_count; i++) {
+                    const u32 page_index = m_full_bundle[i];
+                    m_full_bundle[i] = umax_v;
 
-        [[nodiscard]] PPR_NO_INLINE std::allocation_result<void *>
-        allocateRawFallback_() {
-            PPR_ASSERT(m_partial_bundle.isEmpty());
+                    if (page_index < m_tree_infos.m_desired_size) [[likely]] {
+                        if (free_page) [[likely]] {
+                            m_partial_bundle.pushFront(page_index);
+                        } else {
+                            free_page = pageAt_(page_index);
+                        }
+                    } else {
+                        break;
+                    }
+                }
 
-            // recycle full bundle
-            if (hasFullBundle_()) [[unlikely]] {
-                return reclaimFullBundle_();
+                return {free_page, m_page_size};
             }
 
-            // commit new pages and refill partial bundle
-            bool must_commit_pages = false;
-            const auto [page_first, page_count] = m_committed_pages.allocateContiguous(m_tree_infos, bundle_max_count, must_commit_pages);
-            if (page_first >= m_tree_infos.m_desired_size || page_count == 0u) {
-                throw std::bad_alloc{}; // NOLINT(*-exception-baseclass)
-            }
-            PPR_ASSERT(page_first + page_count <= m_tree_infos.m_desired_size);
+            [[nodiscard]] PPR_NO_INLINE std::allocation_result<void *>
+            allocateRawFallback_() {
+                PPR_ASSERT(m_partial_bundle.isEmpty());
 
-            if (must_commit_pages) [[unlikely]] {
-                void *const free_bucket = pageAt_(alignBackward(page_first, BitmapTree::word_bit_count));
-                hal::pageCommit(free_bucket, m_page_size * BitmapTree::word_bit_count);
-            }
+                // recycle full bundle
+                if (hasFullBundle_()) [[unlikely]] {
+                    return reclaimFullBundle_();
+                }
 
-            for (u32 i = 1u; i < page_count; i++) {
-                m_partial_bundle.pushFront(page_first + i);
-            }
+                // commit new pages and refill partial bundle
+                bool must_commit_pages = false;
+                const auto [page_first, page_count] = m_committed_pages.allocateContiguous(m_tree_infos, bundle_max_count, must_commit_pages);
+                if (page_first >= m_tree_infos.m_desired_size || page_count == 0u) {
+                    throw std::bad_alloc{}; // NOLINT(*-exception-baseclass)
+                }
+                PPR_ASSERT(page_first + page_count <= m_tree_infos.m_desired_size);
 
-            return {pageAt_(page_first), m_page_size};
-        }
+                if (must_commit_pages) [[unlikely]] {
+                    void *const free_bucket = pageAt_(alignBackward(page_first, BitmapTree::word_bit_count));
+                    hal::pageCommit(free_bucket, m_page_size * BitmapTree::word_bit_count);
+                }
 
-        PPR_NO_INLINE void
-        deallocateRawFallback_(const void *const ptr, [[maybe_unused]] const std::size_t bytes) {
-            PPR_ASSUME(ptr != nullptr);
-            PPR_ASSERT(m_partial_bundle.isFull());
+                for (u32 i = 1u; i < page_count; i++) {
+                    m_partial_bundle.pushFront(page_first + i);
+                }
 
-            if (hasFullBundle_()) [[unlikely]] {
-                decommitFullBundle_();
-            }
-
-            const u32 page_index = pageIndex_(ptr);
-
-            PPR_ASSERT(!hasFullBundle_());
-            std::ranges::copy(m_partial_bundle.m_arr | std::views::take(m_partial_bundle.m_count), m_full_bundle.begin());
-            m_full_bundle[m_partial_bundle.m_count] = page_index;
-            m_partial_bundle.m_count = 0u;
-
-            sort::inplaceShell(m_full_bundle);
-        }
-
-    public:
-        PagePool(const std::size_t page_size,
-                 const std::size_t num_reserved_pages)
-            : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(num_reserved_pages * page_size, false).ptr)),
-              m_page_size(page_size),
-              m_tree_infos(checked_cast<u32>(num_reserved_pages)),
-              m_partial_bundle() {
-            PPR_ASSERT(page_size % hal::page_size == 0u);
-            m_full_bundle.fill(umax_v);
-
-            // separated allocation for allocator metadata
-            const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
-            m_committed_pages.initialize(m_tree_infos, hal::pageAlloc(metadata_size_bytes), false);
-        }
-
-        ~PagePool() {
-            shrinkToFit();
-
-            m_barrier.lock(); // keep mutex locked to detect necrophilia
-
-            const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
-            hal::pageFree(m_committed_pages.getAllocationPtr(), metadata_size_bytes);
-            hal::pageFree(m_reserved_space, static_cast<std::size_t>(m_tree_infos.m_desired_size) * static_cast<std::size_t>(m_page_size));
-        }
-
-        [[nodiscard]] bool owns(const void *const ptr, const std::size_t size) const noexcept {
-            return static_cast<const std::byte *>(ptr) >= m_reserved_space &&
-                   static_cast<const std::byte *>(ptr) + size < m_reserved_space + m_page_size * m_tree_infos.m_desired_size;
-        }
-
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes = hal::page_size,
-                    [[maybe_unused]] const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
-            PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
-
-            const std::lock_guard scope_guard{m_barrier};
-
-            if (!m_partial_bundle.isEmpty()) [[likely]] {
-                const u32 page_index = m_partial_bundle.popFront();
-                return {pageAt_(page_index), m_page_size};
+                return {pageAt_(page_first), m_page_size};
             }
 
-            return allocateRawFallback_();
-        }
+            PPR_NO_INLINE void
+            deallocateRawFallback_(const void *const ptr, [[maybe_unused]] const std::size_t bytes) {
+                PPR_ASSUME(ptr != nullptr);
+                PPR_ASSERT(m_partial_bundle.isFull());
 
-        void deallocateRaw(const void *const ptr, [[maybe_unused]] const std::size_t bytes,
-                           [[maybe_unused]] const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
-            PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
-            PPR_ASSUME(ptr != nullptr);
+                if (hasFullBundle_()) [[unlikely]] {
+                    decommitFullBundle_();
+                }
 
-            const std::lock_guard scope_guard{m_barrier};
-
-            if (!m_partial_bundle.isFull()) [[likely]] {
                 const u32 page_index = pageIndex_(ptr);
-                m_partial_bundle.pushFront(page_index);
-                return;
-            }
 
-            deallocateRawFallback_(ptr, bytes);
-        }
-
-        void shrinkToFit() {
-            const std::lock_guard scope_guard{m_barrier};
-
-            decommitFullBundle_();
-
-            if (!m_partial_bundle.isEmpty()) {
+                PPR_ASSERT(!hasFullBundle_());
                 std::ranges::copy(m_partial_bundle.m_arr | std::views::take(m_partial_bundle.m_count), m_full_bundle.begin());
+                m_full_bundle[m_partial_bundle.m_count] = page_index;
                 m_partial_bundle.m_count = 0u;
 
                 sort::inplaceShell(m_full_bundle);
-
-                decommitFullBundle_();
             }
-        }
-
-        template<std::size_t CacheSize = 2u>
-        class Hint {
-            PagePool &m_pool;
-            const std::size_t m_page_size;
-            RingBuffer<void *, CacheSize> m_mru_cache{};
 
         public:
-            explicit Hint(PagePool &pool) noexcept
-                : m_pool(pool),
-                  m_page_size(pool.m_page_size) {
+            PagePool(const std::size_t page_size,
+                     const std::size_t num_reserved_pages)
+                : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(num_reserved_pages * page_size, false).ptr)),
+                  m_page_size(page_size),
+                  m_tree_infos(checked_cast<u32>(num_reserved_pages)),
+                  m_partial_bundle() {
+                PPR_ASSERT(page_size % hal::page_size == 0u);
+                m_full_bundle.fill(umax_v);
+
+                // separated allocation for allocator metadata
+                const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
+                m_committed_pages.initialize(m_tree_infos, hal::pageAlloc(metadata_size_bytes), false);
             }
 
-            ~Hint() noexcept {
+            ~PagePool() {
                 shrinkToFit();
+
+                m_barrier.lock(); // keep mutex locked to detect necrophilia
+
+                const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
+                hal::pageFree(m_committed_pages.getAllocationPtr(), metadata_size_bytes);
+                hal::pageFree(m_reserved_space, static_cast<std::size_t>(m_tree_infos.m_desired_size) * static_cast<std::size_t>(m_page_size));
+            }
+
+            [[nodiscard]] bool owns(const void *const ptr, const std::size_t size) const noexcept {
+                return static_cast<const std::byte *>(ptr) >= m_reserved_space &&
+                       static_cast<const std::byte *>(ptr) + size < m_reserved_space + m_page_size * m_tree_infos.m_desired_size;
             }
 
             [[nodiscard]] std::allocation_result<void *>
             allocateRaw(const std::size_t bytes = hal::page_size,
-                        const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
-                PPR_ASSERT(bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
+                        [[maybe_unused]] const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
+                PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
 
-                if (const std::optional<void *> overflow_ptr = m_mru_cache.popBack()) {
-                    return {overflow_ptr.value(), m_page_size};
+                const std::lock_guard scope_guard{m_barrier};
+
+                if (!m_partial_bundle.isEmpty()) [[likely]] {
+                    const u32 page_index = m_partial_bundle.popFront();
+                    return {pageAt_(page_index), m_page_size};
                 }
 
-                return m_pool.allocateRaw(bytes, alignment);
+                return allocateRawFallback_();
             }
 
-            void deallocateRaw(void *const ptr, [[maybe_unused]] const std::size_t bytes,
-                               const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
-                PPR_ASSERT(bytes <= m_page_size && bytes > 0u && static_cast<std::size_t>(alignment) <= hal::page_size);
+            void deallocateRaw(const void *const ptr, [[maybe_unused]] const std::size_t bytes,
+                               [[maybe_unused]] const std::align_val_t alignment = std::align_val_t{hal::page_size}) {
+                PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
                 PPR_ASSUME(ptr != nullptr);
 
-                if (m_mru_cache.isFull()) {
-                    const void *const overflow_ptr = m_mru_cache.popFrontAssumeNotEmpty();
-                    m_pool.deallocateRaw(overflow_ptr, m_page_size, alignment);
+                const std::lock_guard scope_guard{m_barrier};
+
+                if (!m_partial_bundle.isFull()) [[likely]] {
+                    const u32 page_index = pageIndex_(ptr);
+                    m_partial_bundle.pushFront(page_index);
+                    return;
                 }
 
-                m_mru_cache.pushBackAssumeNotFull(ptr);
+                deallocateRawFallback_(ptr, bytes);
             }
 
-            void shrinkToFit(const bool recurse_to_pool = false) {
-                while (const std::optional<void *> overflow_ptr = m_mru_cache.popBack()) {
-                    m_pool.deallocateRaw(overflow_ptr.value(), m_page_size, std::align_val_t{hal::page_size});
-                }
+            void shrinkToFit() {
+                const std::lock_guard scope_guard{m_barrier};
 
-                if (recurse_to_pool) [[unlikely]] {
-                    m_pool.shrinkToFit();
+                decommitFullBundle_();
+
+                if (!m_partial_bundle.isEmpty()) {
+                    std::ranges::copy(m_partial_bundle.m_arr | std::views::take(m_partial_bundle.m_count), m_full_bundle.begin());
+                    m_partial_bundle.m_count = 0u;
+
+                    sort::inplaceShell(m_full_bundle);
+
+                    decommitFullBundle_();
                 }
             }
         };
-    };
+    }
 }

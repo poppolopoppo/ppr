@@ -80,6 +80,86 @@ export namespace pP::tests {
             al.deallocateRaw(a1, 4096u);
             al.deallocateRaw(a2, 4096u);
         };
+
+        PPR_UNIT_TEST(scratch_pad_allocator) {
+            auto arena = mem::Allocator<mem::ScratchPad>{};
+
+            const auto mark0 = arena.watermark();
+
+            const auto p0 = arena.allocateRaw(32u);
+            PPR_ASSERT(arena.owns(p0.ptr, 32u));
+
+            const auto mark1 = arena.watermark();
+
+            const auto p1 = arena.allocateRaw(16u, max_align_v);
+            PPR_ASSERT(arena.owns(p1.ptr, 16u));
+
+            bool resized = arena.resizeRaw(p1.ptr, 16u, 32u);
+            PPR_ASSERT(resized);
+
+            const auto p2 = arena.allocateRaw(16u, max_align_v);
+
+            resized = arena.resizeRaw(p1.ptr, 32u, 64u);
+            PPR_ASSERT(!resized);
+
+            bool dealloc_res = arena.deallocateRaw(p1.ptr, 32u, max_align_v);
+            PPR_ASSERT(!dealloc_res);
+
+            dealloc_res = arena.deallocateRaw(p2.ptr, 16u, max_align_v);
+            PPR_ASSERT(dealloc_res);
+
+            arena.restore(mark1);
+
+            PPR_ASSERT(arena.owns(p0.ptr, 32u));
+            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
+            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+
+            arena.restore(mark0);
+
+            PPR_ASSERT(!arena.owns(p0.ptr, 32u));
+            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
+            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+        };
+
+        PPR_UNIT_TEST(scratch_pad_scoped) {
+            auto arena = mem::ScratchPad::open();
+
+            const auto mark0 = arena.watermark();
+
+            const auto p0 = arena.allocateRaw(32u, max_align_v);
+            PPR_ASSERT(arena.owns(p0.ptr, 32u));
+
+            const auto mark1 = arena.watermark();
+
+            const auto p1 = arena.allocateRaw(16u, max_align_v);
+            PPR_ASSERT(arena.owns(p1.ptr, 16u));
+
+            bool resized = arena.resizeRaw(p1.ptr, 16u, 32u);
+            PPR_ASSERT(resized);
+
+            const auto p2 = arena.allocateRaw(16u, max_align_v);
+
+            resized = arena.resizeRaw(p1.ptr, 32u, 64u);
+            PPR_ASSERT(!resized);
+
+            bool dealloc_res = arena.deallocateRaw(p1.ptr, 32u, max_align_v);
+            PPR_ASSERT(!dealloc_res);
+
+            dealloc_res = arena.deallocateRaw(p2.ptr, 16u, max_align_v);
+            PPR_ASSERT(dealloc_res);
+
+            arena.restore(mark1);
+
+            PPR_ASSERT(arena.owns(p0.ptr, 32u));
+            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
+            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+
+            arena.restore(mark0);
+
+            PPR_ASSERT(!arena.owns(p0.ptr, 32u));
+            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
+            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+        };
     }
 
     PPR_UNIT_TEST(arena) {
@@ -88,5 +168,7 @@ export namespace pP::tests {
         _.recurse(Arena::watermark_restore);
         _.recurse(Arena::move_semantics);
         _.recurse(Arena::allocator_compliance);
+        _.recurse(Arena::scratch_pad_allocator);
+        _.recurse(Arena::scratch_pad_scoped);
     };
 }

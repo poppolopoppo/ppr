@@ -282,12 +282,13 @@ export namespace pP {
     struct Bitmask {
         using integral_type = unwrap_ref_decay_t<T>;
 
+        static constexpr u32 bit_count_v = N;
+        static constexpr u32 capacity_v = sizeof(T)*8u;
+        static constexpr u32 extra_bits_v = capacity_v - N;
+
+        static constexpr integral_type all_v = ~integral_type{} >> extra_bits_v;
+
         T m_bits{zero_v};
-
-        static constexpr u32 bit_count = N;
-        static constexpr u32 extra_bits = bit_count_v<T> - N;
-
-        static constexpr integral_type all_v = ~integral_type{} >> extra_bits;
 
         [[nodiscard]] PPR_FORCE_INLINE static constexpr integral_type bitMask(const u32 bit) noexcept {
             PPR_ASSERT(bit < N);
@@ -319,7 +320,7 @@ export namespace pP {
         }
 
         constexpr void setRange(const u32 offset, const u32 n) noexcept {
-            PPR_ASSERT(offset + n <= bit_count);
+            PPR_ASSERT(offset + n <= bit_count_v);
 
             const integral_type mask = (bitMask(n) - 1u) << offset;
             PPR_ASSERT(not(mask & m_bits));
@@ -328,7 +329,7 @@ export namespace pP {
         }
 
         constexpr void unsetRange(const u32 offset, const u32 n) noexcept {
-            PPR_ASSERT(offset + n <= bit_count);
+            PPR_ASSERT(offset + n <= bit_count_v);
 
             const integral_type mask = (bitMask(n) - 1u) << offset;
             PPR_ASSERT(not(mask & ~m_bits));
@@ -398,7 +399,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr u32 countLeadingOnes() const noexcept {
-            return static_cast<u32>(std::countl_one(cref() << extra_bits));
+            return static_cast<u32>(std::countl_one(cref() << extra_bits_v));
         }
 
         [[nodiscard]] constexpr u32 countTrailingOnes() const noexcept {
@@ -406,7 +407,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr u32 countLeadingZeros() const noexcept {
-            return static_cast<u32>(std::countl_zero(cref() << extra_bits));
+            return static_cast<u32>(std::countl_zero(cref() << extra_bits_v));
         }
 
         [[nodiscard]] constexpr u32 countTrailingZeros() const noexcept {
@@ -436,25 +437,25 @@ export namespace pP {
             return {all_v << n};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[maybe_unused]] constexpr Bitmask &operator &=(const Bitmask<U> other) noexcept {
             ref() &= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[maybe_unused]] constexpr Bitmask &operator |=(const Bitmask<U> other) noexcept {
             ref() |= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[maybe_unused]] constexpr Bitmask &operator ^=(const Bitmask<U> other) noexcept {
             ref() ^= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[maybe_unused]] constexpr Bitmask &operator -=(const Bitmask<U> other) noexcept {
             ref() &= ~other.cref();
             return *this;
@@ -464,22 +465,22 @@ export namespace pP {
             return {~cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] constexpr Bitmask<integral_type> operator &(const Bitmask<U> other) const noexcept {
             return {cref() & other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] constexpr Bitmask<integral_type> operator |(const Bitmask<U> other) const noexcept {
             return {cref() | other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] constexpr Bitmask<integral_type> operator ^(const Bitmask<U> other) const noexcept {
             return {cref() ^ other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] constexpr Bitmask<integral_type> operator -(const Bitmask<U> other) const noexcept {
             return {cref() & ~other.cref()};
         }
@@ -492,12 +493,12 @@ export namespace pP {
             return {cref() >> rshift};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] friend constexpr bool operator ==(const Bitmask lhs, const Bitmask<U> rhs) noexcept {
             return lhs.cref() == rhs.cref();
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count == bit_count)
+        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
         [[nodiscard]] friend constexpr std::strong_ordering operator<=>(const Bitmask lhs, const Bitmask<U> rhs) noexcept {
             return lhs.cref() <=> rhs.cref();
         }

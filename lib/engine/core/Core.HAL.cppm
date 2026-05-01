@@ -142,6 +142,11 @@ export namespace pP {
     }
 
     template<typename T>
+    [[nodiscard]] T *alignBackward(T *ptr, std::align_val_t alignment) noexcept {
+        return std::bit_cast<T *>(alignBackward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
+    }
+
+    template<typename T>
     [[nodiscard]] T *alignForward(T *ptr, std::align_val_t alignment) noexcept {
         return std::bit_cast<T *>(alignForward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
     }
@@ -213,11 +218,15 @@ export namespace pP {
     template<typename CallbackT> requires std::is_invocable_v<CallbackT>
     class [[nodiscard]] Deferred {
     public:
-        Deferred(CallbackT &&callback) noexcept
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Deferred(CallbackT &&callback)
+            noexcept(std::is_nothrow_move_constructible_v<CallbackT>)
             : m_callback(std::forward<CallbackT>(callback)) {
         }
 
-        ~Deferred() noexcept(std::is_nothrow_invocable_v<CallbackT>) {
+        constexpr ~Deferred()
+            noexcept(std::is_nothrow_invocable_v<CallbackT> &&
+                     std::is_nothrow_destructible_v<CallbackT>) {
             // invoke the deferred callback when this object is destroyed
             m_callback();
         }
@@ -226,9 +235,9 @@ export namespace pP {
 
         Deferred &operator=(const Deferred &) = delete;
 
-        Deferred(Deferred &&) noexcept = default;
+        constexpr Deferred(Deferred &&) noexcept = default;
 
-        Deferred &operator=(Deferred &&) noexcept = default;
+        constexpr Deferred &operator=(Deferred &&) noexcept = default;
 
     private:
         CallbackT m_callback;
@@ -238,7 +247,9 @@ export namespace pP {
     Deferred(CallbackT &&) -> Deferred<std::remove_cvref_t<CallbackT> >;
 
     template<typename CallbackT>
-    [[nodiscard]] auto defer(CallbackT &&callback) noexcept requires std::is_invocable_v<CallbackT> {
+    [[nodiscard]] constexpr auto defer(CallbackT &&callback)
+        noexcept(Deferred(std::forward<CallbackT>(callback)))
+        requires std::is_invocable_v<CallbackT> {
         return Deferred(std::forward<CallbackT>(callback));
     }
 
@@ -259,7 +270,7 @@ export namespace pP {
 #else
 
         // Fallback: enumerate = zip(iota, range)
-        inline constexpr auto enumerate = []<std::ranges::input_range R>(R &&r) {
+        [[nodiscard]] inline constexpr auto enumerate = []<std::ranges::input_range R>(R &&r) constexpr noexcept {
             using std::views::iota;
             using std::views::zip;
 
@@ -296,9 +307,9 @@ export namespace pP::hal {
     // ------------------------------------------------------------------
 
 #if defined(__cpp_lib_hardware_interference_size)
-    inline constexpr std::size_t cacheline_size = std::hardware_destructive_interference_size;
+    inline constexpr std::size_t cacheline_size_v = std::hardware_destructive_interference_size;
 #else
-    inline constexpr std::size_t cacheline_size = 64u; // conservative fallback for older compilers
+    inline constexpr std::size_t cacheline_size_v = 64u; // conservative fallback for older compilers
 #endif
 
     struct PageProtection {

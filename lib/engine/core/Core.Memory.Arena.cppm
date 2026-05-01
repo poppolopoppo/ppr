@@ -17,6 +17,7 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     template<details::TAllocator AllocatorT = HugePage>
+
     class PPR_EMPTY_BASES Arena : public AllocatorTraits<Arena<AllocatorT> >, AllocatorT {
         static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
 
@@ -99,7 +100,11 @@ export namespace pP::mem {
         u32 m_offset{0u};
 
     public:
-        explicit Arena(const std::size_t initial_capacity = hal::page_size)
+        Arena() requires details::TBlockAllocator<AllocatorT>
+            : Arena(AllocatorT::block_size_v) {
+        }
+
+        explicit Arena(const std::size_t initial_capacity)
             requires std::is_default_constructible_v<AllocatorT> {
             reset(initial_capacity);
         }
@@ -164,7 +169,7 @@ export namespace pP::mem {
             }
         }
 
-        void reset(std::size_t initial_capacity) noexcept {
+        void reset(const std::size_t initial_capacity) noexcept {
             reset();
 
             if (m_slab == nullptr || m_capacity != initial_capacity) {
@@ -193,8 +198,8 @@ export namespace pP::mem {
             }
 
             m_offset = checked_cast<u32>(
-                (static_cast<std::byte*>(aligned_ptr) - static_cast<std::byte*>(m_slab)) +
-                static_cast<std::ptrdiff_t>(bytes) );
+                (static_cast<std::byte *>(aligned_ptr) - static_cast<std::byte *>(m_slab)) +
+                static_cast<std::ptrdiff_t>(bytes));
             poisonIfDebug(Poison::uninitialized, static_cast<std::byte *>(aligned_ptr), bytes);
             return {aligned_ptr, bytes};
         }
@@ -204,14 +209,14 @@ export namespace pP::mem {
             PPR_ASSERT(owns(ptr, old_size) && "Trying to resize a pointer outside of the arena");
 
             // Only resizable if it was the last allocation
-            std::byte *const byte_ptr = static_cast<std::byte *>(ptr);
+            const auto byte_ptr = static_cast<std::byte *>(ptr);
             if (byte_ptr + old_size != static_cast<std::byte *>(m_slab) + m_offset) [[unlikely]] {
                 return false; // not the top, caller must allocate+copy
             }
 
             const u32 new_offset = checked_cast<u32>(
-                (static_cast<std::byte*>(byte_ptr) - static_cast<std::byte*>(m_slab)) +
-                static_cast<std::ptrdiff_t>(new_size) );
+                (static_cast<std::byte *>(byte_ptr) - static_cast<std::byte *>(m_slab)) +
+                static_cast<std::ptrdiff_t>(new_size));
             if (new_offset > m_capacity) [[unlikely]] {
                 return false; // OOM - can't relocate to a new slab
             }
@@ -229,8 +234,8 @@ export namespace pP::mem {
             poisonIfDebug(Poison::destroyed, ptr, bytes);
 
             // Verify ptr is actually the top of the arena
-            const std::byte *byte_ptr = static_cast<std::byte *>(ptr);
-            if (byte_ptr + bytes == static_cast<const std::byte *>(m_slab) + m_offset) [[likely]] {
+            if (const std::byte *byte_ptr = static_cast<std::byte *>(ptr);
+                byte_ptr + bytes == static_cast<const std::byte *>(m_slab) + m_offset) [[likely]] {
                 m_offset = checked_cast<u32>(byte_ptr - static_cast<const std::byte *>(m_slab));
                 return true;
             }
@@ -265,8 +270,162 @@ export namespace pP::mem {
 
     template<details::TAllocator AllocatorT>
     Arena(std::size_t initial_capacity, AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT> >;
-}
 
+    // ------------------------------------------------------------------
+    // RAII wrapper to scope all the allocations made in the arena
+    // ------------------------------------------------------------------
+
+    template<details::TArenaAllocator ArenaT>
+    struct [[nodiscard]] ScopedArena {
+        ArenaT *m_arena{};
+        const void *m_watermark{};
+
+        ScopedArena() = delete;
+
+        explicit constexpr ScopedArena(ArenaT &arena) noexcept
+            : m_arena{std::addressof(arena)},
+              m_watermark{arena.watermark()} {
+        }
+
+        constexpr ScopedArena(const ScopedArena &) = delete;
+
+        constexpr ScopedArena &operator =(const ScopedArena &) = delete;
+
+        constexpr ScopedArena(ScopedArena &&other) noexcept {
+            std::swap(m_arena, other.m_arena);
+            std::swap(m_watermark, other.m_watermark);
+        }
+
+        constexpr ScopedArena &operator =(ScopedArena &&other) noexcept {
+            if (this == &other) [[unlikely]] return;
+
+            if (m_arena) {
+                PPR_ASSERT(m_watermark);
+                m_arena->restore(m_watermark);
+
+                m_arena = nullptr;
+            }
+            m_watermark = nullptr;
+
+            std::swap(m_arena, other.m_arena);
+            std::swap(m_watermark, other.m_watermark);
+            return *this;
+        }
+
+        constexpr ~ScopedArena() noexcept {
+            if (m_arena) {
+                PPR_ASSERT(m_watermark);
+                m_arena->restore(m_watermark);
+            }
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE
+        bool owns(const void *const ptr, const std::size_t size) noexcept {
+            return m_arena->owns(ptr, size);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE
+        std::allocation_result<void *>
+        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+            return m_arena->allocateRaw(bytes, alignment);
+        }
+
+        // Only valid if ptr was the most recent allocation
+        [[nodiscard]] PPR_FORCE_INLINE
+        bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+            return m_arena->resizeRaw(ptr, old_size, new_size);
+        }
+
+        // Only valid if ptr was the most recent allocation
+        [[maybe_unused]] PPR_FORCE_INLINE
+        bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+            return m_arena->deallocateRaw(ptr, bytes, alignment);
+        }
+
+        // Checkpoint the current offset for cheap scope-level rewind
+        [[nodiscard]] PPR_FORCE_INLINE constexpr
+        const void *watermark() const noexcept {
+            return m_arena->watermark();
+        }
+
+        // Rewind to a previous checkpoint — no destructor calls, O(1)
+        PPR_FORCE_INLINE constexpr
+        void restore(const void *const mark) noexcept {
+            m_arena->restore(mark);
+        }
+
+        PPR_FORCE_INLINE constexpr
+        void reset() noexcept {
+            m_arena->reset();
+        }
+    };
+
+    template<details::TArenaAllocator ArenaT>
+    ScopedArena(ArenaT &arena) -> ScopedArena<ArenaT>;
+
+    // ------------------------------------------------------------------
+    // default Arena for for small transient allocations (eg string formatting)
+    // ------------------------------------------------------------------
+
+    class ScratchPad {
+        // not constructible locally
+        [[nodiscard]] static constexpr Arena<SmallPage> &getArenaTLS_() noexcept {
+            alignas(hal::cacheline_size_v) thread_local Arena<SmallPage> g_instance_tls{};
+            return g_instance_tls;
+        }
+
+    public:
+        constexpr ScratchPad() noexcept = default;
+
+        using scoped_arena_t = ScopedArena<Arena<SmallPage>>;
+
+        [[nodiscard]] static constexpr scoped_arena_t open() noexcept {
+            return ScopedArena(getArenaTLS_());
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE static
+        bool owns(const void *const ptr, const std::size_t size) noexcept {
+            return getArenaTLS_().owns(ptr, size);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE static
+        std::allocation_result<void *>
+        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+            return getArenaTLS_().allocateRaw(bytes, alignment);
+        }
+
+        // Only valid if ptr was the most recent allocation
+        [[nodiscard]] PPR_FORCE_INLINE static
+        bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+            return getArenaTLS_().resizeRaw(ptr, old_size, new_size);
+        }
+
+        // Only valid if ptr was the most recent allocation
+        [[maybe_unused]] PPR_FORCE_INLINE static
+        bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+            return getArenaTLS_().deallocateRaw(ptr, bytes, alignment);
+        }
+
+        // Checkpoint the current offset for cheap scope-level rewind
+        [[nodiscard]] PPR_FORCE_INLINE static
+        const void *watermark() noexcept {
+            return getArenaTLS_().watermark();
+        }
+
+        // Rewind to a previous checkpoint — no destructor calls, O(1)
+        PPR_FORCE_INLINE static
+        void restore(const void *const mark) noexcept {
+            getArenaTLS_().restore(mark);
+        }
+
+        PPR_FORCE_INLINE static
+        void reset() noexcept {
+            getArenaTLS_().reset();
+        }
+    };
+
+    static_assert(details::use_inplace_v<ScratchPad>);
+}
 
 // ------------------------------------------------------------------
 // custom placement new and delete operators for Arena<>

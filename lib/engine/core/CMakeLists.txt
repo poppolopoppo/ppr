@@ -12,6 +12,7 @@ target_sources(EngineCore
             Core.FunctionRef.cppm
             Core.HAL.cppm
             Core.Memory.cppm
+            Core.Memory.Allocator.cppm
             Core.Memory.Arena.cppm
             Core.Memory.PagePool.cppm
             Core.Opaque.cppm

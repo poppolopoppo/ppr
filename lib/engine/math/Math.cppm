@@ -2,6 +2,8 @@ module;
 
 #include <mango/math/math.hpp>
 
+#include "pP/Macros.h"
+
 export module engine.math;
 
 export namespace mango::math {}

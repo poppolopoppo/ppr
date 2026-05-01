@@ -34,7 +34,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(bundle_flow) {
-            mem::PagePool pool(4096u, 64u);
+            mem::os::PagePool pool(4096u, 64u);
 
             void *ptrs[32];
             for (int i = 0; i < 32; ++i) {
@@ -53,7 +53,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(shrink_mechanics) {
-            mem::PagePool pool(4096u, 64u);
+            mem::os::PagePool pool(4096u, 64u);
 
             const void *p1 = pool.allocateRaw().ptr;
             pool.deallocateRaw(p1, 4096u);
@@ -64,36 +64,11 @@ export namespace pP::tests {
             PPR_ASSERT(p2 != nullptr);
             pool.deallocateRaw(p2, 4096u);
         };
-
-        PPR_UNIT_TEST(hint_cache_behavior) {
-            mem::PagePool pool(4096u, 64u);
-            mem::PagePool::Hint<2u> hint(pool);
-
-            void *h1 = hint.allocateRaw().ptr;
-            void *h2 = hint.allocateRaw().ptr;
-            void *h3 = hint.allocateRaw().ptr;
-
-            hint.deallocateRaw(h1, 4096u);
-            hint.deallocateRaw(h2, 4096u);
-
-            hint.deallocateRaw(h3, 4096u);
-
-            const auto r1 = hint.allocateRaw();
-            const auto r2 = hint.allocateRaw();
-            const auto r3 = hint.allocateRaw();
-
-            PPR_ASSERT(r1.ptr == h3);
-            PPR_ASSERT(r2.ptr == h2);
-            PPR_ASSERT(r3.ptr == h1);
-
-            hint.shrinkToFit(true);
-        };
     }
 
     PPR_UNIT_TEST(pagePool) {
         _.recurse(PagePool::bit_tree_mechanics);
         _.recurse(PagePool::bundle_flow);
         _.recurse(PagePool::shrink_mechanics);
-        _.recurse(PagePool::hint_cache_behavior);
     };
 }

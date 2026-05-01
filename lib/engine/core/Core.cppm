@@ -2,6 +2,7 @@ module;
 
 export module engine.core;
 
+export import :allocator;
 export import :assert;
 export import :arena;
 export import :containers;
