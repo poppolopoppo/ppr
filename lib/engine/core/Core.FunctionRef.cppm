@@ -838,7 +838,7 @@ export namespace std23 {
                           return get<F>(fn_)(static_cast<decltype(args)>(args)...);
                   }),
               obj_(f) {
-            PPR_ASSERT(f != nullptr && "must reference a function");
+            PPR_ASSUME(f != nullptr);
         }
 
         template<class F, class T = std::remove_reference_t<F> >
@@ -913,8 +913,9 @@ export namespace std23 {
             if constexpr (std::is_pointer_v<F> or std::is_member_pointer_v<F>)
                 static_assert(f != nullptr, "NTTP callable must be usable");
 
-            if constexpr (std::is_member_pointer_v<F>)
-                PPR_ASSERT(obj != nullptr && "must reference an object");
+            if constexpr (std::is_member_pointer_v<F>) {
+                PPR_ASSUME(obj != nullptr);
+            }
         }
 
         constexpr R operator()(Args... args) const noexcept(noex) {

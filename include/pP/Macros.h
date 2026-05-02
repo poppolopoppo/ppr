@@ -29,7 +29,7 @@
 
 #ifdef _MSC_VER
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME) __declspec(code_seg(_NAME))
-#   define PPR_ASSUME(...) __assume(__VA_ARGS__)
+#   define PPR_ASSUME(...) [[assume(__VA_ARGS__)]]
 #   define PPR_EMPTY_BASES __declspec(empty_bases)
 #   define PPR_FLATTEN [[msvc::flatten]]
 #   define PPR_FORCE_INLINE [[msvc::forceinline]]
@@ -121,11 +121,11 @@
 #if PPR_ENABLE_ASSERTIONS
 #   define PPR_DETAILS_ASSERTION_IMPL(_TYPE, ...)  do { \
         if consteval { \
-            [[maybe_unused]] const auto PPR_ANONYMIZE(condition) = (__VA_ARGS__); \
-            PPR_ASSUME(PPR_ANONYMIZE(condition)); \
+            [[assume(__VA_ARGS__)]]; \
         } else { \
-            if (!(__VA_ARGS__)) [[unlikely]] [PPR_ANONYMIZE(assertion_site){std::source_location::current()}]() \
+            if (!(__VA_ARGS__)) [[unlikely]] [&]() \
                 PPR_ATTRIBUTE_CODE_SEGMENT(".ppr_dbg") { \
+                constexpr auto PPR_ANONYMIZE(assertion_site) = std::source_location::current(); \
                 ::pP::Assertion::onFailure( \
                     ::pP::Assertion::_TYPE, \
                     PPR_STRINGIZE(__VA_ARGS__), \

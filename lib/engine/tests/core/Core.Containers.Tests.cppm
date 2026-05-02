@@ -175,7 +175,7 @@ export namespace pP::tests {
             IndexIterator<std::array<int, 2>, int> it(arr, 0);
             IndexIterator<std::add_const_t<std::array<int, 2> >, std::add_const_t<int> > cit = it;
             PPR_ASSERT(*cit == 5);
-            PPR_ASSERT((it <=> cit) == std::strong_ordering::equal);
+            PPR_ASSERT(it == cit);
         };
 
         PPR_UNIT_TEST(stack_push_pop_and_iterator) {

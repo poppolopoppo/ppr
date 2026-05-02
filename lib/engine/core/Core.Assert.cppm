@@ -356,7 +356,7 @@ namespace pP {
     };
 }
 
-export template<pP::details::TChar CharT>
+template<pP::details::TChar CharT>
 struct std::formatter<pP::UnitTest::Id, CharT> {
     template<typename FormatParseContextT>
     static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {

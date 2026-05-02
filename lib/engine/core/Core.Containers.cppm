@@ -180,7 +180,7 @@ export namespace pP {
                    IndexIterator rhs) noexcept
             requires (!std::is_same_v<std::add_const_t<T>, T>) {
             PPR_ASSERT(lhs.getContainer() == rhs.m_container);
-            return rhs == lhs;
+            return lhs.getIndex() == rhs.m_index;
         }
 
         [[nodiscard]] friend constexpr std::strong_ordering
