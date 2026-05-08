@@ -51,8 +51,6 @@ namespace pP {
 
     private:
         class Handler {
-            Handler() noexcept = default;
-
             static void defaultAssertFailure_(const Assertion &condition) {
                 char buffer[2048];
                 const auto [out, size] = std::format_to_n(
@@ -81,6 +79,8 @@ namespace pP {
             Policy m_on_assert_failure{&defaultAssertFailure_};
 
         public:
+            Handler() noexcept = default;
+
             Handler(const Handler &) = delete;
 
             Handler &operator =(const Handler &) = delete;

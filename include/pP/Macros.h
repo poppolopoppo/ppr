@@ -1,6 +1,36 @@
 #pragma once
 
 // ------------------------------------------------------------------
+// detects debug builds conservatively
+// ------------------------------------------------------------------
+
+#if defined(_DEBUG) || !defined(NDEBUG)
+#   define PPR_ENABLE_DEBUG 1
+#   define PPR_DECL_IF_DEBUG(...) __VA_ARGS__
+#   define PPR_EXPR_IF_DEBUG(...) __VA_ARGS__
+#else
+#   define PPR_ENABLE_DEBUG 0
+#   define PPR_DECL_IF_DEBUG(...)
+#   define PPR_EXPR_IF_DEBUG(...) (void)0
+#endif
+
+// ------------------------------------------------------------------
+// detects 32-bits vs 64-bits builds, note that 32-bits are deprecated.
+// ------------------------------------------------------------------
+
+#if INTPTR_MAX == INT64_MAX
+#   define PPR_64BIT 1
+#   define PPR_32BIT 0
+#   define PPR_32BIT_OR_64BIT(_32BIT, _64BIT) _64BIT
+#elif INTPTR_MAX == INT32_MAX
+#   define PPR_64BIT 0
+#   define PPR_32BIT 1
+#   define PPR_32BIT_OR_64BIT(_32BIT, _64BIT) _32BIT
+#else
+#   error "Unknown pointer size: cannot determine 32-bit vs 64-bit build"
+#endif
+
+// ------------------------------------------------------------------
 // macro helpers
 // ------------------------------------------------------------------
 
@@ -104,19 +134,7 @@
 // assertions
 // ------------------------------------------------------------------
 
-#ifdef _DEBUG
-#   ifdef NDEBUG
-#       error "NDEBUG should not be defined in debug builds"
-#   endif
-
-#   define PPR_ENABLE_ASSERTIONS 1
-#   define PPR_DECL_IF_DEBUG(...) __VA_ARGS__
-#   define PPR_EXPR_IF_DEBUG(...) __VA_ARGS__
-#else
-#   define PPR_ENABLE_ASSERTIONS 0
-#   define PPR_DECL_IF_DEBUG(...)
-#   define PPR_EXPR_IF_DEBUG(...) (void)0
-#endif
+#define PPR_ENABLE_ASSERTIONS PPR_ENABLE_DEBUG
 
 #if PPR_ENABLE_ASSERTIONS
 #   define PPR_DETAILS_ASSERTION_IMPL(_TYPE, ...)  do { \
