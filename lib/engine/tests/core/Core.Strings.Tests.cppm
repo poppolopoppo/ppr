@@ -4,7 +4,7 @@ export module engine.tests:core_strings;
 import engine.core;
 import std;
 
-export namespace pP::tests {
+namespace pP::tests {
     namespace Strings {
         namespace Helpers {
             PPR_UNIT_TEST(char_helpers) {
@@ -155,7 +155,6 @@ export namespace pP::tests {
             _.recurse(Static::edge_cases);
         };
 
-#if 0
         namespace Range {
             PPR_UNIT_TEST(compare) {
                 constexpr std::string_view a = "hello";
@@ -168,6 +167,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(promote) {
                 constexpr auto a = caseFold("_ToTo!");
+                PPR_ASSERT(a.size() == 6u);
                 PPR_ASSERT(a == std::string_view("_ToTo!"));
                 PPR_ASSERT(a == std::string_view("_toto!"));
                 PPR_ASSERT(a == "_ToTo!");
@@ -176,7 +176,9 @@ export namespace pP::tests {
                 PPR_ASSERT((a <=> "_toto!") == std::strong_ordering::equal);
                 PPR_ASSERT((a <=> "_tOTo!") == std::strong_ordering::equal);
                 PPR_ASSERT((a <=> "_ZOTo!") == std::strong_ordering::less);
-                PPR_ASSERT((a <=> "_aOTo!") == std::strong_ordering::greater);
+                PPR_ASSERT((a <=> "_aoTo!") == std::strong_ordering::greater);
+                PPR_ASSERT((a <=> "_zoTo!") == std::strong_ordering::less);
+                PPR_ASSERT((a <=> "_AOTo!") == std::strong_ordering::greater);
             };
 
             PPR_UNIT_TEST(composition) {
@@ -192,15 +194,14 @@ export namespace pP::tests {
                 constexpr std::string_view input = "  HeLlO   WoRlD!  ";
 
                 auto squeezed = squeezeSpaces(trim(input));
-                std::string intermediate(squeezed);
+                const std::string intermediate(squeezed);
+                PPR_ASSERT(intermediate == "HeLlO WoRlD!");
 
-                auto processed = titleCase(intermediate);
+                const std::string title_case(titleCase(intermediate));
+                PPR_ASSERT(title_case == "Hello World!");
 
-                PPR_ASSERT(std::ranges::equal(processed, std::string_view("Hello World!")));
-
-                PPR_ASSERT(std::ranges::equal(trim(caseFold("  HeLlO   ")), std::string_view("hello")));
-
-                PPR_ASSERT(std::ranges::equal(toUpper("ABC"), std::string_view("ABC")));
+                auto trimmed = trim(caseFold("  HeLlO   "));
+                PPR_ASSERT(trimmed == "hello");
             };
 
             PPR_UNIT_TEST(hashing) {
@@ -258,8 +259,7 @@ export namespace pP::tests {
             _.recurse(Range::hashing);
             _.recurse(Range::to_string_conversion);
         };
-#endif
-#if 1
+
         namespace Lazy {
             PPR_UNIT_TEST(trim_functions) {
                 constexpr std::string_view s1 = "   hello   ";
@@ -340,7 +340,7 @@ export namespace pP::tests {
                 constexpr std::string_view s = R"(<tag attr="value & 'more'>)";
                 auto escaped = xmlEscape(s);
                 const std::string result(escaped);
-                PPR_ASSERT(result == "&lt;tag attr=&quot;value &amp; &apos;more&apos;&gt;&quot;");
+                PPR_ASSERT(result == "&lt;tag attr=&quot;value &amp; &apos;more&apos;&gt;");
             };
 
             PPR_UNIT_TEST(hex_encode) {
@@ -361,14 +361,13 @@ export namespace pP::tests {
             _.recurse(Lazy::xml_escape);
             _.recurse(Lazy::hex_encode);
         };
-#endif
     }
 
     PPR_UNIT_TEST(strings) {
         _.recurse(Strings::helpers);
         _.recurse(Strings::literal);
         _.recurse(Strings::static_string);
-        // _.recurse(Strings::range);
+        _.recurse(Strings::range);
         _.recurse(Strings::lazy);
     };
 }

@@ -24,7 +24,7 @@ export namespace pP::tests {
             pP::HashMap<int, int> m{{1, 10}};
             int count = 0;
             int sum = 0;
-            for (auto &[k,v]: m) {
+            for (auto [k,v]: m) {
                 count += k;
                 sum += v;
             }
@@ -33,7 +33,7 @@ export namespace pP::tests {
             m.clear();
             count = 0;
             sum = 0;
-            for (auto &[k,v]: m) {
+            for (auto [k,v]: m) {
                 count += k;
                 sum += v;
             }

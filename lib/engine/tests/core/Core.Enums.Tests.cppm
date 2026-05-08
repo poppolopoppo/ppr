@@ -21,6 +21,8 @@ export namespace pP::tests {
             a = 1u << 0,
             b = 1u << 1,
             c = 1u << 2,
+            ab = a|b,
+            all = a|b|c
         };
 
         constexpr bool is_enum_flags(std::type_identity<Flags>) noexcept {
@@ -41,11 +43,11 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(flags_and) {
-            const auto ab = Flags::a & Flags::b;
-            PPR_ASSERT(enumOrd(ab) == ((1u << 0) | (1u << 1)));
+            const auto a = Flags::a & Flags::all;
+            PPR_ASSERT(enumOrd(a) == enumOrd(Flags::a));
 
-            const auto abc = Flags::a & Flags::b & Flags::c;
-            PPR_ASSERT(enumOrd(abc) == ((1u << 0) | (1u << 1) | (1u << 2)));
+            const auto none = Flags::a & Flags::b;
+            PPR_ASSERT(enumOrd(none) == enumOrd(Flags::none));
         };
 
         PPR_UNIT_TEST(flags_or) {
@@ -65,8 +67,8 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(flags_mixed_operations) {
-            const auto expr = (Flags::a | Flags::b) & Flags::c ^ Flags::a;
-            PPR_ASSERT(enumOrd(expr) == ((1u << 1) | (1u << 2)));
+            const auto expr = ((Flags::all ^ Flags::c) & Flags::a) | Flags::b;
+            PPR_ASSERT(enumOrd(expr) == enumOrd(Flags::ab));
         };
     }
 

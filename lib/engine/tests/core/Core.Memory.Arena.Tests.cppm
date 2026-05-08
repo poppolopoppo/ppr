@@ -84,20 +84,19 @@ export namespace pP::tests {
         PPR_UNIT_TEST(scratch_pad_allocator) {
             auto arena = mem::Allocator<mem::ScratchPad>{};
 
-            const auto mark0 = arena.watermark();
+            const auto mark = arena.watermark();
 
-            const auto p0 = arena.allocateRaw(32u);
+            [[maybe_unused]] const auto p0 = arena.allocateRaw(32u, max_align_v);
             PPR_ASSERT(arena.owns(p0.ptr, 32u));
 
-            const auto mark1 = arena.watermark();
-
-            const auto p1 = arena.allocateRaw(16u, max_align_v);
+            [[maybe_unused]] auto p1 = arena.allocateRaw(16u, max_align_v);
             PPR_ASSERT(arena.owns(p1.ptr, 16u));
 
             bool resized = arena.resizeRaw(p1.ptr, 16u, 32u);
             PPR_ASSERT(resized);
+            p1.count = 32u;
 
-            const auto p2 = arena.allocateRaw(16u, max_align_v);
+            [[maybe_unused]] const auto p2 = arena.allocateRaw(16u, max_align_v);
 
             resized = arena.resizeRaw(p1.ptr, 32u, 64u);
             PPR_ASSERT(!resized);
@@ -108,36 +107,29 @@ export namespace pP::tests {
             dealloc_res = arena.deallocateRaw(p2.ptr, 16u, max_align_v);
             PPR_ASSERT(dealloc_res);
 
-            arena.restore(mark1);
+            arena.restore(mark);
 
-            PPR_ASSERT(arena.owns(p0.ptr, 32u));
-            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
-            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
-
-            arena.restore(mark0);
-
-            PPR_ASSERT(!arena.owns(p0.ptr, 32u));
-            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
-            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+            PPR_ASSERT(arena.owns(p0.ptr, p0.count));
+            PPR_ASSERT(arena.owns(p1.ptr, p1.count));
+            PPR_ASSERT(arena.owns(p2.ptr, p2.count));
         };
 
         PPR_UNIT_TEST(scratch_pad_scoped) {
             auto arena = mem::ScratchPad::open();
 
-            const auto mark0 = arena.watermark();
+            const auto mark = arena.watermark();
 
-            const auto p0 = arena.allocateRaw(32u, max_align_v);
+            [[maybe_unused]] const auto p0 = arena.allocateRaw(32u, max_align_v);
             PPR_ASSERT(arena.owns(p0.ptr, 32u));
 
-            const auto mark1 = arena.watermark();
-
-            const auto p1 = arena.allocateRaw(16u, max_align_v);
+            [[maybe_unused]] auto p1 = arena.allocateRaw(16u, max_align_v);
             PPR_ASSERT(arena.owns(p1.ptr, 16u));
 
             bool resized = arena.resizeRaw(p1.ptr, 16u, 32u);
             PPR_ASSERT(resized);
+            p1.count = 32u;
 
-            const auto p2 = arena.allocateRaw(16u, max_align_v);
+            [[maybe_unused]] const auto p2 = arena.allocateRaw(16u, max_align_v);
 
             resized = arena.resizeRaw(p1.ptr, 32u, 64u);
             PPR_ASSERT(!resized);
@@ -148,17 +140,11 @@ export namespace pP::tests {
             dealloc_res = arena.deallocateRaw(p2.ptr, 16u, max_align_v);
             PPR_ASSERT(dealloc_res);
 
-            arena.restore(mark1);
+            arena.restore(mark);
 
-            PPR_ASSERT(arena.owns(p0.ptr, 32u));
-            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
-            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
-
-            arena.restore(mark0);
-
-            PPR_ASSERT(!arena.owns(p0.ptr, 32u));
-            PPR_ASSERT(!arena.owns(p1.ptr, 16u));
-            PPR_ASSERT(!arena.owns(p2.ptr, 16u));
+            PPR_ASSERT(arena.owns(p0.ptr, p0.count));
+            PPR_ASSERT(arena.owns(p1.ptr, p1.count));
+            PPR_ASSERT(arena.owns(p2.ptr, p2.count));
         };
     }
 

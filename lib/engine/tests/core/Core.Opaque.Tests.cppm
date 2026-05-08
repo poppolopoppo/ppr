@@ -33,8 +33,10 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(decl_arrays) {
+            [[maybe_unused]] array_view toto = {1,2,3};
+
             constexpr auto check = [](opaque::Value &&v) {
-                const auto ar = v.get<opaque::Array>();
+                const auto &ar = v.get<opaque::Array>();
                 PPR_ASSERT(ar.size() == 4u);
                 PPR_ASSERT(ar[0].get<bool>() == true);
                 PPR_ASSERT(ar[1].get<i64>() == -1);
@@ -43,21 +45,21 @@ export namespace pP::tests {
             };
             check({true, i64{-1}, u64{42u}, "ansi"});
 
-            opaque::Value promoted = {true, i64{-1}, u64{42u}, "ansi"};
-            check(std::move(promoted));
+            std::vector<opaque::Value> promoted = {true, i64{-1}, u64{42u}, "ansi"};
+            check(promoted);
         };
 
         PPR_UNIT_TEST(decl_dict) {
             constexpr auto check = [](opaque::Value &&v) {
-                const auto map = v.get<opaque::Dict>();
+                const auto &map = v.get<opaque::Dict>();
                 PPR_ASSERT(map.size() == 2u);
-                PPR_ASSERT(map[0].value.get<bool>() == false);
-                PPR_ASSERT(map[1].value.get<u64>() == 42u);
+                PPR_ASSERT(map[0].second.get<bool>() == false);
+                PPR_ASSERT(map[1].second.get<u64>() == 42u);
             };
             check(opaque::Dict{{"male", false}, {"age", u64{42u}}});
 
-            opaque::Value promoted = opaque::Dict{{"male", false}, {"age", u64{42u}}};
-            check(std::move(promoted));
+            std::vector<opaque::KeyValue> promoted = {{"male", false}, {"age", u64{42u}}};
+            check(promoted);
         };
 
         inline opaque::Value getValueForDebug() {
@@ -137,7 +139,7 @@ export namespace pP::tests {
             const std::string res = fmt([](opaque::format_context &ctx) {
                 return std::format_to(ctx.out(), "This is {:02} formatted {}", 1, "text");
             });
-            constexpr std::string_view expected = R"EXPECT("This is 01 formatted text")EXPECT";
+            constexpr std::string_view expected = R"EXPECT(This is 01 formatted text)EXPECT";
             PPR_ASSERT(expected == res);
         };
     }

@@ -20,6 +20,19 @@ setup_ppr_project(EngineTests
   INTERNAL_PUBLIC_DEPS EngineCore
 )
 
+# MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
+if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
+    # When using C++23 modules with /MT, the compiler generates C++ mangled references
+    # to __tlregdtor (for thread_local destructors), but libcmt.lib provides it as C linkage.
+    # This provides the C++ mangled version that delegates to the C version.
+    message(AUTHOR_WARNING "EngineTests: enable temporary workaround for thread_local linker issue with modules and ASAN")
+    #    target_sources(EngineCore PRIVATE
+    #        ${PPR_HAL_PLATFORM}/MSVC.tlregdtor.cpp
+    #    )
+    target_link_options(EngineTests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
+endif()
+
+
 add_test(NAME EngineUnitTests COMMAND EngineTests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 set_tests_properties(EngineUnitTests
