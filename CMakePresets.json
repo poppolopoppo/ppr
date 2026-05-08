@@ -43,7 +43,8 @@
         "rhs": "Windows"
       },
       "cacheVariables": {
-        "CMAKE_POLICY_DEFAULT_CMP0091": "NEW"
+        "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
@@ -61,7 +62,7 @@
       },
       "vendor": {
         "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
+          "sourceDir": "$env{HOME}/.vs/${ms{projectDirName}}"
         }
       }
     },

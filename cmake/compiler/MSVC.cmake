@@ -45,6 +45,17 @@ set(PROJECT_WARNINGS_CXX
         /wd5050 # possible incompatible environment while importing module 'std': _UTF8 is defined in current command line and not in module command line
 )
 
+# Disable STL ASan annotations to prevent LNK2038 mismatch when mixing
+# std module (compiled without /fsanitize=address) with user modules (compiled with it).
+# TODO: generate a custom modules.json to compile a custom std module with /fsanitize=address
+if (PPR_ENABLE_SANITIZER_ADDRESS)
+    add_compile_definitions(
+            _DISABLE_STRING_ANNOTATION
+            _DISABLE_VECTOR_ANNOTATION
+            _DISABLE_OPTIONAL_ANNOTATION
+    )
+endif ()
+
 if (PPR_WARNINGS_AS_ERRORS)
     set(PROJECT_WARNINGS_CXX ${PROJECT_WARNINGS_CXX} /WX)
 endif ()
