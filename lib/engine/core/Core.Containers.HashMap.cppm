@@ -30,19 +30,32 @@ export namespace pP {
         // alias for hash map (std::pair<K,V>) vs hash set (bare K)
         // ------------------------------------------------------------
 
-        // const key to avoid client corrupting the table
+        // Internal type uses non-const KeyT for swap/move operations in the hash map implementation.
+        // The iterator uses reinterpret_cast to present pair<const K,V> to users.
         template<typename KeyT, typename ValueT>
-        using hashmap_value_public_t = std::conditional_t<
-            std::is_void_v<ValueT>,
-            std::add_const_t<KeyT>,
-            std::pair<std::add_const_t<KeyT>, ValueT> >;
-
-        // non-const for internal handling
-        template<typename KeyT, typename ValueT>
-        using hashmap_value_private_t = std::conditional_t<
+        using hashmap_value_t = std::conditional_t<
             std::is_void_v<ValueT>,
             KeyT,
             std::pair<KeyT, ValueT> >;
+
+        // const key to avoid client corrupting the table
+        template<typename KeyT, typename ValueT = void>
+        struct hashmap_reference {
+            using type = std::pair<const KeyT &, ValueT &>;
+        };
+
+        template<typename KeyT>
+        struct hashmap_reference<KeyT, void> {
+            using type = const KeyT &;
+        };
+
+        template<typename KeyT>
+        struct hashmap_reference<KeyT, const void> {
+            using type = const KeyT &;
+        };
+
+        template<typename KeyT, typename ValueT>
+        using hashmap_reference_t = hashmap_reference<KeyT, ValueT>::type;
 
         // ------------------------------------------------------------
         // naive hash map iterator, expect bad iteration times
@@ -53,16 +66,11 @@ export namespace pP {
             hash::THasher<KeyT> HasherT,
             mem::details::TAllocator AllocatorT>
         class HashMapIterator {
-            using hash_map_base = HashMap<
+            using hashmap_type = HashMap<
                 KeyT,
                 std::remove_const_t<ValueT>,
                 EqualToT, HasherT, AllocatorT>;
-
-            friend hash_map_base;
-
-            using value_type_base = hashmap_value_public_t<
-                KeyT,
-                std::remove_const_t<ValueT> >;
+            friend hashmap_type;
 
             friend class HashMapIterator<
                 KeyT,
@@ -70,20 +78,14 @@ export namespace pP {
                 EqualToT, HasherT, AllocatorT>;
 
         public:
-            using hash_map = std::conditional_t<
+            using hashmap_pointer = std::add_pointer_t<std::conditional_t<
                 std::is_const_v<ValueT>,
-                std::add_const_t<hash_map_base>,
-                hash_map_base
-            >;
+                std::add_const_t<hashmap_type>,
+                hashmap_type
+            > >;
 
-            using value_type = std::conditional_t<
-                std::is_const_v<ValueT>,
-                std::add_const_t<value_type_base>,
-                value_type_base
-            >;
-
-            using pointer = std::add_pointer_t<value_type>;
-            using reference = std::add_lvalue_reference_t<value_type>;
+            using value_type = hashmap_value_t<KeyT, ValueT>;
+            using reference = hashmap_reference_t<KeyT, ValueT>;
 
             using iterator_category = std::bidirectional_iterator_tag;
             using iterator_concept = std::bidirectional_iterator_tag; // C++20+
@@ -91,9 +93,20 @@ export namespace pP {
             using difference_type = std::ptrdiff_t;
 
         private:
-            hash_map *m_hash_table{nullptr};
+            class ArrowProxy_ {
+                reference m_ref;
 
-            u32 m_slot{umax_v}; // umax_v means end()
+                friend HashMapIterator;
+
+                explicit constexpr ArrowProxy_(const HashMapIterator &iter) noexcept
+                    : m_ref(*iter) {
+                }
+
+            public:
+                [[nodiscard]] constexpr const reference *operator->() const noexcept {
+                    return std::addressof(m_ref);
+                }
+            };
 
             constexpr void initFromIndex_() noexcept {
                 if (!m_hash_table || m_slot >= m_hash_table->capacity()) [[unlikely]] {
@@ -101,7 +114,13 @@ export namespace pP {
                 }
             }
 
+            hashmap_pointer m_hash_table{nullptr};
+
+            u32 m_slot{umax_v}; // umax_v means end()
+
         public:
+            using pointer = ArrowProxy_;
+
             constexpr HashMapIterator() noexcept = default;
 
             constexpr HashMapIterator(const HashMapIterator &) noexcept = default;
@@ -112,17 +131,17 @@ export namespace pP {
 
             constexpr HashMapIterator &operator =(HashMapIterator &&) noexcept = default;
 
-            constexpr HashMapIterator(hash_map &map, const u32 slot_maybe_invalid) noexcept
-                : m_hash_table(std::addressof(map)), m_slot(slot_maybe_invalid) {
+            constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot_maybe_invalid) noexcept
+                : m_hash_table(p_map), m_slot(slot_maybe_invalid) {
                 initFromIndex_();
             }
 
-            constexpr HashMapIterator(std::in_place_t, hash_map &map, const u32 slot) noexcept
-                : m_hash_table(std::addressof(map)), m_slot(slot) {
+            constexpr HashMapIterator(std::in_place_t, hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot) noexcept
+                : m_hash_table(p_map), m_slot(slot) {
             }
 
-            constexpr HashMapIterator(hash_map &map, const UnsignedMax end) noexcept
-                : m_hash_table(std::addressof(map)), m_slot(end) {
+            constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const UnsignedMax end) noexcept
+                : m_hash_table(p_map), m_slot(end) {
             }
 
             using non_const_iterator = HashMapIterator<
@@ -152,31 +171,11 @@ export namespace pP {
             // ------------------------------------------------------------
             [[nodiscard]] reference operator*() const noexcept {
                 PPR_ASSERT(isValid());
-                // Reinterpret pair<K, V> as pair<const K, V>.
-                //
-                // Technically undefined behavior under [basic.lval]/11 (strict aliasing):
-                // the standard provides no layout-compatibility guarantee between pair<T,U>
-                // and pair<const T,U>. In practice every ABI makes them identical, and this
-                // is the accepted industry approach for flat open-addressing maps:
-                //
-                //   - abseil flat_hash_map:
-                //       https://github.com/abseil/abseil-cpp/blob/master/absl/container/internal/raw_hash_set.h
-                //       search: "reinterpret_cast" near PolicyTraits::element()
-                //
-                //   - Folly F14:
-                //       https://github.com/facebook/folly/blob/main/folly/container/detail/F14Table.h
-                //       search: "reinterpret_cast" near "value_type"
-                //
-                // Both libraries ship this cast in production with no sanitizer suppression,
-                // treating it as a known-conforming extension on all targeted compilers.
-                // If strict conformance is ever required, replace with std::destroy_at +
-                // std::construct_at at eviction sites and store pair<const K, V> directly.
-                static_assert(sizeof(value_type) == sizeof(typename hash_map::internal_value_type));
-                return reinterpret_cast<reference>(m_hash_table->m_values[m_slot]);
+                return reference(m_hash_table->m_values[m_slot]);
             }
 
             [[nodiscard]] pointer operator->() const noexcept {
-                return std::addressof(operator*());
+                return ArrowProxy_(*this);
             }
 
             // ------------------------------------------------------------
@@ -247,30 +246,48 @@ export namespace pP {
     }
 
     // ------------------------------------------------------------
-    // Class Template Argument Deduction (CTAD)
+    // CTAD deduction guides for initializer_list and iterator-pair construction
     // ------------------------------------------------------------
 
-    template<typename KeyT, typename ValueT>
-    HashMap(std::initializer_list<std::pair<KeyT, ValueT> > initial_values) -> HashMap<KeyT, ValueT>;
+    template<typename KeyT, typename ValueT,
+        details::TEqualTo<KeyT> EqualToT = std::equal_to<KeyT>,
+        hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
+        mem::details::TAllocator AllocatorT = mem::GPA>
+    HashMap(std::initializer_list<std::pair<KeyT, ValueT> >)
+        -> HashMap<KeyT, ValueT, EqualToT, HasherT, AllocatorT>;
 
-    template<typename KeyT, typename ValueT, mem::details::TAllocator AllocatorT>
-    HashMap(std::initializer_list<std::pair<KeyT, ValueT> > initial_values, const AllocatorT &al) ->
-        HashMap<KeyT, ValueT, std::equal_to<KeyT>, hash::DefaultHash<KeyT>, AllocatorT>;
+    template<typename KeyT,
+        details::TEqualTo<KeyT> EqualToT = std::equal_to<KeyT>,
+        hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
+        mem::details::TAllocator AllocatorT = mem::GPA>
+    HashMap(std::initializer_list<KeyT>)
+        -> HashSet<KeyT, EqualToT, HasherT, AllocatorT>;
 
-    template<typename KeyT, typename ValueT, mem::details::TAllocator AllocatorT>
-    HashMap(std::initializer_list<std::pair<KeyT, ValueT> > initial_values, AllocatorT &&al) ->
-        HashMap<KeyT, ValueT, std::equal_to<KeyT>, hash::DefaultHash<KeyT>, AllocatorT>;
+    template<typename KeyT, typename ValueT,
+        details::TEqualTo<KeyT> EqualToT = std::equal_to<KeyT>,
+        hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
+        mem::details::TAllocator AllocatorT = mem::GPA>
+    HashMap(std::initializer_list<std::pair<KeyT, ValueT> >, const AllocatorT &)
+        -> HashMap<KeyT, ValueT, EqualToT, HasherT, AllocatorT>;
 
-    template<typename KeyT>
-    HashMap(std::initializer_list<KeyT> initial_values) -> HashMap<KeyT, void>;
+    template<typename KeyT,
+        details::TEqualTo<KeyT> EqualToT = std::equal_to<KeyT>,
+        hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
+        mem::details::TAllocator AllocatorT = mem::GPA>
+    HashMap(std::initializer_list<KeyT>, const AllocatorT &)
+        -> HashSet<KeyT, EqualToT, HasherT, AllocatorT>;
 
-    template<typename KeyT, mem::details::TAllocator AllocatorT>
-    HashMap(std::initializer_list<KeyT> initial_values, const AllocatorT &al) ->
-        HashMap<KeyT, void, std::equal_to<KeyT>, hash::DefaultHash<KeyT>, AllocatorT>;
+    template<std::input_iterator Iter>
+    HashMap(Iter, Iter)
+        -> HashMap<
+            std::remove_cvref_t<decltype(std::declval<Iter>()->first)>,
+            std::remove_cvref_t<decltype(std::declval<Iter>()->second)> >;
 
-    template<typename KeyT, mem::details::TAllocator AllocatorT>
-    HashMap(std::initializer_list<KeyT> initial_values, AllocatorT &&al) ->
-        HashMap<KeyT, void, std::equal_to<KeyT>, hash::DefaultHash<KeyT>, AllocatorT>;
+    template<std::input_iterator Iter>
+    HashMap(Iter, Iter, mem::GPA)
+        -> HashMap<
+            std::remove_cvref_t<decltype(std::declval<Iter>()->first)>,
+            std::remove_cvref_t<decltype(std::declval<Iter>()->second)> >;
 
     // ------------------------------------------------------------
     // Round robin hash map/set implementation (ValueT==void -> HashSet)
@@ -286,9 +303,9 @@ export namespace pP {
         using hasher = HasherT;
 
     public:
-        using value_type = details::hashmap_value_public_t<KeyT, ValueT>;
-        using pointer = std::add_pointer_t<value_type>;
-        using reference = std::add_lvalue_reference_t<value_type>;
+        using value_type = details::hashmap_value_t<KeyT, ValueT>;
+        using reference = details::hashmap_reference_t<KeyT, ValueT>;
+        using const_reference = details::hashmap_reference_t<KeyT, const ValueT>;
         using size_type = std::size_t;
 
         using iterator = details::HashMapIterator<KeyT, std::remove_const_t<ValueT>, EqualToT, HasherT, AllocatorT>;
@@ -299,8 +316,6 @@ export namespace pP {
 
         friend iterator;
         friend const_iterator;
-
-        using internal_value_type = details::hashmap_value_private_t<KeyT, ValueT>;
 
     private:
         static constexpr std::size_t min_capacity_v = 4u;
@@ -321,7 +336,6 @@ export namespace pP {
             u8 m_psl: bits_psl_v = 0u;
         };
 
-
         template<typename KeyTLike>
         [[nodiscard]] PPR_FORCE_INLINE constexpr Location
         keyLocation_(const KeyTLike &key_like) const noexcept
@@ -341,7 +355,7 @@ export namespace pP {
             return allocator_type::materialize();
         }
 
-        template<std::convertible_to<internal_value_type> ValueTLike>
+        template<std::convertible_to<value_type> ValueTLike>
         [[nodiscard]] PPR_FORCE_INLINE static constexpr const KeyT &
         key_(const ValueTLike &value_like) noexcept {
             if constexpr (std::is_void_v<ValueT>) {
@@ -392,7 +406,7 @@ export namespace pP {
             return {umax_v, false};
         }
 
-        internal_value_type *m_values{nullptr};
+        value_type *m_values{nullptr};
         Metadata *m_metadata{nullptr};
 
         u32 m_capacity_pow2_m1{0u};
@@ -431,18 +445,18 @@ export namespace pP {
             reserveAssumeEmpty(initial_capacity);
         }
 
-        constexpr HashMap(const std::initializer_list<internal_value_type> initial_values)
+        constexpr HashMap(const std::initializer_list<value_type> initial_values)
             requires std::is_default_constructible_v<allocator_type> {
             assignAssumeEmpty(initial_values);
         }
 
-        explicit constexpr HashMap(const std::initializer_list<internal_value_type> initial_values, const AllocatorT &al)
+        explicit constexpr HashMap(const std::initializer_list<value_type> initial_values, const AllocatorT &al)
             requires std::is_copy_constructible_v<allocator_type>
             : allocator_type(al) {
             assignAssumeEmpty(initial_values);
         }
 
-        explicit constexpr HashMap(const std::initializer_list<internal_value_type> initial_values, AllocatorT &&al)
+        explicit constexpr HashMap(const std::initializer_list<value_type> initial_values, AllocatorT &&al)
             requires std::is_move_constructible_v<allocator_type>
             : allocator_type(std::move(al)) {
             assignAssumeEmpty(initial_values);
@@ -501,70 +515,77 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr iterator begin() noexcept {
-            if (m_capacity_pow2_m1 == 0u)
+            if (m_capacity_pow2_m1 == 0u) {
                 return end();
-            iterator first(std::in_place_t{}, *this, 0u);
-            if (m_metadata[0u].m_psl == 0u)
+            }
+            iterator first(std::in_place_t{}, this, 0u);
+            if (m_metadata[0u].m_psl == 0u) {
                 ++first;
+            }
             return first;
         }
 
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, umax_v); }
-
-        [[nodiscard]] constexpr const_iterator begin() const noexcept {
-            return const_iterator(const_cast<HashMap &>(*this).begin());
+        [[nodiscard]] constexpr iterator end() noexcept {
+            return iterator(this, umax_v);
         }
 
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, umax_v); }
+        [[nodiscard]] constexpr const_iterator begin() const noexcept {
+            return const_iterator(const_cast<HashMap *>(this)->begin());
+        }
 
-        [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
-        [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }
+        [[nodiscard]] constexpr const_iterator end() const noexcept {
+            return const_iterator(this, umax_v);
+        }
 
-        [[nodiscard]] constexpr auto each(this auto &&self) noexcept {
-            return std::ranges::subrange(self.begin(), self.end());
+        [[nodiscard]] constexpr const_iterator cbegin() const noexcept {
+            return begin();
+        }
+
+        [[nodiscard]] constexpr const_iterator cend() const noexcept {
+            return end();
         }
 
         [[nodiscard]] constexpr auto keys(this auto &&self) noexcept
             requires (!std::is_void_v<ValueT>) {
-            return self.each() | std::views::transform([](const internal_value_type &value) -> const KeyT & {
+            return self | std::views::transform([](const value_type &value) -> const KeyT & {
                 return value.first;
             });
         }
 
         [[nodiscard]] constexpr auto values(this auto &&self) noexcept
             requires (!std::is_void_v<ValueT>) {
-            return self.each() | std::views::transform([](const internal_value_type &value) -> const ValueT & {
+            return self | std::views::transform([](const value_type &value) -> const ValueT & {
                 return value.second;
             });
         }
 
         template<std::ranges::range RangeT>
         void assign(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<internal_value_type>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, internal_value_type> {
+            noexcept(std::is_nothrow_copy_constructible_v<value_type>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, value_type> {
             clear();
             assignAssumeEmpty(std::forward<RangeT>(values));
         }
 
         template<std::ranges::range RangeT>
         void assignAssumeEmpty(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<internal_value_type>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, internal_value_type> {
+            noexcept(std::is_nothrow_copy_constructible_v<value_type>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, value_type> {
             const std::size_t n = std::ranges::size(values);
             reserveAssumeEmpty(n);
             appendAssumeCapacity(std::forward<RangeT>(values));
         }
 
         void append(std::initializer_list<value_type> initializer_list)
-            noexcept(std::is_nothrow_copy_constructible_v<internal_value_type>) {
+            noexcept(std::is_nothrow_copy_constructible_v<value_type>) {
             reserveAdditional(initializer_list.size());
             appendAssumeCapacity(initializer_list);
         }
 
         template<std::ranges::range RangeT>
         void append(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<internal_value_type>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, internal_value_type> {
+            noexcept(std::is_nothrow_copy_constructible_v<value_type>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, value_type> {
             const std::size_t n = std::ranges::size(values);
             reserveAdditional(n);
             appendAssumeCapacity(std::forward<RangeT>(values));
@@ -572,25 +593,25 @@ export namespace pP {
 
         template<std::ranges::range RangeT>
         void appendAssumeCapacity(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<internal_value_type>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, internal_value_type> {
+            noexcept(std::is_nothrow_copy_constructible_v<value_type>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, value_type> {
             for (auto &&value: values) {
                 insertAssumeCapacity(value);
             }
         }
 
-        PPR_FORCE_INLINE std::pair<iterator, bool> insert(internal_value_type &&value) noexcept {
+        PPR_FORCE_INLINE std::pair<iterator, bool> insert(value_type &&value) noexcept {
             reserveAdditional(1u);
             return insertAssumeCapacity(std::move(value));
         }
 
-        template<std::convertible_to<internal_value_type> ValueTLike>
+        template<std::convertible_to<value_type> ValueTLike>
         std::pair<iterator, bool> insert(ValueTLike &&value_like) noexcept {
             reserveAdditional(1u);
             return insertAssumeCapacity(std::forward<ValueTLike>(value_like));
         }
 
-        template<std::convertible_to<internal_value_type> ValueTLike>
+        template<std::convertible_to<value_type> ValueTLike>
         std::pair<iterator, bool> insertAssumeCapacity(ValueTLike &&value_like) noexcept {
             PPR_ASSERT(m_size + 1u/* terminator */ < m_capacity_pow2_m1 + 1u);
 
@@ -600,11 +621,11 @@ export namespace pP {
 
             if (found) {
                 // already in
-                return std::make_pair(iterator(*this, offset), false);
+                return std::make_pair(iterator(this, offset), false);
             }
 
             ++m_size;
-            internal_value_type carry_value{std::forward<ValueTLike>(value_like)};
+            value_type carry_value{std::forward<ValueTLike>(value_like)};
 
             // eviction loop
             const u32 inserted_at = offset;
@@ -624,7 +645,7 @@ export namespace pP {
                     PPR_EXPR_IF_DEBUG(PPR_ASSERT(loc_for_debug.m_h1 == m_metadata[inserted_at].m_h1));
                     PPR_EXPR_IF_DEBUG(PPR_ASSERT(loc_for_debug.m_slot == (
                         (inserted_at + m_capacity_pow2_m1 + 2u - m_metadata[inserted_at].m_psl) & m_capacity_pow2_m1)));
-                    return std::make_pair(iterator(std::in_place_t{}, *this, inserted_at), true);
+                    return std::make_pair(iterator(std::in_place_t{}, this, inserted_at), true);
                 }
 
                 // evicting insert: insert this key, cycle insert next key
@@ -655,8 +676,8 @@ export namespace pP {
         template<typename KeyTLike>
         [[nodiscard]] auto &operator[](this auto &&self, KeyTLike &&key_like) noexcept
             requires (!std::is_void_v<ValueT> &&
-                     details::TEqualTo<EqualToT, KeyT, KeyTLike> &&
-                     hash::THasher<HasherT, KeyTLike>) {
+                      details::TEqualTo<EqualToT, KeyT, KeyTLike> &&
+                      hash::THasher<HasherT, KeyTLike>) {
             const auto it = self.find(std::forward<KeyTLike>(key_like));
             PPR_ASSERT(self.end() != it);
             return it->second;
@@ -666,7 +687,7 @@ export namespace pP {
         bool erase(const KeyTLike &key) noexcept
             requires details::TEqualTo<EqualToT, KeyT, KeyTLike> && hash::THasher<HasherT, KeyTLike> {
             if (const auto [slot, found] = findSlot_(key, keyLocation_(key)); found) {
-                eraseAt(const_iterator{*this, slot});
+                eraseAt(const_iterator{this, slot});
                 return true;
             }
             return false;
@@ -730,7 +751,7 @@ export namespace pP {
 
             m_capacity_pow2_m1 = checked_cast<u32>(new_capacity - 1u);
             m_metadata = allocator_type::template allocate<Metadata>(new_capacity);
-            m_values = allocator_type::template allocate<internal_value_type>(new_capacity);
+            m_values = allocator_type::template allocate<value_type>(new_capacity);
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
         }
@@ -744,7 +765,7 @@ export namespace pP {
 
             [[maybe_unused]] const u32 old_size = m_size;
             Metadata *const old_metadata = m_metadata;
-            internal_value_type *const old_values = m_values;
+            value_type *const old_values = m_values;
 
             PPR_DEFER {
                 if (old_metadata != nullptr) [[unlikely]] {
@@ -756,7 +777,7 @@ export namespace pP {
 
             m_capacity_pow2_m1 = checked_cast<u32>(new_capacity - 1u);
             m_metadata = allocator_type::template allocate<Metadata>(new_capacity);
-            m_values = allocator_type::template allocate<internal_value_type>(new_capacity);
+            m_values = allocator_type::template allocate<value_type>(new_capacity);
             m_size = 0u;
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
@@ -770,7 +791,7 @@ export namespace pP {
             PPR_ASSERT(m_size == old_size);
         }
 
-        void clear() noexcept(std::is_nothrow_destructible_v<internal_value_type>) {
+        void clear() noexcept(std::is_nothrow_destructible_v<value_type>) {
             if (m_size == 0u) [[unlikely]] {
                 return;
             }
@@ -778,7 +799,7 @@ export namespace pP {
             PPR_ASSERT(m_capacity_pow2_m1);
             const u32 capacity = m_capacity_pow2_m1 + 1u;
 
-            if constexpr (!std::is_trivially_destructible_v<internal_value_type>) {
+            if constexpr (!std::is_trivially_destructible_v<value_type>) {
                 PPR_EXPR_IF_DEBUG(u32 size_for_debug = 0u);
                 for (u32 i = 0u; i < capacity; ++i) {
                     if (m_metadata[i].m_psl) {
