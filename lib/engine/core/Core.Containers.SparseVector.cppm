@@ -403,7 +403,7 @@ export namespace pP {
 
             mem::poisonIfDebug(mem::Poison::destroyed, item.getValuePtr());
 
-            new(std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
+            new (std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
                 .m_next_free = none_v,
             };
 

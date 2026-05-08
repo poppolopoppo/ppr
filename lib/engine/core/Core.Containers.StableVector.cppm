@@ -660,9 +660,9 @@ export namespace pP {
             }
             PPR_ASSERT(m_slices.isValid() && m_slices.getTag() == slices_is_array_);
 
-            const u32 reserve_size = n - m_capacity;
             const u32 new_num_slices = wanted_num_slices - actual_num_slices;
-            T *const composite_slice_ptr = allocator_type::template allocate<T>(reserve_size);
+            const u32 total_new_capacity = (1u << (wanted_num_slices + 2u)) - (1u << (actual_num_slices + 2u));
+            T *const composite_slice_ptr = allocator_type::template allocate<T>(total_new_capacity);
             PPR_ASSERT(composite_slice_ptr != nullptr);
             u32 composite_slice_size = 0u;
 
@@ -673,7 +673,7 @@ export namespace pP {
                     slice_tag = composite_slice_middle_;
                     if (composite_slice_size == 0u) {
                         slice_tag = composite_slice_start_;
-                    } else if (composite_slice_size + slice_capacity == reserve_size) {
+                    } else if (composite_slice_size + slice_capacity == total_new_capacity) {
                         slice_tag = composite_slice_end_;
                     }
                 }
@@ -681,9 +681,9 @@ export namespace pP {
                 m_slices[i].reset(composite_slice_ptr + composite_slice_size, slice_tag);
                 composite_slice_size += slice_capacity;
             }
-            PPR_ASSERT(composite_slice_size == reserve_size && m_capacity + composite_slice_size == n);
+            PPR_ASSERT(composite_slice_size == total_new_capacity);
 
-            m_capacity = n;
+            m_capacity += total_new_capacity;
         }
 
         constexpr void reserveAssumeEmpty(const std::size_t wanted_capacity) noexcept {
@@ -908,8 +908,8 @@ export namespace pP {
             if (num_append > 0) {
                 const auto range = each();
                 std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index),
-                                     std::ranges::end(range) - static_cast<std::ptrdiff_t>(num_append),
-                                     std::ranges::end(range));
+                                    std::ranges::end(range) - static_cast<std::ptrdiff_t>(num_append),
+                                    std::ranges::end(range));
             }
         }
 
@@ -923,7 +923,8 @@ export namespace pP {
             PPR_ASSERT(index < m_size);
             const auto range = each();
             if (index + 1u < m_size) {
-                std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index), std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index) + 1, std::ranges::end(range));
+                std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index), std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index) + 1,
+                                    std::ranges::end(range));
             }
             std::destroy_at(std::addressof(at(m_size - 1u)));
             m_size--;

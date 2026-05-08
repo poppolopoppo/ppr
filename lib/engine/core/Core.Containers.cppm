@@ -36,6 +36,71 @@ export namespace pP {
         inline constexpr bool is_relocatable_v = relocatable<T>::value;
     }
 
+    // --------------------------------------------------------------
+    // non-owning contiguous view helper
+    // --------------------------------------------------------------
+
+    template<typename T>
+    struct [[nodiscard]] array_view {
+        using value_type = const T;
+        using size_type = std::size_t;
+
+        const T *m_data{};
+        std::size_t m_size{};
+
+        constexpr array_view() noexcept = default;
+
+        constexpr array_view(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
+            : m_data(list.data()),
+              m_size(list.size()) {
+        }
+
+        template<std::ranges::contiguous_range RangeT>
+            requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr array_view(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
+            : m_data(std::ranges::data(contiguous_range)),
+              m_size(std::ranges::size(contiguous_range)) {
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return m_size == 0u;
+        }
+
+        [[nodiscard]] constexpr const T *data() const noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr std::size_t size() const noexcept {
+            return m_size;
+        }
+
+        [[nodiscard]] constexpr const T *begin() const noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr const T *end() const noexcept {
+            return m_data + m_size;
+        }
+
+        [[nodiscard]] constexpr const T &operator[](const std::size_t index) const noexcept {
+            PPR_ASSERT(m_data && index < m_size);
+            PPR_ASSUME(m_data != nullptr);
+            return m_data[index];
+        }
+    };
+
+    static_assert(std::ranges::contiguous_range<array_view<int> >);
+
+    template<typename T>
+    array_view(std::initializer_list<T> list) -> array_view<T>;
+
+    template<std::ranges::contiguous_range RangeT>
+    array_view(RangeT &&contiguous_range) -> array_view<std::ranges::range_value_t<RangeT> >;
+
+    template<typename T>
+    struct details::relocatable<array_view<T> > : std::true_type {
+    };
 
     // ------------------------------------------------------------------
     // general purpose index iterator with random access
@@ -65,11 +130,12 @@ export namespace pP {
         // ------------------------------------------------------------
         constexpr IndexIterator() noexcept = default;
 
-        constexpr IndexIterator(ContainerT &container, const IndexT index) noexcept
+        constexpr IndexIterator(ContainerT &container PPR_LIFETIME_BOUND, const IndexT index) noexcept
             : m_container(std::addressof(container)), m_index(index) {
         }
 
         // allow conversion to const iterator
+        // ReSharper disable once CppNonExplicitConversionOperator
         constexpr operator IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT>() const noexcept {
             return {*m_container, m_index};
         }
@@ -266,7 +332,7 @@ export namespace pP {
         integral_type m_bits{};
 
         [[nodiscard]] constexpr iterator begin() const noexcept { return {m_bits}; }
-        [[nodiscard]] constexpr sentinel end() const noexcept { return {}; }
+        [[nodiscard]] static constexpr sentinel end() noexcept { return {}; }
 
         [[nodiscard]] constexpr bool empty() const noexcept { return m_bits == 0; }
         [[nodiscard]] constexpr u32 size() const noexcept { return static_cast<u32>(std::popcount(m_bits)); }
@@ -283,7 +349,7 @@ export namespace pP {
         using integral_type = unwrap_ref_decay_t<T>;
 
         static constexpr u32 bit_count_v = N;
-        static constexpr u32 capacity_v = sizeof(T)*8u;
+        static constexpr u32 capacity_v = sizeof(T) * 8u;
         static constexpr u32 extra_bits_v = capacity_v - N;
 
         static constexpr integral_type all_v = ~integral_type{} >> extra_bits_v;
@@ -541,7 +607,13 @@ export namespace pP {
 
         [[nodiscard]] PPR_FORCE_INLINE
         constexpr T *getData() const noexcept {
-            return m_offset ? std::bit_cast<T *>(this) + static_cast<std::ptrdiff_t>(m_offset) * static_cast<std::ptrdiff_t>(alignof(T)) : nullptr;
+            if (m_offset == 0)
+                return nullptr;
+            // Use integer arithmetic to avoid pointer arithmetic UB [expr.add]
+            // The result must point within the same allocation as this RelPtr
+            const std::uintptr_t addr = std::bit_cast<std::uintptr_t>(this) +
+                                        static_cast<std::uintptr_t>(m_offset) * static_cast<std::uintptr_t>(alignof(T));
+            return std::bit_cast<T *>(addr);
         }
 
         /// Replaces the pointer, preserving the current flags.
@@ -551,9 +623,11 @@ export namespace pP {
                 return;
             }
 
-            const auto ptr_diff = static_cast<std::ptrdiff_t>(ptr - std::bit_cast<T *>(this));
-            PPR_ASSERT(ptr_diff % static_cast<std::ptrdiff_t>(alignof(T)) == 0);
-            m_offset = checked_cast<OffsetT>(static_cast<std::size_t>(ptr_diff) / alignof(T));
+            const auto this_addr = std::bit_cast<std::uintptr_t>(this);
+            const auto ptr_addr = std::bit_cast<std::uintptr_t>(ptr);
+            const auto diff = static_cast<std::ptrdiff_t>(ptr_addr - this_addr);
+            PPR_ASSERT(diff % static_cast<std::ptrdiff_t>(alignof(T)) == 0);
+            m_offset = checked_cast<OffsetT>(diff / static_cast<std::ptrdiff_t>(alignof(T)));
         }
 
         // ------------------------------------------------------------------
@@ -580,6 +654,7 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         [[nodiscard]] PPR_FORCE_INLINE
+        // ReSharper disable once CppNonExplicitConversionOperator
         constexpr operator T *() const noexcept {
             return getData();
         }
@@ -1031,7 +1106,7 @@ export namespace pP {
 
         template<typename DestructorT> requires std::is_invocable_v<DestructorT, T &&>
         void shrinkToFit(DestructorT destroy) noexcept {
-            for (T &block : m_free_blocks) {
+            for (T &block: m_free_blocks) {
                 destroy(block);
             }
             m_free_blocks.clear();
@@ -1112,7 +1187,7 @@ export namespace pP {
         // (https://mostlymangling.blogspot.com/2019/12/stronger-better-morer-moremur-better.html)
 
         [[nodiscard]] constexpr u64 mix(u64 x) noexcept {
-            std::uint64_t const m = 0xe9846af9b1a615d;
+            constexpr std::uint64_t m = 0xe9846af9b1a615d;
 
             x ^= x >> 32;
             x *= m;
@@ -1129,8 +1204,8 @@ export namespace pP {
         // https://github.com/skeeto/hash-prospector/issues/19
 
         [[nodiscard]] constexpr u32 mix(u32 x) noexcept {
-            std::uint32_t const m1 = 0x21f0aaad;
-            std::uint32_t const m2 = 0x735a2d97;
+            constexpr std::uint32_t m1 = 0x21f0aaad;
+            constexpr std::uint32_t m2 = 0x735a2d97;
 
             x ^= x >> 16;
             x *= m1;
@@ -1142,12 +1217,12 @@ export namespace pP {
         }
 
         // https://github.com/boostorg/container_hash/blob/e3cbbebc8a1f9833287c8eb52fb0484ba744646b/include/boost/container_hash/hash.hpp#L470
-        [[nodiscard]] constexpr u32 combine(u32 s, u32 h) noexcept {
+        [[nodiscard]] constexpr u32 combine(const u32 s, const u32 h) noexcept {
             return mix(s + 0x9e3779b9 + h);
         }
 
         // https://github.com/boostorg/container_hash/blob/e3cbbebc8a1f9833287c8eb52fb0484ba744646b/include/boost/container_hash/hash.hpp#L470
-        [[nodiscard]] constexpr u64 combine(u64 s, u64 h) noexcept {
+        [[nodiscard]] constexpr u64 combine(const u64 s, const u64 h) noexcept {
             return mix(s + 0x9e3779b9 + h);
         }
 
