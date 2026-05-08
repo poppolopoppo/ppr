@@ -30,7 +30,10 @@ export namespace pP {
 
     namespace opaque {
         struct Value;
-        struct KeyValue;
+
+        // --------------------------------------------------------------
+        // type erasure helper for text formatting
+        // --------------------------------------------------------------
 
         template<details::TChar CharT>
         struct [[nodiscard]] basic_format_context {
@@ -51,7 +54,9 @@ export namespace pP {
                 iterator operator++(int) { return *this; }
             };
 
-            [[nodiscard]] constexpr iterator out() noexcept { return {this}; }
+            [[nodiscard]] constexpr iterator out() noexcept {
+                return {this};
+            }
 
         protected:
             ~basic_format_context() = default;
@@ -60,29 +65,17 @@ export namespace pP {
         using format_context = basic_format_context<char>;
         static_assert(std::output_iterator<format_context::iterator, char>);
 
-        template<typename T>
-        struct [[nodiscard]] initializer_array : std::initializer_list<T> {
-            using super_t = std::initializer_list<T>;
-            using super_t::begin;
-            using super_t::end;
-            using super_t::size;
-            using super_t::super_t;
+        // --------------------------------------------------------------
+        // opaque value variants
+        // --------------------------------------------------------------
 
-            constexpr initializer_array(const std::initializer_list<T> il) noexcept
-                : super_t(il) {
-            }
-
-            [[nodiscard]] const T &operator[](const std::size_t index) const noexcept {
-                PPR_ASSERT(index < super_t::size());
-                return super_t::begin()[index];
-            }
-        };
+        using KeyValue = std::pair<string_literal, Value>;
 
         using String = std::string_view;
         using WString = std::wstring_view;
         using U8String = std::u8string_view;
-        using Array = initializer_array<Value>;
-        using Dict = initializer_array<KeyValue>;
+        using Array = array_view<Value>;
+        using Dict = array_view<KeyValue>;
         using Fn = std23::function_ref<Value()>;
         using Formatter = std23::function_ref<void(format_context &)>;
 
@@ -111,16 +104,17 @@ export namespace pP {
             using super_t::super_t;
             using super_t::operator=;
 
-            constexpr Value(const std::initializer_list<Value> arr PPR_LIFETIME_BOUND) noexcept
-                : super_t(Array(arr)) {
-            }
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(std::initializer_list<Value> arr PPR_LIFETIME_BOUND) noexcept;
 
-            constexpr Value(const std::initializer_list<KeyValue> dict PPR_LIFETIME_BOUND) noexcept;
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(std::initializer_list<KeyValue> dict PPR_LIFETIME_BOUND) noexcept;
 
             // Allow direct initialization from functors convertible to Fn
             template<typename FunctorT>
                 requires (!std::is_same_v<std::decay_t<FunctorT>, Fn> &&
                           requires(FunctorT &&f) { Fn{std::forward<FunctorT>(f)}; })
+            // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&functor) noexcept
                 : super_t(Fn{std::forward<FunctorT>(functor)}) {
             }
@@ -129,6 +123,7 @@ export namespace pP {
             template<typename FunctorT>
                 requires (!std::is_same_v<std::decay_t<FunctorT>, Formatter> &&
                           requires(FunctorT &&f) { Formatter{std::forward<FunctorT>(f)}; })
+            // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&functor) noexcept
                 : super_t(Formatter{std::forward<FunctorT>(functor)}) {
             }
@@ -153,39 +148,35 @@ export namespace pP {
             }
         };
 
-        struct [[nodiscard]] KeyValue {
-            string_literal key{""};
-            Value value{};
-
-            constexpr KeyValue() noexcept = default;
-
-            constexpr KeyValue(string_literal init_key, Value init_value) noexcept
-                : key(std::move(init_key)), value(std::move(init_value)) {
-            }
-
-            // Key lookup and sorting — value comparison is omitted because
-            // Value::operator== is deleted (see above).
-            [[nodiscard]] friend constexpr bool operator==(
-                const KeyValue &lhs, string_literal rhs_key) noexcept {
-                return lhs.key == rhs_key;
-            }
-
-            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
-                const KeyValue &lhs, string_literal rhs_key) noexcept {
-                return lhs.key <=> rhs_key;
-            }
-
-            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
-                const KeyValue &lhs, const KeyValue &rhs) noexcept {
-                return lhs.key <=> rhs.key;
-            }
-        };
+        constexpr Value::Value(const std::initializer_list<Value> arr) noexcept
+            : details::ValueVariant(Array(arr)) {
+        }
 
         constexpr Value::Value(const std::initializer_list<KeyValue> dict) noexcept
             : details::ValueVariant(Dict(dict)) {
         }
     }
+
+    // --------------------------------------------------------------
+    // allocator can relocate opaque::Value
+    // --------------------------------------------------------------
+
+    template<details::TChar CharT>
+    struct details::relocatable<opaque::basic_format_context<CharT> > : std::true_type {
+    };
+
+    template<>
+    struct details::relocatable<opaque::Value> : std::true_type {
+    };
+
+    template<>
+    struct details::relocatable<opaque::KeyValue> : std::true_type {
+    };
 }
+
+// --------------------------------------------------------------
+// opaque value formatting
+// --------------------------------------------------------------
 
 export namespace std {
     template<pP::details::TChar CharT>
@@ -203,7 +194,7 @@ export namespace std {
     template<pP::details::TChar CharT>
     struct formatter<pP::opaque::Formatter, CharT> {
         template<typename FormatParseContextT>
-        constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
             return ctx.begin();
         }
 
@@ -231,7 +222,7 @@ export namespace std {
     template<pP::details::TChar CharT>
     struct formatter<pP::opaque::Value, CharT> {
         template<typename FormatParseContextT>
-        constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
             return ctx.begin();
         }
 
@@ -262,7 +253,7 @@ export namespace std {
     template<pP::details::TChar CharT>
     struct formatter<pP::opaque::KeyValue, CharT> {
         template<typename FormatParseContextT>
-        constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
             return ctx.begin();
         }
 
@@ -270,8 +261,11 @@ export namespace std {
         auto format(const pP::opaque::KeyValue &pair, FormatContextT &ctx) const
             -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"),
-                             pair.key.view(), pair.value);
+                             pair.first.view(), pair.second);
         }
+
+        static constexpr void set_brackets(basic_string_view<CharT>, basic_string_view<CharT>) noexcept {}
+        static constexpr void set_separator(basic_string_view<CharT>) noexcept {}
     };
 
     template<pP::details::TChar CharT>
