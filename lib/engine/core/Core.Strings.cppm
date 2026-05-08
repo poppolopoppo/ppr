@@ -96,7 +96,8 @@ export namespace pP {
             return lhs.view() == rhs.view();
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
+        [[nodiscard]] friend constexpr auto operator<=>(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept
+            -> std::compare_three_way_result_t<value_type> {
             return lhs.view() <=> rhs.view();
         }
     };
@@ -329,8 +330,9 @@ export namespace pP {
             return *lhs == *rhs;
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept {
+        [[nodiscard]] friend constexpr auto
+        operator<=>(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept
+            -> std::compare_three_way_result_t<CharT, CharT> {
             return *lhs <=> *rhs;
         }
 
@@ -339,8 +341,9 @@ export namespace pP {
             return *lhs == toLower(rhs);
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(const CaseFoldChar lhs, const CharT rhs) noexcept {
+        [[nodiscard]] friend constexpr auto
+        operator<=>(const CaseFoldChar lhs, const CharT rhs) noexcept
+            -> std::compare_three_way_result_t<CharT, CharT> {
             return *lhs <=> toLower(rhs);
         }
 
@@ -499,7 +502,8 @@ export namespace pP {
     };
 
     template<details::TCharRange CharactersT>
-    basic_string_range(CharactersT &&) -> basic_string_range<std::remove_cvref_t<CharactersT> >;
+    basic_string_range(CharactersT &&)
+        -> basic_string_range<std::remove_cvref_t<CharactersT> >;
 
     template<details::TChar CharT, std::size_t N>
     basic_string_range(const CharT (&)[N])
@@ -507,6 +511,10 @@ export namespace pP {
 
     template<details::TCharRange CharactersT>
     basic_string_range(basic_string_range<CharactersT> &&)
+        -> basic_string_range<CharactersT>;
+
+    template<details::TCharRange CharactersT>
+    basic_string_range(const basic_string_range<CharactersT> &)
         -> basic_string_range<CharactersT>;
 
     template<details::TCharRange V>
@@ -551,10 +559,9 @@ export namespace pP {
     [[nodiscard]] constexpr auto capitalize(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
-            pP::views::enumerate(std::forward<CharactersT>(characters)) |
-            std::views::transform([](auto p) constexpr -> char_type {
-                auto [i, c] = p;
-                return i == 0 ? toUpper(c) : toLower(c);
+            basic_string_range(std::forward<CharactersT>(characters)) |
+            std::views::transform([i = 0u](char_type c) mutable constexpr noexcept -> char_type {
+                return (i++ == 0u) ? toUpper(c) : toLower(c);
             }));
     }
 
@@ -586,24 +593,6 @@ export namespace pP {
             std::views::drop_while(&isSpace<char_type>));
     }
 
-    // Requires bidirectional range for the double-reverse trick
-    template<details::TCharRange CharactersT> requires std::ranges::bidirectional_range<CharactersT>
-    [[nodiscard]] constexpr auto trimRight(CharactersT &&characters) noexcept {
-        using char_type = std::ranges::range_value_t<CharactersT>;
-        return basic_string_range(
-            basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::reverse | std::views::drop_while(&isSpace<char_type>) |
-            std::views::reverse);
-    }
-
-    template<details::TCharRange CharactersT> requires std::ranges::bidirectional_range<CharactersT>
-    [[nodiscard]] constexpr auto trim(CharactersT &&characters) noexcept {
-        // Can't compose trimLeft(trimRight(...)) directly — trimRight returns a
-        // basic_string_range wrapping a reverse_view, which is bidirectional,
-        // so trimLeft's drop_while still works on it.
-        return trimLeft(trimRight(std::forward<CharactersT>(characters)));
-    }
-
     // views::take is the simplest possible range operation
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto truncate(CharactersT &&characters,
@@ -616,45 +605,52 @@ export namespace pP {
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto squeezeSpaces(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
-        // Each chunk is either an all-space run (emit single ' ') or
-        // a non-space run (emit as-is as a string_view).
-        // Both arms must return the same type — string_view<char_type>.
-        // For non-space runs this requires the input to be contiguous.
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::chunk_by(
-                [](char_type a, char_type b) { return isSpace(a) == isSpace(b); }) |
-            std::views::transform([](auto &&chunk) -> auto {
-                if (isSpace(*chunk.begin()))
-                    return std::ranges::subrange(
-                        chunk.begin(),
-                        chunk.begin() + 1); // collapse entire space run
-                return std::ranges::subrange(chunk.begin(), chunk.end());
-            }) |
-            std::views::join);
+            std::views::filter([last_was_space = false](char_type c) mutable constexpr noexcept {
+                const bool current_is_space = isSpace(c);
+                const bool keep = !current_is_space || !last_was_space;
+                last_was_space = current_is_space;
+                return keep;
+            }));
     }
 
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto titleCase(CharactersT &&characters) {
         using char_type = std::ranges::range_value_t<CharactersT>;
-        // Chunk into alternating word/non-word runs, then capitalize the first
-        // character of each word chunk via views::enumerate inside
-        // views::transform.
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::chunk_by(
-                [](char_type a, char_type b) { return isAlnum(a) == isAlnum(b); }) |
-            std::views::transform([](auto &&chunk) {
-                return pP::views::enumerate(chunk) |
-                       std::views::transform([](auto p) -> auto {
-                           auto [i, c] = p;
-                           return i == 0 && isAlpha(c) ? toUpper(c) : toLower(c);
-                       });
-            }) |
-            std::views::join);
+            std::views::transform([was_alnum = false](char_type c) mutable constexpr noexcept -> char_type {
+                const bool alnum = isAlnum(c);
+                const bool prev_alnum = std::exchange(was_alnum, alnum);
+                const bool is_start_of_word = alnum && !prev_alnum;
+
+                return (is_start_of_word && isAlpha(c)) ? toUpper(c) : toLower(c);
+            }));
     }
 
-    template<details::TCharRange CharactersT> requires std::ranges::contiguous_range<CharactersT>
+    // Requires bidirectional range for the double-reverse trick
+    template<details::TCharRange CharactersT>
+        requires std::ranges::bidirectional_range<CharactersT>
+    [[nodiscard]] constexpr auto trimRight(CharactersT &&characters) noexcept {
+        using char_type = std::ranges::range_value_t<CharactersT>;
+        return basic_string_range(
+            basic_string_range(std::forward<CharactersT>(characters)) |
+            std::views::reverse | std::views::drop_while(&isSpace<char_type>) |
+            std::views::reverse);
+    }
+
+    template<details::TCharRange CharactersT>
+        requires std::ranges::bidirectional_range<CharactersT>
+    [[nodiscard]] constexpr auto trim(CharactersT &&characters) noexcept {
+        // Can't compose trimLeft(trimRight(...)) directly — trimRight returns a
+        // basic_string_range wrapping a reverse_view, which is bidirectional,
+        // so trimLeft's drop_while still works on it.
+        return trimLeft(trimRight(std::forward<CharactersT>(characters)));
+    }
+
+    template<details::TCharRange CharactersT>
+        requires std::ranges::contiguous_range<CharactersT>
     [[nodiscard]] constexpr auto xmlEscape(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
@@ -671,7 +667,7 @@ export namespace pP {
         // allocation when the output can't be a string_view into the input.
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::transform([](const char c) noexcept -> std::array<char, 2> {
+            std::views::transform([](const char c) constexpr noexcept -> std::array<char, 2> {
                 const auto b = static_cast<unsigned char>(c);
                 constexpr std::string_view table = "0123456789abcdef";
                 return {table[b >> 4], table[b & 0xF]};
@@ -713,6 +709,7 @@ export namespace std {
             PPR_DEFER {
                 pP::mem::ScratchPad::restore(watermark);
             };
+
             auto tmp = pP::hal::toString<char>(
                 pP::hal::native::string_view(p.native()),
                 pP::mem::STL<char, pP::mem::ScratchPad>{});
