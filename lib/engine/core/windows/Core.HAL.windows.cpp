@@ -298,7 +298,7 @@ namespace pP::hal {
         }
     }
 
-    void pageDecommit(void *const ptr, const std::size_t size) {
+    void pageDecommit(void *const ptr, const std::size_t size) noexcept(false) {
         PPR_ASSERT(ptr != nullptr);
         PPR_ASSERT(std::bit_cast<std::uintptr_t>(ptr) % page_size == 0u);
         PPR_ASSERT(size % page_size == 0u);
@@ -315,7 +315,7 @@ namespace pP::hal {
         }
     }
 
-    void pageOfferToOS(void *const ptr, const std::size_t size) {
+    void pageOfferToOS(void *const ptr, const std::size_t size) noexcept(false) {
         if (::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal) != ERROR_SUCCESS) {
             throw Win32Exception();
         }
@@ -408,7 +408,7 @@ namespace pP::hal {
     // ------------------------------------------------------------------
 
     void outputDebug(const char *ansi_msg) noexcept {
-#ifndef NDEBUG
+#if PPR_ENABLE_DEBUG
         ::OutputDebugStringA(ansi_msg);
 #else
         (void) ansi_msg;
@@ -416,7 +416,7 @@ namespace pP::hal {
     }
 
     void outputDebug(const native::char_t *wide_msg) noexcept {
-#ifndef NDEBUG
+#if PPR_ENABLE_DEBUG
         ::OutputDebugStringW(wide_msg);
 #else
         (void) wide_msg;
@@ -424,7 +424,7 @@ namespace pP::hal {
     }
 
     [[nodiscard]] bool isDebuggerPresent() noexcept {
-#ifndef NDEBUG
+#if PPR_ENABLE_DEBUG
         return ::IsDebuggerPresent();
 #else
         return false;
@@ -432,13 +432,13 @@ namespace pP::hal {
     }
 
     void breakpoint() noexcept {
-#ifndef NDEBUG
+#if PPR_ENABLE_DEBUG
         __debugbreak();
 #endif
     }
 
     void breakpointIfDebugging() noexcept {
-#ifndef NDEBUG
+#if PPR_ENABLE_DEBUG
         if (::IsDebuggerPresent())
 
             __debugbreak();

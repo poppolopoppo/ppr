@@ -3,6 +3,8 @@ export module engine.core:hal;
 
 import std;
 
+#include "pP/Macros.h"
+
 export namespace pP {
     static_assert(__cplusplus >= 202302L, "C++ version too low: 2023 C++ standard is required");
 
@@ -253,210 +255,187 @@ export namespace pP {
         return Deferred(std::forward<CallbackT>(callback));
     }
 
-    // -----------------------------------------------------------------------------
-    // Cross‑platform enumerate view
-    // -----------------------------------------------------------------------------
-    // libc++ (as of LLVM 20) does not yet implement std::views::enumerate,
-    // while MSVC STL and libstdc++ do. To provide a uniform API across all
-    // standard libraries, we detect whether the real enumerate_view is available
-    // and fall back to a portable implementation.
-    // -----------------------------------------------------------------------------
-    namespace views {
-#if defined(__cpp_lib_ranges_enumerate) && __cpp_lib_ranges_enumerate >= 202302L
-
-        // Use the real thing
-        using std::views::enumerate;
-
-#else
-
-        // Fallback: enumerate = zip(iota, range)
-        [[nodiscard]] inline constexpr auto enumerate = []<std::ranges::input_range R>(R &&r) constexpr noexcept {
-            using std::views::iota;
-            using std::views::zip;
-
-            return zip(iota(std::size_t{0}), std::forward<R>(r));
-        };
-
-#endif
-    } // namespace views
-}
-
-// ------------------------------------------------------------------
-// Hardware Abstraction Layer
-// ------------------------------------------------------------------
-
-export namespace pP::hal {
-    [[nodiscard]] std::string_view platformName() noexcept;
-
-    [[nodiscard]] std::string_view userName();
-
     // ------------------------------------------------------------------
-    // file-system
+    // Hardware Abstraction Layer
     // ------------------------------------------------------------------
 
-    [[nodiscard]] const std::filesystem::directory_entry &homeDir();
+    namespace hal {
+        [[nodiscard]] std::string_view platformName() noexcept;
 
-    [[nodiscard]] const std::filesystem::directory_entry &systemDir();
+        [[nodiscard]] std::string_view userName();
 
-    [[nodiscard]] const std::filesystem::directory_entry &appDataLocalDir();
+        // ------------------------------------------------------------------
+        // file-system
+        // ------------------------------------------------------------------
 
-    [[nodiscard]] const std::filesystem::directory_entry &appDataRoamingDir();
+        [[nodiscard]] const std::filesystem::directory_entry &homeDir();
 
-    // ------------------------------------------------------------------
-    // memory pages
-    // ------------------------------------------------------------------
+        [[nodiscard]] const std::filesystem::directory_entry &systemDir();
+
+        [[nodiscard]] const std::filesystem::directory_entry &appDataLocalDir();
+
+        [[nodiscard]] const std::filesystem::directory_entry &appDataRoamingDir();
+
+        // ------------------------------------------------------------------
+        // memory pages
+        // ------------------------------------------------------------------
 
 #if defined(__cpp_lib_hardware_interference_size)
-    inline constexpr std::size_t cacheline_size_v = std::hardware_destructive_interference_size;
+        inline constexpr std::size_t cacheline_size_v = std::hardware_destructive_interference_size;
 #else
-    inline constexpr std::size_t cacheline_size_v = 64u; // conservative fallback for older compilers
+        inline constexpr std::size_t cacheline_size_v = 64u; // conservative fallback for older compilers
 #endif
 
-    struct PageProtection {
-        bool read: 1 = true;
-        bool write: 1 = true;
-        bool execute: 1 = false;
-    };
+        struct PageProtection {
+            bool read: 1 = true;
+            bool write: 1 = true;
+            bool execute: 1 = false;
+        };
 
-    extern const std::size_t page_size;
+        extern const std::size_t page_size;
 
-    extern const std::align_val_t page_granularity;
+        extern const std::align_val_t page_granularity;
 
-    [[nodiscard]] std::allocation_result<void *> pageAlloc(std::size_t size, bool commit = true, PageProtection allowed = {});
+        [[nodiscard]] std::allocation_result<void *> pageAlloc(std::size_t size, bool commit = true, PageProtection allowed = {}) noexcept(false);
 
-    void pageCommit(void *ptr, std::size_t size, PageProtection allowed = {});
+        void pageCommit(void *ptr, std::size_t size, PageProtection allowed = {}) noexcept(false);
 
-    void pageDecommit(void *ptr, std::size_t size);
+        void pageDecommit(void *ptr, std::size_t size) noexcept(false);
 
-    void pageProtect(void *ptr, std::size_t size, PageProtection allowed);
+        void pageProtect(void *ptr, std::size_t size, PageProtection allowed) noexcept(false);
 
-    void pageOfferToOS(void *ptr, std::size_t size);
+        void pageOfferToOS(void *ptr, std::size_t size) noexcept(false);
 
-    [[nodiscard]] bool pageReclaimFromOS(const void *ptr, std::size_t size);
+        [[nodiscard]] bool pageReclaimFromOS(const void *ptr, std::size_t size) noexcept;
 
-    void pageFree(void *ptr, std::size_t size);
+        void pageFree(void *ptr, std::size_t size) noexcept(false);
 
-    // ------------------------------------------------------------------
-    // native strings
-    // ------------------------------------------------------------------
+        // ------------------------------------------------------------------
+        // native strings
+        // ------------------------------------------------------------------
 
-    [[nodiscard]] std::size_t transcode(std::string_view ansi, char8_t *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::string_view ansi, char8_t *p_dst, std::size_t capacity) noexcept;
 
-    [[nodiscard]] std::size_t transcode(std::string_view ansi, wchar_t *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::string_view ansi, wchar_t *p_dst, std::size_t capacity) noexcept;
 
-    [[nodiscard]] std::size_t transcode(std::wstring_view wide, char8_t *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::wstring_view wide, char8_t *p_dst, std::size_t capacity) noexcept;
 
-    [[nodiscard]] std::size_t transcode(std::u8string_view utf8, wchar_t *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::u8string_view utf8, wchar_t *p_dst, std::size_t capacity) noexcept;
 
-    [[nodiscard]] std::size_t transcode(std::wstring_view wide, char *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::wstring_view wide, char *p_dst, std::size_t capacity) noexcept;
 
-    [[nodiscard]] std::size_t transcode(std::u8string_view utf8, char *p_dst, std::size_t capacity) noexcept;
+        [[nodiscard]] std::size_t transcode(std::u8string_view utf8, char *p_dst, std::size_t capacity) noexcept;
 
-    template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
-    [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
-        noexcept(std::is_same_v<SrcCharT, DstCharT>) {
-        if constexpr (std::is_same_v<DstCharT, SrcCharT>) {
-            return src;
+        template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
+        [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
+            noexcept(std::is_same_v<SrcCharT, DstCharT>) {
+            if constexpr (std::is_same_v<DstCharT, SrcCharT>) {
+                return src;
+            }
+
+            const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
+            std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
+            [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
+            return dst;
         }
 
-        const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
-        std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
-        [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
-        return dst;
-    }
+        namespace native {
+            using string = std::filesystem::path::string_type;
+            using char_t = string::value_type;
+            using string_view = std::basic_string_view<char_t>;
 
-    namespace native {
-        using string = std::filesystem::path::string_type;
-        using char_t = string::value_type;
-        using string_view = std::basic_string_view<char_t>;
+            inline constexpr bool is_wchar_v = std::is_same_v<char_t, wchar_t>;
 
-        inline constexpr bool is_wchar_v = std::is_same_v<char_t, wchar_t>;
+            template<typename... ArgsT>
+            using format_string = std::conditional_t<is_wchar_v, std::wformat_string<ArgsT...>, std::format_string<ArgsT...> >;
+            using format_context = std::conditional_t<is_wchar_v, std::wformat_context, std::format_context>;
+            using format_args = std::basic_format_args<format_context>;
 
-        template<typename... ArgsT>
-        using format_string = std::conditional_t<is_wchar_v, std::wformat_string<ArgsT...>, std::format_string<ArgsT...> >;
-        using format_context = std::conditional_t<is_wchar_v, std::wformat_context, std::format_context>;
-        using format_args = std::basic_format_args<format_context>;
+            [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, std::size_t buffer_size) noexcept {
+                return transcode(native_str, out_buffer, buffer_size);
+            }
 
-        [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, std::size_t buffer_size) noexcept {
-            return transcode(native_str, out_buffer, buffer_size);
-        }
+            [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, std::size_t buffer_size) noexcept {
+                return transcode(native_str, out_buffer, buffer_size);
+            }
 
-        [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, std::size_t buffer_size) noexcept {
-            return transcode(native_str, out_buffer, buffer_size);
-        }
+            [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+                return transcode(ansi_str, out_buffer, buffer_size);
+            }
 
-        [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
-            return transcode(ansi_str, out_buffer, buffer_size);
-        }
+            [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+                return transcode(utf8_str, out_buffer, buffer_size);
+            }
 
-        [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
-            return transcode(utf8_str, out_buffer, buffer_size);
-        }
+            [[nodiscard]] inline decltype(auto) ansi(const string_view &native_str) {
+                return toString<char>(native_str);
+            }
 
-        [[nodiscard]] inline decltype(auto) ansi(const string_view &native_str) {
-            return toString<char>(native_str);
-        }
+            [[nodiscard]] inline decltype(auto) utf8(const string_view &native_str) {
+                return toString<char8_t>(native_str);
+            }
 
-        [[nodiscard]] inline decltype(auto) utf8(const string_view &native_str) {
-            return toString<char8_t>(native_str);
-        }
+            [[nodiscard]] inline decltype(auto) from(const std::string_view &ansi_str) {
+                return toString<char_t>(ansi_str);
+            }
 
-        [[nodiscard]] inline decltype(auto) from(const std::string_view &ansi_str) {
-            return toString<char_t>(ansi_str);
-        }
+            [[nodiscard]] inline decltype(auto) from(const std::u8string_view &utf8_str) {
+                return toString<char_t>(utf8_str);
+            }
 
-        [[nodiscard]] inline decltype(auto) from(const std::u8string_view &utf8_str) {
-            return toString<char_t>(utf8_str);
-        }
-
-        template<details::TChar CharT>
-        [[nodiscard]] decltype(auto) format(const string_view &native_str) noexcept(std::is_same_v<char_t, CharT>) {
-            if constexpr (std::is_same_v<char_t, CharT>) {
-                return native_str;
-            } else {
-                static_assert(std::is_same_v<char, CharT>);
-                return utf8(native_str);
+            template<details::TChar CharT>
+            [[nodiscard]] decltype(auto) format(const string_view &native_str) noexcept(std::is_same_v<char_t, CharT>) {
+                if constexpr (std::is_same_v<char_t, CharT>) {
+                    return native_str;
+                } else {
+                    static_assert(std::is_same_v<char, CharT>);
+                    return utf8(native_str);
+                }
             }
         }
-    }
 
-    // ------------------------------------------------------------------
-    // debugger
-    // ------------------------------------------------------------------
+        // ------------------------------------------------------------------
+        // debugger
+        // ------------------------------------------------------------------
 
-    void outputDebug(const char *ansi_msg) noexcept;
+        void outputDebug(const char *ansi_msg) noexcept;
 
-    void outputDebug(const native::char_t *native_msg) noexcept;
+        void outputDebug(const native::char_t *native_msg) noexcept;
 
-    [[nodiscard]] bool isDebuggerPresent() noexcept;
+        [[nodiscard]] bool isDebuggerPresent() noexcept;
 
-    void breakpoint() noexcept;
+        void breakpoint() noexcept;
 
-    void breakpointIfDebugging() noexcept;
+        void breakpointIfDebugging() noexcept;
 
-    // ------------------------------------------------------------------
-    // cross-platform helpers
-    // ------------------------------------------------------------------
+        // ------------------------------------------------------------------
+        // cross-platform helpers
+        // ------------------------------------------------------------------
 
 #ifdef _DEBUG
-    template<typename... ArgsT>
-    void outputDebugFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
-        char buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
-        const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
-        *out = char{0};
-        outputDebug(buffer);
-    }
+        template<typename... ArgsT>
+        void outputDebugFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
+            char buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
+            const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
+            *out = char{0};
+            outputDebug(buffer);
+        }
 
-    template<typename... ArgsT>
-    void outputDebugFmt(const native::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
-        native::char_t buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
-        const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
-        *out = native::char_t{0};
-        outputDebug(buffer);
-    }
+        template<typename... ArgsT>
+        void outputDebugFmt(const native::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
+            native::char_t buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
+            const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
+            *out = native::char_t{0};
+            outputDebug(buffer);
+        }
 #else
-    template<typename... ArgsT>
-    constexpr void outputDebugFmt(const std::format_string<ArgsT...> &, ArgsT &&...) noexcept {
-    }
+        template<typename... ArgsT>
+        constexpr void outputDebugFmt(const std::format_string<ArgsT...> &, ArgsT &&...) noexcept {
+        }
+
+        template<typename... ArgsT>
+        constexpr void outputDebugFmt(const native::format_string<ArgsT...> &, ArgsT &&...) noexcept {
+        }
 #endif
+    }
 }
