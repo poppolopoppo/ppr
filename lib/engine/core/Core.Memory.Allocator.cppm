@@ -972,7 +972,7 @@ export namespace pP::mem {
 
     public:
         static constexpr std::size_t block_size_v = BlockSizeV;
-        static constexpr std::size_t pool_size_v = BlockSizeV * Bitmask<>::bit_count_v;
+        static constexpr std::size_t pool_size_v = BlockSizeV * Bitmask<page_mask_t>::bit_count_v;
 
         constexpr Pooling() noexcept(std::is_nothrow_constructible_v<BlockAllocatorT>) = default;
 
@@ -1047,19 +1047,20 @@ export namespace pP::mem {
             PPR_ASSERT(ptr != nullptr);
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignForward(static_cast<std::size_t>(alignment), block_size_v) == block_size_v);
+            PPR_ASSUME(ptr != nullptr);
 
             poisonIfDebug(Poison::destroyed, const_cast<void *>(ptr), block_size_v);
 
-            const void *const pool_address = alignBackward(ptr, std::align_val_t{pool_size_v});
-            const u32 block_index = checked_cast<u32>((static_cast<const std::byte *>(ptr) -
-                                                       static_cast<const std::byte *>(pool_address)) / block_size_v);
-            PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
-
             for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
                 Metadata &pool = m_pools[pool_index];
-                if (pool.m_address != pool_address) {
+                if (!overlap(pool.m_address, pool_size_v, ptr)) [[unlikely]] {
                     continue;
                 }
+
+                const u32 block_index = checked_cast<u32>(
+                    (static_cast<const std::byte *>(ptr) - static_cast<const std::byte *>(pool.m_address))
+                    / block_size_v);
+                PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
 
                 Bitmask<page_mask_t> expected_blocks(pool.m_free_blocks.load(std::memory_order_relaxed));
 
@@ -1188,9 +1189,9 @@ export namespace pP::mem {
 
         PPR_FORCE_INLINE
         static constexpr void
-        deallocateRaw([[maybe_unused]] const void *const ptr,
-                      [[maybe_unused]] const std::size_t bytes,
-                      [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        deallocateRaw(const void *const ptr,
+                      const std::size_t bytes,
+                      const std::align_val_t alignment) noexcept {
             return GetAllocatorF().deallocateRaw(ptr, bytes, alignment);
         }
 
@@ -1203,7 +1204,7 @@ export namespace pP::mem {
 
         [[nodiscard]] PPR_FORCE_INLINE
         static constexpr bool
-        resizeRaw(const void *const ptr, [[maybe_unused]] const std::size_t old_size, const std::size_t new_size) noexcept
+        resizeRaw(const void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
             requires details::TResizableAllocator<AllocatorT> {
             return GetAllocatorF().resizeRaw(ptr, old_size, new_size);
         }
@@ -1219,7 +1220,7 @@ export namespace pP::mem {
 
     template<typename T, details::TAllocator AllocatorT>
     class STL : Allocator<AllocatorT> {
-        template<typename , details::TAllocator AllocatorT>
+        template<typename, details::TAllocator>
         friend class STL;
 
     public:
@@ -1233,7 +1234,7 @@ export namespace pP::mem {
         using allocator_type::operator=;
 
         template<typename U>
-        constexpr STL(const STL<U, AllocatorT> &other)
+        explicit constexpr STL(const STL<U, AllocatorT> &other)
             noexcept(std::is_nothrow_copy_constructible_v<allocator_type>)
             requires std::is_copy_constructible_v<allocator_type>
             : allocator_type(other) {
@@ -1248,7 +1249,7 @@ export namespace pP::mem {
         }
 
         template<typename U>
-        constexpr STL(STL<U, AllocatorT> &&other)
+        explicit constexpr STL(STL<U, AllocatorT> &&other)
             noexcept(std::is_nothrow_move_constructible_v<allocator_type>)
             requires std::is_move_constructible_v<allocator_type>
             : allocator_type(std::move(other)) {
@@ -1275,5 +1276,9 @@ export namespace pP::mem {
         constexpr void deallocate(value_type *ptr, const size_type n) {
             return allocator_type::template deallocate<value_type>(ptr, n);
         }
+    };
+
+    template<typename T, details::TAllocator AllocatorT>
+    struct details::use_inplace<STL<T, AllocatorT> > : use_inplace<Allocator<AllocatorT> > {
     };
 }

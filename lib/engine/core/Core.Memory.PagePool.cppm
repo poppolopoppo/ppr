@@ -436,20 +436,20 @@ namespace pP::mem {
                 }
             };
 
-            std::mutex m_barrier;
+            std::mutex m_barrier{};
 
             // cold storage, never modified and same cache-line than mutex
-            std::byte *const m_reserved_space;
+            std::byte *const m_reserved_space{};
             const std::size_t m_page_size;
             const BitmapTree::BuildInfos m_tree_infos;
-            BitmapTree m_committed_pages;
+            BitmapTree m_committed_pages{};
 
             [[maybe_unused]]
             const std::byte m_padding_for_alignment[hal::cacheline_size_v - (sizeof(m_barrier) + sizeof(m_reserved_space) + sizeof(m_page_size) +
                                                                              sizeof(m_tree_infos) + sizeof(m_committed_pages)) % hal::cacheline_size_v]{};
 
             // hot storage, bundles are voluntarily isolated inside their respective cache lines
-            alignas(hal::cacheline_size_v) PartialBundle m_partial_bundle;
+            alignas(hal::cacheline_size_v) PartialBundle m_partial_bundle{};
             alignas(hal::cacheline_size_v) FullBundle m_full_bundle{};
 
             [[nodiscard]] PPR_FORCE_INLINE void *pageAt_(const u32 page_index) const noexcept {
@@ -574,6 +574,8 @@ namespace pP::mem {
                   m_tree_infos(checked_cast<u32>(num_reserved_pages)),
                   m_partial_bundle() {
                 PPR_ASSERT(page_size % hal::page_size == 0u);
+                PPR_ASSERT(alignBackward(m_reserved_space, std::align_val_t{hal::page_size}) == m_reserved_space);
+
                 m_full_bundle.fill(umax_v);
 
                 // separated allocation for allocator metadata

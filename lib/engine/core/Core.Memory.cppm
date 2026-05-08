@@ -53,6 +53,7 @@ export namespace pP::mem {
     };
 
     static_assert(details::use_inplace_v<OS>);
+    static_assert(details::TAllocator<OS>);
 
     // ------------------------------------------------------------------
     // pooled 2MiB "huge" pages, serves as backend allocator
@@ -98,19 +99,22 @@ export namespace pP::mem {
     };
 
     static_assert(details::use_inplace_v<HugePage>);
+    static_assert(details::TBlockAllocator<HugePage>);
 
     // ------------------------------------------------------------------
-    // pooled 64KiB "small" pages, serves as transient allocator
+    // pooled 32KiB "small" pages, serves as transient allocator
     // ------------------------------------------------------------------
 
     class SmallPage {
     public:
-        static constexpr std::size_t block_size_v = 64ull << 10u; // 64.0 KiB
+        // 64.0 or 32.0 KiB to keep aligned with HugePage
+        static constexpr std::size_t block_size_v = PPR_32BIT_OR_64BIT(64ull, 32ull) << 10u;
 
         static constexpr std::size_t reserved_size_v = 64ull << 20u; // 64.0 MiB
         static constexpr std::size_t num_reserved_blocks_v = reserved_size_v / block_size_v;
 
         using pooling_allocator_t = Pooling<block_size_v, HugePage, num_reserved_blocks_v>;
+        static_assert(pooling_allocator_t::pool_size_v == HugePage::block_size_v);
 
         [[nodiscard]] static pooling_allocator_t &getGlobalPool() noexcept {
             alignas(hal::cacheline_size_v) static pooling_allocator_t g_instance{};
@@ -143,4 +147,5 @@ export namespace pP::mem {
     };
 
     static_assert(details::use_inplace_v<SmallPage>);
+    static_assert(details::TBlockAllocator<SmallPage>);
 }

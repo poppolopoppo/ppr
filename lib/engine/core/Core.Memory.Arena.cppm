@@ -163,14 +163,22 @@ export namespace pP::mem {
         }
 
         void reset() noexcept {
-            m_offset = (m_slab ? slab_overhead_size : 0u);
-            while (m_slab && rootSlab_()->m_next) [[likely]] {
+            if (m_slab == nullptr) {
+                return;
+            }
+
+            m_offset = slab_overhead_size;
+            while (rootSlab_()->m_next) {
                 popSlab_();
             }
         }
 
-        void reset(const std::size_t initial_capacity) noexcept {
+        void reset(std::size_t initial_capacity) noexcept {
             reset();
+
+            if constexpr (details::TBlockAllocator<AllocatorT>) {
+                initial_capacity = std::max(initial_capacity, AllocatorT::block_size_v);
+            }
 
             if (m_slab == nullptr || m_capacity != initial_capacity) {
                 popSlab_();
