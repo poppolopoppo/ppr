@@ -896,64 +896,121 @@ export namespace pP::mem {
         using page_mask_t = std::size_t;
         static_assert(std::atomic<page_mask_t>::is_always_lock_free);
 
-        struct Metadata {
-            void *m_address{};
-            std::atomic<page_mask_t> m_free_blocks{0u};
-        };
+    public:
+        static constexpr std::size_t num_pools_v = divideRoundUp(MaxNumBlocksV, bit_count_v<page_mask_t>);
+        static constexpr std::size_t block_size_v = BlockSizeV;
+        static constexpr std::size_t pool_size_v = BlockSizeV * Bitmask<page_mask_t>::bit_count_v;
 
-        [[nodiscard]] PPR_NO_INLINE void *allocateRawFallback_() {
+    private:
+        [[nodiscard]] void *allocateLockFree_(const u32 pool_index) noexcept {
+            Bitmask<page_mask_t> expected_blocks(m_blocks[pool_index]);
+            while (expected_blocks.any()) {
+                Bitmask<page_mask_t> desired_blocks(expected_blocks);
+                const u32 block_index = desired_blocks.popAssumeNotEmpty();
+
+                if (const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
+                    atomic_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
+                                                          std::memory_order_acquire, std::memory_order_relaxed)) [[likely]] {
+                    PPR_ASSERT(m_pools[pool_index]);
+                    m_num_free_blocks.fetch_sub(1u);
+                    return m_pools[pool_index] + block_index * block_size_v;
+                }
+            }
+
+            return nullptr;
+        }
+
+        void deallocateLockFree_(const u32 pool_index, const void *const ptr) noexcept {
+            const u32 block_index = checked_cast<u32>((static_cast<const std::byte *>(ptr) - m_pools[pool_index]) / block_size_v);
+            PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
+            PPR_ASSERT(Bitmask<page_mask_t>{m_blocks[pool_index]}.test(block_index) == false);
+
+            // release the block and check if the pool needs to be released
+            const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
+            const page_mask_t block_mask = static_cast<page_mask_t>(1u) << block_index;
+            const page_mask_t prev_mask = atomic_blocks.fetch_or(block_mask);
+
+            // if pool is fully unused and more than 1 pool is alive, try to release this pool
+            const std::size_t prev_num_free_blocks = m_num_free_blocks.fetch_add(1u);
+            if (prev_num_free_blocks > Bitmask<page_mask_t>::bit_count_v &&
+                (prev_mask | block_mask) == Bitmask<page_mask_t>::all_v) [[unlikely]] {
+                deallocateRawReleasePool_(pool_index);
+            }
+        }
+
+        [[nodiscard]] PPR_NO_INLINE void *allocateRawFallback_(u32 *p_hint) {
             const std::lock_guard lock_for_pools{m_barrier_for_pools};
 
             // check if the pools is still empty to avoid race-conditions
+            if (m_num_free_blocks.load(std::memory_order_relaxed) != 0u) {
+                for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
+                    if (void *const pool_block = allocateLockFree_(pool_index);
+                        pool_block != nullptr) {
+                        if (p_hint != nullptr) {
+                            *p_hint = pool_index;
+                        }
+                        return pool_block;
+                    }
+                }
+            }
+
+            // look for the first unused pool index
             u32 free_pool_index = umax_v;
             for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
-                Metadata &pool = m_pools[pool_index];
-                if (pool.m_address == nullptr) {
-                    free_pool_index = std::min(pool_index, free_pool_index);
-                    continue;
+                if (m_pools[pool_index] == nullptr) {
+                    free_pool_index = pool_index;
+                    break;
                 }
             }
             if (free_pool_index >= m_pools.size()) {
                 throw std::bad_alloc();
             }
 
-            Metadata &new_pool = m_pools[free_pool_index];
-            PPR_ASSERT(new_pool.m_address == nullptr && new_pool.m_free_blocks.load(std::memory_order_relaxed) == 0u);
-            new_pool.m_address = BlockAllocatorT::allocateRaw(pool_size_v, AlignmentV).ptr;
-            if (new_pool.m_address == nullptr) {
+            // now we can safely assume that a new pool is indeed needed
+            PPR_ASSERT(m_pools[free_pool_index] == nullptr);
+            PPR_ASSERT(m_blocks[free_pool_index] == 0u);
+
+            m_pools[free_pool_index] = static_cast<std::byte *>(BlockAllocatorT::allocateRaw(pool_size_v, AlignmentV).ptr);
+            if (m_pools[free_pool_index] == nullptr) {
                 throw std::bad_alloc();
             }
 
             constexpr u32 new_block_index = 0u;
-            void *const new_block = static_cast<std::byte *>(new_pool.m_address) + new_block_index * block_size_v;
+            void *const new_block = static_cast<std::byte *>(m_pools[free_pool_index]) + new_block_index * block_size_v;
             constexpr Bitmask<page_mask_t> new_blocks(Bitmask<page_mask_t>::all_v & ~static_cast<page_mask_t>(1u));
             PPR_ASSERT(new_blocks.test(new_block_index) == false);
-            new_pool.m_free_blocks = new_blocks.m_bits;
+
+            const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[free_pool_index]));
+            atomic_blocks.store(new_blocks.m_bits);
+
+            if (p_hint != nullptr) {
+                *p_hint = free_pool_index;
+            }
+
+            m_num_free_blocks.fetch_add(Bitmask<page_mask_t>::bit_count_v - 1u);
             return new_block;
         }
 
         PPR_NO_INLINE void deallocateRawReleasePool_(const u32 pool_index) noexcept {
             const std::lock_guard lock_for_pools{m_barrier_for_pools};
 
-            Metadata &pool = m_pools[pool_index];
-
-            // check if the pool is still full to avoid race-conditions
-            Bitmask<page_mask_t> expected_blocks{pool.m_free_blocks.load(std::memory_order_relaxed)};
-            if (!expected_blocks.all()) [[unlikely]] {
-                return;
-            }
-
             // reserve all the blocks at *once* to avoid other thread from touching this pool
-            if (constexpr Bitmask<page_mask_t> desired_blocks{0u};
-                !pool.m_free_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
-                                                            std::memory_order_acquire, std::memory_order_relaxed)) [[unlikely]] {
+            constexpr Bitmask<page_mask_t> all_blocks_reserved{0u};
+            Bitmask<page_mask_t> expected_blocks{Bitmask<page_mask_t>::all_v};
+            const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
+
+            if (not atomic_blocks.compare_exchange_strong(
+                expected_blocks.m_bits, all_blocks_reserved.m_bits,
+                std::memory_order_acquire, std::memory_order_relaxed)) [[unlikely]] {
                 return;
             }
 
             // finally, it's safe to release the memory since the block is completely allocated by us
-            PPR_ASSERT(pool.m_free_blocks.load(std::memory_order_relaxed) == 0u);
-            BlockAllocatorT::deallocateRaw(pool.m_address, pool_size_v, AlignmentV);
-            pool.m_address = nullptr;
+            PPR_ASSERT(m_blocks[pool_index] == 0u);
+            BlockAllocatorT::deallocateRaw(m_pools[pool_index], pool_size_v, AlignmentV);
+            m_pools[pool_index] = nullptr;
+
+            m_num_free_blocks.fetch_sub(Bitmask<page_mask_t>::bit_count_v);
         }
 
         alignas(hal::cacheline_size_v) std::mutex m_barrier_for_pools{};
@@ -961,12 +1018,12 @@ export namespace pP::mem {
         [[maybe_unused]]
         const std::byte m_padding_for_alignment[hal::cacheline_size_v - sizeof(m_barrier_for_pools) % hal::cacheline_size_v]{};
 
-        std::array<Metadata, MaxNumBlocksV / bit_count_v<page_mask_t>> m_pools{};
+        std::atomic<std::size_t> m_num_free_blocks{0u};
+
+        std::array<page_mask_t, num_pools_v> m_blocks{};
+        std::array<std::byte *, num_pools_v> m_pools{};
 
     public:
-        static constexpr std::size_t block_size_v = BlockSizeV;
-        static constexpr std::size_t pool_size_v = BlockSizeV * Bitmask<page_mask_t>::bit_count_v;
-
         constexpr Pooling() noexcept(std::is_nothrow_constructible_v<BlockAllocatorT>) = default;
 
         explicit constexpr Pooling(const BlockAllocatorT &alloc)
@@ -980,100 +1037,146 @@ export namespace pP::mem {
         }
 
         constexpr ~Pooling() noexcept {
-            for (Metadata &pool: m_pools) {
-                if (pool.m_address != nullptr) {
-                    PPR_ASSERT(Bitmask<page_mask_t>(pool.m_free_blocks.load(std::memory_order_relaxed)).all() &&
-                        "Destroying a Pooling allocator with live allocations");
+            const std::lock_guard lock_for_pools{m_barrier_for_pools};
 
-                    BlockAllocatorT::deallocateRaw(pool.m_address, pool_size_v, AlignmentV);
-                    pool.m_address = nullptr;
-                    pool.m_free_blocks.store(0u, std::memory_order_relaxed);
+            for (u32 pool_index = 0; pool_index < num_pools_v; pool_index++) {
+                if (m_pools[pool_index] == nullptr) {
+                    continue;
                 }
+
+                PPR_ASSERT(Bitmask<page_mask_t>(m_blocks[pool_index]).all() &&
+                    "Destroying a Pooling allocator with live allocations");
+
+                BlockAllocatorT::deallocateRaw(m_pools[pool_index], pool_size_v, AlignmentV);
+                m_pools[pool_index] = nullptr;
+                m_blocks[pool_index] = 0u;
             }
         }
 
-        [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
+        [[nodiscard]] constexpr bool owns(const void *const ptr,
+                                          const std::size_t size,
+                                          u32 *p_hint = nullptr) const noexcept {
             PPR_ASSERT(ptr != nullptr);
-            return std::ranges::any_of(m_pools, [ptr, size](const Metadata &pool) constexpr noexcept {
-                return overlap(pool.m_address, pool_size_v, ptr, size);
+
+            if (p_hint && *p_hint < num_pools_v &&
+                overlap(m_pools[*p_hint], pool_size_v, ptr)) [[likely]] {
+                return true;
+            }
+
+            return std::ranges::any_of(m_pools, [ptr, size](const std::byte *const address) constexpr noexcept {
+                return overlap(address, pool_size_v, ptr, size);
             });
         }
 
         [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw([[maybe_unused]] const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        allocateRaw([[maybe_unused]] const std::size_t bytes,
+                    [[maybe_unused]] const std::align_val_t alignment,
+                    u32 *p_hint = nullptr) noexcept {
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignForward(static_cast<std::size_t>(alignment), block_size_v) == block_size_v);
 
             void *pool_block = nullptr;
 
-            for (Metadata &pool: m_pools) {
-                if (pool.m_address == nullptr) {
-                    continue;
+            if (m_num_free_blocks.load(std::memory_order_relaxed) > 0u) {
+                if (p_hint && *p_hint < num_pools_v && m_blocks[*p_hint]) [[likely]] {
+                    pool_block = allocateLockFree_(*p_hint);
+                    if (pool_block != nullptr) [[likely]] {
+                        goto RETURN_BLOCK;
+                    }
                 }
 
-                Bitmask<page_mask_t> expected_blocks(pool.m_free_blocks.load(std::memory_order_relaxed));
+                for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
+                    if (m_pools[pool_index] == nullptr) {
+                        continue;
+                    }
 
-                while (expected_blocks.any()) {
-                    Bitmask<page_mask_t> desired_blocks(expected_blocks);
-                    const u32 block_index = desired_blocks.popAssumeNotEmpty();
-
-                    if (pool.m_free_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
-                                                                   std::memory_order_acquire, std::memory_order_relaxed)) [[likely]] {
-                        pool_block = static_cast<std::byte *>(pool.m_address) + block_index * block_size_v;
+                    pool_block = allocateLockFree_(pool_index);
+                    if (pool_block != nullptr) [[likely]] {
+                        if (p_hint) {
+                            *p_hint = pool_index;
+                        }
                         goto RETURN_BLOCK;
                     }
                 }
             }
 
-            pool_block = allocateRawFallback_();
+            pool_block = allocateRawFallback_(p_hint);
 
         RETURN_BLOCK:
             PPR_ASSERT(pool_block != nullptr);
             PPR_ASSERT(alignForward(pool_block, alignment) == pool_block);
-            poisonIfDebug(Poison::uninitialized, pool_block, block_size_v);
+            unpoisonUninitialized(pool_block, block_size_v);
             return {pool_block, block_size_v};
         }
 
         constexpr void deallocateRaw(const void *const ptr,
                                      [[maybe_unused]] const std::size_t bytes,
-                                     [[maybe_unused]] const std::align_val_t alignment) noexcept {
+                                     [[maybe_unused]] const std::align_val_t alignment,
+                                     u32 *p_hint = nullptr) noexcept {
             PPR_ASSERT(ptr != nullptr);
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignForward(static_cast<std::size_t>(alignment), block_size_v) == block_size_v);
             PPR_ASSUME(ptr != nullptr);
 
-            poisonIfDebug(Poison::destroyed, const_cast<void *>(ptr), block_size_v);
+            poisonDestroyed(const_cast<void *>(ptr), block_size_v);
+
+            if (p_hint && *p_hint < num_pools_v && overlap(m_pools[*p_hint], pool_size_v, ptr)) {
+                deallocateLockFree_(*p_hint, ptr);
+                return;
+            }
 
             for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
-                Metadata &pool = m_pools[pool_index];
-                if (!overlap(pool.m_address, pool_size_v, ptr)) [[unlikely]] {
-                    continue;
-                }
-
-                const u32 block_index = checked_cast<u32>(
-                    (static_cast<const std::byte *>(ptr) - static_cast<const std::byte *>(pool.m_address))
-                    / block_size_v);
-                PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
-
-                Bitmask<page_mask_t> expected_blocks(pool.m_free_blocks.load(std::memory_order_relaxed));
-
-                for (;;) {
-                    Bitmask<page_mask_t> desired_blocks(expected_blocks);
-                    PPR_ASSERT(desired_blocks.test(block_index) == false);
-                    desired_blocks.set(block_index);
-
-                    if (pool.m_free_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
-                                                                   std::memory_order_acquire, std::memory_order_relaxed)) [[likely]] {
-                        if (desired_blocks.all() && m_pools.size() > 1u) [[unlikely]] {
-                            deallocateRawReleasePool_(pool_index);
-                        }
-                        return;
+                if (overlap(m_pools[pool_index], pool_size_v, ptr)) {
+                    if (p_hint) {
+                        *p_hint = pool_index;
                     }
+                    deallocateLockFree_(pool_index, ptr);
+                    return;
                 }
             }
 
             PPR_ASSERT(false && "Trying to deallocate a pointer outside of the pool");
             std::unreachable();
+        }
+    };
+
+    namespace details {
+        template<typename T>
+        concept TPoolingHint = requires()
+        {
+            { T::value } -> std::convertible_to<u32 &>;
+        };
+    }
+
+    template<std::size_t BlockSizeV,
+        details::TAllocator BlockAllocatorT,
+        std::size_t MaxNumBlocksV,
+        details::TPoolingHint PoolingHintT,
+        std::align_val_t AlignmentV = max_align_v>
+        requires (BlockSizeV > 0u && MaxNumBlocksV > 0u && (MaxNumBlocksV & bit_count_v<std::size_t>) == 0u)
+    class HintedPooling : Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV> {
+        using super_t = Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV>;
+
+    public:
+        using super_t::super_t;
+        using super_t::num_pools_v;
+        using super_t::pool_size_v;
+        using super_t::block_size_v;
+
+        [[nodiscard]] PPR_FORCE_INLINE static constexpr u32 *getHintPtr() noexcept {
+            return std::addressof(PoolingHintT::value);
+        }
+
+        [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t bytes) {
+            return super_t::owns(ptr, bytes, getHintPtr());
+        }
+
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
+            return super_t::allocateRaw(bytes, alignment, getHintPtr());
+        }
+
+        constexpr void deallocateRaw(const void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
+            return super_t::deallocateRaw(ptr, bytes, alignment, getHintPtr());
         }
     };
 

@@ -111,7 +111,11 @@ export namespace pP::mem {
         static constexpr std::size_t reserved_size_v = 64ull << 20u; // 64.0 MiB
         static constexpr std::size_t num_reserved_blocks_v = reserved_size_v / block_size_v;
 
-        using pooling_allocator_t = Pooling<block_size_v, HugePage, num_reserved_blocks_v>;
+        struct LocalHint {
+            static thread_local u32 value;
+        };
+
+        using pooling_allocator_t = HintedPooling<block_size_v, HugePage, num_reserved_blocks_v, LocalHint>;
         static_assert(pooling_allocator_t::pool_size_v == HugePage::block_size_v);
 
         [[nodiscard]] static pooling_allocator_t &getGlobalPool() noexcept {
