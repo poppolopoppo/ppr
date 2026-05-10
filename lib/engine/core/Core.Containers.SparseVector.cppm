@@ -384,7 +384,7 @@ export namespace pP {
             }
 
             PPR_ASSERT(new_alloc.m_item_ptr && new_alloc.m_index < stable_vector::m_size);
-            mem::poisonIfDebug(mem::Poison::uninitialized, new_alloc.m_item_ptr->getValuePtr());
+            mem::unpoisonUninitialized(new_alloc.m_item_ptr->getValuePtr());
 
             new_alloc.m_item_ptr->m_payload.m_seed = nextAllocationSeed_();
             new_alloc.m_item_ptr->m_payload.m_skip = 0u;
@@ -401,7 +401,7 @@ export namespace pP {
 
             m_size_alive--;
 
-            mem::poisonIfDebug(mem::Poison::destroyed, item.getValuePtr());
+            mem::poisonDestroyed(item.getValuePtr());
 
             new (std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
                 .m_next_free = none_v,

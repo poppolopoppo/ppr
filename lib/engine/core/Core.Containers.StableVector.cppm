@@ -13,6 +13,9 @@ export namespace pP {
     // stable vector grows exponentially without invalidating storage
     // ------------------------------------------------------------------
 
+    // #TODO: find a way to integrate ASAN cleanly with StableVector<>
+    // using std::ranges is making the integration of memory poison very invasive :/
+
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
     class StableVector;
 
@@ -167,11 +170,8 @@ export namespace pP {
             // decrement
             // ------------------------------------------------------------
             constexpr StableVectorIterator &operator--() noexcept {
-                if (const u32 actual_index = getIndex(); actual_index > 0u) [[likely]] {
-                    m_index = actual_index - 1u;
-                } else {
-                    m_index = umax_v;
-                }
+                const u32 actual_index = getIndex();
+                m_index = actual_index > 0u ? actual_index - 1u : umax_v;
                 initFromIndex_();
                 return *this;
             }
@@ -662,10 +662,11 @@ export namespace pP {
 
             const u32 new_num_slices = wanted_num_slices - actual_num_slices;
             const u32 total_new_capacity = (1u << (wanted_num_slices + 2u)) - (1u << (actual_num_slices + 2u));
+
             T *const composite_slice_ptr = allocator_type::template allocate<T>(total_new_capacity);
             PPR_ASSERT(composite_slice_ptr != nullptr);
-            u32 composite_slice_size = 0u;
 
+            u32 composite_slice_size = 0u;
             for (u32 i = actual_num_slices; i < wanted_num_slices; ++i) {
                 const u32 slice_capacity = sliceCapacity_(i);
                 ESliceTag_ slice_tag = standalone_slice_;
@@ -926,7 +927,8 @@ export namespace pP {
                 std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index), std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index) + 1,
                                     std::ranges::end(range));
             }
-            std::destroy_at(std::addressof(at(m_size - 1u)));
+            auto *const ptr = std::addressof(back());
+            std::destroy_at(ptr);
             m_size--;
         }
 
@@ -941,7 +943,8 @@ export namespace pP {
             if (index + 1u < m_size) {
                 std::swap(back(), at(index));
             }
-            std::destroy_at(std::addressof(back()));
+            auto *const ptr = std::addressof(back());
+            std::destroy_at(ptr);
             m_size--;
         }
 

@@ -639,6 +639,7 @@ export namespace pP {
                 const u32 table_psl = m_metadata[slot].m_psl;
                 if (table_psl == 0u) [[likely]] {
                     // empty slot, insert here
+                    mem::unpoisonUninitialized(&m_values[slot]);
                     std::construct_at(&m_values[slot], std::move(carry_value));
                     m_metadata[slot] = Metadata{.m_h1 = static_cast<u8>(loc.m_h1), .m_psl = static_cast<u8>(psl)};
 
@@ -717,7 +718,7 @@ export namespace pP {
             --m_size;
             m_metadata[prev] = default_value_v;
             std::destroy_at(&m_values[prev]);
-            mem::poisonIfDebug(mem::Poison::destroyed, &m_values[prev]);
+            mem::poisonDestroyed(&m_values[prev]);
         }
 
         PPR_FORCE_INLINE void reserveAdditional(const std::size_t n) {
@@ -754,6 +755,7 @@ export namespace pP {
             m_values = allocator_type::template allocate<value_type>(new_capacity);
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
+            mem::poisonReserved(m_values, new_capacity);
         }
 
         void rehash(std::size_t new_capacity) noexcept {
@@ -781,6 +783,7 @@ export namespace pP {
             m_size = 0u;
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
+            mem::poisonReserved(m_values, new_capacity);
 
             for (u32 slot = 0u; slot < old_capacity; ++slot) {
                 if (old_metadata[slot].m_psl) {
@@ -806,13 +809,13 @@ export namespace pP {
                         m_metadata[i] = default_value_v;
                         std::destroy_at(&m_values[i]);
                         PPR_EXPR_IF_DEBUG(++size_for_debug);
-                        mem::poisonIfDebug(mem::Poison::destroyed, &m_values[i]);
+                        mem::poisonDestroyed(&m_values[i]);
                     }
                 }
                 PPR_EXPR_IF_DEBUG(PPR_ASSERT(size_for_debug == m_size));
             } else {
                 std::memset(m_metadata, 0u, sizeof(Metadata) * capacity);
-                mem::poisonIfDebug(mem::Poison::destroyed, m_values, capacity);
+                mem::poisonDestroyed(m_values, capacity);
             }
 
             m_size = 0u;

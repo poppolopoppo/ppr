@@ -479,4 +479,89 @@ export namespace pP::tests {
         _.recurse(Allocator::allocation_raii_and_relocate);
         _.recurse(Allocator::allocation_create_destroy_non_trivial);
     };
+
+    // ------------------------------------------------------------------
+    // ASAN poisoning tests - these verify the poisoning API works correctly
+    // by deliberately accessing poisoned memory (which ASAN will catch)
+    // ------------------------------------------------------------------
+
+    namespace AsanPoisoning {
+        namespace details {
+            [[maybe_unused]] volatile int sink = 0;
+
+            [[maybe_unused]] void access_after_poison(void *ptr) {
+                auto *byte_ptr = static_cast<std::byte *>(ptr);
+                sink = byte_ptr[0] != std::byte{0};
+            }
+
+            [[maybe_unused]] void write_after_poison(void *ptr) {
+                auto *byte_ptr = static_cast<std::byte *>(ptr);
+                byte_ptr[0] = std::byte{0xAB};
+            }
+        }
+
+        PPR_UNIT_TEST(poison_destroyed_then_read_triggers_asan) {
+            std::byte buffer[64u]{};
+            mem::poisonDestroyed(buffer, sizeof(buffer));
+            details::access_after_poison(buffer);
+        };
+
+        PPR_UNIT_TEST(poison_reserved_then_write_triggers_asan) {
+            std::byte buffer[64u]{};
+            mem::poisonReserved(buffer, sizeof(buffer));
+            details::write_after_poison(buffer);
+        };
+
+        PPR_UNIT_TEST(poison_nullptr_safe) {
+            mem::unpoisonUninitialized(nullptr, 0u);
+            mem::poisonDestroyed(nullptr, 0u);
+            mem::poisonReserved(nullptr, 0u);
+        };
+
+        PPR_UNIT_TEST(gpa_poison_on_free_triggers_asan) {
+            auto alloc = mem::GPA::allocateRaw(32u, max_align_v);
+            mem::GPA::deallocateRaw(alloc.ptr, alloc.count, max_align_v);
+            details::access_after_poison(alloc.ptr);
+        };
+
+        PPR_UNIT_TEST(os_poison_on_free_triggers_asan) {
+            auto alloc = mem::OS::allocateRaw(4096u, std::align_val_t{4096u});
+            if (alloc.ptr) [[likely]] {
+                mem::OS::deallocateRaw(alloc.ptr, alloc.count, std::align_val_t{4096u});
+                details::access_after_poison(alloc.ptr);
+            }
+        };
+
+        PPR_UNIT_TEST(pooling_poison_on_free_triggers_asan) {
+            mem::Pooling<64u, mem::GPA, 256u> pool{};
+            void *block = pool.allocateRaw(64u, max_align_v).ptr;
+            pool.deallocateRaw(block, 64u, max_align_v);
+            details::access_after_poison(block);
+        };
+
+        PPR_UNIT_TEST(arena_poison_on_dealloc_triggers_asan) {
+            mem::Arena<mem::GPA> arena{4096u};
+            auto *const alloc = arena.allocateRaw(64u, max_align_v).ptr;
+            arena.deallocateRaw(alloc, 64u, max_align_v);
+            details::access_after_poison(alloc);
+        };
+
+        PPR_UNIT_TEST(insitu_poison_on_dealloc_triggers_asan) {
+            mem::InSitu<128u> buffer{};
+            auto alloc = buffer.allocateRaw(64u, max_align_v);
+            buffer.deallocateRaw(alloc.ptr, alloc.count, max_align_v);
+            details::access_after_poison(alloc.ptr);
+        };
+    }
+
+    PPR_UNIT_TEST(asan_poisoning) {
+        _.recurse(AsanPoisoning::poison_destroyed_then_read_triggers_asan);
+        _.recurse(AsanPoisoning::poison_reserved_then_write_triggers_asan);
+        _.recurse(AsanPoisoning::poison_nullptr_safe);
+        _.recurse(AsanPoisoning::gpa_poison_on_free_triggers_asan);
+        _.recurse(AsanPoisoning::os_poison_on_free_triggers_asan);
+        _.recurse(AsanPoisoning::pooling_poison_on_free_triggers_asan);
+        _.recurse(AsanPoisoning::arena_poison_on_dealloc_triggers_asan);
+        _.recurse(AsanPoisoning::insitu_poison_on_dealloc_triggers_asan);
+    };
 }

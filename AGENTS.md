@@ -170,6 +170,47 @@ Modern C++23-compatible allocator system:
 - `pP::mem::HugePage`: 2 MiB pooled pages for backend allocation
 - `pP::mem::InSitu<N>`: Stack-allocated fixed-size buffer
 
+### ASAN Poisoning
+
+Custom allocators and containers should use `pP::mem::poison*` functions to enable ASAN error detection. The API provides two modes:
+
+1. **ASAN-native poisoning** (when `PPR_ENABLE_SANITIZER_ADDRESS` is defined)
+2. **Pattern-based poisoning** (for debugging without ASAN - uses `memset` with debug patterns)
+
+#### Poison Functions
+
+| Function | Purpose | Usage |
+|----------|---------|-------|
+| `poisonAllocated(ptr, size)` | Mark memory as freshly allocated (uninitialized) | Call after `allocateRaw()` succeeds |
+| `poisonDestroyed(ptr, size)` | Mark memory as about to be freed | Call before `deallocateRaw()` |
+| `poisonReserved(ptr, size)` | Mark memory region as reserved but inactive | Call after restore or reset |
+
+Template overloads for element counts:
+```cpp
+poisonAllocated(ptr, count);  // poisons sizeof(T) * count bytes
+poisonDestroyed(ptr, count);
+```
+
+#### When to Use Poisoning
+
+- **Base allocators** (`GPA`, `OS`, `HugePage`, `SmallPage`): Poison on allocate/deallocate
+- **Composite allocators** (`Pooling`, `LocalCache`, `InSitu`): Poison on block allocation/recycling
+- **Containers** (`HashMap`, `SparseVector`, `StableVector`): Poison on element destruction
+- **Arena**: Poison reserved regions after watermark restore
+
+#### Implementation
+
+The `isAsanEnabled()` function checks for sanitizer support at compile time:
+```cpp
+#if defined(__SANITIZE_ADDRESS__) || defined(PPR_ENABLE_SANITIZER_ADDRESS)
+    // Use ASAN_POISON_MEMORY_REGION macro
+#else
+    // Use memset with poison patterns (0xCC, 0xDD, 0xAA)
+#endif
+```
+
+For MSVC builds with `msvc-dev` preset, ASAN is automatically enabled via `PPR_ENABLE_DEVELOPER_MODE`.
+
 ## Core Abstractions
 
 Essential types used throughout:

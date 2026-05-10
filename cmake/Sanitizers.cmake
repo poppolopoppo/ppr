@@ -48,6 +48,7 @@ function(enable_sanitizers project_name)
 
     if(PPR_ENABLE_SANITIZER_ADDRESS)
       list(APPEND SANITIZERS "address")
+      target_compile_definitions(${project_name} PRIVATE PPR_ENABLE_SANITIZER_ADDRESS)
     endif()
 
     if(PPR_ENABLE_SANITIZER_LEAK)

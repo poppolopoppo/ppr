@@ -5,6 +5,7 @@ export module engine.core:allocator;
 
 import :assert;
 import :containers;
+import :memory_poison;
 
 import std;
 
@@ -729,7 +730,7 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     template<std::size_t InSituSizeV, std::align_val_t AlignmentV = max_align_v>
-    class InSitu {
+    class alignas(static_cast<std::size_t>(AlignmentV)) InSitu {
         enum EStatus_ : u8 {
             status_free_ = 0x7F,
             status_used_ = 0x7A,
@@ -741,13 +742,12 @@ export namespace pP::mem {
     public:
 #if PPR_ENABLE_ASSERTIONS
         constexpr InSitu() noexcept { // NOLINT(*-pro-type-member-init)
-            poison(Poison::reserved, m_storage, sizeof(m_storage));
+            poisonReserved(&m_storage);
         }
 
         constexpr ~InSitu() noexcept {
             PPR_ASSERT(m_status == status_free_ && "In-situ buffer is still in use during destruction");
             m_status = status_used_; // disable use-after-free
-            poison(Poison::destroyed, m_storage, sizeof(m_storage));
         }
 #endif
 
@@ -770,7 +770,7 @@ export namespace pP::mem {
             }
 
             m_status = status_used_;
-            poisonIfDebug(Poison::uninitialized, aligned_ptr, space);
+            unpoisonUninitialized(aligned_ptr, space);
             return {aligned_ptr, space};
         }
 
@@ -781,15 +781,21 @@ export namespace pP::mem {
             PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, bytes) && "Trying to deallocate a pointer outside of the in-situ buffer");
 
             m_status = status_free_;
-            poisonIfDebug(Poison::destroyed, static_cast<void *>(&m_storage), sizeof(m_storage));
+            poisonDestroyed(&m_storage);
         }
 
         [[nodiscard]] constexpr bool
-        resizeRaw(const void *const ptr, [[maybe_unused]] const std::size_t old_size, const std::size_t new_size) noexcept {
+        resizeRaw(void *const ptr, [[maybe_unused]] const std::size_t old_size, const std::size_t new_size) noexcept {
             PPR_ASSERT(ptr && m_status == status_used_);
             PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, old_size) && "Trying to resize a pointer outside of the in-situ buffer");
             PPR_ASSUME(ptr != nullptr);
-            return (static_cast<const std::byte *>(ptr) + new_size <= static_cast<const std::byte *>(m_storage) + InSituSizeV);
+            if (static_cast<const std::byte *>(ptr) + new_size <= static_cast<const std::byte *>(m_storage) + InSituSizeV) {
+                if (old_size < new_size) {
+                    unpoisonUninitialized(static_cast<std::byte *>(ptr) + old_size, new_size - old_size);
+                }
+                return true;
+            }
+            return false;
         }
     };
 
@@ -854,7 +860,7 @@ export namespace pP::mem {
 
             if (m_mru.size() > 0u) [[likely]] {
                 void *const p_block = m_mru.popBackAssumeNotEmpty();
-                poisonIfDebug(Poison::uninitialized, p_block, block_size_v);
+                unpoisonUninitialized(p_block, block_size_v);
                 return {p_block, block_size_v};
             }
 
@@ -872,6 +878,7 @@ export namespace pP::mem {
                 AllocatorT::deallocateRaw(p_oldest, bytes, AlignmentV);
             }
 
+            poisonDestroyed(ptr, block_size_v);
             m_mru.pushBackAssumeNotFull(ptr);
         }
     };
@@ -905,21 +912,7 @@ export namespace pP::mem {
                     free_pool_index = std::min(pool_index, free_pool_index);
                     continue;
                 }
-
-                Bitmask<page_mask_t> expected_blocks(pool.m_free_blocks.load(std::memory_order_relaxed));
-
-                while (expected_blocks.any()) {
-                    Bitmask<page_mask_t> desired_blocks(expected_blocks);
-                    const u32 block_index = desired_blocks.popAssumeNotEmpty();
-
-                    if (pool.m_free_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
-                                                                   std::memory_order_acquire, std::memory_order_relaxed)) [[likely]] {
-                        return static_cast<std::byte *>(pool.m_address) + block_index * block_size_v;
-                    }
-                }
             }
-
-            // now we can safely assume that a new pool is indeed needed
             if (free_pool_index >= m_pools.size()) {
                 throw std::bad_alloc();
             }

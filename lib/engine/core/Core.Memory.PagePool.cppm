@@ -571,10 +571,10 @@ namespace pP::mem {
                      const std::size_t num_reserved_pages)
                 : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(num_reserved_pages * page_size, false).ptr)),
                   m_page_size(page_size),
-                  m_tree_infos(checked_cast<u32>(num_reserved_pages)),
-                  m_partial_bundle() {
+                  m_tree_infos(checked_cast<u32>(num_reserved_pages)) {
                 PPR_ASSERT(page_size % hal::page_size == 0u);
                 PPR_ASSERT(alignBackward(m_reserved_space, std::align_val_t{hal::page_size}) == m_reserved_space);
+                PPR_ASSERT(m_tree_infos.m_desired_size == num_reserved_pages);
 
                 m_full_bundle.fill(umax_v);
 

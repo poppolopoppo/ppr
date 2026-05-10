@@ -73,28 +73,26 @@ export namespace pP::mem {
             return g_instance;
         }
 
-        using LocalHint = LocalCache<block_size_v, Static<&getGlobalPool> >;
-
-        [[nodiscard]] static LocalHint &getThreadLocalHint() noexcept {
-            alignas(hal::cacheline_size_v) thread_local LocalHint g_instance_tls{};
+        [[nodiscard]] static auto &getThreadLocalCache() noexcept {
+            alignas(hal::cacheline_size_v) thread_local LocalCache<block_size_v, Static<&getGlobalPool> > g_instance_tls{};
             return g_instance_tls;
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>
         owns(const std::size_t bytes, const std::align_val_t alignment) {
-            return getThreadLocalHint().allocateRaw(bytes, alignment);
+            return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>
         allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
-            return getThreadLocalHint().allocateRaw(bytes, alignment);
+            return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
         PPR_FORCE_INLINE
         static void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-            getThreadLocalHint().deallocateRaw(ptr, bytes, alignment);
+            getThreadLocalCache().deallocateRaw(ptr, bytes, alignment);
         }
     };
 
@@ -121,30 +119,32 @@ export namespace pP::mem {
             return g_instance;
         }
 
-        using LocalHint = LocalCache<block_size_v, Static<&getGlobalPool>, 2u>;
-
-        [[nodiscard]] static LocalHint &getThreadLocalHint() noexcept {
-            alignas(hal::cacheline_size_v) thread_local LocalHint g_instance_tls{};
+        [[nodiscard]] static auto &getThreadLocalCache() noexcept {
+            alignas(hal::cacheline_size_v) thread_local
+                    LocalCache<block_size_v, Static<&getGlobalPool>, 2u>
+                    g_instance_tls{};
             return g_instance_tls;
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>
         owns(const std::size_t bytes, const std::align_val_t alignment) {
-            return getThreadLocalHint().allocateRaw(bytes, alignment);
+            return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>
         allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
-            return getThreadLocalHint().allocateRaw(bytes, alignment);
+            return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
         PPR_FORCE_INLINE
         static void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-            getThreadLocalHint().deallocateRaw(ptr, bytes, alignment);
+            getThreadLocalCache().deallocateRaw(ptr, bytes, alignment);
         }
     };
+
+    thread_local u32 SmallPage::LocalHint::value{};
 
     static_assert(details::use_inplace_v<SmallPage>);
     static_assert(details::TBlockAllocator<SmallPage>);

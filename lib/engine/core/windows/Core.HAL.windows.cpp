@@ -275,12 +275,22 @@ namespace pP::hal {
         const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));
         const ::DWORD allocation_type = MEM_RESERVE | (commit ? MEM_COMMIT : 0);
         void *const mapped_ptr = ::VirtualAlloc(
-            nullptr, size,
+            nullptr, aligned_size,
             allocation_type,
             pageProtectionFlags_(allowed));
         if (!mapped_ptr) [[unlikely]] {
             throw Win32Exception();
         }
+
+#if PPR_ENABLE_ASSERTIONS
+        //  https://msdn.microsoft.com/en-us/library/windows/desktop/aa366902(v=vs.85).aspx
+        ::MEMORY_BASIC_INFORMATION info;
+        if (PPR_ENSURE(::VirtualQuery(mapped_ptr, &info, sizeof(info)))) {
+            PPR_ASSERT(info.BaseAddress == mapped_ptr && "Allocate memory with an invalid pointer");
+            PPR_ASSERT((info.State & (MEM_COMMIT|MEM_RESERVE)) && "Allocate unreserved memory");
+            PPR_ASSERT(info.RegionSize == size && "Allocate with unmatching region size");
+        }
+#endif
 
         return std::allocation_result(mapped_ptr, aligned_size);
     }

@@ -57,7 +57,7 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(move_semantics) {
             mem::Arena<mem::GPA> arena(64u);
-            const auto p1 = arena.allocateRaw(128u, max_align_v);
+            [[maybe_unused]] const auto p1 = arena.allocateRaw(128u, max_align_v);
             PPR_ASSERT(arena.owns(p1.ptr, 128u));
 
             mem::Arena arena_moved(std::move(arena));

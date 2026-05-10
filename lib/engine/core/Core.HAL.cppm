@@ -1,14 +1,15 @@
-// ReSharper disable CppNonExplicitConversionOperator
+module;
+
+#include "pP/Macros.h"
+
 export module engine.core:hal;
 
 import std;
 
-#include "pP/Macros.h"
-
 export namespace pP {
     static_assert(__cplusplus >= 202302L, "C++ version too low: 2023 C++ standard is required");
 
-#ifdef _DEBUG
+#ifdef PPR_ENABLE_DEBUG
     inline constexpr bool enable_debug = true;
 #else
     inline constexpr bool enable_debug = false;
@@ -153,10 +154,14 @@ export namespace pP {
         return std::bit_cast<T *>(alignForward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
     }
 
+    struct alignas(16u) simd_128_t {
+        u32 m_data[4u]{};
+    };
+
     template<typename T>
     inline constexpr std::align_val_t alignof_v{alignof(T)};
     inline constexpr std::align_val_t max_align_v = alignof_v<std::max_align_t>;
-    inline constexpr std::align_val_t simd_align_v = std::align_val_t{16u};
+    inline constexpr std::align_val_t simd_align_v = alignof_v<simd_128_t>;
 
     // ------------------------------------------------------------------
     // bit count needed to store any type
@@ -164,6 +169,100 @@ export namespace pP {
 
     template<typename T>
     inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8;
+
+    // ------------------------------------------------------------------
+    // base split mix hash functions (from boost)
+    // ------------------------------------------------------------------
+
+    namespace hash {
+        // hash_mix for 64 bit size_t
+        //
+        // The general "xmxmx" form of state of the art 64 bit mixers originates
+        // from Murmur3 by Austin Appleby, which uses the following function as
+        // its "final mix":
+        //
+        //	k ^= k >> 33;
+        //	k *= 0xff51afd7ed558ccd;
+        //	k ^= k >> 33;
+        //	k *= 0xc4ceb9fe1a85ec53;
+        //	k ^= k >> 33;
+        //
+        // (https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp)
+        //
+        // It has subsequently been improved multiple times by different authors
+        // by changing the constants. The most well known improvement is the
+        // so-called "variant 13" function by David Stafford:
+        //
+        //	k ^= k >> 30;
+        //	k *= 0xbf58476d1ce4e5b9;
+        //	k ^= k >> 27;
+        //	k *= 0x94d049bb133111eb;
+        //	k ^= k >> 31;
+        //
+        // (https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html)
+        //
+        // This mixing function is used in the splitmix64 RNG:
+        // http://xorshift.di.unimi.it/splitmix64.c
+        //
+        // We use Jon Maiga's implementation from
+        // http://jonkagstrom.com/mx3/mx3_rev2.html
+        //
+        // 	x ^= x >> 32;
+        //	x *= 0xe9846af9b1a615d;
+        //	x ^= x >> 32;
+        //	x *= 0xe9846af9b1a615d;
+        //	x ^= x >> 28;
+        //
+        // An equally good alternative is Pelle Evensen's Moremur:
+        //
+        //	x ^= x >> 27;
+        //	x *= 0x3C79AC492BA7B653;
+        //	x ^= x >> 33;
+        //	x *= 0x1C69B3F74AC4AE35;
+        //	x ^= x >> 27;
+        //
+        // (https://mostlymangling.blogspot.com/2019/12/stronger-better-morer-moremur-better.html)
+
+        [[nodiscard]] constexpr u64 mix(u64 x) noexcept {
+            constexpr std::uint64_t m = 0xe9846af9b1a615d;
+
+            x ^= x >> 32;
+            x *= m;
+            x ^= x >> 32;
+            x *= m;
+            x ^= x >> 28;
+
+            return x;
+        }
+
+        // hash_mix for 32 bit size_t
+        //
+        // We use the "best xmxmx" implementation from
+        // https://github.com/skeeto/hash-prospector/issues/19
+
+        [[nodiscard]] constexpr u32 mix(u32 x) noexcept {
+            constexpr std::uint32_t m1 = 0x21f0aaad;
+            constexpr std::uint32_t m2 = 0x735a2d97;
+
+            x ^= x >> 16;
+            x *= m1;
+            x ^= x >> 15;
+            x *= m2;
+            x ^= x >> 15;
+
+            return x;
+        }
+
+        // https://github.com/boostorg/container_hash/blob/e3cbbebc8a1f9833287c8eb52fb0484ba744646b/include/boost/container_hash/hash.hpp#L470
+        [[nodiscard]] constexpr u32 combine(const u32 s, const u32 h) noexcept {
+            return mix(s + 0x9e3779b9 + h);
+        }
+
+        // https://github.com/boostorg/container_hash/blob/e3cbbebc8a1f9833287c8eb52fb0484ba744646b/include/boost/container_hash/hash.hpp#L470
+        [[nodiscard]] constexpr u64 combine(const u64 s, const u64 h) noexcept {
+            return mix(s + 0x9e3779b9 + h);
+        }
+    }
 
     // ------------------------------------------------------------------
     // variant visitor helper (TM)
@@ -180,37 +279,19 @@ export namespace pP {
     overloaded(Ts...) -> overloaded<Ts...>;
 
     // ------------------------------------------------------------------
-    // memory debugging
+    // random number generator from hardware seed
     // ------------------------------------------------------------------
 
-    namespace mem {
-        enum class Poison : u8 {
-            reserved = 0xAA,
-            uninitialized = 0xCC,
-            destroyed = 0xDD,
-        };
+    [[nodiscard]] constexpr std::mt19937_64 randomNumberGenerator() noexcept {
+        std::array<std::uint32_t, 8> seed_data{};
+        std::random_device rd;
 
-        constexpr void poison(const Poison phase, void *const ptr, const std::size_t size) noexcept {
-            if !consteval {
-                std::memset(ptr, static_cast<u8>(phase), size);
-            }
+        for (auto& x : seed_data) {
+            x = rd();
         }
 
-        template<typename T>
-        constexpr void poison(const Poison phase, T *const ptr, const std::size_t n = 1u) noexcept
-            requires (!std::is_const_v<T>) {
-            if !consteval {
-                std::memset(ptr, static_cast<u8>(phase), sizeof(T) * n);
-            }
-        }
-
-        template<typename T>
-        constexpr void poisonIfDebug(const Poison phase, T *const ptr, const std::size_t n = 1u) noexcept
-            requires (!std::is_const_v<T>) {
-            if constexpr (enable_debug) {
-                poison(phase, ptr, n);
-            }
-        }
+        std::seed_seq seq(seed_data.begin(), seed_data.end());
+        return std::mt19937_64(seq);
     }
 
     // ------------------------------------------------------------------

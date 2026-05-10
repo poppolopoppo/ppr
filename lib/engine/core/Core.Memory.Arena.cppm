@@ -85,7 +85,7 @@ export namespace pP::mem {
                         std::bit_cast<std::uintptr_t>(mark) -
                         std::bit_cast<std::uintptr_t>(m_slab));
                     PPR_ASSERT(m_offset >= sizeof(SlabHeader));
-                    poisonIfDebug(Poison::reserved, static_cast<std::byte *>(m_slab) + m_offset, m_capacity - m_offset);
+                    poisonReserved(static_cast<std::byte *>(m_slab) + m_offset, m_capacity - m_offset);
                     return;
                 }
                 popSlab_();
@@ -208,7 +208,7 @@ export namespace pP::mem {
             m_offset = checked_cast<u32>(
                 (static_cast<std::byte *>(aligned_ptr) - static_cast<std::byte *>(m_slab)) +
                 static_cast<std::ptrdiff_t>(bytes));
-            poisonIfDebug(Poison::uninitialized, static_cast<std::byte *>(aligned_ptr), bytes);
+            unpoisonUninitialized(static_cast<std::byte *>(aligned_ptr), bytes);
             return {aligned_ptr, bytes};
         }
 
@@ -231,7 +231,7 @@ export namespace pP::mem {
 
             m_offset = new_offset;
             if (new_size > old_size) {
-                poisonIfDebug(Poison::uninitialized, byte_ptr + old_size, new_size - old_size);
+                unpoisonUninitialized(byte_ptr + old_size, new_size - old_size);
             }
             return true;
         }
@@ -239,7 +239,7 @@ export namespace pP::mem {
         // Only valid if ptr was the most recent allocation
         [[maybe_unused]] /*constexpr*/ bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
             PPR_ASSERT(owns(ptr, bytes) && "Trying to deallocate a pointer outside of the arena");
-            poisonIfDebug(Poison::destroyed, ptr, bytes);
+            poisonDestroyed(ptr, bytes);
 
             // Verify ptr is actually the top of the arena
             if (const std::byte *byte_ptr = static_cast<std::byte *>(ptr);
@@ -265,7 +265,7 @@ export namespace pP::mem {
 
             if (overlap(m_slab, m_capacity, mark)) [[likely]] {
                 m_offset = static_cast<u32>(static_cast<const std::byte *>(mark) - static_cast<std::byte *>(m_slab));
-                poisonIfDebug(Poison::reserved, static_cast<std::byte *>(m_slab) + m_offset, m_capacity - m_offset);
+                poisonReserved(static_cast<std::byte *>(m_slab) + m_offset, m_capacity - m_offset);
                 return;
             }
 
@@ -305,7 +305,7 @@ export namespace pP::mem {
         }
 
         constexpr ScopedArena &operator =(ScopedArena &&other) noexcept {
-            if (this == &other) [[unlikely]] return;
+            if (this == &other) [[unlikely]] return *this;
 
             if (m_arena) {
                 PPR_ASSERT(m_watermark);

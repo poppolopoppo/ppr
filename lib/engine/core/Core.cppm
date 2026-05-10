@@ -11,6 +11,7 @@ export import :function_ref;
 export import :hal;
 export import :hash_map;
 export import :memory;
+export import :memory_poison;
 export import :page_pool;
 export import :opaque;
 export import :sparse_vector;

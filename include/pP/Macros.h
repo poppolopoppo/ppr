@@ -58,8 +58,12 @@
 // ------------------------------------------------------------------
 
 #ifdef _MSC_VER
+extern "C" void _ReadWriteBarrier();
+#pragma intrinsic(_ReadWriteBarrier)
+
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME) __declspec(code_seg(_NAME))
 #   define PPR_ASSUME(...) [[assume(__VA_ARGS__)]]
+#   define PPR_COMPILER_READWRITE_BARRIER() ::_ReadWriteBarrier()
 #   define PPR_EMPTY_BASES __declspec(empty_bases)
 #   define PPR_FLATTEN [[msvc::flatten]]
 #   define PPR_FORCE_INLINE [[msvc::forceinline]]
@@ -72,6 +76,7 @@
 #elif defined(__clang__) || defined(__GNUC__)
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME) __attribute((code_seg(_NAME)))
 #   define PPR_ASSUME(...) __builtin_assume(__VA_ARGS__)
+#   define PPR_COMPILER_READWRITE_BARRIER() asm volatile("" ::: "memory")
 #   define PPR_EMPTY_BASES
 #   define PPR_FLATTEN [[gnu::flatten]]
 #   define PPR_FORCE_INLINE [[gnu::always_inline]] inline
@@ -90,7 +95,8 @@
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE)
 #else
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME)
-#   define PPR_ASSUME(...)
+#   define PPR_ASSUME(...) ((void)0)
+#   define PPR_COMPILER_READWRITE_BARRIER() ((void)0)
 #   define PPR_EMPTY_BASES
 #   define PPR_FLATTEN
 #   define PPR_FORCE_INLINE
