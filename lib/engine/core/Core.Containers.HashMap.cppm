@@ -518,6 +518,7 @@ export namespace pP {
             if (m_capacity_pow2_m1 == 0u) {
                 return end();
             }
+
             iterator first(std::in_place_t{}, this, 0u);
             if (m_metadata[0u].m_psl == 0u) {
                 ++first;
@@ -646,6 +647,7 @@ export namespace pP {
                     PPR_EXPR_IF_DEBUG(PPR_ASSERT(loc_for_debug.m_h1 == m_metadata[inserted_at].m_h1));
                     PPR_EXPR_IF_DEBUG(PPR_ASSERT(loc_for_debug.m_slot == (
                         (inserted_at + m_capacity_pow2_m1 + 2u - m_metadata[inserted_at].m_psl) & m_capacity_pow2_m1)));
+
                     return std::make_pair(iterator(std::in_place_t{}, this, inserted_at), true);
                 }
 
@@ -788,7 +790,9 @@ export namespace pP {
             for (u32 slot = 0u; slot < old_capacity; ++slot) {
                 if (old_metadata[slot].m_psl) {
                     insertAssumeCapacity(std::move(old_values[slot]));
+
                     std::destroy_at(&old_values[slot]);
+                    mem::poisonDestroyed(&old_values[slot]);
                 }
             }
             PPR_ASSERT(m_size == old_size);
@@ -804,18 +808,22 @@ export namespace pP {
 
             if constexpr (!std::is_trivially_destructible_v<value_type>) {
                 PPR_EXPR_IF_DEBUG(u32 size_for_debug = 0u);
+
                 for (u32 i = 0u; i < capacity; ++i) {
                     if (m_metadata[i].m_psl) {
                         m_metadata[i] = default_value_v;
+
                         std::destroy_at(&m_values[i]);
-                        PPR_EXPR_IF_DEBUG(++size_for_debug);
                         mem::poisonDestroyed(&m_values[i]);
+
+                        PPR_EXPR_IF_DEBUG(++size_for_debug);
                     }
                 }
+
                 PPR_EXPR_IF_DEBUG(PPR_ASSERT(size_for_debug == m_size));
             } else {
                 std::memset(m_metadata, 0u, sizeof(Metadata) * capacity);
-                mem::poisonDestroyed(m_values, capacity);
+                mem::poisonReserved(m_values, capacity);
             }
 
             m_size = 0u;
@@ -872,11 +880,13 @@ export namespace pP {
             if (lhs.size() != rhs.size()) [[likely]] {
                 return false;
             }
+
             for (const auto &value: lhs) {
                 const auto it = rhs.find(key_(value));
                 if (it == rhs.end()) {
                     return false;
                 }
+
                 if constexpr (!std::is_void_v<ValueT>) {
                     if (!(it->second == value.second)) {
                         return false;

@@ -5,6 +5,7 @@ export module engine.core:stable_vector;
 import :assert;
 import :hal;
 import :memory;
+import :memory_poison;
 
 import std;
 
@@ -12,9 +13,6 @@ export namespace pP {
     // ------------------------------------------------------------------
     // stable vector grows exponentially without invalidating storage
     // ------------------------------------------------------------------
-
-    // #TODO: find a way to integrate ASAN cleanly with StableVector<>
-    // using std::ranges is making the integration of memory poison very invasive :/
 
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
     class StableVector;
@@ -304,7 +302,7 @@ export namespace pP {
             PPR_ASSERT(m_slices.getTag() == slices_is_single_slice_);
             PPR_ASSERT(wanted_num_slices > 1u);
 
-            T *const uniq_slice_ptr = m_slices.template getReinterpret<T>();
+            T *const unique_slice_ptr = m_slices.template getReinterpret<T>();
             slice_t *const slices_arr = allocator_type::template allocate<slice_t>(wanted_num_slices);
             PPR_ASSERT(slices_arr != nullptr);
             PPR_ASSUME(slices_arr != nullptr);
@@ -322,7 +320,7 @@ export namespace pP {
                     }
                 }
 
-                slices_arr[slice_index].reset(uniq_slice_ptr + slice_offset, slice_tag);
+                slices_arr[slice_index].reset(unique_slice_ptr + slice_offset, slice_tag);
             }
 
             m_slices.reset(slices_arr, slices_is_array_);
@@ -520,10 +518,6 @@ export namespace pP {
         [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
         [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }
 
-        [[nodiscard]] constexpr auto each(this auto &&self) noexcept {
-            return std::ranges::subrange(self.begin(), self.end());
-        }
-
         template<std::ranges::range RangeT>
         constexpr void assign(RangeT &&values)
             noexcept(std::is_nothrow_copy_constructible_v<T>)
@@ -539,13 +533,46 @@ export namespace pP {
             const std::size_t n = std::ranges::size(values);
             reserveAssumeEmpty(n);
             m_size = checked_cast<u32>(n);
-            std::ranges::uninitialized_copy(values, each());
+            std::uninitialized_copy(
+                std::ranges::begin(values),
+                std::ranges::end(values),
+                mem::UnpoisonUninitializedIterator(begin()));
         }
 
         constexpr void clear() noexcept(std::is_nothrow_destructible_v<T>) {
-            if constexpr (!std::is_trivially_destructible_v<T>) {
-                std::ranges::destroy(each());
+            const u32 old_size = m_size;
+            if (old_size == 0u) [[unlikely]] {
+                return;
             }
+
+#if PPR_ENABLE_SANITIZER_ADDRESS
+            if (m_slices.getTag() == slices_is_single_slice_) {
+                auto *const base = m_slices.template getReinterpret<T>();
+                if constexpr (!std::is_trivially_destructible_v<T>) {
+                    std::destroy_n(base, old_size);
+                }
+                mem::annotateContiguousContainer(base, m_capacity, m_size, 0u);
+            } else {
+                const u32 num_slices = sliceIndex_(m_capacity);
+                for (u32 i = 0u; i < num_slices; ++i) {
+                    const u32 slice_off = sliceOffset_(i);
+                    const u32 slice_cap = sliceCapacity_(i);
+                    if (old_size > slice_off) {
+                        const u32 live = std::min(old_size - slice_off, slice_cap);
+                        auto *data = m_slices[i].getData();
+                        if constexpr (!std::is_trivially_destructible_v<T>) {
+                            std::destroy_n(data, live);
+                        }
+                        mem::annotateContiguousContainer(data, slice_cap, live, 0u);
+                    }
+                }
+            }
+#else
+            if constexpr (!std::is_trivially_destructible_v<T>) {
+                std::ranges::destroy(begin(), end());
+            }
+#endif
+
             m_size = 0u;
         }
 
@@ -645,9 +672,9 @@ export namespace pP {
             PPR_ASSERT(actual_num_slices < wanted_num_slices);
 
             if (m_slices.getTag() == slices_is_single_slice_) {
-                T *const uniq_slice_ptr = m_slices.template getReinterpret<T>();
+                T *const unique_slice_ptr = m_slices.template getReinterpret<T>();
                 if constexpr (mem::details::TResizableAllocator<AllocatorT>) {
-                    if (allocator_type::resize(uniq_slice_ptr, m_capacity, n)) {
+                    if (allocator_type::resize(unique_slice_ptr, m_capacity, n)) {
                         m_capacity = n;
                         return;
                     }
@@ -665,6 +692,8 @@ export namespace pP {
 
             T *const composite_slice_ptr = allocator_type::template allocate<T>(total_new_capacity);
             PPR_ASSERT(composite_slice_ptr != nullptr);
+
+            mem::annotateEmptyContiguousContainer(composite_slice_ptr, total_new_capacity);
 
             u32 composite_slice_size = 0u;
             for (u32 i = actual_num_slices; i < wanted_num_slices; ++i) {
@@ -698,6 +727,8 @@ export namespace pP {
             T *const composite_slice_ptr = allocator_type::template allocate<T>(m_capacity);
             PPR_ASSERT(composite_slice_ptr != nullptr);
 
+            mem::annotateEmptyContiguousContainer(composite_slice_ptr, m_capacity);
+
             m_slices.reset(reinterpret_cast<slice_t *>(composite_slice_ptr), slices_is_single_slice_);
         }
 
@@ -708,11 +739,15 @@ export namespace pP {
             }
 
             if (m_slices.getTag() == slices_is_single_slice_) [[likely]] {
+                pointer const p_data = m_slices.template getReinterpret<T>();
+
                 if constexpr (!std::is_trivially_destructible_v<T>) {
-                    std::destroy_n(m_slices.template getReinterpret<T>(), std::min(m_size, m_capacity));
+                    std::destroy_n(p_data, std::min(m_size, m_capacity));
                 }
 
-                allocator_type::template deallocate<T>(m_slices.template getReinterpret<T>(), m_capacity);
+                mem::annotateEmptyContiguousContainer(p_data, m_capacity);
+
+                allocator_type::template deallocate<T>(p_data, m_capacity);
             } else {
                 resetSliceArray_();
             }
@@ -729,9 +764,14 @@ export namespace pP {
                 shrinkToFit();
             } else if (new_size > m_size) {
                 reserve(new_size);
+
                 const u32 old_size = m_size;
                 m_size = checked_cast<u32>(new_size);
-                std::ranges::uninitialized_fill(begin() + old_size, end(), init_value);
+
+                std::uninitialized_fill(
+                    mem::UnpoisonUninitializedIterator(begin() + old_size),
+                    mem::UnpoisonUninitializedIterator(end()),
+                    init_value);
             }
         }
 
@@ -748,26 +788,46 @@ export namespace pP {
             src.m_size = 0;
         }
 
-        [[nodiscard]] constexpr T *pushBackUninitialized() noexcept {
-            reserveAdditional(1u);
-            return std::addressof(at(m_size++));
-        }
-
         [[nodiscard]] constexpr T *pushBackUninitializedAssumeCapacity() noexcept {
             PPR_ASSERT(m_size < m_capacity);
-            return std::addressof(at(m_size++));
+            const u32 old_size = m_size;
+            pointer const p_back = std::addressof(at(m_size++));
+
+#if PPR_ENABLE_SANITIZER_ADDRESS
+            if (m_slices.getTag() == slices_is_single_slice_) {
+                mem::annotateContiguousContainer(
+                    m_slices.template getReinterpret<T>(),
+                    m_capacity,
+                    old_size,
+                    m_size);
+            } else {
+                const u32 slice_idx = sliceIndex_(old_size);
+                const u32 rel_idx = old_size - sliceOffset_(slice_idx);
+                mem::annotateContiguousContainer(
+                    m_slices[slice_idx].getData(),
+                    sliceCapacity_(slice_idx), rel_idx, rel_idx + 1u);
+            }
+#endif
+
+            return p_back;
+        }
+
+        [[nodiscard]] constexpr T *pushBackUninitialized() noexcept {
+            reserveAdditional(1u);
+            return pushBackUninitializedAssumeCapacity();
         }
 
         constexpr void pushBack(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
             requires std::is_move_constructible_v<T> {
             reserveAdditional(1u);
-            pushBackAssumeCapacity(std::move(rvalue));
+            T *const ptr = pushBackUninitializedAssumeCapacity();
+            std::construct_at(ptr, std::move(rvalue));
         }
 
         constexpr void pushBackAssumeCapacity(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
             requires std::is_move_constructible_v<T> {
-            PPR_ASSERT(m_size < m_capacity);
-            std::construct_at(std::addressof(at(m_size++)), std::move(rvalue));
+            T *const ptr = pushBackUninitializedAssumeCapacity();
+            std::construct_at(ptr, std::move(rvalue));
         }
 
         [[maybe_unused]] constexpr T &pushBackDefault() noexcept(std::is_nothrow_default_constructible_v<T>)
@@ -778,21 +838,22 @@ export namespace pP {
 
         [[maybe_unused]] constexpr T &pushBackDefaultAssumeCapacity() noexcept(std::is_nothrow_default_constructible_v<T>)
             requires std::is_default_constructible_v<T> {
-            PPR_ASSERT(m_size < m_capacity);
-            return *std::construct_at(std::addressof(at(m_size++)));
+            return *std::construct_at(pushBackUninitializedAssumeCapacity());
+        }
+
+        constexpr void pushBackAssumeCapacity(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_copy_constructible_v<T> {
+            T *const ptr = pushBackUninitializedAssumeCapacity();
+            std::construct_at(ptr, value);
         }
 
         constexpr void pushBack(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
             requires std::is_copy_constructible_v<T> {
             reserveAdditional(1u);
-            pushBackAssumeCapacity(value);
+            T *const ptr = pushBackUninitializedAssumeCapacity();
+            std::construct_at(ptr, value);
         }
 
-        constexpr void pushBackAssumeCapacity(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_copy_constructible_v<T> {
-            PPR_ASSERT(m_size < m_capacity);
-            std::construct_at(std::addressof(at(m_size++)), value);
-        }
 
         template<typename... ArgsT>
         [[maybe_unused]] constexpr T &emplaceBack(ArgsT &&... args)
@@ -806,13 +867,8 @@ export namespace pP {
         [[maybe_unused]] constexpr T &emplaceBackAssumeCapacity(ArgsT &&... args)
             noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
             requires std::is_constructible_v<T, ArgsT &&...> {
-            PPR_ASSERT(m_size < m_capacity);
-            return *std::construct_at(std::addressof(at(m_size++)), std::forward<ArgsT>(args)...);
-        }
-
-        constexpr void popBack() noexcept(std::is_nothrow_destructible_v<T>) {
-            PPR_ASSERT(m_size > 0u);
-            std::destroy_at(std::addressof(at(--m_size)));
+            T *const ptr = pushBackUninitializedAssumeCapacity();
+            return *std::construct_at(ptr, std::forward<ArgsT>(args)...);
         }
 
         template<typename ValueT>
@@ -873,15 +929,13 @@ export namespace pP {
         constexpr void insert(const std::size_t index, T &&rvalue) noexcept {
             PPR_ASSERT(index <= m_size);
             pushBack(std::move(rvalue));
-            const auto range = each();
-            std::ranges::rotate(range.begin() + index, range.end() - 1u, range.end());
+            std::ranges::rotate(begin() + index, end() - 1u, end());
         }
 
         constexpr void insert(const std::size_t index, const T &value) noexcept {
             PPR_ASSERT(index <= m_size);
             pushBack(value);
-            const auto range = each();
-            std::ranges::rotate(range.begin() + index, range.end() - 1u, range.end());
+            std::ranges::rotate(begin() + index, end() - 1u, end());
         }
 
         template<std::ranges::range RangeT>
@@ -905,13 +959,36 @@ export namespace pP {
         template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
         constexpr void insert(const std::size_t index, IteratorT first, IteratorT last) noexcept {
             PPR_ASSERT(index <= m_size);
-            const std::size_t num_append = append(first, last);
-            if (num_append > 0) {
-                const auto range = each();
-                std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index),
-                                    std::ranges::end(range) - static_cast<std::ptrdiff_t>(num_append),
-                                    std::ranges::end(range));
+            if (const std::size_t n = append(first, last); n > 0u) [[likely]] {
+                std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index),
+                                    end() - static_cast<std::ptrdiff_t>(n),
+                                    end());
             }
+        }
+
+        constexpr void popBack() noexcept(std::is_nothrow_destructible_v<T>) {
+            PPR_ASSERT(m_size > 0u);
+
+            pointer const p_back = std::addressof(at(m_size - 1u));
+            const u32 old_size = m_size--;
+            std::destroy_at(p_back);
+
+#if PPR_ENABLE_SANITIZER_ADDRESS
+            if (m_slices.getTag() == slices_is_single_slice_) {
+                mem::annotateContiguousContainer(
+                    m_slices.template getReinterpret<T>(),
+                    m_capacity,
+                    old_size,
+                    m_size);
+            } else {
+                const u32 element_idx = old_size - 1u;
+                const u32 slice_idx = sliceIndex_(element_idx);
+                const u32 rel_idx = element_idx - sliceOffset_(slice_idx);
+                mem::annotateContiguousContainer(
+                    m_slices[slice_idx].getData(),
+                    sliceCapacity_(slice_idx), rel_idx + 1u, rel_idx);
+            }
+#endif
         }
 
         constexpr iterator erase(const const_iterator &it) noexcept(std::is_nothrow_destructible_v<T>) {
@@ -922,14 +999,14 @@ export namespace pP {
 
         constexpr void erase(const std::size_t index) noexcept(std::is_nothrow_destructible_v<T>) {
             PPR_ASSERT(index < m_size);
-            const auto range = each();
-            if (index + 1u < m_size) {
-                std::ranges::rotate(std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index), std::ranges::begin(range) + static_cast<std::ptrdiff_t>(index) + 1,
-                                    std::ranges::end(range));
+
+            if (index + 1u < m_size) [[likely]] {
+                std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index),
+                                    begin() + static_cast<std::ptrdiff_t>(index) + 1,
+                                    end());
             }
-            auto *const ptr = std::addressof(back());
-            std::destroy_at(ptr);
-            m_size--;
+
+            popBack();
         }
 
         constexpr iterator eraseSwapBack(const const_iterator &it) noexcept(std::is_nothrow_destructible_v<T>) {
@@ -940,12 +1017,12 @@ export namespace pP {
 
         constexpr void eraseSwapBack(const std::size_t index) noexcept(std::is_nothrow_destructible_v<T>) {
             PPR_ASSERT(index < m_size);
-            if (index + 1u < m_size) {
+
+            if (index + 1u < m_size) [[likely]] {
                 std::swap(back(), at(index));
             }
-            auto *const ptr = std::addressof(back());
-            std::destroy_at(ptr);
-            m_size--;
+
+            popBack();
         }
 
         template<typename ValueT>
