@@ -17,6 +17,14 @@ import :core_stable_vector;
 import :core_strings;
 
 export namespace pP::tests {
+    PPR_UNIT_TEST(memory) {
+        _.recurse(pagePool);
+        _.recurse(arena);
+        _.recurse(slab);
+        _.recurse(allocator);
+        _.recurse(poisoning);
+    };
+
     PPR_UNIT_TEST(containers) {
         _.recurse(relocatable);
         _.recurse(hash);
@@ -29,12 +37,6 @@ export namespace pP::tests {
         _.recurse(stableVector);
         _.recurse(sparseVector);
         _.recurse(hashMap);
-    };
-
-    PPR_UNIT_TEST(memory) {
-        _.recurse(pagePool);
-        _.recurse(arena);
-        _.recurse(allocator);
     };
 
     PPR_UNIT_TEST(core) {
