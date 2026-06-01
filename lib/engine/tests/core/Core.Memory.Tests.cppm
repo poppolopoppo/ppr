@@ -201,8 +201,8 @@ export namespace pP::tests {
 
         static_assert(mem::details::TResizableAllocator<ResizeOnlyAllocator>);
         PPR_UNIT_TEST(overlap_boundaries) {
-            std::array<std::byte, 16u> storage{};
-            std::array<std::byte, 16u> other{};
+            const std::array<std::byte, 16u> storage{};
+            const std::array<std::byte, 16u> other{};
 
             PPR_ASSERT(mem::overlap(storage.data(), storage.size(), storage.data()));
             PPR_ASSERT(mem::overlap(storage.data(), storage.size(), storage.data() + 15u));
@@ -308,8 +308,8 @@ export namespace pP::tests {
         PPR_UNIT_TEST(pmr_erasure_and_equality) {
             RecordingAllocator backend{};
 
-            mem::Pmr stateful{backend};
-            mem::Pmr erased{mem::Allocator{backend}};
+            const mem::Pmr stateful{backend};
+            const mem::Pmr erased{mem::Allocator{backend}};
             PPR_ASSERT(stateful == erased);
 
             const auto shrinkable = stateful.allocateRaw(24u, max_align_v);
@@ -317,7 +317,7 @@ export namespace pP::tests {
             PPR_ASSERT(stateful.resizeRaw(shrinkable.ptr, 24u, 16u));
             stateful.deallocateRaw(shrinkable.ptr, 16u, max_align_v);
 
-            mem::Pmr stateless{mem::GPA{}};
+            const mem::Pmr stateless{mem::GPA{}};
             const auto overaligned = stateless.allocateRaw(32u, std::align_val_t{64u});
             PPR_ASSERT(overaligned.ptr != nullptr);
             PPR_ASSERT(!stateless.resizeRaw(overaligned.ptr, overaligned.count, overaligned.count * 2u));
@@ -334,10 +334,10 @@ export namespace pP::tests {
             ints[1] = 11;
             wrapped.deallocate<int>(ints, 2u);
 
-            const auto atleast = wrapped.allocate_at_least<int>(3u);
-            PPR_ASSERT(atleast.ptr != nullptr);
-            PPR_ASSERT(atleast.count >= 3u);
-            wrapped.deallocate<int>(atleast.ptr, 3u);
+            const auto at_least = wrapped.allocate_at_least<int>(3u);
+            PPR_ASSERT(at_least.ptr != nullptr);
+            PPR_ASSERT(at_least.count >= 3u);
+            wrapped.deallocate<int>(at_least.ptr, 3u);
 
             const auto span = wrapped.span<int>(4u);
             PPR_ASSERT(span.size() >= 4u);
@@ -410,7 +410,7 @@ export namespace pP::tests {
 
             Widget::destroyed = 0u;
             mem::Allocation<Widget, RecordingAllocator> widget_alloc{};
-            auto *const created = widget_alloc.create(backend, 99);
+            const auto *const created = widget_alloc.create(backend, 99);
             PPR_ASSERT(created != nullptr);
             PPR_ASSERT(created->x == 99);
             widget_alloc.destroy(backend);
@@ -455,7 +455,7 @@ export namespace pP::tests {
             PPR_ASSERT(!alloc.isValid());
             alloc.destroy();
 
-            Widget *const widget = alloc.create(17);
+            const Widget *const widget = alloc.create(17);
             PPR_ASSERT(widget != nullptr);
             PPR_ASSERT(widget->x == 17);
             PPR_ASSERT(alloc.isValid());
@@ -501,6 +501,7 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(child_process_without_error, UnitTest::fork) {
+            // simple test to make sure the process is not failing when not expected to
         };
 
         PPR_UNIT_TEST(poison_destroyed_then_read_triggers_asan, UnitTest::expect_crash) {
@@ -554,6 +555,10 @@ export namespace pP::tests {
             buffer.deallocateRaw(ptr, count, max_align_v);
             details::access_after_poison(ptr);
         };
+
+        // ------------------------------------------------------------------
+        // Container-level ASAN annotation validation
+        // ------------------------------------------------------------------
 
         PPR_UNIT_TEST(stablevector_asan_on_erase, UnitTest::expect_crash) {
             StableVector<int> sv;

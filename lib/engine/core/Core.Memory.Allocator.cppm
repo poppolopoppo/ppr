@@ -90,7 +90,12 @@ export namespace pP::mem {
         }
 
         // can't implement since the allocator is not accessible here
-        Allocation &operator =(Allocation &&rvalue) noexcept {
+        Allocation &operator =(Allocation &&rvalue) noexcept
+            requires is_stateless_v {
+            if (m_block.ptr != nullptr) {
+                deallocate();
+            }
+
             m_block = std::move(rvalue.m_block);
             rvalue.m_block = {};
             return *this;
@@ -140,13 +145,31 @@ export namespace pP::mem {
             return AlignmentV;
         }
 
-        [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T &operator*() const noexcept {
+            return *static_cast<T *>(m_block.ptr);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T *operator->() const noexcept {
+            return static_cast<T *>(m_block.ptr);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
             return overlap(data(), size_bytes(), ptr, size);
         }
 
         [[nodiscard]] PPR_FORCE_INLINE constexpr std::span<T> view() const noexcept {
             PPR_ASSERT(isValid() && "Allocation is not valid");
             return std::span<T>(data(), count());
+        }
+
+        /// forget the allocation: it won't be deallocated by the destructor
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::span<T> discard() noexcept {
+            std::span<T> discarded{};
+            if (T *const p_data = data()) [[likely]] {
+                discarded = std::span<T>{p_data, count()};
+                m_block = {}; // reset to default value
+            }
+            return discarded;
         }
 
         [[maybe_unused]] constexpr std::allocation_result<T *>
@@ -165,7 +188,8 @@ export namespace pP::mem {
             return allocate(al, n);
         }
 
-        [[nodiscard]] constexpr bool resize(AllocatorT &al, const std::size_t new_size) noexcept
+        [[nodiscard]] constexpr bool
+        resize(AllocatorT &al, const std::size_t new_size) noexcept
             requires details::TResizableAllocator<AllocatorT> {
             if (isValid()) [[likely]] {
                 if (const std::size_t raw_size = new_size * sizeof(T);
@@ -188,17 +212,20 @@ export namespace pP::mem {
             return resize(al, new_size);
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *> relocate(AllocatorT &al, const std::size_t new_size) noexcept
+        [[maybe_unused]] constexpr std::allocation_result<T *>
+        relocate(AllocatorT &al, const std::size_t new_size) noexcept
             requires pP::details::is_relocatable_v<T> {
-            if (m_block.ptr) {
+            if (m_block.ptr) [[likely]] {
                 if (new_size == 0u) [[unlikely]] {
                     deallocate(al);
                     return {};
                 }
+
                 bool skip_relocate = false;
                 if constexpr (details::TResizableAllocator<AllocatorT>) {
                     skip_relocate = resize(al, new_size);
                 }
+
                 if (!skip_relocate) [[likely]] {
                     const std::size_t raw_size = new_size * sizeof(T);
                     std::allocation_result<void *> new_block = al.allocateRaw(raw_size, AlignmentV);
@@ -208,12 +235,14 @@ export namespace pP::mem {
 
                     m_block = std::move(new_block);
                 }
+
                 return {static_cast<T *>(m_block.ptr), m_block.count / sizeof(T)};
             }
             return allocate(new_size);
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *> relocate(const std::size_t new_size) noexcept
+        [[maybe_unused]] constexpr std::allocation_result<T *>
+        relocate(const std::size_t new_size) noexcept
             requires is_stateless_v && pP::details::is_relocatable_v<T> {
             AllocatorT al{};
             return relocate(al, new_size);
@@ -282,8 +311,6 @@ export namespace pP::mem {
 
     template<typename AllocatorT>
     struct AllocatorTraits {
-        static constexpr bool is_stateless_v = details::TAllocator<AllocatorT> && std::is_empty_v<AllocatorT>;
-
         // ------------------------------------------------------------------
         // trivial types
         // ------------------------------------------------------------------
@@ -315,28 +342,6 @@ export namespace pP::mem {
         [[nodiscard]] constexpr bool resize(this AllocatorT &al, T *const ptr, const std::size_t old_n, const std::size_t new_n) noexcept
             requires details::TResizableAllocator<AllocatorT> {
             return al.resizeRaw(ptr, sizeof(T) * old_n, sizeof(T) * new_n);
-        }
-
-        // ------------------------------------------------------------------
-        // non-trivial objects
-        // ------------------------------------------------------------------
-
-        template<typename T, typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] constexpr T *create(this AllocatorT &al, ArgsT &&... args) noexcept
-            requires details::TAllocator<AllocatorT> {
-            if (T *const ptr = al.template allocate<T>()) [[likely]]{
-                return std::construct_at(ptr, std::forward<ArgsT>(args)...);
-            }
-            return nullptr;
-        }
-
-        template<typename T> requires std::is_destructible_v<T>
-        constexpr void destroy(this AllocatorT &al, T *const ptr) noexcept
-            requires details::TAllocator<AllocatorT> {
-            if (ptr) [[likely]] {
-                std::destroy_at(ptr);
-                al.deallocate(ptr);
-            }
         }
 
         // ------------------------------------------------------------------
@@ -378,15 +383,69 @@ export namespace pP::mem {
         }
 
         // ------------------------------------------------------------------
-        // trivial range
+        // Object construction helpers
         // ------------------------------------------------------------------
 
-        template<typename T> requires std::is_trivially_destructible_v<T>
+        template<typename T, typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        [[nodiscard]] constexpr T *
+        create(this AllocatorT &al, ArgsT&&... args)
+            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+            if (T *const ptr = al.template allocate<T>()) [[likely]] {
+                std::construct_at(ptr, std::forward<ArgsT>(args)...);
+                return ptr;
+            }
+            return nullptr;
+        }
+
+        template<typename T>
+            requires std::is_copy_constructible_v<T>
+        [[nodiscard]] constexpr Allocation<T, AllocatorT>
+        create(this AllocatorT &al, const T &copy)
+            noexcept(std::is_nothrow_copy_constructible_v<T>) {
+            return al.template construct<T>(copy);
+        }
+
+        template<typename T>
+            requires std::is_move_constructible_v<T>
+        [[nodiscard]] constexpr Allocation<T, AllocatorT>
+        create(this AllocatorT &al, T &&move)
+            noexcept(std::is_nothrow_move_constructible_v<T>) {
+            return al.template construct<T>(std::move(move));
+        }
+
+        template<typename T> requires std::is_destructible_v<T>
+        constexpr void destroy(this AllocatorT &al, T *ptr)
+            noexcept(std::is_nothrow_destructible_v<T>) {
+            if (PPR_ENSURE(ptr != nullptr)) [[likely]] {
+                std::destroy_at(ptr);
+                al.deallocate(ptr);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Relocatable range helpers
+        // ------------------------------------------------------------------
+
+        template<typename T>
+            requires pP::details::is_relocatable_v<T>
         [[nodiscard]] constexpr std::span<T>
         span(this AllocatorT &al, const std::size_t n, const std::align_val_t alignment = alignof_v<T>) noexcept
             requires details::TAllocator<AllocatorT> {
             const std::allocation_result<T *> block = al.template allocate_at_least<T>(n, alignment);
             return std::span<T>(block.ptr, block.count);
+        }
+
+        template<std::ranges::contiguous_range RangeT>
+            requires pP::details::is_relocatable_v<std::ranges::range_value_t<RangeT>>
+        [[nodiscard]] constexpr std::span<std::ranges::range_value_t<RangeT>>
+        dup(this AllocatorT &al, RangeT &&values, const std::align_val_t alignment = alignof_v<std::ranges::range_value_t<RangeT>>) noexcept
+            requires details::TAllocator<AllocatorT> {
+            using value_type = std::ranges::range_value_t<RangeT>;
+            const std::size_t n = std::ranges::size(values);
+            const std::span<value_type> dst{al.template allocate<value_type>(n, alignment), n};
+            std::memcpy(dst.data(), std::ranges::data(values), n * sizeof(value_type));
+            return dst;
         }
     };
 
@@ -781,7 +840,7 @@ export namespace pP::mem {
             PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, bytes) && "Trying to deallocate a pointer outside of the in-situ buffer");
 
             m_status = status_free_;
-            poisonDestroyed(&m_storage);
+            poisonReserved(&m_storage);
         }
 
         [[nodiscard]] constexpr bool
@@ -1377,4 +1436,22 @@ export namespace pP::mem {
     template<typename T, details::TAllocator AllocatorT>
     struct details::use_inplace<STL<T, AllocatorT> > : use_inplace<Allocator<AllocatorT> > {
     };
+}
+
+// ------------------------------------------------------------------
+// custom placement new and delete operators for Arena<>
+// ------------------------------------------------------------------
+
+// Need to be defined in Global namespace
+export template<pP::mem::details::TArenaAllocator ArenaT>
+[[nodiscard]] PPR_FORCE_INLINE void *operator new(const std::size_t size_bytes, ArenaT &arena) noexcept {
+    return arena.allocateRaw(size_bytes, pP::max_align_v).ptr;
+}
+
+// Note that this operator can't be called explicitly,
+// and will be called only if an exception is thrown in the placement new above.
+// https://isocpp.org/wiki/faq/dtors#placement-delete
+export template<pP::mem::details::TArenaAllocator ArenaT>
+void operator delete(void *ptr, std::size_t size_bytes, ArenaT &arena) {
+    arena.deallocateRaw(ptr, size_bytes, pP::max_align_v);
 }
