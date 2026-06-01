@@ -569,7 +569,10 @@ namespace pP::mem {
         public:
             PagePool(const std::size_t page_size,
                      const std::size_t num_reserved_pages)
-                : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(num_reserved_pages * page_size, false).ptr)),
+                : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(
+                    num_reserved_pages * page_size,
+                    false, {},
+                    std::max(hal::page_granularity, std::align_val_t{page_size})).ptr)),
                   m_page_size(page_size),
                   m_tree_infos(checked_cast<u32>(num_reserved_pages)) {
                 PPR_ASSERT(page_size % hal::page_size == 0u);
@@ -579,8 +582,14 @@ namespace pP::mem {
                 m_full_bundle.fill(umax_v);
 
                 // separated allocation for allocator metadata
-                const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
-                m_committed_pages.initialize(m_tree_infos, hal::pageAlloc(metadata_size_bytes), false);
+                const std::size_t metadata_size_bytes = alignForward(
+                    m_tree_infos.getAllocationSize(),
+                    hal::page_granularity);
+
+                m_committed_pages.initialize(
+                    m_tree_infos,
+                    hal::pageAlloc(metadata_size_bytes),
+                    false);
             }
 
             ~PagePool() {
@@ -588,7 +597,9 @@ namespace pP::mem {
 
                 m_barrier.lock(); // keep mutex locked to detect necrophilia
 
-                const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
+                const std::size_t metadata_size_bytes = alignForward(
+                    m_tree_infos.getAllocationSize(),
+                    hal::page_granularity);
                 hal::pageFree(m_committed_pages.getAllocationPtr(), metadata_size_bytes);
                 hal::pageFree(m_reserved_space, static_cast<std::size_t>(m_tree_infos.m_desired_size) * static_cast<std::size_t>(m_page_size));
             }
