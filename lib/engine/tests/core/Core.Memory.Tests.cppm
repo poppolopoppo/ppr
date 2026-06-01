@@ -485,12 +485,12 @@ export namespace pP::tests {
     // by deliberately accessing poisoned memory (which ASAN will catch)
     // ------------------------------------------------------------------
 
-    namespace AsanPoisoning {
+    namespace Poisoning {
         namespace details {
             [[maybe_unused]] volatile int sink = 0;
 
             [[maybe_unused]] void access_after_poison(void *ptr) {
-                auto *byte_ptr = static_cast<std::byte *>(ptr);
+                const auto *byte_ptr = static_cast<std::byte *>(ptr);
                 sink = byte_ptr[0] != std::byte{0};
             }
 
@@ -500,13 +500,16 @@ export namespace pP::tests {
             }
         }
 
-        PPR_UNIT_TEST(poison_destroyed_then_read_triggers_asan) {
+        PPR_UNIT_TEST(child_process_without_error, UnitTest::fork) {
+        };
+
+        PPR_UNIT_TEST(poison_destroyed_then_read_triggers_asan, UnitTest::expect_crash) {
             std::byte buffer[64u]{};
             mem::poisonDestroyed(buffer, sizeof(buffer));
             details::access_after_poison(buffer);
         };
 
-        PPR_UNIT_TEST(poison_reserved_then_write_triggers_asan) {
+        PPR_UNIT_TEST(poison_reserved_then_write_triggers_asan, UnitTest::expect_crash) {
             std::byte buffer[64u]{};
             mem::poisonReserved(buffer, sizeof(buffer));
             details::write_after_poison(buffer);
@@ -518,50 +521,112 @@ export namespace pP::tests {
             mem::poisonReserved(nullptr, 0u);
         };
 
-        PPR_UNIT_TEST(gpa_poison_on_free_triggers_asan) {
-            auto alloc = mem::GPA::allocateRaw(32u, max_align_v);
-            mem::GPA::deallocateRaw(alloc.ptr, alloc.count, max_align_v);
-            details::access_after_poison(alloc.ptr);
+        PPR_UNIT_TEST(gpa_poison_on_free_triggers_asan, UnitTest::expect_crash) {
+            const auto [ptr, count] = mem::GPA::allocateRaw(32u, max_align_v);
+            mem::GPA::deallocateRaw(ptr, count, max_align_v);
+            details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(os_poison_on_free_triggers_asan) {
-            auto alloc = mem::OS::allocateRaw(4096u, std::align_val_t{4096u});
-            if (alloc.ptr) [[likely]] {
-                mem::OS::deallocateRaw(alloc.ptr, alloc.count, std::align_val_t{4096u});
-                details::access_after_poison(alloc.ptr);
+        PPR_UNIT_TEST(os_poison_on_free_triggers_asan, UnitTest::expect_crash) {
+            if (const auto [ptr, count] = mem::OS::allocateRaw(4096u, std::align_val_t{4096u}); ptr) [[likely]] {
+                mem::OS::deallocateRaw(ptr, count, std::align_val_t{4096u});
+                details::access_after_poison(ptr);
             }
         };
 
-        PPR_UNIT_TEST(pooling_poison_on_free_triggers_asan) {
+        PPR_UNIT_TEST(pooling_poison_on_free_triggers_asan, UnitTest::expect_crash) {
             mem::Pooling<64u, mem::GPA, 256u> pool{};
             void *block = pool.allocateRaw(64u, max_align_v).ptr;
             pool.deallocateRaw(block, 64u, max_align_v);
             details::access_after_poison(block);
         };
 
-        PPR_UNIT_TEST(arena_poison_on_dealloc_triggers_asan) {
+        PPR_UNIT_TEST(arena_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
             mem::Arena<mem::GPA> arena{4096u};
             auto *const alloc = arena.allocateRaw(64u, max_align_v).ptr;
             arena.deallocateRaw(alloc, 64u, max_align_v);
             details::access_after_poison(alloc);
         };
 
-        PPR_UNIT_TEST(insitu_poison_on_dealloc_triggers_asan) {
+        PPR_UNIT_TEST(insitu_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
             mem::InSitu<128u> buffer{};
-            auto alloc = buffer.allocateRaw(64u, max_align_v);
-            buffer.deallocateRaw(alloc.ptr, alloc.count, max_align_v);
-            details::access_after_poison(alloc.ptr);
+            const auto [ptr, count] = buffer.allocateRaw(64u, max_align_v);
+            buffer.deallocateRaw(ptr, count, max_align_v);
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(stablevector_asan_on_erase, UnitTest::expect_crash) {
+            StableVector<int> sv;
+            sv.pushBack(42);
+            int *ptr = &sv[0];
+            sv.erase(0);
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(stablevector_asan_multi_slice, UnitTest::expect_crash) {
+            StableVector<int> sv;
+            for (std::size_t i = 0; i < 100; ++i) {
+                sv.pushBack(static_cast<int>(i));
+            }
+            int *ptr = &sv[50];
+            sv.erase(50);
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(stablevector_asan_on_clear, UnitTest::expect_crash) {
+            StableVector<int> sv;
+            sv.pushBack(42);
+            int *ptr = &sv[0];
+            sv.clear();
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(hashmap_asan_on_clear, UnitTest::expect_crash) {
+            HashMap<int, int> hm;
+            hm.insert({1, 10});
+            auto it = hm.find(1);
+            PPR_ASSERT(it != hm.end());
+            int *ptr = &it->second;
+            hm.clear();
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(sparsevector_asan_on_erase, UnitTest::expect_crash) {
+            SparseVector<int> sv;
+            const auto key = sv.add(42);
+            int *ptr = &sv[key];
+            sv.erase(key);
+            details::access_after_poison(ptr);
+        };
+
+        PPR_UNIT_TEST(arena_asan_on_restore, UnitTest::expect_crash) {
+            mem::Arena<mem::GPA> arena{4096u};
+            const void *mark = arena.watermark();
+            auto *const alloc = static_cast<std::byte *>(arena.allocateRaw(64u, max_align_v).ptr);
+            alloc[0] = std::byte{42};
+            arena.restore(mark);
+            details::access_after_poison(alloc);
         };
     }
 
-    PPR_UNIT_TEST(asan_poisoning) {
-        _.recurse(AsanPoisoning::poison_destroyed_then_read_triggers_asan);
-        _.recurse(AsanPoisoning::poison_reserved_then_write_triggers_asan);
-        _.recurse(AsanPoisoning::poison_nullptr_safe);
-        _.recurse(AsanPoisoning::gpa_poison_on_free_triggers_asan);
-        _.recurse(AsanPoisoning::os_poison_on_free_triggers_asan);
-        _.recurse(AsanPoisoning::pooling_poison_on_free_triggers_asan);
-        _.recurse(AsanPoisoning::arena_poison_on_dealloc_triggers_asan);
-        _.recurse(AsanPoisoning::insitu_poison_on_dealloc_triggers_asan);
+    PPR_UNIT_TEST(poisoning) {
+        _.recurse(Poisoning::child_process_without_error);
+
+        if constexpr (mem::is_asan_enabled_v) {
+            _.recurse(Poisoning::poison_destroyed_then_read_triggers_asan);
+            _.recurse(Poisoning::poison_reserved_then_write_triggers_asan);
+            _.recurse(Poisoning::poison_nullptr_safe);
+            _.recurse(Poisoning::gpa_poison_on_free_triggers_asan);
+            _.recurse(Poisoning::os_poison_on_free_triggers_asan);
+            _.recurse(Poisoning::pooling_poison_on_free_triggers_asan);
+            _.recurse(Poisoning::arena_poison_on_dealloc_triggers_asan);
+            _.recurse(Poisoning::insitu_poison_on_dealloc_triggers_asan);
+            _.recurse(Poisoning::stablevector_asan_on_erase);
+            _.recurse(Poisoning::stablevector_asan_multi_slice);
+            _.recurse(Poisoning::stablevector_asan_on_clear);
+            _.recurse(Poisoning::hashmap_asan_on_clear);
+            _.recurse(Poisoning::sparsevector_asan_on_erase);
+            _.recurse(Poisoning::arena_asan_on_restore);
+        }
     };
 }
