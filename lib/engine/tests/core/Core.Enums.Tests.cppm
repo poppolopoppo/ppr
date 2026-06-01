@@ -7,14 +7,14 @@ import std;
 export namespace pP::tests {
     namespace Enums {
         enum class Color : u32 {
+            none = 0u,
             red = 0xFF0000u,
             green = 0x00FF00u,
             blue = 0x0000FFu,
+            all = red | green | blue,
         };
 
-        constexpr bool is_enum_flags(std::type_identity<Color>) noexcept {
-            return true;
-        }
+        static_assert(pP::details::TEnumFlags<Color>);
 
         enum class Flags : u32 {
             none = 0u,
@@ -24,6 +24,8 @@ export namespace pP::tests {
             ab = a|b,
             all = a|b|c
         };
+
+        static_assert(pP::details::TEnumFlags<Flags>);
 
         constexpr bool is_enum_flags(std::type_identity<Flags>) noexcept {
             return true;

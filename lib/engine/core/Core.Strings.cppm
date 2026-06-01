@@ -60,27 +60,23 @@ export namespace pP {
             : m_str{str} {
         }
 
-        template<std::size_t nLen> requires (nLen > 0u)
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr basic_string_literal(const std::array<CharT, nLen> &arr) noexcept
-            : m_str{arr.data()} {
-            PPR_ASSERT(arr.back() == CharT{});
-        }
-
         [[nodiscard]] constexpr std::size_t size() const noexcept {
             return std::char_traits<CharT>::length(m_str);
         }
 
         using view_type = std::basic_string_view<CharT>;
         using value_type = CharT;
-        using iterator = std::ranges::iterator_t<view_type>;
 
-        [[nodiscard]] constexpr iterator begin() const noexcept {
-            return view().begin();
+        [[nodiscard]] constexpr const CharT *data() const noexcept {
+            return m_str;
         }
 
-        [[nodiscard]] constexpr iterator end() const noexcept {
-            return view().end();
+        [[nodiscard]] constexpr const CharT *begin() const noexcept {
+            return m_str;
+        }
+
+        [[nodiscard]] constexpr const CharT *end() const noexcept {
+            return m_str ? &m_str[std::strlen(m_str)] : nullptr;
         }
 
         [[nodiscard]] constexpr std::basic_string_view<CharT> view() const noexcept {
@@ -92,13 +88,17 @@ export namespace pP {
             return {m_str};
         }
 
-        [[nodiscard]] friend constexpr bool operator==(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
-            return lhs.view() == rhs.view();
+        [[nodiscard]] friend constexpr bool
+        operator==(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
+            return std::strcmp(lhs.m_str, rhs.m_str) == 0;
         }
 
-        [[nodiscard]] friend constexpr auto operator<=>(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept
-            -> std::compare_three_way_result_t<value_type> {
-            return lhs.view() <=> rhs.view();
+        [[nodiscard]] friend constexpr std::strong_ordering
+        operator<=>(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
+            if (const int cmp = std::strcmp(lhs.m_str, rhs.m_str); cmp != 0) {
+                return cmp < 0 ? std::strong_ordering::less : std::strong_ordering::greater;
+            }
+            return std::strong_ordering::equal;
         }
     };
 
@@ -157,16 +157,6 @@ export namespace pP {
             return nLen;
         }
 
-        [[nodiscard]] constexpr basic_string_literal<CharT>
-        literal() const noexcept {
-            return {m_chars};
-        }
-
-        // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator basic_string_literal<CharT>() const noexcept {
-            return literal();
-        }
-
         [[nodiscard]] constexpr std::basic_string_view<CharT> view() const noexcept {
             return {m_chars.data(), nLen};
         }
@@ -179,25 +169,25 @@ export namespace pP {
         template<std::size_t nOffset, std::size_t nNewLen> requires (nOffset + nNewLen <= nLen)
         [[nodiscard]] constexpr basic_static_string<CharT, nNewLen>
         subrange() const noexcept {
-            basic_static_string<CharT, nNewLen> outp;
+            basic_static_string<CharT, nNewLen> output;
             const auto first = m_chars.begin() + nOffset;
-            std::copy(first, first + nNewLen, outp.m_chars.begin());
-            PPR_ASSERT(outp.m_chars.back() == CharT{});
-            return outp;
+            std::copy(first, first + nNewLen, output.m_chars.begin());
+            PPR_ASSERT(output.m_chars.back() == CharT{});
+            return output;
         }
 
         template<std::size_t nOtherLen>
         [[nodiscard]] friend constexpr auto
         operator +(const basic_static_string &lhs, const basic_static_string<CharT, nOtherLen> &rhs) noexcept {
             basic_static_string<CharT, nLen + nOtherLen> result;
-            auto outp = std::copy(lhs.begin(), lhs.end(), result.begin());
-            std::copy(rhs.begin(), rhs.end(), outp);
+            auto output = std::copy(lhs.begin(), lhs.end(), result.begin());
+            std::copy(rhs.begin(), rhs.end(), output);
             return result;
         }
 
         [[nodiscard]] friend constexpr bool
         operator ==(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
-            return std::ranges::equal(lhs.m_chars, rhs.m_chars);
+            return std::ranges::equal(lhs, rhs);
         }
 
         template<std::size_t nOtherLen>
@@ -206,11 +196,35 @@ export namespace pP {
             return false;
         }
 
-        template<std::size_t nOtherLen>
+        template<std::size_t StringLenV>
+        [[nodiscard]] friend constexpr bool
+        operator ==(const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
+            return std::ranges::equal(lhs, std::basic_string_view<CharT>(rhs));
+        }
+
+        template<std::size_t StringLenV>
         [[nodiscard]] friend constexpr std::strong_ordering
-        operator <=>(const basic_static_string &lhs, const basic_static_string<CharT, nOtherLen> &rhs) noexcept {
+        operator <=>(const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
+            const std::basic_string_view<CharT> rhs_view(rhs);
             return std::lexicographical_compare_three_way(
-                std::begin(lhs), std::end(lhs),
+                lhs.begin(), lhs.end(),
+                rhs_view.begin(), rhs_view.end(),
+                std::compare_three_way{});
+        }
+
+        template<std::ranges::forward_range StringT>
+            requires std::is_same_v<std::ranges::range_value_t<StringT>, CharT>
+        [[nodiscard]] friend constexpr bool
+        operator ==(const basic_static_string &lhs, const StringT &rhs) noexcept {
+            return std::ranges::equal(lhs, rhs);
+        }
+
+        template<std::ranges::forward_range StringT>
+            requires std::is_same_v<std::ranges::range_value_t<StringT>, CharT>
+        [[nodiscard]] friend constexpr std::strong_ordering
+        operator <=>(const basic_static_string &lhs, const StringT &rhs) noexcept {
+            return std::lexicographical_compare_three_way(
+                lhs.begin(), lhs.end(),
                 std::begin(rhs), std::end(rhs),
                 std::compare_three_way{});
         }
