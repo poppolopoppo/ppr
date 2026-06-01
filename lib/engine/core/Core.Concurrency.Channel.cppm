@@ -1,0 +1,825 @@
+module;
+#include "pP/Macros.h"
+export module engine.core:channel;
+
+import :assert;
+import :enums;
+import :hal;
+
+import std;
+import :containers;
+
+export namespace pP {
+    // ------------------------------------------------------------------
+    // a channel is a lock-free MPSC circular buffer for fast message passing between threads
+    // ------------------------------------------------------------------
+
+    // inspired from BPF ring buffer: https://www.kernel.org/doc/html/latest/bpf/ringbuf.html
+
+    PPR_PRAGMA_WARNING_PUSH()
+    PPR_PRAGMA_WARNING_DISABLE_MSVC(4324)
+
+    class alignas(hal::cacheline_size_v) RawChannel {
+        void advanceCommit_() noexcept;
+
+        void *const m_data{};
+        const std::size_t m_capacity{};
+
+        std::mutex m_producer_mutex{};
+        std::size_t m_write{};
+        alignas(hal::cacheline_size_v) std::atomic<std::size_t> m_commit{};
+        alignas(hal::cacheline_size_v) std::atomic<std::size_t> m_read{};
+
+        enum EStatus_ {
+            status_opened,
+            status_closing,
+            status_closed,
+        };
+
+        std::atomic<int> m_status{status_opened};
+
+    protected:
+        struct alignas(u64) RecordHeader {
+            enum EFlags : u32 {
+                none = 0u,
+
+                flag_busy = 0b0001u,
+                flag_discard = 0b0010u,
+                flag_flush = 0b0100u,
+                flag_close = 0b1000u,
+
+                all = flag_busy | flag_discard | flag_flush | flag_close,
+            };
+
+            EFlags m_flags{};
+            u32 m_available_size{};
+
+            [[nodiscard]] void *data() & noexcept {
+                return this + 1;
+            }
+
+            [[nodiscard]] const void *data() const & noexcept {
+                return this + 1;
+            }
+
+            [[nodiscard]] std::size_t size() const noexcept {
+                return m_available_size;
+            }
+
+            [[nodiscard]] std::allocation_result<void *> allocation() & noexcept {
+                return {this + 1, m_available_size};
+            }
+
+            [[nodiscard]] bool isClosing() const noexcept {
+                return (m_flags & flag_close) != none;
+            }
+        };
+
+    public:
+        [[nodiscard]] static constexpr std::size_t alignSize(const std::size_t size_bytes) noexcept {
+            return sizeof(RecordHeader) + alignForward(size_bytes, alignof(RecordHeader));
+        }
+
+        struct Record {
+            std::reference_wrapper<RecordHeader> m_header;
+
+            // ReSharper disable once CppNonExplicitConversionOperator
+            [[nodiscard]] RecordHeader &get() const noexcept {
+                return m_header;
+            }
+
+            // ReSharper disable once CppNonExplicitConversionOperator
+            [[nodiscard]] operator RecordHeader &() const noexcept {
+                return m_header;
+            }
+
+            [[nodiscard]] void *data() noexcept {
+                return m_header.get().data();
+            }
+
+            [[nodiscard]] const void *data() const noexcept {
+                return m_header.get().data();
+            }
+
+            [[nodiscard]] std::size_t size() const noexcept {
+                return m_header.get().size();
+            }
+
+            [[nodiscard]] std::allocation_result<void *> allocation() const noexcept {
+                return m_header.get().allocation();
+            }
+        };
+
+        explicit RawChannel(const std::size_t buffer_size) noexcept
+            : m_data{hal::ringBufferAlloc(buffer_size)},
+              m_capacity(buffer_size) {
+            PPR_ASSERT(std::has_single_bit(m_capacity) && "buffer size must be a power of 2");
+            mem::poisonReserved(m_data, m_capacity);
+        }
+
+        explicit RawChannel() noexcept
+            : RawChannel(static_cast<std::size_t>(hal::page_granularity)) {
+        }
+
+        RawChannel(const std::size_t num_elements, const std::size_t element_size) noexcept
+            : RawChannel(std::bit_ceil(alignForward(
+                num_elements * alignSize(element_size), hal::page_granularity))) {
+        }
+
+        ~RawChannel() noexcept {
+            if (m_data == nullptr) [[unlikely]] {
+                return;
+            }
+            if (not isClosedOrClosing()) {
+                [[maybe_unused]] auto _ = close();
+            }
+            mem::poisonDestroyed(m_data, m_capacity);
+            hal::ringBufferFree(m_data, m_capacity);
+        }
+
+        RawChannel(const RawChannel &) = delete;
+
+        RawChannel &operator=(const RawChannel &) = delete;
+
+        RawChannel(const RawChannel &&) = delete;
+
+        RawChannel &operator=(const RawChannel &&) = delete;
+
+        [[nodiscard]] bool isOpened() const noexcept {
+            return m_status.load(std::memory_order_acquire) == status_opened;
+        }
+
+        [[nodiscard]] bool isClosed() const noexcept {
+            return m_status.load(std::memory_order_acquire) == status_closed;
+        }
+
+        [[nodiscard]] bool isClosedOrClosing() const noexcept {
+            return m_status.load(std::memory_order_acquire) != status_opened;
+        }
+
+        [[nodiscard]] std::size_t capacity() const noexcept {
+            return m_capacity;
+        }
+
+        enum EError {
+            error_closed,
+            error_empty,
+            error_full,
+            error_invalid,
+        };
+
+        std::expected<void, EError> flush() noexcept;
+
+        std::expected<void, EError> close() noexcept;
+
+        enum EBackPressure {
+            drop_if_full,
+            wait_if_full,
+            yield_if_full,
+        };
+
+    private:
+        [[nodiscard]] std::expected<Record, EError>
+        producerReserveAssumeNotClosed_(const std::size_t size_bytes, const EBackPressure policy) noexcept;
+
+    public:
+        [[nodiscard]] std::expected<Record, EError>
+        producerReserve(const std::size_t size_bytes, const EBackPressure policy = wait_if_full) noexcept;
+
+        void producerSubmit(RecordHeader &written) noexcept;
+
+        void producerDiscard(RecordHeader &written) noexcept;
+
+        enum EPolling {
+            block_until_available,
+            peek_without_blocking,
+        };
+
+        [[nodiscard]] std::expected<Record, EError>
+        consumerAcquire(const EPolling policy = block_until_available) noexcept;
+
+        void consumerRelease(const RecordHeader &read) noexcept;
+    };
+
+    PPR_PRAGMA_WARNING_POP()
+
+    using SharedRawChannelPtr = std::shared_ptr<RawChannel>;
+
+    auto RawChannel::flush() noexcept -> std::expected<void, EError> {
+        auto hdr = producerReserve(sizeof(std::atomic_flag), wait_if_full);
+        if (not hdr.has_value()) [[unlikely]] {
+            return std::unexpected(hdr.error());
+        }
+
+        alignas(hal::cacheline_size_v) std::atomic_flag flush_signal{};
+        new(hdr->data()) (std::atomic_flag *)(&flush_signal);
+
+        hdr->m_header.get().m_flags |= RecordHeader::flag_flush;
+
+        producerSubmit(*hdr);
+
+        flush_signal.wait(false, std::memory_order_acquire);
+        return {};
+    }
+
+    auto RawChannel::close() noexcept -> std::expected<void, EError> {
+        if (int expected_status = status_opened;
+            not m_status.compare_exchange_strong(expected_status, status_closing)) {
+            return std::unexpected(error_closed);
+        }
+
+        auto hdr = producerReserveAssumeNotClosed_(0u, wait_if_full);
+        if (not hdr.has_value()) [[unlikely]] {
+            m_status.store(status_closed, std::memory_order_release);
+            m_commit.notify_one();
+            return std::unexpected(hdr.error());
+        }
+
+        hdr->m_header.get().m_flags = RecordHeader::flag_close;
+        producerSubmit(*hdr);
+        return {};
+    }
+
+    auto RawChannel::producerReserve(const std::size_t size_bytes, const EBackPressure policy) noexcept
+        -> std::expected<Record, EError> {
+        if (isClosedOrClosing()) [[unlikely]] {
+            return std::unexpected(error_closed);
+        }
+        return producerReserveAssumeNotClosed_(size_bytes, policy);
+    }
+
+    auto RawChannel::producerReserveAssumeNotClosed_(const std::size_t size_bytes, const EBackPressure policy) noexcept
+        -> std::expected<Record, EError> {
+        const std::size_t record_size = alignSize(size_bytes);
+        if (not PPR_ENSURE(record_size <= m_capacity)) [[unlikely]] {
+            return std::unexpected(error_full);
+        }
+
+        std::unique_lock lock(m_producer_mutex);
+        while (true) {
+            if (const std::size_t used = m_write - m_read.load(std::memory_order_acquire);
+                used + record_size > m_capacity) [[unlikely]] {
+                switch (policy) {
+                    case drop_if_full:
+                        return std::unexpected(error_full);
+                    case wait_if_full:
+                        m_read.wait(m_read.load(std::memory_order_acquire), std::memory_order_acquire);
+                        continue;
+                    case yield_if_full:
+                        lock.unlock();
+                        std::this_thread::yield();
+                        lock.lock();
+                        continue;
+                }
+            }
+
+            const std::size_t offset = m_write & (m_capacity - 1u);
+            void *const p_reserved_block = static_cast<std::byte *>(m_data) + offset;
+            m_write += record_size;
+
+            mem::unpoisonUninitialized(p_reserved_block, record_size);
+
+            return Record{
+                *new(p_reserved_block) RecordHeader{
+                    .m_flags = RecordHeader::flag_busy,
+                    .m_available_size = safe_narrowing{record_size - sizeof(RecordHeader)}
+                }
+            };
+        }
+    }
+
+    void RawChannel::advanceCommit_() noexcept {
+        std::size_t commit = m_commit.load(std::memory_order_relaxed);
+
+        while (commit < m_write) {
+            const std::size_t offset = commit & (m_capacity - 1u);
+            const auto *hdr = reinterpret_cast<const RecordHeader *>(
+                static_cast<const std::byte *>(m_data) + offset);
+
+            if (hdr->m_flags & RecordHeader::flag_busy) {
+                break;
+            }
+
+            commit += alignSize(hdr->m_available_size);
+        }
+
+        m_commit.store(commit, std::memory_order_release);
+        m_commit.notify_one();
+    }
+
+    void RawChannel::producerSubmit(RecordHeader &written) noexcept {
+        const std::lock_guard lock(m_producer_mutex);
+        written.m_flags &= ~RecordHeader::flag_busy;
+        advanceCommit_();
+    }
+
+    void RawChannel::producerDiscard(RecordHeader &written) noexcept {
+        const std::lock_guard lock(m_producer_mutex);
+        written.m_flags = RecordHeader::flag_discard;
+        advanceCommit_();
+    }
+
+    auto RawChannel::consumerAcquire(const EPolling policy) noexcept
+        -> std::expected<Record, EError> {
+        while (true) {
+            const std::size_t read_pos = m_read.load(std::memory_order_relaxed);
+            const std::size_t commit_pos = m_commit.load(std::memory_order_acquire);
+
+            if (read_pos == commit_pos) {
+                switch (policy) {
+                    case block_until_available:
+                        m_commit.wait(commit_pos, std::memory_order_acquire);
+                        continue;
+                    case peek_without_blocking:
+                        return std::unexpected(error_empty);
+                }
+            }
+
+            const std::size_t offset = read_pos & (m_capacity - 1u);
+            auto *const hdr = reinterpret_cast<RecordHeader *>(
+                static_cast<std::byte *>(m_data) + offset);
+
+            const std::uint32_t f = hdr->m_flags;
+            PPR_ASSERT(!(f & RecordHeader::flag_busy));
+
+            if (f & (RecordHeader::flag_close | RecordHeader::flag_discard | RecordHeader::flag_flush)) [[unlikely]] {
+                PPR_ASSERT(not (f & RecordHeader::flag_close) || hdr->m_available_size == 0u);
+                const std::size_t record_size = alignSize(hdr->m_available_size);
+
+                if (f & RecordHeader::flag_flush) {
+                    PPR_ASSERT(hdr->m_available_size >= sizeof(std::atomic_flag));
+                    auto *const p_atomic_signal = *static_cast<std::atomic_flag **>(hdr->data());
+
+                    p_atomic_signal->test_and_set(std::memory_order_release);
+                    p_atomic_signal->notify_all();
+                }
+
+                mem::poisonDestroyed(static_cast<void *>(hdr), record_size);
+
+                m_read.fetch_add(record_size, std::memory_order_release);
+                m_read.notify_all();
+
+                if (f & RecordHeader::flag_close) {
+                    m_status.store(status_closed);
+                    return std::unexpected(error_closed);
+                }
+                continue;
+            }
+
+            return Record{*hdr};
+        }
+    }
+
+    void RawChannel::consumerRelease(const RecordHeader &read) noexcept {
+        const std::size_t record_size = alignSize(read.m_available_size);
+        mem::poisonDestroyed(static_cast<void *>(const_cast<RecordHeader *>(&read)), record_size);
+
+        m_read.fetch_add(record_size, std::memory_order_release);
+        m_read.notify_all();
+    }
+
+    // ------------------------------------------------------------------
+    // typed channel helpers for fixed-size messages
+    // ------------------------------------------------------------------
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    class ChannelReader;
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    class ChannelWriter;
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    class Channel {
+        SharedRawChannelPtr m_chan;
+
+        using RecordHeader = RawChannel::Record;
+
+    public:
+        struct CloseTag {
+        };
+
+        using EBackPressure = RawChannel::EBackPressure;
+        using EError = RawChannel::EError;
+        using EPolling = RawChannel::EPolling;
+
+        using enum EBackPressure;
+        using enum EError;
+        using enum EPolling;
+
+        explicit Channel(SharedRawChannelPtr &&chan) noexcept
+            : m_chan{std::move(chan)} {
+            PPR_ASSERT(m_chan != nullptr);
+        }
+
+        Channel(std::in_place_t, const std::size_t capacity)
+            : Channel(std::make_shared<RawChannel>(capacity, sizeof(T))) {
+            PPR_ASSERT(capacity > 0);
+        }
+
+        ~Channel() noexcept {
+            [[maybe_unused]] auto err = close();
+            PPR_ASSERT(err.has_value() or err.error() == error_closed);
+
+#if PPR_ENABLE_ASSERTIONS
+            if constexpr (not std::is_trivially_destructible_v<T>
+                          && std::is_nothrow_move_constructible_v<T>) {
+                std::size_t unread = 0;
+                while (peek().has_value()) {
+                    ++unread;
+                }
+                PPR_ASSERT(unread == 0
+                    && "Channel destroyed with unread non-trivially-destructible messages");
+            }
+#endif
+        }
+
+        std::expected<void, EError> flush() noexcept {
+            if (RawChannel *const p_chan = m_chan.get()) [[likely]] {
+                return p_chan->flush();
+            }
+            return std::unexpected(error_invalid);
+        }
+
+        std::expected<void, EError> close() noexcept {
+            if (RawChannel *const p_chan = m_chan.get()) [[likely]] {
+                return p_chan->close();
+            }
+            return std::unexpected(error_invalid);
+        }
+
+        [[nodiscard]] ChannelReader<T> reader() noexcept;
+
+        [[nodiscard]] ChannelWriter<T> writer() noexcept;
+
+        template<typename LikeT>
+        [[nodiscard]] std::expected<void, EError>
+        send(LikeT &&value, const EBackPressure policy = drop_if_full) noexcept
+            requires std::conjunction_v<std::is_nothrow_constructible<T, LikeT &&>, std::is_nothrow_move_constructible<T> > {
+            auto hdr = m_chan->producerReserve(sizeof(T), policy);
+
+            if (hdr.has_value()) [[likely]] {
+                new(hdr->data()) T(std::forward<LikeT>(value));
+                m_chan->producerSubmit(*hdr);
+                return {};
+            }
+
+            return std::unexpected(hdr.error());
+        }
+
+        template<typename... ArgsT>
+        [[nodiscard]] std::expected<void, EError>
+        emplace(const EBackPressure policy, ArgsT &&... args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+            auto hdr = m_chan->producerReserve(sizeof(T), policy);
+            if (hdr.has_value()) [[likely]] {
+                new(hdr->data()) T(std::forward<ArgsT>(args)...);
+                m_chan->producerSubmit(*hdr);
+                return {};
+            }
+            return std::unexpected(hdr.error());
+        }
+
+        template<typename... ArgsT>
+        [[nodiscard]] std::expected<void, EError>
+        emplace(ArgsT &&... args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+            return emplace(wait_if_full, std::forward<ArgsT>(args)...);
+        }
+
+        template<typename ChannelT>
+        class [[nodiscard]] BasicSendResult {
+            ChannelT &m_chan;
+            std::optional<EError> m_error{std::nullopt};
+
+        public:
+            BasicSendResult(ChannelT &chan, const std::expected<void, EError> &result) noexcept
+                : m_chan{chan} {
+                if (not result.has_value()) {
+                    m_error = result.error();
+                }
+            }
+
+            [[nodiscard]] bool has_error() const noexcept {
+                return m_error.has_value();
+            }
+
+            [[nodiscard]] EError error() const noexcept {
+                return m_error.value();
+            }
+
+            friend BasicSendResult operator<<(const BasicSendResult &writer, const T &value) noexcept {
+                if (not writer.m_error.has_value()) [[likely]] {
+                    return writer.m_chan << value;
+                }
+                return writer;
+            }
+
+            friend BasicSendResult operator<<(const BasicSendResult &writer, T &&value) noexcept {
+                if (not writer.m_error.has_value()) [[likely]] {
+                    return writer.m_chan << std::move(value);
+                }
+                return writer;
+            }
+        };
+
+        using SendResult = BasicSendResult<Channel>;
+
+        friend SendResult operator<<(Channel &writer, const T &value) noexcept {
+            auto err = writer.send(value);
+            return SendResult(writer, err);
+        }
+
+        friend SendResult operator<<(Channel &writer, T &&value) noexcept {
+            auto err = writer.send(std::move(value));
+            return SendResult(writer, err);
+        }
+
+        class [[nodiscard]] OutputIterator {
+            Channel m_writer;
+            EBackPressure m_policy{wait_if_full};
+            std::optional<EError> m_error;
+
+        public:
+            using iterator_category = std::output_iterator_tag;
+            using value_type = void;
+            using difference_type = std::ptrdiff_t;
+            using pointer = void;
+            using reference = void;
+
+            explicit OutputIterator(Channel &writer, const EBackPressure policy = wait_if_full) noexcept
+                : m_writer{writer}, m_policy{policy} {
+            }
+
+            [[nodiscard]] std::optional<EError> error() const noexcept {
+                return m_error;
+            }
+
+            OutputIterator &operator*() noexcept {
+                return *this;
+            }
+
+            OutputIterator &operator=(const T &value) noexcept
+                requires std::is_nothrow_copy_constructible_v<T> {
+                if (auto status = m_writer.send(value, m_policy); status.has_error()) [[unlikely]] {
+                    m_error = status.error();
+                }
+                return *this;
+            }
+
+            OutputIterator &operator=(T &&value) noexcept
+                requires std::is_nothrow_move_constructible_v<T> {
+                if (auto status = m_writer.send(value, m_policy); status.has_error()) [[unlikely]] {
+                    m_error = status.error();
+                }
+                return *this;
+            }
+
+            OutputIterator &operator++() noexcept {
+                return *this;
+            }
+
+            OutputIterator operator++(int) noexcept {
+                return *this;
+            }
+        };
+
+        [[nodiscard]] OutputIterator output(const EBackPressure policy = wait_if_full) noexcept {
+            return OutputIterator{*this, policy};
+        }
+
+        [[nodiscard]] std::expected<T, EError>
+        receive(const EPolling policy = block_until_available) noexcept
+            requires std::is_nothrow_move_constructible_v<T> {
+            auto hdr = m_chan->consumerAcquire(policy);
+
+            if (hdr.has_value()) [[likely]] {
+                T *const p_written = static_cast<T *>(hdr->data());
+                PPR_DEFER {
+                    std::destroy_at(p_written);
+                    m_chan->consumerRelease(*hdr);
+                };
+                return std::move(*p_written);
+            }
+
+            PPR_ASSERT(hdr.error() == error_closed || policy == peek_without_blocking);
+            return std::unexpected(hdr.error());
+        }
+
+        [[nodiscard]] std::optional<T> peek() noexcept
+            requires std::is_nothrow_move_constructible_v<T> {
+            auto it = receive(peek_without_blocking);
+            if (it.has_value()) [[likely]] {
+                return std::move(*it);
+            }
+            return std::nullopt;
+        }
+
+        friend std::expected<void, EError> operator>>(Channel &reader, T &dst) noexcept {
+            auto result = reader.receive();
+            if (result.has_value()) [[likely]] {
+                dst = std::move(*result);
+                return {};
+            }
+            return std::unexpected(result.error());
+        }
+
+        class [[nodiscard]] InputIterator {
+            Channel m_reader;
+            std::expected<T, EError> m_value{};
+            EPolling m_policy{};
+
+            void advance() noexcept {
+                m_value = m_reader.receive(m_policy);
+            }
+
+        public:
+            using iterator_category = std::input_iterator_tag;
+            using value_type = T;
+            using difference_type = std::ptrdiff_t;
+            using pointer = T *;
+            using reference = T &;
+
+            explicit InputIterator(const Channel &reader, const EPolling policy = block_until_available) noexcept
+                : m_reader{reader}, m_policy{policy} {
+                advance();
+            }
+
+            [[nodiscard]] T &operator*() noexcept {
+                PPR_ASSERT(m_value.has_value());
+                return *m_value;
+            }
+
+            [[nodiscard]] T *operator->() noexcept {
+                PPR_ASSERT(m_value.has_value());
+                return std::addressof(*m_value);
+            }
+
+            InputIterator &operator++() noexcept {
+                advance();
+                return *this;
+            }
+
+            void operator++(int) noexcept {
+                advance();
+            }
+
+            [[nodiscard]] bool isValid() const noexcept {
+                return m_reader.m_chan && m_value.has_value();
+            }
+
+            friend bool operator==(const InputIterator &a, const InputIterator &b) noexcept {
+                return a.m_reader.m_chan == b.m_reader.m_chan;
+            }
+
+            friend bool operator!=(const InputIterator &a, const InputIterator &b) noexcept {
+                return not(a == b);
+            }
+        };
+
+        [[nodiscard]] friend bool operator==(const InputIterator &it, std::default_sentinel_t) noexcept {
+            return not it.isValid();
+        }
+
+        [[nodiscard]] friend bool operator!=(const InputIterator &it, std::default_sentinel_t) noexcept {
+            return it.isValid();
+        }
+
+        [[nodiscard]] friend bool operator==(std::default_sentinel_t, const InputIterator &it) noexcept {
+            return not it.isValid();
+        }
+
+        [[nodiscard]] friend bool operator!=(std::default_sentinel_t, const InputIterator &it) noexcept {
+            return it.isValid();
+        }
+
+        [[nodiscard]] InputIterator begin(EPolling policy = block_until_available) noexcept {
+            return InputIterator{*this, policy};
+        }
+
+        [[nodiscard]] static std::default_sentinel_t end() noexcept {
+            return std::default_sentinel;
+        }
+    };
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    class ChannelReader {
+        Channel<T> m_channel;
+
+    public:
+        using EError = Channel<T>::EError;
+        using EPolling = Channel<T>::EPolling;
+        using InputIterator = Channel<T>::InputIterator;
+
+        using enum RawChannel::EError;
+        using enum RawChannel::EPolling;
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        ChannelReader(const Channel<T> &channel) noexcept
+            : m_channel{channel} {
+        }
+
+        [[nodiscard]] std::expected<T, EError>
+        receive(const EPolling policy = block_until_available) noexcept
+            requires std::is_nothrow_move_constructible_v<T> {
+            return m_channel.receive(policy);
+        }
+
+        [[nodiscard]] std::optional<T>
+        peek() noexcept
+            requires std::is_nothrow_move_constructible_v<T> {
+            return m_channel.peek(peek_without_blocking);
+        }
+
+        [[nodiscard]] friend std::expected<void, EError>
+        operator>>(ChannelReader &reader, T &dst) noexcept {
+            return reader.m_channel >> dst;
+        }
+
+        [[nodiscard]] InputIterator begin(EPolling policy = block_until_available) noexcept {
+            return m_channel.begin(policy);
+        }
+
+        [[nodiscard]] static std::default_sentinel_t end() noexcept {
+            return m_channel.end();
+        }
+    };
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    class ChannelWriter {
+        Channel<T> m_channel;
+
+    public:
+        using EBackPressure = Channel<T>::EBackPressure;
+        using EError = Channel<T>::EError;
+        using OutputIterator = Channel<T>::OutputIterator;
+        using SendResult = Channel<T>::template BasicSendResult<ChannelWriter>;
+
+        using enum RawChannel::EBackPressure;
+        using enum RawChannel::EError;
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        ChannelWriter(const Channel<T> &channel) noexcept
+            : m_channel{channel} {
+        }
+
+        void flush() noexcept {
+            m_channel.flush();
+        }
+
+        void close() noexcept {
+            m_channel.close();
+        }
+
+        template<typename LikeT>
+        [[nodiscard]] std::expected<void, EError>
+        send(LikeT &&value) noexcept
+            requires std::is_nothrow_constructible_v<T, LikeT &&> {
+            return m_channel.send(std::forward<LikeT>(value));
+        }
+
+        template<typename... ArgsT>
+        [[nodiscard]] std::expected<void, EError>
+        emplace(ArgsT &&... args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+            return m_channel.emplace(std::forward<ArgsT>(args)...);
+        }
+
+        friend SendResult operator<<(ChannelWriter &writer, const T &value) noexcept {
+            return SendResult(writer, writer.m_channel.send(value));
+        }
+
+        friend SendResult operator<<(ChannelWriter &writer, T &&value) noexcept {
+            return SendResult(writer, writer.m_channel.send(value));
+        }
+
+        [[nodiscard]] OutputIterator output(const EBackPressure policy = wait_if_full) noexcept {
+            return m_channel.output(policy);
+        }
+    };
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    [[nodiscard]] ChannelReader<T> Channel<T>::reader() noexcept {
+        return ChannelReader<T>(*this);
+    }
+
+    template<typename T>
+        requires std::is_nothrow_destructible_v<T>
+    [[nodiscard]] ChannelWriter<T> Channel<T>::writer() noexcept {
+        return ChannelWriter<T>(*this);
+    }
+
+    template<typename T>
+    using chan = Channel<T>;
+
+    template<typename T>
+    using input_chan = ChannelReader<T>;
+
+    template<typename T>
+    using output_chan = ChannelWriter<T>;
+}

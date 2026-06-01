@@ -6,6 +6,7 @@ export module engine.tests;
 import engine.core;
 
 import :core_arena;
+import :core_channel;
 import :core_containers;
 import :core_hash_map;
 import :core_enums;
@@ -45,5 +46,6 @@ export namespace pP::tests {
         _.recurse(strings);
         _.recurse(containers);
         _.recurse(opaque);
+        _.recurse(channel);
     };
 }

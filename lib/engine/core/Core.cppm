@@ -5,6 +5,7 @@ export module engine.core;
 export import :allocator;
 export import :assert;
 export import :arena;
+export import :channel;
 export import :containers;
 export import :enums;
 export import :function_ref;
