@@ -1,3 +1,7 @@
+module;
+
+#include "pP/Macros.h"
+
 module engine.core;
 
 import :hal;
@@ -90,26 +94,105 @@ namespace pP::hal {
     // ------------------------------------------------------------------
     // native strings
     // ------------------------------------------------------------------
+    const std::size_t page_size = 4096u;
+    const std::align_val_t page_granularity{4096u};
 
-    namespace native {
-        [[nodiscard]] size_t utf8(const string_view& native_str, char* out_buffer, size_t out_buffer_size) noexcept {
-            const size_t n = std::min(native_str.size(), out_buffer_size);
-            std::memcpy(out_buffer, native_str.data(), n);
-            return n;
-        }
-
-        [[nodiscard]] size_t from(const std::string_view& utf8_str, char_t* out_buffer, size_t out_buffer_size) noexcept {
-            const size_t n = std::min(utf8_str.size(), out_buffer_size);
-            std::memcpy(out_buffer, utf8_str.data(), n);
-            return n;
-        }
+    [[nodiscard]] std::allocation_result<void *> pageAlloc(
+        const std::size_t size,
+        const bool commit,
+        const PageProtection allowed,
+        std::align_val_t alignment) noexcept(false) {
+        (void)size;
+        (void)commit;
+        (void)allowed;
+        (void)alignment;
+        throw std::bad_alloc();
     }
 
-    // ------------------------------------------------------------------
-    // debugger
-    // ------------------------------------------------------------------
+    void pageCommit(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
+        (void)ptr;
+        (void)size;
+        (void)allowed;
+        throw std::bad_alloc();
+    }
 
-    void outputDebug(const native::char_t *) noexcept {
+    void pageDecommit(void *const ptr, const std::size_t size) noexcept(false) {
+        (void)ptr;
+        (void)size;
+    }
+
+    void pageProtect(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
+        (void)ptr;
+        (void)size;
+        (void)allowed;
+    }
+
+    void pageOfferToOS(void *const ptr, const std::size_t size) noexcept {
+        (void)ptr;
+        (void)size;
+    }
+
+    [[nodiscard]] bool pageReclaimFromOS(const void *const ptr, const std::size_t size) noexcept {
+        (void)ptr;
+        (void)size;
+        return false;
+    }
+
+    void pageFree(void *const ptr, const std::size_t size) noexcept(false) {
+        (void)ptr;
+        (void)size;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::string_view ansi, char8_t *p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(ansi.size(), capacity);
+        std::memcpy(p_dst, ansi.data(), n * sizeof(char8_t));
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::string_view ansi, wchar_t *p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(ansi.size(), capacity);
+        for (std::size_t i = 0; i < n; ++i) {
+            p_dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(ansi[i]));
+        }
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::u8string_view utf8, wchar_t *p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(utf8.size(), capacity);
+        for (std::size_t i = 0; i < n; ++i) {
+            p_dst[i] = static_cast<wchar_t>(utf8[i]);
+        }
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::wstring_view wide, char8_t *p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(wide.size(), capacity);
+        for (std::size_t i = 0; i < n; ++i) {
+            p_dst[i] = static_cast<char8_t>(wide[i] & 0xFF);
+        }
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::wstring_view wide, char *const p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(wide.size(), capacity);
+        for (std::size_t i = 0; i < n; ++i) {
+            p_dst[i] = static_cast<char>(wide[i] & 0xFF);
+        }
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::u8string_view utf8, char *const p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n = std::min(utf8.size(), capacity);
+        std::memcpy(p_dst, utf8.data(), n * sizeof(char));
+        return n;
+    }
+
+    void outputDebug(const char *ansi_msg) noexcept {
+        (void)ansi_msg;
+    }
+
+    void outputDebug(const native::char_t *native_msg) noexcept {
+        (void)native_msg;
     }
 
     [[nodiscard]] bool isDebuggerPresent() noexcept {
@@ -120,5 +203,17 @@ namespace pP::hal {
     }
 
     void breakpointIfDebugging() noexcept {
+    }
+}
+
+namespace pP::hal::process {
+    [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
+        throw std::runtime_error("currentExecutablePath not implemented for generic platform");
+    }
+
+    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
+        (void)executable;
+        (void)args;
+        throw std::runtime_error("spawnAndWait not implemented for generic platform");
     }
 }

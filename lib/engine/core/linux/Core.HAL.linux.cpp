@@ -125,8 +125,12 @@ namespace pP::hal {
         return prot;
     }
 
-    [[nodiscard]] std::allocation_result<void *>
-    pageAlloc(const std::size_t size, const bool commit, const PageProtection allowed) noexcept(false) {
+    [[nodiscard]] std::allocation_result<void *> pageAlloc(
+        const std::size_t size,
+        const bool commit,
+        const PageProtection allowed,
+        [[maybe_unused]] std::align_val_t alignment) noexcept(false) {
+        PPR_ASSERT(alignment == page_granularity);
         const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));
 
         const int prot = pageProtectionFlags_(allowed);
@@ -289,7 +293,7 @@ namespace pP::hal {
         static_assert(sizeof(char8_t) == sizeof(char));
         const std::size_t n = std::min(utf8.size(), capacity);
         std::memcpy(p_dst, utf8.data(), n * sizeof(char));
-        return utf8.size();
+        return n;
     }
 
     // ------------------------------------------------------------------
@@ -334,5 +338,48 @@ namespace pP::hal {
             breakpoint();
         }
 #endif
+    }
+
+    void breakpointIfDebugging() noexcept {
+        // TODO
+    }
+}
+
+namespace pP::hal::process {
+    [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
+        std::error_code ec;
+        auto path = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (ec) {
+            throw std::runtime_error("Failed to read /proc/self/exe");
+        }
+        return path;
+    }
+
+    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            std::vector<const char *> argv;
+            argv.reserve(args.size() + 2);
+            argv.push_back(executable.c_str());
+            for (const auto &arg : args) {
+                argv.push_back(arg.c_str());
+            }
+            argv.push_back(nullptr);
+
+            ::execvp(executable.c_str(), const_cast<char *const *>(argv.data()));
+            ::_exit(127);
+        }
+
+        if (pid < 0) {
+            throw std::runtime_error("fork failed");
+        }
+
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        }
+        return -1;
     }
 }

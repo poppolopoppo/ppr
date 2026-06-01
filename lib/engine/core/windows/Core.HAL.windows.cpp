@@ -56,8 +56,11 @@ module;
 
 #include <Windows.h>
 #include <Memoryapi.h>
+
+#include <crtdbg.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <werapi.h>
 
 // clean the mess after windows.h:#undef CreateDirectory
 #undef CreateProcess
@@ -73,6 +76,9 @@ module;
 #undef max
 
 #include "pP/Macros.h"
+
+// for VirtualAlloc2() and MapViewOfFile3()
+#pragma comment(lib, "mincore.lib")
 
 module engine.core;
 
@@ -140,14 +146,16 @@ namespace pP::hal {
     public:
         Win32Exception() noexcept
             : Win32Exception(Win32LastError{}) {
-        };
+        }
 
         explicit Win32Exception(const Win32LastError last_error) noexcept
             : std::runtime_error(last_error.message()),
               m_last_error(last_error) {
-        };
+        }
 
-        [[nodiscard]] Win32LastError getLastError() const noexcept { return m_last_error; }
+        [[nodiscard]] Win32LastError getLastError() const noexcept {
+            return m_last_error;
+        }
     };
 
     // ------------------------------------------------------------------
@@ -271,28 +279,125 @@ namespace pP::hal {
         return protect.execute ? PAGE_EXECUTE : PAGE_NOACCESS;
     }
 
-    [[nodiscard]] std::allocation_result<void *> pageAlloc(const std::size_t size, const bool commit, const PageProtection allowed) {
-        const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));
-        const ::DWORD allocation_type = MEM_RESERVE | (commit ? MEM_COMMIT : 0);
-        void *const mapped_ptr = ::VirtualAlloc(
-            nullptr, aligned_size,
-            allocation_type,
-            pageProtectionFlags_(allowed));
-        if (!mapped_ptr) [[unlikely]] {
-            throw Win32Exception();
+#if WINVER < 0x0A00
+    // fallback using VirtualAlloc() to force alignment with repeated allocations
+    [[nodiscard]] static PVOID WINAPI alignedVirtualAllocFallback_(
+        [[maybe_unused]] HANDLE process,
+        PVOID p_base_address,
+        SIZE_T size,
+        ULONG allocation_type,
+        ULONG protection_flags,
+        MEM_EXTENDED_PARAMETER *p_params,
+        ULONG num_params) {
+        // Optimistically try mapping precisely the right amount before falling back to the slow method :
+        void *p = ::VirtualAlloc(p_base_address, size, allocation_type, protection_flags);
+
+        std::size_t alignment_v = static_cast<std::size_t>(page_granularity);
+        for (ULONG i = 0u; i < num_params; ++i) {
+            if (p_params[i].Type == MemExtendedParameterAddressRequirements) {
+                const auto *const p_address_requirements = static_cast<const MEM_ADDRESS_REQUIREMENTS *>(p_params[i].Pointer);
+                if (p_address_requirements->Alignment) {
+                    alignment_v = static_cast<std::size_t>(p_address_requirements->Alignment);
+                }
+            }
         }
+
+        if (alignForward(p, std::align_val_t{alignment_v}) != p) {
+            // Fill "bubbles" (reserve unaligned regions) at the beginning of virtual address space, otherwise there will be always falling back to the slow method
+            if (std::bit_cast<std::uintptr_t>(p) < 16 * 1024 * 1024)
+                ::VirtualAlloc(p, alignment_v - (std::bit_cast<std::uintptr_t>(p) & (alignment_v - 1u)), MEM_RESERVE, PAGE_NOACCESS);
+
+            do {
+                p = ::VirtualAlloc(nullptr, size + alignment_v - static_cast<std::size_t>(page_granularity), MEM_RESERVE, PAGE_NOACCESS);
+                if (nullptr == p) // if OOM
+                    return nullptr;
+
+                ::VirtualFree(p, 0, MEM_RELEASE); // Unfortunately, WinAPI doesn't support release a part of allocated region, so release a whole region
+
+                p = ::VirtualAlloc(
+                    std::bit_cast<void *>(std::bit_cast<std::uintptr_t>(p) + (alignment_v - 1u) & ~(alignment_v - 1u)),
+                    size, allocation_type, protection_flags);
+            } while (nullptr == p);
+        }
+
+        PPR_ASSERT(alignForward(p, std::align_val_t{alignment_v}) == p);
+        return p;
+    }
+#endif
+
+    // try to dynamically load VirtualAlloc2(), and unlock native alignment and support MEM_64K_PAGES (to reduce TLB pressure for whole engine)
+    [[nodiscard]] PPR_FORCE_INLINE static void *alignedVirtualAlloc_(
+        const std::size_t size,
+        const std::align_val_t alignment,
+        const ::DWORD allocation_type,
+        const ::DWORD protection_flags) {
+        using virtual_alloc_2_f = PVOID (WINAPI*)(
+            HANDLE, PVOID, SIZE_T, ULONG, ULONG,
+            MEM_EXTENDED_PARAMETER *, ULONG);
+#if WINVER >= 0x0A00
+        static constexpr virtual_alloc_2_f g_virtual_alloc_2 = &::VirtualAlloc2;
+#else
+        static const auto g_virtual_alloc_2 = []() noexcept -> virtual_alloc_2_f {
+            if (const ::HMODULE h_kernel = ::GetModuleHandleW(L"KernelBase.dll")) [[likely]] {
+                const auto fn_virtual_alloc_2 = reinterpret_cast<virtual_alloc_2_f>(
+                    ::GetProcAddress(h_kernel, "VirtualAlloc2"));
+
+                if (fn_virtual_alloc_2) {
+                    return fn_virtual_alloc_2;
+                }
+            }
+            return &alignedVirtualAllocFallback_;
+        }();
+#endif
+
+        ::MEM_ADDRESS_REQUIREMENTS address_requirements{};
+        address_requirements.Alignment = static_cast<std::size_t>(alignment);
+
+        ::MEM_EXTENDED_PARAMETER params{
+            .Type = MemExtendedParameterAddressRequirements,
+            .Pointer = &address_requirements
+        };
+
+        return g_virtual_alloc_2(
+            nullptr,
+            nullptr,
+            size,
+            allocation_type | MEM_64K_PAGES,
+            protection_flags,
+            &params, 1u);
+    }
+
+    [[nodiscard]] std::allocation_result<void *> pageAlloc(
+        const std::size_t size,
+        const bool commit,
+        const PageProtection allowed,
+        std::align_val_t alignment) {
+        PPR_ASSERT((static_cast<std::size_t>(alignment) % static_cast<std::size_t>(page_granularity)) == 0u);
+        const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));
+
+        void *const p_result = alignedVirtualAlloc_(
+            aligned_size,
+            alignment,
+            MEM_RESERVE | (commit ? MEM_COMMIT : 0),
+            pageProtectionFlags_(allowed));
+
+        if (!p_result) [[unlikely]] {
+            throw std::bad_alloc();
+        }
+
+        PPR_ASSERT(alignForward(p_result, alignment) == p_result);
 
 #if PPR_ENABLE_ASSERTIONS
         //  https://msdn.microsoft.com/en-us/library/windows/desktop/aa366902(v=vs.85).aspx
         ::MEMORY_BASIC_INFORMATION info;
-        if (PPR_ENSURE(::VirtualQuery(mapped_ptr, &info, sizeof(info)))) {
-            PPR_ASSERT(info.BaseAddress == mapped_ptr && "Allocate memory with an invalid pointer");
+        if (PPR_ENSURE(::VirtualQuery(p_result, &info, sizeof(info)))) {
+            PPR_ASSERT(info.BaseAddress == p_result && "Allocate memory with an invalid pointer");
             PPR_ASSERT((info.State & (MEM_COMMIT|MEM_RESERVE)) && "Allocate unreserved memory");
-            PPR_ASSERT(info.RegionSize == size && "Allocate with unmatching region size");
+            PPR_ASSERT(info.RegionSize == aligned_size && "Allocate with unmatching region size");
         }
 #endif
 
-        return std::allocation_result(mapped_ptr, aligned_size);
+        return std::allocation_result(p_result, aligned_size);
     }
 
     void pageCommit(void *const ptr, const std::size_t size, const PageProtection allowed) {
@@ -304,7 +409,7 @@ namespace pP::hal {
                 ptr, size,
                 MEM_COMMIT,
                 pageProtectionFlags_(allowed)) == nullptr) [[unlikely]] {
-            throw Win32Exception();
+            throw std::bad_alloc();
         }
     }
 
@@ -314,20 +419,20 @@ namespace pP::hal {
         PPR_ASSERT(size % page_size == 0u);
 
         if (::VirtualFree(ptr, size, MEM_DECOMMIT) == FALSE) {
-            throw Win32Exception();
+            throw std::bad_alloc();
         }
     }
 
     void pageProtect(void *const ptr, const std::size_t size, const PageProtection allowed) {
         ::DWORD old_protect;
         if (::VirtualProtect(ptr, size, pageProtectionFlags_(allowed), &old_protect) == FALSE) {
-            throw Win32Exception();
+            throw std::bad_alloc();
         }
     }
 
     void pageOfferToOS(void *const ptr, const std::size_t size) noexcept(false) {
         if (::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal) != ERROR_SUCCESS) {
-            throw Win32Exception();
+            throw std::bad_alloc();
         }
     }
 
@@ -335,24 +440,147 @@ namespace pP::hal {
         switch (::ReclaimVirtualMemory(ptr, size)) {
             case ERROR_SUCCESS:
             case ERROR_BUSY:
-                return true;;
+                return true;
             default:
                 return false;
         }
     }
 
     void pageFree(void *const ptr, [[maybe_unused]] const std::size_t size) {
-#if PPR_ENABLE_ASSERTIONS
-        //  https://msdn.microsoft.com/en-us/library/windows/desktop/aa366902(v=vs.85).aspx
-        ::MEMORY_BASIC_INFORMATION info;
-        if (PPR_ENSURE(::VirtualQuery(ptr, &info, sizeof(info)))) {
-            PPR_ASSERT(info.BaseAddress == ptr && "Trying to free memory with an invalid pointer");
-            PPR_ASSERT((info.State & (MEM_COMMIT|MEM_RESERVE)) && "Trying to free unreserved memory");
-            PPR_ASSERT(info.RegionSize == size && "Trying to free with unmatching region size");
-        }
-#endif
-
         if (!::VirtualFree(ptr, 0u, MEM_RELEASE)) {
+            throw std::bad_alloc();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // ring buffer
+    // ------------------------------------------------------------------
+
+    /// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc2
+    void *ringBufferAlloc(const std::size_t buffer_size) noexcept(false) {
+        PPR_ASSERT(alignForward(buffer_size, page_granularity) == buffer_size);
+
+        ::HANDLE section = nullptr;
+        void *ringBuffer = nullptr;
+        void *placeholder1 = nullptr;
+        void *placeholder2 = nullptr;
+        void *view1 = nullptr;
+        void *view2 = nullptr;
+
+        //
+        // Reserve a placeholder region where the buffer will be mapped.
+        //
+
+        placeholder1 = static_cast<PCHAR>(::VirtualAlloc2(
+            nullptr,
+            nullptr,
+            2u * buffer_size,
+            MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+            PAGE_NOACCESS,
+            nullptr, 0
+        ));
+
+        if (placeholder1 == nullptr) {
+            throw Win32Exception();
+        }
+
+        //
+        // Split the placeholder region into two regions of equal size.
+        //
+
+        const BOOL result = ::VirtualFree(
+            placeholder1,
+            buffer_size,
+            MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER
+        );
+
+        if (result == FALSE) {
+            throw Win32Exception();
+        }
+
+        placeholder2 = reinterpret_cast<void *>(reinterpret_cast<ULONG_PTR>(placeholder1) + buffer_size);
+
+        //
+        // Create a pagefile-backed section for the buffer.
+        //
+
+        section = ::CreateFileMapping(
+            INVALID_HANDLE_VALUE,
+            nullptr,
+            PAGE_READWRITE,
+            0,
+            safe_narrowing{buffer_size}, nullptr
+        );
+
+        if (section == nullptr) {
+            throw Win32Exception();
+        }
+
+        //
+        // Map the section into the first placeholder region.
+        //
+
+        view1 = ::MapViewOfFile3(
+            section,
+            nullptr,
+            placeholder1,
+            0,
+            buffer_size,
+            MEM_REPLACE_PLACEHOLDER,
+            PAGE_READWRITE,
+            nullptr, 0
+        );
+
+        if (view1 == nullptr) {
+            throw Win32Exception();
+        }
+
+        //
+        // Ownership transferred, don't free this now.
+        //
+
+        placeholder1 = nullptr;
+
+        //
+        // Map the section into the second placeholder region.
+        //
+
+        view2 = ::MapViewOfFile3(
+            section,
+            nullptr,
+            placeholder2,
+            0,
+            buffer_size,
+            MEM_REPLACE_PLACEHOLDER,
+            PAGE_READWRITE,
+            nullptr, 0
+        );
+
+        if (view2 == nullptr) {
+            throw Win32Exception();
+        }
+
+        //
+        // Success, return both mapped views to the caller.
+        //
+
+        ringBuffer = view1;
+        // void *const secondaryView = view2;
+
+        ::CloseHandle(section);
+        return ringBuffer;
+    }
+
+    void ringBufferFree(const void *ring_buffer, const std::size_t buffer_size) noexcept(false) {
+        PPR_ASSERT(ring_buffer != nullptr);
+        PPR_ASSERT(alignForward(buffer_size, page_granularity) == buffer_size);
+
+        if (not::UnmapViewOfFile(ring_buffer)) {
+            throw Win32Exception();
+        }
+
+        if (const auto *secondary_view = static_cast<const std::byte *>(ring_buffer) + buffer_size;
+            not::UnmapViewOfFile(secondary_view)) {
             throw Win32Exception();
         }
     }
@@ -365,7 +593,7 @@ namespace pP::hal {
         static_assert(sizeof(char8_t) == sizeof(char));
         const std::size_t n_chars = std::min(ansi.size(), capacity);
         memcpy(p_dst, ansi.data(), n_chars * sizeof(char8_t));
-        return ansi.size();
+        return n_chars;
     }
 
     [[nodiscard]] std::size_t transcode(const std::string_view ansi, wchar_t *p_dst, const std::size_t capacity) noexcept {
@@ -450,8 +678,82 @@ namespace pP::hal {
     void breakpointIfDebugging() noexcept {
 #if PPR_ENABLE_DEBUG
         if (::IsDebuggerPresent())
-
             __debugbreak();
 #endif
+    }
+
+    void disableSystemErrorReporting() noexcept {
+        // Redirect abort() / _wassert() output to stderr instead of a dialog
+        ::_set_error_mode(_OUT_TO_STDERR);
+
+        // Redirect all three CRT report channels away from dialog boxes
+        for (const int channel: {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+            ::_CrtSetReportMode(channel, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+            ::_CrtSetReportFile(channel, _CRTDBG_FILE_STDERR);
+        }
+
+        // Suppress OS-level error dialogs:
+        //   SEM_NOGPFAULTERRORBOX  – no crash dialog for access violations / GP faults
+        //   SEM_FAILCRITICALERRORS – no "insert disk" / hard-error dialogs
+        //   SEM_NOOPENFILEERRORBOX – no missing-DLL popup dialogs
+        ::SetErrorMode(SEM_NOGPFAULTERRORBOX |
+                       SEM_FAILCRITICALERRORS |
+                       SEM_NOOPENFILEERRORBOX);
+
+        // Belt-and-suspenders: tell WER to queue reports silently for this process.
+        // Required if any crash path bypasses SetErrorMode (e.g. __fastfail).
+        ::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE);
+    }
+
+    // ------------------------------------------------------------------
+    // spawn process helpers
+    // ------------------------------------------------------------------
+
+    namespace process {
+        [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
+            wchar_t buffer[MAX_PATH];
+            const DWORD len = ::GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+            if (len == 0 || len >= MAX_PATH) {
+                throw std::runtime_error("Failed to get executable path");
+            }
+            return std::filesystem::path(buffer, buffer + len);
+        }
+
+        [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
+            std::wstring cmdline = L"\"" + executable.wstring() + L"\"";
+            for (const auto &arg: args) {
+                cmdline += L" \"";
+                cmdline += toString<wchar_t>(std::string_view(arg));
+                cmdline += L'"';
+            }
+
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
+
+            PROCESS_INFORMATION pi{};
+
+            constexpr DWORD creationFlags = CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE;
+
+            if (!::CreateProcessW(
+                executable.c_str(),
+                cmdline.data(),
+                nullptr, nullptr, FALSE,
+                creationFlags, nullptr, nullptr, &si, &pi)) {
+                throw std::runtime_error("Failed to create process");
+            }
+
+            ::CloseHandle(pi.hThread);
+            ::WaitForSingleObject(pi.hProcess, INFINITE);
+
+            DWORD exit_code = 0;
+            if (!::GetExitCodeProcess(pi.hProcess, &exit_code)) {
+                exit_code = 0;
+            }
+            ::CloseHandle(pi.hProcess);
+
+            return static_cast<int>(exit_code);
+        }
     }
 }

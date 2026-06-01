@@ -286,7 +286,7 @@ export namespace pP {
         std::array<std::uint32_t, 8> seed_data{};
         std::random_device rd;
 
-        for (auto& x : seed_data) {
+        for (auto &x: seed_data) {
             x = rd();
         }
 
@@ -377,7 +377,11 @@ export namespace pP {
 
         extern const std::align_val_t page_granularity;
 
-        [[nodiscard]] std::allocation_result<void *> pageAlloc(std::size_t size, bool commit = true, PageProtection allowed = {}) noexcept(false);
+        [[nodiscard]] std::allocation_result<void *> pageAlloc(
+            std::size_t size,
+            bool commit = true,
+            PageProtection allowed = {},
+            std::align_val_t alignment = page_granularity) noexcept(false);
 
         void pageCommit(void *ptr, std::size_t size, PageProtection allowed = {}) noexcept(false);
 
@@ -390,6 +394,14 @@ export namespace pP {
         [[nodiscard]] bool pageReclaimFromOS(const void *ptr, std::size_t size) noexcept;
 
         void pageFree(void *ptr, std::size_t size) noexcept(false);
+
+        // ------------------------------------------------------------------
+        // magic ring-buffer backed by contiguous pages mapping the same memory twice
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] void *ringBufferAlloc(const std::size_t buffer_size) noexcept(false);
+
+        void ringBufferFree(const void *ring_buffer, const std::size_t buffer_size) noexcept(false);
 
         // ------------------------------------------------------------------
         // native strings
@@ -488,6 +500,18 @@ export namespace pP {
         void breakpoint() noexcept;
 
         void breakpointIfDebugging() noexcept;
+
+        void disableSystemErrorReporting() noexcept;
+
+        // ------------------------------------------------------------------
+        // process
+        // ------------------------------------------------------------------
+
+        namespace process {
+            [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false);
+
+            [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false);
+        }
 
         // ------------------------------------------------------------------
         // cross-platform helpers
