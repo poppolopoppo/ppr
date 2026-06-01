@@ -186,7 +186,7 @@ export namespace pP::tests {
             PPR_ASSERT(s.size() == 2u);
             PPR_ASSERT(s.pop().value() == 20);
             int sum = 0;
-            for (int v: s.each())
+            for (int v: s)
                 sum += v;
             PPR_ASSERT(sum == 10);
         };
@@ -201,14 +201,15 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(ringbuffer_push_pop_wrap) {
-            RingBuffer<int, 3> rb;
+            RingBuffer<int, 4> rb;
             PPR_ASSERT(rb.pushBack(1));
             PPR_ASSERT(rb.pushBack(2));
             PPR_ASSERT(rb.pushBack(3));
-            PPR_ASSERT(!rb.pushBack(4));
-            PPR_ASSERT(rb.popFront().value() == 1);
             PPR_ASSERT(rb.pushBack(4));
-            PPR_ASSERT(rb[0] == 2 && rb[2] == 4);
+            PPR_ASSERT(not rb.pushBack(5));
+            PPR_ASSERT(rb.popFront().value() == 1);
+            PPR_ASSERT(rb.pushBack(5));
+            PPR_ASSERT(rb[0] == 2 && rb[3] == 5);
         };
 
         PPR_UNIT_TEST(ringbuffer_pop_empty_resets_positions) {
@@ -263,20 +264,6 @@ export namespace pP::tests {
             PPR_ASSERT(p1.m_value == p2.m_value);
             auto c = hash::combine(hash_t{1}, hash_t{2});
             PPR_ASSERT(c.m_value != 0);
-        };
-
-        PPR_UNIT_TEST(recycler_allocate_release_and_shrink) {
-            Recycler<int, 4> r;
-            int out;
-            PPR_ASSERT(!r.allocate(out));
-            PPR_ASSERT(r.release(42));
-            PPR_ASSERT(r.allocate(out));
-            PPR_ASSERT(out == 42);
-            PPR_VERIFY(r.release(10));
-            PPR_VERIFY(r.release(20));
-            int destroyed_sum = 0;
-            r.shrinkToFit([&](int v) { destroyed_sum += v; });
-            PPR_ASSERT(destroyed_sum == 30);
         };
 
         PPR_UNIT_TEST(additional_hash_and_pointer_checks) {
@@ -337,9 +324,5 @@ export namespace pP::tests {
         _.recurse(Containers::hash_mix_64_and_32);
         _.recurse(Containers::hash_sized_and_unordered_range_and_ptr_combine);
         _.recurse(Containers::additional_hash_and_pointer_checks);
-    };
-
-    PPR_UNIT_TEST(recycler) {
-        _.recurse(Containers::recycler_allocate_release_and_shrink);
     };
 }

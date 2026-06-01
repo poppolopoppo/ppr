@@ -19,14 +19,13 @@ import :core_strings;
 export namespace pP::tests {
     PPR_UNIT_TEST(containers) {
         _.recurse(relocatable);
+        _.recurse(hash);
+        _.recurse(sort);
         _.recurse(bitmask);
         _.recurse(pointers);
         _.recurse(iterators);
         _.recurse(stack);
         _.recurse(ring_buffer);
-        _.recurse(sort);
-        _.recurse(hash);
-        _.recurse(recycler);
         _.recurse(stableVector);
         _.recurse(sparseVector);
         _.recurse(hashMap);

@@ -6,6 +6,7 @@ export module engine.core:containers;
 
 import :assert;
 import :hal;
+import :memory_poison;
 
 import std;
 
@@ -36,71 +37,31 @@ export namespace pP {
         inline constexpr bool is_relocatable_v = relocatable<T>::value;
     }
 
-    // --------------------------------------------------------------
-    // non-owning contiguous view helper
-    // --------------------------------------------------------------
-
-    template<typename T>
-    struct [[nodiscard]] array_view {
-        using value_type = const T;
-        using size_type = std::size_t;
-
-        const T *m_data{};
-        std::size_t m_size{};
-
-        constexpr array_view() noexcept = default;
-
-        constexpr array_view(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
-            : m_data(list.data()),
-              m_size(list.size()) {
+    template<typename T> requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
+    [[nodiscard]] constexpr T relocate(T *const src)
+        noexcept(details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
+        PPR_ASSERT(src != nullptr);
+        if constexpr (details::is_relocatable_v<T>) {
+            alignas(T) T result{};
+            std::memcpy(&result, src, sizeof(T));
+            return result;
+        } else {
+            alignas(T) T result{std::move(*src)};
+            std::destroy_at(src);
+            return result;
         }
+    }
 
-        template<std::ranges::contiguous_range RangeT>
-            requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr array_view(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
-            : m_data(std::ranges::data(contiguous_range)),
-              m_size(std::ranges::size(contiguous_range)) {
+    template<typename T> requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
+    constexpr void relocateUninitialized(T *const src, T *const uninitialized)
+        noexcept(details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
+        PPR_ASSERT(src != nullptr && uninitialized != nullptr);
+        if constexpr (details::is_relocatable_v<T>) {
+            std::memcpy(uninitialized, src, sizeof(T));
+        } else {
+            std::construct_at(uninitialized, std::move(*src));
         }
-
-        [[nodiscard]] constexpr bool empty() const noexcept {
-            return m_size == 0u;
-        }
-
-        [[nodiscard]] constexpr const T *data() const noexcept {
-            return m_data;
-        }
-
-        [[nodiscard]] constexpr std::size_t size() const noexcept {
-            return m_size;
-        }
-
-        [[nodiscard]] constexpr const T *begin() const noexcept {
-            return m_data;
-        }
-
-        [[nodiscard]] constexpr const T *end() const noexcept {
-            return m_data + m_size;
-        }
-
-        [[nodiscard]] constexpr const T &operator[](const std::size_t index) const noexcept {
-            PPR_ASSERT(m_data && index < m_size);
-            PPR_ASSUME(m_data != nullptr);
-            return m_data[index];
-        }
-    };
-
-    static_assert(std::ranges::contiguous_range<array_view<int> >);
-
-    template<typename T>
-    array_view(std::initializer_list<T> list) -> array_view<T>;
-
-    template<std::ranges::contiguous_range RangeT>
-    array_view(RangeT &&contiguous_range) -> array_view<std::ranges::range_value_t<RangeT> >;
-
-    template<typename T>
-    struct details::relocatable<array_view<T> > : std::true_type {
-    };
+    }
 
     // ------------------------------------------------------------------
     // general purpose index iterator with random access
@@ -356,6 +317,22 @@ export namespace pP {
 
         T m_bits{zero_v};
 
+        static constexpr Bitmask bitAnd(const std::initializer_list<T> bit_or) noexcept {
+            Bitmask result;
+            for (T mask: bit_or) {
+                result &= mask;
+            }
+            return result;
+        }
+
+        static constexpr Bitmask bitOr(const std::initializer_list<T> bit_or) noexcept {
+            Bitmask result;
+            for (T mask: bit_or) {
+                result |= mask;
+            }
+            return result;
+        }
+
         [[nodiscard]] PPR_FORCE_INLINE static constexpr integral_type bitMask(const u32 bit) noexcept {
             PPR_ASSERT(bit < N);
             return static_cast<integral_type>(1) << bit;
@@ -592,11 +569,16 @@ export namespace pP {
             setData(ptr);
         }
 
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr RelPtr(std::nullptr_t) noexcept {
+            setData(nullptr);
+        }
+
         constexpr RelPtr(const RelPtr &other) noexcept
             : RelPtr(other.getData()) {
         }
 
-        constexpr RelPtr &operator =(const RelPtr &other) noexcept {
+        constexpr RelPtr &operator =(const RelPtr &other) & noexcept {
             setData(other.getData());
             return *this;
         }
@@ -605,29 +587,33 @@ export namespace pP {
 
         constexpr RelPtr &operator =(RelPtr &&) noexcept = delete;
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *getData() const noexcept {
-            if (m_offset == 0)
-                return nullptr;
-            // Use integer arithmetic to avoid pointer arithmetic UB [expr.add]
-            // The result must point within the same allocation as this RelPtr
-            const std::uintptr_t addr = std::bit_cast<std::uintptr_t>(this) +
-                                        static_cast<std::uintptr_t>(m_offset) * static_cast<std::uintptr_t>(alignof(T));
-            return std::bit_cast<T *>(addr);
+        constexpr RelPtr &operator =(T *ptr) & noexcept {
+            setData(ptr);
+            return *this;
         }
 
-        /// Replaces the pointer, preserving the current flags.
-        PPR_FORCE_INLINE constexpr void setData(T *ptr) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE
+        constexpr T *getData() const & noexcept {
+            if (m_offset == 0) {
+                return nullptr;
+            }
+
+            // Use integer arithmetic to avoid pointer arithmetic UB
+            return std::bit_cast<T *>(
+                std::bit_cast<std::uintptr_t>(this) +
+                static_cast<std::uintptr_t>(m_offset));
+        }
+
+        PPR_FORCE_INLINE constexpr void setData(T *ptr) & noexcept {
             if (ptr == nullptr) {
                 m_offset = 0;
                 return;
             }
 
-            const auto this_addr = std::bit_cast<std::uintptr_t>(this);
-            const auto ptr_addr = std::bit_cast<std::uintptr_t>(ptr);
-            const auto diff = static_cast<std::ptrdiff_t>(ptr_addr - this_addr);
-            PPR_ASSERT(diff % static_cast<std::ptrdiff_t>(alignof(T)) == 0);
-            m_offset = checked_cast<OffsetT>(diff / static_cast<std::ptrdiff_t>(alignof(T)));
+            // Use integer arithmetic to avoid pointer arithmetic UB
+            m_offset = checked_cast<OffsetT>(
+                std::bit_cast<std::intptr_t>(ptr) -
+                std::bit_cast<std::intptr_t>(this));
         }
 
         // ------------------------------------------------------------------
@@ -655,34 +641,32 @@ export namespace pP {
 
         [[nodiscard]] PPR_FORCE_INLINE
         // ReSharper disable once CppNonExplicitConversionOperator
-        constexpr operator T *() const noexcept {
+        constexpr operator T *() const & noexcept {
             return getData();
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *operator->() const noexcept {
+        constexpr T *operator->() const & noexcept {
             return getData();
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T &operator*() const noexcept {
+        constexpr T &operator*() const & noexcept {
             return *getData();
         }
 
-        // ------------------------------------------------------------------
-        //  Comparisons
-        // ------------------------------------------------------------------
-
-        /// Full equality: pointer AND tags must both match.
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool operator==(const RelPtr &other) const noexcept {
+        constexpr T &operator[](const std::size_t offset) const & noexcept {
+            return getData()[offset];
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE
+        constexpr bool operator==(const RelPtr &other) const & noexcept {
             return getData() == other.getData();
         }
 
-        /// Pointer-only three-way comparison (tags ignored). Produces a
-        /// consistent total order within a single execution.
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr std::strong_ordering operator<=>(const RelPtr &other) const noexcept {
+        constexpr std::strong_ordering operator<=>(const RelPtr &other) const & noexcept {
             return getData() <=> other.getData();
         }
     };
@@ -862,6 +846,157 @@ export namespace pP {
     struct details::relocatable<TagPtr<T, TagT, Alignment> > : std::true_type {
     };
 
+    // --------------------------------------------------------------
+    // non-owning contiguous view helper
+    // --------------------------------------------------------------
+
+    template<typename T>
+    struct [[nodiscard]] array_view {
+        using value_type = const T;
+        using size_type = std::size_t;
+
+        const T *m_data{};
+        std::size_t m_size{};
+
+        constexpr array_view() noexcept = default;
+
+        constexpr array_view(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
+            : m_data(list.data()),
+              m_size(list.size()) {
+        }
+
+        template<std::size_t ExtentV = std::dynamic_extent>
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr array_view(const std::span<T, ExtentV> span PPR_LIFETIME_BOUND) noexcept
+            : m_data(span.data()),
+              m_size(span.size()) {
+        }
+
+        template<std::ranges::contiguous_range RangeT>
+            requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr array_view(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
+            : m_data(std::ranges::data(contiguous_range)),
+              m_size(std::ranges::size(contiguous_range)) {
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return m_size == 0u;
+        }
+
+        [[nodiscard]] constexpr const T *data() const noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr size_type size() const noexcept {
+            return m_size;
+        }
+
+        [[nodiscard]] constexpr const T *begin() const noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr const T *end() const noexcept {
+            return m_data + m_size;
+        }
+
+        [[nodiscard]] constexpr const T &operator[](const size_type index) const noexcept {
+            PPR_ASSERT(m_data && index < m_size);
+            PPR_ASSUME(m_data != nullptr);
+            return m_data[index];
+        }
+    };
+
+    static_assert(std::ranges::contiguous_range<array_view<int> >);
+
+    template<typename T>
+    array_view(std::initializer_list<T> list) -> array_view<T>;
+
+    template<std::ranges::contiguous_range RangeT>
+    array_view(RangeT &&contiguous_range) -> array_view<std::ranges::range_value_t<RangeT> >;
+
+    template<typename T>
+    struct details::relocatable<array_view<T> > : std::true_type {
+    };
+
+    // --------------------------------------------------------------
+    // non-owning contiguous view helper with relative pointers (half the size of array_view<>)
+    // --------------------------------------------------------------
+
+    template<typename T>
+    struct [[nodiscard]] relative_view {
+        using value_type = const T;
+        using size_type = u32;
+
+        RelPtr<const T, i32> m_data{};
+        size_type m_size{};
+
+        constexpr relative_view() noexcept = default;
+
+        constexpr relative_view(const T *const ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
+            reset(ptr, n);
+        }
+
+        template<std::size_t ExtentV = std::dynamic_extent>
+        explicit constexpr relative_view(const std::span<T, ExtentV> &span) noexcept {
+            reset(span.data(), span.size());
+        }
+
+        template<std::size_t ExtentV = std::dynamic_extent>
+        constexpr relative_view &operator=(const std::span<T, ExtentV> &span) noexcept {
+            reset(span.data(), span.size());
+            return *this;
+        }
+
+        constexpr void reset(T *const ptr, const std::size_t n) noexcept {
+            m_data = ptr;
+            m_size = safe_narrowing(n);
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return m_size == 0u;
+        }
+
+        [[nodiscard]] constexpr const T *data() const noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr size_type size() const noexcept {
+            return m_size;
+        }
+
+        [[nodiscard]] constexpr const T *begin() const & noexcept {
+            return m_data;
+        }
+
+        [[nodiscard]] constexpr const T *end() const & noexcept {
+            return m_data + m_size;
+        }
+
+        [[nodiscard]] constexpr const T &operator[](const std::size_t index) const & noexcept {
+            PPR_ASSERT(m_data.isValid() && index < m_size);
+            return m_data[index];
+        }
+
+        [[nodiscard]] constexpr std::span<const T> span() const noexcept {
+            return std::span<const T>{m_data, m_size};
+        }
+
+        [[nodiscard]] constexpr array_view<T> view() const noexcept {
+            return array_view<T>{m_data, m_size};
+        }
+    };
+
+    static_assert(sizeof(relative_view<int>) == sizeof(u64));
+    static_assert(std::ranges::contiguous_range<relative_view<int> >);
+
+    template<typename T>
+    relative_view(array_view<T> view) -> relative_view<T>;
+
+    template<typename T>
+    struct details::relocatable<relative_view<T> > : std::true_type {
+    };
+
     // ------------------------------------------------------------------
     // bounded single-thread stack
     // ------------------------------------------------------------------
@@ -873,7 +1008,15 @@ export namespace pP {
         std::array<T, N> m_storage;
         std::size_t m_count{0};
 
-        constexpr Stack() noexcept = default;
+        constexpr Stack() noexcept {
+            PPR_EXPR_IF_DEBUG(mem::details::poisonFlood(mem::details::PoisonPattern::reserved,
+                static_cast<void *>(m_storage.data()), N * sizeof(T)));
+            mem::annotateEmptyContiguousContainer(m_storage.data(), N);
+        }
+
+        constexpr ~Stack() noexcept {
+            mem::annotateContiguousContainer(m_storage.data(), N, m_count, 0u);
+        }
 
         [[nodiscard]] constexpr bool isEmpty() const noexcept {
             return m_count == 0u;
@@ -900,7 +1043,13 @@ export namespace pP {
         // Takes T by value — move or copy, caller's choice
         [[nodiscard]] constexpr bool push(T value) noexcept {
             if (m_count < N) [[likely]] {
-                m_storage[m_count++] = value;
+                mem::annotateContiguousContainer(
+                    m_storage.data(),
+                    N,
+                    m_count,
+                    m_count + 1u);
+
+                m_storage[m_count++] = std::move(value);
                 return true;
             }
             return false;
@@ -908,22 +1057,48 @@ export namespace pP {
 
         constexpr void pushAssumeCapacity(T value) noexcept {
             PPR_ASSERT(m_count < N);
-            m_storage[m_count++] = value;
+            mem::annotateContiguousContainer(
+                m_storage.data(),
+                N,
+                m_count,
+                m_count + 1u);
+
+            m_storage[m_count++] = std::move(value);
         }
 
         [[nodiscard]] constexpr std::optional<T> pop() noexcept {
             if (m_count > 0) [[likely]] {
-                return m_storage[--m_count];
+                const auto old_count = m_count;
+                --m_count;
+                T return_value = std::move(m_storage[m_count]);
+
+                mem::annotateContiguousContainer(
+                    m_storage.data(),
+                    N,
+                    old_count,
+                    m_count);
+
+                return return_value;
             }
             return std::nullopt;
         }
 
         [[nodiscard]] constexpr T popAssumeNotEmpty() noexcept {
             PPR_ASSERT(m_count > 0);
-            return m_storage[--m_count];
+            const auto old_count = m_count;
+            --m_count;
+            T return_value = std::move(m_storage[m_count]);
+
+            mem::annotateContiguousContainer(
+                m_storage.data(),
+                N,
+                old_count,
+                m_count);
+            return return_value;
         }
 
-        void clear() noexcept {
+        constexpr void clear() noexcept {
+            mem::annotateContiguousContainer(m_storage.data(), N, m_count, 0u);
             m_count = 0u;
         }
 
@@ -935,10 +1110,6 @@ export namespace pP {
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0u); }
         [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, m_count); }
-
-        [[nodiscard]] constexpr auto each(this auto &&self) noexcept {
-            return self.m_storage | std::views::take(self.m_count);
-        }
     };
 
     template<typename T, std::size_t N> requires std::is_trivial_v<T>
@@ -966,7 +1137,17 @@ export namespace pP {
         i32 m_back_pos{0};
         i32 m_front_pos{0};
 
+#if PPR_ENABLE_SANITIZER_ADDRESS
+        constexpr RingBuffer() noexcept {
+            mem::poisonReserved(m_storage.data(), m_storage.size());
+        }
+
+        constexpr ~RingBuffer() noexcept {
+            mem::poisonDestroyed(m_storage.data(), m_storage.size());
+        }
+#else
         constexpr RingBuffer() noexcept = default;
+#endif
 
         [[nodiscard]] constexpr bool isEmpty() const noexcept {
             return m_back_pos == m_front_pos;
@@ -1004,7 +1185,9 @@ export namespace pP {
         void pushFrontAssumeNotFull(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             PPR_ASSERT(!isFull());
             --m_front_pos;
-            m_storage[arrIndex(m_front_pos)] = T{std::forward<ArgsT>(args)...};
+            T &dst = m_storage[arrIndex(m_front_pos)];
+            mem::unpoisonUninitialized(&dst);
+            std::construct_at(&dst, std::forward<ArgsT>(args)...);
         }
 
         template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
@@ -1019,7 +1202,9 @@ export namespace pP {
         template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
         void pushBackAssumeNotFull(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             PPR_ASSERT(!isFull());
-            m_storage[arrIndex(m_back_pos)] = T{std::forward<ArgsT>(args)...};
+            T &dst = m_storage[arrIndex(m_back_pos)];
+            mem::unpoisonUninitialized(&dst);
+            std::construct_at(&dst, std::forward<ArgsT>(args)...);
             ++m_back_pos;
         }
 
@@ -1034,14 +1219,19 @@ export namespace pP {
         [[nodiscard]] T popBackAssumeNotEmpty() noexcept {
             PPR_ASSERT(!isEmpty());
             --m_back_pos;
-            return m_storage[arrIndex(m_back_pos)]; // NRVO applies
+            T &src = m_storage[arrIndex(m_back_pos)];
+            T return_value = std::move(src);
+            mem::poisonDestroyed(&src);
+            return return_value; // NRVO applies
         }
 
         [[nodiscard]] std::optional<T> popFront() noexcept {
             if (!isEmpty()) [[likely]] {
-                T value = m_storage[arrIndex(m_front_pos)];
+                T &src = m_storage[arrIndex(m_front_pos)];
+                T return_value = std::move(src);
+                mem::poisonDestroyed(&src);
                 ++m_front_pos;
-                return value; // NRVO applies
+                return return_value; // NRVO applies
             }
             m_front_pos = m_back_pos = 0;
             return std::nullopt;
@@ -1049,13 +1239,16 @@ export namespace pP {
 
         [[nodiscard]] T popFrontAssumeNotEmpty() noexcept {
             PPR_ASSERT(!isEmpty());
-            T value = m_storage[arrIndex(m_front_pos)];
+            T &src = m_storage[arrIndex(m_front_pos)];
+            T value = std::move(src);
+            mem::poisonDestroyed(&src);
             ++m_front_pos;
             return value; // NRVO applies
         }
 
         void clear() noexcept {
             static_assert(std::is_trivially_destructible_v<T>);
+            mem::poisonReserved(m_storage.data(), m_storage.size());
             m_back_pos = m_front_pos = 0;
         }
 
@@ -1067,50 +1260,10 @@ export namespace pP {
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, m_front_pos); }
         [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, m_back_pos); }
-
-        [[nodiscard]] auto each(this auto &&self) noexcept {
-            return std::ranges::subrange(self.begin(), self.end());
-        }
     };
 
     template<typename T, std::size_t N> requires std::is_trivial_v<T>
     struct details::relocatable<RingBuffer<T, N> > : relocatable<T> {
-    };
-
-    // ------------------------------------------------------------------
-    // recycler from go
-    // ------------------------------------------------------------------
-
-    template<typename T, std::size_t N>
-    class Recycler {
-        Stack<T, N> m_free_blocks{};
-
-    public:
-        Recycler() noexcept = default;
-
-        constexpr ~Recycler() noexcept {
-            PPR_ASSERT(m_free_blocks.isEmpty() && "There are still blocks in-flight while destroying the recycler");
-        }
-
-        [[nodiscard]] constexpr bool allocate(T &out_recycled) noexcept {
-            if (auto recycled = m_free_blocks.pop()) [[likely]] {
-                out_recycled = std::move(*recycled);
-                return true;
-            }
-            return false;
-        }
-
-        [[nodiscard]] bool release(T value) noexcept {
-            return m_free_blocks.push(value);
-        }
-
-        template<typename DestructorT> requires std::is_invocable_v<DestructorT, T &&>
-        void shrinkToFit(DestructorT destroy) noexcept {
-            for (T &block: m_free_blocks) {
-                destroy(block);
-            }
-            m_free_blocks.clear();
-        }
     };
 
     // ------------------------------------------------------------------
@@ -1269,6 +1422,48 @@ export namespace pP {
         requires hash::TRawHashable<std::ranges::range_value_t<ContiguousRangeT> > {
         return hash::contiguousRange(std::forward<ContiguousRangeT>(values));
     }
+
+    // ------------------------------------------------------------------
+    // hash memoizer records the hashValue() to avoid computing it more than once
+    // ------------------------------------------------------------------
+
+    namespace hash {
+        template<THashable T>
+        struct Memoizer {
+            T m_value;
+            hash_t m_hash{};
+
+            explicit constexpr Memoizer(const T &value) noexcept
+                : m_value(value),
+                  m_hash(hashValue(value)) {
+            }
+
+            explicit constexpr Memoizer(T &&value) noexcept
+                : m_value(std::move(value)),
+                  m_hash(hashValue(value)) {
+            }
+
+            [[nodiscard]] friend constexpr bool operator==(const Memoizer &a, const Memoizer &b) noexcept
+                requires std::equality_comparable<T> {
+                return a.m_hash == b.m_hash/* short-circuit */ &&
+                       a.m_value == b.m_value;
+            }
+
+            [[nodiscard]] friend constexpr hash_t hashValue(const Memoizer &memoized) noexcept {
+                return memoized.m_hash;
+            }
+        };
+
+        template<THashable T>
+        Memoizer(const T &) -> Memoizer<T>;
+
+        template<THashable T>
+        Memoizer(T &&) -> Memoizer<T>;
+    }
+
+    template<hash::THashable T>
+    struct details::relocatable<hash::Memoizer<T> > : relocatable<T> {
+    };
 
     // ------------------------------------------------------------------
     // sorting
