@@ -144,12 +144,15 @@ extern "C" void _ReadWriteBarrier();
 
 #if PPR_ENABLE_ASSERTIONS
 #   define PPR_DETAILS_ASSERTION_IMPL(_TYPE, ...)  do { \
+        const bool PPR_ANONYMIZE(predicate) = (__VA_ARGS__); \
         if consteval { \
-            [[assume(__VA_ARGS__)]]; \
+            [[assume(PPR_ANONYMIZE(predicate))]]; \
         } else { \
-            if (!(__VA_ARGS__)) [[unlikely]] [&]() \
+            static constexpr auto PPR_ANONYMIZE(assertion_site) = \
+                std::source_location::current(); \
+            \
+            if (not PPR_ANONYMIZE(predicate)) [[unlikely]] [&]() \
                 PPR_ATTRIBUTE_CODE_SEGMENT(".ppr_dbg") { \
-                constexpr auto PPR_ANONYMIZE(assertion_site) = std::source_location::current(); \
                 ::pP::Assertion::onFailure( \
                     ::pP::Assertion::_TYPE, \
                     PPR_STRINGIZE(__VA_ARGS__), \
