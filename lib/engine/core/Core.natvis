@@ -5,6 +5,11 @@
     · pP::StableVector<T, TAllocator>
     · pP::StableVectorIterator<T, TAllocator>
     · mem::Arena<TAllocator>
+    · pP::RelPtr<T, OffsetT>
+    · pP::array_view<T>
+    · pP::relative_view<T>
+    · pP::Stack<T, N>
+    · pP::RingBuffer<T, N>
 
   Placement options (pick one):
     Per-project  : add this file to your .vcxproj — it is picked up automatically.
@@ -994,6 +999,9 @@
 
         <!-- ── Expand ───────────────────────────────────────────────────── -->
         <Expand>
+            <Item Name="[allocator]">
+                *(($T1*)this)
+            </Item>
 
             <!-- ── Scalar usage summary ──────────────────────────────────── -->
             <!--
@@ -1050,7 +1058,7 @@
                   void** dereference is only reached when m_slab != 0.
                 -->
                 <DisplayString
-                        Condition="*(void**)((unsigned char*)m_slab + 8) == 0">
+                        Condition="*(void**)((unsigned char*)m_slab) == 0">
                     1 slab: {m_offset - slab_overhead_size} / {m_capacity - slab_overhead_size} bytes
                 </DisplayString>
                 <DisplayString>
@@ -1068,7 +1076,7 @@
                         <Variable Name="overhead"
                                   InitialValue="(unsigned int)slab_overhead_size"/>
                         <Variable Name="slab"
-                                  InitialValue="(void*)m_slab"/>
+                                  InitialValue="(SlabHeader*)m_slab"/>
                         <Variable Name="sidx"
                                   InitialValue="(unsigned int)0"/>
 
@@ -1080,7 +1088,7 @@
                               so the Memory window lets you inspect raw contents directly.
                             -->
                             <Item
-                                    Name="[slab {sidx}]  {*(unsigned __int64*)slab} bytes  ({m_offset - overhead} used, {m_capacity - m_offset} free)"
+                                    Name="[slab {sidx}]  {slab->m_capacity} bytes  ({m_offset - overhead} used, {m_capacity - m_offset} free)"
                                     Condition="sidx == 0">
                                 (void*)((unsigned char*)slab + overhead)
                             </Item>
@@ -1093,13 +1101,13 @@
                               natvis viewer just needs the address range.
                             -->
                             <Item
-                                    Name="[slab {sidx}]  {*(unsigned __int64*)slab} bytes  (exhausted)"
+                                    Name="[slab {sidx}]  {slab->m_capacity} bytes  ({slab->m_offset - overhead} used, {slab->m_capacity - slab->m_offset} free)"
                                     Condition="sidx != 0">
                                 (void*)((unsigned char*)slab + overhead)
                             </Item>
 
                             <!-- Advance: read m_next at offset 8 from the current slab base. -->
-                            <Exec>slab = *(void**)((unsigned char*)slab + 8)</Exec>
+                            <Exec>slab = slab->m_next</Exec>
                             <Exec>++sidx</Exec>
                         </Loop>
                     </CustomListItems>
@@ -1111,6 +1119,125 @@
                 <DisplayString>no slabs allocated</DisplayString>
             </Synthetic>
 
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         pP::RelPtr<T, OffsetT>
+
+         $T1 = T
+         $T2 = OffsetT (default std::ptrdiff_t)
+
+         Self-relative pointer: m_offset is the byte distance from
+         `this` to the target object.  Zero offset means nullptr.
+         ================================================================ -->
+    <Type Name="pP::RelPtr&lt;*,*&gt;">
+        <DisplayString Condition="m_offset == 0">nullptr</DisplayString>
+        <DisplayString>{*($T1*)((char*)this + m_offset)}</DisplayString>
+        <Expand>
+            <Item Name="[pointer]" Condition="m_offset != 0">
+                ($T1*)((char*)this + m_offset)
+            </Item>
+            <Item Name="[pointer]" Condition="m_offset == 0">
+                ($T1*)0
+            </Item>
+            <Item Name="[offset]">m_offset</Item>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         pP::array_view<T>
+
+         $T1 = T
+
+         Non-owning contiguous view: data pointer + size.
+         ================================================================ -->
+    <Type Name="pP::array_view&lt;*&gt;">
+        <DisplayString Condition="m_size == 0">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_size} }} {m_data,[m_size]}</DisplayString>
+        <Expand>
+            <Item Name="[size]">m_size</Item>
+            <ArrayItems>
+                <Size>m_size</Size>
+                <ValuePointer>m_data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         pP::relative_view<T>
+
+         $T1 = T
+
+         Non-owning contiguous view using a relative pointer (halves
+         the footprint of array_view on x64).
+         ================================================================ -->
+    <Type Name="pP::relative_view&lt;*&gt;">
+        <DisplayString Condition="m_size == 0">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_size} }} {(value_type*)((char*)&amp;m_data + m_data.m_offset),[m_size]}</DisplayString>
+        <Expand>
+            <Item Name="[size]">m_size</Item>
+            <ArrayItems>
+                <Size>m_size</Size>
+                <ValuePointer>(value_type*)((char*)&amp;m_data + m_data.m_offset)</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         pP::Stack<T, N>
+
+         $T1 = T
+         $T2 = N  (capacity, compile-time constant)
+
+         Bounded LIFO stack backed by std::array<T, N>.
+         ================================================================ -->
+    <Type Name="pP::Stack&lt;*,*&gt;">
+        <DisplayString Condition="m_count == 0">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_count}/$T2 }}</DisplayString>
+        <Expand>
+            <Item Name="[size]">m_count</Item>
+            <Item Name="[capacity]">$T2</Item>
+            <ArrayItems>
+                <Size>m_count</Size>
+                <ValuePointer>m_storage.data()</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         pP::RingBuffer<T, N>
+
+         $T1 = T
+         $T2 = N  (capacity, compile-time constant)
+
+         Bounded circular FIFO backed by std::array<T, N>.
+         m_front_pos / m_back_pos are monotonically increasing i32
+         cursors; the physical array index is computed via modulo-N
+         wrapping (see arrIndex).
+         ================================================================ -->
+    <Type Name="pP::RingBuffer&lt;*,*&gt;">
+        <DisplayString Condition="m_front_pos == m_back_pos">{{ empty }}</DisplayString>
+        <DisplayString>{{ size={m_back_pos - m_front_pos}/$T2 }}</DisplayString>
+        <Expand>
+            <Item Name="[size]">m_back_pos - m_front_pos</Item>
+            <Item Name="[capacity]">$T2</Item>
+            <Item Name="[front_pos]">m_front_pos</Item>
+            <Item Name="[back_pos]">m_back_pos</Item>
+            <CustomListItems>
+                <Variable Name="i" InitialValue="(int)0"/>
+                <Variable Name="count" InitialValue="m_back_pos - m_front_pos"/>
+                <Variable Name="phys" InitialValue="(int)0"/>
+                <Loop>
+                    <Break Condition="i &gt;= count"/>
+                    <Exec>phys = (m_front_pos + i) % (int)$T2</Exec>
+                    <If Condition="phys &lt; 0">
+                        <Exec>phys += (int)$T2</Exec>
+                    </If>
+                    <Item Name="[{i}]">m_storage[phys]</Item>
+                    <Exec>++i</Exec>
+                </Loop>
+            </CustomListItems>
         </Expand>
     </Type>
 
