@@ -17,3 +17,4 @@ export import :opaque;
 export import :sparse_vector;
 export import :stable_vector;
 export import :strings;
+export import :unit_test;
