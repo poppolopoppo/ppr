@@ -1,4 +1,5 @@
-set(PROJECT_WARNINGS_CXX
+
+set(PPR_PROJECT_WARNINGS_CXX
   -Wall
   -Wextra # reasonable and standard
   -Wshadow # warn the user if a variable declaration shadows one from a parent context
@@ -24,5 +25,5 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
 set(CMAKE_CXX_STDLIB_MODULES_JSON "/usr/lib/llvm-20/lib/libc++.modules.json")
 
 if(PPR_WARNINGS_AS_ERRORS)
-  set(PROJECT_WARNINGS_CXX ${PROJECT_WARNINGS_CXX} -Werror)
+  set(PPR_PROJECT_WARNINGS_CXX ${PPR_PROJECT_WARNINGS_CXX} -Werror)
 endif()

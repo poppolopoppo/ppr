@@ -23,7 +23,7 @@ function(setup_ppr_project project_name)
   set_target_properties(${project_name} PROPERTIES CXX_MODULE_STD ON)
   target_compile_features(${project_name} PRIVATE cxx_std_23 INTERFACE cxx_std_23)
   # Set compiler warnings and warning as error IFN
-  target_compile_options(${project_name} PRIVATE ${PROJECT_WARNINGS_CXX})
+  target_compile_options(${project_name} PRIVATE ${PPR_PROJECT_WARNINGS_CXX})
   target_compile_options(${project_name} INTERFACE ${PROJECT_FLAGS_CXX})
   # Add global engine include directories, since legacy headers with macros are still the only way to handle assertions
   target_include_directories(${project_name} PUBLIC ${CMAKE_SOURCE_DIR}/include)

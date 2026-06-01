@@ -42,8 +42,12 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
+      "environment": {
+        "VS_SEGMENT_HEAP_ALLOWLIST": "VideoGameApp;EngineTests;"
+      },
       "cacheVariables": {
         "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+        "CMAKE_PROJECT_TOP_LEVEL_INCLUDES": "$env{VSINSTALLDIR}Common7/IDE/CommonExtensions/Microsoft/CMake/cmake/Microsoft/SegmentHeap.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
@@ -61,8 +65,11 @@
         ]
       },
       "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Linux" ]
+        },
         "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-          "sourceDir": "$env{HOME}/.vs/${ms{projectDirName}}"
+          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
         }
       }
     },

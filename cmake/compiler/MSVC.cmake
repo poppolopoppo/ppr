@@ -18,7 +18,7 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 # https://learn.microsoft.com/en-us/cpp/build/reference/zc-cplusplus?view=msvc-170
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/Zc:__cplusplus>")
 
-set(PROJECT_WARNINGS_CXX
+set(PPR_PROJECT_WARNINGS_CXX
         /permissive- # standards conformance mode for MSVC compiler.
 
         /W4 # Baseline reasonable warnings
@@ -57,5 +57,5 @@ if (PPR_ENABLE_SANITIZER_ADDRESS)
 endif ()
 
 if (PPR_WARNINGS_AS_ERRORS)
-    set(PROJECT_WARNINGS_CXX ${PROJECT_WARNINGS_CXX} /WX)
+    set(PPR_PROJECT_WARNINGS_CXX ${PPR_PROJECT_WARNINGS_CXX} /WX)
 endif ()

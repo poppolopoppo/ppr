@@ -12,6 +12,7 @@ target_sources(EngineTests
             core/Core.Containers.StableVector.Tests.cppm
             core/Core.Containers.SparseVector.Tests.cppm
             core/Core.Containers.HashMap.Tests.cppm
+            core/Core.Concurrency.Channel.Tests.cppm
             core/Core.Strings.Tests.cppm
             core/Core.Tests.cppm
 )
