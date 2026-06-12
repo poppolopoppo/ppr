@@ -17,18 +17,7 @@ namespace pP {
     protected:
         struct RunImpl;
 
-        [[nodiscard]] bool startInChildProcess_(RunImpl &run) const {
-            if (run.m_context.isChildRun()) {
-                m_run(run);
-                return true;
-            }
-
-            const auto exe_path = hal::process::currentExecutablePath();
-            const std::string test_path = run.currentPath();
-            const std::vector<std::string> child_args{"--child-run", "--run-test", test_path};
-            const int exit_code = hal::process::spawnAndWait(exe_path, child_args);
-            return (exit_code == 0);
-        }
+        [[nodiscard]] bool startInChildProcess_(RunImpl &run) const;
 
     public:
         struct TimeDuration {
@@ -67,9 +56,7 @@ namespace pP {
                 return m_run->m_test.m_name;
             }
 
-            [[nodiscard]] std::string path() const noexcept {
-                return m_run->currentPath();
-            }
+            [[nodiscard]] std::string path() const noexcept;
 
             template<details::TChar CharT, typename OutT>
             auto format(OutT &output) const -> OutT {
@@ -127,30 +114,7 @@ namespace pP {
             return (m_flags & expect_fail) == expect_fail;
         }
 
-        void run(IRun &run) const noexcept {
-            try {
-                auto &impl = checked_cast<RunImpl>(run);
-                impl.start();
-
-                if ((m_flags & fork) == none) [[likely]] {
-                    m_run(run);
-                } else {
-                    if (not startInChildProcess_(impl)) {
-                        if (not isExpectedToFail()) [[unlikely]] {
-                            run.failWith("child process exited with an error");
-                            return;
-                        }
-                    } else if (isExpectedToFail()) [[unlikely]] {
-                        run.failWith("test succeeded, but it was expected to fail");
-                        return;
-                    }
-                }
-
-                run.success();
-            } catch (std::exception &e) {
-                run.failWith(e.what());
-            }
-        }
+        void run(IRun &run) const noexcept;
 
         struct Context {
             using LogHandler = std23::function_ref<void(const IRun &, const char *)>;
@@ -160,32 +124,19 @@ namespace pP {
             std::string m_filter_path{};
             bool m_is_child_run = false;
 
-            void setFilter(std::string_view path) noexcept {
-                m_filter_path = path;
-            }
+            void setFilter(std::string_view path) noexcept;
 
-            [[nodiscard]] bool hasFilter() const noexcept {
-                return !m_filter_path.empty();
-            }
+            [[nodiscard]] bool hasFilter() const noexcept;
 
-            [[nodiscard]] bool isChildRun() const noexcept {
-                return m_is_child_run;
-            }
+            [[nodiscard]] bool isChildRun() const noexcept;
 
-            void markAsChildRun() noexcept {
-                m_is_child_run = true;
-            }
+            void markAsChildRun() noexcept;
 
-            [[nodiscard]] bool filterMatches(const std::string_view path) const noexcept {
-                return path.starts_with(m_filter_path) || m_filter_path.starts_with(path);
-            }
+            [[nodiscard]] bool filterMatches(const std::string_view path) const noexcept;
         };
 
 
-        static void run(const Context &context, const UnitTest &test) noexcept {
-            RunImpl first_run{context, test};
-            test.run(first_run);
-        }
+        static void run(const Context &context, const UnitTest &test) noexcept;
 
         struct Named {
             const char *m_name{nullptr};
@@ -237,77 +188,27 @@ namespace pP {
 
             EStatus m_status{pass};
 
-            RunImpl(const Context &context, const UnitTest &test) noexcept
-                : m_context(context), m_test(test) {
-            }
+            RunImpl(const Context &context, const UnitTest &test) noexcept;
 
-            RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept
-                : m_context(context), m_test(test), m_parent(&parent), m_depth(parent.m_depth + 1u) {
-            }
+            RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept;
 
             ~RunImpl();
 
             void start() noexcept;
 
-            [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept {
-                if (m_parent) {
-                    return m_parent->getFirstRunImpl();
-                }
-                return *this;
-            }
+            [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept;
 
-            [[nodiscard]] Id getTestId() const noexcept override {
-                return Id(*this);
-            }
+            [[nodiscard]] Id getTestId() const noexcept override;
 
-            [[nodiscard]] std::string currentPath() const {
-                std::string result;
-                auto it = std::back_inserter(result);
-                getTestId().format<char>(it);
-                return result;
-            }
+            [[nodiscard]] std::string currentPath() const;
 
-            void log(const char *msg) override {
-                if (m_context.m_log.has_value()) {
-                    (*m_context.m_log)(*this, msg);
-                } else {
-                    hal::outputDebugFmt("{}: {}\n",
-                                        std::string_view(m_test.m_name),
-                                        std::string_view(msg));
-                }
-            }
+            void log(const char *msg) override;
 
-            void failWith(const char *msg) override {
-                if (m_num_failed++ == 0u) {
-                    m_failure = msg;
-                    m_status = fail;
-                }
+            void failWith(const char *msg) override;
 
-                if (m_parent != nullptr) {
-                    m_parent->failWith(msg);
-                } else if (m_context.m_fail_with.has_value()) {
-                    (*m_context.m_fail_with)(*this, msg);
-                }
-            }
+            void recurse(const UnitTest &test) override;
 
-            void recurse(const UnitTest &test) override {
-                if (m_context.hasFilter()) {
-                    const std::string child_path = currentPath() + "/" + test.m_name;
-                    if (!m_context.filterMatches(child_path)) {
-                        return;
-                    }
-                }
-
-                RunImpl new_run{m_context, test, *this};
-                test.run(new_run);
-            }
-
-            void success() override {
-                ++m_num_passed;
-                if (m_parent != nullptr) {
-                    m_parent->success();
-                }
-            }
+            void success() override;
 
 #if PPR_ENABLE_ASSERTIONS
             void onAssertFailure(const Assertion &condition) const;
@@ -361,66 +262,4 @@ namespace std {
     };
 }
 
-void pP::UnitTest::RunImpl::start() noexcept {
-#if PPR_ENABLE_ASSERTIONS
-    // install a new assertion policy to catch error messages
-    Assertion::Policy new_policy(std23::nontype<&RunImpl::onAssertFailure>, this);
-    m_prev_assert_policy = Assertion::setFailurePolicy(std::move(new_policy));
-#endif
 
-    m_start_time = std::chrono::steady_clock::now();
-}
-
-pP::UnitTest::RunImpl::~RunImpl() {
-    const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
-    const std::chrono::steady_clock::duration duration_from_start = end_time - m_start_time;
-
-#if PPR_ENABLE_ASSERTIONS
-    PPR_DEFER {
-        if (m_prev_assert_policy.has_value()) [[likely]] {
-            // restore previous assertion policy
-            Assertion::setFailurePolicy(std::move(m_prev_assert_policy.value()));
-            m_prev_assert_policy.reset();
-        }
-    };
-#endif
-
-    const Id test_id{*this};
-    const bool is_group = m_num_passed + m_num_failed > 1u;
-    const char *bullet = is_group ? "↳" : "•";
-    const char *icon = m_status == pass ? "✅" : "❌";
-
-    hal::outputDebugFmt(" {} {:>3}/{:<3}  {} {:<60} ({})\n",
-                        icon,
-                        m_num_passed,
-                        m_num_passed + m_num_failed,
-                        bullet,
-                        test_id,
-                        TimeDuration{duration_from_start});
-
-    if (m_status == fail) {
-        hal::outputDebugFmt("    └─ {}\n", m_failure);
-    }
-    if (is_group) {
-        hal::outputDebug("--------------------------------------------------------------------------------------\n");
-    }
-}
-
-#if PPR_ENABLE_ASSERTIONS
-void pP::UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
-    const std::stacktrace backtrace = std::stacktrace::current(9);
-
-    hal::outputDebugFmt("{}({}): Assertion failed with \"{}\"\n"
-                        "\tin function: {}\n"
-                        "\tin test: {}\n\n"
-                        "Callstack:\n{}\n",
-                        std::string_view(condition.m_site.file_name()),
-                        condition.m_site.line(),
-                        std::string_view(condition.m_message),
-                        std::string_view(condition.m_site.function_name()),
-                        getTestId(),
-                        backtrace);
-
-    throw std::logic_error(condition.m_message);
-}
-#endif

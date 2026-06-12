@@ -30,6 +30,7 @@ target_sources(EngineCore
     PRIVATE
         Core.Logger.cpp
         Core.Timer.cpp
+        Core.UnitTest.cpp
         Core.Memory.Poison.cpp
         Core.Memory.cpp
         Core.Memory.PagePool.cpp
