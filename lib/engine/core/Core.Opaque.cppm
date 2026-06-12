@@ -137,28 +137,14 @@ export namespace pP {
                 using relative_view::operator=;
                 using relative_view::operator[];
 
-                [[nodiscard]] constexpr const Value *
-                tryGet(const string_literal key) const noexcept {
-                    for (const auto &[first, second]: *this) {
-                        if (std::string_view(first.data(), first.size()) == key) {
-                            return std::addressof(second);
-                        }
-                    }
-                    return nullptr;
-                }
+                [[nodiscard]] const Value *
+                tryGet(const string_literal key) const noexcept;
 
-                [[nodiscard]] constexpr const Value &
-                get(const string_literal key) const noexcept {
-                    if (const Value *const p_value = tryGet(key)) [[likely]] {
-                        return *p_value;
-                    }
-                    std::unreachable();
-                }
+                [[nodiscard]] const Value &
+                get(const string_literal key) const noexcept;
 
-                [[nodiscard]] constexpr const Value &
-                operator[](const string_literal key) const noexcept {
-                    return get(key);
-                }
+                [[nodiscard]] const Value &
+                operator[](const string_literal key) const noexcept;
             };
 
             using ValueVariant = std::variant<
