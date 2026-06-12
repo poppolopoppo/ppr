@@ -45,35 +45,11 @@ namespace pP {
             });
         }
 
-        static Policy setFailurePolicy(Policy &&on_assert_failure) noexcept {
-            return Handler::get().setFailurePolicy(std::move(on_assert_failure));
-        }
+        static Policy setFailurePolicy(Policy &&on_assert_failure) noexcept;
 
     private:
         class Handler {
-            static void defaultAssertFailure_(const Assertion &condition) {
-                char buffer[2048];
-                const auto [out, size] = std::format_to_n(
-                    buffer, sizeof(buffer) - 1,
-                    "{}({}): {} assert failed: \"{}\"\n"
-                    "\tin function: {}\n",
-                    condition.m_site.file_name(),
-                    condition.m_site.line(),
-                    typeName(condition.m_type),
-                    condition.m_message,
-                    condition.m_site.function_name());
-                // adds terminator to the buffer
-                *out = zero_v;
-
-                hal::outputDebug(buffer);
-                hal::breakpointIfDebugging();
-
-                // change this value with the debugger to survive the assertion
-                static volatile bool g_throw_exception = true;
-                if (g_throw_exception) {
-                    throw std::logic_error(buffer);
-                }
-            }
+            static void defaultAssertFailure_(const Assertion &condition);
 
             std::mutex m_barrier{};
             Policy m_on_assert_failure{&defaultAssertFailure_};
@@ -89,22 +65,12 @@ namespace pP {
 
             Handler &operator =(Handler &&) = delete;
 
-            [[nodiscard]] static Handler &get() noexcept {
-                alignas(hal::cacheline_size_v) static Handler g_handler;
-                return g_handler;
-            }
+            [[nodiscard]] static Handler &get() noexcept;
 
             // returns previous policy
-            Policy setFailurePolicy(Policy &&on_assert_failure) noexcept {
-                const std::lock_guard guard(m_barrier);
-                std::swap(on_assert_failure, m_on_assert_failure);
-                return on_assert_failure;
-            }
+            Policy setFailurePolicy(Policy &&on_assert_failure) noexcept;
 
-            void onAssertFailure(const Assertion &condition) {
-                const std::lock_guard guard(m_barrier);
-                return m_on_assert_failure(condition);
-            }
+            void onAssertFailure(const Assertion &condition);
         };
     };
 #endif

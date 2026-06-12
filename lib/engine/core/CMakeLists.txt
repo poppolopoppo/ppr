@@ -28,6 +28,7 @@ target_sources(EngineCore
 
             Core.cppm
     PRIVATE
+        Core.Assert.cpp
         Core.Logger.cpp
         Core.Timer.cpp
         Core.UnitTest.cpp
