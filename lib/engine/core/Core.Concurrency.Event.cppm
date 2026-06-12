@@ -412,45 +412,11 @@ export namespace pP {
     public:
         PulseEvent() noexcept = default;
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            PPR_ASSERT((signal.m_packed & signal_bit_v ) == 0u);
-
-            TagPtr<ISignal> parent;
-            parent.m_packed = m_signal.exchange(signal.m_packed, std::memory_order_acq_rel);
-
-            if (parent.m_packed & signal_bit_v) [[unlikely]] {
-                parent.m_packed &= ~signal_bit_v;
-                emitEvent();
-            }
-
-            return parent;
-        }
-
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            // unsubscribe <=> subscribe(previous_callback)
-            [[maybe_unused]] const auto subscription = subscribeEvent(restore);
-            PPR_ASSERT(subscription == signal);
-        }
-
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return (m_signal.load(std::memory_order_acquire) & signal_bit_v) != 0u;
-        }
-
-        void resetEvent() noexcept override {
-            m_signal.fetch_and(~signal_bit_v, std::memory_order_release);
-        }
-
-        void emitEvent() noexcept {
-            TagPtr<ISignal> handler;
-            handler.m_packed = m_signal.fetch_or(signal_bit_v, std::memory_order_acq_rel);
-            const bool should_notify = (handler.m_packed & signal_bit_v) == 0u;
-            handler.m_packed &= ~signal_bit_v;
-
-            if (should_notify && handler.isValid()) {
-                const auto [signal, event_tag] = handler.unpack();
-                signal->notify(event_tag);
-            }
-        }
+        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;
+        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override;
+        [[nodiscard]] bool pollEvent() noexcept override;
+        void resetEvent() noexcept override;
+        void emitEvent() noexcept;
     };
 
     // ------------------------------------------------------------------
@@ -469,46 +435,11 @@ export namespace pP {
             : m_subscriptions(allocator) {
         }
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            const std::lock_guard scope_lock(m_subscriptions_mutex);
-            PPR_ASSERT(m_subscriptions.find(signal) == m_subscriptions.end());
-            m_subscriptions.pushBack(signal);
-            return default_value_v;
-        }
-
-        void unsubscribeEvent(const TagPtr<ISignal> signal, [[maybe_unused]] const TagPtr<ISignal> restore) noexcept override {
-            PPR_ASSERT(restore.isNull());
-
-            const std::lock_guard scope_lock(m_subscriptions_mutex);
-            const auto it = m_subscriptions.find(signal);
-            if (PPR_ENSURE(it != m_subscriptions.end())) [[likely]] {
-                m_subscriptions.erase(it);
-            }
-        }
-
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return m_signal.test(std::memory_order_acquire);
-        }
-
-        void resetEvent() noexcept override {
-            m_signal.clear(std::memory_order_release);
-        }
-
-        void emitEvent() noexcept {
-            if (not m_signal.test_and_set(std::memory_order_acq_rel)) {
-                StableVectorInplace<TagPtr<ISignal>> snapshot;
-                {
-                    const std::lock_guard scope_lock(m_subscriptions_mutex);
-                    snapshot.append(m_subscriptions);
-                }
-                // if a subscriber's notify() callback attempts to subscribeEvent or
-                // unsubscribeEvent on the same BroadcastEvent, it will deadlock.
-                for (const TagPtr<ISignal> handler : snapshot) {
-                    const auto [signal, event_tag] = handler.unpack();
-                    signal->notify(event_tag);
-                }
-            }
-        }
+        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;
+        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override;
+        [[nodiscard]] bool pollEvent() noexcept override;
+        void resetEvent() noexcept override;
+        void emitEvent() noexcept;
     };
 
 }

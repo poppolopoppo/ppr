@@ -36,6 +36,9 @@ target_sources(EngineCore
         Core.Memory.PagePool.cpp
         Core.Memory.Arena.cpp
         Core.Opaque.cpp
+        Core.Concurrency.Context.cpp
+        Core.Concurrency.Channel.cpp
+        Core.Concurrency.Event.cpp
         ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.cpp
 )
 
