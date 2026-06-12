@@ -8,6 +8,7 @@ export import :arena;
 export import :channel;
 export import :containers;
 export import :enums;
+export import :event;
 export import :function_ref;
 export import :hal;
 export import :hash_map;
