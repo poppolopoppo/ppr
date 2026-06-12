@@ -1,13 +1,15 @@
+// ReSharper disable CppPolymorphicClassWithNonVirtualPublicDestructor
 module;
 #include "pP/Macros.h"
 export module engine.core:channel;
 
 import :assert;
+import :containers;
 import :enums;
+import :event;
 import :hal;
 
 import std;
-import :containers;
 
 export namespace pP {
     // ------------------------------------------------------------------
@@ -17,16 +19,19 @@ export namespace pP {
     // inspired from BPF ring buffer: https://www.kernel.org/doc/html/latest/bpf/ringbuf.html
 
     PPR_PRAGMA_WARNING_PUSH()
-    PPR_PRAGMA_WARNING_DISABLE_MSVC(4324)
+    PPR_PRAGMA_WARNING_DISABLE_MSVC(4324) // ignore padding due to cache-line alignment
+    PPR_PRAGMA_WARNING_DISABLE_MSVC(4265) // ignore the absence of virtual destructor for this class
 
-    class alignas(hal::cacheline_size_v) RawChannel {
+    class alignas(hal::cacheline_size_v) RawChannel : public IEvent {
         void advanceCommit_() noexcept;
 
         void *const m_data{};
         const std::size_t m_capacity{};
 
         std::mutex m_producer_mutex{};
+        PulseEvent m_on_produced{};
         std::size_t m_write{};
+
         alignas(hal::cacheline_size_v) std::atomic<std::size_t> m_commit{};
         alignas(hal::cacheline_size_v) std::atomic<std::size_t> m_read{};
 
@@ -199,6 +204,26 @@ export namespace pP {
         consumerAcquire(const EPolling policy = block_until_available) noexcept;
 
         void consumerRelease(const RecordHeader &read) noexcept;
+
+        // ------------------------------------------------------------------
+        // IEvent interface implementation
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept final {
+            return m_on_produced.subscribeEvent(signal);
+        }
+
+        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept final {
+            return m_on_produced.unsubscribeEvent(signal, restore);
+        }
+
+        [[nodiscard]] bool pollEvent() noexcept final {
+            return m_on_produced.pollEvent();
+        }
+
+        void resetEvent() noexcept final {
+            m_on_produced.resetEvent();
+        }
     };
 
     PPR_PRAGMA_WARNING_POP()
@@ -231,7 +256,10 @@ export namespace pP {
         auto hdr = producerReserveAssumeNotClosed_(0u, wait_if_full);
         if (not hdr.has_value()) [[unlikely]] {
             m_status.store(status_closed, std::memory_order_release);
+
             m_commit.notify_one();
+            m_on_produced.emitEvent();
+
             return std::unexpected(hdr.error());
         }
 
@@ -305,6 +333,8 @@ export namespace pP {
 
         m_commit.store(commit, std::memory_order_release);
         m_commit.notify_one();
+
+        m_on_produced.emitEvent();
     }
 
     void RawChannel::producerSubmit(RecordHeader &written) noexcept {
@@ -398,9 +428,6 @@ export namespace pP {
         using RecordHeader = RawChannel::Record;
 
     public:
-        struct CloseTag {
-        };
-
         using EBackPressure = RawChannel::EBackPressure;
         using EError = RawChannel::EError;
         using EPolling = RawChannel::EPolling;
@@ -631,7 +658,7 @@ export namespace pP {
             std::expected<T, EError> m_value{};
             EPolling m_policy{};
 
-            void advance() noexcept {
+            void advance_() noexcept {
                 m_value = m_reader.receive(m_policy);
             }
 
@@ -644,7 +671,7 @@ export namespace pP {
 
             explicit InputIterator(const Channel &reader, const EPolling policy = block_until_available) noexcept
                 : m_reader{reader}, m_policy{policy} {
-                advance();
+                advance_();
             }
 
             [[nodiscard]] T &operator*() noexcept {
@@ -658,12 +685,12 @@ export namespace pP {
             }
 
             InputIterator &operator++() noexcept {
-                advance();
+                advance_();
                 return *this;
             }
 
             void operator++(int) noexcept {
-                advance();
+                advance_();
             }
 
             [[nodiscard]] bool isValid() const noexcept {

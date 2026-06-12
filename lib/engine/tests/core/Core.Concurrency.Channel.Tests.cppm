@@ -418,14 +418,14 @@ export namespace pP::tests {
                 }
             }
 
+            for (auto &p: producers) {
+                p.join();
+            }
+
             constexpr int total = num_producers * messages_per_thread;
             PPR_ASSERT(received == total);
             const int local_seed_send = seed_send.load();
             PPR_ASSERT(local_seed_send == seed_recv);
-
-            for (auto &p: producers) {
-                p.join();
-            }
         };
 
         PPR_UNIT_TEST(concurrent_mpmc) {
@@ -519,6 +519,399 @@ export namespace pP::tests {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             const auto close = chan.close();
             PPR_ASSERT(close.has_value());
+        };
+
+        PPR_UNIT_TEST(select_one) {
+            RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+
+            const auto send = chan.producerReserve(8, RawChannel::wait_if_full);
+            PPR_ASSERT(send.has_value());
+            chan.producerSubmit(*send);
+
+            auto signal = select(chan);
+
+            const auto event = signal.poll();
+            PPR_ASSERT(event.has_value());
+
+            const auto recv = event.value()->consumerAcquire(RawChannel::block_until_available);
+            PPR_ASSERT(recv.has_value());
+            event.value()->consumerRelease(*recv);
+
+            signal.reset();
+        };
+
+        PPR_UNIT_TEST(select_multiple) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+
+            const auto send = chan_a.producerReserve(8, RawChannel::wait_if_full);
+            PPR_ASSERT(send.has_value());
+            chan_a.producerSubmit(*send);
+
+            auto signal = select(chan_a, chan_b);
+
+            auto event = signal.poll();
+            PPR_ASSERT(event.has_value());
+            PPR_ASSERT(event->index() == 0u);
+
+            const auto recv = chan_a.consumerAcquire(RawChannel::block_until_available);
+            PPR_ASSERT(recv.has_value());
+            chan_a.consumerRelease(*recv);
+
+            signal.reset(*event);
+        };
+
+        PPR_UNIT_TEST(select_close) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+
+            PPR_VERIFY(chan_a.close().has_value());
+            PPR_VERIFY(chan_b.close().has_value());
+
+            auto signal = select(chan_a, chan_b);
+
+            auto event = signal.poll();
+            PPR_ASSERT(event.has_value());
+
+            std::visit([](RawChannel *p_chan) {
+                const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                PPR_ASSERT(not recv.has_value());
+                PPR_ASSERT(recv.error() == RawChannel::error_closed);
+            }, event.value());
+
+            signal.reset(*event);
+        };
+
+        PPR_UNIT_TEST(select_loop) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+
+            PPR_VERIFY(chan_a.close().has_value());
+            PPR_VERIFY(chan_b.close().has_value());
+
+            bool chan_a_closed = false;
+            bool chan_b_closed = false;
+
+            for (auto event: select(chan_a, chan_b)) {
+                std::visit([&](RawChannel *p_chan) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                    PPR_ASSERT(not recv.has_value());
+                    PPR_ASSERT(recv.error() == RawChannel::error_closed);
+                    if (p_chan == &chan_a) {
+                        chan_a_closed = true;
+                    } else if (p_chan == &chan_b) {
+                        chan_b_closed = true;
+                    }
+                }, event);
+
+                if (chan_a_closed && chan_b_closed) {
+                    break;
+                }
+            }
+        };
+
+        // ------------------------------------------------------------------
+        // Advanced select() tests
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST(select_same_channel_two_messages) {
+            RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+
+            // Submit first message
+            auto send = chan.producerReserve(8, RawChannel::wait_if_full);
+            PPR_ASSERT(send.has_value());
+            chan.producerSubmit(*send);
+
+            auto signal = select(chan);
+
+            // First poll detects the first message
+            {
+                auto event = signal.poll();
+                PPR_ASSERT(event.has_value());
+                PPR_ASSERT(*event == std::addressof(chan));
+
+                const auto recv = (*event)->consumerAcquire(RawChannel::peek_without_blocking);
+                PPR_ASSERT(recv.has_value());
+                (*event)->consumerRelease(*recv);
+                signal.reset();
+            }
+
+            // No more pending after reset
+            PPR_ASSERT(not signal.poll().has_value());
+
+            // Submit second message
+            send = chan.producerReserve(8, RawChannel::wait_if_full);
+            PPR_ASSERT(send.has_value());
+            chan.producerSubmit(*send);
+
+            // Second poll detects the new message (PulseEvent re-triggered after reset)
+            {
+                auto event = signal.poll();
+                PPR_ASSERT(event.has_value());
+                PPR_ASSERT(*event == std::addressof(chan));
+
+                const auto recv = (*event)->consumerAcquire(RawChannel::peek_without_blocking);
+                PPR_ASSERT(recv.has_value());
+                (*event)->consumerRelease(*recv);
+                signal.reset();
+            }
+
+            PPR_ASSERT(not signal.poll().has_value());
+        };
+
+        PPR_UNIT_TEST(select_notify_before_subscribe) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+
+            // Submit BEFORE creating the Signal
+            auto send = chan_a.producerReserve(8, RawChannel::wait_if_full);
+            PPR_ASSERT(send.has_value());
+            chan_a.producerSubmit(*send);
+
+            // Signal subscribes — should detect the already-fired PulseEvent
+            // via subscribeEvent → emitEvent → notify path
+            auto signal = select(chan_a, chan_b);
+
+            auto event = signal.poll();
+            PPR_ASSERT(event.has_value());
+            PPR_ASSERT(event->index() == 0u);
+            PPR_ASSERT(std::get<0u>(*event) == std::addressof(chan_a));
+
+            const auto recv = chan_a.consumerAcquire(RawChannel::peek_without_blocking);
+            PPR_ASSERT(recv.has_value());
+            chan_a.consumerRelease(*recv);
+            signal.reset(*event);
+
+            PPR_ASSERT(not signal.poll().has_value());
+        };
+
+        PPR_UNIT_TEST(select_all_channels_ready) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_c{static_cast<std::size_t>(hal::page_granularity)};
+
+            // Submit data to all three channels before select
+            for (auto *chan : {&chan_a, &chan_b, &chan_c}) {
+                auto send = chan->producerReserve(8, RawChannel::wait_if_full);
+                PPR_ASSERT(send.has_value());
+                *static_cast<int *>(send->data()) = 42;
+                chan->producerSubmit(*send);
+            }
+
+            // Range-for iterates through all three ready channels
+            std::size_t seen = 0;
+            for (auto event : select(chan_a, chan_b, chan_c)) {
+                std::visit([&](RawChannel *p_chan) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
+                    PPR_ASSERT(recv.has_value());
+                    PPR_ASSERT(*static_cast<const int *>(recv->data()) == 42);
+                    p_chan->consumerRelease(*recv);
+                    ++seen;
+                }, event);
+
+                if (seen == 3u) {
+                    break;
+                }
+            }
+
+            PPR_ASSERT(seen == 3u);
+        };
+
+        PPR_UNIT_TEST(select_all_closed_range_for) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_c{static_cast<std::size_t>(hal::page_granularity)};
+
+            PPR_VERIFY(chan_a.close().has_value());
+            PPR_VERIFY(chan_b.close().has_value());
+            PPR_VERIFY(chan_c.close().has_value());
+
+            std::size_t closed_count = 0;
+            for (auto event : select(chan_a, chan_b, chan_c)) {
+                std::visit([&](RawChannel *p_chan) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                    PPR_ASSERT(not recv.has_value());
+                    PPR_ASSERT(recv.error() == RawChannel::error_closed);
+                    ++closed_count;
+                }, event);
+
+                if (closed_count == 3u) {
+                    break;
+                }
+            }
+
+            PPR_ASSERT(closed_count == 3u);
+        };
+
+        PPR_UNIT_TEST(select_three_channels_mixed) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_c{static_cast<std::size_t>(hal::page_granularity)};
+
+            // Chan A: data, Chan B: closed, Chan C: data
+            {
+                auto send = chan_a.producerReserve(8, RawChannel::wait_if_full);
+                PPR_ASSERT(send.has_value());
+                *static_cast<int *>(send->data()) = 100;
+                chan_a.producerSubmit(*send);
+            }
+
+            PPR_VERIFY(chan_b.close().has_value());
+
+            {
+                auto send = chan_c.producerReserve(8, RawChannel::wait_if_full);
+                PPR_ASSERT(send.has_value());
+                *static_cast<int *>(send->data()) = 300;
+                chan_c.producerSubmit(*send);
+            }
+
+            std::size_t data_received = 0;
+            bool closed_detected = false;
+
+            for (auto event : select(chan_a, chan_b, chan_c)) {
+                std::visit([&](RawChannel *p_chan) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
+                    if (recv.has_value()) {
+                        const int val = *static_cast<const int *>(recv->data());
+                        PPR_ASSERT(val == 100 || val == 300);
+                        p_chan->consumerRelease(*recv);
+                        ++data_received;
+                    } else {
+                        PPR_ASSERT(recv.error() == RawChannel::error_closed);
+                        closed_detected = true;
+                    }
+                }, event);
+
+                if (data_received == 2u && closed_detected) {
+                    break;
+                }
+            }
+
+            PPR_ASSERT(data_received == 2u);
+            PPR_ASSERT(closed_detected);
+        };
+
+        PPR_UNIT_TEST(select_close_wakes_waiting_thread) {
+            RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+
+            std::atomic<bool> woke{false};
+
+            std::jthread consumer([&chan, &woke] {
+                auto signal = select(chan);
+                signal.wait();
+                woke.store(true, std::memory_order_release);
+
+                const auto event = signal.poll();
+                PPR_ASSERT(event.has_value());
+
+                const auto recv = event.value()->consumerAcquire(RawChannel::block_until_available);
+                PPR_ASSERT(not recv.has_value());
+                PPR_ASSERT(recv.error() == RawChannel::error_closed);
+            });
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            PPR_ASSERT(not woke.load(std::memory_order_acquire));
+
+            PPR_VERIFY(chan.close().has_value());
+
+            consumer.join();
+            PPR_ASSERT(woke.load(std::memory_order_acquire));
+        };
+
+        PPR_UNIT_TEST(select_concurrent_wakeup_and_drain) {
+            RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+            constexpr int num_messages = 500;
+
+            std::jthread producer([&chan] {
+                for (int i = 0; i < num_messages; ++i) {
+                    auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
+                    PPR_ASSERT(hdr.has_value());
+                    *static_cast<int *>(hdr->data()) = i;
+                    chan.producerSubmit(*hdr);
+                }
+            });
+
+            std::size_t received = 0;
+
+            // Use range-for with select; drain all available data on each wakeup
+            for (auto &event : select(chan)) {
+                // Drain ALL messages in the channel
+                while (true) {
+                    const auto recv = event.consumerAcquire(RawChannel::peek_without_blocking);
+                    if (not recv.has_value()) {
+                        break;
+                    }
+                    PPR_ASSERT(*static_cast<const int *>(recv->data()) == static_cast<int>(received));
+                    event.consumerRelease(*recv);
+                    ++received;
+                }
+
+                if (received >= static_cast<std::size_t>(num_messages)) {
+                    break;
+                }
+            }
+
+            producer.join();
+            PPR_ASSERT(received == static_cast<std::size_t>(num_messages));
+        };
+
+        PPR_UNIT_TEST(select_multiple_channels_concurrent) {
+            constexpr int messages_per_producer = 200;
+            constexpr int num_channels = 3;
+
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_c{static_cast<std::size_t>(hal::page_granularity)};
+
+            std::atomic<int> seed_send{0};
+
+            auto producer_fn = [&](RawChannel &chan) {
+                for (int i = 0; i < messages_per_producer; ++i) {
+                    auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
+                    PPR_ASSERT(hdr.has_value());
+                    *static_cast<int *>(hdr->data()) = i;
+                    seed_send += i;
+                    chan.producerSubmit(*hdr);
+                }
+            };
+
+            std::jthread prod_a(producer_fn, std::ref(chan_a));
+            std::jthread prod_b(producer_fn, std::ref(chan_b));
+            std::jthread prod_c(producer_fn, std::ref(chan_c));
+
+            // Consumer: use select with wait/poll, draining all messages on wakeup
+            int received = 0;
+            int seed_recv = 0;
+            auto signal = select(chan_a, chan_b, chan_c);
+
+            while (received < messages_per_producer * num_channels) {
+                auto event = signal.poll();
+                if (not event.has_value()) {
+                    signal.wait();
+                    event = signal.poll();
+                }
+
+                // Drain ALL messages from the ready channel
+                RawChannel *const p_chan = std::visit([](RawChannel *p) { return p; }, *event);
+                while (true) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
+                    if (not recv.has_value()) {
+                        break;
+                    }
+                    seed_recv += *static_cast<const int *>(recv->data());
+                    p_chan->consumerRelease(*recv);
+                    ++received;
+                }
+
+                signal.reset(*event);
+            }
+
+            prod_a.join();
+            prod_b.join();
+            prod_c.join();
+
+            PPR_ASSERT(received == messages_per_producer * num_channels);
+            PPR_ASSERT(static_cast<int>(seed_send.load()) == seed_recv);
         };
     }
 
@@ -863,6 +1256,18 @@ export namespace pP::tests {
         _.recurse(ChannelRaw::concurrent_mpsc);
         _.recurse(ChannelRaw::concurrent_mpmc);
         _.recurse(ChannelRaw::concurrent_close_wakeup);
+        _.recurse(ChannelRaw::select_one);
+        _.recurse(ChannelRaw::select_multiple);
+        _.recurse(ChannelRaw::select_close);
+        _.recurse(ChannelRaw::select_loop);
+        _.recurse(ChannelRaw::select_same_channel_two_messages);
+        _.recurse(ChannelRaw::select_notify_before_subscribe);
+        _.recurse(ChannelRaw::select_all_channels_ready);
+        _.recurse(ChannelRaw::select_all_closed_range_for);
+        _.recurse(ChannelRaw::select_three_channels_mixed);
+        _.recurse(ChannelRaw::select_close_wakes_waiting_thread);
+        _.recurse(ChannelRaw::select_concurrent_wakeup_and_drain);
+        _.recurse(ChannelRaw::select_multiple_channels_concurrent);
     };
 
     PPR_UNIT_TEST(typed_channel) {
