@@ -3,5 +3,16 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/mango-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/rapidhash-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/slang-rhi-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/stb-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/mango/254a" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/mango/9a5d" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/mango/a5cd" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/rapidhash/2103" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/slang-rhi/f756" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/cpm_cache/stb/2e40" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/tmp/hardened-steel" vcs="Git" />
   </component>
 </project>
