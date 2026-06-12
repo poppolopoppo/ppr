@@ -21,6 +21,7 @@ target_sources(EngineCore
             Core.Memory.Poison.cppm
             Core.Opaque.cppm
             Core.Strings.cppm
+            Core.Timer.cppm
             Core.UnitTest.cppm
 
             Core.cppm
