@@ -35,8 +35,10 @@ If the repo root is not the working directory, prepend `git -C <path>`.
 
 ## Step 2 — Analyse and group
 
-Read the diff and mentally partition it by **what changes together for the same
-reason**. Good partitions for C++ projects:
+Read the **full diff** (hunk by hunk), not just the file list. A single file can
+contain multiple unrelated changes — treat each hunk as an independent unit.
+Group hunks across files by **what changes together for the same reason**.
+Good partitions for C++ projects:
 
 | Heuristic | Commit boundary |
 |---|---|---|
@@ -46,7 +48,8 @@ reason**. Good partitions for C++ projects:
 | Large multi-file change across a subsystem | Split into one commit per logical unit |
 | Bug fix with a matching test | Fix + test together |
 | Refactor with no behaviour change | Isolated commit |
-| CMake / build system | Isolated; goes after the code it enables |
+| **Adding a source file to CMakeLists.txt** | Go with its feature — same rule as module exports |
+| Infrastructure build change (flag, toolchain, dependency) | Isolated commit after the code it enables |
 | Dependency bump (`CPM.cmake`, `vcpkg.json`) | Own commit |
 | Formatting / clang-format sweep | Always last, never mixed with logic |
 | **Tests for a feature** | Commit with the feature, never separate |
@@ -54,7 +57,9 @@ reason**. Good partitions for C++ projects:
 | **Test registration changes** (`Core.Tests.cppm` adds `_.recurse(foo)`) | Go with their feature — use `git add -p` to split |
 
 **Dependency ordering rule**: if commit B requires a declaration introduced in
-commit A, A must appear first.
+commit A, A must appear first. Apply this rule at **hunk granularity** — if a
+file has hunks for two independent features, check whether one hunk's symbols
+are used by the other before ordering them.
 
 - Modules with zero dependencies go first (macros, platform HAL)
 - Then subsystems in dependency order (e.g., memory poison before
@@ -62,13 +67,17 @@ commit A, A must appear first.
 - UnitTest framework goes right after assert/exception handling
   (other tests depend on it)
 - Tests go alongside their feature, never in a test-only commit
-- Build/config/visualisation goes last
+- **CMakeLists.txt source entries go with their feature commit** —
+  do not batch them in a later build commit
+- Infrastructure build/config (flags, dependencies, toolchain) goes last
 
 ### Consistent granularity
 
 Every commit should represent exactly **one logical change**. If a subsystem
 touches multiple independent concerns (e.g., adding a poisoning utility, an
 allocator, and an arena), split into three separate commits — one per concern.
+The same applies **within a single file** — unrelated hunks belong in different
+commits even if they modify the same file.
 
 A typical commit is **50–300 lines** across 1–5 files. If a commit would
 exceed ~400 lines, consider whether it can be split further. This keeps the
@@ -161,21 +170,32 @@ After all commits, add a short **Summary** section:
 
 - **Do not invent** functionality not present in the diff. Every claim in a
   commit message must be traceable to actual lines changed.
+- **Analyse at hunk granularity**: scan every hunk in `git diff HEAD` and tag
+  each hunk with the concern it belongs to. If two hunks in the same file
+  belong to different concerns, they must be split into separate commits.
+  Only after this per-hunk labelling can you determine the true commit
+  boundaries and dependency order.
 - If a single file contains **unrelated changes** (e.g., a bug fix and a
   refactor in the same `.cpp`), note that the user should consider `git add -p`
-  to split it, and draft both commit messages anyway.
+  to split it, and draft both commit messages anyway. In the commit plan, list
+  only the relevant hunks' lines for each commit rather than the whole file.
 - **C++20 module projects** commonly have shared files that accumulate changes
-  for multiple features: `Core.cppm` (module exports), `Core.Tests.cppm` (test
-  tree registration), `main.cpp` (test runner). These files MUST be split with
-  `git add -p` so each hunk goes with its feature commit. Call this out
-  explicitly in the plan.
+  for multiple features: `Core.cppm` (module exports), `CMakeLists.txt` (source
+  registration), `Core.Tests.cppm` (test tree registration), `main.cpp` (test
+  runner). These files MUST be split with `git add -p` so each hunk goes with
+  its feature commit. Call this out explicitly in the plan.
 - If `git add -p` is needed but the shell doesn't support interactive mode,
   recommend this workflow:
   1. Save a backup of the file
   2. `git checkout -- <file>` to reset to HEAD
-  3. Manually edit only the hunk needed for the current commit
+  3. Manually edit only the hunk(s) needed for the current commit
   4. Stage and commit
   5. Restore the backup for the next commit
+  6. **Important**: each commit's shared file snapshot must contain the
+     **cumulative** changes from ALL features committed so far, not just
+     the current feature. For example, if commit 1 adds `:event` to
+     `Core.cppm` and commit 2 adds `:timer`, then commit 2's `Core.cppm`
+     must have BOTH `:event` and `:timer` exports.
 - For **C++ module partitions** (`:partition` syntax), changes to the primary
   interface unit and its partitions often need to be committed together to keep
   the BMI consistent; call this out explicitly.

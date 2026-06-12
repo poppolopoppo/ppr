@@ -53,6 +53,11 @@ The build system uses modern CMake. When adding new subsystems:
 
 **Rule:** Never add a library without corresponding CMake definitions.
 
+**Commit rule:** When adding a new source file to an existing library, the
+`CMakeLists.txt` change that registers it must go in the **same commit** as
+the new source — never batched in a separate build commit. Each feature
+commit must produce a buildable intermediate state.
+
 ### CMake Configuration
 
 The root `CMakeLists.txt` provides:
