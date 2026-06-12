@@ -3,6 +3,7 @@ module;
 
 export module engine.core:opaque;
 
+import :arena;
 import :assert;
 import :allocator;
 import :function_ref;
@@ -392,6 +393,84 @@ export namespace pP {
                         fmt(sink);
                         return alignForward(sink.m_count * sizeof(char), max_align_v);
                     }), value);
+        }
+
+        template<mem::details::TAllocator AllocatorT>
+        class Unique : mem::Allocator<AllocatorT> {
+            using allocator_type = mem::Allocator<AllocatorT>;
+            std::allocation_result<void *> m_alloc{};
+            Block m_block{};
+
+        public:
+            Unique() noexcept(std::is_nothrow_default_constructible_v<AllocatorT>)
+                requires std::is_default_constructible_v<AllocatorT> = default;
+
+            explicit Unique(const AllocatorT &allocator)
+                noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+                : allocator_type(allocator) {
+            }
+
+            explicit Unique(AllocatorT &&allocator)
+                noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+                : allocator_type(std::move(allocator)) {
+            }
+
+            ~Unique() noexcept {
+                reset();
+            }
+
+            [[nodiscard]] const Block &block() const noexcept {
+                return m_block;
+            }
+
+            [[nodiscard]] const Block::Dict &operator*() const noexcept {
+                return m_block.operator*();
+            }
+
+            [[nodiscard]] const Block::Dict *operator->() const noexcept {
+                return m_block.operator->();
+            }
+
+            void assign(const Dict &init) {
+                m_block = default_value_v;
+                mem::poisonDestroyed(m_alloc.ptr, m_alloc.count);
+
+                const std::size_t size_bytes = Block::sizeOf(init);
+                if (m_alloc.count < size_bytes) {
+                    allocator_type::deallocateRaw(m_alloc.ptr, m_alloc.count);
+                    m_alloc = allocator_type::allocateRaw(size_bytes);
+                    mem::poisonReserved(m_alloc.ptr, m_alloc.count);
+                }
+
+                PPR_ASSERT(m_alloc.ptr && m_alloc.count >= size_bytes);
+                mem::unpoisonUninitialized(m_alloc.ptr, size_bytes);
+
+                mem::Slab local_slab(m_alloc);
+                m_block.resetAssumeEmpty(init, local_slab);
+            }
+
+            void reset() noexcept {
+                if (m_alloc.ptr == nullptr) [[unlikely]] {
+                    return;
+                }
+
+                m_block = default_value_v;
+                mem::poisonDestroyed(m_alloc.ptr, m_alloc.count);
+                allocator_type::deallocateRaw(m_alloc.ptr, m_alloc.count);
+            }
+        };
+
+        template<mem::details::TAllocator AllocatorT>
+        Unique(const AllocatorT &) -> Unique<std::remove_cvref_t<AllocatorT>>;
+
+        template<mem::details::TAllocator AllocatorT>
+        Unique(AllocatorT &&) -> Unique<std::remove_cvref_t<AllocatorT>>;
+
+        template<mem::details::TAllocator AllocatorT>
+        [[nodiscard]] auto makeUnique(const Dict &init, AllocatorT &&allocator = default_value_v) {
+            Unique result(std::forward<AllocatorT>(allocator));
+            result.assign(init);
+            return result;
         }
     }
 
