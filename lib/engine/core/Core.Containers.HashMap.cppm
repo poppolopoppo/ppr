@@ -913,4 +913,6 @@ export namespace pP {
     struct details::relocatable<HashMap<KeyT, ValueT, EqualToT, HasherT, AllocatorT> > :
             relocatable<mem::Allocator<AllocatorT> > {
     };
+
+    extern template class HashMap<int, int>;
 }

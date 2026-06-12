@@ -40,6 +40,8 @@ target_sources(EngineCore
         Core.Concurrency.Context.cpp
         Core.Concurrency.Channel.cpp
         Core.Concurrency.Event.cpp
+        Core.Containers.StableVector.cpp
+        Core.Containers.HashMap.cpp
         ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.cpp
 )
 

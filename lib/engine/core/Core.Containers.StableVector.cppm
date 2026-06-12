@@ -1094,4 +1094,6 @@ export namespace pP {
     template<typename T, mem::details::TAllocator AllocatorT>
     struct details::relocatable<StableVector<T, AllocatorT> > : relocatable<mem::Allocator<AllocatorT> > {
     };
+
+    extern template class StableVector<int>;
 }
