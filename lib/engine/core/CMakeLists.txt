@@ -28,6 +28,10 @@ target_sources(EngineCore
 
             Core.cppm
     PRIVATE
+        Core.Memory.Poison.cpp
+        Core.Memory.cpp
+        Core.Memory.PagePool.cpp
+        Core.Memory.Arena.cpp
         ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.cpp
 )
 

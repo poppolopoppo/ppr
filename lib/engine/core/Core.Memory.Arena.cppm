@@ -62,75 +62,18 @@ export namespace pP::mem {
             std::swap(lhs.m_offset, rhs.m_offset);
         }
 
-        constexpr void reset() noexcept {
-            if (m_data != nullptr) [[likely]] {
-                annotateContiguousContainer(m_data, m_capacity, m_offset, 0u);
-                m_offset = 0u;
-            }
-        }
+        void reset() noexcept;
 
         [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
             return overlap(m_data, m_capacity, ptr, size);
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept(false) {
-            std::size_t space = m_capacity - m_offset;
-            void *aligned_ptr = m_data + m_offset;
+        [[nodiscard]] std::allocation_result<void *>
+        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept(false);
 
-            if (std::align(static_cast<std::size_t>(alignment), bytes, aligned_ptr, space) == nullptr) [[unlikely]] {
-                throw std::bad_alloc{};
-            }
+        [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept;
 
-            const u32 old_offset = m_offset;
-            m_offset = checked_cast<u32>(static_cast<std::ptrdiff_t>(bytes) +
-                                         static_cast<std::byte *>(aligned_ptr) - m_data);
-
-            annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
-            return {aligned_ptr, bytes};
-        }
-
-        // Only valid if ptr was the most recent allocation
-        [[nodiscard]] constexpr bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
-            PPR_ASSERT(owns(ptr, old_size) && "Trying to resize a pointer outside of the arena");
-            if (old_size == new_size) {
-                return true;
-            }
-
-            // Only resizable if it was the last allocation
-            const auto byte_ptr = static_cast<std::byte *>(ptr);
-            if (byte_ptr + old_size != m_data + m_offset) [[unlikely]] {
-                return false; // not the top, caller must allocate+copy
-            }
-
-            const u32 new_offset = checked_cast<u32>(
-                static_cast<std::byte *>(byte_ptr) - m_data +
-                static_cast<std::ptrdiff_t>(new_size));
-            if (new_offset > m_capacity) [[unlikely]] {
-                return false; // OOM - can't relocate to a new slab
-            }
-
-            annotateContiguousContainer(m_data, m_capacity, m_offset, new_offset);
-            m_offset = new_offset;
-            return true;
-        }
-
-        // Only valid if ptr was the most recent allocation
-        [[maybe_unused]] constexpr bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
-            PPR_ASSERT(owns(ptr, bytes) && "Trying to deallocate a pointer outside of the arena");
-
-            // Verify ptr is actually the top of the arena
-            if (const std::byte *byte_ptr = static_cast<std::byte *>(ptr);
-                byte_ptr + bytes == m_data + m_offset) [[likely]] {
-                const u32 old_offset = m_offset;
-                m_offset = checked_cast<u32>(byte_ptr - m_data);
-
-                annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
-                return true;
-            }
-
-            return false;
-        }
+        [[maybe_unused]] bool deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept;
 
         // Checkpoint the current offset for cheap scope-level rewind
         [[nodiscard]] constexpr const void *watermark() const noexcept {
@@ -138,17 +81,7 @@ export namespace pP::mem {
         }
 
         // Rewind to a previous checkpoint — no destructor calls, O(1)
-        constexpr void restore(const void *const mark) noexcept {
-            if (mark == nullptr) [[likely]] {
-                reset();
-            }
-
-            PPR_ASSERT(overlap(m_data, m_capacity, mark));
-            const u32 prev_offset = m_offset;
-            m_offset = static_cast<u32>(static_cast<const std::byte *>(mark) - m_data);
-
-            annotateContiguousContainer(m_data, m_capacity, prev_offset, m_offset);
-        }
+        void restore(const void *const mark) noexcept;
     };
 
     template<std::size_t CapacityV>
@@ -577,10 +510,7 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     class ScratchPad {
-        [[nodiscard]] static constexpr Arena<SmallPage> &getArenaTLS_() noexcept {
-            alignas(hal::cacheline_size_v) thread_local Arena<SmallPage> g_instance_tls{};
-            return g_instance_tls;
-        }
+        [[nodiscard]] static Arena<SmallPage> &getArenaTLS_() noexcept;
 
     public:
         constexpr ScratchPad() noexcept = default;
@@ -683,4 +613,7 @@ export namespace pP::mem {
     };
 
     static_assert(details::use_inplace_v<ScratchPad>);
+
+    extern template class Arena<HugePage>;
+    extern template class Arena<SmallPage>;
 }

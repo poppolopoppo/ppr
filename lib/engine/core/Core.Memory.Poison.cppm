@@ -59,157 +59,15 @@ export namespace pP::mem {
             destroyed = UINT64_C(0xDDDDDDDDDDDDDDDD), // freed / destructed — use-after-free bait
         };
 
-        [[nodiscard]] constexpr u64 poisonSeed(
-            const PoisonPattern pattern,
-            const void *const ptr,
-            const std::size_t size_bytes) noexcept {
-            if consteval {
-                return hash::combine(std::bit_cast<std::uintptr_t>(ptr), static_cast<u64>(pattern) ^ size_bytes);
-            } else {
-                static const u64 g_process_salt{randomNumberGenerator()()};
-                return hash::combine(std::bit_cast<std::uintptr_t>(ptr) ^ static_cast<u64>(pattern), g_process_salt ^ size_bytes);
-            }
-        }
-
-        constexpr void poisonFlood(const PoisonPattern pattern, const void *const ptr, const std::size_t size_bytes) noexcept {
-            if (!ptr || size_bytes == 0) [[unlikely]] {
-                return;
-            }
-
-            auto next_pattern = [rng{poisonSeed(pattern, ptr, size_bytes)}]() mutable constexpr noexcept -> u64 {
-                rng = hash::mix(rng);
-                return rng;
-            };
-
-            auto *const p_start = static_cast<std::byte *>(const_cast<void *>(ptr));
-            auto *const p_end = p_start + size_bytes;
-
-            std::byte *const p_start_aligned = std::min(alignForward(p_start, alignof_v<u64>), p_end);
-            for (std::byte *p_bytes = p_start; p_bytes != p_start_aligned; ++p_bytes) {
-                const auto lo = static_cast<std::byte>(next_pattern() & 0x0Fu);
-                *p_bytes = static_cast<std::byte>(static_cast<u64>(pattern) & 0xF0u) | lo;
-            }
-
-            auto *const p_end_aligned = reinterpret_cast<u64 *>(std::max(alignBackward(p_end, alignof_v<u64>), p_start_aligned));
-            for (auto *p_words = reinterpret_cast<u64 *>(p_start_aligned); p_words != p_end_aligned; ++p_words) {
-                constexpr u64 high_mask_v = 0xF0F0'F0F0'F0F0'F0F0ULL;
-                *p_words = (static_cast<u64>(pattern) & high_mask_v) | (next_pattern() & ~high_mask_v);
-            }
-
-            for (auto *p_bytes = reinterpret_cast<std::byte *>(p_end_aligned); p_bytes != p_end; ++p_bytes) {
-                const auto lo = static_cast<std::byte>(next_pattern() & 0x0Fu);
-                *p_bytes = static_cast<std::byte>(static_cast<u64>(pattern) & 0xF0u) | lo;
-            }
-
-            PPR_COMPILER_READWRITE_BARRIER(); // avoid dead-store elimination
-        }
+        [[nodiscard]] u64 poisonSeed(PoisonPattern pattern, const void *ptr, std::size_t size_bytes) noexcept;
+        void poisonFlood(PoisonPattern pattern, const void *ptr, std::size_t size_bytes) noexcept;
     }
 
-    void poisonReserved([[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t size_bytes) noexcept {
-#if PPR_ENABLE_SANITIZER_ADDRESS
-        if (ptr && size_bytes > 0u) [[likely]] {
-            const auto a = std::bit_cast<std::uintptr_t>(ptr);
-            const auto asan_start = a & ~7ULL;
-            const auto asan_end = (a + size_bytes + 7) & ~7ULL;
-            PPR_ASAN_POISON_MEMORY(std::bit_cast<void *>(asan_start), asan_end - asan_start);
-        }
-#else
-        PPR_EXPR_IF_DEBUG(details::poisonFlood(details::PoisonPattern::reserved, ptr, size_bytes));
-#endif
-    }
-
-    void unpoisonUninitialized([[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t size_bytes) noexcept {
-#if PPR_ENABLE_SANITIZER_ADDRESS
-        if (ptr && size_bytes > 0u) [[likely]] {
-            const auto a = std::bit_cast<std::uintptr_t>(ptr);
-            const auto asan_start = a & ~7ULL;
-            const auto asan_end = (a + size_bytes + 7) & ~7ULL;
-            PPR_ASAN_UNPOISON_MEMORY(std::bit_cast<void *>(asan_start), asan_end - asan_start);
-        }
-#else
-        PPR_EXPR_IF_DEBUG(details::poisonFlood(details::PoisonPattern::uninitialized, ptr, size_bytes));
-#endif
-    }
-
-    void poisonDestroyed([[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t size_bytes) noexcept {
-#if PPR_ENABLE_SANITIZER_ADDRESS
-        if (ptr && size_bytes > 0u) [[likely]] {
-            const auto a = std::bit_cast<std::uintptr_t>(ptr);
-            const auto asan_start = (a + 7) & ~7ULL;
-            const auto asan_end = (a + size_bytes) & ~7ULL;
-            if (asan_end > asan_start) {
-                PPR_ASAN_POISON_MEMORY(std::bit_cast<void *>(asan_start), asan_end - asan_start);
-            }
-        }
-#else
-        PPR_EXPR_IF_DEBUG(details::poisonFlood(details::PoisonPattern::destroyed, ptr, size_bytes));
-#endif
-    }
-
-    // ------------------------------------------------------------------
-    // contiguous container annotation helpers
-    // ------------------------------------------------------------------
-
-    void annotateContiguousContainer(
-        [[maybe_unused]] const void *const beg,
-        [[maybe_unused]] const void *const end,
-        [[maybe_unused]] const void *const old_mid,
-        [[maybe_unused]] const void *const new_mid) noexcept {
-#if PPR_ENABLE_SANITIZER_ADDRESS
-        __sanitizer_annotate_contiguous_container(beg, end, old_mid, new_mid);
-#elif PPR_ENABLE_DEBUG
-        if (old_mid == new_mid) [[unlikely]] {
-            return;
-        }
-        auto *const old_bytes = static_cast<const std::byte *>(old_mid);
-        auto *const new_bytes = static_cast<const std::byte *>(new_mid);
-        if (old_bytes < new_bytes) {
-            const auto sz = static_cast<std::size_t>(new_bytes - old_bytes);
-            details::poisonFlood(details::PoisonPattern::uninitialized, old_mid, sz);
-        } else {
-            const auto sz = static_cast<std::size_t>(old_bytes - new_bytes);
-            details::poisonFlood(details::PoisonPattern::destroyed, new_mid, sz);
-        }
-#endif
-    }
-
-    void annotateDoubleEndedContiguousContainer(
-        [[maybe_unused]] const void *const storage_beg,
-        [[maybe_unused]] const void *const storage_end,
-        [[maybe_unused]] const void *const old_container_beg,
-        [[maybe_unused]] const void *const old_container_end,
-        [[maybe_unused]] const void *const new_container_beg,
-        [[maybe_unused]] const void *const new_container_end) noexcept {
-#if PPR_ENABLE_SANITIZER_ADDRESS
-        __sanitizer_annotate_double_ended_contiguous_container(
-            storage_beg, storage_end,
-            old_container_beg, old_container_end,
-            new_container_beg, new_container_end);
-#elif PPR_ENABLE_DEBUG
-        {
-            auto *const old_beg = static_cast<const std::byte *>(old_container_beg);
-            auto *const new_beg = static_cast<const std::byte *>(new_container_beg);
-            if (new_beg < old_beg) {
-                const auto sz = static_cast<std::size_t>(old_beg - new_beg);
-                details::poisonFlood(details::PoisonPattern::uninitialized, new_container_beg, sz);
-            } else if (new_beg > old_beg) {
-                const auto sz = static_cast<std::size_t>(new_beg - old_beg);
-                details::poisonFlood(details::PoisonPattern::destroyed, old_container_beg, sz);
-            }
-        }
-        {
-            auto *const old_end = static_cast<const std::byte *>(old_container_end);
-            auto *const new_end = static_cast<const std::byte *>(new_container_end);
-            if (new_end > old_end) {
-                const auto sz = static_cast<std::size_t>(new_end - old_end);
-                details::poisonFlood(details::PoisonPattern::uninitialized, old_container_end, sz);
-            } else if (new_end < old_end) {
-                const auto sz = static_cast<std::size_t>(old_end - new_end);
-                details::poisonFlood(details::PoisonPattern::destroyed, new_container_end, sz);
-            }
-        }
-#endif
-    }
+    void poisonReserved(void *const ptr, const std::size_t size_bytes) noexcept;
+    void unpoisonUninitialized(void *const ptr, const std::size_t size_bytes) noexcept;
+    void poisonDestroyed(void *const ptr, const std::size_t size_bytes) noexcept;
+    void annotateContiguousContainer(const void *const beg, const void *const end, const void *const old_mid, const void *const new_mid) noexcept;
+    void annotateDoubleEndedContiguousContainer(const void *const storage_beg, const void *const storage_end, const void *const old_container_beg, const void *const old_container_end, const void *const new_container_beg, const void *const new_container_end) noexcept;
 
 #else
 
@@ -349,10 +207,3 @@ export namespace pP::mem {
     template<std::input_iterator IteratorT>
     UnpoisonUninitializedIterator(const IteratorT &) -> UnpoisonUninitializedIterator<IteratorT>;
 }
-
-#if PPR_ENABLE_SANITIZER_ADDRESS
-extern "C" const char* __asan_default_options()
-{
-    return "abort_on_error=1:print_stats=1";
-}
-#endif
