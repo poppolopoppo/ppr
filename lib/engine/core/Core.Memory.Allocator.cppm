@@ -465,6 +465,9 @@ export namespace pP::mem {
 
         using allocator_type::allocateRaw;
         using allocator_type::deallocateRaw;
+
+        Inplace(const Inplace &) = delete;
+        Inplace &operator=(const Inplace &) = delete;
     };
 
     namespace details {
@@ -547,7 +550,7 @@ export namespace pP::mem {
         }
 
         template<typename... ArgsT>
-        explicit constexpr Allocator([[maybe_unused]] std::in_place_t _, ArgsT &&... args)
+        explicit constexpr Allocator([[maybe_unused]] std::in_place_t, ArgsT &&... args)
             noexcept(std::is_nothrow_constructible_v<reference, ArgsT &&...>)
             requires std::is_constructible_v<reference, ArgsT &&...>
             : reference(std::forward<ArgsT>(args)...) {
@@ -636,13 +639,15 @@ export namespace pP::mem {
         constexpr Fallback() requires std::is_default_constructible_v<PrimaryT> &&
                                       std::is_default_constructible_v<SecondaryT> = default;
 
-        explicit constexpr Fallback(PrimaryT &&primary)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Fallback(PrimaryT &&primary)
             noexcept(std::is_nothrow_move_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
             requires std::is_move_constructible_v<PrimaryT> && std::is_default_constructible_v<SecondaryT>
             : PrimaryT(std::move(primary)) {
         }
 
-        explicit constexpr Fallback(SecondaryT &&secondary)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Fallback(SecondaryT &&secondary)
             noexcept(std::is_nothrow_move_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
             requires std::is_move_constructible_v<SecondaryT> && std::is_default_constructible_v<PrimaryT>
             : SecondaryT(std::move(secondary)) {
@@ -655,10 +660,18 @@ export namespace pP::mem {
               SecondaryT(std::move(secondary)) {
         }
 
-        explicit constexpr Fallback(const PrimaryT &primary)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Fallback(const PrimaryT &primary)
             noexcept(std::is_nothrow_copy_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
             requires std::is_copy_constructible_v<PrimaryT> && std::is_default_constructible_v<SecondaryT>
             : PrimaryT(primary) {
+        }
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Fallback(const SecondaryT &secondary)
+            noexcept(std::is_nothrow_copy_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
+            requires std::is_copy_constructible_v<SecondaryT> && std::is_default_constructible_v<PrimaryT>
+            : SecondaryT(secondary) {
         }
 
         constexpr Fallback(const PrimaryT &primary, const SecondaryT &secondary)
@@ -809,6 +822,9 @@ export namespace pP::mem {
             m_status = status_used_; // disable use-after-free
         }
 #endif
+
+        InSitu(const InSitu &) = delete;
+        InSitu &operator=(const InSitu &) = delete;
 
         [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
             const bool owned = overlap(m_storage, InSituSizeV, ptr, size);
@@ -1237,96 +1253,6 @@ export namespace pP::mem {
         constexpr void deallocateRaw(const void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
             return super_t::deallocateRaw(ptr, bytes, alignment, getHintPtr());
         }
-    };
-
-    // ------------------------------------------------------------------
-    // polymorphic allocator uses runtime dispatch for allocation
-    // ------------------------------------------------------------------
-
-    class Pmr {
-        struct VTable {
-            std::allocation_result<void *> (*m_allocateRaw)(void *context, std::size_t bytes, std::align_val_t alignment){};
-
-            void (*m_deallocateRaw)(void *context, void *ptr, std::size_t bytes, std::align_val_t alignment){};
-
-            bool (*m_resizeRaw)(void *context, void *ptr, std::size_t old_size, std::size_t new_size){};
-        };
-
-        void *m_context{nullptr};
-        const VTable *m_vtable{nullptr};
-
-    public:
-        template<details::TAllocator AllocatorT>
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(AllocatorT = {}) noexcept requires std::is_empty_v<AllocatorT>
-            : m_context(nullptr) {
-            static constexpr VTable g_vtable{
-                .m_allocateRaw = [](void *const, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
-                    return AllocatorT{}.allocateRaw(bytes, alignment);
-                },
-                .m_deallocateRaw = [](void *const, void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-                    AllocatorT{}.deallocateRaw(ptr, bytes, alignment);
-                },
-                .m_resizeRaw = [](void *, [[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t old_size,
-                                  [[maybe_unused]] const std::size_t new_size) -> bool {
-                    if constexpr (details::TResizableAllocator<AllocatorT>) {
-                        return AllocatorT{}.resizeRaw(ptr, old_size, new_size);
-                    } else {
-                        return false;
-                    }
-                },
-            };
-            m_vtable = &g_vtable;
-        }
-
-        template<details::TAllocator AllocatorT>
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(AllocatorT &al) noexcept requires (!std::is_empty_v<AllocatorT>)
-            : m_context(std::addressof(al)) {
-            static constexpr VTable g_vtable{
-                .m_allocateRaw = [](void *const context, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
-                    return static_cast<AllocatorT *>(context)->allocateRaw(bytes, alignment);
-                },
-                .m_deallocateRaw = [](void *const context, void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-                    static_cast<AllocatorT *>(context)->deallocateRaw(ptr, bytes, alignment);
-                },
-                .m_resizeRaw = []([[maybe_unused]] void *const context, [[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t old_size,
-                                  [[maybe_unused]] const std::size_t new_size) -> bool {
-                    if constexpr (details::TResizableAllocator<AllocatorT>) {
-                        return static_cast<AllocatorT *>(context)->resizeRaw(ptr, old_size, new_size);
-                    } else {
-                        return false;
-                    }
-                },
-            };
-            m_vtable = &g_vtable;
-        }
-
-        template<details::TAllocator AllocatorT>
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(Allocator<AllocatorT> al) noexcept
-            : Pmr(al.materialize()) {
-        }
-
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) const {
-            return m_vtable->m_allocateRaw(m_context, bytes, alignment);
-        }
-
-        void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) const {
-            m_vtable->m_deallocateRaw(m_context, ptr, bytes, alignment);
-        }
-
-        [[nodiscard]] bool
-        resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) const noexcept {
-            return m_vtable->m_resizeRaw(m_context, ptr, old_size, new_size);
-        }
-
-        [[nodiscard]] friend bool operator==(const Pmr &a, const Pmr &b) noexcept = default;
-    };
-
-    template<>
-    struct details::use_inplace<Pmr> : std::true_type {
     };
 
     // ------------------------------------------------------------------

@@ -242,7 +242,7 @@ export namespace pP {
 
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
     using SparseVectorInplace = SparseVector<T,
-        mem::InSituFallback<details::stable_vector_min_capacity * sizeof(details::SparseVectorItem<T>),
+        mem::InSituFallback<details::stable_vector_min_capacity_v * sizeof(details::SparseVectorItem<T>),
             AllocatorT, alignof_v<details::SparseVectorItem<T> > > >;
 
     // ------------------------------------------------------------------
@@ -464,12 +464,23 @@ export namespace pP {
             assignAssumeEmpty(init_values);
         }
 
-        explicit constexpr SparseVector(AllocatorT &&al) noexcept
+        explicit constexpr SparseVector(AllocatorT &&al)
+            noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+            requires std::is_move_constructible_v<AllocatorT>
             : stable_vector(std::move(al)) {
         }
 
-        explicit constexpr SparseVector(const AllocatorT &al) noexcept
+        explicit constexpr SparseVector(const AllocatorT &al)
+            noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+            requires std::is_copy_constructible_v<AllocatorT>
             : stable_vector(al) {
+        }
+
+        template<typename AllocatorLikeT>
+            requires std::is_constructible_v<stable_vector, AllocatorLikeT&&>
+        explicit constexpr SparseVector(AllocatorLikeT &&al_init)
+            noexcept(std::is_nothrow_constructible_v<stable_vector, AllocatorLikeT&&>)
+            : stable_vector(std::forward<AllocatorLikeT>(al_init)) {
         }
 
         constexpr SparseVector(const std::size_t initial_capacity, AllocatorT &&al) noexcept
@@ -634,7 +645,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr std::pair<SparseKeyId, T *>
-        ddUninitialized() noexcept(std::is_nothrow_move_constructible_v<T>) {
+        addUninitialized() noexcept(std::is_nothrow_move_constructible_v<T>) {
             const AllocationResult_ alloc = allocateItem_();
             return std::make_pair(alloc.getKeyId(), alloc.launderValuePtr());
         }

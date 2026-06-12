@@ -684,19 +684,19 @@ export namespace pP {
 
     template<typename T, typename TagT = std::uintptr_t, std::align_val_t Alignment = alignof_v<T> >
     struct [[nodiscard]] TagPtr {
-        static_assert(static_cast<std::uintptr_t>(Alignment) >= 1,
+        static_assert(static_cast<std::uintptr_t>(Alignment) >= 1u,
                       "Alignment must be at least 1.");
-        static_assert((static_cast<std::uintptr_t>(Alignment) & static_cast<std::uintptr_t>(Alignment) - 1) == 0,
+        static_assert((static_cast<std::uintptr_t>(Alignment) & (static_cast<std::uintptr_t>(Alignment) - 1u)) == 0u,
                       "Alignment must be a power of two.");
         static_assert(sizeof(T *) == sizeof(std::uintptr_t),
                       "sizeof(T*) != sizeof(uintptr_t): pointer tagging is unsafe on this platform.");
-        static_assert(std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1 < sizeof(std::uintptr_t),
+        static_assert((std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u) < sizeof(std::uintptr_t),
                       "Alignment consumes the entire pointer width; no bits remain for the address.");
         static_assert(sizeof(TagT) <= sizeof(std::uintptr_t),
                       "Tag type is too large to fit in the pointer's unused bits.");
 
         /// Number of flag bits available in the LSBs of the pointer.
-        static constexpr std::size_t extra_bits = std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1; // log2(Alignment)
+        static constexpr std::size_t extra_bits = std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u; // log2(Alignment)
 
         static constexpr std::uintptr_t FLAG_MASK = static_cast<std::uintptr_t>(Alignment) - 1u;
         static constexpr std::uintptr_t PTR_MASK = ~FLAG_MASK;
@@ -736,6 +736,11 @@ export namespace pP {
         [[nodiscard]] PPR_FORCE_INLINE
         constexpr TagT getTag() const noexcept {
             return static_cast<TagT>(m_packed & FLAG_MASK);
+        }
+
+        [[nodiscard]] PPR_FLATTEN
+        constexpr std::tuple<T *, TagT> unpack() const noexcept {
+            return std::make_tuple(getData(), getTag());
         }
 
         /// Returns only the flag bits.

@@ -18,7 +18,7 @@ export namespace pP {
     class StableVector;
 
     namespace details {
-        inline constexpr u32 stable_vector_min_capacity = 8u;
+        inline constexpr u32 stable_vector_min_capacity_v = 8u;
 
         template<typename T, mem::details::TAllocator AllocatorT>
         class StableVectorIterator {
@@ -103,7 +103,8 @@ export namespace pP {
                 initFromIndexFallback_();
             }
 
-            explicit constexpr StableVectorIterator(const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr StableVectorIterator(const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
                 requires std::is_const_v<T>
                 : m_vector(other.m_vector),
                   m_slice_ptr(other.m_slice_ptr),
@@ -246,7 +247,7 @@ export namespace pP {
 
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
     using StableVectorInplace = StableVector<T,
-        mem::InSituFallback<details::stable_vector_min_capacity * sizeof(T), AllocatorT, alignof_v<T> > >;
+        mem::InSituFallback<details::stable_vector_min_capacity_v * sizeof(T), AllocatorT, alignof_v<T> > >;
 
     template<typename T, mem::details::TAllocator AllocatorT>
     class StableVector : mem::Allocator<AllocatorT> {
@@ -255,7 +256,7 @@ export namespace pP {
 
     protected:
         using allocator_type = mem::Allocator<AllocatorT>;
-        static constexpr u32 min_capacity_ = details::stable_vector_min_capacity;
+        static constexpr u32 min_capacity_ = details::stable_vector_min_capacity_v;
 
         enum ESliceTag_ {
             standalone_slice_ = 0u,
@@ -408,12 +409,23 @@ export namespace pP {
             resize(size, init_value);
         }
 
-        explicit constexpr StableVector(AllocatorT &&al) noexcept
+        explicit constexpr StableVector(AllocatorT &&al)
+            noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+            requires std::is_move_constructible_v<AllocatorT>
             : allocator_type(std::move(al)) {
         }
 
-        explicit constexpr StableVector(const AllocatorT &al) noexcept
+        explicit constexpr StableVector(const AllocatorT &al)
+            noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+            requires std::is_copy_constructible_v<AllocatorT>
             : allocator_type(al) {
+        }
+
+        template<typename AllocatorLikeT>
+            requires std::is_constructible_v<AllocatorT, AllocatorLikeT&&>
+        explicit constexpr StableVector(AllocatorLikeT &&al_init)
+            noexcept(std::is_nothrow_constructible_v<AllocatorT, AllocatorLikeT&&>)
+        :   allocator_type(std::in_place, std::forward<AllocatorLikeT>(al_init)) {
         }
 
         constexpr StableVector(const std::size_t initial_capacity, AllocatorT &&al) noexcept

@@ -171,6 +171,41 @@ export namespace pP {
     inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8;
 
     // ------------------------------------------------------------------
+    // expand a callable over an index sequence to perform compile-time unrolling
+    // ------------------------------------------------------------------
+
+    namespace details {
+        template<typename T, class F, T... Is>
+        constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>)
+            noexcept(noexcept(std::declval<F>()(std::integral_constant<T, Is>{}...))) {
+            return std::forward<F>(f)(std::integral_constant<T, Is>{}...);
+        }
+    }
+
+    // Usage pattern
+    //   static_iota<N>([&](auto... idx) { /* idx are std::integral_constant<std::size_t, I>... */ });
+
+    template<std::size_t N, class F>
+    constexpr decltype(auto) static_iota(F &&f)
+        noexcept(noexcept(details::static_iota_expand<std::size_t>(
+            std::forward<F>(f),
+            std::make_integer_sequence<std::size_t, N>{}))) {
+        return details::static_iota_expand<std::size_t>(
+            std::forward<F>(f),
+            std::make_integer_sequence<std::size_t, N>{});
+    }
+
+    template<typename T, T N, class F>
+    constexpr decltype(auto) static_iota(F &&f)
+        noexcept(noexcept(details::static_iota_expand<T>(
+            std::forward<F>(f),
+            std::make_integer_sequence<T, N>{}))) {
+        return details::static_iota_expand<T>(
+            std::forward<F>(f),
+            std::make_integer_sequence<T, N>{});
+    }
+
+    // ------------------------------------------------------------------
     // base split mix hash functions (from boost)
     // ------------------------------------------------------------------
 

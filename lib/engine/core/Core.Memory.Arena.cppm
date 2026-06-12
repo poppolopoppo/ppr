@@ -52,6 +52,10 @@ export namespace pP::mem {
             return *this;
         }
 
+        [[nodiscard]] std::allocation_result<void *> data() const noexcept {
+            return std::allocation_result<void *>(m_data, m_capacity);
+        }
+
         friend constexpr void swap(Slab &lhs, Slab &rhs) noexcept {
             std::swap(lhs.m_data, rhs.m_data);
             std::swap(lhs.m_capacity, rhs.m_capacity);
