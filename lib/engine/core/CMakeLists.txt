@@ -23,6 +23,7 @@ target_sources(EngineCore
             Core.Opaque.cppm
             Core.Strings.cppm
             Core.Timer.cppm
+            Core.Types.cppm
             Core.UnitTest.cppm
 
             Core.cppm

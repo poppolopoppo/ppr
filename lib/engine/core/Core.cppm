@@ -21,4 +21,5 @@ export import :sparse_vector;
 export import :stable_vector;
 export import :strings;
 export import :timer;
+export import :types;
 export import :unit_test;
