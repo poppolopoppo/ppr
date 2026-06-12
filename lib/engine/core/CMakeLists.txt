@@ -29,6 +29,7 @@ target_sources(EngineCore
             Core.cppm
     PRIVATE
         Core.Logger.cpp
+        Core.Timer.cpp
         Core.Memory.Poison.cpp
         Core.Memory.cpp
         Core.Memory.PagePool.cpp
