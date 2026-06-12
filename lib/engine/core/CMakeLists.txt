@@ -5,6 +5,7 @@ target_sources(EngineCore
         FILE_SET CXX_MODULES FILES
             Core.Assert.cppm
             Core.Concurrency.Channel.cppm
+            Core.Concurrency.Context.cppm
             Core.Concurrency.Event.cppm
             Core.Containers.cppm
             Core.Containers.HashMap.cppm

@@ -17,6 +17,7 @@ import :core_sparse_vector;
 import :core_stable_vector;
 import :core_strings;
 import :core_event;
+import :core_context;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(memory) {
@@ -49,5 +50,6 @@ export namespace pP::tests {
         _.recurse(opaque);
         _.recurse(channel);
         _.recurse(event);
+        _.recurse(context);
     };
 }

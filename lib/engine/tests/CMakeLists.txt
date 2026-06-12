@@ -13,6 +13,7 @@ target_sources(EngineTests
             core/Core.Containers.SparseVector.Tests.cppm
             core/Core.Containers.HashMap.Tests.cppm
             core/Core.Concurrency.Channel.Tests.cppm
+            core/Core.Concurrency.Context.Tests.cppm
             core/Core.Concurrency.Event.Tests.cppm
             core/Core.Strings.Tests.cppm
             core/Core.Tests.cppm
