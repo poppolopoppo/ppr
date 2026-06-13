@@ -1,6 +1,7 @@
 module;
 export module engine.core:context;
 
+import :event;
 import :opaque;
 import :strings;
 import :timer;
@@ -8,14 +9,9 @@ import :timer;
 import std;
 
 export namespace pP {
-    class IEvent;
-
-    class IContext {
+    class IContext : public IEvent {
     public:
         virtual ~IContext() = default;
-
-        [[nodiscard]] virtual IEvent &
-        done() noexcept = 0;
 
         [[nodiscard]] virtual std::optional<std::error_code>
         error() const noexcept = 0;

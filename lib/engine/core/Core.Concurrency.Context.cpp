@@ -17,11 +17,6 @@ class BackgroundContext final : public IContext {
 public:
     BackgroundContext() noexcept = default;
 
-    [[nodiscard]] IEvent &
-    done() noexcept override {
-        return m_done;
-    }
-
     [[nodiscard]] std::optional<std::error_code>
     error() const noexcept override {
         return std::nullopt;
@@ -30,6 +25,24 @@ public:
     [[nodiscard]] std::optional<const opaque::Block::Value *>
     value(const string_literal) const noexcept override {
         return std::nullopt;
+    }
+
+    // IEvent interface:
+
+    TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
+        return m_done.subscribeEvent(signal);
+    }
+
+    void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
+        m_done.unsubscribeEvent(signal, restore);
+    }
+
+    [[nodiscard]] bool pollEvent() noexcept override {
+        return m_done.pollEvent();
+    }
+
+    void resetEvent() noexcept override {
+        m_done.resetEvent();
     }
 };
 
@@ -44,22 +57,24 @@ class CancelContext : public IContext, protected ISignal {
     std::atomic<int> m_error{0u};
 
 protected: // ISignal interface
+    // ReSharper disable once CppOverrideWithDifferentVisibility
     void notify(const std::size_t) noexcept final {
         m_done.emitEvent();
     }
 
+    // ReSharper disable once CppOverrideWithDifferentVisibility
     void wait() noexcept final {
     }
 
 public:
     explicit CancelContext(SharedContext parent) noexcept
         : m_parent(std::move(parent)),
-          m_restore(m_parent->done().subscribeEvent(TagPtr<ISignal>(this, 0u))) {
+          m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))) {
         PPR_ASSERT(m_parent.get());
     }
 
     ~CancelContext() noexcept override {
-        m_parent->done().unsubscribeEvent(TagPtr<ISignal>(this, 0u), m_restore);
+        m_parent->unsubscribeEvent(TagPtr<ISignal>(this, 0u), m_restore);
     }
 
     void cancel() noexcept {
@@ -75,11 +90,7 @@ public:
         }
     }
 
-public: // IContext interface
-    [[nodiscard]] IEvent &done() noexcept override {
-        return m_done;
-    }
-
+public: // IContext interface:
     [[nodiscard]] std::optional<std::error_code>
     error() const noexcept override {
         if (const int err = m_error.load(std::memory_order_acquire); err != 0u) {
@@ -91,6 +102,24 @@ public: // IContext interface
     [[nodiscard]] std::optional<const opaque::Block::Value *>
     value(const string_literal user_key) const noexcept override {
         return m_parent->value(user_key);
+    }
+
+    // IEvent interface:
+
+    TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
+        return m_done.subscribeEvent(signal);
+    }
+
+    void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
+        m_done.unsubscribeEvent(signal, restore);
+    }
+
+    [[nodiscard]] bool pollEvent() noexcept override {
+        return m_done.pollEvent();
+    }
+
+    void resetEvent() noexcept override {
+        m_done.resetEvent();
     }
 };
 
@@ -109,9 +138,7 @@ public:
         // Notice: We specifically DO NOT subscribe to m_parent->done()
     }
 
-    [[nodiscard]] IEvent &done() noexcept override {
-        return m_done;
-    }
+    // IContext interface:
 
     [[nodiscard]] std::optional<std::error_code> error() const noexcept override {
         return std::nullopt; // Never has an error
@@ -119,6 +146,24 @@ public:
 
     [[nodiscard]] std::optional<const opaque::Block::Value *> value(const string_literal user_key) const noexcept override {
         return m_parent->value(user_key); // Values still flow down
+    }
+
+    // IEvent interface:
+
+    TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
+        return m_done.subscribeEvent(signal);
+    }
+
+    void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
+        m_done.unsubscribeEvent(signal, restore);
+    }
+
+    [[nodiscard]] bool pollEvent() noexcept override {
+        return m_done.pollEvent();
+    }
+
+    void resetEvent() noexcept override {
+        m_done.resetEvent();
     }
 };
 
@@ -141,9 +186,7 @@ public:
         m_execute_after(*this);
     }
 
-    [[nodiscard]] IEvent &done() noexcept override {
-        return m_parent->done();
-    }
+    // IContext interface:
 
     [[nodiscard]] std::optional<std::error_code>
     error() const noexcept override {
@@ -153,6 +196,24 @@ public:
     [[nodiscard]] std::optional<const opaque::Block::Value *>
     value(const string_literal user_key) const noexcept override {
         return m_parent->value(user_key);
+    }
+
+    // IEvent interface:
+
+    TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
+        return m_parent->subscribeEvent(signal);
+    }
+
+    void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
+        m_parent->unsubscribeEvent(signal, restore);
+    }
+
+    [[nodiscard]] bool pollEvent() noexcept override {
+        return m_parent->pollEvent();
+    }
+
+    void resetEvent() noexcept override {
+        m_parent->resetEvent();
     }
 };
 
@@ -171,9 +232,7 @@ public:
         PPR_ASSERT(m_parent.get());
     }
 
-    [[nodiscard]] IEvent &done() noexcept override {
-        return m_parent->done();
-    }
+    // IContext interface:
 
     [[nodiscard]] std::optional<std::error_code>
     error() const noexcept override {
@@ -186,6 +245,24 @@ public:
             return p_value;
         }
         return m_parent->value(user_key);
+    }
+
+    // IEvent interface:
+
+    TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
+        return m_parent->subscribeEvent(signal);
+    }
+
+    void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
+        m_parent->unsubscribeEvent(signal, restore);
+    }
+
+    [[nodiscard]] bool pollEvent() noexcept override {
+        return m_parent->pollEvent();
+    }
+
+    void resetEvent() noexcept override {
+        m_parent->resetEvent();
     }
 };
 
