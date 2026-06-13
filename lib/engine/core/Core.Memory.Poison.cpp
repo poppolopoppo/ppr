@@ -133,8 +133,8 @@ void poisonDestroyed(void *const ptr, const std::size_t size_bytes) noexcept {
 }
 
 void annotateContiguousContainer(
-    const void *const beg,
-    const void *const end,
+    const void *const beg [[maybe_unused]],
+    const void *const end [[maybe_unused]],
     const void *const old_mid,
     const void *const new_mid) noexcept {
 #if PPR_ENABLE_SANITIZER_ADDRESS
@@ -156,8 +156,8 @@ void annotateContiguousContainer(
 }
 
 void annotateDoubleEndedContiguousContainer(
-    const void *const storage_beg,
-    const void *const storage_end,
+    const void *const storage_beg [[maybe_unused]],
+    const void *const storage_end [[maybe_unused]],
     const void *const old_container_beg,
     const void *const old_container_end,
     const void *const new_container_beg,

@@ -802,7 +802,7 @@ export namespace pP {
 
         [[nodiscard]] constexpr T *pushBackUninitializedAssumeCapacity() noexcept {
             PPR_ASSERT(m_size < m_capacity);
-            const u32 old_size = m_size;
+            [[maybe_unused]] const u32 old_size = m_size;
             pointer const p_back = std::addressof(at(m_size++));
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
@@ -982,7 +982,7 @@ export namespace pP {
             PPR_ASSERT(m_size > 0u);
 
             pointer const p_back = std::addressof(at(m_size - 1u));
-            const u32 old_size = m_size--;
+            [[maybe_unused]] const u32 old_size = m_size--;
             std::destroy_at(p_back);
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
