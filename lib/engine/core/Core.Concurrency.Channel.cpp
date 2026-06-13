@@ -76,8 +76,8 @@ auto RawChannel::flush() noexcept -> std::expected<void, EError> {
     }
 
     alignas(hal::cacheline_size_v) std::atomic_flag flush_signal{};
-    new(hdr->data()) (std::atomic_flag *)(&flush_signal);
 
+    *std::start_lifetime_as<std::atomic_flag*>(hdr->data()) = &flush_signal;
     hdr->m_header.get().m_flags |= RecordHeader::flag_flush;
 
     producerSubmit(*hdr);
@@ -160,8 +160,8 @@ void RawChannel::advanceCommit_() noexcept {
 
     while (commit < m_write) {
         const std::size_t offset = commit & (m_capacity - 1u);
-        const auto *hdr = reinterpret_cast<const RecordHeader *>(
-            static_cast<const std::byte *>(m_data) + offset);
+        const auto *hdr = std::start_lifetime_as<RecordHeader>(
+            static_cast<std::byte *>(m_data) + offset);
 
         if (hdr->m_flags & RecordHeader::flag_busy) {
             break;
@@ -205,7 +205,7 @@ auto RawChannel::consumerAcquire(const EPolling policy) noexcept
         }
 
         const std::size_t offset = read_pos & (m_capacity - 1u);
-        auto *const hdr = reinterpret_cast<RecordHeader *>(
+        auto *const hdr = std::start_lifetime_as<RecordHeader>(
             static_cast<std::byte *>(m_data) + offset);
 
         const std::uint32_t f = hdr->m_flags;
@@ -217,7 +217,8 @@ auto RawChannel::consumerAcquire(const EPolling policy) noexcept
 
             if (f & RecordHeader::flag_flush) {
                 PPR_ASSERT(hdr->m_available_size >= sizeof(std::atomic_flag));
-                auto *const p_atomic_signal = *static_cast<std::atomic_flag **>(hdr->data());
+                auto *const p_atomic_signal = *std::start_lifetime_as<std::atomic_flag *>(
+                    hdr->data());
 
                 p_atomic_signal->test_and_set(std::memory_order_release);
                 p_atomic_signal->notify_all();
