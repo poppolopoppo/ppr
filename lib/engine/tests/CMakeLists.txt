@@ -15,6 +15,7 @@ target_sources(EngineTests
             core/Core.Concurrency.Channel.Tests.cppm
             core/Core.Concurrency.Context.Tests.cppm
             core/Core.Concurrency.Event.Tests.cppm
+            core/Core.Concurrency.IoPort.Tests.cppm
             core/Core.Strings.Tests.cppm
             core/Core.Tests.cppm
 )
