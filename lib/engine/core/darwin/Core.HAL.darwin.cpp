@@ -399,3 +399,120 @@ namespace pP::hal::process {
         return -1;
     }
 }
+
+namespace pP::hal::io {
+    // ------------------------------------------------------------------
+    // platform-specific state structures (kqueue based)
+    // ------------------------------------------------------------------
+    //
+    // Availability on this platform:
+    //   mapFile/unmapFile/mapData/mapSize — fully implemented (mmap).
+    //   init/openFile/submit/poll/wait     — throw std::system_error (kqueue not yet wired).
+    //
+
+    struct IoHandleData {
+        int m_kq{-1};
+    };
+
+    struct FileHandleData {
+        int m_fd{-1};
+    };
+
+    struct MapHandleData {
+        void       *m_data{nullptr};
+        std::size_t m_size{0};
+    };
+
+    IoHandle init() noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "IoPort: kqueue not yet implemented on Darwin");
+    }
+
+    void deinit(const IoHandle handle) noexcept {
+        delete static_cast<IoHandleData *>(handle);
+    }
+
+    FileHandle openFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "IoPort: openFile not yet implemented on Darwin");
+    }
+
+    void closeFile(const IoHandle, const FileHandle file) noexcept {
+        delete static_cast<FileHandleData *>(file);
+    }
+
+    std::size_t submit(const IoHandle, const std::span<SubmitEntry>) noexcept {
+        return 0u;
+    }
+
+    std::size_t poll(const IoHandle, const std::span<CompletionEntry>) noexcept {
+        return 0u;
+    }
+
+    std::size_t wait(const IoHandle, const std::span<CompletionEntry>) noexcept {
+        return 0u;
+    }
+
+    void wake(const IoHandle) noexcept {
+    }
+
+    MapHandle mapFile(const IoHandle, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
+        int prot = PROT_READ;
+        int oflags = O_RDONLY;
+
+        if (flags.m_bits & OpenFlags::write) {
+            prot |= PROT_WRITE;
+            oflags = O_RDWR;
+        }
+
+        const int fd = ::open(path.c_str(), oflags);
+        if (fd < 0) [[unlikely]] {
+            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile open failed");
+        }
+
+        PPR_DEFER { ::close(fd); };
+
+        struct ::stat st {};
+        if (::fstat(fd, &st) < 0) [[unlikely]] {
+            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile fstat failed");
+        }
+
+        if (st.st_size == 0) {
+            auto *md = new MapHandleData();
+            return static_cast<MapHandle>(md);
+        }
+
+        void *const data = ::mmap(nullptr, static_cast<std::size_t>(st.st_size),
+                                  prot, MAP_SHARED, fd, 0);
+        if (data == MAP_FAILED) [[unlikely]] {
+            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile mmap failed");
+        }
+
+        auto *md = new MapHandleData();
+        md->m_data = data;
+        md->m_size = static_cast<std::size_t>(st.st_size);
+        return static_cast<MapHandle>(md);
+    }
+
+    void unmapFile(const IoHandle, const MapHandle map) noexcept {
+        auto *data = static_cast<MapHandleData *>(map);
+        if (data != nullptr) {
+            if (data->m_data != nullptr) {
+                ::munmap(data->m_data, data->m_size);
+            }
+            delete data;
+        }
+    }
+
+    void *mapData(const MapHandle map) noexcept {
+        const auto *data = static_cast<const MapHandleData *>(map);
+        return data != nullptr ? data->m_data : nullptr;
+    }
+
+    std::size_t mapSize(const MapHandle map) noexcept {
+        const auto *data = static_cast<const MapHandleData *>(map);
+        return data != nullptr ? data->m_size : 0u;
+    }
+}

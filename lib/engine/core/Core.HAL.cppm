@@ -429,6 +429,90 @@ export namespace pP {
         }
 
         // ------------------------------------------------------------------
+        // asynchronous I/O
+        // ------------------------------------------------------------------
+
+        namespace io {
+            using IoHandle = void *;
+            using FileHandle = void *;
+            using MapHandle = void *;
+
+            enum class Opcode : u8 {
+                read,
+                write,
+            };
+
+            // Minimum storage needed for platform-specific OVERLAPPED extension.
+            // Must be ≥ sizeof(OverlappedExt) on Windows (currently 40 bytes on x64).
+            inline constexpr std::size_t overlapped_storage_size_v = 64u;
+
+            struct OpenFlags {
+                enum : u32 {
+                    read     = 1u << 0,
+                    write    = 1u << 1,
+                    create   = 1u << 2,
+                    truncate = 1u << 3,
+                };
+                u32 m_bits{read};
+
+                constexpr OpenFlags() noexcept = default;
+                explicit constexpr OpenFlags(const u32 bits) noexcept
+                    : m_bits(bits) {
+                }
+
+                [[nodiscard]] friend constexpr OpenFlags operator|(const OpenFlags a, const OpenFlags b) noexcept {
+                    return a.m_bits | b.m_bits;
+                }
+
+                constexpr OpenFlags &operator|=(const OpenFlags other) noexcept {
+                    m_bits |= other.m_bits;
+                    return *this;
+                }
+
+                [[nodiscard]] friend constexpr bool operator==(const OpenFlags a, const OpenFlags b) noexcept {
+                    return a.m_bits == b.m_bits;
+                }
+            };
+
+            struct SubmitEntry {
+                FileHandle  m_file;
+                void       *m_buffer;
+                u64         m_buffer_size;
+                u64         m_file_offset;
+                Opcode      m_opcode;
+                void       *m_user_data;     // → IoRequest *
+                void       *m_overlapped;    // → embedded storage (or null for heap fallback)
+            };
+
+            struct CompletionEntry {
+                void          *m_user_data;  // → IoRequest *
+                u64            m_bytes_transferred;
+                std::error_code m_error;
+            };
+
+            // lifecycle
+            [[nodiscard]] IoHandle init() noexcept(false);
+            void deinit(IoHandle handle) noexcept;
+
+            // file operations
+            [[nodiscard]] FileHandle openFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+            void closeFile(IoHandle io, FileHandle file) noexcept;
+
+            // submit & drain
+            [[nodiscard]] std::size_t submit(IoHandle io, std::span<SubmitEntry> entries) noexcept;
+            [[nodiscard]] std::size_t poll(IoHandle io, std::span<CompletionEntry> entries) noexcept;
+            [[nodiscard]] std::size_t wait(IoHandle io, std::span<CompletionEntry> entries) noexcept;
+            void wake(IoHandle io) noexcept;
+            void cancelIo(FileHandle file, void *overlapped) noexcept;
+
+            // memory-mapped files
+            [[nodiscard]] MapHandle mapFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+            void unmapFile(IoHandle io, MapHandle map) noexcept;
+            [[nodiscard]] void *mapData(MapHandle map) noexcept;
+            [[nodiscard]] std::size_t mapSize(MapHandle map) noexcept;
+        }
+
+        // ------------------------------------------------------------------
         // cross-platform helpers
         // ------------------------------------------------------------------
 

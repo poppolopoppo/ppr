@@ -758,6 +758,375 @@ namespace pP::hal {
     }
 }
 
+namespace pP::hal::io {
+    // ------------------------------------------------------------------
+    // platform-specific state structures
+    // ------------------------------------------------------------------
+
+    struct IoHandleData {
+        ::HANDLE m_port{nullptr}; // IOCP handle
+    };
+
+    struct FileHandleData {
+        ::HANDLE m_file{INVALID_HANDLE_VALUE};
+    };
+
+    struct MapHandleData {
+        ::HANDLE m_mapping{nullptr};
+        void    *m_data{nullptr};
+        std::size_t m_size{0};
+    };
+
+    // OVERLAPPED-compatible header that carries user_data
+    struct OverlappedExt : public ::OVERLAPPED {
+        void *m_user_data{nullptr};
+    };
+
+    static_assert(sizeof(OverlappedExt) == sizeof(::OVERLAPPED) + sizeof(void *));
+    static_assert(sizeof(OverlappedExt) <= overlapped_storage_size_v);
+
+    // IOCP API uses ULONG_PTR as opaque completion key (file association + completion status).
+    // HANDLE and ULONG_PTR are both pointer-sized on all MSVC targets — no truncation.
+    static_assert(sizeof(::HANDLE) <= sizeof(::ULONG_PTR),
+        "IOCP completion key must be wide enough to hold a HANDLE");
+
+    // ------------------------------------------------------------------
+    // lifecycle
+    // ------------------------------------------------------------------
+
+    IoHandle init() noexcept(false) {
+        const ::HANDLE port = ::CreateIoCompletionPort(
+            INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        if (port == nullptr) [[unlikely]] {
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: CreateIoCompletionPort failed");
+        }
+
+        auto *data = new IoHandleData();
+        data->m_port = port;
+        return static_cast<IoHandle>(data);
+    }
+
+    void deinit(const IoHandle handle) noexcept {
+        auto *data = static_cast<IoHandleData *>(handle);
+        if (data != nullptr) {
+            ::CloseHandle(data->m_port);
+            delete data;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // file operations
+    // ------------------------------------------------------------------
+
+    FileHandle openFile(const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
+        const auto *io_data = static_cast<const IoHandleData *>(io);
+        if (io_data == nullptr) [[unlikely]] {
+            throw std::invalid_argument("IoPort: invalid IoHandle");
+        }
+
+        ::DWORD access = 0;
+        ::DWORD disposition = OPEN_EXISTING;
+        ::DWORD share = FILE_SHARE_READ;
+
+        if (flags.m_bits & OpenFlags::read) {
+            access |= GENERIC_READ;
+        }
+        if (flags.m_bits & OpenFlags::write) {
+            access |= GENERIC_WRITE;
+            share = FILE_SHARE_READ; // exclusive write
+        }
+        if ((flags.m_bits & (OpenFlags::create | OpenFlags::write)) == (OpenFlags::create | OpenFlags::write)) {
+            disposition = OPEN_ALWAYS;
+        }
+        if (flags.m_bits & OpenFlags::truncate) {
+            disposition = CREATE_ALWAYS;
+        }
+
+        const ::HANDLE file = ::CreateFileW(
+            path.c_str(),
+            access,
+            share,
+            nullptr,
+            disposition,
+            FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr);
+
+        if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: CreateFileW failed");
+        }
+
+        // associate with the completion port
+        // ULONG_PTR cast: required by IOCP API for completion key — safe because both are pointer-sized
+        // (verified by static_assert above).
+        if (::CreateIoCompletionPort(file, io_data->m_port,
+                                     reinterpret_cast<::ULONG_PTR>(file), 0) == nullptr) [[unlikely]] {
+            ::CloseHandle(file);
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: CreateIoCompletionPort (assoc) failed");
+        }
+
+        ::SetFileCompletionNotificationModes(file, FILE_SKIP_SET_EVENT_ON_HANDLE);
+
+        auto *file_data = new FileHandleData();
+        file_data->m_file = file;
+        return static_cast<FileHandle>(file_data);
+    }
+
+    void closeFile(const IoHandle io, const FileHandle file) noexcept {
+        (void)io;
+        auto *data = static_cast<FileHandleData *>(file);
+        if (data != nullptr) {
+            if (data->m_file != INVALID_HANDLE_VALUE) {
+                ::CancelIoEx(data->m_file, nullptr);
+                ::CloseHandle(data->m_file);
+            }
+            delete data;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // submit & drain
+    // ------------------------------------------------------------------
+
+    std::size_t submit(const IoHandle io, const std::span<SubmitEntry> entries) noexcept {
+        auto *io_data = static_cast<IoHandleData *>(io);
+        if (io_data == nullptr) [[unlikely]] {
+            return 0u;
+        }
+
+        std::size_t submitted = 0u;
+        for (auto &entry : entries) {
+            const auto *file_data = static_cast<const FileHandleData *>(entry.m_file);
+            if (file_data == nullptr || file_data->m_file == INVALID_HANDLE_VALUE) {
+                continue;
+            }
+
+            PPR_ASSERT(entry.m_overlapped != nullptr);
+            auto *overlapped = ::new(entry.m_overlapped) OverlappedExt{};
+            overlapped->Offset = static_cast<::DWORD>(entry.m_file_offset & 0xFFFFFFFFu);
+            overlapped->OffsetHigh = static_cast<::DWORD>(entry.m_file_offset >> 32u);
+            overlapped->m_user_data = entry.m_user_data;
+
+            PPR_ASSERT(entry.m_buffer_size <= static_cast<u64>(std::numeric_limits<::DWORD>::max()));
+
+            ::BOOL result = FALSE;
+            if (entry.m_opcode == Opcode::read) {
+                result = ::ReadFile(
+                    file_data->m_file,
+                    entry.m_buffer,
+                    static_cast<::DWORD>(entry.m_buffer_size),
+                    nullptr,
+                    overlapped);
+            } else {
+                result = ::WriteFile(
+                    file_data->m_file,
+                    entry.m_buffer,
+                    static_cast<::DWORD>(entry.m_buffer_size),
+                    nullptr,
+                    overlapped);
+            }
+
+            if (not result) {
+                const ::DWORD err = ::GetLastError();
+                if (err != ERROR_IO_PENDING) [[unlikely]] {
+                    // operation failed synchronously — enqueue a synthetic completion
+                    // ULONG_PTR cast: required by IOCP API for completion key — safe per static_assert above.
+                    ::PostQueuedCompletionStatus(
+                        io_data->m_port,
+                        0,
+                        reinterpret_cast<::ULONG_PTR>(file_data->m_file),
+                        overlapped);
+                }
+            }
+            ++submitted;
+        }
+
+        return submitted;
+    }
+
+    static std::size_t drainCompletions_(const IoHandle io, const std::span<CompletionEntry> entries,
+                                         const ::DWORD timeout_ms) noexcept {
+        auto *io_data = static_cast<IoHandleData *>(io);
+        if (io_data == nullptr) [[unlikely]] {
+            return 0u;
+        }
+
+        if (entries.empty()) {
+            return 0u;
+        }
+
+        ::OVERLAPPED_ENTRY ov_entries[64];
+        const ::ULONG max_count = static_cast<::ULONG>(
+            std::min(entries.size(), static_cast<std::size_t>(64u)));
+        ::ULONG count = 0u;
+
+        const ::BOOL result = ::GetQueuedCompletionStatusEx(
+            io_data->m_port,
+            ov_entries,
+            max_count,
+            &count,
+            timeout_ms,
+            FALSE);
+
+        if (not result) [[unlikely]] {
+            return 0u;
+        }
+
+        for (::ULONG i = 0u; i < count; ++i) {
+            auto *ext = static_cast<OverlappedExt *>(ov_entries[i].lpOverlapped);
+            CompletionEntry &ce = entries[static_cast<std::size_t>(i)];
+            ce.m_user_data = ext != nullptr ? ext->m_user_data : nullptr;
+            ce.m_bytes_transferred = ov_entries[i].dwNumberOfBytesTransferred;
+
+            if (ext != nullptr && ov_entries[i].lpCompletionKey != 0u) {
+                // ULONG_PTR → HANDLE: reverse of the association cast above — safe per static_assert.
+                const ::HANDLE file_handle = reinterpret_cast<::HANDLE>(ov_entries[i].lpCompletionKey);
+                ::DWORD dummy;
+                if (!::GetOverlappedResult(file_handle, ext, &dummy, FALSE)) {
+                    ce.m_error = std::error_code(::GetLastError(), std::system_category());
+                }
+            } else {
+                ce.m_error = {};
+            }
+        }
+
+        return static_cast<std::size_t>(count);
+    }
+
+    std::size_t poll(const IoHandle io, const std::span<CompletionEntry> entries) noexcept {
+        return drainCompletions_(io, entries, 0u);
+    }
+
+    std::size_t wait(const IoHandle io, const std::span<CompletionEntry> entries) noexcept {
+        return drainCompletions_(io, entries, INFINITE);
+    }
+
+    void wake(const IoHandle io) noexcept {
+        auto *io_data = static_cast<IoHandleData *>(io);
+        if (io_data != nullptr) {
+            ::PostQueuedCompletionStatus(io_data->m_port, 0, 0, nullptr);
+        }
+    }
+
+    void cancelIo(const FileHandle file, void *const overlapped) noexcept {
+        const auto *data = static_cast<const FileHandleData *>(file);
+        if (data != nullptr && data->m_file != INVALID_HANDLE_VALUE) {
+            ::CancelIoEx(data->m_file, static_cast<::OVERLAPPED *>(overlapped));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // memory-mapped files
+    // ------------------------------------------------------------------
+
+    MapHandle mapFile([[maybe_unused]] const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
+        ::DWORD desired_access = GENERIC_READ;
+        ::DWORD share = FILE_SHARE_READ;
+        ::DWORD protection = PAGE_READONLY;
+        ::DWORD map_access = FILE_MAP_READ;
+
+        if (flags.m_bits & OpenFlags::write) {
+            desired_access = GENERIC_READ | GENERIC_WRITE;
+            protection = PAGE_READWRITE;
+            map_access = FILE_MAP_READ | FILE_MAP_WRITE;
+            share = FILE_SHARE_READ;
+        }
+
+        const ::HANDLE file = ::CreateFileW(
+            path.c_str(),
+            desired_access,
+            share,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+
+        if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: mapFile CreateFileW failed");
+        }
+
+        PPR_DEFER { ::CloseHandle(file); };
+
+        ::LARGE_INTEGER file_size{};
+        if (not::GetFileSizeEx(file, &file_size)) [[unlikely]] {
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: mapFile GetFileSizeEx failed");
+        }
+
+        if (file_size.QuadPart == 0) [[unlikely]] {
+            // empty file — still create a valid mapping
+            auto *md = new MapHandleData();
+            md->m_data = nullptr;
+            md->m_size = 0;
+            return static_cast<MapHandle>(md);
+        }
+
+        const ::HANDLE mapping = ::CreateFileMappingW(
+            file,
+            nullptr,
+            protection,
+            static_cast<::DWORD>(file_size.QuadPart >> 32u),
+            static_cast<::DWORD>(file_size.QuadPart & 0xFFFFFFFFu),
+            nullptr);
+
+        if (mapping == nullptr) [[unlikely]] {
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: mapFile CreateFileMappingW failed");
+        }
+
+        void *const data = ::MapViewOfFile(
+            mapping,
+            map_access,
+            0, 0,
+            static_cast<std::size_t>(file_size.QuadPart));
+
+        if (data == nullptr) [[unlikely]] {
+            ::CloseHandle(mapping);
+            throw std::system_error(
+                std::error_code(::GetLastError(), std::system_category()),
+                "IoPort: mapFile MapViewOfFile failed");
+        }
+
+        auto *md = new MapHandleData();
+        md->m_mapping = mapping;
+        md->m_data = data;
+        md->m_size = static_cast<std::size_t>(file_size.QuadPart);
+        return static_cast<MapHandle>(md);
+    }
+
+    void unmapFile([[maybe_unused]] const IoHandle io, const MapHandle map) noexcept {
+        auto *data = static_cast<MapHandleData *>(map);
+        if (data != nullptr) {
+            if (data->m_data != nullptr) {
+                ::UnmapViewOfFile(data->m_data);
+            }
+            if (data->m_mapping != nullptr) {
+                ::CloseHandle(data->m_mapping);
+            }
+            delete data;
+        }
+    }
+
+    void *mapData(const MapHandle map) noexcept {
+        const auto *data = static_cast<const MapHandleData *>(map);
+        return data != nullptr ? data->m_data : nullptr;
+    }
+
+    std::size_t mapSize(const MapHandle map) noexcept {
+        const auto *data = static_cast<const MapHandleData *>(map);
+        return data != nullptr ? data->m_size : 0u;
+    }
+}
+
 namespace pP {
     std::mt19937_64 randomNumberGenerator() noexcept {
         std::array<std::uint32_t, 8> seed_data{};

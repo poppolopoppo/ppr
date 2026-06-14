@@ -206,6 +206,51 @@ namespace pP::hal {
     }
 }
 
+namespace pP::hal::io {
+    // ------------------------------------------------------------------
+    // asynchronous I/O
+    // ------------------------------------------------------------------
+    // Stub: no async I/O primitives available on this platform.
+    // All operations throw std::system_error(operation_not_supported).
+    // ------------------------------------------------------------------
+
+    struct IoHandleData { int dummy{}; };
+    struct FileHandleData { int dummy{}; };
+    struct MapHandleData { void *m_data{}; std::size_t m_size{}; };
+
+    IoHandle init() noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "IoPort not supported on this platform");
+    }
+
+    void deinit(const IoHandle) noexcept {}
+
+    FileHandle openFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "IoPort not supported on this platform");
+    }
+
+    void closeFile(const IoHandle, const FileHandle) noexcept {}
+
+    std::size_t submit(const IoHandle, const std::span<SubmitEntry>) noexcept { return 0u; }
+    std::size_t poll(const IoHandle, const std::span<CompletionEntry>) noexcept { return 0u; }
+    std::size_t wait(const IoHandle, const std::span<CompletionEntry>) noexcept { return 0u; }
+    void wake(const IoHandle) noexcept {}
+
+    MapHandle mapFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "IoPort: memory-mapped files not supported on this platform");
+    }
+
+    void unmapFile(const IoHandle, const MapHandle) noexcept {}
+
+    void *mapData(const MapHandle) noexcept { return nullptr; }
+    std::size_t mapSize(const MapHandle) noexcept { return 0u; }
+}
+
 namespace pP::hal::process {
     [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
         throw std::runtime_error("currentExecutablePath not implemented for generic platform");
