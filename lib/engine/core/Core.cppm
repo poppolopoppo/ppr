@@ -11,6 +11,7 @@ export import :context;
 export import :enums;
 export import :event;
 export import :function_ref;
+export import :io_port;
 export import :hal;
 export import :hash_map;
 export import :memory;
