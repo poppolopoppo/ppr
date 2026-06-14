@@ -72,6 +72,13 @@ export namespace pP::tests {
             const auto expr = ((Flags::all ^ Flags::c) & Flags::a) | Flags::b;
             PPR_ASSERT(enumOrd(expr) == enumOrd(Flags::ab));
         };
+
+        PPR_UNIT_TEST(open_flags_or) {
+            constexpr auto read_flag = hal::io::OpenFlags{hal::io::OpenFlags::read};
+            constexpr auto write_flag = hal::io::OpenFlags{hal::io::OpenFlags::write};
+            constexpr auto rw = read_flag | write_flag;
+            PPR_ASSERT(rw == hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
+        };
     }
 
     PPR_UNIT_TEST(enums) {
@@ -81,5 +88,6 @@ export namespace pP::tests {
         _.recurse(Enums::flags_or);
         _.recurse(Enums::flags_xor);
         _.recurse(Enums::flags_mixed_operations);
+        _.recurse(Enums::open_flags_or);
     };
 }
