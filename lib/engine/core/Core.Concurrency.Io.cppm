@@ -1,14 +1,18 @@
 module;
 #include "pP/Macros.h"
-export module engine.core:io_port;
+export module engine.core:io;
 
 import :assert;
+import :containers;
 import :event;
 import :hal;
 
 import std;
 
 export namespace pP {
+
+    class IoPort;
+
     // ------------------------------------------------------------------
     // IoFile — RAII file handle for async I/O (move-only)
     // ------------------------------------------------------------------
@@ -66,72 +70,7 @@ export namespace pP {
     };
 
     // ------------------------------------------------------------------
-    // MappedFile — memory-mapped file (RAII move-only, no IEvent)
-    // ------------------------------------------------------------------
-
-    class MappedFile {
-        hal::io::IoHandle  m_port_handle{nullptr};
-        hal::io::MapHandle m_map{nullptr};
-
-    public:
-        MappedFile() noexcept = default;
-
-        MappedFile(MappedFile &&other) noexcept
-            : m_port_handle(std::exchange(other.m_port_handle, nullptr)),
-              m_map(std::exchange(other.m_map, nullptr)) {
-        }
-
-        MappedFile &operator=(MappedFile &&other) noexcept {
-            if (this != &other) {
-                unmap_();
-                m_port_handle = std::exchange(other.m_port_handle, nullptr);
-                m_map = std::exchange(other.m_map, nullptr);
-            }
-            return *this;
-        }
-
-        MappedFile(const MappedFile &) = delete;
-        MappedFile &operator=(const MappedFile &) = delete;
-
-        ~MappedFile() noexcept {
-            unmap_();
-        }
-
-        [[nodiscard]] std::span<const std::byte> span() const noexcept {
-            if (m_map == nullptr) {
-                return {};
-            }
-            return std::span(
-                static_cast<const std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map));
-        }
-
-        [[nodiscard]] std::size_t size() const noexcept {
-            return m_map != nullptr ? hal::io::mapSize(m_map) : 0u;
-        }
-
-        [[nodiscard]] bool isValid() const noexcept {
-            return m_map != nullptr;
-        }
-
-    private:
-        friend class IoPort;
-
-        MappedFile(hal::io::IoHandle port, hal::io::MapHandle map) noexcept
-            : m_port_handle(port), m_map(map) {
-        }
-
-        void unmap_() noexcept {
-            if (m_map != nullptr) {
-                hal::io::unmapFile(m_port_handle, m_map);
-                m_map = nullptr;
-                m_port_handle = nullptr;
-            }
-        }
-    };
-
-    // ------------------------------------------------------------------
-    // IoRequest — per-operation async I/O event
+    // IoRequest — per-operation async I/O event (IEvent, move-disallowed)
     // ------------------------------------------------------------------
 
     class IoRequest final : public IEvent {
@@ -143,7 +82,7 @@ export namespace pP {
         PulseEvent      m_completed{};
         u64             m_bytes{};
         std::error_code m_error{};
-        std::atomic<u8> m_state{0}; // 0=idle, 1=inflight, 2=done
+        std::atomic<u8> m_state{0};
         hal::io::FileHandle m_active_file{nullptr};
         alignas(max_align_v) std::byte m_overlapped_storage[kOverlappedSize]{};
 
@@ -157,7 +96,7 @@ export namespace pP {
         }
 
     public:
-        IoRequest() noexcept;
+        IoRequest() noexcept = default;
 
         IoRequest(const IoRequest &) = delete;
         IoRequest &operator=(const IoRequest &) = delete;
@@ -171,7 +110,6 @@ export namespace pP {
             PPR_VERIFY(not isPending());
         }
 
-        // IEvent interface
         TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
             return m_completed.subscribeEvent(signal);
         }
@@ -207,14 +145,11 @@ export namespace pP {
     };
 
     // ------------------------------------------------------------------
-    // IoPort — async I/O driver with background completion thread
+    // IoPort — async I/O driver (no background thread, explicit drain)
     // ------------------------------------------------------------------
 
     class IoPort final {
         hal::io::IoHandle m_handle{nullptr};
-        std::jthread      m_poller;
-
-        static void pollerLoop_(std::stop_token stop, IoPort &self) noexcept;
 
     public:
         IoPort();
@@ -222,25 +157,28 @@ export namespace pP {
 
         IoPort(const IoPort &) = delete;
         IoPort &operator=(const IoPort &) = delete;
-        IoPort(IoPort &&) = delete;
-        IoPort &operator=(IoPort &&) = delete;
+        IoPort(IoPort &&) noexcept = default;
+        IoPort &operator=(IoPort &&) noexcept = default;
 
-        // file operations
         [[nodiscard]] IoFile open(const std::filesystem::path &path,
                                    const hal::io::OpenFlags flags = {}) noexcept(false);
 
-        // async I/O submission
         void read(IoRequest &req, const IoFile &file,
                   std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
         void write(IoRequest &req, const IoFile &file,
                    std::span<const std::byte> buffer, const u64 file_offset) noexcept;
 
-        // memory-mapped file (synchronous)
-        [[nodiscard]] MappedFile map(const std::filesystem::path &path,
-                                      const hal::io::OpenFlags flags = hal::io::OpenFlags::read) noexcept(false);
+        [[nodiscard]] std::size_t pollCompletions() noexcept;
+        [[nodiscard]] std::size_t waitForCompletions() noexcept;
     };
 
     template<> struct details::relocatable<IoFile> : std::true_type {};
-    template<> struct details::relocatable<MappedFile> : std::true_type {};
+
+}
+
+export namespace pP::io {
+
+    [[nodiscard]] IoPort createPort();
+
 }

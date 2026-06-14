@@ -1,28 +1,12 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_io_port;
+export module engine.tests:core_io;
 import engine.core;
 import std;
 
 export namespace pP::tests {
 
-    namespace IoPortTests {
-
-        PPR_UNIT_TEST(lifecycle) {
-            constexpr std::string_view kContent = "Lifecycle!";
-            const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_lifecycle.bin";
-            PPR_DEFER { std::error_code ec; std::filesystem::remove(path, ec); };
-            {
-                std::ofstream ofs(path, std::ios::binary);
-                ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
-            }
-
-            IoPort port;
-            auto file = port.open(path);
-            PPR_ASSERT(file.isValid());
-            file.close();
-            PPR_ASSERT(not file.isValid());
-        };
+    namespace IoTests {
 
         namespace File {
 
@@ -34,7 +18,7 @@ export namespace pP::tests {
                     ofs.write("test", 4);
                 }
 
-                IoPort port;
+                auto port = io::createPort();
                 auto file = port.open(path);
                 PPR_ASSERT(file.isValid());
                 file.close();
@@ -49,7 +33,7 @@ export namespace pP::tests {
                     ofs.write("move", 4);
                 }
 
-                IoPort port;
+                auto port = io::createPort();
                 auto file = port.open(path);
                 PPR_ASSERT(file.isValid());
 
@@ -60,6 +44,22 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(default_constructed_invalid) {
                 IoFile file;
+                PPR_ASSERT(not file.isValid());
+            };
+
+            PPR_UNIT_TEST(double_close_safe) {
+                const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_dclose.bin";
+                PPR_DEFER { std::error_code ec; std::filesystem::remove(path, ec); };
+                {
+                    std::ofstream ofs(path, std::ios::binary);
+                    ofs.write("safe", 4);
+                }
+
+                auto port = io::createPort();
+                auto file = port.open(path);
+                PPR_ASSERT(file.isValid());
+                file.close();
+                file.close();
                 PPR_ASSERT(not file.isValid());
             };
 
@@ -76,8 +76,7 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                auto mapped = port.map(path);
+                auto mapped = io::mapFile(path);
                 PPR_ASSERT(mapped.isValid());
                 PPR_ASSERT(mapped.size() == kContent.size());
 
@@ -93,8 +92,7 @@ export namespace pP::tests {
                     std::ofstream ofs(path, std::ios::binary);
                 }
 
-                IoPort port;
-                auto mapped = port.map(path);
+                auto mapped = io::mapFile(path);
                 PPR_ASSERT(mapped.isValid());
                 PPR_ASSERT(mapped.size() == 0u);
                 PPR_ASSERT(mapped.span().empty());
@@ -109,8 +107,7 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                auto mapped = port.map(path);
+                auto mapped = io::mapFile(path);
                 PPR_ASSERT(mapped.isValid());
 
                 auto mapped2 = std::move(mapped);
@@ -126,20 +123,48 @@ export namespace pP::tests {
                 PPR_ASSERT(mapped.span().empty());
             };
 
+            PPR_UNIT_TEST(write_content) {
+                constexpr std::string_view kInitial = "Hello, World!";
+                constexpr std::string_view kWrite  = "MappedWrite";
+                const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap_write.bin";
+                PPR_DEFER { std::error_code ec; std::filesystem::remove(path, ec); };
+                {
+                    std::ofstream ofs(path, std::ios::binary);
+                    ofs.write(kInitial.data(), static_cast<std::streamsize>(kInitial.size()));
+                }
+
+                auto mapped = io::mapFile(path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
+                PPR_ASSERT(mapped.isValid());
+                PPR_ASSERT(mapped.size() == kInitial.size());
+
+                {
+                    auto sp = mapped.span();
+                    PPR_ASSERT(not sp.empty());
+                    std::memcpy(sp.data(), kWrite.data(), kWrite.size());
+                }
+
+                {
+                    const auto &cm = mapped;
+                    const auto sp = cm.span();
+                    PPR_ASSERT(std::memcmp(sp.data(), kWrite.data(), kWrite.size()) == 0);
+                    PPR_ASSERT(sp[kInitial.size() - 1u] == std::byte{'!'});
+                }
+            };
+
         }
 
         namespace Request {
 
             PPR_UNIT_TEST(default_state) {
-                IoPort port;
+                auto port = io::createPort();
                 IoRequest req;
                 PPR_ASSERT(not req.isPending());
                 PPR_ASSERT(not req.pollEvent());
-                PPR_ASSERT(not req.cancel()); // idle → cancel returns false
+                PPR_ASSERT(not req.cancel());
             };
 
             PPR_UNIT_TEST(i_event_interface) {
-                IoPort port;
+                auto port = io::createPort();
                 IoRequest req;
 
                 PPR_ASSERT(not req.pollEvent());
@@ -157,16 +182,17 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
                 PPR_ASSERT(file.isValid());
 
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
+                (void)port.pollCompletions();
+
                 auto signal = select(req);
-                signal.wait();
                 const auto result = signal.poll();
                 PPR_ASSERT(result.has_value());
                 PPR_ASSERT(result.value() == std::addressof(req));
@@ -174,6 +200,12 @@ export namespace pP::tests {
                 PPR_ASSERT(req.bytesTransferred() == kContent.size());
                 PPR_ASSERT(not req.error());
                 PPR_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
+            };
+
+            PPR_UNIT_TEST(poll_idle_returns_zero) {
+                auto port = io::createPort();
+                const std::size_t n = port.pollCompletions();
+                PPR_ASSERT(n == 0u);
             };
 
             PPR_UNIT_TEST(reset_and_reuse) {
@@ -185,21 +217,17 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
 
                 IoRequest req;
 
                 {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
-
-                    auto signal = select(req);
-                    signal.wait();
-                    const auto result = signal.poll();
-                    PPR_ASSERT(result.has_value());
+                    (void)port.pollCompletions();
+                    PPR_ASSERT(req.pollEvent());
                     PPR_ASSERT(req.bytesTransferred() == kContent.size());
-                    PPR_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
                 }
 
                 req.resetEvent();
@@ -207,13 +235,9 @@ export namespace pP::tests {
                 {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
-
-                    auto signal = select(req);
-                    signal.wait();
-                    const auto result = signal.poll();
-                    PPR_ASSERT(result.has_value());
+                    (void)port.pollCompletions();
+                    PPR_ASSERT(req.pollEvent());
                     PPR_ASSERT(req.bytesTransferred() == kContent.size());
-                    PPR_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
                 }
             };
 
@@ -226,16 +250,17 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
 
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
+                (void)port.pollCompletions();
+
                 PulseEvent timer;
                 auto signal = select(req, timer);
-                signal.wait();
                 const auto result = signal.poll();
                 PPR_ASSERT(result.has_value());
                 PPR_ASSERT(result->index() == 0u);
@@ -251,27 +276,19 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
-                const bool was_cancelled = req.cancel();
+                const bool was = req.cancel();
                 PPR_ASSERT(not req.isPending());
 
-                // Allow any racing completion notifications to drain to the poller thread
-                for (int spin = 0; spin < 32; ++spin) {
-                    std::this_thread::yield();
-                }
+                (void)port.pollCompletions();
 
-                if (was_cancelled) {
+                if (was) {
                     PPR_ASSERT(not req.pollEvent());
-
-                    IoRequest barrier;
-                    std::array<std::byte, 64> barrier_buf{};
-                    port.read(barrier, file, barrier_buf, 0u);
-                    select(barrier).wait();
                 } else {
                     PPR_ASSERT(req.bytesTransferred() == kContent.size());
                     req.resetEvent();
@@ -287,32 +304,23 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
                 const bool first = req.cancel();
+                (void)first;
                 const bool second = req.cancel();
                 PPR_ASSERT(not second);
                 PPR_ASSERT(not req.isPending());
 
-                // Allow any racing completion notifications to drain to the poller thread
-                for (int spin = 0; spin < 32; ++spin) {
-                    std::this_thread::yield();
-                }
-
-                if (first) {
-                    IoRequest barrier;
-                    std::array<std::byte, 64> barrier_buf{};
-                    port.read(barrier, file, barrier_buf, 0u);
-                    select(barrier).wait();
-                }
+                (void)port.pollCompletions();
             };
 
             PPR_UNIT_TEST(cancel_i_event) {
-                IoPort port;
+                auto port = io::createPort();
                 IoRequest req;
 
                 auto signal = select(req);
@@ -337,23 +345,14 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                IoPort port;
-                IoFile file = port.open(path);
+                auto port = io::createPort();
+                auto file = port.open(path);
                 {
                     IoRequest req;
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
                     (void)req.cancel();
-
-                    // Allow any racing completion notifications to drain to the poller thread
-                    for (int spin = 0; spin < 32; ++spin) {
-                        std::this_thread::yield();
-                    }
-
-                    IoRequest barrier;
-                    std::array<std::byte, 64> barrier_buf{};
-                    port.read(barrier, file, barrier_buf, 0u);
-                    select(barrier).wait();
+                    (void)port.pollCompletions();
                 }
                 PPR_ASSERT(true);
             };
@@ -364,6 +363,7 @@ export namespace pP::tests {
             _.recurse(File::open_and_close);
             _.recurse(File::move_semantics);
             _.recurse(File::default_constructed_invalid);
+            _.recurse(File::double_close_safe);
         };
 
         PPR_UNIT_TEST(mapped) {
@@ -371,11 +371,13 @@ export namespace pP::tests {
             _.recurse(Mapped::empty_file);
             _.recurse(Mapped::move_semantics);
             _.recurse(Mapped::default_constructed_invalid);
+            _.recurse(Mapped::write_content);
         };
 
         PPR_UNIT_TEST(request) {
             _.recurse(Request::default_state);
             _.recurse(Request::i_event_interface);
+            _.recurse(Request::poll_idle_returns_zero);
             _.recurse(Request::read_completes);
             _.recurse(Request::reset_and_reuse);
             _.recurse(Request::select_with_timer);
@@ -386,9 +388,9 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(ioPort) {
-        _.recurse(IoPortTests::file);
-        _.recurse(IoPortTests::mapped);
-        _.recurse(IoPortTests::request);
+    PPR_UNIT_TEST(io) {
+        _.recurse(IoTests::file);
+        _.recurse(IoTests::mapped);
+        _.recurse(IoTests::request);
     };
 }

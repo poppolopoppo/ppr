@@ -88,7 +88,8 @@ auto RawChannel::flush() noexcept -> std::expected<void, EError> {
 
 auto RawChannel::close() noexcept -> std::expected<void, EError> {
     if (int expected_status = status_opened;
-        not m_status.compare_exchange_strong(expected_status, status_closing)) {
+        not m_status.compare_exchange_strong(expected_status, status_closing,
+                                              std::memory_order_acq_rel, std::memory_order_relaxed)) {
         return std::unexpected(error_closed);
     }
 
@@ -230,7 +231,7 @@ auto RawChannel::consumerAcquire(const EPolling policy) noexcept
             m_read.notify_all();
 
             if (f & RecordHeader::flag_close) {
-                m_status.store(status_closed);
+                m_status.store(status_closed, std::memory_order_release);
                 return std::unexpected(error_closed);
             }
             continue;

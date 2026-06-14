@@ -5,7 +5,7 @@ module engine.core;
 import :assert;
 import :event;
 import :hal;
-import :io_port;
+import :io;
 
 import std;
 
@@ -16,30 +16,11 @@ namespace pP {
 // ------------------------------------------------------------------
 
 IoPort::IoPort()
-    : m_handle(hal::io::init()),
-      m_poller(&IoPort::pollerLoop_, std::ref(*this)) {
+    : m_handle(hal::io::init()) {
 }
 
 IoPort::~IoPort() noexcept {
-    m_poller.request_stop();
-    hal::io::wake(m_handle);
-    m_poller.join();
     hal::io::deinit(m_handle);
-}
-
-void IoPort::pollerLoop_(std::stop_token stop, IoPort &self) noexcept {
-    while (not stop.stop_requested()) {
-        hal::io::CompletionEntry entries[64];
-        const std::size_t n = hal::io::wait(self.m_handle, entries);
-
-        for (std::size_t i = 0u; i < n; ++i) {
-            auto &ce = entries[i];
-            if (ce.m_user_data != nullptr) [[likely]] {
-                auto *req = static_cast<IoRequest *>(ce.m_user_data);
-                req->complete_(ce.m_bytes_transferred, ce.m_error);
-            }
-        }
-    }
 }
 
 IoFile IoPort::open(const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept(false) {
@@ -90,15 +71,35 @@ void IoPort::write(IoRequest &req, const IoFile &file,
     PPR_ASSERT(submitted == 1u);
 }
 
-MappedFile IoPort::map(const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept(false) {
-    return MappedFile(m_handle, hal::io::mapFile(m_handle, path, flags));
+std::size_t IoPort::pollCompletions() noexcept {
+    hal::io::CompletionEntry entries[64];
+    const std::size_t n = hal::io::poll(m_handle, entries);
+    for (std::size_t i = 0u; i < n; ++i) {
+        auto &ce = entries[i];
+        if (ce.m_user_data != nullptr) [[likely]] {
+            auto *req = static_cast<IoRequest *>(ce.m_user_data);
+            req->complete_(ce.m_bytes_transferred, ce.m_error);
+        }
+    }
+    return n;
+}
+
+std::size_t IoPort::waitForCompletions() noexcept {
+    hal::io::CompletionEntry entries[64];
+    const std::size_t n = hal::io::wait(m_handle, entries);
+    for (std::size_t i = 0u; i < n; ++i) {
+        auto &ce = entries[i];
+        if (ce.m_user_data != nullptr) [[likely]] {
+            auto *req = static_cast<IoRequest *>(ce.m_user_data);
+            req->complete_(ce.m_bytes_transferred, ce.m_error);
+        }
+    }
+    return n;
 }
 
 // ------------------------------------------------------------------
 // IoRequest
 // ------------------------------------------------------------------
-
-IoRequest::IoRequest() noexcept = default;
 
 bool IoRequest::cancel() noexcept {
     u8 expected = 1u;
@@ -114,3 +115,11 @@ bool IoRequest::cancel() noexcept {
 }
 
 } // namespace pP
+
+namespace pP::io {
+
+IoPort createPort() {
+    return IoPort();
+}
+
+} // namespace pP::io
