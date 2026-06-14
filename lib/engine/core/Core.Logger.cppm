@@ -79,7 +79,11 @@ export namespace pP {
         static void log(const Emitter &emitter, const string_literal message, const opaque::Dict params = {}) noexcept;
 
         class Handler {
+#ifdef PPR_LOG_BUFFER_SIZE
+            static constexpr std::size_t buffer_size_v = PPR_LOG_BUFFER_SIZE;
+#else
             static constexpr std::size_t buffer_size_v = 2ull << 20u;
+#endif
 
             void defaultWriter_(const Entry &entry) const noexcept;
 
