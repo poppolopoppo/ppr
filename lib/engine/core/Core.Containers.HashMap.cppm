@@ -117,6 +117,9 @@ export namespace pP {
             hashmap_pointer m_hash_table{nullptr};
 
             u32 m_slot{umax_v}; // umax_v means end()
+#if PPR_ENABLE_DEBUG
+            u32 m_revision{0u};
+#endif
 
         public:
             using pointer = ArrowProxy_;
@@ -132,16 +135,19 @@ export namespace pP {
             constexpr HashMapIterator &operator =(HashMapIterator &&) noexcept = default;
 
             constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot_maybe_invalid) noexcept
-                : m_hash_table(p_map), m_slot(slot_maybe_invalid) {
+                : m_hash_table(p_map), m_slot(slot_maybe_invalid)
+                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
                 initFromIndex_();
             }
 
             constexpr HashMapIterator(std::in_place_t, hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot) noexcept
-                : m_hash_table(p_map), m_slot(slot) {
+                : m_hash_table(p_map), m_slot(slot)
+                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
             }
 
             constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const UnsignedMax end) noexcept
-                : m_hash_table(p_map), m_slot(end) {
+                : m_hash_table(p_map), m_slot(end)
+                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
             }
 
             using non_const_iterator = HashMapIterator<
@@ -151,17 +157,24 @@ export namespace pP {
 
             explicit constexpr HashMapIterator(const non_const_iterator &other) noexcept
                 requires std::is_const_v<ValueT>
-                : m_hash_table(other.m_hash_table), m_slot(other.m_slot) {
+                : m_hash_table(other.m_hash_table), m_slot(other.m_slot)
+                PPR_EXPR_IF_DEBUG(, m_revision(other.m_revision)) {
             }
 
             constexpr HashMapIterator &operator =(const non_const_iterator &other) noexcept
                 requires std::is_const_v<ValueT> {
                 m_hash_table = other.m_hash_table;
                 m_slot = other.m_slot;
+                PPR_EXPR_IF_DEBUG(m_revision = other.m_revision);
                 return *this;
             }
 
             [[nodiscard]] constexpr bool isValid() const noexcept {
+                PPR_EXPR_IF_DEBUG(
+                    if (m_hash_table != nullptr) {
+                        PPR_ASSERT(m_revision == m_hash_table->m_revision);
+                    }
+                );
                 return m_hash_table != nullptr &&
                        m_slot < m_hash_table->capacity();
             }
@@ -171,6 +184,7 @@ export namespace pP {
             // ------------------------------------------------------------
             [[nodiscard]] reference operator*() const noexcept {
                 PPR_ASSERT(isValid());
+                PPR_EXPR_IF_DEBUG(PPR_ASSERT(m_revision == m_hash_table->m_revision));
                 return reference(m_hash_table->m_values[m_slot]);
             }
 
@@ -183,6 +197,7 @@ export namespace pP {
             // ------------------------------------------------------------
             constexpr HashMapIterator &operator++() noexcept {
                 PPR_ASSERT(isValid());
+                PPR_EXPR_IF_DEBUG(PPR_ASSERT(m_revision == m_hash_table->m_revision));
 
                 for (;;) {
                     if (++m_slot == m_hash_table->m_capacity_pow2_m1 + 1u) [[unlikely]] {
@@ -208,6 +223,7 @@ export namespace pP {
             // ------------------------------------------------------------
             constexpr HashMapIterator &operator--() noexcept {
                 PPR_ASSERT(isValid());
+                PPR_EXPR_IF_DEBUG(PPR_ASSERT(m_revision == m_hash_table->m_revision));
 
                 for (;;) {
                     if (m_slot-- == 0u) [[unlikely]] {
@@ -411,6 +427,9 @@ export namespace pP {
 
         u32 m_capacity_pow2_m1{0u};
         u32 m_size{0u};
+#if PPR_ENABLE_DEBUG
+        u32 m_revision{0u};
+#endif
 
     public:
         constexpr HashMap() noexcept(std::is_nothrow_default_constructible_v<allocator_type>)
@@ -755,6 +774,7 @@ export namespace pP {
             m_capacity_pow2_m1 = checked_cast<u32>(new_capacity - 1u);
             m_metadata = allocator_type::template allocate<Metadata>(new_capacity);
             m_values = allocator_type::template allocate<value_type>(new_capacity);
+            PPR_EXPR_IF_DEBUG(++m_revision);
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
             mem::poisonReserved(m_values, new_capacity);
@@ -782,6 +802,7 @@ export namespace pP {
             m_capacity_pow2_m1 = checked_cast<u32>(new_capacity - 1u);
             m_metadata = allocator_type::template allocate<Metadata>(new_capacity);
             m_values = allocator_type::template allocate<value_type>(new_capacity);
+            PPR_EXPR_IF_DEBUG(++m_revision);
             m_size = 0u;
 
             std::memset(m_metadata, 0u, sizeof(Metadata) * new_capacity);
@@ -799,6 +820,7 @@ export namespace pP {
         }
 
         void clear() noexcept(std::is_nothrow_destructible_v<value_type>) {
+            PPR_EXPR_IF_DEBUG(++m_revision);
             if (m_size == 0u) [[unlikely]] {
                 return;
             }
@@ -850,6 +872,9 @@ export namespace pP {
         constexpr void spliceAssumeEmpty(HashMap &src) noexcept {
             PPR_ASSERT(m_values == nullptr && m_metadata == nullptr);
 
+            PPR_EXPR_IF_DEBUG(++m_revision);
+            PPR_EXPR_IF_DEBUG(++src.m_revision);
+
             m_values = src.m_values;
             m_metadata = src.m_metadata;
             m_capacity_pow2_m1 = src.m_capacity_pow2_m1;
@@ -870,6 +895,7 @@ export namespace pP {
             swap(lhs.m_metadata, rhs.m_metadata);
             swap(lhs.m_capacity_pow2_m1, rhs.m_capacity_pow2_m1);
             swap(lhs.m_size, rhs.m_size);
+            PPR_EXPR_IF_DEBUG(swap(lhs.m_revision, rhs.m_revision));
         }
 
         template<details::TEqualTo<KeyT> OtherEqualToT,

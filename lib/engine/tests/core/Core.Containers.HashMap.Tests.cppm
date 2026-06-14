@@ -98,6 +98,14 @@ export namespace pP::tests {
             const hash_t hc = hashValue(b);
             PPR_ASSERT(hb != hc);
         };
+
+        PPR_UNIT_TEST(stale_iterator_after_reserve_crashes, UnitTest::expect_crash) {
+            pP::HashMap<int, int> m{{1, 10}};
+            auto it = m.find(1);
+            PPR_ASSERT(it != m.end());
+            m.reserve(64u);
+            [[maybe_unused]] auto val = *it;
+        };
     }
 
     PPR_UNIT_TEST(hashMap) {
@@ -111,5 +119,8 @@ export namespace pP::tests {
         _.recurse(HashMap::find_after_eviction);
         _.recurse(HashMap::unordered_equality);
         _.recurse(HashMap::unordered_hash_value);
+        if constexpr (PPR_ENABLE_DEBUG) {
+            _.recurse(HashMap::stale_iterator_after_reserve_crashes);
+        }
     };
 }
