@@ -210,7 +210,7 @@ export namespace pP {
     [[nodiscard]] std::mt19937_64 randomNumberGenerator() noexcept;
 
     // ------------------------------------------------------------------
-    // defer block mock syntax, because it's a better pattern than RAII (Zig <3)
+    // defer block
     // ------------------------------------------------------------------
 
     template<typename CallbackT> requires std::is_invocable_v<CallbackT>
@@ -461,7 +461,7 @@ export namespace pP {
                 }
 
                 [[nodiscard]] friend constexpr OpenFlags operator|(const OpenFlags a, const OpenFlags b) noexcept {
-                    return a.m_bits | b.m_bits;
+                    return OpenFlags(a.m_bits | b.m_bits);
                 }
 
                 constexpr OpenFlags &operator|=(const OpenFlags other) noexcept {
@@ -506,8 +506,8 @@ export namespace pP {
             void cancelIo(FileHandle file, void *overlapped) noexcept;
 
             // memory-mapped files
-            [[nodiscard]] MapHandle mapFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(false);
-            void unmapFile(IoHandle io, MapHandle map) noexcept;
+            [[nodiscard]] MapHandle mapFile(const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+            void unmapFile(MapHandle map) noexcept;
             [[nodiscard]] void *mapData(MapHandle map) noexcept;
             [[nodiscard]] std::size_t mapSize(MapHandle map) noexcept;
         }

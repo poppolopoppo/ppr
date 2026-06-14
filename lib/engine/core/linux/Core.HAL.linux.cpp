@@ -414,7 +414,7 @@ namespace pP::hal::io {
     IoHandle init() noexcept(false) {
         throw std::system_error(
             std::make_error_code(std::errc::operation_not_supported),
-            "IoPort: io_uring not yet implemented on Linux");
+            "pP::io: io_uring not yet implemented on Linux");
     }
 
     void deinit(const IoHandle handle) noexcept {
@@ -428,7 +428,7 @@ namespace pP::hal::io {
     FileHandle openFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
         throw std::system_error(
             std::make_error_code(std::errc::operation_not_supported),
-            "IoPort: openFile not yet implemented on Linux");
+            "pP::io: openFile not yet implemented on Linux");
     }
 
     void closeFile(const IoHandle, const FileHandle file) noexcept {
@@ -458,7 +458,7 @@ namespace pP::hal::io {
     // memory-mapped files
     // ------------------------------------------------------------------
 
-    MapHandle mapFile(const IoHandle, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
+    MapHandle mapFile(const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
         int prot = PROT_READ;
         int oflags = O_RDONLY;
 
@@ -469,14 +469,14 @@ namespace pP::hal::io {
 
         const int fd = ::open(path.c_str(), oflags);
         if (fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile open failed");
+            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile open failed");
         }
 
         PPR_DEFER { ::close(fd); };
 
         struct ::stat st {};
         if (::fstat(fd, &st) < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile fstat failed");
+            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile fstat failed");
         }
 
         if (st.st_size == 0) {
@@ -487,7 +487,7 @@ namespace pP::hal::io {
         void *const data = ::mmap(nullptr, static_cast<std::size_t>(st.st_size),
                                   prot, MAP_SHARED, fd, 0);
         if (data == MAP_FAILED) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "IoPort: mapFile mmap failed");
+            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile mmap failed");
         }
 
         auto *md = new MapHandleData();
@@ -496,7 +496,7 @@ namespace pP::hal::io {
         return static_cast<MapHandle>(md);
     }
 
-    void unmapFile(const IoHandle, const MapHandle map) noexcept {
+    void unmapFile(const MapHandle map) noexcept {
         auto *data = static_cast<MapHandleData *>(map);
         if (data != nullptr) {
             if (data->m_data != nullptr) {

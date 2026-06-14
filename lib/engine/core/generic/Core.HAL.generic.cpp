@@ -239,13 +239,13 @@ namespace pP::hal::io {
     std::size_t wait(const IoHandle, const std::span<CompletionEntry>) noexcept { return 0u; }
     void wake(const IoHandle) noexcept {}
 
-    MapHandle mapFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
+    MapHandle mapFile(const std::filesystem::path &, const OpenFlags) noexcept(false) {
         throw std::system_error(
             std::make_error_code(std::errc::operation_not_supported),
-            "IoPort: memory-mapped files not supported on this platform");
+            "pP::io: memory-mapped files not supported on this platform");
     }
 
-    void unmapFile(const IoHandle, const MapHandle) noexcept {}
+    void unmapFile(const MapHandle) noexcept {}
 
     void *mapData(const MapHandle) noexcept { return nullptr; }
     std::size_t mapSize(const MapHandle) noexcept { return 0u; }

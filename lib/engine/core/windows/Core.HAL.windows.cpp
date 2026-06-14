@@ -800,7 +800,7 @@ namespace pP::hal::io {
         if (port == nullptr) [[unlikely]] {
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: CreateIoCompletionPort failed");
+                "pP::io: CreateIoCompletionPort failed");
         }
 
         auto *data = new IoHandleData();
@@ -823,7 +823,7 @@ namespace pP::hal::io {
     FileHandle openFile(const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
         const auto *io_data = static_cast<const IoHandleData *>(io);
         if (io_data == nullptr) [[unlikely]] {
-            throw std::invalid_argument("IoPort: invalid IoHandle");
+            throw std::invalid_argument("pP::io: invalid IoHandle");
         }
 
         ::DWORD access = 0;
@@ -856,7 +856,7 @@ namespace pP::hal::io {
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: CreateFileW failed");
+                "pP::io: CreateFileW failed");
         }
 
         // associate with the completion port
@@ -867,7 +867,7 @@ namespace pP::hal::io {
             ::CloseHandle(file);
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: CreateIoCompletionPort (assoc) failed");
+                "pP::io: CreateIoCompletionPort (assoc) failed");
         }
 
         ::SetFileCompletionNotificationModes(file, FILE_SKIP_SET_EVENT_ON_HANDLE);
@@ -907,6 +907,7 @@ namespace pP::hal::io {
             }
 
             PPR_ASSERT(entry.m_overlapped != nullptr);
+            PPR_ASSERT((std::bit_cast<std::uintptr_t>(entry.m_overlapped) % alignof(OverlappedExt)) == 0u);
             auto *overlapped = ::new(entry.m_overlapped) OverlappedExt{};
             overlapped->Offset = static_cast<::DWORD>(entry.m_file_offset & 0xFFFFFFFFu);
             overlapped->OffsetHigh = static_cast<::DWORD>(entry.m_file_offset >> 32u);
@@ -1024,7 +1025,7 @@ namespace pP::hal::io {
     // memory-mapped files
     // ------------------------------------------------------------------
 
-    MapHandle mapFile([[maybe_unused]] const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
+    MapHandle mapFile(const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
         ::DWORD desired_access = GENERIC_READ;
         ::DWORD share = FILE_SHARE_READ;
         ::DWORD protection = PAGE_READONLY;
@@ -1049,7 +1050,7 @@ namespace pP::hal::io {
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: mapFile CreateFileW failed");
+                "pP::io: mapFile CreateFileW failed");
         }
 
         PPR_DEFER { ::CloseHandle(file); };
@@ -1058,7 +1059,7 @@ namespace pP::hal::io {
         if (not::GetFileSizeEx(file, &file_size)) [[unlikely]] {
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: mapFile GetFileSizeEx failed");
+                "pP::io: mapFile GetFileSizeEx failed");
         }
 
         if (file_size.QuadPart == 0) [[unlikely]] {
@@ -1080,7 +1081,7 @@ namespace pP::hal::io {
         if (mapping == nullptr) [[unlikely]] {
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: mapFile CreateFileMappingW failed");
+                "pP::io: mapFile CreateFileMappingW failed");
         }
 
         void *const data = ::MapViewOfFile(
@@ -1093,7 +1094,7 @@ namespace pP::hal::io {
             ::CloseHandle(mapping);
             throw std::system_error(
                 std::error_code(::GetLastError(), std::system_category()),
-                "IoPort: mapFile MapViewOfFile failed");
+                "pP::io: mapFile MapViewOfFile failed");
         }
 
         auto *md = new MapHandleData();
@@ -1103,7 +1104,7 @@ namespace pP::hal::io {
         return static_cast<MapHandle>(md);
     }
 
-    void unmapFile([[maybe_unused]] const IoHandle io, const MapHandle map) noexcept {
+    void unmapFile(const MapHandle map) noexcept {
         auto *data = static_cast<MapHandleData *>(map);
         if (data != nullptr) {
             if (data->m_data != nullptr) {
