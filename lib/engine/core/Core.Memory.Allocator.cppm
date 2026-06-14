@@ -812,16 +812,17 @@ export namespace pP::mem {
         EStatus_ m_status{status_free_};
 
     public:
-#if PPR_ENABLE_ASSERTIONS
-        constexpr InSitu() noexcept { // NOLINT(*-pro-type-member-init)
+        constexpr InSitu() noexcept {
             poisonReserved(&m_storage);
         }
 
         constexpr ~InSitu() noexcept {
+#if PPR_ENABLE_ASSERTIONS
             PPR_ASSERT(m_status == status_free_ && "In-situ buffer is still in use during destruction");
             m_status = status_used_; // disable use-after-free
-        }
 #endif
+            poisonReserved(&m_storage);
+        }
 
         InSitu(const InSitu &) = delete;
         InSitu &operator=(const InSitu &) = delete;
@@ -1003,10 +1004,10 @@ export namespace pP::mem {
             // release the block and check if the pool needs to be released
             const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
             const page_mask_t block_mask = static_cast<page_mask_t>(1u) << block_index;
-            const page_mask_t prev_mask = atomic_blocks.fetch_or(block_mask);
+            const page_mask_t prev_mask = atomic_blocks.fetch_or(block_mask, std::memory_order_release);
 
             // if pool is fully unused and more than 1 pool is alive, try to release this pool
-            const std::size_t prev_num_free_blocks = m_num_free_blocks.fetch_add(1u);
+            const std::size_t prev_num_free_blocks = m_num_free_blocks.fetch_add(1u, std::memory_order_release);
             if (prev_num_free_blocks > Bitmask<page_mask_t>::bit_count_v &&
                 (prev_mask | block_mask) == Bitmask<page_mask_t>::all_v) [[unlikely]] {
                 deallocateRawReleasePool_(pool_index);
@@ -1049,6 +1050,7 @@ export namespace pP::mem {
             if (m_pools[free_pool_index] == nullptr) {
                 throw std::bad_alloc();
             }
+            poisonReserved(m_pools[free_pool_index], pool_size_v);
 
             constexpr u32 new_block_index = 0u;
             void *const new_block = static_cast<std::byte *>(m_pools[free_pool_index]) + new_block_index * block_size_v;
@@ -1082,6 +1084,7 @@ export namespace pP::mem {
 
             // finally, it's safe to release the memory since the block is completely allocated by us
             PPR_ASSERT(m_blocks[pool_index] == 0u);
+            poisonDestroyed(m_pools[pool_index], pool_size_v);
             BlockAllocatorT::deallocateRaw(m_pools[pool_index], pool_size_v, AlignmentV);
             m_pools[pool_index] = nullptr;
 
@@ -1122,6 +1125,7 @@ export namespace pP::mem {
                 PPR_ASSERT(Bitmask<page_mask_t>(m_blocks[pool_index]).all() &&
                     "Destroying a Pooling allocator with live allocations");
 
+                poisonDestroyed(m_pools[pool_index], pool_size_v);
                 BlockAllocatorT::deallocateRaw(m_pools[pool_index], pool_size_v, AlignmentV);
                 m_pools[pool_index] = nullptr;
                 m_blocks[pool_index] = 0u;

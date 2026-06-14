@@ -612,6 +612,33 @@ export namespace pP::tests {
             arena.restore(mark);
             details::access_after_poison(alloc);
         };
+
+        PPR_UNIT_TEST(arena_cross_slab_restore_triggers_asan, UnitTest::expect_crash) {
+            // Exhaust first slab to trigger pushSlab_, then restore past it
+            mem::Arena<mem::GPA> arena{128u};
+            const void *mark = arena.watermark();
+            [[maybe_unused]] const auto f1 = arena.allocateRaw(64u, max_align_v);
+            [[maybe_unused]] const auto f2 = arena.allocateRaw(64u, max_align_v);
+            auto *const cross_slab = static_cast<std::byte *>(arena.allocateRaw(1u, max_align_v).ptr);
+            arena.restore(mark);
+            details::access_after_poison(cross_slab);
+        };
+
+        PPR_UNIT_TEST(pooling_pool_level_poison, UnitTest::expect_crash) {
+            mem::Pooling<64u, mem::GPA, 128u> pool;
+            std::byte *blocks[128];
+            for (std::size_t i = 0u; i < 128u; ++i) {
+                blocks[i] = static_cast<std::byte *>(pool.allocateRaw(64u, max_align_v).ptr);
+            }
+            for (std::size_t i = 0u; i < 64u; ++i) {
+                pool.deallocateRaw(blocks[i], 64u, max_align_v);
+            }
+            for (std::size_t i = 64u; i < 127u; ++i) {
+                pool.deallocateRaw(blocks[i], 64u, max_align_v);
+            }
+            pool.deallocateRaw(blocks[127], 64u, max_align_v);
+            details::access_after_poison(blocks[64]);
+        };
     }
 
     PPR_UNIT_TEST(poisoning) {
@@ -632,6 +659,8 @@ export namespace pP::tests {
             _.recurse(Poisoning::hashmap_asan_on_clear);
             _.recurse(Poisoning::sparsevector_asan_on_erase);
             _.recurse(Poisoning::arena_asan_on_restore);
+            _.recurse(Poisoning::arena_cross_slab_restore_triggers_asan);
+            _.recurse(Poisoning::pooling_pool_level_poison);
         }
     };
 }

@@ -146,6 +146,7 @@ export namespace pP::mem {
 
             SlabHeader *const next_slab = rootSlab_()->m_next;
 
+            poisonDestroyed(m_slab, m_capacity);
             AllocatorT::deallocateRaw(m_slab, m_capacity, max_align_v);
             m_slab = nullptr;
             m_capacity = 0u;
@@ -177,7 +178,7 @@ export namespace pP::mem {
                         std::bit_cast<std::uintptr_t>(mark) -
                         std::bit_cast<std::uintptr_t>(m_slab));
                     PPR_ASSERT(m_offset >= sizeof(SlabHeader));
-                    PPR_ASSERT(old_offset <= m_offset);
+                    PPR_ASSERT(m_offset <= old_offset);
 
                     annotateContiguousContainer(
                         static_cast<std::byte *>(m_slab),
@@ -506,7 +507,7 @@ export namespace pP::mem {
     ScopedArena(ArenaT &arena) -> ScopedArena<ArenaT>;
 
     // ------------------------------------------------------------------
-    // default Arena for for small transient allocations (ex: log formatting, serialization, etc)
+    // ScratchPad — arena for transient allocations
     // ------------------------------------------------------------------
 
     class ScratchPad {
