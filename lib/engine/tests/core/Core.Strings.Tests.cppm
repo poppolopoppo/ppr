@@ -61,9 +61,11 @@ namespace pP::tests {
         }
 
         PPR_UNIT_TEST(helpers) {
-            _.recurse(Helpers::char_helpers);
-            _.recurse(Helpers::escape_functions);
-            _.recurse(Helpers::case_fold_char);
+            _.recurse({
+                Helpers::char_helpers,
+                Helpers::escape_functions,
+                Helpers::case_fold_char,
+            });
         };
 
         namespace Literal {
@@ -96,9 +98,11 @@ namespace pP::tests {
         }
 
         PPR_UNIT_TEST(literal) {
-            _.recurse(Literal::static_interop);
-            _.recurse(Literal::basic_view_and_equality);
-            _.recurse(Literal::empty_string);
+            _.recurse({
+                Literal::static_interop,
+                Literal::basic_view_and_equality,
+                Literal::empty_string,
+            });
         };
 
         namespace Static {
@@ -148,11 +152,13 @@ namespace pP::tests {
         }
 
         PPR_UNIT_TEST(static_string) {
-            _.recurse(Static::basic_view_and_equality);
-            _.recurse(Static::copy_and_move);
-            _.recurse(Static::range);
-            _.recurse(Static::concatenation);
-            _.recurse(Static::edge_cases);
+            _.recurse({
+                Static::basic_view_and_equality,
+                Static::copy_and_move,
+                Static::range,
+                Static::concatenation,
+                Static::edge_cases,
+            });
         };
 
         namespace Range {
@@ -252,12 +258,14 @@ namespace pP::tests {
         }
 
         PPR_UNIT_TEST(range) {
-            _.recurse(Range::compare);
-            _.recurse(Range::promote);
-            _.recurse(Range::composition);
-            _.recurse(Range::compositions_advanced);
-            _.recurse(Range::hashing);
-            _.recurse(Range::to_string_conversion);
+            _.recurse({
+                Range::compare,
+                Range::promote,
+                Range::composition,
+                Range::compositions_advanced,
+                Range::hashing,
+                Range::to_string_conversion,
+            });
         };
 
         namespace Lazy {
@@ -352,22 +360,26 @@ namespace pP::tests {
         }
 
         PPR_UNIT_TEST(lazy) {
-            _.recurse(Lazy::trim_functions);
-            _.recurse(Lazy::truncate_and_filter);
-            _.recurse(Lazy::squeeze_spaces);
-            _.recurse(Lazy::title_case);
-            _.recurse(Lazy::string_capitalize);
-            _.recurse(Lazy::string_escape);
-            _.recurse(Lazy::xml_escape);
-            _.recurse(Lazy::hex_encode);
+            _.recurse({
+                Lazy::trim_functions,
+                Lazy::truncate_and_filter,
+                Lazy::squeeze_spaces,
+                Lazy::title_case,
+                Lazy::string_capitalize,
+                Lazy::string_escape,
+                Lazy::xml_escape,
+                Lazy::hex_encode,
+            });
         };
     }
 
     PPR_UNIT_TEST(strings) {
-        _.recurse(Strings::helpers);
-        _.recurse(Strings::literal);
-        _.recurse(Strings::static_string);
-        _.recurse(Strings::range);
-        _.recurse(Strings::lazy);
+        _.recurse({
+            Strings::helpers,
+            Strings::literal,
+            Strings::static_string,
+            Strings::range,
+            Strings::lazy,
+        });
     };
 }

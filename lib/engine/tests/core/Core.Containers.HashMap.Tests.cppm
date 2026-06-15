@@ -109,16 +109,18 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(hashMap) {
-        _.recurse(HashMap::eviction);
-        _.recurse(HashMap::const_find);
-        _.recurse(HashMap::begin_empty_allocated);
-        _.recurse(HashMap::erase);
-        _.recurse(HashMap::move);
-        _.recurse(HashMap::duplicate_size);
-        _.recurse(HashMap::find_empty);
-        _.recurse(HashMap::find_after_eviction);
-        _.recurse(HashMap::unordered_equality);
-        _.recurse(HashMap::unordered_hash_value);
+        _.recurse({
+            HashMap::eviction,
+            HashMap::const_find,
+            HashMap::begin_empty_allocated,
+            HashMap::erase,
+            HashMap::move,
+            HashMap::duplicate_size,
+            HashMap::find_empty,
+            HashMap::find_after_eviction,
+            HashMap::unordered_equality,
+            HashMap::unordered_hash_value,
+        });
         if constexpr (PPR_ENABLE_DEBUG) {
             _.recurse(HashMap::stale_iterator_after_reserve_crashes);
         }

@@ -61,7 +61,7 @@ export namespace pP::tests {
             };
 
             PPR_UNIT_TEST(decl_arrays) {
-                [[maybe_unused]] array_view toto = {1, 2, 3};
+                [[maybe_unused]] ArrayView toto = {1, 2, 3};
 
                 constexpr auto check = [](opaque::Value &&v) {
                     const auto &ar = v.get<opaque::Array>();
@@ -177,15 +177,17 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(value) {
-            _.recurse(Value::decl_scalars);
-            _.recurse(Value::decl_arrays);
-            _.recurse(Value::decl_dict);
-            _.recurse(Value::decl_formatter);
-            _.recurse(Value::decl_as_nullptr);
-            _.recurse(Value::format_scalar);
-            _.recurse(Value::format_array);
-            _.recurse(Value::format_object);
-            _.recurse(Value::format_formatter);
+            _.recurse({
+                Value::decl_scalars,
+                Value::decl_arrays,
+                Value::decl_dict,
+                Value::decl_formatter,
+                Value::decl_as_nullptr,
+                Value::format_scalar,
+                Value::format_array,
+                Value::format_object,
+                Value::format_formatter,
+            });
         };
 
         namespace Block {
@@ -512,22 +514,26 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(block) {
-            _.recurse(Block::value);
-            _.recurse(Block::builder_scalars);
-            _.recurse(Block::builder_strings);
-            _.recurse(Block::builder_array);
-            _.recurse(Block::builder_dict);
-            _.recurse(Block::builder_formatter);
-            _.recurse(Block::format_value_scalars);
-            _.recurse(Block::format_block);
-            _.recurse(Block::format_complex);
-            _.recurse(Block::constructor);
-            _.recurse(Block::constructor_with_generator_fmt);
+            _.recurse({
+                Block::value,
+                Block::builder_scalars,
+                Block::builder_strings,
+                Block::builder_array,
+                Block::builder_dict,
+                Block::builder_formatter,
+                Block::format_value_scalars,
+                Block::format_block,
+                Block::format_complex,
+                Block::constructor,
+                Block::constructor_with_generator_fmt,
+            });
         };
     }
 
     PPR_UNIT_TEST(opaque) {
-        _.recurse(Opaque::value);
-        _.recurse(Opaque::block);
+        _.recurse({
+            Opaque::value,
+            Opaque::block,
+        });
     };
 }

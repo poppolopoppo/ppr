@@ -24,9 +24,11 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(background) {
-            _.recurse(Background::done_is_never_event);
-            _.recurse(Background::error_is_none);
-            _.recurse(Background::value_is_none);
+            _.recurse({
+                Background::done_is_never_event,
+                Background::error_is_none,
+                Background::value_is_none,
+            });
         };
 
         namespace Cancel {
@@ -77,12 +79,14 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(cancel) {
-            _.recurse(Cancel::done_initially_empty);
-            _.recurse(Cancel::manual_cancel_fires_done);
-            _.recurse(Cancel::cancel_is_idempotent);
-            _.recurse(Cancel::parent_cancel_propagates);
-            _.recurse(Cancel::grandparent_cancel_propagates);
-            _.recurse(Cancel::child_cancel_does_not_affect_parent);
+            _.recurse({
+                Cancel::done_initially_empty,
+                Cancel::manual_cancel_fires_done,
+                Cancel::cancel_is_idempotent,
+                Cancel::parent_cancel_propagates,
+                Cancel::grandparent_cancel_propagates,
+                Cancel::child_cancel_does_not_affect_parent,
+            });
         };
 
         namespace CancelClause {
@@ -105,8 +109,10 @@ export namespace pP::tests {
 
 
         PPR_UNIT_TEST(cancel_clause) {
-            _.recurse(CancelClause::clause_fires_done_with_error);
-            _.recurse(CancelClause::clause_error_matches);
+            _.recurse({
+                CancelClause::clause_fires_done_with_error,
+                CancelClause::clause_error_matches,
+            });
         };
 
         namespace WithoutCancel {
@@ -126,8 +132,10 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(without_cancel) {
-            _.recurse(WithoutCancel::done_never_fires);
-            _.recurse(WithoutCancel::error_always_none);
+            _.recurse({
+                WithoutCancel::done_never_fires,
+                WithoutCancel::error_always_none,
+            });
         };
 
         namespace AfterFunc {
@@ -155,8 +163,10 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(after_func) {
-            _.recurse(AfterFunc::callback_called_on_destruction);
-            _.recurse(AfterFunc::callback_receives_context);
+            _.recurse({
+                AfterFunc::callback_called_on_destruction,
+                AfterFunc::callback_receives_context,
+            });
         };
 
         namespace Value {
@@ -185,9 +195,11 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(value) {
-            _.recurse(Value::value_is_retrievable);
-            _.recurse(Value::missing_key_returns_none);
-            _.recurse(Value::values_from_parent_fallback);
+            _.recurse({
+                Value::value_is_retrievable,
+                Value::missing_key_returns_none,
+                Value::values_from_parent_fallback,
+            });
         };
 
         namespace Deadline {
@@ -222,19 +234,23 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(deadline) {
-            _.recurse(Deadline::deadline_is_set);
-            _.recurse(Deadline::parent_cancel_overrides_deadline);
-            _.recurse(Deadline::timeout_sets_deadline);
+            _.recurse({
+                Deadline::deadline_is_set,
+                Deadline::parent_cancel_overrides_deadline,
+                Deadline::timeout_sets_deadline,
+            });
         };
     }
 
     PPR_UNIT_TEST(context) {
-        _.recurse(Context::background);
-        _.recurse(Context::cancel);
-        _.recurse(Context::cancel_clause);
-        _.recurse(Context::without_cancel);
-        _.recurse(Context::after_func);
-        _.recurse(Context::value);
-        _.recurse(Context::deadline);
+        _.recurse({
+            Context::background,
+            Context::cancel,
+            Context::cancel_clause,
+            Context::without_cancel,
+            Context::after_func,
+            Context::value,
+            Context::deadline,
+        });
     };
 }

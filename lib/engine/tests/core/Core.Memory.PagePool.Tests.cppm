@@ -34,7 +34,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(bundle_flow) {
-            mem::os::PagePool pool(4096u, 64u);
+            mem::PagePool pool(4096u, 64u);
 
             void *ptrs[32];
             for (int i = 0; i < 32; ++i) {
@@ -53,7 +53,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(shrink_mechanics) {
-            mem::os::PagePool pool(4096u, 64u);
+            mem::PagePool pool(4096u, 64u);
 
             const void *p1 = pool.allocateRaw().ptr;
             pool.deallocateRaw(p1, 4096u);
@@ -66,7 +66,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(allocate_deallocate_cycle) {
-            mem::os::PagePool pool(4096u, 64u);
+            mem::PagePool pool(4096u, 64u);
 
             void *ptrs[64];
             for (std::size_t i = 0u; i < 64u; ++i) {
@@ -90,9 +90,11 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(pagePool) {
-        _.recurse(PagePool::bit_tree_mechanics);
-        _.recurse(PagePool::bundle_flow);
-        _.recurse(PagePool::shrink_mechanics);
-        _.recurse(PagePool::allocate_deallocate_cycle);
+        _.recurse({
+            PagePool::bit_tree_mechanics,
+            PagePool::bundle_flow,
+            PagePool::shrink_mechanics,
+            PagePool::allocate_deallocate_cycle,
+        });
     };
 }

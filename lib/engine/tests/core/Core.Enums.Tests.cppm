@@ -82,12 +82,14 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(enums) {
-        _.recurse(Enums::ord);
-        _.recurse(Enums::flags_any);
-        _.recurse(Enums::flags_and);
-        _.recurse(Enums::flags_or);
-        _.recurse(Enums::flags_xor);
-        _.recurse(Enums::flags_mixed_operations);
-        _.recurse(Enums::open_flags_or);
+        _.recurse({
+            Enums::ord,
+            Enums::flags_any,
+            Enums::flags_and,
+            Enums::flags_or,
+            Enums::flags_xor,
+            Enums::flags_mixed_operations,
+            Enums::open_flags_or,
+        });
     };
 }

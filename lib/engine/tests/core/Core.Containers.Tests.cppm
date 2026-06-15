@@ -279,50 +279,66 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(relocatable) {
-        _.recurse(Containers::traits_relocatable_fundamentals);
-        _.recurse(Containers::traits_relocatable_user_type_negative);
-        _.recurse(Containers::traits_relocatable_specialized_types);
+        _.recurse({
+            Containers::traits_relocatable_fundamentals,
+            Containers::traits_relocatable_user_type_negative,
+            Containers::traits_relocatable_specialized_types,
+        });
     };
 
     PPR_UNIT_TEST(bitmask) {
-        _.recurse(Containers::bitmask_basic_set_reset_test);
-        _.recurse(Containers::bitmask_rotate_and_pop_tests);
-        _.recurse(Containers::bitmask_range_and_flip_test);
-        _.recurse(Containers::bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst);
-        _.recurse(Containers::bitmask_ref_mutation_visibility);
-        _.recurse(Containers::bitmask_ref_compound_ops);
+        _.recurse({
+            Containers::bitmask_basic_set_reset_test,
+            Containers::bitmask_rotate_and_pop_tests,
+            Containers::bitmask_range_and_flip_test,
+            Containers::bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst,
+            Containers::bitmask_ref_mutation_visibility,
+            Containers::bitmask_ref_compound_ops,
+        });
     };
 
     PPR_UNIT_TEST(pointers) {
-        _.recurse(Containers::relptr_null_and_valid);
-        _.recurse(Containers::relptr_copy_assign_and_comparisons);
-        _.recurse(Containers::tagptr_basic_tag_and_data);
-        _.recurse(Containers::tagptr_bits_reinterpret_and_mutation);
+        _.recurse({
+            Containers::relptr_null_and_valid,
+            Containers::relptr_copy_assign_and_comparisons,
+            Containers::tagptr_basic_tag_and_data,
+            Containers::tagptr_bits_reinterpret_and_mutation,
+        });
     };
 
     PPR_UNIT_TEST(iterators) {
-        _.recurse(Containers::indexiterator_arithmetic_and_distance);
-        _.recurse(Containers::indexiterator_const_conversion_and_cross_compare);
+        _.recurse({
+            Containers::indexiterator_arithmetic_and_distance,
+            Containers::indexiterator_const_conversion_and_cross_compare,
+        });
     };
 
     PPR_UNIT_TEST(stack) {
-        _.recurse(Containers::stack_push_pop_and_iterator);
-        _.recurse(Containers::stack_overflow_and_clear);
+        _.recurse({
+            Containers::stack_push_pop_and_iterator,
+            Containers::stack_overflow_and_clear,
+        });
     };
 
     PPR_UNIT_TEST(ring_buffer) {
-        _.recurse(Containers::ringbuffer_push_pop_wrap);
-        _.recurse(Containers::ringbuffer_pop_empty_resets_positions);
+        _.recurse({
+            Containers::ringbuffer_push_pop_wrap,
+            Containers::ringbuffer_pop_empty_resets_positions,
+        });
     };
 
     PPR_UNIT_TEST(sort) {
-        _.recurse(Containers::shellsort_empty_and_single);
-        _.recurse(Containers::shellsort_projection_and_comparator);
+        _.recurse({
+            Containers::shellsort_empty_and_single,
+            Containers::shellsort_projection_and_comparator,
+        });
     };
 
     PPR_UNIT_TEST(hash) {
-        _.recurse(Containers::hash_mix_64_and_32);
-        _.recurse(Containers::hash_sized_and_unordered_range_and_ptr_combine);
-        _.recurse(Containers::additional_hash_and_pointer_checks);
+        _.recurse({
+            Containers::hash_mix_64_and_32,
+            Containers::hash_sized_and_unordered_range_and_ptr_combine,
+            Containers::additional_hash_and_pointer_checks,
+        });
     };
 }

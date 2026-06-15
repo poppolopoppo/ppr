@@ -20,13 +20,24 @@ int main(const int argc, char *argv[]) {
             context.setFilter(argv[++i]);
         } else if (arg == "--child-run") {
             context.markAsChildRun();
+        } else if (arg == "--shuffle") {
+            unsigned seed = static_cast<unsigned>(std::random_device{}());
+            if (i + 1 < argc) {
+                const std::string_view next{argv[i + 1]};
+                auto [ptr, ec] = std::from_chars(next.data(), next.data() + next.size(), seed);
+                if (ec == std::errc{}) {
+                    ++i;
+                }
+            }
+            context.m_shuffle_seed = seed;
         } else if (arg == "--help" || arg == "-h") {
             std::println(
-                "Usage: EngineTests [--run-test <path>] [--child-run] [--help]\n"
+                "Usage: EngineTests [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--help]\n"
                 "\n"
-                "  --run-test <path>  Run a specific test (or subtree) by path\n"
-                "  --child-run        Mark this process as a child (forked) test runner\n"
-                "  -h, --help         Show this help message\n"
+                "  --run-test <path>   Run a specific test (or subtree) by path\n"
+                "  --child-run         Mark this process as a child (forked) test runner\n"
+                "  --shuffle [<seed>]  Randomize test execution order (optional seed for reproducibility)\n"
+                "  -h, --help          Show this help message\n"
                 "\n"
                 "Test paths use '/' separators, e.g. 'core/memory/asanPoisoning/poison_destroyed_then_read_triggers_asan'.\n");
             return 0;

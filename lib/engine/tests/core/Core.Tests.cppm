@@ -16,42 +16,50 @@ import :core_opaque;
 import :core_sparse_vector;
 import :core_stable_vector;
 import :core_strings;
+import :core_utility;
 import :core_event;
 import :core_context;
 import :core_io;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(memory) {
-        _.recurse(pagePool);
-        _.recurse(arena);
-        _.recurse(slab);
-        _.recurse(allocator);
-        _.recurse(poisoning);
+        _.recurse({
+            pagePool,
+            arena,
+            slab,
+            allocator,
+            poisoning,
+        });
     };
 
     PPR_UNIT_TEST(containers) {
-        _.recurse(relocatable);
-        _.recurse(hash);
-        _.recurse(sort);
-        _.recurse(bitmask);
-        _.recurse(pointers);
-        _.recurse(iterators);
-        _.recurse(stack);
-        _.recurse(ring_buffer);
-        _.recurse(stableVector);
-        _.recurse(sparseVector);
-        _.recurse(hashMap);
+        _.recurse({
+            relocatable,
+            hash,
+            sort,
+            bitmask,
+            pointers,
+            iterators,
+            stack,
+            ring_buffer,
+            stableVector,
+            sparseVector,
+            hashMap,
+        });
     };
 
     PPR_UNIT_TEST(core) {
-        _.recurse(enums);
-        _.recurse(memory);
-        _.recurse(strings);
-        _.recurse(containers);
-        _.recurse(opaque);
-        _.recurse(channel);
-        _.recurse(event);
-        _.recurse(context);
-        _.recurse(io);
+        _.recurse({
+            enums,
+            memory,
+            strings,
+            containers,
+            opaque,
+            channel,
+            event,
+            context,
+            io,
+            utility,
+        });
     };
 }

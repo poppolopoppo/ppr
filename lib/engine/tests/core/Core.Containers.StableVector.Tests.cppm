@@ -107,10 +107,12 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(stableVector) {
-        _.recurse(StableVector::growth_and_indexing);
-        _.recurse(StableVector::iterator_navigation);
-        _.recurse(StableVector::lifetime_management);
-        _.recurse(StableVector::modifiers);
-        _.recurse(StableVector::memory_compaction);
+        _.recurse({
+            StableVector::growth_and_indexing,
+            StableVector::iterator_navigation,
+            StableVector::lifetime_management,
+            StableVector::modifiers,
+            StableVector::memory_compaction,
+        });
     };
 }

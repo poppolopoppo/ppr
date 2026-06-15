@@ -115,11 +115,13 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(sparseVector) {
-        _.recurse(SparseVector::allocation_and_free_list);
-        _.recurse(SparseVector::jump_counting_logic);
-        _.recurse(SparseVector::key_validation);
-        _.recurse(SparseVector::copy_and_move);
-        _.recurse(SparseVector::iteration_boundary);
-        _.recurse(SparseVector::memory_stability);
+        _.recurse({
+            SparseVector::allocation_and_free_list,
+            SparseVector::jump_counting_logic,
+            SparseVector::key_validation,
+            SparseVector::copy_and_move,
+            SparseVector::iteration_boundary,
+            SparseVector::memory_stability,
+        });
     };
 }

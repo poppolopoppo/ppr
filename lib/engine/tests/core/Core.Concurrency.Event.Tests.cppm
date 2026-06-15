@@ -226,50 +226,62 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(never_event) {
-            _.recurse(Never::poll_returns_false);
-            _.recurse(Never::subscribe_returns_default);
-            _.recurse(Never::unsubscribe_noop);
-            _.recurse(Never::reset_noop);
+            _.recurse({
+                Never::poll_returns_false,
+                Never::subscribe_returns_default,
+                Never::unsubscribe_noop,
+                Never::reset_noop,
+            });
         };
 
         PPR_UNIT_TEST(pulse_event) {
-            _.recurse(Pulse::poll_initially_false);
-            _.recurse(Pulse::emit_sets_flag);
-            _.recurse(Pulse::reset_clears_flag);
-            _.recurse(Pulse::emit_twice_stays_set);
-            _.recurse(Pulse::reset_then_emit_sets_again);
-            _.recurse(Pulse::subscribe_returns_previous);
-            _.recurse(Pulse::unsubscribe_restores_previous);
+            _.recurse({
+                Pulse::poll_initially_false,
+                Pulse::emit_sets_flag,
+                Pulse::reset_clears_flag,
+                Pulse::emit_twice_stays_set,
+                Pulse::reset_then_emit_sets_again,
+                Pulse::subscribe_returns_previous,
+                Pulse::unsubscribe_restores_previous,
+            });
         };
 
         PPR_UNIT_TEST(broadcast_event) {
-            _.recurse(Broadcast::poll_initially_false);
-            _.recurse(Broadcast::emit_sets_flag);
-            _.recurse(Broadcast::reset_clears_flag);
-            _.recurse(Broadcast::subscribe_returns_default);
-            _.recurse(Broadcast::unsubscribe_removes_subscriber);
+            _.recurse({
+                Broadcast::poll_initially_false,
+                Broadcast::emit_sets_flag,
+                Broadcast::reset_clears_flag,
+                Broadcast::subscribe_returns_default,
+                Broadcast::unsubscribe_removes_subscriber,
+            });
         };
 
         PPR_UNIT_TEST(signal_single) {
-            _.recurse(SignalSingle::poll_empty_returns_nullopt);
-            _.recurse(SignalSingle::poll_after_emit_returns_event);
-            _.recurse(SignalSingle::reset_clears_pending);
-            _.recurse(SignalSingle::iterator_sentinel);
+            _.recurse({
+                SignalSingle::poll_empty_returns_nullopt,
+                SignalSingle::poll_after_emit_returns_event,
+                SignalSingle::reset_clears_pending,
+                SignalSingle::iterator_sentinel,
+            });
         };
 
         PPR_UNIT_TEST(signal_multi) {
-            _.recurse(SignalMulti::poll_two_events_emits_first);
-            _.recurse(SignalMulti::poll_two_events_emits_second);
-            _.recurse(SignalMulti::reset_clears_specific_event);
-            _.recurse(SignalMulti::both_events_set);
+            _.recurse({
+                SignalMulti::poll_two_events_emits_first,
+                SignalMulti::poll_two_events_emits_second,
+                SignalMulti::reset_clears_specific_event,
+                SignalMulti::both_events_set,
+            });
         };
     }
 
     PPR_UNIT_TEST(event) {
-        _.recurse(Events::never_event);
-        _.recurse(Events::pulse_event);
-        _.recurse(Events::broadcast_event);
-        _.recurse(Events::signal_single);
-        _.recurse(Events::signal_multi);
+        _.recurse({
+            Events::never_event,
+            Events::pulse_event,
+            Events::broadcast_event,
+            Events::signal_single,
+            Events::signal_multi,
+        });
     };
 }

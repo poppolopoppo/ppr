@@ -308,8 +308,8 @@ export namespace pP::tests {
         PPR_UNIT_TEST(pmr_erasure_and_equality) {
             RecordingAllocator backend{};
 
-            const mem::Pmr stateful{backend};
-            const mem::Pmr erased{mem::Allocator{backend}};
+            const mem::PMR stateful{backend};
+            const mem::PMR erased{mem::Allocator{backend}};
             PPR_ASSERT(stateful == erased);
 
             const auto shrinkable = stateful.allocateRaw(24u, max_align_v);
@@ -317,7 +317,7 @@ export namespace pP::tests {
             PPR_ASSERT(stateful.resizeRaw(shrinkable.ptr, 24u, 16u));
             stateful.deallocateRaw(shrinkable.ptr, 16u, max_align_v);
 
-            const mem::Pmr stateless{mem::GPA{}};
+            const mem::PMR stateless{mem::GPA{}};
             const auto overaligned = stateless.allocateRaw(32u, std::align_val_t{64u});
             PPR_ASSERT(overaligned.ptr != nullptr);
             PPR_ASSERT(!stateless.resizeRaw(overaligned.ptr, overaligned.count, overaligned.count * 2u));
@@ -467,17 +467,19 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(allocator) {
-        _.recurse(Allocator::overlap_boundaries);
-        _.recurse(Allocator::gpa_alignment_paths);
-        _.recurse(Allocator::insitu_one_shot_and_reuse);
-        _.recurse(Allocator::fallback_prefers_primary_then_secondary);
-        _.recurse(Allocator::threshold_routes_and_resizes_within_bucket);
-        _.recurse(Allocator::allocator_wrapper_forwards_and_force_ref);
-        _.recurse(Allocator::pmr_erasure_and_equality);
-        _.recurse(Allocator::allocator_traits_operations);
-        _.recurse(Allocator::allocation_stateful_resize_create_destroy);
-        _.recurse(Allocator::allocation_raii_and_relocate);
-        _.recurse(Allocator::allocation_create_destroy_non_trivial);
+        _.recurse({
+            Allocator::overlap_boundaries,
+            Allocator::gpa_alignment_paths,
+            Allocator::insitu_one_shot_and_reuse,
+            Allocator::fallback_prefers_primary_then_secondary,
+            Allocator::threshold_routes_and_resizes_within_bucket,
+            Allocator::allocator_wrapper_forwards_and_force_ref,
+            Allocator::pmr_erasure_and_equality,
+            Allocator::allocator_traits_operations,
+            Allocator::allocation_stateful_resize_create_destroy,
+            Allocator::allocation_raii_and_relocate,
+            Allocator::allocation_create_destroy_non_trivial,
+        });
     };
 
     // ------------------------------------------------------------------
@@ -642,25 +644,29 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(poisoning) {
-        _.recurse(Poisoning::child_process_without_error);
+        _.recurse({
+            Poisoning::child_process_without_error,
+        });
 
         if constexpr (mem::is_asan_enabled_v) {
-            _.recurse(Poisoning::poison_destroyed_then_read_triggers_asan);
-            _.recurse(Poisoning::poison_reserved_then_write_triggers_asan);
-            _.recurse(Poisoning::poison_nullptr_safe);
-            _.recurse(Poisoning::gpa_poison_on_free_triggers_asan);
-            _.recurse(Poisoning::os_poison_on_free_triggers_asan);
-            _.recurse(Poisoning::pooling_poison_on_free_triggers_asan);
-            _.recurse(Poisoning::arena_poison_on_dealloc_triggers_asan);
-            _.recurse(Poisoning::insitu_poison_on_dealloc_triggers_asan);
-            _.recurse(Poisoning::stablevector_asan_on_erase);
-            _.recurse(Poisoning::stablevector_asan_multi_slice);
-            _.recurse(Poisoning::stablevector_asan_on_clear);
-            _.recurse(Poisoning::hashmap_asan_on_clear);
-            _.recurse(Poisoning::sparsevector_asan_on_erase);
-            _.recurse(Poisoning::arena_asan_on_restore);
-            _.recurse(Poisoning::arena_cross_slab_restore_triggers_asan);
-            _.recurse(Poisoning::pooling_pool_level_poison);
+            _.recurse({
+                Poisoning::poison_destroyed_then_read_triggers_asan,
+                Poisoning::poison_reserved_then_write_triggers_asan,
+                Poisoning::poison_nullptr_safe,
+                Poisoning::gpa_poison_on_free_triggers_asan,
+                Poisoning::os_poison_on_free_triggers_asan,
+                Poisoning::pooling_poison_on_free_triggers_asan,
+                Poisoning::arena_poison_on_dealloc_triggers_asan,
+                Poisoning::insitu_poison_on_dealloc_triggers_asan,
+                Poisoning::stablevector_asan_on_erase,
+                Poisoning::stablevector_asan_multi_slice,
+                Poisoning::stablevector_asan_on_clear,
+                Poisoning::hashmap_asan_on_clear,
+                Poisoning::sparsevector_asan_on_erase,
+                Poisoning::arena_asan_on_restore,
+                Poisoning::arena_cross_slab_restore_triggers_asan,
+                Poisoning::pooling_pool_level_poison,
+            });
         }
     };
 }

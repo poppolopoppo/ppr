@@ -233,20 +233,24 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(slab) {
-        _.recurse(Slab::lifo_operations);
-        _.recurse(Slab::out_of_memory);
-        _.recurse(Slab::watermark_restore);
-        _.recurse(Slab::move_semantics);
-        _.recurse(Slab::allocator_compliance);
+        _.recurse({
+            Slab::lifo_operations,
+            Slab::out_of_memory,
+            Slab::watermark_restore,
+            Slab::move_semantics,
+            Slab::allocator_compliance,
+        });
     };
 
     PPR_UNIT_TEST(arena) {
-        _.recurse(Arena::lifo_operations);
-        _.recurse(Arena::multi_slab);
-        _.recurse(Arena::watermark_restore);
-        _.recurse(Arena::move_semantics);
-        _.recurse(Arena::allocator_compliance);
-        _.recurse(Arena::scratch_pad_allocator);
-        _.recurse(Arena::scratch_pad_scoped);
+        _.recurse({
+            Arena::lifo_operations,
+            Arena::multi_slab,
+            Arena::watermark_restore,
+            Arena::move_semantics,
+            Arena::allocator_compliance,
+            Arena::scratch_pad_allocator,
+            Arena::scratch_pad_scoped,
+        });
     };
 }
