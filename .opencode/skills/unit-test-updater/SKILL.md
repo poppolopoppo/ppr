@@ -63,6 +63,9 @@ For each changed function, type, or constant, classify the nature of the change:
 8. **Top-level registration:** In `Core.Tests.cppm`, add `import :core_<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
 9. **Assertions:** Use `PPR_ASSERT()` only
 10. **Code style:** No comments, `constexpr` everywhere, `[[nodiscard]]`, no raw loops, prefer algorithms/ranges
+11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... }` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
+12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... }` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
+13. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... }` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
 
 ### Test coverage checklist for each function under test:
 
@@ -76,6 +79,31 @@ For each changed function, type, or constant, classify the nature of the change:
 - [ ] Iterator validity (where iterators are involved)
 - [ ] Equality/comparison (if types define `==`, `<=>`, `hashValue`)
 - [ ] Relocatability trait (if type should be relocatable)
+- [ ] Guarded/precondition edge cases (inputs that trigger `PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE` — use `UnitTest::expect_fail`)
+- [ ] Crash-expected paths (use-after-free, double-free, ASAN poison reads — use `UnitTest::expect_crash`)
+
+### Guarded edge cases
+
+Every function has preconditions guarded by `PPR_ASSERT`, `PPR_VERIFY`, or `PPR_ENSURE`. These must be tested too:
+
+```cpp
+// Precondition assertion — expected to throw, test passes on assertion
+PPR_UNIT_TEST(null_parameter_triggers_assertion, UnitTest::expect_fail) {
+    some_function(nullptr);  // triggers PPR_ASSERT(arg != nullptr)
+};
+
+// Memory safety violation — expected to crash the process
+PPR_UNIT_TEST(use_after_free_triggers_asan, UnitTest::expect_crash) {
+    auto *p = new int{42};
+    delete p;
+    volatile auto x = *p;  // ASAN use-after-free
+};
+```
+
+Rules:
+- Use `expect_fail` for **precondition guards** — the test body throws via `PPR_ASSERT`/`PPR_VERIFY`/`PPR_ENSURE`, the runner catches the exception and records a pass.
+- Use `expect_crash` for **process-level failures** — the test spawns in a child process; a non-zero exit (crash) is a pass, a clean exit is a failure.
+- Guarded-edge-case tests live alongside the happy-path tests in the same test file and parent group.
 
 ---
 
@@ -109,6 +137,11 @@ cmake --build build --target VideoGameApp
 ```
 
 If any test fails, treat the failure as a bug — do not weaken assertions.
+
+**Expected-fail/crash validation:**
+- For `expect_fail` tests: verify they pass (i.e., the assertion fires and the runner flips the result to pass). If an `expect_fail` test returns without throwing, that is a *failure* — the precondition wasn't enforced.
+- For `expect_crash` tests: verify they pass (i.e., the child process exits non-zero). If an `expect_crash` test exits cleanly, that is a *failure* — the crash wasn't triggered.
+- Run all tests together; expected-fail/crash tests should produce green (pass) output, not red (fail).
 
 ---
 

@@ -56,6 +56,11 @@ For each file in the diff, apply the relevant checklists below.
 - Uses `consteval` where compile-time is mandatory (string literals, hash mixing)
 - Uses deducing `this` for const/mutable overloads where appropriate
 - Prefers `std::expected` / `std::optional` over out-params for fallible results
+- `.value()` called only after `.has_value()` guard (or use `value_or()`)
+- `.and_then()`, `.or_else()`, `.transform()` preferred over manual `if/else` branches for chaining
+- `std::expected::error()` accessed only when `!has_value()` is proven
+- `std::optional` for "maybe" values; `std::expected` for error reporting (with distinct error type)
+- No `std::optional<T&>` — use `T*` or `std::optional<std::reference_wrapper<T>>`
 - Uses `std::span<T>` not `T* + size_t` for array views
 - Uses `std::bit_cast` not `reinterpret_cast` / `memcpy` for type punning
 - C-style casts are forbidden; uses `checked_cast<>` for narrowing/widening
@@ -84,6 +89,12 @@ For each file in the diff, apply the relevant checklists below.
 - Alignment respected: `alignof_v<T>` passed through correctly
 - Appropriate allocator tier chosen (`GPA` / `OS` / `HugePage` / `SmallPage`)
 - Relocatable types marked via `pP::details::relocatable<T>`
+- **Member alignment & padding:**
+  - Fields ordered from largest alignment to smallest to minimize padding
+  - `alignas` used deliberately (not reflexively) with a documented rationale
+  - No unnecessary `#pragma pack` — if required for wire format, `static_assert` the layout
+  - `offsetof` verified where ABI-sensitive layout is assumed
+  - Bit-fields checked for platform-dependent layout and storage-unit boundaries
 
 ---
 
@@ -92,6 +103,10 @@ For each file in the diff, apply the relevant checklists below.
 - Hot / cold data separation (frequently accessed fields grouped together)
 - Struct-of-arrays preferred over array-of-structs for container internals
 - `alignas(hal::cacheline_size_v)` on shared mutable data to prevent false sharing
+- Read-mostly data separated from read-write data across cache-line boundaries
+- Hot struct fits within a single cache line (total size ≤ `hal::cacheline_size_v`)
+- Standalone mutable atomics / counters that are write-contended have `alignas(hal::cacheline_size_v)`
+- Intentional cache-line isolation uses separator padding (`[[no_unique_address]]` + unused byte array)
 - `thread_local` for thread-private data to avoid contention
 - No pointer-chasing in hot paths (linked lists, deep indirection)
 - Branch order favors hot path with `[[likely]]`
@@ -109,19 +124,38 @@ For each file in the diff, apply the relevant checklists below.
 
 ---
 
-### Dimension 6 — Exception usage
+### Dimension 6 — Exception safety & noexcept
 
 - All engine core functions marked `noexcept`
-- `noexcept` not used as "documentation" where code could actually throw
+- `noexcept` not used as "documentation" where code could actually throw (must be provably non-throwing)
+- Move constructors, move assignment operators, and `swap()` must be `noexcept`
+- Destructors are implicitly `noexcept` — flag any that could actually throw
+- Non-trivial destructors explicitly marked `noexcept` for clarity
+- No throwing from destructors during stack unwinding (calls `std::terminate`)
 - Exceptions not used for control flow in engine layer
 - `PPR_ASSERT` for invariants (compiles away in release), `PPR_VERIFY` for side effects, `PPR_ENSURE` for post-conditions
 - `std::nothrow` used with `operator new` in `GPA::allocateRaw`
+- **Exception safety guarantees:** each function's guarantee is deliberate:
+  - **No‑throw:** `noexcept` functions provide the no‑throw guarantee
+  - **Strong:** state changes are committed only after all operations succeed (commit‐or‑rollback via RAII or scope guard)
+  - **Basic:** no resource leaks on exception; invariants remain valid
+  - No functions leave objects in an indeterminate state on exception
+- RAII wrappers used for all resource ownership to prevent leaks during unwinding
+- Exception-neutral code propagates exceptions correctly through wrappers (`std::nested_exception` or transparent forwarding)
+- No throwing in hot paths or non‑critical paths where error codes suffice
+- No throwing in constructors of types allocated in bulk (prefer two‑phase init or factory functions)
+- Code paths that call `std::terminate` are guarded by a clear precondition check
 
 ---
 
 ### Dimension 7 — Compile-time impact
 
 - Module partitions minimize what is recompiled on change
+- Module partition names (after `:`) match the source file name suffix (e.g. `:containers` → `Core.Containers.cppm`)
+- Module partition hierarchy mirrors subdirectory layout (e.g. `lib/engine/core/strings/` → `engine.core:strings`)
+- Every `.cppm` with non-trivial definitions has a corresponding `.cpp` implementation file
+- No `export import` of entire partitions where a more selective `export { ... }` would suffice
+- Module partitions imported by parent module only, not by unrelated consumers
 - Template-heavy code isolated in dedicated `.cppm` partitions
 - No unnecessary `import std;` in files that don't use standard types
 - `.cppm` files kept minimal (declarations only), definitions in `.cpp`
