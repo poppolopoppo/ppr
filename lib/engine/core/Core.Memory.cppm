@@ -43,7 +43,7 @@ export namespace pP::mem {
     // polymorphic allocator uses runtime dispatch for allocation
     // ------------------------------------------------------------------
 
-    class Pmr {
+    class PMR {
         struct VTable {
             std::allocation_result<void *> (*m_allocateRaw)(void *context, std::size_t bytes, std::align_val_t alignment){};
 
@@ -58,7 +58,7 @@ export namespace pP::mem {
     public:
         template<details::TAllocator AllocatorT = GPA>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(AllocatorT = {}) noexcept requires std::is_empty_v<AllocatorT> {
+        PMR(AllocatorT = {}) noexcept requires std::is_empty_v<AllocatorT> {
             static constexpr VTable g_vtable{
                 .m_allocateRaw = [](void *const, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
                     return AllocatorT{}.allocateRaw(bytes, alignment);
@@ -80,7 +80,7 @@ export namespace pP::mem {
 
         template<details::TAllocator AllocatorT>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(AllocatorT &al) noexcept requires (!std::is_empty_v<AllocatorT>)
+        PMR(AllocatorT &al) noexcept requires (!std::is_empty_v<AllocatorT>)
             : m_context(std::addressof(al)) {
             static constexpr VTable g_vtable{
                 .m_allocateRaw = [](void *const context, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
@@ -103,8 +103,8 @@ export namespace pP::mem {
 
         template<details::TAllocator AllocatorT>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        Pmr(Allocator<AllocatorT> al) noexcept
-            : Pmr(al.materialize()) {
+        PMR(Allocator<AllocatorT> al) noexcept
+            : PMR(al.materialize()) {
         }
 
         [[nodiscard]] std::allocation_result<void *>
@@ -121,11 +121,11 @@ export namespace pP::mem {
             return m_vtable->m_resizeRaw(m_context, ptr, old_size, new_size);
         }
 
-        [[nodiscard]] friend bool operator==(const Pmr &a, const Pmr &b) noexcept = default;
+        [[nodiscard]] friend bool operator==(const PMR &a, const PMR &b) noexcept = default;
     };
 
     template<>
-    struct details::use_inplace<Pmr> : std::true_type {
+    struct details::use_inplace<PMR> : std::true_type {
     };
 
     // ------------------------------------------------------------------

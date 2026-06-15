@@ -426,12 +426,12 @@ export namespace pP {
     class [[nodiscard]] BroadcastEvent final : public IEvent {
         std::mutex m_subscriptions_mutex{};
         std::atomic_flag m_signal{};
-        StableVectorInplace<TagPtr<ISignal>, mem::Pmr> m_subscriptions;
+        StableVectorInplace<TagPtr<ISignal>, mem::PMR> m_subscriptions;
 
     public:
         BroadcastEvent() noexcept = default;
 
-        explicit BroadcastEvent(const mem::Pmr &allocator) noexcept
+        explicit BroadcastEvent(const mem::PMR &allocator) noexcept
             : m_subscriptions(allocator) {
         }
 

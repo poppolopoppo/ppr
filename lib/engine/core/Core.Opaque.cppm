@@ -57,8 +57,8 @@ export namespace pP {
         using String = std::string_view;
         using WString = std::wstring_view;
         using U8String = std::u8string_view;
-        using Array = array_view<Value>;
-        using Dict = array_view<KeyValue>;
+        using Array = ArrayView<Value>;
+        using Dict = ArrayView<KeyValue>;
         using Formatter = std23::function_ref<void(format_context &)>;
 
         namespace details {
@@ -126,16 +126,16 @@ export namespace pP {
         struct Block {
             struct Value;
 
-            using String = relative_view<char>;
-            using WString = relative_view<wchar_t>;
-            using U8String = relative_view<char8_t>;
-            using Array = relative_view<Value>;
+            using String = RelativeView<char>;
+            using WString = RelativeView<wchar_t>;
+            using U8String = RelativeView<char8_t>;
+            using Array = RelativeView<Value>;
             using KeyValue = std::pair<String, Value>;
 
-            struct Dict : relative_view<KeyValue> {
-                using relative_view::relative_view;
-                using relative_view::operator=;
-                using relative_view::operator[];
+            struct Dict : RelativeView<KeyValue> {
+                using RelativeView::RelativeView;
+                using RelativeView::operator=;
+                using RelativeView::operator[];
 
                 [[nodiscard]] const Value *
                 tryGet(const string_literal key) const noexcept;
@@ -206,7 +206,7 @@ export namespace pP {
                 template<pP::details::TChar CharT>
                 void operator()(const std::basic_string_view<CharT> str) const noexcept {
                     const std::span<CharT> local_cpy = m_arena.dup(str);
-                    m_target.emplace<relative_view<CharT> >(local_cpy);
+                    m_target.emplace<RelativeView<CharT> >(local_cpy);
                 }
 
                 void operator()(const opaque::Array arr) const noexcept {
@@ -571,7 +571,7 @@ export namespace std {
             -> decltype(ctx.out()) {
             return visit(
                 pP::overloaded(
-                    [&]<pP::details::TChar StringCharT>(const pP::relative_view<StringCharT> &inner_value) {
+                    [&]<pP::details::TChar StringCharT>(const pP::RelativeView<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
                                          std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
                     },

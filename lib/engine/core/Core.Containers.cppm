@@ -856,23 +856,23 @@ export namespace pP {
     // --------------------------------------------------------------
 
     template<typename T>
-    struct [[nodiscard]] array_view {
+    struct [[nodiscard]] ArrayView {
         using value_type = const T;
         using size_type = std::size_t;
 
         const T *m_data{};
         std::size_t m_size{};
 
-        constexpr array_view() noexcept = default;
+        constexpr ArrayView() noexcept = default;
 
-        constexpr array_view(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
+        constexpr ArrayView(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
             : m_data(list.data()),
               m_size(list.size()) {
         }
 
         template<std::size_t ExtentV = std::dynamic_extent>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr array_view(const std::span<T, ExtentV> span PPR_LIFETIME_BOUND) noexcept
+        constexpr ArrayView(const std::span<T, ExtentV> span PPR_LIFETIME_BOUND) noexcept
             : m_data(span.data()),
               m_size(span.size()) {
         }
@@ -880,7 +880,7 @@ export namespace pP {
         template<std::ranges::contiguous_range RangeT>
             requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr array_view(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
+        constexpr ArrayView(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
             : m_data(std::ranges::data(contiguous_range)),
               m_size(std::ranges::size(contiguous_range)) {
         }
@@ -912,43 +912,43 @@ export namespace pP {
         }
     };
 
-    static_assert(std::ranges::contiguous_range<array_view<int> >);
+    static_assert(std::ranges::contiguous_range<ArrayView<int> >);
 
     template<typename T>
-    array_view(std::initializer_list<T> list) -> array_view<T>;
+    ArrayView(std::initializer_list<T> list) -> ArrayView<T>;
 
     template<std::ranges::contiguous_range RangeT>
-    array_view(RangeT &&contiguous_range) -> array_view<std::ranges::range_value_t<RangeT> >;
+    ArrayView(RangeT &&contiguous_range) -> ArrayView<std::ranges::range_value_t<RangeT> >;
 
     template<typename T>
-    struct details::relocatable<array_view<T> > : std::true_type {
+    struct details::relocatable<ArrayView<T> > : std::true_type {
     };
 
     // --------------------------------------------------------------
-    // non-owning contiguous view helper with relative pointers (half the size of array_view<>)
+    // non-owning contiguous view helper with relative pointers (half the size of ArrayView<>)
     // --------------------------------------------------------------
 
     template<typename T>
-    struct [[nodiscard]] relative_view {
+    struct [[nodiscard]] RelativeView {
         using value_type = const T;
         using size_type = u32;
 
         RelPtr<const T, i32> m_data{};
         size_type m_size{};
 
-        constexpr relative_view() noexcept = default;
+        constexpr RelativeView() noexcept = default;
 
-        constexpr relative_view(const T *const ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
+        constexpr RelativeView(const T *const ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
             reset(ptr, n);
         }
 
         template<std::size_t ExtentV = std::dynamic_extent>
-        explicit constexpr relative_view(const std::span<T, ExtentV> &span) noexcept {
+        explicit constexpr RelativeView(const std::span<T, ExtentV> &span) noexcept {
             reset(span.data(), span.size());
         }
 
         template<std::size_t ExtentV = std::dynamic_extent>
-        constexpr relative_view &operator=(const std::span<T, ExtentV> &span) noexcept {
+        constexpr RelativeView &operator=(const std::span<T, ExtentV> &span) noexcept {
             reset(span.data(), span.size());
             return *this;
         }
@@ -987,19 +987,19 @@ export namespace pP {
             return std::span<const T>{m_data, m_size};
         }
 
-        [[nodiscard]] constexpr array_view<T> view() const noexcept {
-            return array_view<T>{m_data, m_size};
+        [[nodiscard]] constexpr ArrayView<T> view() const noexcept {
+            return ArrayView<T>{m_data, m_size};
         }
     };
 
-    static_assert(sizeof(relative_view<int>) == sizeof(u64));
-    static_assert(std::ranges::contiguous_range<relative_view<int> >);
+    static_assert(sizeof(RelativeView<int>) == sizeof(u64));
+    static_assert(std::ranges::contiguous_range<RelativeView<int> >);
 
     template<typename T>
-    relative_view(array_view<T> view) -> relative_view<T>;
+    RelativeView(ArrayView<T> view) -> RelativeView<T>;
 
     template<typename T>
-    struct details::relocatable<relative_view<T> > : std::true_type {
+    struct details::relocatable<RelativeView<T> > : std::true_type {
     };
 
     // ------------------------------------------------------------------
@@ -1545,7 +1545,7 @@ export namespace pP {
             // Used to propagate the noexcept specifier correctly.
             // ---------------------------------------------------------------
             template<typename IteratorT, typename CompT, typename ProjT>
-            concept nothrow_sortable =
+            concept TNothrowSortable =
                     noexcept(std::declval<CompT &>()(
                         std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()),
                         std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()))) &&
@@ -1568,7 +1568,7 @@ export namespace pP {
             S last,
             CompT comp = {},
             ProjT proj = {}
-        ) noexcept(details::nothrow_sortable<IteratorT, CompT, ProjT>) {
+        ) noexcept(details::TNothrowSortable<IteratorT, CompT, ProjT>) {
             const auto n = static_cast<std::size_t>(std::ranges::distance(first, last));
             if (n < 2u) [[unlikely]] return;
 
