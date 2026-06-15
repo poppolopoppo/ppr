@@ -32,9 +32,6 @@ extern "C" void __asan_unpoison_memory_region(void const volatile *, ::std::size
 #   define PPR_ASAN_UNPOISON_MEMORY(_ADDR, _SIZE) ((void)(_ADDR), (void)(_SIZE))
 #endif
 
-#define PPR_ENABLE_MEMORY_POISONING \
-    defined(PPR_ENABLE_SANITIZER_ADDRESS) || PPR_ENABLE_DEBUG
-
 #if PPR_ENABLE_MEMORY_POISONING
 
 namespace pP::mem::details {

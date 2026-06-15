@@ -15,6 +15,16 @@
 #endif
 
 // ------------------------------------------------------------------
+// memory poisoning is enabled when ASAN or debug builds are active
+// ------------------------------------------------------------------
+
+#if defined(PPR_ENABLE_SANITIZER_ADDRESS) || PPR_ENABLE_DEBUG
+#   define PPR_ENABLE_MEMORY_POISONING 1
+#else
+#   define PPR_ENABLE_MEMORY_POISONING 0
+#endif
+
+// ------------------------------------------------------------------
 // detects 32-bits vs 64-bits builds, note that 32-bits are deprecated.
 // ------------------------------------------------------------------
 

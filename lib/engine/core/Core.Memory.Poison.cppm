@@ -15,9 +15,6 @@ import :hal;
 
 import std;
 
-#define PPR_ENABLE_MEMORY_POISONING \
-    defined(PPR_ENABLE_SANITIZER_ADDRESS) || PPR_ENABLE_DEBUG
-
 #if defined(PPR_ENABLE_SANITIZER_ADDRESS)
 #   include <sanitizer/common_interface_defs.h>
 #   if defined(ASAN_POISON_MEMORY_REGION)
