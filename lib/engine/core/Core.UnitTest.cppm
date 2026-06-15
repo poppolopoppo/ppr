@@ -81,6 +81,7 @@ namespace pP {
             virtual void failWith(const char *msg) = 0;
 
             virtual void recurse(const UnitTest &test) = 0;
+            virtual void recurse(std::initializer_list<const UnitTest> tests) = 0;
 
             virtual void success() = 0;
 
@@ -123,6 +124,7 @@ namespace pP {
             std::optional<LogHandler> m_log{};
             std::string m_filter_path{};
             bool m_is_child_run = false;
+            std::optional<unsigned> m_shuffle_seed{};
 
             void setFilter(std::string_view path) noexcept;
 
@@ -207,6 +209,7 @@ namespace pP {
             void failWith(const char *msg) override;
 
             void recurse(const UnitTest &test) override;
+            void recurse(std::initializer_list<const UnitTest> tests) override;
 
             void success() override;
 

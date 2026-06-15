@@ -40,6 +40,11 @@ namespace pP {
 
             if ((m_flags & fork) == none) [[likely]] {
                 m_run(run);
+
+                if (isExpectedToFail()) [[unlikely]] {
+                    run.failWith("test succeeded, but it was expected to fail");
+                    return;
+                }
             } else {
                 if (not startInChildProcess_(impl)) {
                     if (not isExpectedToFail()) [[unlikely]] {
@@ -54,7 +59,11 @@ namespace pP {
 
             run.success();
         } catch (std::exception &e) {
-            run.failWith(e.what());
+            if (isExpectedToFail()) {
+                run.success();
+            } else {
+                run.failWith(e.what());
+            }
         }
     }
 
@@ -142,6 +151,21 @@ namespace pP {
 
         RunImpl new_run{m_context, test, *this};
         test.run(new_run);
+    }
+
+    void UnitTest::RunImpl::recurse(std::initializer_list<const UnitTest> tests) {
+        auto order = std::vector<std::size_t>(tests.size());
+        std::iota(order.begin(), order.end(), std::size_t{0});
+
+        if (auto seed = m_context.m_shuffle_seed) {
+            std::minstd_rand rng(*seed);
+            std::ranges::shuffle(order, rng);
+            hal::outputDebugFmt("shuffle seed: {}\n", *seed);
+        }
+
+        for (const auto idx : order) {
+            recurse(tests.begin()[static_cast<std::ptrdiff_t>(idx)]);
+        }
     }
 
     void UnitTest::RunImpl::success() {
