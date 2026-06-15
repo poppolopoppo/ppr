@@ -14,6 +14,7 @@ target_sources(EngineCore
             Core.Enums.cppm
             Core.FunctionRef.cppm
             Core.Io.cppm
+            Core.Io.FileWatcher.cppm
             Core.Io.Mapped_File.cppm
             Core.Utility.cppm
             Core.HAL.cppm
@@ -44,6 +45,7 @@ target_sources(EngineCore
         Core.Concurrency.Channel.cpp
         Core.Concurrency.Event.cpp
         Core.Io.cpp
+        Core.Io.FileWatcher.cpp
         Core.Containers.StableVector.cpp
         Core.Containers.HashMap.cpp
         ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.cpp

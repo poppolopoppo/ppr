@@ -20,6 +20,7 @@ import :core_utility;
 import :core_event;
 import :core_context;
 import :core_io;
+import :core_io_file_watcher;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(memory) {
@@ -59,6 +60,7 @@ export namespace pP::tests {
             event,
             context,
             io,
+            file_watcher,
             utility,
         });
     };

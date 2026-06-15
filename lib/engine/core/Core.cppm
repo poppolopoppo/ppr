@@ -14,6 +14,7 @@ export import :enums;
 export import :function_ref;
 export import :hal;
 export import :io;
+export import :io.file_watcher;
 export import :io.mapped_file;
 export import :memory;
 export import :memory.allocator;
