@@ -25,3 +25,4 @@ export import :strings;
 export import :timer;
 export import :types;
 export import :unit_test;
+export import :utility;

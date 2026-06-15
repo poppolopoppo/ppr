@@ -17,6 +17,7 @@ target_sources(EngineTests
             core/Core.Concurrency.Event.Tests.cppm
             core/Core.Concurrency.Io.Tests.cppm
             core/Core.Strings.Tests.cppm
+            core/Core.Utility.Tests.cppm
             core/Core.Tests.cppm
 )
 

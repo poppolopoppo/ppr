@@ -15,6 +15,7 @@ target_sources(EngineCore
             Core.FunctionRef.cppm
             Core.Concurrency.Io.cppm
             Core.Concurrency.Io.MappedFile.cppm
+            Core.Utility.cppm
             Core.HAL.cppm
             Core.Logger.cppm
             Core.Memory.cppm
