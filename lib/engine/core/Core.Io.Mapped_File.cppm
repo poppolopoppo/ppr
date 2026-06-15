@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.core:io_mapped;
+export module engine.core:io.mapped_file;
 
 import :assert;
 import :containers;
@@ -84,9 +84,16 @@ export namespace pP {
 
 export namespace pP::io {
 
-    [[nodiscard]] MappedFile mapFile(const std::filesystem::path &path,
-                                      const hal::io::OpenFlags flags = {}) noexcept(false) {
-        return MappedFile(hal::io::mapFile(path, flags));
+    [[nodiscard]] std::expected<MappedFile, std::error_code>
+    mapFile(const std::filesystem::path &path,
+            const hal::io::OpenFlags flags = {}) noexcept {
+        try {
+            return MappedFile(hal::io::mapFile(path, flags));
+        } catch (const std::system_error &e) {
+            return std::unexpected(e.code());
+        } catch (const std::bad_alloc &) {
+            return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
+        }
     }
 
 }

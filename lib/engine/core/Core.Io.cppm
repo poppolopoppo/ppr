@@ -4,7 +4,7 @@ export module engine.core:io;
 
 import :assert;
 import :containers;
-import :event;
+import :concurrency.event;
 import :hal;
 
 import std;
@@ -160,14 +160,15 @@ export namespace pP {
         IoPort(IoPort &&) noexcept = default;
         IoPort &operator=(IoPort &&) noexcept = default;
 
-        [[nodiscard]] IoFile open(const std::filesystem::path &path,
-                                   const hal::io::OpenFlags flags = {}) noexcept(false);
+        [[nodiscard]] std::expected<IoFile, std::error_code>
+        open(const std::filesystem::path &path,
+             const hal::io::OpenFlags flags = {}) noexcept;
 
         void read(IoRequest &req, const IoFile &file,
                   std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
         void write(IoRequest &req, const IoFile &file,
-                   std::span<const std::byte> buffer, const u64 file_offset) noexcept;
+                   std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
         [[nodiscard]] std::size_t pollCompletions() noexcept;
         [[nodiscard]] std::size_t waitForCompletions() noexcept;

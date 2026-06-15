@@ -19,7 +19,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 PPR_ASSERT(file.isValid());
                 file.close();
                 PPR_ASSERT(not file.isValid());
@@ -34,7 +36,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto file = std::move(*file_result);
                 PPR_ASSERT(file.isValid());
 
                 auto file2 = std::move(file);
@@ -56,7 +60,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 PPR_ASSERT(file.isValid());
                 file.close();
                 file.close();
@@ -76,7 +82,9 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                auto mapped = io::mapFile(path);
+                auto mapped_result = io::mapFile(path);
+                PPR_ASSERT(mapped_result.has_value());
+                auto &mapped = *mapped_result;
                 PPR_ASSERT(mapped.isValid());
                 PPR_ASSERT(mapped.size() == kContent.size());
 
@@ -92,7 +100,9 @@ export namespace pP::tests {
                     std::ofstream ofs(path, std::ios::binary);
                 }
 
-                auto mapped = io::mapFile(path);
+                auto mapped_result = io::mapFile(path);
+                PPR_ASSERT(mapped_result.has_value());
+                auto &mapped = *mapped_result;
                 PPR_ASSERT(mapped.isValid());
                 PPR_ASSERT(mapped.size() == 0u);
                 PPR_ASSERT(mapped.span().empty());
@@ -107,7 +117,9 @@ export namespace pP::tests {
                     ofs.write(kContent.data(), static_cast<std::streamsize>(kContent.size()));
                 }
 
-                auto mapped = io::mapFile(path);
+                auto mapped_result = io::mapFile(path);
+                PPR_ASSERT(mapped_result.has_value());
+                auto mapped = std::move(*mapped_result);
                 PPR_ASSERT(mapped.isValid());
 
                 auto mapped2 = std::move(mapped);
@@ -133,7 +145,9 @@ export namespace pP::tests {
                     ofs.write(kInitial.data(), static_cast<std::streamsize>(kInitial.size()));
                 }
 
-                auto mapped = io::mapFile(path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
+                auto mapped_result = io::mapFile(path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
+                PPR_ASSERT(mapped_result.has_value());
+                auto &mapped = *mapped_result;
                 PPR_ASSERT(mapped.isValid());
                 PPR_ASSERT(mapped.size() == kInitial.size());
 
@@ -183,7 +197,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 PPR_ASSERT(file.isValid());
 
                 IoRequest req;
@@ -218,7 +234,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
 
                 IoRequest req;
 
@@ -251,7 +269,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
 
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
@@ -277,7 +297,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
@@ -305,7 +327,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
@@ -346,7 +370,9 @@ export namespace pP::tests {
                 }
 
                 auto port = io::createPort();
-                auto file = port.open(path);
+                auto file_result = port.open(path);
+                PPR_ASSERT(file_result.has_value());
+                auto &file = *file_result;
                 {
                     IoRequest req;
                     std::array<std::byte, 64> buf{};
@@ -360,37 +386,45 @@ export namespace pP::tests {
         }
 
         PPR_UNIT_TEST(file) {
-            _.recurse(File::open_and_close);
-            _.recurse(File::move_semantics);
-            _.recurse(File::default_constructed_invalid);
-            _.recurse(File::double_close_safe);
+            _.recurse({
+                File::open_and_close,
+                File::move_semantics,
+                File::default_constructed_invalid,
+                File::double_close_safe,
+            });
         };
 
         PPR_UNIT_TEST(mapped) {
-            _.recurse(Mapped::read_content);
-            _.recurse(Mapped::empty_file);
-            _.recurse(Mapped::move_semantics);
-            _.recurse(Mapped::default_constructed_invalid);
-            _.recurse(Mapped::write_content);
+            _.recurse({
+                Mapped::read_content,
+                Mapped::empty_file,
+                Mapped::move_semantics,
+                Mapped::default_constructed_invalid,
+                Mapped::write_content,
+            });
         };
 
         PPR_UNIT_TEST(request) {
-            _.recurse(Request::default_state);
-            _.recurse(Request::i_event_interface);
-            _.recurse(Request::poll_idle_returns_zero);
-            _.recurse(Request::read_completes);
-            _.recurse(Request::reset_and_reuse);
-            _.recurse(Request::select_with_timer);
-            _.recurse(Request::cancel_inflight);
-            _.recurse(Request::cancel_idempotent);
-            _.recurse(Request::cancel_i_event);
-            _.recurse(Request::cancel_then_destroy);
+            _.recurse({
+                Request::default_state,
+                Request::i_event_interface,
+                Request::poll_idle_returns_zero,
+                Request::read_completes,
+                Request::reset_and_reuse,
+                Request::select_with_timer,
+                Request::cancel_inflight,
+                Request::cancel_idempotent,
+                Request::cancel_i_event,
+                Request::cancel_then_destroy,
+            });
         };
     }
 
     PPR_UNIT_TEST(io) {
-        _.recurse(IoTests::file);
-        _.recurse(IoTests::mapped);
-        _.recurse(IoTests::request);
+        _.recurse({
+            IoTests::file,
+            IoTests::mapped,
+            IoTests::request,
+        });
     };
 }

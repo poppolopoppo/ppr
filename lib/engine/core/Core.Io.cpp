@@ -3,13 +3,17 @@ module;
 module engine.core;
 
 import :assert;
-import :event;
+import :concurrency.event;
 import :hal;
 import :io;
 
 import std;
 
 namespace pP {
+
+namespace {
+    constexpr std::size_t kMaxCompletionBatch = 64;
+}
 
 // ------------------------------------------------------------------
 // IoPort
@@ -23,8 +27,17 @@ IoPort::~IoPort() noexcept {
     hal::io::deinit(m_handle);
 }
 
-IoFile IoPort::open(const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept(false) {
-    return IoFile(m_handle, hal::io::openFile(m_handle, path, flags));
+std::expected<IoFile, std::error_code>
+IoPort::open(const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept {
+    try {
+        return IoFile(m_handle, hal::io::openFile(m_handle, path, flags));
+    } catch (const std::system_error &e) {
+        return std::unexpected(e.code());
+    } catch (const std::invalid_argument &) {
+        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+    } catch (const std::bad_alloc &) {
+        return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
+    }
 }
 
 void IoPort::read(IoRequest &req, const IoFile &file,
@@ -50,14 +63,14 @@ void IoPort::read(IoRequest &req, const IoFile &file,
 }
 
 void IoPort::write(IoRequest &req, const IoFile &file,
-                    std::span<const std::byte> buffer, const u64 file_offset) noexcept {
+                    std::span<std::byte> buffer, const u64 file_offset) noexcept {
     PPR_ASSERT(req.m_state.load() == 0u && "IoRequest already in-flight");
 
     req.m_active_file = file.m_file;
 
     hal::io::SubmitEntry entry;
     entry.m_file = file.m_file;
-    entry.m_buffer = const_cast<std::byte *>(buffer.data());
+    entry.m_buffer = buffer.data();
     entry.m_buffer_size = buffer.size();
     entry.m_file_offset = file_offset;
     entry.m_opcode = hal::io::Opcode::write;
@@ -72,7 +85,7 @@ void IoPort::write(IoRequest &req, const IoFile &file,
 }
 
 std::size_t IoPort::pollCompletions() noexcept {
-    hal::io::CompletionEntry entries[64];
+    std::array<hal::io::CompletionEntry, kMaxCompletionBatch> entries{};
     const std::size_t n = hal::io::poll(m_handle, entries);
     for (std::size_t i = 0u; i < n; ++i) {
         auto &ce = entries[i];
@@ -85,7 +98,7 @@ std::size_t IoPort::pollCompletions() noexcept {
 }
 
 std::size_t IoPort::waitForCompletions() noexcept {
-    hal::io::CompletionEntry entries[64];
+    std::array<hal::io::CompletionEntry, kMaxCompletionBatch> entries{};
     const std::size_t n = hal::io::wait(m_handle, entries);
     for (std::size_t i = 0u; i < n; ++i) {
         auto &ce = entries[i];

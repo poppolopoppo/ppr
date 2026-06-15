@@ -136,7 +136,7 @@ export namespace pP::mem {
 
             annotateContiguousContainer(
                 static_cast<std::byte *>(m_slab),
-                m_capacity, 0u, m_offset);
+                m_capacity, slab_overhead_size, m_offset);
         }
 
         void popSlab_() {
