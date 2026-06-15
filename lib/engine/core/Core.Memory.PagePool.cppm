@@ -397,8 +397,7 @@ namespace pP::mem {
     // ------------------------------------------------------------------
     // OS page pooling allocator
     // ------------------------------------------------------------------
-    namespace os {
-        export class PagePool {
+    export class PagePool {
             static constexpr u32 bundle_max_count = 16u;
 
             using FullBundle = std::array<u32, bundle_max_count>;
@@ -497,5 +496,5 @@ namespace pP::mem {
 
             void shrinkToFit();
         };
-    }
 }
+

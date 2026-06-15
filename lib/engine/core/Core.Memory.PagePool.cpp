@@ -5,7 +5,7 @@ module engine.core;
 import :memory.page_pool;
 import std;
 
-namespace pP::mem::os {
+namespace pP::mem {
 
 // ------------------------------------------------------------------
 // OS page pooling allocator

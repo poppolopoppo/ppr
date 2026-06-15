@@ -138,8 +138,8 @@ export namespace pP::mem {
         static constexpr std::size_t reserved_size_v = 16ull << 30u; // 16.0 GiB
         static constexpr std::size_t num_reserved_blocks_v = reserved_size_v / block_size_v;
 
-        [[nodiscard]] static os::PagePool &getGlobalPool() noexcept {
-            alignas(hal::cacheline_size_v) static os::PagePool g_instance{
+        [[nodiscard]] static PagePool &getGlobalPool() noexcept {
+            alignas(hal::cacheline_size_v) static PagePool g_instance{
                 block_size_v,
                 num_reserved_blocks_v
             };
