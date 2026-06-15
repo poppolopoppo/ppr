@@ -3,7 +3,7 @@ module;
 export module engine.core:timer;
 
 import :assert;
-import :stable_vector;
+import :containers.stable_vector;
 
 import std;
 

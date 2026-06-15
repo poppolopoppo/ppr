@@ -1,14 +1,14 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.core:arena;
+export module engine.core:memory.arena;
 
 import :assert;
 import :containers;
 import :hal;
 import :memory;
-import :memory_poison;
-import :page_pool;
+import :memory.poison;
+import :memory.page_pool;
 
 import std;
 

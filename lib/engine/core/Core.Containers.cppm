@@ -6,7 +6,7 @@ export module engine.core:containers;
 
 import :assert;
 import :hal;
-import :memory_poison;
+import :memory.poison;
 
 import std;
 

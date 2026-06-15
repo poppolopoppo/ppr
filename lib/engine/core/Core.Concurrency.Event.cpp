@@ -1,7 +1,7 @@
 module;
 #include "pP/Macros.h"
 module engine.core;
-import :event;
+import :concurrency.event;
 import std;
 
 namespace pP {

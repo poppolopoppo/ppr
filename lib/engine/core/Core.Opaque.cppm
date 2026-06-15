@@ -3,9 +3,9 @@ module;
 
 export module engine.core:opaque;
 
-import :arena;
+import :memory.arena;
 import :assert;
-import :allocator;
+import :memory.allocator;
 import :function_ref;
 import :strings;
 

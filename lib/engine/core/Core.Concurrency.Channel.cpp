@@ -1,7 +1,7 @@
 module;
 #include "pP/Macros.h"
 module engine.core;
-import :channel;
+import :concurrency.channel;
 import std;
 
 namespace pP {

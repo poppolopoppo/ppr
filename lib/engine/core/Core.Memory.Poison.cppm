@@ -8,7 +8,7 @@ module;
 #   include <sanitizer/asan_interface.h>
 #endif
 
-export module engine.core:memory_poison;
+export module engine.core:memory.poison;
 
 import :assert;
 import :hal;

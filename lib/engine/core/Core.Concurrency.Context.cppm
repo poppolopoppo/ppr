@@ -1,7 +1,7 @@
 module;
-export module engine.core:context;
+export module engine.core:concurrency.context;
 
-import :event;
+import :concurrency.event;
 import :opaque;
 import :strings;
 import :timer;

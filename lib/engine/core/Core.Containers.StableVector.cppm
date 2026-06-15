@@ -1,11 +1,11 @@
 module;
 #include "pP/Macros.h"
-export module engine.core:stable_vector;
+export module engine.core:containers.stable_vector;
 
 import :assert;
 import :hal;
 import :memory;
-import :memory_poison;
+import :memory.poison;
 
 import std;
 

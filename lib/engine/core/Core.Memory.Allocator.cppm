@@ -1,11 +1,11 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.core:allocator;
+export module engine.core:memory.allocator;
 
 import :assert;
 import :containers;
-import :memory_poison;
+import :memory.poison;
 
 import std;
 

@@ -2,7 +2,7 @@ module;
 #include "pP/Macros.h"
 
 module engine.core;
-import :page_pool;
+import :memory.page_pool;
 import std;
 
 namespace pP::mem::os {

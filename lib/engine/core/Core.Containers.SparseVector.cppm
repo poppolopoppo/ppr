@@ -1,12 +1,12 @@
 module;
 #include "pP/Macros.h"
-export module engine.core:sparse_vector;
+export module engine.core:containers.sparse_vector;
 
 import :assert;
 import :containers;
 import :hal;
 import :memory;
-import :stable_vector;
+import :containers.stable_vector;
 
 import std;
 

@@ -1,13 +1,13 @@
 // ReSharper disable CppPolymorphicClassWithNonVirtualPublicDestructor
 module;
 #include "pP/Macros.h"
-export module engine.core:event;
+export module engine.core:concurrency.event;
 
 import :assert;
-import :allocator;
+import :memory.allocator;
 import :containers;
 import :hal;
-import :stable_vector;
+import :containers.stable_vector;
 
 import std;
 

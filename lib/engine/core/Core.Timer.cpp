@@ -6,7 +6,7 @@ module engine.core;
 import :timer;
 import :hal;
 import :assert;
-import :stable_vector;
+import :containers.stable_vector;
 
 import std;
 

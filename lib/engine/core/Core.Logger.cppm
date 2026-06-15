@@ -2,8 +2,8 @@ module;
 #include "pP/Macros.h"
 export module engine.core:logger;
 
-import :allocator;
-import :channel;
+import :memory.allocator;
+import :concurrency.channel;
 import :enums;
 import :opaque;
 import :strings;

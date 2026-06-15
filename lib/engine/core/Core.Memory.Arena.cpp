@@ -2,7 +2,7 @@ module;
 #include "pP/Macros.h"
 
 module engine.core;
-import :arena;
+import :memory.arena;
 import std;
 
 namespace pP::mem {

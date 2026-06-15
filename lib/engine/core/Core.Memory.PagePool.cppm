@@ -1,7 +1,7 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.core:page_pool;
+export module engine.core:memory.page_pool;
 
 import :assert;
 import :containers;

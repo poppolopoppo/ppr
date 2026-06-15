@@ -8,7 +8,7 @@ module;
 #endif
 
 module engine.core;
-import :memory_poison;
+import :memory.poison;
 import std;
 
 #if defined(PPR_ENABLE_SANITIZER_ADDRESS)

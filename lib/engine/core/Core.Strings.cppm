@@ -4,7 +4,7 @@ module;
 export module engine.core:strings;
 
 import :assert;
-import :arena;
+import :memory.arena;
 import :containers;
 
 import std;

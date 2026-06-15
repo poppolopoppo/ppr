@@ -2,8 +2,8 @@ module;
 #include "pP/Macros.h"
 module engine.core;
 import :assert;
-import :context;
-import :event;
+import :concurrency.context;
+import :concurrency.event;
 import :opaque;
 import :timer;
 import std;
