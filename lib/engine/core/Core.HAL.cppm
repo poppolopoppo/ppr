@@ -8,92 +8,15 @@ import :types;
 export import :types;
 import std;
 
+export import :utility;
+
 export namespace pP {
-
-    // ------------------------------------------------------------------
-    // alignment helpers
-    // ------------------------------------------------------------------
-
-    template<std::integral T>
-    [[nodiscard]] constexpr auto divideRoundUp(T value, T div) noexcept {
-        return (value + div - 1) / div;
-    }
-
-    template<std::integral T>
-    [[nodiscard]] constexpr auto alignBackward(T value, T mod) noexcept {
-        return (value / mod) * mod;
-    }
-
-    template<std::integral T>
-    [[nodiscard]] constexpr auto alignForward(T value, T mod) noexcept {
-        return divideRoundUp(value, mod) * mod;
-    }
-
-    template<std::integral T>
-    [[nodiscard]] constexpr auto alignForward(T value, std::align_val_t alignment) noexcept {
-        return alignForward(value, static_cast<T>(alignment));
-    }
-
-    template<typename T>
-    [[nodiscard]] T *alignBackward(T *ptr, std::align_val_t alignment) noexcept {
-        return std::bit_cast<T *>(alignBackward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
-    }
-
-    template<typename T>
-    [[nodiscard]] T *alignForward(T *ptr, std::align_val_t alignment) noexcept {
-        return std::bit_cast<T *>(alignForward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
-    }
 
     struct alignas(16u) simd_128_t {
         u32 m_data[4u]{};
     };
 
-    template<typename T>
-    inline constexpr std::align_val_t alignof_v{alignof(T)};
-    inline constexpr std::align_val_t max_align_v = alignof_v<std::max_align_t>;
     inline constexpr std::align_val_t simd_align_v = alignof_v<simd_128_t>;
-
-    // ------------------------------------------------------------------
-    // bit count needed to store any type
-    // ------------------------------------------------------------------
-
-    template<typename T>
-    inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8;
-
-    // ------------------------------------------------------------------
-    // expand a callable over an index sequence to perform compile-time unrolling
-    // ------------------------------------------------------------------
-
-    namespace details {
-        template<typename T, class F, T... Is>
-        constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>)
-            noexcept(noexcept(std::declval<F>()(std::integral_constant<T, Is>{}...))) {
-            return std::forward<F>(f)(std::integral_constant<T, Is>{}...);
-        }
-    }
-
-    // Usage pattern
-    //   static_iota<N>([&](auto... idx) { /* idx are std::integral_constant<std::size_t, I>... */ });
-
-    template<std::size_t N, class F>
-    constexpr decltype(auto) static_iota(F &&f)
-        noexcept(noexcept(details::static_iota_expand<std::size_t>(
-            std::forward<F>(f),
-            std::make_integer_sequence<std::size_t, N>{}))) {
-        return details::static_iota_expand<std::size_t>(
-            std::forward<F>(f),
-            std::make_integer_sequence<std::size_t, N>{});
-    }
-
-    template<typename T, T N, class F>
-    constexpr decltype(auto) static_iota(F &&f)
-        noexcept(noexcept(details::static_iota_expand<T>(
-            std::forward<F>(f),
-            std::make_integer_sequence<T, N>{}))) {
-        return details::static_iota_expand<T>(
-            std::forward<F>(f),
-            std::make_integer_sequence<T, N>{});
-    }
 
     // ------------------------------------------------------------------
     // base split mix hash functions (from boost)
