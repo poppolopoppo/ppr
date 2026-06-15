@@ -433,6 +433,36 @@ export namespace pP {
             void unmapFile(MapHandle map) noexcept;
             [[nodiscard]] void *mapData(MapHandle map) noexcept;
             [[nodiscard]] std::size_t mapSize(MapHandle map) noexcept;
+
+            // directory watching
+            using WatchHandle = void *;
+
+            struct WatchEvent {
+                enum class Action : u8 {
+                    added,
+                    removed,
+                    modified,
+                    renamed_old,
+                    renamed_new,
+                };
+                Action m_action;
+                u32    m_name_offset{0u};
+            };
+
+            [[nodiscard]] WatchHandle openWatch(const std::filesystem::path &dir, bool recursive) noexcept(false);
+            void closeWatch(WatchHandle watch) noexcept;
+
+            // pollWatch: non-blocking read of raw platform events into buffer.
+            // Returns bytes written to buffer, or 0 if nothing pending / on error.
+            // ec receives std::errc::result_out_of_range if the platform's internal buffer overflowed.
+            [[nodiscard]] std::size_t pollWatch(WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
+
+            // waitWatch: blocking variant of pollWatch.
+            [[nodiscard]] std::size_t waitWatch(WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
+
+            // Parse raw platform-specific event data into normalized WatchEvent records.
+            // out_names receives concatenated null-terminated filenames relative to watched directory.
+            [[nodiscard]] std::size_t parseWatchEvents(std::span<const std::byte> raw, std::span<WatchEvent> out_events, std::span<char> out_names) noexcept;
         }
 
         // ------------------------------------------------------------------

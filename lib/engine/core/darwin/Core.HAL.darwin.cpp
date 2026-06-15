@@ -515,4 +515,32 @@ namespace pP::hal::io {
         const auto *data = static_cast<const MapHandleData *>(map);
         return data != nullptr ? data->m_size : 0u;
     }
+
+    // ------------------------------------------------------------------
+    // directory watching (stub)
+    // ------------------------------------------------------------------
+
+    WatchHandle openWatch(const std::filesystem::path &, bool) noexcept(false) {
+        throw std::system_error(
+            std::make_error_code(std::errc::operation_not_supported),
+            "pP::io: directory watching not implemented on darwin");
+    }
+
+    void closeWatch(const WatchHandle) noexcept {
+        // no-op
+    }
+
+    std::size_t pollWatch(const WatchHandle, const std::span<std::byte>, std::error_code &) noexcept {
+        return 0u;
+    }
+
+    std::size_t waitWatch(const WatchHandle, const std::span<std::byte>, std::error_code &) noexcept {
+        return 0u;
+    }
+
+    std::size_t parseWatchEvents(const std::span<const std::byte>,
+                                  const std::span<WatchEvent>,
+                                  const std::span<char>) noexcept {
+        return 0u;
+    }
 }
