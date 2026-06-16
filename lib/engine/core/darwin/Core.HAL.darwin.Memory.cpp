@@ -13,6 +13,7 @@ module engine.core;
 import :assert;
 import :hal;
 import :memory;
+import :memory.poison;
 
 import std;
 
@@ -56,6 +57,8 @@ namespace pP::hal {
             throw std::bad_alloc();
         }
 
+        mem::unpoisonUninitialized(mapped_ptr, aligned_size);
+
         return {mapped_ptr, aligned_size};
     }
 
@@ -68,12 +71,16 @@ namespace pP::hal {
         if (::mprotect(ptr, size, prot) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
+
+        mem::unpoisonUninitialized(ptr, size);
     }
 
     void pageDecommit(void *const ptr, const std::size_t size) noexcept(false) {
         PPR_ASSERT(ptr != nullptr);
         PPR_ASSERT(std::bit_cast<std::uintptr_t>(ptr) % page_size == 0u);
         PPR_ASSERT(size % page_size == 0u);
+
+        mem::poisonDestroyed(ptr, size);
 
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
             throw std::bad_alloc();
@@ -88,14 +95,15 @@ namespace pP::hal {
     }
 
     void pageOfferToOS(void *const ptr, const std::size_t size) noexcept(false) {
+        mem::poisonDestroyed(ptr, size);
+
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
     }
 
     [[nodiscard]] bool pageReclaimFromOS(const void *const ptr, const std::size_t size) noexcept {
-        (void) ptr;
-        (void) size;
+        mem::unpoisonUninitialized(const_cast<void *>(ptr), size);
         return true;
     }
 
@@ -106,6 +114,8 @@ namespace pP::hal {
 #else
         (void) size;
 #endif
+
+        mem::poisonDestroyed(ptr, size);
 
         if (::munmap(ptr, size) != 0) [[unlikely]] {
             throw std::bad_alloc();

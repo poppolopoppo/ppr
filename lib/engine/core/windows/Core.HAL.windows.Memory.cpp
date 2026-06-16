@@ -11,6 +11,7 @@ module engine.core;
 import :assert;
 import :hal;
 import :memory;
+import :memory.poison;
 
 import std;
 
@@ -144,6 +145,10 @@ namespace pP::hal {
 
         PPR_ASSERT(alignForward(p_result, alignment) == p_result);
 
+        if (commit) {
+            mem::unpoisonUninitialized(p_result, aligned_size);
+        }
+
 #if PPR_ENABLE_ASSERTIONS
         ::MEMORY_BASIC_INFORMATION info;
         if (PPR_ENSURE(::VirtualQuery(p_result, &info, sizeof(info)))) {
@@ -167,12 +172,16 @@ namespace pP::hal {
                 pageProtectionFlags_(allowed)) == nullptr) [[unlikely]] {
             throw std::bad_alloc();
         }
+
+        mem::unpoisonUninitialized(ptr, size);
     }
 
     void pageDecommit(void *const ptr, const std::size_t size) noexcept(false) {
         PPR_ASSERT(ptr != nullptr);
         PPR_ASSERT(std::bit_cast<std::uintptr_t>(ptr) % page_size == 0u);
         PPR_ASSERT(size % page_size == 0u);
+
+        mem::poisonDestroyed(ptr, size);
 
         if (::VirtualFree(ptr, size, MEM_DECOMMIT) == FALSE) {
             throw std::bad_alloc();
@@ -187,6 +196,8 @@ namespace pP::hal {
     }
 
     void pageOfferToOS(void *const ptr, const std::size_t size) noexcept(false) {
+        mem::poisonDestroyed(ptr, size);
+
         if (::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal) != ERROR_SUCCESS) {
             throw std::bad_alloc();
         }
@@ -196,6 +207,7 @@ namespace pP::hal {
         switch (::ReclaimVirtualMemory(ptr, size)) {
             case ERROR_SUCCESS:
             case ERROR_BUSY:
+                mem::unpoisonUninitialized(ptr, size);
                 return true;
             default:
                 return false;
@@ -203,6 +215,8 @@ namespace pP::hal {
     }
 
     void pageFree(void *const ptr, [[maybe_unused]] const std::size_t size) {
+        mem::poisonDestroyed(ptr, size);
+
         if (!::VirtualFree(ptr, 0u, MEM_RELEASE)) {
             throw std::bad_alloc();
         }

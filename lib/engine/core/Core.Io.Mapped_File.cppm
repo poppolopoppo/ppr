@@ -5,6 +5,7 @@ export module engine.core:io.mapped_file;
 import :assert;
 import :containers;
 import :hal;
+import :memory.poison;
 
 import std;
 
@@ -67,6 +68,11 @@ export namespace pP {
 
         explicit MappedFile(hal::io::MapHandle map) noexcept
             : m_map(map) {
+            if (m_map != nullptr) {
+                mem::unpoisonUninitialized(
+                    static_cast<std::byte *>(hal::io::mapData(m_map)),
+                    hal::io::mapSize(m_map));
+            }
         }
 
     private:
