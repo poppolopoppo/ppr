@@ -13,6 +13,11 @@ int main(const int argc, char *argv[]) {
         std::cerr << "unit-test <" << run.getTestId().path() << "> failed with: " << failure << std::endl;
     };
 
+    unsigned loops = mem::is_asan_enabled_v ? 3u : 1u;
+    bool shuffle_seen = false;
+    bool explicit_seed = false;
+    std::random_device rng{};
+
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg{argv[i]};
 
@@ -21,22 +26,31 @@ int main(const int argc, char *argv[]) {
         } else if (arg == "--child-run") {
             context.markAsChildRun();
         } else if (arg == "--shuffle") {
-            unsigned seed = static_cast<unsigned>(std::random_device{}());
+            shuffle_seen = true;
+            unsigned seed = rng();
             if (i + 1 < argc) {
                 const std::string_view next{argv[i + 1]};
-                auto [ptr, ec] = std::from_chars(next.data(), next.data() + next.size(), seed);
-                if (ec == std::errc{}) {
+                if (auto [ptr, ec] = std::from_chars(next.data(), next.data() + next.size(), seed);
+                    ec == std::errc{}) {
                     ++i;
+                    explicit_seed = true;
                 }
             }
             context.m_shuffle_seed = seed;
+        } else if (arg == "--no-shuffle") {
+            shuffle_seen = true;
+            context.m_shuffle_seed = std::nullopt;
+        } else if (arg == "--loop" && i + 1 < argc) {
+            loops = std::stoul(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::println(
-                "Usage: EngineTests [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--help]\n"
+                "Usage: EngineTests [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--help]\n"
                 "\n"
                 "  --run-test <path>   Run a specific test (or subtree) by path\n"
                 "  --child-run         Mark this process as a child (forked) test runner\n"
-                "  --shuffle [<seed>]  Randomize test execution order (optional seed for reproducibility)\n"
+                "  --shuffle [<seed>]  Randomize test execution order (default: on, auto-seed)\n"
+                "  --no-shuffle        Disable test shuffling (declaration order)\n"
+                "  --loop <N>          Run the full test suite N times\n"
                 "  -h, --help          Show this help message\n"
                 "\n"
                 "Test paths use '/' separators, e.g. 'core/memory/asanPoisoning/poison_destroyed_then_read_triggers_asan'.\n");
@@ -44,10 +58,26 @@ int main(const int argc, char *argv[]) {
         }
     }
 
+    if (!shuffle_seen) {
+        context.m_shuffle_seed = rng();
+    }
+
     if (context.isChildRun()) {
         hal::disableSystemErrorReporting();
     }
 
-    UnitTest::run(context, tests::core);
+    for (unsigned iter = 0u; iter < loops; ++iter) {
+        if (iter > 0 && !explicit_seed && context.m_shuffle_seed.has_value()) {
+            context.m_shuffle_seed = rng();
+        }
+        if (loops > 1 and context.m_shuffle_seed.has_value()) {
+            std::cout << "[Running tests][Loop: " << iter << "/" << loops
+                    << "][Shuffle: " << std::hex << std::uppercase
+                    << std::setw(16) << std::setfill('0')
+                    << context.m_shuffle_seed.value_or(0u) << std::dec << "]"
+                    << std::endl;
+        }
+        UnitTest::run(context, tests::core);
+    }
     return g_tests_failed ? -1 : 0;
 }

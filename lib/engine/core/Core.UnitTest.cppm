@@ -78,7 +78,7 @@ namespace pP {
 
             virtual void log(const char *msg) = 0;
 
-            virtual void failWith(const char *msg) = 0;
+            virtual void failWith(const char *msg) noexcept(false) = 0;
 
             virtual void recurse(const UnitTest &test) = 0;
             virtual void recurse(std::initializer_list<const UnitTest> tests) = 0;
@@ -94,7 +94,7 @@ namespace pP {
             }
 
             template<typename... ArgsT>
-            void failFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
+            void failFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept(false) {
                 char buffer[2048];
                 const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
                 *out = char{0};
@@ -120,11 +120,13 @@ namespace pP {
         struct Context {
             using LogHandler = std23::function_ref<void(const IRun &, const char *)>;
 
+            std::string m_filter_path{};
+
             std::optional<LogHandler> m_fail_with{};
             std::optional<LogHandler> m_log{};
-            std::string m_filter_path{};
-            bool m_is_child_run = false;
             std::optional<unsigned> m_shuffle_seed{};
+
+            bool m_is_child_run = false;
 
             void setFilter(std::string_view path) noexcept;
 

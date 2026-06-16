@@ -128,7 +128,7 @@ namespace pP {
         }
     }
 
-    void UnitTest::RunImpl::failWith(const char *msg) {
+    void UnitTest::RunImpl::failWith(const char *msg) noexcept(false) {
         if (m_num_failed++ == 0u) {
             m_failure = msg;
             m_status = fail;
@@ -138,6 +138,8 @@ namespace pP {
             m_parent->failWith(msg);
         } else if (m_context.m_fail_with.has_value()) {
             (*m_context.m_fail_with)(*this, msg);
+        } else {
+            throw std::logic_error{msg};
         }
     }
 
@@ -160,7 +162,6 @@ namespace pP {
         if (auto seed = m_context.m_shuffle_seed) {
             std::minstd_rand rng(*seed);
             std::ranges::shuffle(order, rng);
-            hal::outputDebugFmt("shuffle seed: {}\n", *seed);
         }
 
         for (const auto idx : order) {
