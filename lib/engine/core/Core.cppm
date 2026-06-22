@@ -25,6 +25,7 @@ export import :memory.page_pool;
 export import :memory.pointer;
 export import :memory.poison;
 export import :opaque;
+export import :service;
 export import :strings;
 export import :timer;
 export import :types;

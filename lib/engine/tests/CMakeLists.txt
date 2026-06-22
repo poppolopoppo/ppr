@@ -4,6 +4,7 @@ target_sources(EngineTests
     PUBLIC
         FILE_SET CXX_MODULES FILES
             core/Core.Opaque.Tests.cppm
+            core/Core.Service.Tests.cppm
             core/Core.Enums.Tests.cppm
             core/Core.Memory.Tests.cppm
             core/Core.Memory.Arena.Tests.cppm

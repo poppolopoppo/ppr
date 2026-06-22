@@ -48,6 +48,7 @@ target_sources(EngineCore
             Core.Memory.Pointer.cppm
             Core.Memory.Poison.cppm
             Core.Opaque.cppm
+            Core.Service.cppm
             Core.Strings.cppm
             Core.Timer.cppm
             Core.Types.cppm
