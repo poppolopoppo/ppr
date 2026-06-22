@@ -28,6 +28,7 @@ target_sources(EngineCore
             Core.Concurrency.Context.cppm
             Core.Concurrency.Event.cppm
             Core.Containers.cppm
+            Core.Containers.FlatMap.cppm
             Core.Containers.HashMap.cppm
             Core.Containers.SparseVector.cppm
             Core.Containers.StableVector.cppm
@@ -67,6 +68,7 @@ target_sources(EngineCore
         Core.Io.cpp
         Core.Io.FileWatcher.cpp
         Core.Containers.StableVector.cpp
+        Core.Containers.FlatMap.cpp
         Core.Containers.HashMap.cpp
         ${HAL_PLATFORM_SOURCES}
 )
