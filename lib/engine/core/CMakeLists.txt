@@ -45,6 +45,7 @@ target_sources(EngineCore
             Core.Memory.Allocator.cppm
             Core.Memory.Arena.cppm
             Core.Memory.PagePool.cppm
+            Core.Memory.Pointer.cppm
             Core.Memory.Poison.cppm
             Core.Opaque.cppm
             Core.Strings.cppm
