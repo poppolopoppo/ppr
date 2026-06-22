@@ -9,6 +9,9 @@ else ()
     message(STATUS "Using preconfigured cmake toolchain file: ${CMAKE_TOOLCHAIN_FILE}")
 endif ()
 
+# Enable C++ exceptions (required by the C++ Standard Library module)
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
+
 # Ensure /utf-8 is applied to every target that builds or imports modules.
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
