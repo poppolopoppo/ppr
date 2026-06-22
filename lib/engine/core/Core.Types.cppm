@@ -119,4 +119,39 @@ export namespace pP {
     inline constexpr ZeroValue zero_v;
     inline constexpr UnsignedMax none_v;
     inline constexpr UnsignedMax umax_v;
+
+    template<typename T, typename TagT>
+        requires std::equality_comparable<T> && std::three_way_comparable<T>
+    struct Numeric {
+        using tag_type = TagT;
+
+        [[nodiscard]] friend constexpr T defaultValue(std::type_identity_t<Numeric>) noexcept {
+            return default_value_v;
+        }
+
+        T m_value{defaultValue(std::type_identity_t<Numeric>{})};
+
+        constexpr Numeric() noexcept = default;
+
+        explicit constexpr Numeric(const T value) noexcept
+            : m_value{value} {
+        }
+
+        [[nodiscard]] constexpr T operator*() const noexcept {
+            return m_value;
+        }
+
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator T() const noexcept {
+            return m_value;
+        }
+
+        [[nodiscard]] constexpr bool operator==(const Numeric &other) const {
+            return m_value == other.m_value;
+        }
+
+        [[nodiscard]] constexpr std::strong_ordering operator<=>(const Numeric &other) const {
+            return m_value <=> other.m_value;
+        }
+    };
 }
