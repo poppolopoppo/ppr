@@ -58,6 +58,25 @@ The build system uses modern CMake. When adding new subsystems:
 the new source — never batched in a separate build commit. Each feature
 commit must produce a buildable intermediate state.
 
+**Toolchain selection:** Always use the latest toolchain available on the
+current system. On Windows, prefer Visual Studio 2026 when available (even
+if it's an Insiders version) and recommended cmake preset is `msvc-dev` -which
+has full debug options and ASAN enabled by default.
+
+**Reload and configure CMake:** Use the CLion tool `clion_execute_run_configuration` with
+`configurationName="cmake-configure"` (or the corresponding CMake reload configuration) whenever
+available. This ensures the IDE's index stays in sync with the build system.
+
+**Fallback (bash):** If the CLion tool is unavailable, run the CMake CLI directly. Run
+`vcvarsall.bat` (from the VS 2026 Insiders installation) in a **cmd.exe** shell first, then
+configure:
+```cmd
+"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvarsall.bat" x64 && cmake --preset msvc-dev
+```
+Do NOT run `cmake` from PowerShell with `&&` — it spawns a sub-shell where vcvarsall env vars
+don't persist. When using the bash tool on Windows, use `cmd.exe /c` with the single-line form
+above.
+
 ### CMake Configuration
 
 The root `CMakeLists.txt` provides:
@@ -269,4 +288,18 @@ export namespace pP::tests {
 Run all core tests:
 ```cpp
 pP::UnitTest::run(pP::tests::core);
+```
+
+### Testing Procedure
+
+When building and running tests, prefer CLion tools on Windows (msvc-dev preset):
+
+1. **Build:** Use `clion_execute_run_configuration` with `configurationName="EngineTests"` and `waitForExit=true` (or `false` if you only need the build to complete). This builds the test executable with the `msvc-dev` preset.
+2. **Run tests:** Execute `clion_execute_run_configuration` with `configurationName="EngineTests"` and `waitForExit=true`, or build and run in a single call.
+
+The `EngineTests` executable runs all registered `PPR_UNIT_TEST` suites automatically and reports results via assertions.
+
+**Fallback (bash):** If the CLion tool is unavailable, use the command-line approach:
+```cmd
+"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvarsall.bat" x64 && cmake --build --preset msvc-dev --target EngineTests && ctest --preset msvc-dev -R EngineUnitTests --output-on-failure
 ```
