@@ -37,7 +37,7 @@ target_sources(EngineCore
             Core.Hashing.cppm
             Core.Io.cppm
             Core.Io.FileWatcher.cppm
-            Core.Io.Mapped_File.cppm
+            Core.Io.MappedFile.cppm
             Core.Utility.cppm
             Core.HAL.cppm
             Core.Logger.cppm
