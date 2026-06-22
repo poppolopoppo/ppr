@@ -212,9 +212,9 @@ export namespace pP {
         using EError = RawChannel::EError;
         using EPolling = RawChannel::EPolling;
 
-        using enum EBackPressure;
-        using enum EError;
-        using enum EPolling;
+        using enum RawChannel::EBackPressure;
+        using enum RawChannel::EError;
+        using enum RawChannel::EPolling;
 
         explicit Channel(SharedRawChannelPtr &&chan) noexcept
             : m_chan{std::move(chan)} {
