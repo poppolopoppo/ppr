@@ -14,6 +14,7 @@ export import :concurrency.event;
 export import :enums;
 export import :function_ref;
 export import :hal;
+export import :hashing;
 export import :io;
 export import :io.file_watcher;
 export import :io.mapped_file;
