@@ -8,6 +8,7 @@ import engine.core;
 import :core_arena;
 import :core_channel;
 import :core_containers;
+import :core_flat_map;
 import :core_hash_map;
 import :core_enums;
 import :core_memory;
@@ -45,6 +46,7 @@ export namespace pP::tests {
             ring_buffer,
             stableVector,
             sparseVector,
+            flatMap,
             hashMap,
         });
     };

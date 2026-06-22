@@ -10,6 +10,7 @@ target_sources(EngineTests
             core/Core.Memory.Arena.Tests.cppm
             core/Core.Memory.PagePool.Tests.cppm
             core/Core.Containers.Tests.cppm
+            core/Core.Containers.FlatMap.Tests.cppm
             core/Core.Containers.StableVector.Tests.cppm
             core/Core.Containers.SparseVector.Tests.cppm
             core/Core.Containers.HashMap.Tests.cppm
