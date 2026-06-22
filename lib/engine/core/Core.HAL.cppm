@@ -349,6 +349,22 @@ export namespace pP {
             [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false);
 
             [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false);
+
+            [[noreturn]] void terminateProcess(int exit_code) noexcept;
+        }
+
+        // ------------------------------------------------------------------
+        // deadline timers (used for test timeout enforcement)
+        // ------------------------------------------------------------------
+
+        namespace timer {
+            struct DeadlineHandle {
+                void *m_data{nullptr};
+            };
+
+            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::move_only_function<void()> callback) noexcept(false);
+
+            void cancelDeadline(DeadlineHandle &handle) noexcept;
         }
 
         // ------------------------------------------------------------------
