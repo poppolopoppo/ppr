@@ -1,305 +1,109 @@
 # AGENTS.md: Developer Guide for PPR Game Engine
 
-This document outlines structural conventions and best practices for contributing to the game engine core and game modules.
+## Available Skills
+Load these on demand via the `skill` tool when your task matches their domain:
 
----
-
-## Table of Contents
-
-1. [Project Structure](#project-structure)
-2. [Build System](#build-system)
-3. [C++20 Modules](#c20-modules)
-4. [Type Safety](#type-safety)
-5. [Assertions](#assertions)
-6. [Memory \& Allocators](#memory--allocators)
-7. [Core Abstractions](#core-abstractions)
-8. [Unit Testing](#unit-testing)
-9. [Coding Standards](#coding-standards)
-10. [Platform Abstraction (HAL)](#platform-abstraction-hal)
-
----
-
-## Project Structure
-
-The codebase follows a clear separation of concerns:
-
-| Directory | Purpose |
-|-----------|---------|
-| `lib/` | Core reusable components: rendering pipeline, memory management, math utilities, asset loading |
-| `game/` | Application entry point, game-specific logic orchestrating lib modules |
+| Skill | Trigger Keywords | Coverage |
+|-------|-----------------|----------|
+| `memory-allocator` | allocation, arena, pool, slab, poison | Allocator selection, composition, arena patterns, poison API, STL adapter, safe_ptr |
+| `module-architect` | new module, partition, `.cppm`, test module | Module naming, file structure, umbrella registration, CMake registration, pitfalls |
+| `build-system` | cmake, preset, target, dependency, linker error | Presets, setup_ppr_project, deps (CPM/vcpkg), MSVC workarounds, sanitizers |
+| `hal-developer` | hal, platform, porting, syscall | 10 areas across 4 platforms, syscall mapping, stub conventions, adding a platform |
+| `concurrency-patterns` | channel, signal, event, context, cancellation | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
 
 ## External File Loading
-
-**CRITICAL:** When you encounter a file reference (e.g., @rules/general.md),
-use your Read tool to load it on a need-to-know basis.
-They're relevant to the SPECIFIC task at hand.
-
-Instructions:
-
-- Do NOT preemptively load all references - use lazy loading based on actual need
-- When loaded, treat content as mandatory instructions that override defaults
-- Follow references recursively when needed
-
----
+When you encounter a file reference (e.g., @rules/general.md), load it on demand.
+Do NOT preemptively load all references. Treat loaded content as mandatory instructions.
 
 ## Build System
-
-The build system uses modern CMake. When adding new subsystems:
-
-1. **Create directory** under `lib/` (e.g., `lib/new_subsystem/`)
-2. **Add CMakeLists.txt** defining the target
-3. **Integrate** via parent's `add_subdirectory()`
-4. **Link** via `target_link_libraries(consumer PRIVATE new_target)`
-
-**Rule:** Never add a library without corresponding CMake definitions.
-
-**Commit rule:** When adding a new source file to an existing library, the
-`CMakeLists.txt` change that registers it must go in the **same commit** as
-the new source — never batched in a separate build commit. Each feature
-commit must produce a buildable intermediate state.
-
-**Toolchain selection:** Always use the latest toolchain available on the
-current system. On Windows, prefer Visual Studio 2026 when available (even
-if it's an Insiders version) and recommended cmake preset is `msvc-dev` -which
-has full debug options and ASAN enabled by default.
-
-**Reload and configure CMake:** Use the CLion tool `clion_execute_run_configuration` with
-`configurationName="cmake-configure"` (or the corresponding CMake reload configuration) whenever
-available. This ensures the IDE's index stays in sync with the build system.
-
-**Fallback (bash):** If the CLion tool is unavailable, run the CMake CLI directly. Run
-`vcvarsall.bat` (from the VS 2026 Insiders installation) in a **cmd.exe** shell first, then
-configure:
-```cmd
-"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvarsall.bat" x64 && cmake --preset msvc-dev
-```
-Do NOT run `cmake` from PowerShell with `&&` — it spawns a sub-shell where vcvarsall env vars
-don't persist. When using the bash tool on Windows, use `cmd.exe /c` with the single-line form
-above.
-
-### CMake Configuration
-
-The root `CMakeLists.txt` provides:
-
-| Option | Purpose |
-|--------|---------|
-| `PPR_ENABLE_DEVELOPER_MODE` | Enables warnings-as-errors, sanitizers, and static analyzers |
-| `PPR_ENABLE_COVERAGE` | Coverage reporting for gcc/clang |
-| `PPR_ENABLE_SANITIZER_*` | Individual sanitizers (address, leak, undefined, thread, memory) |
-| `PPR_ENABLE_CLANG_TIDY` | Run clang-tidy on builds |
-| `PPR_ENABLE_CPPCHECK` | Run cppcheck static analyzer |
-| `PPR_WARNINGS_AS_ERRORS` | Treat warnings as errors |
-| `PPR_ENABLE_UNITY_BUILD` | Enable unity build for faster compilation |
-
-### Library Targets
-
-| Target | Purpose | Dependencies |
-|--------|---------|------------|
-| `EngineCore` | Core modules (containers, memory, strings) | rapidhash |
-| `EngineMath` | Math utilities | EngineCore, mango |
-| `EngineRHI` | Rendering interface | EngineCore, slang-rhi |
-| `EngineApp` | Application layer | EngineCore, EngineRHI, glfw |
-| `VideoGameApp` | Final executable | All engine libraries |
-
-### Target Setup
-
-Use `setup_ppr_project()` to configure a target with standard settings:
-
-- C++23 compile features
-- Compiler warnings
-- Engine include directories
-- Sanitizers (if enabled)
-
-### File Organization
-
-```
-cmake/
-  HAL.cmake           # Platform detection (PPR_HAL_PLATFORM)
-  Compilers.cmake     # Compiler-specific settings
-  Sanitizers.cmake   # Sanitizer configuration
-  StaticAnalyzers.cmake  # clang-tidy, cppcheck
-  Dependencies.cmake  # VCPkg integration
-  Cache.cmake       # Build cache settings
-```
-
----
+- CMake 4.2+, C++23, modules enabled, experimental `import std`.
+- Presets: `msvc-dev` (recommended), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
+- Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see cmake/Compilers.cmake).
+- Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
+- Build & test via CLion run configuration `EngineTests`; or build with `cmake --build --preset msvc-dev --target EngineTests` after `cmake --preset msvc-dev`.
 
 ## C++20 Modules
-
-We strictly use C++20 Modules for interfaces:
-
-| Extension | Purpose |
-|----------|---------|
-| `.cppm` | Module interface (export declarations) |
-| `.cpp` | Module implementation (definitions) |
-| `.h` | Legacy headers (use sparingly) |
-| `.hpp` | Pure template headers (rare) |
-
-**Module naming:** `export module engine.core:containers;`
-
-**Best practice:** Keep `.cppm` files minimal with only exports; put definitions in `.cpp`.
+- `.cppm` = interface (exports), `.cpp` = implementation (definitions), `.h` = Macros.h only.
+- Libraries: `engine.core`, `engine.math`, `engine.rhi`, `engine.app`.
+- Partitions: `engine.core:containers.hash_map` (dots = hierarchy).
+- Tests: `engine.tests:core_memory` (underscores).
+- File naming: `Core.<Partition>.cppm` / `Core.<Partition>.cpp`, platform HAL: `Core.HAL.<platform>.<Area>.cpp`.
+- Interface pattern:
+  ```cpp
+  module;
+  #include "pP/Macros.h"
+  export module engine.core:your_partition;
+  import std;
+  export namespace pP { ... }
+  ```
+- Implementation pattern:
+  ```cpp
+  module;
+  #include "pP/Macros.h"
+  module engine.core;
+  import :your_partition;
+  import std;
+  namespace pP { ... }
+  ```
+- Umbrella re-exports: add `export import :partition;` to `Core.cppm`.
+- Keep `.cppm` files minimal (exports only); put definitions in `.cpp`.
 
 ## Coding Standards
-
-- **No raw loops:** Prefer algorithms and ranges
-- **No comments:** Code should be self-documenting
-- **constexpr everywhere:** Prefer compile-time evaluation
-- **`[[nodiscard]]`:** Mark functions returning important values
-- **`PPR_FORCE_INLINE`:** For hot-path functions
-- **`noexcept`:** Mark functions that cannot throw
+- No raw loops (prefer algorithms/ranges). No comments (code should be self-documenting).
+- `constexpr` everywhere, `[[nodiscard]]` on important returns, `noexcept` where possible.
+- Inlining: `PPR_FORCE_INLINE` (hot paths), `PPR_NO_INLINE` (prevent), `PPR_FLATTEN` (recursive).
+- Attributes: `PPR_EMPTY_BASES` (MSVC stateless wrappers), `PPR_LIFETIME_BOUND` (reference lifetime deps).
+- Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), PPR_UNIT_TEST. No others.
 
 ## Type Safety
-
-The engine prioritizes compile-time safety:
-
-- `checked_cast<ToT>(value)`: Safe narrowing/widening with assertion guards
-- `std::bit_cast<ToT>(value)`: Type-pun without undefined behavior
-- **Concepts:** Use C++20 concepts for template validation
-- `std::size_t` / `std::ptrdiff_t`: For sizes and indices (not `int`)
-- `std::span<T>`: For array views (not raw pointer + size)
-- **Relocatable types:** Mark via `pP::details::relocatable<T>` when they support `memcpy`
-- **Macros are forbidden:** The only macros allowed are in [@include/ppr/Macros.h](include/ppr/Macros.h) for assertions and portability.
+- `checked_cast<ToT>(v)` — safe narrowing/widening + downcast (dynamic_cast debug, static_cast release).
+- `safe_narrowing<IntT>` — tag type asserting round-trip on implicit conversion.
+- Integer shorthands: `u8/u16/u32/u64/i8/i16/i32/i64` (Core.Types.cppm).
+- Sentinel values: `default_value_v`, `zero_v`, `none_v`, `umax_v`.
+- `Numeric<T, TagT>` — strongly-typed numeric wrapper.
+- `hash_t` — type-safe hash value (struct with m_value, comparison, hashValue).
+- `pP::details::relocatable<T>` — mark types supporting memcpy.
 
 ## Assertions
+| Macro | Debug Behavior | Release Behavior |
+|-------|---------------|------------------|
+| `PPR_ASSERT(expr)` | Calls onFailure, throws `std::logic_error` | `PPR_ASSUME(expr)` |
+| `PPR_VERIFY(expr)` | Calls onFailure, throws `std::logic_error` | Evaluates expr + `PPR_ASSUME` |
+| `PPR_ENSURE(expr)` | Returns false on failure | `PPR_ASSUME(expr)` then eval |
+| `PPR_ASSUME(expr)` | `[[assume(expr)]]` / `__built_assume` | Same |
+- `PPR_ENABLE_ASSERTIONS` = `PPR_ENABLE_DEBUG` (`_DEBUG` or `!NDEBUG`).
+- `Assertion::setFailurePolicy()` lets tests intercept assertions.
 
-A tiered assertion system:
-
-| Macro | Behavior |
-|------|----------|
-| `PPR_ASSERT()` | Throws in debug, compiles away in release |
-| `PPR_VERIFY()` | Evaluates expression in release (for side effects) |
-| `PPR_ENSURE()` | Post-condition check; returns false on failure |
-
-Enable via `PPR_ENABLE_ASSERTIONS` (enabled in debug builds).
-
-## Platform Abstraction (HAL)
-
-Platform-specific code lives in:
-
-```
-lib/engine/core/<platform>/Core.HAL.<platform>.cpp
-```
-
-- Platform selection via `PPR_HAL_PLATFORM` (windows, linux, darwin)
-- Use `pP::hal::` namespace for OS/platform calls
-- Provides: memory pages, filesystem, debugger, native strings
+## HAL
+Platform code in `lib/engine/core/<platform>/`. Supported: windows, linux, darwin, generic (stub). Selected via `PPR_HAL_PLATFORM` (cmake/HAL.cmake).
+- `pP::hal`: pageAlloc/Free/Commit/Decommit/Protect/OfferToOS/ReclaimFromOS, ringBufferAlloc/Free, outputDebug, isDebuggerPresent, breakpoint.
+- Sub-namespaces: `process` (executablePath, spawnAndWait, terminate), `timer` (setDeadline, cancelDeadline), `io` (async I/O, file watches), `native` (string transcoding).
+- See `Core.HAL.cppm` for full API surface.
 
 ## Memory & Allocators
-
-Modern C++23-compatible allocator system:
-
-- `pP::mem::Allocator<T>`: Wrapper providing STL allocator compatibility
-- `pP::mem::GPA`: General purpose allocator (backed by `operator new`)
-- `pP::mem::OS`: OS virtual memory allocator (via `hal::pageAlloc`)
-- `pP::mem::HugePage`: 2 MiB pooled pages for backend allocation
-- `pP::mem::InSitu<N>`: Stack-allocated fixed-size buffer
-
-### ASAN Poisoning
-
-Custom allocators and containers should use `pP::mem::poison*` functions to enable ASAN error detection. The API provides two modes:
-
-1. **ASAN-native poisoning** (when `PPR_ENABLE_SANITIZER_ADDRESS` is defined)
-2. **Pattern-based poisoning** (for debugging without ASAN - uses `memset` with debug patterns)
-
-#### Poison Functions
-
-| Function | Purpose | Usage |
-|----------|---------|-------|
-| `poisonAllocated(ptr, size)` | Mark memory as freshly allocated (uninitialized) | Call after `allocateRaw()` succeeds |
-| `poisonDestroyed(ptr, size)` | Mark memory as about to be freed | Call before `deallocateRaw()` |
-| `poisonReserved(ptr, size)` | Mark memory region as reserved but inactive | Call after restore or reset |
-
-Template overloads for element counts:
-```cpp
-poisonAllocated(ptr, count);  // poisons sizeof(T) * count bytes
-poisonDestroyed(ptr, count);
-```
-
-#### When to Use Poisoning
-
-- **Base allocators** (`GPA`, `OS`, `HugePage`, `SmallPage`): Poison on allocate/deallocate
-- **Composite allocators** (`Pooling`, `LocalCache`, `InSitu`): Poison on block allocation/recycling
-- **Containers** (`HashMap`, `SparseVector`, `StableVector`): Poison on element destruction
-- **Arena**: Poison reserved regions after watermark restore
-
-#### Implementation
-
-The `isAsanEnabled()` function checks for sanitizer support at compile time:
-```cpp
-#if defined(__SANITIZE_ADDRESS__) || defined(PPR_ENABLE_SANITIZER_ADDRESS)
-    // Use ASAN_POISON_MEMORY_REGION macro
-#else
-    // Use memset with poison patterns (0xCC, 0xDD, 0xAA)
-#endif
-```
-
-For MSVC builds with `msvc-dev` preset, ASAN is automatically enabled via `PPR_ENABLE_DEVELOPER_MODE`.
+- Concepts: `TAllocator`, `TOwningAllocator`, `TResizableAllocator`, `TBlockAllocator`, `TArenaAllocator` (in Core.Memory.Allocator.cppm).
+- Hierarchy: GPA (operator new) → OS (pageAlloc) → PagePool/BitmapTree → HugePage (2 MiB) / SmallPage (32/64 KiB) → Arena (persistent) / ScratchPad (TLS transient).
+- Slab/Arena: Slab, InSituSlab, Arena<AllocatorT = HugePage>, ScopedArena (RAII watermark), ScratchPad (TLS Arena<SmallPage>).
+- Composite: InSitu, Fallback, Threshold, Pooling, LocalCache, HintedPooling, Static, Allocation<T>, Allocator<>, AllocatorTraits, STL<>, Inplace.
+- Poison: `poisonReserved`, `unpoisonUninitialized`, `poisonDestroyed`, `annotateContiguousContainer` (+ typed overloads). Uses `__asan_*` when ASAN enabled, debug patterns (0xAA/0xCC/0xDD) otherwise, no-op in release.
+- For MSVC with `msvc-dev` preset, ASAN is auto-enabled via PPR_ENABLE_DEVELOPER_MODE.
+- See `Core.Memory.*.cppm` for full type catalog.
 
 ## Core Abstractions
-
-Essential types used throughout:
-
-- `pP::Deferred`: RAII defer pattern via `PPR_DEFER { ... };`
-- `pP::hash_t`: Type-safe hash values
-- `pP::Stack<T,N>`, `pP::RingBuffer<T,N>`: Bounded containers
-- `pP::SparseVector<T>`, `pP::StableVector<T>`: Dynamic containers
-- `pP::HashMap<K,V>`, `pP::HashSet<K>`: Hash collections
-- `pP::string_literal`, `pP::static_string<N>`: String literals
-- `pP::basic_string_range<T>`: Lazy string transformations
+All types in `namespace pP`. See corresponding `.cppm` files:
+- **Containers:** Stack<T,N>, RingBuffer<T,N> (bounded, trivial T); SparseVector<T>, StableVector<T>, HashMap<K,V>/HashSet<K>, FlatMap<K,V>, Bitmask<T,N>, SetBitsRange.
+- **Pointers/views:** RelPtr (relative offset), TagPtr (flagged), ArrayView, RelativeView (half-size), safe_ptr, IndexIterator.
+- **Strings:** string_literal, static_string<N>, char helpers (toLower, etc.), lazy transforms (caseFold, stringEscape, trim, etc.).
+- **Opaque values:** opaque::Value (variant), opaque::Block (persistent), opaque::Unique (RAII owning), Block::Builder.
+- **Concurrency:** IEvent/ISignal/Signal<...>, RawChannel (lock-free MPSC), IContext/SharedContext (Go-style cancellation).
+- **Other:** IService/typeUid<T>, Log::Category/ELevel/Emitter, TimerManager, overloaded (visitor), std23::function_ref, sort::shellSort.
 
 ## Unit Testing
-
-Built-in test framework using `PPR_UNIT_TEST` macro:
-
-### Defining Tests
-
-```cpp
-PPR_UNIT_TEST(my_test) {
-    PPR_ASSERT(condition);
-};
-```
-
-Use `PPR_ASSERT` inside tests. Failed assertions are caught and reported as test failures.
-
-Tests are organized hierarchically using the `/` operator:
-
-```cpp
-PPR_UNIT_TEST(container) {
-    _.recurse(Strings::char_helpers);
-    _.recurse(Strings::escape_functions);
-};
-```
-
-Tests are nested in `pP::tests` namespace. Parent tests aggregate child results:
-
-```cpp
-// From Core.cppm
-export namespace pP::tests {
-    PPR_UNIT_TEST(core) {
-        _.recurse(memory);
-        _.recurse(strings);
-        _.recurse(containers);
-    };
-}
-```
-
-### Running tests
-
-Run all core tests:
-```cpp
-pP::UnitTest::run(pP::tests::core);
-```
-
-### Testing Procedure
-
-When building and running tests, prefer CLion tools on Windows (msvc-dev preset):
-
-1. **Build:** Use `clion_execute_run_configuration` with `configurationName="EngineTests"` and `waitForExit=true` (or `false` if you only need the build to complete). This builds the test executable with the `msvc-dev` preset.
-2. **Run tests:** Execute `clion_execute_run_configuration` with `configurationName="EngineTests"` and `waitForExit=true`, or build and run in a single call.
-
-The `EngineTests` executable runs all registered `PPR_UNIT_TEST` suites automatically and reports results via assertions.
-
-**Fallback (bash):** If the CLion tool is unavailable, use the command-line approach:
-```cmd
-"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvarsall.bat" x64 && cmake --build --preset msvc-dev --target EngineTests && ctest --preset msvc-dev -R EngineUnitTests --output-on-failure
-```
+- Define: `PPR_UNIT_TEST(name) { PPR_ASSERT(cond); };` (tests are `inline constexpr` variables).
+- Flags: `UnitTest::expect_fail` (must throw), `UnitTest::fork` (child process), `UnitTest::expect_crash` (fork + expect_fail).
+- Group: `_.recurse({TestA, TestB, ...})` — supports conditional inclusion via `if constexpr (PPR_ENABLE_DEBUG)`.
+- Module pattern: `export module engine.tests:core_memory;` with `export namespace pP::tests { ... }`.
+- CLI: `EngineTests [--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]`.
+- Fork tests spawn child process via `hal::process::spawnAndWait`. Assertions intercepted by test framework (converted to failures, not terminations).
+- Run programmatically: `pP::UnitTest::run(context, pP::tests::core);`.
+- See `lib/engine/tests/` for existing examples.
