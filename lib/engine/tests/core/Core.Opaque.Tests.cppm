@@ -94,17 +94,25 @@ export namespace pP::tests {
                 return static_cast<u64>(42u);
             }
 
+            PPR_UNIT_TEST(decl_delegate) {
+                constexpr auto check = [](opaque::Value &&v) {
+                    PPR_ASSERT(v.as<opaque::Delegate>() != nullptr);
+                };
+                check(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
+                check([] noexcept { return opaque::Value{42}; });
+            };
+
             PPR_UNIT_TEST(decl_formatter) {
                 constexpr auto check = [](opaque::Value &&v) {
                     PPR_ASSERT(v.as<opaque::Formatter>() != nullptr);
                 };
-                check(opaque::Formatter([](opaque::format_context &ctx) -> decltype(auto) {
+                check(opaque::Formatter([](opaque::format_context &ctx) noexcept -> decltype(auto) {
                     return ctx.out();
                 }));
-                check([](opaque::format_context &ctx) -> decltype(auto) {
+                check([](opaque::format_context &ctx) noexcept -> decltype(auto) {
                     return ctx.out();
                 });
-                constexpr auto formatter = [](opaque::format_context &ctx) {
+                constexpr auto formatter = [](opaque::format_context &ctx) noexcept {
                     return ctx.out();
                 };
                 check(opaque::Formatter(formatter));
@@ -136,7 +144,7 @@ export namespace pP::tests {
                     return std::format("{}", v);
                 };
                 const std::string res = fmt({
-                    1, true, "ansi", L"wide", 3.14151618, [](opaque::format_context &fmt) {
+                    1, true, "ansi", L"wide", 3.14151618, [](opaque::format_context &fmt) noexcept {
                         std::format_to(fmt.out(), "the answer is {}", 42);
                     }
                 });
@@ -164,11 +172,24 @@ export namespace pP::tests {
                 PPR_ASSERT(expected == res);
             };
 
+            PPR_UNIT_TEST(format_delegate) {
+                constexpr auto fmt = [](opaque::Value &&v) -> std::string {
+                    return std::format("{}", v);
+                };
+                const auto res = fmt(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
+                constexpr std::string_view expected = "42";
+                PPR_ASSERT(expected == res);
+
+                const auto res2 = fmt([] noexcept { return opaque::Value{3.14}; });
+                constexpr std::string_view expected2 = "3.14";
+                PPR_ASSERT(expected2 == res2);
+            };
+
             PPR_UNIT_TEST(format_formatter) {
                 constexpr auto fmt = [](opaque::Value &&v) -> std::string {
                     return std::format("{}", v);
                 };
-                const std::string res = fmt([](opaque::format_context &ctx) {
+                const std::string res = fmt([](opaque::format_context &ctx) noexcept {
                     return std::format_to(ctx.out(), "This is {:02} formatted {}", 1, "text");
                 });
                 constexpr std::string_view expected = R"EXPECT("This is 01 formatted text")EXPECT";
@@ -181,11 +202,13 @@ export namespace pP::tests {
                 Value::decl_scalars,
                 Value::decl_arrays,
                 Value::decl_dict,
+                Value::decl_delegate,
                 Value::decl_formatter,
                 Value::decl_as_nullptr,
                 Value::format_scalar,
                 Value::format_array,
                 Value::format_object,
+                Value::format_delegate,
                 Value::format_formatter,
             });
         };
@@ -349,13 +372,29 @@ export namespace pP::tests {
                 auto &target = *arena.create<opaque::Block::Value>();
                 opaque::Block::Builder builder{target, arena};
 
-                builder.dup([](opaque::format_context &ctx) {
+                builder.dup([](opaque::format_context &ctx) noexcept {
                     return std::format_to(ctx.out(), "fmt {}", 42);
                 });
                 {
                     const auto &rv = target.get<opaque::Block::String>();
                     PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "fmt 42");
                 }
+
+                arena.restore(mark);
+            };
+
+            PPR_UNIT_TEST(builder_delegate) {
+                auto arena = mem::Allocator<mem::ScratchPad>{};
+                const auto mark = arena.watermark();
+
+                auto &target = *arena.create<opaque::Block::Value>();
+                opaque::Block::Builder builder{target, arena};
+
+                builder.dup(opaque::Delegate{[] noexcept { return opaque::Value{u64{42}}; }});
+                PPR_ASSERT(target.get<u64>() == 42);
+
+                builder.dup(opaque::Value{opaque::Delegate{[] noexcept { return opaque::Value{3.14}; }}});
+                PPR_ASSERT(target.get<double>() == 3.14);
 
                 arena.restore(mark);
             };
@@ -588,7 +627,7 @@ export namespace pP::tests {
                             "int", 99
                         },
                         {
-                            "fmt", [](opaque::format_context &ctx) {
+                            "fmt", [](opaque::format_context &ctx) noexcept {
                                 return std::format_to(ctx.out(), "formatted");
                             }
                         },
@@ -612,6 +651,29 @@ export namespace pP::tests {
 
                 arena.restore(mark);
             };
+
+            PPR_UNIT_TEST(growing_slab_delegate) {
+                mem::GrowingSlab slab;
+
+                int call_count = 0;
+                opaque::Block tmp;
+                tmp.resetAssumeEmpty({
+                    {"value", opaque::Delegate{[&] noexcept {
+                        ++call_count;
+                        return opaque::Value{u64{42}};
+                    }}}
+                }, slab);
+                PPR_ASSERT(call_count == 1);
+
+                const std::size_t bytes = slab.consumed().size_bytes();
+                std::array<std::byte, 1024> buf{};
+                std::memcpy(buf.data(), slab.consumed().data(), bytes);
+
+                opaque::Block copy;
+                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
+                PPR_ASSERT(copy["value"].get<u64>() == 42);
+                PPR_ASSERT(call_count == 1);
+            };
         }
 
         PPR_UNIT_TEST(block) {
@@ -622,11 +684,13 @@ export namespace pP::tests {
                 Block::builder_array,
                 Block::builder_dict,
                 Block::builder_formatter,
+                Block::builder_delegate,
                 Block::format_value_scalars,
                 Block::format_block,
                 Block::format_complex,
                 Block::growing_slab_scalars,
                 Block::growing_slab_strings,
+                Block::growing_slab_delegate,
                 Block::growing_slab_formatter,
                 Block::growing_slab_growth,
                 Block::constructor,

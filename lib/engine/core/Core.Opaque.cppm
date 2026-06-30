@@ -59,7 +59,11 @@ export namespace pP {
         using U8String = std::u8string_view;
         using Array = ArrayView<Value>;
         using Dict = ArrayView<KeyValue>;
-        using Formatter = std23::function_ref<void(format_context &)>;
+        using Delegate = std23::function_ref<Value() noexcept>;
+        using Formatter = std23::function_ref<void(format_context &) noexcept>;
+
+        using TransformView = TransformView<Value>;
+        using Transform = std23::function_ref<TransformView() noexcept>;
 
         namespace details {
             // All alias types (string_view, span, function_ref) are already
@@ -80,7 +84,9 @@ export namespace pP {
                 Array,
                 Dict,
 
-                Formatter>;
+                Delegate,
+                Formatter,
+                Transform>;
 
             static_assert(sizeof(ValueVariant) == sizeof(void *) * 3u);
         } // namespace details
@@ -90,13 +96,31 @@ export namespace pP {
             using super_t::super_t;
             using super_t::operator=;
 
+            // Allow direct initialization from functors convertible to Delegate
+            template<typename FunctorT>
+                requires (!std::is_same_v<std::decay_t<FunctorT>, Delegate> &&
+                          requires(FunctorT &&f) { Delegate{std::forward<FunctorT>(f)}; })
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(FunctorT &&delegate) noexcept
+                : super_t(Delegate{std::forward<FunctorT>(delegate)}) {
+            }
+
             // Allow direct initialization from functors convertible to Formatter
             template<typename FunctorT>
                 requires (!std::is_same_v<std::decay_t<FunctorT>, Formatter> &&
                           requires(FunctorT &&f) { Formatter{std::forward<FunctorT>(f)}; })
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(FunctorT &&functor) noexcept
-                : super_t(Formatter{std::forward<FunctorT>(functor)}) {
+            constexpr Value(FunctorT &&formatter) noexcept
+                : super_t(Formatter{std::forward<FunctorT>(formatter)}) {
+            }
+
+            // Allow direct initialization from functors convertible to Yield
+            template<typename FunctorT>
+                requires (!std::is_same_v<std::decay_t<FunctorT>, Transform> &&
+                          requires(FunctorT &&f) { Transform{std::forward<FunctorT>(f)}; })
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(FunctorT &&transform) noexcept
+                : super_t(Transform{std::forward<FunctorT>(transform)}) {
             }
 
             // Note: operator== is intentionally not provided. std::variant::operator==
@@ -138,13 +162,13 @@ export namespace pP {
                 using RelativeView::operator[];
 
                 [[nodiscard]] const Value *
-                tryGet(const string_literal key) const noexcept;
+                tryGet(string_literal key) const noexcept;
 
                 [[nodiscard]] const Value &
-                get(const string_literal key) const noexcept;
+                get(string_literal key) const noexcept;
 
                 [[nodiscard]] const Value &
-                operator[](const string_literal key) const noexcept;
+                operator[](string_literal key) const noexcept;
             };
 
             using ValueVariant = std::variant<
@@ -189,7 +213,7 @@ export namespace pP {
                 Value &m_target;
                 ArenaT &m_arena;
 
-                constexpr Builder(Value &target, ArenaT &arena) noexcept
+                constexpr Builder(Value &target PPR_LIFETIME_BOUND, ArenaT &arena PPR_LIFETIME_BOUND) noexcept
                     : m_target(target), m_arena(arena) {
                 }
 
@@ -232,12 +256,16 @@ export namespace pP {
                     }
                 }
 
-                void operator()(const Formatter fmt) const noexcept {
+                void operator()(const Delegate delegate) const noexcept {
+                    dup(delegate());
+                }
+
+                void operator()(const Formatter formatter) const noexcept {
                     // Concrete sink wrapping whatever output iterator this context uses.
                     // Stack-allocated — zero heap overhead.
                     struct format_sink final : format_context {
                         ArenaT &m_arena;
-                        mem::Allocation<char, ArenaT> m_output;
+                        mem::Allocation<char, ArenaT> m_output{};
 
                         explicit constexpr format_sink(ArenaT &arena PPR_LIFETIME_BOUND) noexcept
                             : m_arena(arena) {
@@ -252,9 +280,21 @@ export namespace pP {
                     };
 
                     format_sink sink{m_arena};
-                    fmt(sink);
+                    formatter(sink);
 
                     m_target.emplace<String>(sink.m_output.discard());
+                }
+
+                void operator()(const Transform transform) const noexcept {
+                    const TransformView arr = transform();
+                    const auto dst = m_arena.template span<Value>(arr.size());
+                    m_target.emplace<Array>(dst);
+
+                    auto output = dst.begin();
+                    for (const opaque::Value &src: arr) {
+                        Value &it = *std::construct_at(std::addressof(*output++));
+                        Builder{it, m_arena}.dup(src);
+                    }
                 }
             };
 
@@ -364,7 +404,10 @@ export namespace pP {
                         }
                         return size_bytes;
                     },
-                    [](const Formatter &fmt) constexpr noexcept -> std::size_t {
+                    [](const Delegate delegate) constexpr noexcept -> std::size_t {
+                        return sizeOf(delegate());
+                    },
+                    [](const Formatter fmt) constexpr noexcept -> std::size_t {
                         // Concrete sink wrapping whatever output iterator this context uses.
                         // Only count memory used to reserve the whole block.
                         struct format_count final : format_context {
@@ -378,7 +421,18 @@ export namespace pP {
                         format_count sink{};
                         fmt(sink);
                         return alignForward(sink.m_count * sizeof(char), max_align_v);
-                    }), value);
+                    },
+                    [](const Transform transform) constexpr noexcept -> std::size_t {
+                        std::size_t n = 0u;
+                        std::size_t size_bytes = 0u;
+                        for (const opaque::Value &it: transform()) {
+                            n++;
+                            size_bytes += sizeOf(it);
+                        }
+                        size_bytes += alignForward(n * sizeof(Value), max_align_v);
+                        return size_bytes;
+                    }),
+                value);
         }
 
         template<mem::details::TAllocator AllocatorT>
@@ -447,10 +501,10 @@ export namespace pP {
         };
 
         template<mem::details::TAllocator AllocatorT>
-        Unique(const AllocatorT &) -> Unique<std::remove_cvref_t<AllocatorT>>;
+        Unique(const AllocatorT &) -> Unique<std::remove_cvref_t<AllocatorT> >;
 
         template<mem::details::TAllocator AllocatorT>
-        Unique(AllocatorT &&) -> Unique<std::remove_cvref_t<AllocatorT>>;
+        Unique(AllocatorT &&) -> Unique<std::remove_cvref_t<AllocatorT> >;
 
         template<mem::details::TAllocator AllocatorT>
         [[nodiscard]] auto makeUnique(const Dict &init, AllocatorT &&allocator = default_value_v) {
@@ -498,6 +552,12 @@ export namespace pP {
 // --------------------------------------------------------------
 
 export namespace std {
+    template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Delegate, CharT>;
+
+    template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Transform, CharT>;
+
     template<pP::details::TChar CharT>
     struct formatter<pP::opaque::Formatter, CharT> {
         template<typename FormatParseContextT>
@@ -556,6 +616,34 @@ export namespace std {
                                          typeid(UnformattableT).name());
                     }),
                 value);
+        }
+    };
+
+    template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Delegate, CharT> {
+        template<typename FormatParseContextT>
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+            return ctx.begin();
+        }
+
+        template<typename FormatContextT>
+        auto format(const pP::opaque::Delegate &delegate, FormatContextT &ctx) const
+            -> decltype(ctx.out()) {
+            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}"), delegate());
+        }
+    };
+
+    template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Transform, CharT> {
+        template<typename FormatParseContextT>
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+            return ctx.begin();
+        }
+
+        template<typename FormatContextT>
+        auto format(const pP::opaque::Transform &transform, FormatContextT &ctx) const
+            -> decltype(ctx.out()) {
+            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}"), transform());
         }
     };
 
