@@ -67,4 +67,63 @@ namespace pP::hal {
 
         ::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE);
     }
+
+#if PPR_ENABLE_ASSERTIONS
+    namespace {
+        int __cdecl crtReportHook(int reportType, char *message, int *returnValue) {
+            (void)reportType;
+            if (returnValue) {
+                *returnValue = 0;
+            }
+
+            if (message) {
+                outputDebug(message);
+            }
+
+            throw std::logic_error(message ? message : "CRT assertion failure");
+        }
+
+        void __cdecl invalidParamHandler(
+            const wchar_t *expr,
+            const wchar_t *func,
+            const wchar_t *file,
+            const unsigned int line,
+            uintptr_t
+        ) {
+            char buf[2048];
+            const auto w2a = [](const wchar_t *ws) -> std::string {
+                if (!ws) return std::string("(null)");
+                return toString<char>(std::wstring_view(ws));
+            };
+            const auto [end, _] = std::format_to_n(buf, sizeof(buf) - 1,
+                "Invalid parameter: {} in {} at {}:{}",
+                w2a(expr), w2a(func), w2a(file), line);
+            *end = '\0';
+
+            outputDebug(buf);
+            throw std::logic_error(buf);
+        }
+
+        void __cdecl purecallHandler() {
+            constexpr const char *msg = "Pure virtual function call";
+            outputDebug(msg);
+            throw std::logic_error(msg);
+        }
+
+        [[noreturn]] void terminateHandler() noexcept {
+            outputDebug("Terminate called, exiting\n");
+            breakpointIfDebugging();
+            std::_Exit(3);
+        }
+    }
+#endif
+
+    void installDebugAssertHooks() noexcept {
+#if PPR_ENABLE_ASSERTIONS
+        ::_CrtSetReportHook(&crtReportHook);
+        ::_set_invalid_parameter_handler(&invalidParamHandler);
+        ::_set_purecall_handler(&purecallHandler);
+        std::set_terminate(&terminateHandler);
+#endif
+    }
 }

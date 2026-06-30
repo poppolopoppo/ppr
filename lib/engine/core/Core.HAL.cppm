@@ -341,6 +341,8 @@ export namespace pP {
 
         void disableSystemErrorReporting() noexcept;
 
+        void installDebugAssertHooks() noexcept;
+
         // ------------------------------------------------------------------
         // process
         // ------------------------------------------------------------------

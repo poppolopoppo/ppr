@@ -59,6 +59,12 @@ namespace pP::hal {
 #endif
     }
 
-    void breakpointIfDebugging() noexcept {
+    void installDebugAssertHooks() noexcept {
+#if PPR_ENABLE_ASSERTIONS
+        std::signal(SIGABRT, [](int) {
+            ::write(STDERR_FILENO, "SIGABRT received\n", 17);
+            ::_Exit(3);
+        });
+#endif
     }
 }

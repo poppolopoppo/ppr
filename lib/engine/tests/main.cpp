@@ -62,9 +62,8 @@ int main(const int argc, char *argv[]) {
         context.m_shuffle_seed = rng();
     }
 
-    if (context.isChildRun()) {
-        hal::disableSystemErrorReporting();
-    }
+    hal::disableSystemErrorReporting();
+    hal::installDebugAssertHooks();
 
     for (unsigned iter = 0u; iter < loops; ++iter) {
         if (iter > 0 && !explicit_seed && context.m_shuffle_seed.has_value()) {
