@@ -153,6 +153,11 @@ export namespace pP::mem {
             return static_cast<T *>(m_block.ptr);
         }
 
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T &operator[](const std::size_t index) const noexcept {
+            PPR_ASSERT(index < count());
+            return static_cast<T *>(m_block.ptr)[index];
+        }
+
         [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
             return overlap(data(), size_bytes(), ptr, size);
         }
@@ -238,7 +243,7 @@ export namespace pP::mem {
 
                 return {static_cast<T *>(m_block.ptr), m_block.count / sizeof(T)};
             }
-            return allocate(new_size);
+            return allocate(al, new_size);
         }
 
         [[maybe_unused]] constexpr std::allocation_result<T *>
@@ -389,7 +394,7 @@ export namespace pP::mem {
         template<typename T, typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
         [[nodiscard]] constexpr T *
-        create(this AllocatorT &al, ArgsT&&... args)
+        create(this AllocatorT &al, ArgsT &&... args)
             noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             if (T *const ptr = al.template allocate<T>()) [[likely]] {
                 std::construct_at(ptr, std::forward<ArgsT>(args)...);
@@ -437,9 +442,9 @@ export namespace pP::mem {
         }
 
         template<std::ranges::contiguous_range RangeT>
-            requires pP::details::is_relocatable_v<std::ranges::range_value_t<RangeT>>
-        [[nodiscard]] constexpr std::span<std::ranges::range_value_t<RangeT>>
-        dup(this AllocatorT &al, RangeT &&values, const std::align_val_t alignment = alignof_v<std::ranges::range_value_t<RangeT>>) noexcept
+            requires pP::details::is_relocatable_v<std::ranges::range_value_t<RangeT> >
+        [[nodiscard]] constexpr std::span<std::ranges::range_value_t<RangeT> >
+        dup(this AllocatorT &al, RangeT &&values, const std::align_val_t alignment = alignof_v<std::ranges::range_value_t<RangeT> >) noexcept
             requires details::TAllocator<AllocatorT> {
             using value_type = std::ranges::range_value_t<RangeT>;
             const std::size_t n = std::ranges::size(values);
@@ -467,6 +472,7 @@ export namespace pP::mem {
         using allocator_type::deallocateRaw;
 
         Inplace(const Inplace &) = delete;
+
         Inplace &operator=(const Inplace &) = delete;
     };
 
@@ -825,6 +831,7 @@ export namespace pP::mem {
         }
 
         InSitu(const InSitu &) = delete;
+
         InSitu &operator=(const InSitu &) = delete;
 
         [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {

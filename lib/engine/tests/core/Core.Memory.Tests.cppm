@@ -464,6 +464,28 @@ export namespace pP::tests {
             PPR_ASSERT(!alloc.isValid());
             PPR_ASSERT(Widget::destroyed == 1u);
         };
+
+        PPR_UNIT_TEST(allocation_index_operator) {
+            mem::Allocation<int, mem::GPA> alloc(4u);
+            PPR_ASSERT(alloc.isValid());
+            PPR_ASSERT(alloc.count() == 4u);
+
+            alloc[0] = 10;
+            alloc[1] = 20;
+            alloc[2] = 30;
+            alloc[3] = 40;
+
+            PPR_ASSERT(alloc[0] == 10);
+            PPR_ASSERT(alloc[1] == 20);
+            PPR_ASSERT(alloc[2] == 30);
+            PPR_ASSERT(alloc[3] == 40);
+
+            const auto &const_alloc = alloc;
+            PPR_ASSERT(const_alloc[0] == 10);
+
+            alloc.deallocate();
+            PPR_ASSERT(!alloc.isValid());
+        };
     }
 
     PPR_UNIT_TEST(allocator) {
@@ -479,6 +501,7 @@ export namespace pP::tests {
             Allocator::allocation_stateful_resize_create_destroy,
             Allocator::allocation_raii_and_relocate,
             Allocator::allocation_create_destroy_non_trivial,
+            Allocator::allocation_index_operator,
         });
     };
 
