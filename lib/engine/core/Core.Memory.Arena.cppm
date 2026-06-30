@@ -18,6 +18,7 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     class Slab : public AllocatorTraits<Slab> {
+    protected:
         std::byte *m_data{nullptr};
         u32 m_capacity{0u};
         u32 m_offset{0u};
@@ -415,6 +416,9 @@ export namespace pP::mem {
     template<details::TAllocator AllocatorT>
     Arena(std::size_t initial_capacity, AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT> >;
 
+    extern template class Arena<HugePage>;
+    extern template class Arena<SmallPage>;
+
     // ------------------------------------------------------------------
     // RAII wrapper to scope all the allocations made in the arena
     // ------------------------------------------------------------------
@@ -615,6 +619,137 @@ export namespace pP::mem {
 
     static_assert(details::use_inplace_v<ScratchPad>);
 
-    extern template class Arena<HugePage>;
-    extern template class Arena<SmallPage>;
+    // ------------------------------------------------------------------
+    // growable slab — single contiguous buffer that reallocates on OOM
+    // ------------------------------------------------------------------
+
+    template<details::TAllocator AllocatorT = ScratchPad>
+    class PPR_EMPTY_BASES GrowingSlab : public AllocatorTraits<GrowingSlab<AllocatorT> > {
+        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
+
+        static constexpr std::size_t initial_capacity_v = 4096;
+
+        std::byte *m_data{nullptr};
+        u32 m_capacity{0u};
+        u32 m_offset{0u};
+
+        PPR_NO_INLINE void grow_(const std::size_t needed) {
+            std::size_t target = std::max(static_cast<std::size_t>(m_capacity) * 2u, initial_capacity_v);
+            while (target < needed) {
+                target *= 2u;
+            }
+
+            const auto new_buf = AllocatorT::allocateRaw(target, max_align_v);
+            PPR_ASSERT(new_buf.ptr);
+
+            std::memcpy(new_buf.ptr, m_data, m_offset);
+
+            m_data = static_cast<std::byte *>(new_buf.ptr);
+            m_capacity = safe_narrowing(new_buf.count);
+        }
+
+    public:
+        GrowingSlab() noexcept {
+            const auto init = AllocatorT::allocateRaw(initial_capacity_v, max_align_v);
+            PPR_ASSERT(init.ptr);
+            m_data = static_cast<std::byte *>(init.ptr);
+            m_capacity = safe_narrowing(init.count);
+            m_offset = 0u;
+        }
+
+        GrowingSlab(const GrowingSlab &) = delete;
+
+        GrowingSlab &operator =(const GrowingSlab &) = delete;
+
+        GrowingSlab(GrowingSlab &&) = delete;
+
+        GrowingSlab &operator =(GrowingSlab &&) = delete;
+
+        ~GrowingSlab() noexcept {
+            if (m_data) {
+                poisonDestroyed(m_data, m_capacity);
+                AllocatorT::deallocateRaw(m_data, m_capacity, max_align_v);
+            }
+        }
+
+        [[nodiscard]] std::allocation_result<void *>
+        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept(false) {
+        RETRY_ALLOC:
+            std::size_t space = m_capacity - m_offset;
+            void *aligned_ptr = m_data + m_offset;
+
+            if (std::align(static_cast<std::size_t>(alignment), bytes, aligned_ptr, space) == nullptr) [[unlikely]] {
+                grow_(m_capacity + bytes + static_cast<std::size_t>(alignment));
+                goto RETRY_ALLOC;
+            }
+
+            const u32 old_offset = m_offset;
+            m_offset = safe_narrowing(static_cast<std::byte *>(aligned_ptr) - m_data + bytes);
+            annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
+            return {aligned_ptr, bytes};
+        }
+
+        [[maybe_unused]] bool deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+            static_cast<void>(alignment);
+            if (static_cast<std::byte *>(ptr) + bytes == m_data + m_offset) [[likely]] {
+                const u32 old_offset = m_offset;
+                m_offset = checked_cast<u32>(static_cast<std::byte *>(ptr) - m_data);
+                annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
+                return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool owns(const void *const ptr, const std::size_t size) const noexcept {
+            return overlap(m_data, m_capacity, ptr, size);
+        }
+
+        [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+            PPR_ASSERT(owns(ptr, old_size));
+            if (old_size == new_size) {
+                return true;
+            }
+
+            const auto byte_ptr = static_cast<std::byte *>(ptr);
+            if (byte_ptr + old_size != m_data + m_offset) [[unlikely]] {
+                return false;
+            }
+
+            const u32 new_offset = safe_narrowing(byte_ptr - m_data + static_cast<std::ptrdiff_t>(new_size));
+            if (new_offset > m_capacity) [[unlikely]] {
+                return false;
+            }
+
+            annotateContiguousContainer(m_data, m_capacity, m_offset, new_offset);
+            m_offset = new_offset;
+            return true;
+        }
+
+        [[nodiscard]] const void *watermark() const noexcept {
+            return m_data + m_offset;
+        }
+
+        void restore(const void *const mark) noexcept {
+            PPR_ASSERT(m_data != nullptr);
+            PPR_ASSERT(overlap(m_data, m_capacity, mark));
+            const u32 old_offset = m_offset;
+            m_offset = checked_cast<u32>(static_cast<const std::byte *>(mark) - m_data);
+            annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
+        }
+
+        void reset() noexcept {
+            if (m_data == nullptr) {
+                return;
+            }
+            poisonDestroyed(m_data, m_capacity);
+            AllocatorT::deallocateRaw(m_data, m_capacity, max_align_v);
+            m_data = nullptr;
+            m_capacity = 0u;
+            m_offset = 0u;
+        }
+
+        [[nodiscard]] std::span<const std::byte> consumed() const noexcept {
+            return {m_data, m_offset};
+        }
+    };
 }
