@@ -3,9 +3,5 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/mango-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/rapidhash-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/slang-rhi-src" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/out/build/x64-debug/_deps/stb-src" vcs="Git" />
   </component>
 </project>
