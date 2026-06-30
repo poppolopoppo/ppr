@@ -18,6 +18,7 @@ export import :hashing;
 export import :io;
 export import :io.file_watcher;
 export import :io.mapped_file;
+export import :logger;
 export import :memory;
 export import :memory.allocator;
 export import :memory.arena;
