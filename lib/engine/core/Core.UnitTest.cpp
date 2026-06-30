@@ -11,7 +11,6 @@ import :function_ref;
 import std;
 
 namespace pP {
-
     // ------------------------------------------------------------------
     // Unit test helper
     // ------------------------------------------------------------------
@@ -93,11 +92,15 @@ namespace pP {
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test) noexcept
-        : m_context(context), m_test(test) {
+        : m_context(context),
+          m_test(test) {
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept
-        : m_context(context), m_test(test), m_parent(&parent), m_depth(parent.m_depth + 1u) {
+        : m_context(context),
+          m_test(test),
+          m_parent(&parent),
+          m_depth(parent.m_depth + 1u) {
     }
 
     const UnitTest::RunImpl &UnitTest::RunImpl::getFirstRunImpl() const noexcept {
@@ -122,9 +125,7 @@ namespace pP {
         if (m_context.m_log.has_value()) {
             (*m_context.m_log)(*this, msg);
         } else {
-            hal::outputDebugFmt("{}: {}\n",
-                                std::string_view(m_test.m_name),
-                                std::string_view(msg));
+            std::println("{}: {}", std::string_view(m_test.m_name), std::string_view(msg));
         }
     }
 
@@ -164,7 +165,7 @@ namespace pP {
             std::ranges::shuffle(order, rng);
         }
 
-        for (const auto idx : order) {
+        for (const auto idx: order) {
             recurse(tests.begin()[static_cast<std::ptrdiff_t>(idx)]);
         }
     }
@@ -180,16 +181,13 @@ namespace pP {
     void UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
         const std::stacktrace backtrace = std::stacktrace::current(9);
 
-        hal::outputDebugFmt("{}({}): Assertion failed with \"{}\"\n"
-                            "\tin function: {}\n"
-                            "\tin test: {}\n\n"
-                            "Callstack:\n{}\n",
-                            std::string_view(condition.m_site.file_name()),
-                            condition.m_site.line(),
-                            std::string_view(condition.m_message),
-                            std::string_view(condition.m_site.function_name()),
-                            getTestId(),
-                            backtrace);
+        std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
+                     "\tin function: {}\n"
+                     "\tin test: {}\n\n"
+                     "Callstack:\n{}",
+                     std::string_view(condition.m_site.file_name()), condition.m_site.line(), std::string_view(condition.m_message),
+                     std::string_view(condition.m_site.function_name()), getTestId(), backtrace);
+        std::cerr.flush();
 
         throw std::logic_error(condition.m_message);
     }
@@ -222,20 +220,21 @@ namespace pP {
         const char *bullet = is_group ? "\u21B3" : "\u2022";
         const char *icon = m_status == pass ? "\u2705" : "\u274C";
 
-        hal::outputDebugFmt(" {} {:>3}/{:<3}  {} {:<60} ({})\n",
-                            icon,
-                            m_num_passed,
-                            m_num_passed + m_num_failed,
-                            bullet,
-                            test_id,
-                            TimeDuration{duration_from_start});
+        std::println(std::cout, " {} {:>3}/{:<3}  {} {:<60} ({})",
+                     icon,
+                     m_num_passed,
+                     m_num_passed + m_num_failed,
+                     bullet,
+                     test_id,
+                     TimeDuration{duration_from_start});
 
         if (m_status == fail) {
-            hal::outputDebugFmt("    \u2514\u2500 {}\n", m_failure);
+            std::println(std::cout, "    \u2514\u2500 {}", m_failure);
         }
         if (is_group) {
-            hal::outputDebug("----------------------------------------------------------------------\n");
+            std::println(std::cout, "----------------------------------------------------------------------");
         }
-    }
 
+        std::cout.flush();
+    }
 }
