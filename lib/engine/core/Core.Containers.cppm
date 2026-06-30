@@ -69,7 +69,7 @@ export namespace pP {
     template<typename ContainerT, typename T, std::integral IndexT = std::size_t>
         requires requires(ContainerT &arr, IndexT index)
         {
-            { arr[index] } -> std::convertible_to<std::add_lvalue_reference_t<T> >;
+            { arr[index] } -> std::convertible_to<T>;
         }
     class IndexIterator {
     public:
@@ -77,8 +77,9 @@ export namespace pP {
         using iterator_concept = std::random_access_iterator_tag; // C++20+
         using difference_type = std::make_signed_t<IndexT>;
         using value_type = T;
-        using pointer = std::add_pointer_t<value_type>;
-        using reference = std::add_lvalue_reference_t<value_type>;
+        using reference = decltype(std::declval<ContainerT &>()[std::declval<IndexT>()]);
+
+        static constexpr bool return_by_reference_v = std::is_reference_v<reference>;
 
     private:
         ContainerT *m_container{nullptr};
@@ -117,7 +118,8 @@ export namespace pP {
             return (*m_container)[m_index]; // use [] (not at) for iterator semantics
         }
 
-        [[nodiscard]] constexpr pointer operator->() const noexcept {
+        [[nodiscard]] constexpr std::add_pointer_t<value_type> operator->() const noexcept
+            requires return_by_reference_v {
             return std::addressof(operator*());
         }
 
@@ -564,7 +566,7 @@ export namespace pP {
 
         constexpr RelPtr() noexcept = default;
 
-        explicit constexpr RelPtr(T *ptr) noexcept {
+        explicit constexpr RelPtr(T *ptr PPR_LIFETIME_BOUND) noexcept {
             setData(ptr);
         }
 
@@ -586,7 +588,7 @@ export namespace pP {
 
         constexpr RelPtr &operator =(RelPtr &&) noexcept = delete;
 
-        constexpr RelPtr &operator =(T *ptr) & noexcept {
+        constexpr RelPtr &operator =(T *ptr PPR_LIFETIME_BOUND) & noexcept {
             setData(ptr);
             return *this;
         }
@@ -603,7 +605,7 @@ export namespace pP {
                 static_cast<std::uintptr_t>(m_offset));
         }
 
-        PPR_FORCE_INLINE constexpr void setData(T *ptr) & noexcept {
+        PPR_FORCE_INLINE constexpr void setData(T *ptr PPR_LIFETIME_BOUND) & noexcept {
             if (ptr == nullptr) {
                 m_offset = 0;
                 return;
@@ -674,7 +676,8 @@ export namespace pP {
     RelPtr(T *ptr) -> RelPtr<T>;
 
     template<typename T, std::signed_integral OffsetT>
-    struct details::relocatable<RelPtr<T, OffsetT> > : std::true_type {
+    struct details::relocatable<RelPtr<T, OffsetT> > : std::false_type {
+        // must be moved to conserve absolute pointer address
     };
 
     // ------------------------------------------------------------------
@@ -706,7 +709,7 @@ export namespace pP {
 
         /// \pre (flags & PTR_MASK) == 0  — flags must fit inside extra_bits.
         /// \pre ptr is aligned to at least Alignment.
-        explicit constexpr TagPtr(T *const ptr, const TagT tag = default_value_v) noexcept {
+        explicit constexpr TagPtr(T *const ptr PPR_LIFETIME_BOUND, const TagT tag = default_value_v) noexcept {
             reset(ptr, tag);
         }
 
@@ -750,7 +753,7 @@ export namespace pP {
         }
 
         /// Replaces the pointer, preserving the current flags.
-        PPR_FORCE_INLINE constexpr void setData(T *const ptr) noexcept {
+        PPR_FORCE_INLINE constexpr void setData(T *const ptr PPR_LIFETIME_BOUND) noexcept {
             PPR_ASSERT((std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0
                 && "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
             m_packed = (m_packed & FLAG_MASK) | std::bit_cast<std::uintptr_t>(ptr);
@@ -998,14 +1001,68 @@ export namespace pP {
     RelativeView(ArrayView<T> view) -> RelativeView<T>;
 
     template<typename T>
-    struct details::relocatable<RelativeView<T> > : std::true_type {
+    struct details::relocatable<RelativeView<T> > : std::false_type {
+        // must be moved to conserve absolute pointer address
+    };
+
+    // ------------------------------------------------------------------
+    // view transform adapter
+    // ------------------------------------------------------------------
+
+    template<typename T>
+    class [[nodiscard]] TransformView {
+        std23::function_ref<T(std::size_t) noexcept> m_transform;
+        std::size_t m_size;
+
+        template<std::ranges::random_access_range RangeT>
+            requires std::convertible_to<std::ranges::range_value_t<RangeT>, T>
+        static T transform_(const RangeT *const p_range, const std::size_t index) noexcept {
+            return (*p_range)[index];
+        }
+
+    public:
+        TransformView(const std::size_t size, std23::function_ref<T(std::size_t) noexcept> transform) noexcept
+            : m_transform(std::move(transform)),
+              m_size(size) {
+        }
+
+        template<std::ranges::random_access_range RangeT>
+            requires std::convertible_to<std::ranges::range_value_t<RangeT>, T>
+        explicit TransformView(const RangeT &range) noexcept
+            : m_transform(std23::nontype<&transform_<RangeT>>, &range),
+              m_size(std::ranges::size(range)) {
+        }
+
+        [[nodiscard]] bool empty() const noexcept {
+            return m_size == 0u;
+        }
+
+        [[nodiscard]] std::size_t size() const noexcept {
+            return m_size;
+        }
+
+        [[nodiscard]] T operator[](const std::size_t index) const noexcept {
+            PPR_ASSERT(index < m_size);
+            return m_transform(index);
+        }
+
+        using iterator = IndexIterator<const TransformView, T>;
+
+        [[nodiscard]] iterator begin() const noexcept {
+            return iterator(*this, 0u);
+        }
+
+        [[nodiscard]] iterator end() const noexcept {
+            return iterator(*this, m_size);
+        }
     };
 
     // ------------------------------------------------------------------
     // bounded single-thread stack
     // ------------------------------------------------------------------
 
-    template<typename T, std::size_t N> requires std::is_trivial_v<T>
+    template<typename T, std::size_t N>
+        requires std::is_trivial_v<T>
     struct Stack {
         using value_type = T;
 
@@ -1106,14 +1163,11 @@ export namespace pP {
             m_count = 0u;
         }
 
-        using iterator = IndexIterator<Stack, T>;
-        using const_iterator = IndexIterator<const Stack, const T>;
+        [[nodiscard]] constexpr T *begin() noexcept { return m_storage.data(); }
+        [[nodiscard]] constexpr T *end() noexcept { return m_storage.data() + m_count; }
 
-        [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, 0u); }
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, m_count); }
-
-        [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0u); }
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, m_count); }
+        [[nodiscard]] constexpr const T *begin() const noexcept { return m_storage.data(); }
+        [[nodiscard]] constexpr const T *end() const noexcept { return m_storage.data() + m_count; }
     };
 
     template<typename T, std::size_t N> requires std::is_trivial_v<T>
@@ -1124,7 +1178,8 @@ export namespace pP {
     // bounded single-thread ring-buffer
     // ------------------------------------------------------------------
 
-    template<typename T, std::size_t N> requires std::is_trivial_v<T>
+    template<typename T, std::size_t N>
+        requires std::is_trivial_v<T>
     struct RingBuffer {
         using value_type = T;
 
@@ -1142,7 +1197,8 @@ export namespace pP {
         i32 m_front_pos{0};
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
-        constexpr RingBuffer() noexcept {
+        constexpr
+        RingBuffer() noexcept {
             mem::poisonReserved(m_storage.data(), m_storage.size());
         }
 
@@ -1429,6 +1485,6 @@ export namespace pP {
     }
 
     template<hash::THashable T>
-    struct details::relocatable<hash::Memoizer<T>> : relocatable<T> {
+    struct details::relocatable<hash::Memoizer<T> > : relocatable<T> {
     };
 }
