@@ -33,14 +33,22 @@ public:
     [[nodiscard]] void* getNativeHandle() const noexcept override;
 };
 
+using GlfwKeyCallback = void (*)(int glfwKey, bool pressed, void* context);
+using GlfwMouseCallback = void (*)(int glfwButton, bool pressed, void* context);
+
 class GlfwPlatform : public IPlatform {
     bool m_initialized = false;
+    void* m_inputContext{};
+    GlfwKeyCallback m_keyCb{};
+    GlfwMouseCallback m_mouseCb{};
 public:
     GlfwPlatform() noexcept = default;
     ~GlfwPlatform() noexcept override;
 
     GlfwPlatform(const GlfwPlatform&) = delete;
     GlfwPlatform& operator=(const GlfwPlatform&) = delete;
+
+    void setInputCallbacks(GlfwKeyCallback keyCb, GlfwMouseCallback mouseCb, void* context);
 
     [[nodiscard]] bool initialize();
     [[nodiscard]] std::expected<std::unique_ptr<IWindow>, int> createWindow(const WindowDesc& desc) override;

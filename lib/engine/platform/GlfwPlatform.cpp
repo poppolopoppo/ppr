@@ -63,6 +63,12 @@ bool GlfwPlatform::initialize() {
     return true;
 }
 
+void GlfwPlatform::setInputCallbacks(const GlfwKeyCallback keyCb, const GlfwMouseCallback mouseCb, void* const context) {
+    m_keyCb = keyCb;
+    m_mouseCb = mouseCb;
+    m_inputContext = context;
+}
+
 GlfwPlatform::~GlfwPlatform() noexcept {
     if (m_initialized) {
         glfwTerminate();
@@ -78,6 +84,20 @@ std::expected<std::unique_ptr<IWindow>, int> GlfwPlatform::createWindow(const Wi
     if (!handle) {
         return std::unexpected(-1);
     }
+
+    glfwSetKeyCallback(handle, [](GLFWwindow* w, int key, int, int action, int) {
+        auto* platform = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(w));
+        if (platform && platform->m_keyCb) {
+            platform->m_keyCb(key, action != GLFW_RELEASE, platform->m_inputContext);
+        }
+    });
+    glfwSetMouseButtonCallback(handle, [](GLFWwindow* w, int button, int action, int) {
+        auto* platform = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(w));
+        if (platform && platform->m_mouseCb) {
+            platform->m_mouseCb(button, action != GLFW_RELEASE, platform->m_inputContext);
+        }
+    });
+    glfwSetWindowUserPointer(handle, this);
 
     return std::unique_ptr<IWindow>(std::make_unique<GlfwWindow>(handle));
 }

@@ -15,6 +15,7 @@ export import :enums;
 export import :function_ref;
 export import :hal;
 export import :hashing;
+export import :input_key;
 export import :io;
 export import :io.file_watcher;
 export import :io.mapped_file;

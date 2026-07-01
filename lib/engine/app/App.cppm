@@ -6,6 +6,8 @@ import engine.core;
 import engine.platform;
 import std;
 
+export import :input_service;
+
 export namespace pP {
 
     class Camera {
