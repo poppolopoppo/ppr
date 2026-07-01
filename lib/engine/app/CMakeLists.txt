@@ -9,6 +9,6 @@ target_sources(EngineApp
 )
 
 setup_ppr_project(EngineApp
-  INTERNAL_PUBLIC_DEPS EngineCore EngineRHI
+  INTERNAL_PUBLIC_DEPS EngineCore EngineRHI EnginePlatform
   EXTERNAL_SYSTEM_PRIVATE_DEPS glfw
 )
