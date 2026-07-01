@@ -24,11 +24,10 @@ public:
 };
 
 class NullPlatform : public IPlatform {
-    std::vector<std::unique_ptr<NullWindow>> m_windows{};
     double m_time = 0.0;
 public:
     NullPlatform() noexcept = default;
-    ~NullPlatform() noexcept override;
+    ~NullPlatform() noexcept override = default;
 
     NullPlatform(const NullPlatform&) = delete;
     NullPlatform& operator=(const NullPlatform&) = delete;

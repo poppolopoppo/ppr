@@ -30,16 +30,17 @@ void GlfwWindow::swapBuffers() noexcept {
 }
 
 void GlfwWindow::setTitle(std::string_view title) {
-    glfwSetWindowTitle(m_handle, title.data());
+    std::string titleStr(title);
+    glfwSetWindowTitle(m_handle, titleStr.c_str());
 }
 
 void GlfwWindow::setCursorMode(CursorMode mode) {
     m_cursorMode = mode;
-    int glfwMode;
+    int glfwMode = GLFW_CURSOR_NORMAL;
     switch (mode) {
-        case CursorMode::Normal:   glfwMode = GLFW_CURSOR_NORMAL;   break;
         case CursorMode::Hidden:   glfwMode = GLFW_CURSOR_HIDDEN;   break;
         case CursorMode::Disabled: glfwMode = GLFW_CURSOR_DISABLED; break;
+        default: break;
     }
     glfwSetInputMode(m_handle, GLFW_CURSOR, glfwMode);
 }
@@ -85,6 +86,8 @@ std::expected<std::unique_ptr<IWindow>, int> GlfwPlatform::createWindow(const Wi
         return std::unexpected(-1);
     }
 
+    glfwSetWindowUserPointer(handle, this);
+
     glfwSetKeyCallback(handle, [](GLFWwindow* w, int key, int, int action, int) {
         auto* platform = static_cast<GlfwPlatform*>(glfwGetWindowUserPointer(w));
         if (platform && platform->m_keyCb) {
@@ -97,7 +100,6 @@ std::expected<std::unique_ptr<IWindow>, int> GlfwPlatform::createWindow(const Wi
             platform->m_mouseCb(button, action != GLFW_RELEASE, platform->m_inputContext);
         }
     });
-    glfwSetWindowUserPointer(handle, this);
 
     return std::unique_ptr<IWindow>(std::make_unique<GlfwWindow>(handle));
 }
