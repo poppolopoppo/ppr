@@ -3,6 +3,7 @@ add_library(EnginePlatform)
 target_sources(EnginePlatform
   PRIVATE
     GlfwPlatform.cpp
+    NullPlatform.cpp
 )
 
 target_sources(EnginePlatform
@@ -14,6 +15,7 @@ target_sources(EnginePlatform
       IApp.cppm
       IMath.cppm
       GlfwPlatform.cppm
+      NullPlatform.cppm
 )
 
 setup_ppr_project(EnginePlatform

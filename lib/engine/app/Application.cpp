@@ -1,6 +1,8 @@
 module;
 
+#if !defined(PPR_NULL_PLATFORM)
 #include <GLFW/glfw3.h>
+#endif
 
 #include "pP/Macros.h"
 
@@ -99,6 +101,9 @@ namespace pP {
             }},
         });
 
+#if defined(PPR_NULL_PLATFORM)
+        auto platform = std::make_unique<detail::NullPlatform>();
+#else
         ::glfwSetErrorCallback([](const int error_code, const char *const description) {
             PPR_LOG(App, error, "caught GLFW error", {{"error_code", error_code}, {"description", description}});
         });
@@ -118,6 +123,7 @@ namespace pP {
         }
         PPR_LOG(App, info, "successfully initialized GLFW",
             {{"version", ::glfwGetVersionString()}});
+#endif
 
         if (not rhi::initialize()) [[unlikely]] {
             setExitCode(exit_failed_init);
