@@ -71,7 +71,6 @@ target_sources(EngineCore
         Core.Concurrency.Event.cpp
         Core.Io.cpp
         Core.Io.FileWatcher.cpp
-        Core.InputKey.cpp
         Core.Containers.StableVector.cpp
         Core.Containers.FlatMap.cpp
         Core.Containers.HashMap.cpp
@@ -79,5 +78,5 @@ target_sources(EngineCore
 )
 
 setup_ppr_project(EngineCore
-    EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash glfw
+    EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash
 )

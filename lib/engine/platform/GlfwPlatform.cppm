@@ -9,6 +9,7 @@ module;
 #include <GLFW/glfw3native.h>
 
 export module engine.platform:glfw;
+import engine.core;
 import :platform;
 import :window;
 import std;
@@ -58,3 +59,10 @@ public:
 };
 
 } // namespace pP::detail
+
+export namespace pP {
+
+[[nodiscard]] InputKey fromGlfwKey(int glfwKey) noexcept;
+[[nodiscard]] InputKey fromGlfwMouseButton(int glfwButton) noexcept;
+
+} // namespace pP
