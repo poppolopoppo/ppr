@@ -10,6 +10,7 @@ module;
 
 module engine.platform;
 import :glfw;
+import std;
 
 namespace pP::detail {
 

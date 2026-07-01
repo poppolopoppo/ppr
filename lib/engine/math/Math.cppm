@@ -95,6 +95,35 @@ export namespace math {
         return mango::math::Matrix4x4::perspectiveD3D(fovY * aspect, fovY, nearZ, farZ);
     }
 
+    // ------------------------------------------------------------------
+    // re-exported matrix/vector operators and functions
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] inline float4x4 operator*(const float4x4& a, const float4x4& b) {
+        return mango::math::operator*(a, b);
+    }
+
+    [[nodiscard]] inline float4 operator*(const float4& v, const float4x4& m) {
+        return mango::math::operator*(v, m);
+    }
+
+    [[nodiscard]] inline float3 operator-(const float3& a, const float3& b) {
+        return mango::math::operator-(a, b);
+    }
+
+    [[nodiscard]] inline float4x4 inverse(const float4x4& m) {
+        return mango::math::inverse(m);
+    }
+
+    template <typename T>
+    [[nodiscard]] inline auto normalize(const T& v) {
+        return mango::math::normalize(v);
+    }
+
+    [[nodiscard]] inline float4x4 lookAt(const float3& viewer, const float3& target, const float3& up) {
+        return mango::math::Matrix4x4::lookat(target, viewer, up);
+    }
+
 }
 
 
