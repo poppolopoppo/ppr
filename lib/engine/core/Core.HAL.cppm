@@ -357,16 +357,12 @@ export namespace pP {
             [[noreturn]] void terminateProcess(int exit_code) noexcept;
         }
 
-        // ------------------------------------------------------------------
-        // deadline timers (used for test timeout enforcement)
-        // ------------------------------------------------------------------
-
         namespace timer {
             struct DeadlineHandle {
                 void *m_data{nullptr};
             };
 
-            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false);
+            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false); // move_only_function unavailable on Clang 20 + libc++ 20.1
 
             void cancelDeadline(DeadlineHandle &handle) noexcept;
         }

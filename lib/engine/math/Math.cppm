@@ -23,10 +23,6 @@ export namespace math {
     using float3x3 = mango::math::Matrix3x3;
     using float4x4 = mango::math::Matrix4x4;
 
-    // ------------------------------------------------------------------
-    // matrices
-    // ------------------------------------------------------------------
-
     inline float4x4 translate(const float4x4& matrix, const float x, const float y, const float z) { return mango::math::translate(matrix, x, y, z); }
     inline float4x4 scale(const float4x4& matrix, const float s) { return mango::math::scale(matrix, s); }
     inline float4x4 scale(const float4x4& matrix, const float x, const float y, const float z) { return mango::math::scale(matrix, x, y, z); }
@@ -41,17 +37,9 @@ export namespace math {
 
     inline float4x4 oblique(const float4x4& matrix, const float4& nearClip) { return mango::math::obliqueD3D(matrix, nearClip); }
 
-    // -----------------------------------------------------------------
-    // quaternion
-    // -----------------------------------------------------------------
-
     using mango::math::Quaternion;
     using mango::math::AngleAxis;
     using mango::math::EulerAngles;
-
-    // -----------------------------------------------------------------
-    // geometry
-    // -----------------------------------------------------------------
 
     using mango::math::Quadratic;
     using mango::math::LineSegment;
@@ -73,10 +61,6 @@ export namespace math {
 
     using mango::math::intersect;
 
-    // ------------------------------------------------------------------
-    // helpers
-    // ------------------------------------------------------------------
-
     template <typename T>
         requires requires (T x)
     {
@@ -86,18 +70,10 @@ export namespace math {
         return dot(x, x);
     }
 
-    // ------------------------------------------------------------------
-    // perspective projections
-    // ------------------------------------------------------------------
-
     template <typename T>
     [[nodiscard]] auto perspectiveD3D(T fovY, T aspect, T nearZ, T farZ) {
         return mango::math::Matrix4x4::perspectiveD3D(fovY * aspect, fovY, nearZ, farZ);
     }
-
-    // ------------------------------------------------------------------
-    // re-exported matrix/vector operators and functions
-    // ------------------------------------------------------------------
 
     [[nodiscard]] inline float4x4 operator*(const float4x4& a, const float4x4& b) {
         return mango::math::operator*(a, b);

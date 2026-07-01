@@ -9,10 +9,6 @@ import std;
 
 export namespace pP {
 
-    // ------------------------------------------------------------------
-    // schedule events in the future, at a specific time
-    // ------------------------------------------------------------------
-
     using TimePoint = std::chrono::steady_clock::time_point;
     using TimeDuration = std::chrono::steady_clock::duration;
 
@@ -29,7 +25,7 @@ export namespace pP {
     class TimerManager final {
         struct Event {
             TimePoint m_date{};
-            std::function<void(TimePoint)> m_callback{};
+            std::function<void(TimePoint)> m_callback{}; // move_only_function unavailable on Clang 20 + libc++ 20.1
 
             [[nodiscard]] constexpr std::strong_ordering operator<=>(const Event &other) const noexcept {
                 return m_date <=> other.m_date;
@@ -45,7 +41,7 @@ export namespace pP {
         std::vector<Event> m_queue{};
 
     public:
-        using Callback = std::function<void(TimePoint)>;
+        using Callback = std::function<void(TimePoint)>; // move_only_function unavailable on Clang 20 + libc++ 20.1
 
         explicit TimerManager(ITimerClock &clock = ITimerClock::steady()) noexcept;
 

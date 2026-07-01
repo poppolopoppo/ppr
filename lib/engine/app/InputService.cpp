@@ -97,15 +97,8 @@ void InputService::update() {
 void InputService::onKeyEvent(InputKey key, bool pressed) {
     for (auto& [prio, map] : m_layers) {
         if (isBlocked(prio)) continue;
-        auto* action = map.findKey(key);
-        if (action) {
-            if (pressed && !action->isPressed) {
-                action->justPressed = true;
-            }
-            action->isPressed = pressed;
-            action->value = pressed ? 1.0f : 0.0f;
-            return;
-        }
+        map.onKeyEvent(key, pressed);
+        if (map.findKey(key)) return;
     }
 }
 
