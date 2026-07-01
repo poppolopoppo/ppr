@@ -20,6 +20,8 @@ export namespace pP {
 
     class ISignal {
     public:
+        virtual ~ISignal() noexcept = default;
+
         virtual void notify(const std::size_t event_tag) noexcept = 0;
 
         virtual void wait() noexcept = 0;
@@ -27,6 +29,8 @@ export namespace pP {
 
     class IEvent {
     public:
+        virtual ~IEvent() noexcept = default;
+
         virtual TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept = 0;
         virtual void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept = 0;
 
@@ -109,7 +113,7 @@ export namespace pP {
                     break;
                 }
             };
-            const std::size_t ready_index = std::countr_zero(pending);
+            const auto ready_index = static_cast<std::size_t>(std::countr_zero(pending));
             return getOptionalEvent_(ready_index);
         }
 
@@ -392,7 +396,7 @@ export namespace pP {
         constexpr void unsubscribeEvent(const TagPtr<ISignal>, const TagPtr<ISignal>) noexcept override {
         }
 
-        constexpr [[nodiscard]] bool pollEvent() noexcept override {
+        [[nodiscard]] constexpr bool pollEvent() noexcept override {
             return false;
         }
 

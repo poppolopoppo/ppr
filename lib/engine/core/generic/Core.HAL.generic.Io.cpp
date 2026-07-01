@@ -34,4 +34,8 @@ namespace pP::hal::io {
     std::size_t poll(const IoHandle, const std::span<CompletionEntry>) noexcept { return 0u; }
     std::size_t wait(const IoHandle, const std::span<CompletionEntry>) noexcept { return 0u; }
     void wake(const IoHandle) noexcept {}
+
+    void cancelIo(const FileHandle, void *) noexcept {
+        // Generic fallback — no-op.
+    }
 }

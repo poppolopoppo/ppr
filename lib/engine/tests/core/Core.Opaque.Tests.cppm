@@ -61,7 +61,8 @@ export namespace pP::tests {
             };
 
             PPR_UNIT_TEST(decl_arrays) {
-                [[maybe_unused]] ArrayView toto = {1, 2, 3};
+                [[maybe_unused]] const int toto_data[] = {1, 2, 3};
+                [[maybe_unused]] ArrayView toto = toto_data;
 
                 constexpr auto check = [](opaque::Value &&v) {
                     const auto &ar = v.get<opaque::Array>();
@@ -600,7 +601,7 @@ export namespace pP::tests {
                             return dict[i].second;
                         }
                     }
-                    PPR_ASSERT(!"key not found");
+                    PPR_ASSERT(false && "key not found");
                     static opaque::Block::Value fallback{};
                     return fallback;
                 };

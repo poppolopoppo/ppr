@@ -103,7 +103,7 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
-        "PPR_ENABLE_DEVELOPER_MODE": "OM"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {

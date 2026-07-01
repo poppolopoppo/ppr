@@ -448,7 +448,7 @@ export namespace pP::tests {
                         seed_send += local_send;
                     };
                     for (int i = 0; i < messages_per_thread; ++i) {
-                        RawChannel &chan = channels[channels_fan_out.fetch_add(1) % num_consumers];
+                        RawChannel &chan = channels[static_cast<std::size_t>(channels_fan_out.fetch_add(1)) % num_consumers];
                         auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
                         PPR_ASSERT(hdr.has_value());
                         auto *const p_value = static_cast<int *>(hdr->data());
@@ -467,7 +467,7 @@ export namespace pP::tests {
 
             for (int t = 0; t < num_consumers; ++t) {
                 consumers.emplace_back([=, &channels, &seed_recv, &received] {
-                    RawChannel &chan = channels[t];
+                    RawChannel &chan = channels[static_cast<std::size_t>(t)];
                     while (true) {
                         auto hdr = chan.consumerAcquire(RawChannel::block_until_available);
                         if (hdr.has_value()) {

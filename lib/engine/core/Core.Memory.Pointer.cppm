@@ -1,5 +1,6 @@
 module;
 #include "pP/Macros.h"
+#include <cstddef>
 export module engine.core:memory.pointer;
 
 import std;

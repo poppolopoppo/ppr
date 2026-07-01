@@ -22,7 +22,23 @@ set(PPR_PROJECT_WARNINGS_CXX
 
 # Add libc++ include paths for module support
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
-set(CMAKE_CXX_STDLIB_MODULES_JSON "/usr/lib/llvm-20/lib/libc++.modules.json")
+
+# Probe llvm-config for the C++ module map path if not already set
+if(NOT CMAKE_CXX_STDLIB_MODULES_JSON)
+    find_program(LLVM_CONFIG_EXECUTABLE llvm-config)
+    if(LLVM_CONFIG_EXECUTABLE)
+        execute_process(
+            COMMAND ${LLVM_CONFIG_EXECUTABLE} --libdir
+            OUTPUT_VARIABLE LLVM_LIB_DIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        set(CMAKE_CXX_STDLIB_MODULES_JSON
+            "${LLVM_LIB_DIR}/libc++.modules.json"
+            CACHE STRING "C++ stdlib modules JSON path" FORCE)
+    else()
+        message(WARNING "llvm-config not found; C++23 modules may not build")
+    endif()
+endif()
 
 if(PPR_WARNINGS_AS_ERRORS)
   set(PPR_PROJECT_WARNINGS_CXX ${PPR_PROJECT_WARNINGS_CXX} -Werror)

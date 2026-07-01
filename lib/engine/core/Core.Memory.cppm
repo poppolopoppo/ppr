@@ -185,7 +185,7 @@ export namespace pP::mem {
         static constexpr std::size_t num_reserved_blocks_v = reserved_size_v / block_size_v;
 
         struct LocalHint {
-            static thread_local u32 value;
+            inline static thread_local u32 value{};
         };
 
         using pooling_allocator_t = HintedPooling<block_size_v, HugePage, num_reserved_blocks_v, LocalHint>;
@@ -221,7 +221,7 @@ export namespace pP::mem {
         }
     };
 
-    thread_local u32 SmallPage::LocalHint::value{};
+
 
     static_assert(details::use_inplace_v<SmallPage>);
     static_assert(details::TBlockAllocator<SmallPage>);

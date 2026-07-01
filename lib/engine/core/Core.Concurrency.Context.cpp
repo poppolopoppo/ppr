@@ -328,7 +328,7 @@ SharedContext withoutCancel(SharedContext parent) {
 }
 
 SharedContext withAfterFunc(SharedContext parent, AfterFunc &&execute_after) {
-    return std::make_shared<AfterContext>(parent, std::move(execute_after));
+    return SharedContext(static_cast<IContext *>(new AfterContext(parent, std::move(execute_after))));
 }
 
 SharedContext withValue(SharedContext parent, const string_literal user_key, const opaque::Value &value) {

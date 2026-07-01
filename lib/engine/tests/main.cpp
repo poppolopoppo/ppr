@@ -41,7 +41,7 @@ int main(const int argc, char *argv[]) {
             shuffle_seen = true;
             context.m_shuffle_seed = std::nullopt;
         } else if (arg == "--loop" && i + 1 < argc) {
-            loops = std::stoul(argv[++i]);
+            loops = static_cast<unsigned>(std::stoul(argv[++i]));
         } else if (arg == "--help" || arg == "-h") {
             std::println(
                 "Usage: EngineTests [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--help]\n"

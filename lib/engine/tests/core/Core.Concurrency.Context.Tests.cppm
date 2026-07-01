@@ -155,7 +155,8 @@ export namespace pP::tests {
                 {
                     const SharedContext ctx = context::withAfterFunc(
                         parent, [&received_correct_context](const IContext &c) noexcept {
-                            received_correct_context = (&c != nullptr);
+                            received_correct_context = true;
+                            static_cast<void>(c);
                         });
                 }
                 PPR_ASSERT(received_correct_context);

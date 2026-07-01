@@ -29,4 +29,8 @@ namespace pP::hal {
 
     void installDebugAssertHooks() noexcept {
     }
+
+    void disableSystemErrorReporting() noexcept {
+        // Generic fallback — no-op.
+    }
 }

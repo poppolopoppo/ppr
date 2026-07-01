@@ -11,11 +11,11 @@ set(HAL_PLATFORM_SOURCES
     ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Strings.cpp
     ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.System.cpp
     ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Timer.cpp
+    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Random.cpp
 )
 
 if(PPR_HAL_PLATFORM STREQUAL "windows")
     list(APPEND HAL_PLATFORM_SOURCES
-        windows/Core.HAL.windows.Random.cpp
         windows/Core.HAL.windows.RingBuffer.cpp
     )
 endif()

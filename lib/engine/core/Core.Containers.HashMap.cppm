@@ -277,7 +277,7 @@ export namespace pP {
         hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
         mem::details::TAllocator AllocatorT = mem::GPA>
     HashMap(std::initializer_list<KeyT>)
-        -> HashSet<KeyT, EqualToT, HasherT, AllocatorT>;
+        -> HashMap<KeyT, void, EqualToT, HasherT, AllocatorT>;
 
     template<typename KeyT, typename ValueT,
         details::TEqualTo<KeyT> EqualToT = std::equal_to<KeyT>,
@@ -291,7 +291,7 @@ export namespace pP {
         hash::THasher<KeyT> HasherT = hash::DefaultHash<KeyT>,
         mem::details::TAllocator AllocatorT = mem::GPA>
     HashMap(std::initializer_list<KeyT>, const AllocatorT &)
-        -> HashSet<KeyT, EqualToT, HasherT, AllocatorT>;
+        -> HashMap<KeyT, void, EqualToT, HasherT, AllocatorT>;
 
     template<std::input_iterator Iter>
     HashMap(Iter, Iter)
@@ -530,7 +530,7 @@ export namespace pP {
         }
 
         [[nodiscard]] float getLoadFactor() const noexcept {
-            return m_capacity_pow2_m1 ? static_cast<float>(m_size) / (1u + m_capacity_pow2_m1) : 0u;
+            return m_capacity_pow2_m1 ? static_cast<float>(m_size) / static_cast<float>(1u + m_capacity_pow2_m1) : 0u;
         }
 
         [[nodiscard]] constexpr iterator begin() noexcept {

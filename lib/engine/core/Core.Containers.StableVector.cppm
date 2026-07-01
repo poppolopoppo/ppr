@@ -941,13 +941,13 @@ export namespace pP {
         constexpr void insert(const std::size_t index, T &&rvalue) noexcept {
             PPR_ASSERT(index <= m_size);
             pushBack(std::move(rvalue));
-            std::ranges::rotate(begin() + index, end() - 1u, end());
+            std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index), end() - 1, end());
         }
 
         constexpr void insert(const std::size_t index, const T &value) noexcept {
             PPR_ASSERT(index <= m_size);
             pushBack(value);
-            std::ranges::rotate(begin() + index, end() - 1u, end());
+            std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index), end() - 1, end());
         }
 
         template<std::ranges::range RangeT>

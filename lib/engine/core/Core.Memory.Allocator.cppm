@@ -1004,7 +1004,7 @@ export namespace pP::mem {
         }
 
         void deallocateLockFree_(const u32 pool_index, const void *const ptr) noexcept {
-            const u32 block_index = checked_cast<u32>((static_cast<const std::byte *>(ptr) - m_pools[pool_index]) / block_size_v);
+            const u32 block_index = checked_cast<u32>(static_cast<std::size_t>(static_cast<const std::byte *>(ptr) - m_pools[pool_index]) / block_size_v);
             PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
             PPR_ASSERT(Bitmask<page_mask_t>{m_blocks[pool_index]}.test(block_index) == false);
 

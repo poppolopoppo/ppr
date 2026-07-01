@@ -101,6 +101,7 @@ namespace pP {
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
         auto *const entry = new (slot) Entry{
             .m_message{message.view()},
+            .m_params{},
             .m_site{emitter},
             .m_timestamp{timestamp},
             .m_thread_id{std::this_thread::get_id()},
@@ -114,7 +115,7 @@ namespace pP {
 
     void Log::Handler::defaultWriter_(const Entry &entry) const noexcept {
         using namespace std::chrono;
-        const auto elapsed_seconds = duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count() / 1e9;
+        const auto elapsed_seconds = static_cast<double>(duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count()) / 1e9;
 
 #if 0
         hal::outputDebugFmt("[{:08.3f}][{}][{}] {} -- {} {}\n", elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),

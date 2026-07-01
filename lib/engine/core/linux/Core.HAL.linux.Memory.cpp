@@ -5,6 +5,10 @@ module;
 
 #include <sys/time.h>
 
+#include <linux/memfd.h>
+#include <cstdlib>
+#include <cstring>
+
 #include "pP/Macros.h"
 
 module engine.core;
@@ -118,5 +122,51 @@ namespace pP::hal {
         if (::munmap(ptr, size) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
+    }
+
+    void *ringBufferAlloc(const std::size_t buffer_size) noexcept(false) {
+        const std::size_t total_size = buffer_size * 2;
+
+        void *storage = nullptr;
+        if (::posix_memalign(&storage, 4096, total_size) != 0) {
+            throw std::bad_alloc();
+        }
+        std::memset(storage, 0, total_size);
+
+        int fd = ::memfd_create("ringbuf", MFD_CLOEXEC);
+        if (fd < 0) {
+            std::free(storage);
+            throw std::bad_alloc();
+        }
+
+        if (::ftruncate(fd, static_cast<off_t>(buffer_size)) < 0) {
+            ::close(fd);
+            std::free(storage);
+            throw std::bad_alloc();
+        }
+
+        void *mapping1 = ::mmap(storage, buffer_size, PROT_READ | PROT_WRITE,
+                                MAP_FIXED | MAP_SHARED, fd, 0);
+        if (mapping1 == MAP_FAILED) {
+            ::close(fd);
+            std::free(storage);
+            throw std::bad_alloc();
+        }
+
+        void *mapping2 = ::mmap(static_cast<u8 *>(storage) + buffer_size, buffer_size,
+                                PROT_READ | PROT_WRITE, MAP_FIXED | MAP_SHARED, fd, 0);
+        ::close(fd);
+
+        if (mapping2 == MAP_FAILED) {
+            ::munmap(storage, buffer_size);
+            throw std::bad_alloc();
+        }
+
+        return storage;
+    }
+
+    void ringBufferFree(const void *ring_buffer, const std::size_t buffer_size) noexcept(false) {
+        if (!ring_buffer) return;
+        ::munmap(const_cast<void *>(ring_buffer), buffer_size * 2);
     }
 }

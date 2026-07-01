@@ -540,7 +540,7 @@ export namespace pP::mem {
                     return;
                 i32 &g_depth_tls = getDepthTLS();
                 PPR_ASSERT(g_depth_tls == m_depth);
-                g_depth_tls = m_depth - 1u;
+                g_depth_tls = m_depth - 1;
             }
 
             ScopedArenaWithDebug(const ScopedArenaWithDebug &) = delete;
@@ -557,7 +557,7 @@ export namespace pP::mem {
                 if (m_depth >= 0) {
                     i32 &g_depth_tls = getDepthTLS();
                     PPR_ASSERT(g_depth_tls == m_depth);
-                    g_depth_tls = m_depth - 1u;
+                    g_depth_tls = m_depth - 1;
                 }
 
                 ScopedArena::operator=(std::move(other));
@@ -684,7 +684,7 @@ export namespace pP::mem {
             }
 
             const u32 old_offset = m_offset;
-            m_offset = safe_narrowing(static_cast<std::byte *>(aligned_ptr) - m_data + bytes);
+            m_offset = safe_narrowing(static_cast<std::size_t>(static_cast<std::byte *>(aligned_ptr) - m_data) + bytes);
             annotateContiguousContainer(m_data, m_capacity, old_offset, m_offset);
             return {aligned_ptr, bytes};
         }

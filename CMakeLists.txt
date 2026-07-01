@@ -16,6 +16,18 @@ set(CMAKE_EXPERIMENTAL_EXPORT_BUILD_DATABASE "73194a1d-c0b5-41b9-9190-a4512925e1
 # set(CMAKE_EXPERIMENTAL_EXPORT_PACKAGE_INFO "b80be207-778e-46ba-8080-b23bba22639e")
 # set(CMAKE_EXPERIMENTAL_FIND_CPS_PACKAGES "e82e467b-f997-4464-8ace-b00808fff261")
 
+# Pre-set C++ stdlib modules JSON path for Clang on Linux
+# This must be set before project() so CMake detects it correctly during compiler ABI detection.
+execute_process(
+    COMMAND clang++ -stdlib=libc++ -print-file-name=libc++.modules.json
+    OUTPUT_VARIABLE _ppr_libcxx_modules_json
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(_ppr_libcxx_modules_json AND EXISTS "${_ppr_libcxx_modules_json}")
+    set(CMAKE_CXX_STDLIB_MODULES_JSON "${_ppr_libcxx_modules_json}")
+endif()
+
 # Set defaults for standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

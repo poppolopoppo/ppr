@@ -34,13 +34,19 @@ namespace pP::hal {
             if (cp < 0x80) {
                 p_dst[count++] = static_cast<wchar_t>(cp);
             } else if ((cp & 0xE0) == 0xC0 && it != utf8.end()) {
-                cp = ((cp & 0x1F) << 6) | (*it++ & 0x3F);
+                const auto b1 = static_cast<unsigned int>(*it++ & 0x3F);
+                cp = ((cp & 0x1F) << 6) | b1;
                 p_dst[count++] = static_cast<wchar_t>(cp);
             } else if ((cp & 0xF0) == 0xE0 && std::distance(it, utf8.end()) >= 2) {
-                cp = ((cp & 0x0F) << 12) | ((*it++ & 0x3F) << 6) | (*it++ & 0x3F);
+                const auto b1 = static_cast<unsigned int>(*it++ & 0x3F);
+                const auto b2 = static_cast<unsigned int>(*it++ & 0x3F);
+                cp = ((cp & 0x0F) << 12) | (b1 << 6) | b2;
                 p_dst[count++] = static_cast<wchar_t>(cp);
             } else if ((cp & 0xF8) == 0xF0 && std::distance(it, utf8.end()) >= 3) {
-                cp = ((cp & 0x07) << 18) | ((*it++ & 0x3F) << 12) | ((*it++ & 0x3F) << 6) | (*it++ & 0x3F);
+                const auto b1 = static_cast<unsigned int>(*it++ & 0x3F);
+                const auto b2 = static_cast<unsigned int>(*it++ & 0x3F);
+                const auto b3 = static_cast<unsigned int>(*it++ & 0x3F);
+                cp = ((cp & 0x07) << 18) | (b1 << 12) | (b2 << 6) | b3;
                 p_dst[count++] = static_cast<wchar_t>(cp);
             }
         }
@@ -83,6 +89,12 @@ namespace pP::hal {
         static_assert(sizeof(char8_t) == sizeof(char));
         const std::size_t n = std::min(utf8.size(), capacity);
         std::memcpy(p_dst, utf8.data(), n * sizeof(char));
+        return n;
+    }
+
+    [[nodiscard]] std::size_t transcode(const std::string_view ansi, char *p_dst, std::size_t capacity) noexcept {
+        const std::size_t n = std::min(ansi.size(), capacity);
+        std::memcpy(p_dst, ansi.data(), n);
         return n;
     }
 }

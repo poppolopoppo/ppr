@@ -115,7 +115,7 @@ export namespace pP {
         [[nodiscard]] constexpr reference operator*() const noexcept {
             PPR_ASSERT(m_container != nullptr);
             PPR_ASSUME(m_container != nullptr);
-            return (*m_container)[m_index]; // use [] (not at) for iterator semantics
+            return (*m_container)[static_cast<std::size_t>(m_index)]; // use [] (not at) for iterator semantics
         }
 
         [[nodiscard]] constexpr std::add_pointer_t<value_type> operator->() const noexcept
@@ -605,7 +605,7 @@ export namespace pP {
                 static_cast<std::uintptr_t>(m_offset));
         }
 
-        PPR_FORCE_INLINE constexpr void setData(T *ptr PPR_LIFETIME_BOUND) & noexcept {
+        PPR_FORCE_INLINE constexpr void setData(T *ptr) & noexcept {
             if (ptr == nullptr) {
                 m_offset = 0;
                 return;
@@ -753,7 +753,7 @@ export namespace pP {
         }
 
         /// Replaces the pointer, preserving the current flags.
-        PPR_FORCE_INLINE constexpr void setData(T *const ptr PPR_LIFETIME_BOUND) noexcept {
+        PPR_FORCE_INLINE constexpr void setData(T *const ptr) noexcept {
             PPR_ASSERT((std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0
                 && "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
             m_packed = (m_packed & FLAG_MASK) | std::bit_cast<std::uintptr_t>(ptr);
@@ -868,7 +868,7 @@ export namespace pP {
         constexpr ArrayView() noexcept = default;
 
         constexpr ArrayView(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
-            : m_data(list.data()),
+            : m_data(list.begin()),
               m_size(list.size()) {
         }
 
@@ -879,8 +879,10 @@ export namespace pP {
               m_size(span.size()) {
         }
 
-        template<std::ranges::contiguous_range RangeT>
-            requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
+        template<typename RangeT>
+            requires (!std::same_as<std::remove_cvref_t<RangeT>, ArrayView>) &&
+                     std::ranges::contiguous_range<RangeT> &&
+                     std::is_same_v<std::ranges::range_value_t<RangeT>, T>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr ArrayView(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
             : m_data(std::ranges::data(contiguous_range)),
@@ -920,6 +922,7 @@ export namespace pP {
     ArrayView(std::initializer_list<T> list) -> ArrayView<T>;
 
     template<std::ranges::contiguous_range RangeT>
+        requires (!std::same_as<std::remove_cvref_t<RangeT>, ArrayView<std::ranges::range_value_t<RangeT>>>)
     ArrayView(RangeT &&contiguous_range) -> ArrayView<std::ranges::range_value_t<RangeT> >;
 
     template<typename T>

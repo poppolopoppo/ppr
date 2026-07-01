@@ -9,7 +9,9 @@ export module engine.math;
 export namespace mango::math {}
 
 // warning C5304: a declaration designated by the using-declaration 'XXX' exported from this module has internal linkage and using such a name outside the module is ill-formed
+#ifdef _MSC_VER
 #pragma warning(disable :  5304)
+#endif
 
 export namespace math {
     using namespace mango::math;

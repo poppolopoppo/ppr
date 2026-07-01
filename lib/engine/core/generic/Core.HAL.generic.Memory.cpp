@@ -59,4 +59,11 @@ namespace pP::hal {
         (void)ptr;
         (void)size;
     }
+
+    void *ringBufferAlloc(const std::size_t) noexcept(false) {
+        throw std::bad_alloc();
+    }
+
+    void ringBufferFree(const void *, const std::size_t) noexcept(false) {
+    }
 }

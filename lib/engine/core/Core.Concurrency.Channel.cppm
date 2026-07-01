@@ -551,7 +551,7 @@ export namespace pP {
         }
 
         [[nodiscard]] static std::default_sentinel_t end() noexcept {
-            return m_channel.end();
+            return Channel<T>::end();
         }
     };
 

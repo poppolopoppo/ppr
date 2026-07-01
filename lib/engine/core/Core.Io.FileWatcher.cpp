@@ -16,8 +16,8 @@ namespace pP {
     // ------------------------------------------------------------------
 
     DirectoryWatcher::DirectoryWatcher(const std::filesystem::path &dir, const bool recursive)
-        : m_root(dir)
-        , m_recursive(recursive)
+        : m_recursive(recursive)
+        , m_root(dir)
     {
         m_handle = hal::io::openWatch(dir, recursive);
     }

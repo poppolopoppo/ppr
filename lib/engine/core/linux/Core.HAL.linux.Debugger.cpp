@@ -2,6 +2,7 @@ module;
 
 #include <unistd.h>
 #include <csignal>
+#include <cstdlib>
 
 #include "pP/Macros.h"
 
@@ -20,12 +21,14 @@ namespace pP::hal {
 #endif
     }
 
+#ifdef _WIN32
     void outputDebug(const native::char_t *wide_msg) noexcept {
 #if PPR_ENABLE_DEBUG
         std::string converted = toString<char>(native::string_view(wide_msg));
         outputDebug(converted.c_str());
 #endif
     }
+#endif
 
     [[nodiscard]] bool isDebuggerPresent() noexcept {
         return false;
@@ -52,5 +55,10 @@ namespace pP::hal {
             ::_Exit(3);
         });
 #endif
+    }
+
+    void disableSystemErrorReporting() noexcept {
+        // On Linux, crash dialogs don't exist; error reporting via SIG* handlers already disabled.
+        // No-op for Linux.
     }
 }

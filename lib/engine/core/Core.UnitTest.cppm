@@ -254,15 +254,15 @@ namespace std {
                 return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}ns"), ns);
             }
             if (ns < 100'000) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}µs"), ns / 1'000.0);
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}µs"), static_cast<double>(ns) / 1'000.0);
             }
             if (ns < 1'000'000) {
                 return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}µs"), duration_cast<microseconds>(td.m_value).count());
             }
             if (ns < 1'000'000'000LL) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), ns / 1'000'000.0);
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), static_cast<double>(ns) / 1'000'000.0);
             }
-            return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), ns / 1'000'000'000.0);
+            return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), static_cast<double>(ns) / 1'000'000'000.0);
         }
     };
 }

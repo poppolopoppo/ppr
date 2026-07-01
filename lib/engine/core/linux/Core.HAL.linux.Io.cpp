@@ -53,4 +53,9 @@ namespace pP::hal::io {
 
     void wake(const IoHandle) noexcept {
     }
+
+    void cancelIo(const FileHandle, void *) noexcept {
+        // On linux, io_uring's teardown handles in-flight cancellation naturally.
+        // No additional cancel needed; stub retained for API compatibility.
+    }
 }
