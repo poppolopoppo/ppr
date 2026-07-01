@@ -16,77 +16,12 @@ export namespace mango::math {}
 export namespace math {
     using namespace mango::math;
 
-    using mango::math::pi;
-
     using float2 = mango::math::float32x2;
     using float3 = mango::math::float32x3;
     using float4 = mango::math::float32x4;
 
     using float3x3 = mango::math::Matrix3x3;
     using float4x4 = mango::math::Matrix4x4;
-
-    // ------------------------------------------------------------------
-    // scalar functions
-    // ------------------------------------------------------------------
-
-    using mango::math::is_scalar;
-
-    using mango::math::abs;
-    using mango::math::sqrt;
-    using mango::math::sin;
-    using mango::math::cos;
-    using mango::math::tan;
-    using mango::math::asin;
-    using mango::math::acos;
-    using mango::math::atan;
-    using mango::math::exp;
-    using mango::math::log;
-    using mango::math::exp2;
-    using mango::math::log2;
-    using mango::math::pow;
-    using mango::math::atan2;
-    using mango::math::round;
-    using mango::math::floor;
-    using mango::math::ceil;
-    using mango::math::trunc;
-    using mango::math::fract;
-    using mango::math::mod;
-    using mango::math::min;
-    using mango::math::max;
-    using mango::math::clamp;
-    using mango::math::lerp;
-    using mango::math::smoothstep;
-    using mango::math::sign;
-    using mango::math::radians;
-    using mango::math::degrees;
-
-    // -----------------------------------------------------------------
-    // vectors
-    // -----------------------------------------------------------------
-
-    using mango::math::dot;
-    using mango::math::square;
-    using mango::math::distance;
-    using mango::math::normalize;
-    using mango::math::project;
-    using mango::math::reflect;
-    using mango::math::refract;
-    using mango::math::cross;
-    using mango::math::hmin;
-    using mango::math::hmax;
-    using mango::math::clamp;
-    using mango::math::smoothstep;
-
-    using mango::math::unpacklo;
-    using mango::math::unpackhi;
-
-    using mango::math::adds;
-    using mango::math::subs;
-
-    using mango::math::add;
-    using mango::math::sub;
-    using mango::math::mul;
-    using mango::math::div;
 
     // ------------------------------------------------------------------
     // matrices
@@ -106,12 +41,6 @@ export namespace math {
 
     inline float4x4 oblique(const float4x4& matrix, const float4& nearClip) { return mango::math::obliqueD3D(matrix, nearClip); }
 
-    using mango::math::transpose;
-    using mango::math::inverse;
-    using mango::math::inverseTranspose;
-    using mango::math::inverseTRS;
-    using mango::math::inverseTR;
-
     // -----------------------------------------------------------------
     // quaternion
     // -----------------------------------------------------------------
@@ -119,23 +48,6 @@ export namespace math {
     using mango::math::Quaternion;
     using mango::math::AngleAxis;
     using mango::math::EulerAngles;
-
-    using mango::math::dot;
-    using mango::math::norm;
-    using mango::math::square;
-    using mango::math::mod;
-    using mango::math::negate;
-    using mango::math::inverse;
-    using mango::math::conjugate;
-
-    using mango::math::log;
-    using mango::math::exp;
-    using mango::math::pow;
-    using mango::math::normalize;
-    using mango::math::lndif;
-    using mango::math::lerp;
-    using mango::math::slerp;
-    using mango::math::squad;
 
     // -----------------------------------------------------------------
     // geometry
@@ -162,72 +74,6 @@ export namespace math {
     using mango::math::intersect;
 
     // ------------------------------------------------------------------
-    // easing functions
-    // ------------------------------------------------------------------
-
-    // Illustration of the ease functions:
-    // https://easings.net/
-
-    using mango::math::easeLinear;
-    using mango::math::easeSmoothStep;
-    using mango::math::easeInQuadratic;
-    using mango::math::easeOutQuadratic;
-    using mango::math::easeInOutQuadratic;
-
-    using mango::math::easeInCubic;
-    using mango::math::easeOutCubic;
-    using mango::math::easeInOutCubic;
-
-    using mango::math::easeInQuartic;
-    using mango::math::easeOutQuartic;
-    using mango::math::easeInOutQuartic;
-
-    using mango::math::easeInQuintic;
-    using mango::math::easeOutQuintic;
-    using mango::math::easeInOutQuintic;
-
-    using mango::math::easeInSine;
-    using mango::math::easeOutSine;
-    using mango::math::easeInOutSine;
-
-    using mango::math::easeInCircular;
-    using mango::math::easeOutCircular;
-    using mango::math::easeInOutCircular;
-
-    using mango::math::easeInExponential;
-    using mango::math::easeOutExponential;
-    using mango::math::easeInOutExponential;
-
-    using mango::math::easeInElastic;
-    using mango::math::easeOutElastic;
-    using mango::math::easeInOutElastic;
-
-    using mango::math::easeInBack;
-    using mango::math::easeOutBack;
-    using mango::math::easeInOutBack;
-
-    using mango::math::easeInBounce;
-    using mango::math::easeOutBounce;
-    using mango::math::easeInOutBounce;
-
-    // ------------------------------------------------------------------
-    // spline interpolation
-    // ------------------------------------------------------------------
-
-    using mango::math::bezier;
-    using mango::math::catmull;
-    using mango::math::bicubic;
-    using mango::math::bspline;
-    using mango::math::hermite;
-
-    // ------------------------------------------------------------------
-    // colors
-    // ------------------------------------------------------------------
-
-    using mango::math::linear_to_srgb;
-    using mango::math::srgb_to_linear;
-
-    // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
 
@@ -240,29 +86,17 @@ export namespace math {
         return dot(x, x);
     }
 
+    // ------------------------------------------------------------------
+    // perspective projections
+    // ------------------------------------------------------------------
+
+    template <typename T>
+    [[nodiscard]] auto perspectiveD3D(T fovY, T aspect, T nearZ, T farZ) {
+        return mango::math::Matrix4x4::perspectiveD3D(fovY * aspect, fovY, nearZ, farZ);
+    }
+
 }
 
-// ------------------------------------------------------------------
-// operators (for ADL)
-// ------------------------------------------------------------------
 
-export using mango::math::operator+;
-export using mango::math::operator-;
-export using mango::math::operator*;
-export using mango::math::operator/;
-export using mango::math::operator+=;
-export using mango::math::operator-=;
-export using mango::math::operator*=;
-export using mango::math::operator/=;
-export using mango::math::operator==;
-export using mango::math::operator!=;
-export using mango::math::operator<;
-export using mango::math::operator<=;
-export using mango::math::operator>;
-export using mango::math::operator>=;
-export using mango::math::operator^;
-export using mango::math::operator~;
-export using mango::math::operator&;
-export using mango::math::operator|;
-export using mango::math::operator<<;
-export using mango::math::operator>>;
+
+
