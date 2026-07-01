@@ -20,10 +20,6 @@ namespace pP {
 
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
-    // ------------------------------------------------------------------
-    // Camera
-    // ------------------------------------------------------------------
-
     math::float4x4 Camera::viewMatrix() const noexcept {
         return math::lookAt(
             math::float3{position.x, position.y, position.z},
@@ -58,10 +54,6 @@ namespace pP {
         return {origin, direction};
     }
 
-    // ------------------------------------------------------------------
-    // Application
-    // ------------------------------------------------------------------
-
     Application::Application(const std::string_view name, const std::span<const char* const> argv)
         : m_arguments(argv.begin(), argv.end()),
           m_name(name) {
@@ -78,6 +70,9 @@ namespace pP {
 
         if (onInitialize()) [[likely]] {
             PPR_DEFER { onShutdown(); };
+
+            if (!m_platform) [[unlikely]]
+                return m_exitCode;
 
             while (true) {
                 double now = m_platform->getTime();
