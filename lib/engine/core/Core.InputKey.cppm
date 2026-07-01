@@ -25,7 +25,4 @@ export namespace pP {
         inline constexpr InputKey mouseX{104}, mouseY{105};
     }
 
-    [[nodiscard]] InputKey fromGlfwKey(int glfwKey) noexcept;
-    [[nodiscard]] InputKey fromGlfwMouseButton(int glfwButton) noexcept;
-
 } // namespace pP
