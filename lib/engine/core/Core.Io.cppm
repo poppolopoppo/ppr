@@ -84,7 +84,7 @@ export namespace pP {
         std::error_code m_error{};
         std::atomic<u8> m_state{0};
         hal::io::FileHandle m_active_file{nullptr};
-        alignas(max_align_v) std::byte m_overlapped_storage[kOverlappedSize]{};
+        alignas(std::max_align_t) std::byte m_overlapped_storage[kOverlappedSize]{};
 
         void complete_(const u64 bytes, const std::error_code ec) noexcept {
             u8 expected = 1u;

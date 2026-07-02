@@ -27,7 +27,7 @@ export namespace pP {
     class TimerManager final {
         struct Event {
             TimePoint m_date{};
-            std::move_only_function<void(TimePoint) noexcept> m_callback{};
+            pP::unique_function<void(TimePoint)> m_callback{};
 
             [[nodiscard]] constexpr std::strong_ordering operator<=>(const Event &other) const noexcept {
                 return m_date <=> other.m_date;
@@ -43,7 +43,7 @@ export namespace pP {
         std::vector<Event> m_queue{};
 
     public:
-        using Callback = std::move_only_function<void(TimePoint) noexcept>;
+        using Callback = pP::unique_function<void(TimePoint)>;
 
         explicit TimerManager(ITimerClock &clock = ITimerClock::steady()) noexcept;
 

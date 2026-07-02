@@ -408,17 +408,7 @@ export namespace pP {
                         return sizeOf(delegate());
                     },
                     [](const Formatter fmt) constexpr noexcept -> std::size_t {
-                        // Concrete sink wrapping whatever output iterator this context uses.
-                        // Only count memory used to reserve the whole block.
-                        struct format_count final : format_context {
-                            std::size_t m_count{};
-
-                            void write(const std::string_view sv) override {
-                                m_count += sv.size();
-                            }
-                        };
-
-                        format_count sink{};
+                        details::FormatCounter sink{};
                         fmt(sink);
                         return alignForward(sink.m_count * sizeof(char), max_align_v);
                     },
@@ -512,6 +502,20 @@ export namespace pP {
             result.assign(init);
             return result;
         }
+    }
+
+    // --------------------------------------------------------------
+    // sizing helpers
+    // --------------------------------------------------------------
+
+    namespace details {
+        struct FormatCounter final : opaque::format_context {
+            std::size_t m_count{};
+
+            void write(const std::string_view sv) override {
+                m_count += sv.size();
+            }
+        };
     }
 
     // --------------------------------------------------------------
