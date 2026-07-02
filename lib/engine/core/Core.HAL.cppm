@@ -257,19 +257,17 @@ export namespace pP {
 
         [[nodiscard]] std::size_t transcode(std::u8string_view utf8, char *p_dst, std::size_t capacity) noexcept;
 
-        [[nodiscard]] std::size_t transcode(std::string_view ansi, char *p_dst, std::size_t capacity) noexcept;
-
         template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
-        [[nodiscard]] auto toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
-            -> std::basic_string<DstCharT, std::char_traits<DstCharT>, AllocatorT> {
+        [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
+            noexcept(std::is_same_v<SrcCharT, DstCharT>) {
             if constexpr (std::is_same_v<DstCharT, SrcCharT>) {
-                return std::basic_string<DstCharT, std::char_traits<DstCharT>, AllocatorT>(src, std::forward<AllocatorT>(alloc));
-            } else {
-                const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
-                std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
-                [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
-                return dst;
+                return src;
             }
+
+            const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
+            std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
+            [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
+            return dst;
         }
 
         namespace native {
@@ -357,12 +355,16 @@ export namespace pP {
             [[noreturn]] void terminateProcess(int exit_code) noexcept;
         }
 
+        // ------------------------------------------------------------------
+        // deadline timers (used for test timeout enforcement)
+        // ------------------------------------------------------------------
+
         namespace timer {
             struct DeadlineHandle {
                 void *m_data{nullptr};
             };
 
-            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false); // move_only_function unavailable on Clang 20 + libc++ 20.1
+            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, pP::unique_function<void()> callback) noexcept(false);
 
             void cancelDeadline(DeadlineHandle &handle) noexcept;
         }

@@ -57,7 +57,7 @@ export namespace pP {
         // execute a callback after cancel or destruction
         // --------------------------------------------------------------
 
-        using AfterFunc = std::function<void(const IContext &)>;
+        using AfterFunc = pP::unique_function<void(const IContext &)>;
 
         [[nodiscard]] SharedContext withAfterFunc(SharedContext parent, AfterFunc &&execute_after);
 

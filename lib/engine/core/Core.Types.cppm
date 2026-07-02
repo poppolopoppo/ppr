@@ -154,4 +154,10 @@ export namespace pP {
             return m_value <=> other.m_value;
         }
     };
+
+#if defined(__cpp_lib_move_only_function)
+    template<typename T> using unique_function = std::move_only_function<T>;
+#else
+    template<typename T> using unique_function = std::function<T>;
+#endif
 }

@@ -179,11 +179,23 @@ namespace pP {
 
 #if PPR_ENABLE_ASSERTIONS
     void UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
+#if defined(__cpp_lib_stacktrace) && __cpp_lib_stacktrace >= 202011L
+        const std::stacktrace backtrace = std::stacktrace::current(9);
+#endif
+
         std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
                      "\tin function: {}\n"
-                     "\tin test: {}",
+                     "\tin test: {}\n\n"
+#if defined(__cpp_lib_stacktrace) && __cpp_lib_stacktrace >= 202011L
+                     "Callstack:\n{}"
+#endif
+                     ,
                      std::string_view(condition.m_site.file_name()), condition.m_site.line(), std::string_view(condition.m_message),
-                     std::string_view(condition.m_site.function_name()), getTestId());
+                     std::string_view(condition.m_site.function_name()), getTestId()
+#if defined(__cpp_lib_stacktrace) && __cpp_lib_stacktrace >= 202011L
+                     , backtrace
+#endif
+                     );
         std::cerr.flush();
 
         throw std::logic_error(condition.m_message);

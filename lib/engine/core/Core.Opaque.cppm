@@ -147,14 +147,6 @@ export namespace pP {
         // Value are transient, Block is persistent
         // --------------------------------------------------------------
 
-        struct FormatCounter final : format_context {
-            std::size_t m_count{};
-
-            void write(const std::string_view sv) override {
-                m_count += sv.size();
-            }
-        };
-
         struct Block {
             struct Value;
 
@@ -416,7 +408,7 @@ export namespace pP {
                         return sizeOf(delegate());
                     },
                     [](const Formatter fmt) constexpr noexcept -> std::size_t {
-                        FormatCounter sink{};
+                        details::FormatCounter sink{};
                         fmt(sink);
                         return alignForward(sink.m_count * sizeof(char), max_align_v);
                     },
@@ -513,6 +505,20 @@ export namespace pP {
     }
 
     // --------------------------------------------------------------
+    // sizing helpers
+    // --------------------------------------------------------------
+
+    namespace details {
+        struct FormatCounter final : opaque::format_context {
+            std::size_t m_count{};
+
+            void write(const std::string_view sv) override {
+                m_count += sv.size();
+            }
+        };
+    }
+
+    // --------------------------------------------------------------
     // allocator can relocate opaque::Value
     // --------------------------------------------------------------
 
@@ -599,13 +605,8 @@ export namespace std {
             return visit(
                 pP::overloaded(
                     [&]<pP::details::TChar StringCharT>(const basic_string_view<StringCharT> &inner_value) {
-                        if constexpr (std::is_same_v<StringCharT, char>) {
-                            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
-                                             inner_value);
-                        } else {
-                            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "[{:}]"),
-                                             inner_value.size());
-                        }
+                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
+                                         inner_value);
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
                         requires formattable<ValueT, CharT> {
@@ -663,13 +664,8 @@ export namespace std {
             return visit(
                 pP::overloaded(
                     [&]<pP::details::TChar StringCharT>(const pP::RelativeView<StringCharT> &inner_value) {
-                        if constexpr (std::is_same_v<StringCharT, char>) {
-                            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
-                                             std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
-                        } else {
-                            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "[{:}]"),
-                                             inner_value.size());
-                        }
+                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
+                                         std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
                         requires formattable<ValueT, CharT> {
