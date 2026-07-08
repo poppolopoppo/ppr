@@ -76,9 +76,9 @@ export namespace pP {
                                                        TimerManager &timer = TimerManager::mainTimer());
         [[nodiscard]] SharedContext withDeadline(SharedContext parent, const TimePoint deadline,
                                                   TimerManager &timer = TimerManager::mainTimer());
-        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, const TimeDuration delay, std::error_code cause,
+        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, const TimeSpan delay, std::error_code cause,
                                                       TimerManager &timer = TimerManager::mainTimer());
-        [[nodiscard]] SharedContext withTimeout(SharedContext parent, const TimeDuration delay,
+        [[nodiscard]] SharedContext withTimeout(SharedContext parent, const TimeSpan delay,
                                                  TimerManager &timer = TimerManager::mainTimer());
     }
 }

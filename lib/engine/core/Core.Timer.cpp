@@ -33,7 +33,7 @@ namespace pP {
     }
 
     TimePoint TimerManager::now() const noexcept {
-        return TimePoint(TimeDuration(m_last_tick.load(std::memory_order_acquire)));
+        return TimePoint(TimeSpan(m_last_tick.load(std::memory_order_acquire)));
     }
 
     void TimerManager::schedule(const TimePoint date, Callback &&callback) noexcept {

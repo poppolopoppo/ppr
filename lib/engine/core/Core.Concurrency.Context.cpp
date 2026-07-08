@@ -351,12 +351,12 @@ SharedContext withDeadline(SharedContext parent, const TimePoint deadline, Timer
     return withDeadlineCause(std::move(parent), deadline, std::make_error_code(std::errc::timed_out), timer);
 }
 
-SharedContext withTimeoutCause(SharedContext parent, const TimeDuration delay, std::error_code cause,
+SharedContext withTimeoutCause(SharedContext parent, const TimeSpan delay, std::error_code cause,
                                 TimerManager &timer) {
     return withDeadlineCause(std::move(parent), timer.now() + delay, cause, timer);
 }
 
-SharedContext withTimeout(SharedContext parent, const TimeDuration delay, TimerManager &timer) {
+SharedContext withTimeout(SharedContext parent, const TimeSpan delay, TimerManager &timer) {
     return withDeadlineCause(std::move(parent), timer.now() + delay, std::make_error_code(std::errc::timed_out), timer);
 }
 

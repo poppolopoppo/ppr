@@ -39,8 +39,10 @@ export namespace pP {
         }
 
         // duplicated from rapidhash to solve linker issues due to modules
-        inline constexpr u64 rapid_secret_v[8] = {0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull, 0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull,
-            0xa0761d6478bd642full, 0xe7037ed1a0b428dbull, 0x90ed1765281c388cull, 0xaaaaaaaaaaaaaaaaull};
+        inline constexpr u64 rapid_secret_v[8] = {
+            0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull, 0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull,
+            0xa0761d6478bd642full, 0xe7037ed1a0b428dbull, 0x90ed1765281c388cull, 0xaaaaaaaaaaaaaaaaull
+        };
 
         // Used by Chromium, Folly's F14, Fuchsia, Ninja, JuliaLang, ziglang, fb303, zxc, among others
         [[nodiscard]] RAPIDHASH_ALWAYS_INLINE hash_t memory(const void *const key, const std::size_t size_bytes, const u64 seed) noexcept {
@@ -54,13 +56,14 @@ export namespace pP {
 
         // Used by Chromium, Folly's F14, Fuchsia, Ninja, JuliaLang, ziglang, fb303, zxc, among others
         template<typename T>
-        requires std::is_trivially_copyable_v<T>
+            requires std::is_trivially_copyable_v<T>
         [[nodiscard]] RAPIDHASH_ALWAYS_INLINE hash_t trivial(const T *const trivial, const u64 seed) noexcept {
             return hash_t{::rapidhashNano_internal(trivial, sizeof(T), seed, rapid_secret_v)};
         }
 
         template<typename T, typename ValueT>
-        concept THasher = requires(const std::remove_cvref_t<T> &hasher, const ValueT &value) {
+        concept THasher = requires(const std::remove_cvref_t<T> &hasher, const ValueT &value)
+        {
             { hasher(value) } -> std::same_as<hash_t>;
         };
 
@@ -75,7 +78,7 @@ export namespace pP {
     }
 
     template<typename EnumT>
-    requires std::is_enum_v<EnumT>
+        requires std::is_enum_v<EnumT>
     [[nodiscard]] PPR_FLATTEN constexpr hash_t hashValue(const EnumT value) noexcept {
         return hash::trivial(&value, hash::default_seed_v);
     }
@@ -92,7 +95,8 @@ export namespace pP {
 
     namespace hash {
         template<typename T>
-        concept THashable = requires(const std::remove_cvref_t<T> &value) {
+        concept THashable = requires(const std::remove_cvref_t<T> &value)
+        {
             { hashValue(value) } -> std::same_as<hash_t>;
         };
 
@@ -110,10 +114,9 @@ export namespace pP {
 
         template<std::ranges::sized_range SizedRangeT>
         [[nodiscard]] PPR_FLATTEN constexpr hash_t sizedRange(SizedRangeT &&values) noexcept
-            requires THashable<std::ranges::range_value_t<SizedRangeT> >
-        {
+            requires THashable<std::ranges::range_value_t<SizedRangeT> > {
             hash_t H = hashValue(std::ranges::size(values));
-            for (const auto &value : values) {
+            for (const auto &value: values) {
                 H = hash::combine(H, value);
             }
             return H;
@@ -121,10 +124,9 @@ export namespace pP {
 
         template<std::ranges::range UnorderedRangeT>
         [[nodiscard]] PPR_FLATTEN constexpr hash_t unorderedRange(UnorderedRangeT &&values) noexcept
-            requires THashable<std::ranges::range_value_t<UnorderedRangeT> >
-        {
+            requires THashable<std::ranges::range_value_t<UnorderedRangeT> > {
             hash_t H{default_seed_v};
-            for (const auto &value : values) {
+            for (const auto &value: values) {
                 // use an associative hash combine, so the final result is not order-dependant
                 H.m_value += hashValue(value).m_value;
             }
@@ -133,8 +135,7 @@ export namespace pP {
 
         template<std::ranges::contiguous_range ContiguousRangeT>
         [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t contiguousRange(ContiguousRangeT &&values) noexcept
-            requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> >
-        {
+            requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
             return memory(
                 std::ranges::data(values), std::ranges::size(values) * sizeof(std::ranges::range_value_t<ContiguousRangeT>), default_seed_v);
         }
@@ -142,8 +143,7 @@ export namespace pP {
         template<std::ranges::sized_range RangeT>
         [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t anyRange(RangeT &&values) noexcept
             requires hash::THashable<std::ranges::range_value_t<RangeT> > ||
-                     std::is_trivially_copyable_v<std::ranges::range_value_t<RangeT> >
-        {
+                     std::is_trivially_copyable_v<std::ranges::range_value_t<RangeT> > {
             if constexpr (std::ranges::contiguous_range<RangeT> && std::is_trivially_copyable_v<std::ranges::range_value_t<RangeT> >) {
                 return hash::contiguousRange(std::forward<RangeT>(values));
             } else {
@@ -157,7 +157,7 @@ export namespace pP {
 
         [[nodiscard]] consteval u32 fnv1a32(const std::string_view str) noexcept {
             u32 hash = 2166136261u;
-            for (const auto ch : str) {
+            for (const auto ch: str) {
                 hash ^= static_cast<u8>(ch);
                 hash *= 16777619u;
             }
@@ -166,7 +166,7 @@ export namespace pP {
 
         [[nodiscard]] consteval u64 fnv1a64(const std::string_view str) noexcept {
             u64 hash = 14695981039346656037ull;
-            for (const auto ch : str) {
+            for (const auto ch: str) {
                 hash ^= static_cast<u8>(ch);
                 hash *= 1099511628211ull;
             }
@@ -180,8 +180,7 @@ export namespace pP {
 
     template<std::ranges::contiguous_range ContiguousRangeT>
     [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t hashValue(ContiguousRangeT &&values) noexcept
-        requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> >
-    {
+        requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
         return hash::contiguousRange(std::forward<ContiguousRangeT>(values));
     }
 

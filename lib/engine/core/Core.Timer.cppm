@@ -4,17 +4,27 @@ export module engine.core:timer;
 
 import :assert;
 import :containers.stable_vector;
+import :opaque;
 
 import std;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // time point and duration representations
+    // ------------------------------------------------------------------
+
+    using TimePoint = std::chrono::steady_clock::time_point;
+    using TimeSpan = std::chrono::steady_clock::duration;
+
+    namespace time {
+        [[nodiscard]] double seconds(const TimeSpan duration) noexcept {
+            return std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
+        }
+    }
 
     // ------------------------------------------------------------------
     // schedule events in the future, at a specific time
     // ------------------------------------------------------------------
-
-    using TimePoint = std::chrono::steady_clock::time_point;
-    using TimeDuration = std::chrono::steady_clock::duration;
 
     // ReSharper disable once CppPolymorphicClassWithNonVirtualPublicDestructor
     class ITimerClock {
@@ -55,4 +65,14 @@ export namespace pP {
 
         static TimerManager &mainTimer() noexcept;
     };
+}
+
+export namespace std {
+    [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const pP::TimePoint &value) noexcept {
+        return value.time_since_epoch().count();
+    }
+
+    [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const pP::TimeSpan &value) noexcept {
+        return value.count();
+    }
 }
