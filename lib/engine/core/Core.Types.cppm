@@ -83,6 +83,7 @@ export namespace pP {
     struct ZeroValue final {
         // Constrain both conversion and comparison to int-constructible types.
         template<typename T> requires std::is_constructible_v<T, int>
+        // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator T() const
             noexcept(std::is_nothrow_constructible_v<T, int>) {
             return T{0};
@@ -100,6 +101,7 @@ export namespace pP {
         // Constrain to unsigned integral types only — the ~T(0) trick is
         // undefined behavior on signed types, so reject them at the constraint level.
         template<std::unsigned_integral T>
+        // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator T() const noexcept {
             return ~T{0};
         }
@@ -115,21 +117,48 @@ export namespace pP {
         }
     };
 
+    struct Epsilon final {
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator float() const noexcept {
+            return 1e-3f;
+        }
+
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator double() const noexcept {
+            return 1e-6;
+        }
+
+        template<std::floating_point T>
+        [[nodiscard]] friend constexpr bool operator==(Epsilon lhs, T rhs) noexcept {
+            return T{lhs} == rhs;
+        }
+
+        template<std::floating_point T>
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(Epsilon lhs, T rhs) noexcept {
+            return T{lhs} <=> rhs;
+        }
+    };
+
     inline constexpr DefaultValue default_value_v;
-    inline constexpr ZeroValue zero_v;
+    inline constexpr Epsilon epsilon_v;
     inline constexpr UnsignedMax none_v;
     inline constexpr UnsignedMax umax_v;
+    inline constexpr ZeroValue zero_v;
+
+    // ------------------------------------------------------------------
+    // strongly-typed numeric types
+    // ------------------------------------------------------------------
 
     template<typename T, typename TagT>
         requires std::equality_comparable<T> && std::three_way_comparable<T>
     struct Numeric {
         using tag_type = TagT;
 
-        [[nodiscard]] friend constexpr T defaultValue(std::type_identity_t<Numeric>) noexcept {
+        [[nodiscard]] friend constexpr T defaultValue(std::type_identity<Numeric>) noexcept {
             return default_value_v;
         }
 
-        T m_value{defaultValue(std::type_identity_t<Numeric>{})};
+        T m_value{defaultValue(std::type_identity<Numeric>{})};
 
         constexpr Numeric() noexcept = default;
 

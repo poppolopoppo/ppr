@@ -60,6 +60,10 @@ export namespace pP {
             : m_str{str} {
         }
 
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return std::char_traits<CharT>::length(m_str) > 0u;
+        }
+
         [[nodiscard]] constexpr std::size_t size() const noexcept {
             return std::char_traits<CharT>::length(m_str);
         }

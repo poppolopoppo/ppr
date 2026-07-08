@@ -5,10 +5,28 @@ module;
 export module engine.core:utility;
 
 import :types;
-export import :types;
 import std;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // trivial math aliases
+    // ------------------------------------------------------------------
+
+    template<typename T>
+        requires std::is_arithmetic_v<T>
+    [[nodiscard]] constexpr T clamp(T value, T vmin, T vmax) noexcept {
+        return std::max(std::min(value, vmax), vmin);
+    }
+
+    template<typename T>
+        requires std::is_arithmetic_v<T>
+    [[nodiscard]] constexpr T saturate(T value) noexcept {
+        return std::max(std::min(value, T(1)), T(0));
+    }
+
+    // ------------------------------------------------------------------
+    // alignment helpers
+    // ------------------------------------------------------------------
 
     template<std::unsigned_integral T>
     [[nodiscard]] constexpr auto divideRoundUp(T value, T div) noexcept {
@@ -53,7 +71,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename T>
-    inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8;
+    inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8u;
 
     // ------------------------------------------------------------------
     // expand a callable over an index sequence to perform compile-time unrolling
