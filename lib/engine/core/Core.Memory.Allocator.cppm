@@ -1320,7 +1320,7 @@ export namespace pP::mem {
         using value_type = T;
         using size_type = std::size_t;
         using difference_type = std::ptrdiff_t;
-        using propagate_on_container_move_assignment = std::true_type;
+        using propagate_on_container_move_assignment = std::bool_constant<not allocator_type::is_stateless_v>;
 
         using allocator_type::allocator_type;
         using allocator_type::operator=;
@@ -1367,6 +1367,14 @@ export namespace pP::mem {
 
         constexpr void deallocate(value_type *ptr, const size_type n) {
             return allocator_type::template deallocate<value_type>(ptr, n);
+        }
+
+        [[nodiscard]] constexpr bool operator==(const STL &other) const noexcept {
+            if constexpr (allocator_type::is_stateless_v) {
+                return true;
+            } else {
+                return allocator_type::materialize() == other.materialize();
+            }
         }
     };
 
