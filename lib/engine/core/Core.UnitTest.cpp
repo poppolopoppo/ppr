@@ -6,7 +6,7 @@ module engine.core;
 import :unit_test;
 import :assert;
 import :hal;
-import :function_ref;
+import :function.ref;
 
 import std;
 

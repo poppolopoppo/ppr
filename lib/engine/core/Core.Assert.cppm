@@ -2,14 +2,14 @@ module;
 #include "pP/Macros.h"
 export module engine.core:assert;
 
-import :function_ref;
+import :function.ref;
 import :hal;
 
 import std;
 
-namespace pP {
+export namespace pP {
 #if PPR_ENABLE_ASSERTIONS
-    export class Assertion {
+    class Assertion {
     public:
         enum EType {
             assume,
@@ -138,7 +138,8 @@ namespace pP {
             return m_value;
         }
 
-        template<std::integral OtherIntT> requires (not std::is_same_v<IntT, OtherIntT>)
+        template<std::integral OtherIntT>
+            requires (not std::is_same_v<IntT, OtherIntT>)
         // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] PPR_FORCE_INLINE constexpr operator OtherIntT() const noexcept {
             return checked_cast<OtherIntT>(m_value);

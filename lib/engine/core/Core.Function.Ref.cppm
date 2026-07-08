@@ -29,7 +29,7 @@ module;
 
 #include "pP/Macros.h"
 
-export module engine.core:function_ref;
+export module engine.core:function.ref;
 
 import std;
 
@@ -504,7 +504,7 @@ namespace std23 {
     // See also: https://www.agner.org/optimize/calling_conventions.pdf
     template<class T>
     inline constexpr auto _select_param_type = [] {
-        if constexpr (std::is_trivially_copyable_v<T>)
+        if constexpr (std::is_trivially_copyable<T>::value)
             return std::type_identity<T>();
         else
             return std::add_rvalue_reference<T>();
