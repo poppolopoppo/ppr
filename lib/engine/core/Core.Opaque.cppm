@@ -69,6 +69,8 @@ export namespace pP {
             // All alias types (string_view, span, function_ref) are already
             // lightweight non-owning handles, so we store them directly.
             using ValueVariant = std::variant<
+                std::nullptr_t,
+
                 bool,
 
                 char, wchar_t, char8_t,
@@ -91,7 +93,30 @@ export namespace pP {
             static_assert(sizeof(ValueVariant) == sizeof(void *) * 3u);
         } // namespace details
 
+        // --------------------------------------------------------------
+        // opaque value traits
+        // --------------------------------------------------------------
+
+        void opaqueValue(...) = delete;
+
+        [[nodiscard]] constexpr const Value &opaqueValue(const Value &value) noexcept {
+            return value;
+        }
+
+        namespace details {
+            template<typename T>
+            concept TOpaque = requires(T value)
+            {
+                { opaqueValue(value) } -> std::same_as<Value>;
+            };
+        }
+
+        // --------------------------------------------------------------
+        // opaque value type
+        // --------------------------------------------------------------
+
         struct [[nodiscard]] Value : details::ValueVariant {
+            // inherits from the variant constructors and assignment operators
             using super_t = details::ValueVariant;
             using super_t::super_t;
             using super_t::operator=;
@@ -123,9 +148,25 @@ export namespace pP {
                 : super_t(Transform{std::forward<FunctorT>(transform)}) {
             }
 
+            // Allow direct promotion from values with an explicit opaqueValue() overload
+#if 0 // workaround MSVC compiler bug with concepts and ADL through module boundaries
+            template<details::TOpaque OpaqueT>
+
+#else
+            template<typename OpaqueT>
+                requires requires(OpaqueT value)
+                {
+                    { opaqueValue(value) } -> std::same_as<Value>;
+                }
+#endif
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(OpaqueT value) noexcept
+                : super_t(opaqueValue(std::forward<OpaqueT>(value))) {
+            }
+
             // Note: operator== is intentionally not provided. std::variant::operator==
             // requires all alternatives to be equality_comparable, but Array/Dict
-            // have no operator==, and Fn/Formatter (function_ref) have no
+            // have no operator==, and Delegate/Formatter/Transform (function_ref) have no
             // meaningful identity.
 
             // Returns a reference to the held value. Undefined behavior if the
@@ -172,6 +213,8 @@ export namespace pP {
             };
 
             using ValueVariant = std::variant<
+                std::nullptr_t,
+
                 bool,
 
                 char, wchar_t, char8_t,
@@ -219,6 +262,10 @@ export namespace pP {
 
                 constexpr void dup(const opaque::Value &init) const noexcept {
                     std::visit(*this, init);
+                }
+
+                void operator()(const std::nullptr_t) const noexcept {
+                    m_target.emplace<std::nullptr_t>(nullptr);
                 }
 
                 template<typename NumericT>
@@ -382,6 +429,9 @@ export namespace pP {
         constexpr std::size_t Block::sizeOf(const opaque::Value &value) noexcept {
             return std::visit(
                 overloaded(
+                    [](const std::nullptr_t) constexpr noexcept -> std::size_t {
+                        return 0u;
+                    },
                     []<typename NumericT>(const NumericT) constexpr noexcept -> std::size_t requires
                         std::integral<NumericT> || std::floating_point<NumericT> {
                         return 0u;
@@ -600,6 +650,9 @@ export namespace std {
             -> decltype(ctx.out()) {
             return visit(
                 pP::overloaded(
+                    [&](const std::nullptr_t) {
+                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), PPR_LITERAL_FOR(CharT, "nil"));
+                    },
                     [&]<pP::details::TChar StringCharT>(const basic_string_view<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
                                          inner_value);
@@ -659,6 +712,9 @@ export namespace std {
             -> decltype(ctx.out()) {
             return visit(
                 pP::overloaded(
+                    [&](const std::nullptr_t) {
+                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), PPR_LITERAL_FOR(CharT, "nil"));
+                    },
                     [&]<pP::details::TChar StringCharT>(const pP::RelativeView<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
                                          std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
@@ -757,4 +813,12 @@ export namespace std {
             return super_t::format(*block.m_data, ctx);
         }
     };
+
+    template<pP::opaque::details::TOpaque OpaqueT>
+    [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const std::optional<OpaqueT> &opt) noexcept {
+        if (opt.has_value()) {
+            return opaqueValue(opt.value());
+        }
+        return nullptr;
+    }
 }
