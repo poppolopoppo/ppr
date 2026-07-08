@@ -179,13 +179,21 @@ export namespace pP {
         template<typename BaseT>
             requires std::is_base_of_v<BaseT, T>
         [[nodiscard]] constexpr safe_ptr<BaseT> upcast() && noexcept {
-            BaseT *raw = static_cast<BaseT *>(m_ptr);
+            auto *const raw = static_cast<BaseT *>(m_ptr);
             m_ptr = nullptr;
             return safe_ptr<BaseT>(raw);
         }
 
         friend void swap(safe_ptr &lhs, safe_ptr &rhs) noexcept {
             std::swap(lhs.m_ptr, rhs.m_ptr);
+        }
+
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, T *rhs) noexcept {
+            return lhs.m_ptr == rhs;
+        }
+
+        [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, T *rhs) noexcept {
+            return lhs.m_ptr <=> rhs;
         }
 
         [[nodiscard]] friend bool operator==(const safe_ptr &lhs, const safe_ptr &rhs) noexcept {
