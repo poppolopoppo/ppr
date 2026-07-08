@@ -510,17 +510,12 @@ export namespace pP::mem {
     template<details::TArenaAllocator ArenaT>
     ScopedArena(ArenaT &arena) -> ScopedArena<ArenaT>;
 
-    // ------------------------------------------------------------------
-    // ScratchPad — arena for transient allocations
-    // ------------------------------------------------------------------
-
-    class ScratchPad {
-        [[nodiscard]] static Arena<SmallPage> &getArenaTLS_() noexcept;
-
-    public:
-        constexpr ScratchPad() noexcept = default;
+    template<details::TArenaAllocator ArenaT>
+    struct details::use_inplace<ScopedArena<ArenaT> > : std::true_type {
+    };
 
 #if PPR_ENABLE_DEBUG
+    namespace details {
         class [[nodiscard]] ScopedArenaWithDebug : public ScopedArena<Arena<SmallPage> > {
             static i32 &getDepthTLS() noexcept {
                 thread_local i32 g_depth_tls{-1};
@@ -567,12 +562,29 @@ export namespace pP::mem {
             }
         };
 
-        using scoped_arena_t = ScopedArenaWithDebug;
+        template<>
+        struct use_inplace<ScopedArenaWithDebug> : std::true_type {
+        };
+    }
+#endif
+
+    // ------------------------------------------------------------------
+    // ScratchPad — arena for transient allocations
+    // ------------------------------------------------------------------
+
+    class ScratchPad {
+        [[nodiscard]] static Arena<SmallPage> &getArenaTLS_() noexcept;
+
+    public:
+        constexpr ScratchPad() noexcept = default;
+
+#if PPR_ENABLE_DEBUG
+        using scoped_arena_t = details::ScopedArenaWithDebug;
 #else
         using scoped_arena_t = ScopedArena<Arena<SmallPage> >;
 #endif
 
-        [[nodiscard]] static constexpr scoped_arena_t open() noexcept {
+        [[nodiscard]] static constexpr Allocator<scoped_arena_t> open() noexcept {
             return scoped_arena_t(getArenaTLS_());
         }
 
