@@ -696,6 +696,11 @@ export namespace pP {
         }
 
         template<typename KeyTLike>
+        [[nodiscard]] bool contains(KeyTLike &&key_like) const noexcept {
+            return find(std::forward<KeyTLike>(key_like)) != end();
+        }
+
+        template<typename KeyTLike>
         [[nodiscard]] auto &operator[](this auto &&self, KeyTLike &&key_like) noexcept
             requires (!std::is_void_v<ValueT> &&
                       details::TEqualTo<EqualToT, KeyT, KeyTLike> &&

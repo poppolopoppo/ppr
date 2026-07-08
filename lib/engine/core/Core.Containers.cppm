@@ -14,12 +14,15 @@ export namespace pP {
         template<std::forward_iterator IteratorT, typename T>
         inline constexpr bool is_iterator_of = std::is_convertible_v<std::iter_value_t<IteratorT>, T>;
 
-        template<typename T, typename LhsT, typename RhsT = LhsT>
-        concept TEqualTo = requires(const std::remove_cvref_t<T> &cmp, const std::remove_cvref_t<LhsT> &lhs, const std::remove_cvref_t<RhsT> &rhs)
+        template<typename EqualToT, typename LhsT, typename RhsT = LhsT>
+        concept TEqualTo = requires(const std::remove_cvref_t<EqualToT> &cmp, const std::remove_cvref_t<LhsT> &lhs, const std::remove_cvref_t<RhsT> &rhs)
         {
             { cmp(lhs, rhs) } -> std::convertible_to<bool>;
         };
     }
+
+    template<typename T>
+    using Collector = std23::function_ref<void (const T &push_back)>;
 
     // ------------------------------------------------------------------
     // relocatable objects can be safely mem-copied instead of moving them
@@ -867,6 +870,11 @@ export namespace pP {
 
         constexpr ArrayView() noexcept = default;
 
+        constexpr ArrayView(const T *data PPR_LIFETIME_BOUND, const std::size_t size) noexcept
+            : m_data(data),
+              m_size(size) {
+        }
+
         constexpr ArrayView(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
             : m_data(list.data()),
               m_size(list.size()) {
@@ -915,6 +923,9 @@ export namespace pP {
     };
 
     static_assert(std::ranges::contiguous_range<ArrayView<int> >);
+
+    template<typename T>
+    ArrayView(const T *data, std::size_t size) -> ArrayView<T>;
 
     template<typename T>
     ArrayView(std::initializer_list<T> list) -> ArrayView<T>;

@@ -400,12 +400,14 @@ export namespace pP {
         }
 
         constexpr StableVector(std::initializer_list<T> init_values) noexcept
-            requires std::is_default_constructible_v<allocator_type> {
+            requires std::is_default_constructible_v<allocator_type> and
+                     std::is_copy_constructible_v<T> {
             assignAssumeEmpty(init_values);
         }
 
         constexpr StableVector(const std::size_t size, const T &init_value) noexcept
-            requires std::is_default_constructible_v<allocator_type> {
+            requires std::is_default_constructible_v<allocator_type> and
+                     std::is_copy_constructible_v<T> {
             resize(size, init_value);
         }
 
@@ -449,11 +451,13 @@ export namespace pP {
         }
 
         constexpr StableVector(const std::size_t size, const T &init_value, AllocatorT &&al) noexcept
+            requires std::is_copy_constructible_v<T>
             : allocator_type(std::move(al)) {
             resize(size, init_value);
         }
 
         constexpr StableVector(const std::size_t size, const T &init_value, const AllocatorT &al) noexcept
+            requires std::is_copy_constructible_v<T>
             : allocator_type(al) {
             resize(size, init_value);
         }
@@ -769,7 +773,8 @@ export namespace pP {
             m_size = 0u;
         }
 
-        constexpr void resize(const std::size_t new_size, const T &init_value = default_value_v) noexcept {
+        constexpr void resize(const std::size_t new_size, const T &init_value = default_value_v) noexcept
+            requires std::is_copy_constructible_v<T> {
             if (new_size < m_size) {
                 std::ranges::destroy(begin() + static_cast<std::ptrdiff_t>(new_size), end());
                 m_size = checked_cast<u32>(new_size);
@@ -829,31 +834,36 @@ export namespace pP {
             return pushBackUninitializedAssumeCapacity();
         }
 
-        constexpr void pushBack(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
+        constexpr void pushBack(T &&rvalue)
+            noexcept(std::is_nothrow_move_constructible_v<T>)
             requires std::is_move_constructible_v<T> {
             reserveAdditional(1u);
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, std::move(rvalue));
         }
 
-        constexpr void pushBackAssumeCapacity(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
+        constexpr void pushBackAssumeCapacity(T &&rvalue)
+            noexcept(std::is_nothrow_move_constructible_v<T>)
             requires std::is_move_constructible_v<T> {
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, std::move(rvalue));
         }
 
-        [[maybe_unused]] constexpr T &pushBackDefault() noexcept(std::is_nothrow_default_constructible_v<T>)
+        [[maybe_unused]] constexpr T &pushBackDefault()
+            noexcept(std::is_nothrow_default_constructible_v<T>)
             requires std::is_default_constructible_v<T> {
             reserveAdditional(1u);
             return pushBackDefaultAssumeCapacity();
         }
 
-        [[maybe_unused]] constexpr T &pushBackDefaultAssumeCapacity() noexcept(std::is_nothrow_default_constructible_v<T>)
+        [[maybe_unused]] constexpr T &pushBackDefaultAssumeCapacity()
+            noexcept(std::is_nothrow_default_constructible_v<T>)
             requires std::is_default_constructible_v<T> {
             return *std::construct_at(pushBackUninitializedAssumeCapacity());
         }
 
-        constexpr void pushBackAssumeCapacity(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
+        constexpr void pushBackAssumeCapacity(const T &value)
+            noexcept(std::is_nothrow_copy_constructible_v<T>)
             requires std::is_copy_constructible_v<T> {
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, value);
@@ -899,9 +909,11 @@ export namespace pP {
             return appendAssumeCapacity(std::ranges::begin(range), std::ranges::end(range));
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
-        append(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        append(IteratorT first, IteratorT last)
+            noexcept(std::is_nothrow_copy_constructible_v<T>) {
             if constexpr (std::random_access_iterator<IteratorT>) {
                 const std::size_t n = static_cast<std::size_t>(std::distance(first, last));
                 reserveAdditional(n);
@@ -920,7 +932,8 @@ export namespace pP {
 
         template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
-        appendAssumeCapacity(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        appendAssumeCapacity(IteratorT first, IteratorT last)
+            noexcept(std::is_nothrow_copy_constructible_v<T>) {
             std::size_t num_append = 0u;
             for (; first != last; ++first, ++num_append) {
                 pushBackAssumeCapacity(*first);
