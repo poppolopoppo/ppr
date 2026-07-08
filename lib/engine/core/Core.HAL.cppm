@@ -11,7 +11,6 @@ import std;
 export import :utility;
 
 export namespace pP {
-
     struct alignas(16u) simd_128_t {
         u32 m_data[4u]{};
     };
@@ -184,6 +183,28 @@ export namespace pP {
         [[nodiscard]] std::string_view userName();
 
         // ------------------------------------------------------------------
+        // UUID v4 generator
+        // ------------------------------------------------------------------
+
+        struct Uuid {
+            std::array<u32, 4> m_data;
+
+            Uuid() noexcept;
+
+            constexpr Uuid(const u32 a, const u32 b, const u32 c, const u32 d) noexcept
+                : m_data{a, b, c, d} {
+            }
+
+            [[nodiscard]] constexpr bool operator==(const Uuid &other) const noexcept {
+                return m_data == other.m_data;
+            }
+
+            [[nodiscard]] constexpr std::strong_ordering operator<=>(const Uuid &other) const noexcept {
+                return m_data <=> other.m_data;
+            }
+        };
+
+        // ------------------------------------------------------------------
         // file-system
         // ------------------------------------------------------------------
 
@@ -282,19 +303,19 @@ export namespace pP {
             using format_context = std::conditional_t<is_wchar_v, std::wformat_context, std::format_context>;
             using format_args = std::basic_format_args<format_context>;
 
-            [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(native_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(native_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(ansi_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(utf8_str, out_buffer, buffer_size);
             }
 
@@ -389,14 +410,16 @@ export namespace pP {
 
             struct OpenFlags {
                 enum : u32 {
-                    read     = 1u << 0,
-                    write    = 1u << 1,
-                    create   = 1u << 2,
+                    read = 1u << 0,
+                    write = 1u << 1,
+                    create = 1u << 2,
                     truncate = 1u << 3,
                 };
+
                 u32 m_bits{read};
 
                 constexpr OpenFlags() noexcept = default;
+
                 explicit constexpr OpenFlags(const u32 bits) noexcept
                     : m_bits(bits) {
                 }
@@ -416,40 +439,49 @@ export namespace pP {
             };
 
             struct SubmitEntry {
-                FileHandle  m_file;
-                void       *m_buffer;
-                u64         m_buffer_size;
-                u64         m_file_offset;
-                Opcode      m_opcode;
-                void       *m_user_data;     // → IoRequest *
-                void       *m_overlapped;    // → embedded storage (or null for heap fallback)
+                FileHandle m_file;
+                void *m_buffer;
+                u64 m_buffer_size;
+                u64 m_file_offset;
+                Opcode m_opcode;
+                void *m_user_data; // → IoRequest *
+                void *m_overlapped; // → embedded storage (or null for heap fallback)
             };
 
             struct CompletionEntry {
-                void          *m_user_data;  // → IoRequest *
-                u64            m_bytes_transferred;
+                void *m_user_data; // → IoRequest *
+                u64 m_bytes_transferred;
                 std::error_code m_error;
             };
 
             // lifecycle
             [[nodiscard]] IoHandle init() noexcept(false);
+
             void deinit(IoHandle handle) noexcept;
 
             // file operations
             [[nodiscard]] FileHandle openFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+
             void closeFile(IoHandle io, FileHandle file) noexcept;
 
             // submit & drain
             [[nodiscard]] std::size_t submit(IoHandle io, std::span<SubmitEntry> entries) noexcept;
+
             [[nodiscard]] std::size_t poll(IoHandle io, std::span<CompletionEntry> entries) noexcept;
+
             [[nodiscard]] std::size_t wait(IoHandle io, std::span<CompletionEntry> entries) noexcept;
+
             void wake(IoHandle io) noexcept;
+
             void cancelIo(FileHandle file, void *overlapped) noexcept;
 
             // memory-mapped files
             [[nodiscard]] MapHandle mapFile(const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+
             void unmapFile(MapHandle map) noexcept;
+
             [[nodiscard]] void *mapData(MapHandle map) noexcept;
+
             [[nodiscard]] std::size_t mapSize(MapHandle map) noexcept;
 
             // directory watching
@@ -457,17 +489,19 @@ export namespace pP {
 
             struct WatchEvent {
                 enum class Action : u8 {
-                    added,
+                    added = 0,
                     removed,
                     modified,
                     renamed_old,
                     renamed_new,
                 };
-                Action m_action;
-                u32    m_name_offset{0u};
+
+                Action m_action{};
+                u32 m_name_offset{0u};
             };
 
             [[nodiscard]] WatchHandle openWatch(const std::filesystem::path &dir, bool recursive) noexcept(false);
+
             void closeWatch(WatchHandle watch) noexcept;
 
             // pollWatch: non-blocking read of raw platform events into buffer.
