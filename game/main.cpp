@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
     // std::println("Starting Encapsulated Video Game App...");
 
     // 1. Math check
-    const auto perspective = math::float4x4::perspectiveD3D(4.0f, 3.0f, 0.1f, 1000.0f);
+    const auto perspective = float4x4::perspectiveD3D(4.0f, 3.0f, 0.1f, 1000.0f);
     //std::cout << "Math perspective matrix created successfully (Left-Handed, Z-to-1).\n";
 
 
@@ -48,13 +48,13 @@ int main(int argc, char *argv[]) {
     Application app("ppr", std::span<const char * const>(&argv[0], argc));
     const int exit_code = app.run();
 
-    math::float3 a{1, 2, 3};
-    math::float3 b{4, 5, 6};
+    float3 a{1, 2, 3};
+    float3 b{4, 5, 6};
     [[maybe_unused]] auto v = (a + b) * .5f;
-    [[maybe_unused]] auto n = math::normalize(v);
-    [[maybe_unused]] auto d = math::distance(a, b);
-    [[maybe_unused]] auto c = math::dot(a, b);
-    [[maybe_unused]] auto d2 = math::sqrt(math::dot2(b - a));
+    [[maybe_unused]] auto n = normalize(v);
+    [[maybe_unused]] auto d = distance(a, b);
+    [[maybe_unused]] auto c = dot(a, b);
+    [[maybe_unused]] auto d2 = sqrt(dot2(b - a));
 //
 // #ifdef _MSC_VER
 //     std::println("MSVC version: {}", _MSC_VER);
