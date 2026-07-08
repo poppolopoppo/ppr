@@ -33,7 +33,8 @@ target_sources(EngineCore
             Core.Containers.SparseVector.cppm
             Core.Containers.StableVector.cppm
             Core.Enums.cppm
-            Core.FunctionRef.cppm
+            Core.Function.Callback.cppm
+            Core.Function.Ref.cppm
             Core.Hashing.cppm
             Core.Io.cppm
             Core.Io.FileWatcher.cppm

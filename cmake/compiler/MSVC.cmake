@@ -25,6 +25,8 @@ set(PPR_PROJECT_WARNINGS_CXX
         /permissive- # standards conformance mode for MSVC compiler.
 
         /W4 # Baseline reasonable warnings
+
+        /wd4201 # nonstandard extension used: nameless struct/union
         /w14242 # 'identifier': conversion from 'type1' to 'type1', possible loss of data
         /w14254 # 'operator': conversion from 'type1': field to 'type2': field, possible loss of data
         /w14263 # 'function': member function does not override any base class virtual member function

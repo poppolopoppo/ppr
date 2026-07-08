@@ -12,8 +12,10 @@
 
 CPMAddPackage(
     NAME mango
-    GITHUB_REPOSITORY t0rakka/mango
-    GIT_TAG main
+    #GITHUB_REPOSITORY t0rakka/mango
+    #GIT_TAG main
+        GITHUB_REPOSITORY poppolopoppo/mango
+        GIT_TAG v0.2-pre-release
     CMAKE_ARGS
         "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
         "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
