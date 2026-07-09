@@ -35,11 +35,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename... ArgsT>
-    using WindowCallback = Callback<std::conditional_t<
-        (std::is_void_v<std::remove_cvref_t<ArgsT> > && ...),
-        void(const Window &window),
-        void(const Window &window, ArgsT... args)
-    > >;
+    using WindowCallback = Callback<void(const Window &window, ArgsT...)>;
 
     // ------------------------------------------------------------------
     // actual window instance
@@ -49,7 +45,7 @@ export namespace pP {
     public:
         WindowHandle m_handle{};
 
-        WindowCallback<void> m_when_closed{};
+        WindowCallback<> m_when_closed{};
         WindowCallback<bool> m_when_focused{};
         WindowCallback<bool> m_when_iconified{};
         WindowCallback<int2> m_when_moved{};

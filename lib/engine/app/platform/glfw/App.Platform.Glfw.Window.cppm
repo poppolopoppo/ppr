@@ -25,8 +25,8 @@ export namespace pP {
     public:
         [[nodiscard]] std::expected<SharedWindow, std::errc> createWindow(
             const WindowModel &definition,
-            std::optional<SharedMonitor> fullscreen,
-            std::optional<SharedWindow> share_resources_with) override;
+            const SharedMonitor &fullscreen,
+            const SharedWindow &share_resources_with) override;
 
         void destroyWindow(SharedWindow &&window) override;
 

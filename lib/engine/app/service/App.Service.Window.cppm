@@ -5,6 +5,7 @@ export module engine.app:service.window;
 import engine.core;
 import engine.math;
 import std;
+import :window.handle;
 
 export namespace pP {
     class Monitor;
@@ -12,7 +13,6 @@ export namespace pP {
     using MonitorHandle = Numeric<void *, Monitor>;
     using SharedMonitor = safe_ptr<const Monitor>;
 
-    class Window;
     struct WindowModel;
     using WindowHandle = Numeric<void *, Window>;
     using SharedWindow = safe_ptr<const Window>;
@@ -50,8 +50,8 @@ export namespace pP {
         // windows:
         [[nodiscard]] virtual std::expected<SharedWindow, std::errc> createWindow(
             const WindowModel &definition,
-            const std::optional<SharedMonitor> &fullscreen = std::nullopt,
-            const std::optional<SharedWindow> &share_resources_with = std::nullopt) = 0;
+            const SharedMonitor &fullscreen = {},
+            const SharedWindow &share_resources_with = {}) = 0;
 
         virtual void destroyWindow(SharedWindow &&window) = 0;
 
