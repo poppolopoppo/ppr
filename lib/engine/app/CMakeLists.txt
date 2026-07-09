@@ -16,6 +16,8 @@ target_sources(EngineApp
             input/App.Input.Mapping.cppm
 
             service/App.Service.Input.cppm
+            service/App.Service.Window.cppm
+            window/App.Window.Handle.cppm
     PRIVATE
         Application.cpp
 
@@ -27,6 +29,8 @@ target_sources(EngineApp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
         input/App.Input.Mapping.cpp
+
+        window/App.Window.Handle.cpp
 )
 
 setup_ppr_project(EngineApp

@@ -15,6 +15,8 @@ export import :input.mouse;
 export import :input.mapping;
 
 export import :service.input;
+export import :window.handle;
+export import :service.window;
 
 export namespace pP {
 
