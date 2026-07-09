@@ -15,6 +15,7 @@ export import :input.mouse;
 export import :input.mapping;
 
 export import :application;
+export import :platform;
 export import :service.input;
 export import :window.handle;
 export import :service.window;

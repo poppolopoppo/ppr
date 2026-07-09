@@ -18,6 +18,7 @@ target_sources(EngineApp
 
             service/App.Service.Input.cppm
             service/App.Service.Window.cppm
+            platform/App.Platform.cppm
             window/App.Window.Handle.cppm
     PRIVATE
         App.Application.cpp
