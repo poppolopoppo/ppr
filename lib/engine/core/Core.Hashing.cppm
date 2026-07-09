@@ -93,6 +93,12 @@ export namespace pP {
         return hash::trivial(&value, hash::default_seed_v);
     }
 
+    template<typename T, typename TagT>
+        requires std::equality_comparable<T> && std::three_way_comparable<T>
+    [[nodiscard]] PPR_FLATTEN constexpr hash_t hashValue(const Numeric<T, TagT> numeric) noexcept {
+        return hash::trivial(&numeric.m_value, hash::default_seed_v);
+    }
+
     namespace hash {
         template<typename T>
         concept THashable = requires(const std::remove_cvref_t<T> &value)
@@ -174,7 +180,7 @@ export namespace pP {
         }
 
         [[nodiscard]] consteval auto fnv1a(const std::string_view str) noexcept {
-            return PPR_32BIT_OR_64BIT(fnv1a32(str), fnv1a64(str));
+            return PPR_32BIT_OR_64BIT(fnv1a32, fnv1a64)(str);
         }
     }
 

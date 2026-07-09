@@ -89,30 +89,42 @@ export namespace pP {
             return T{0};
         }
 
+        // Constrain both conversion and comparison to int-constructible types.
+        template<typename T>
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator T *() const noexcept {
+            return nullptr;
+        }
+
         template<typename T> requires std::is_constructible_v<T, int>
         [[nodiscard]] friend constexpr bool operator==(ZeroValue, T rhs)
             noexcept(std::is_nothrow_constructible_v<T, int> &&
                      noexcept(T{0} == rhs)) {
             return T{} == rhs;
         }
+
+        template<typename T>
+        [[nodiscard]] friend constexpr bool operator==(ZeroValue, T *rhs) noexcept {
+            return rhs == nullptr;
+        }
     };
 
-    struct UnsignedMax final {
+    struct MaxValue final {
         // Constrain to unsigned integral types only — the ~T(0) trick is
         // undefined behavior on signed types, so reject them at the constraint level.
-        template<std::unsigned_integral T>
+        template<std::integral T>
         // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator T() const noexcept {
-            return ~T{0};
+            return std::numeric_limits<T>::max();
         }
 
-        template<std::unsigned_integral T>
-        [[nodiscard]] friend constexpr bool operator==(UnsignedMax lhs, T rhs) noexcept {
+        template<std::integral T>
+        [[nodiscard]] friend constexpr bool operator==(MaxValue lhs, T rhs) noexcept {
             return T{lhs} == rhs;
         }
 
-        template<std::unsigned_integral T>
-        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(UnsignedMax lhs, T rhs) noexcept {
+        template<std::integral T>
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(MaxValue lhs, T rhs) noexcept {
             return T{lhs} <=> rhs;
         }
     };
@@ -141,8 +153,8 @@ export namespace pP {
 
     inline constexpr DefaultValue default_value_v;
     inline constexpr Epsilon epsilon_v;
-    inline constexpr UnsignedMax none_v;
-    inline constexpr UnsignedMax umax_v;
+    inline constexpr MaxValue none_v;
+    inline constexpr MaxValue umax_v;
     inline constexpr ZeroValue zero_v;
 
     // ------------------------------------------------------------------
@@ -166,6 +178,22 @@ export namespace pP {
             : m_value{value} {
         }
 
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Numeric(const DefaultValue) noexcept
+            : m_value{default_value_v} {
+        }
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Numeric(const ZeroValue) noexcept
+            : m_value{zero_v} {
+        }
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr Numeric(const MaxValue) noexcept
+            requires std::is_unsigned_v<T>
+            : m_value{std::numeric_limits<T>::max()} {
+        }
+
         [[nodiscard]] constexpr T operator*() const noexcept {
             return m_value;
         }
@@ -181,6 +209,11 @@ export namespace pP {
 
         [[nodiscard]] constexpr std::strong_ordering operator<=>(const Numeric &other) const {
             return m_value <=> other.m_value;
+        }
+
+        friend constexpr void swap(Numeric &lhs, Numeric &rhs) noexcept {
+            using std::swap;
+            swap(lhs.m_value, rhs.m_value);
         }
     };
 }

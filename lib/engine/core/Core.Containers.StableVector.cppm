@@ -97,7 +97,7 @@ export namespace pP {
                 initFromIndexFallback_();
             }
 
-            constexpr StableVectorIterator(stable_vector &container, const UnsignedMax end) noexcept
+            constexpr StableVectorIterator(stable_vector &container, const MaxValue end) noexcept
                 : m_vector(std::addressof(container)),
                   m_index(end) {
                 initFromIndexFallback_();

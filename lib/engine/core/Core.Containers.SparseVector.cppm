@@ -139,7 +139,7 @@ export namespace pP {
                 : m_stable_it(static_cast<stable_vector &>(container), index) {
             }
 
-            constexpr SparseVectorIterator(sparse_vector &container, const UnsignedMax end) noexcept
+            constexpr SparseVectorIterator(sparse_vector &container, const MaxValue end) noexcept
                 : m_stable_it(static_cast<stable_vector &>(container), end) {
             }
 

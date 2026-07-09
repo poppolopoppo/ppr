@@ -145,7 +145,7 @@ export namespace pP {
                 PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
             }
 
-            constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const UnsignedMax end) noexcept
+            constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const MaxValue end) noexcept
                 : m_hash_table(p_map), m_slot(end)
                 PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
             }
