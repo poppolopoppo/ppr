@@ -4,6 +4,7 @@ target_sources(EngineApp
     PUBLIC
         FILE_SET CXX_MODULES FILES
             App.cppm
+            App.Application.cppm
 
             input/device/App.Input.Gamepad.cppm
             input/device/App.Input.Keyboard.cppm
@@ -19,7 +20,7 @@ target_sources(EngineApp
             service/App.Service.Window.cppm
             window/App.Window.Handle.cppm
     PRIVATE
-        Application.cpp
+        App.Application.cpp
 
         input/device/App.Input.Gamepad.cpp
         input/device/App.Input.Keyboard.cpp
