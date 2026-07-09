@@ -8,6 +8,10 @@ import :hal;
 import :memory.pointer;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // services are keyed by constexpr interface type unique identifier
+    // ------------------------------------------------------------------
+
     template<typename>
     [[nodiscard]] consteval hash_t typeUid() noexcept {
 #if defined(_MSC_VER)
@@ -18,8 +22,13 @@ export namespace pP {
         return hash_t{hash::mix(hash::fnv1a(signature))};
     }
 
+    // ------------------------------------------------------------------
+    // service base interface, can be referenced safely with safe_ptr<>
+    // ------------------------------------------------------------------
+
     class IService : public safe_object {
     public:
+        // ReSharper disable once CppHidingFunction
         virtual ~IService() noexcept = default;
 
         struct Uid {
@@ -55,19 +64,23 @@ export namespace pP {
         };
     };
 
-    class ServiceLocator : public safe_object {
+    // ------------------------------------------------------------------
+    // services are stored inside a flat map, for fast, cache-coherent lookups
+    // ------------------------------------------------------------------
+
+    class ServiceInjector;
+
+    class ServicesStore : public safe_object {
         mutable std::shared_mutex m_shared_mutex{};
         FlatMap<IService::Uid, safe_ptr<IService> > m_services{};
-        safe_ptr<ServiceLocator> m_parent{};
+        safe_ptr<ServicesStore> m_parent{};
 
     public:
-        ServiceLocator() noexcept = default;
+        ServicesStore() noexcept = default;
 
-        explicit ServiceLocator(safe_ptr<ServiceLocator> parent) noexcept
+        explicit ServicesStore(safe_ptr<ServicesStore> parent) noexcept
             : m_parent{std::move(parent)} {
         }
-
-        ~ServiceLocator() noexcept = default;
 
         void reset() noexcept {
             const std::unique_lock write_lock{m_shared_mutex};
@@ -96,10 +109,10 @@ export namespace pP {
         template<typename T>
             requires std::is_base_of_v<IService, T>
         [[nodiscard]] safe_ptr<T> tryGet() const noexcept {
-            std::vector<const ServiceLocator *> visited;
-            const ServiceLocator *current = this;
+            std::vector<const ServicesStore *> visited;
+            auto *current = this;
             while (current) {
-                for (const auto *v : visited) {
+                for (const auto *v: visited) {
                     if (v == current) {
                         return safe_ptr<T>{};
                     }
@@ -123,5 +136,31 @@ export namespace pP {
             PPR_ASSERT(ptr.isValid() && "get() called on unknown service");
             return ptr;
         }
+
+        [[nodiscard]] ServiceInjector inject() const noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // service injector can be used for implicit dependency injection
+    // ------------------------------------------------------------------
+
+    class ServiceInjector {
+        safe_ptr<const ServicesStore> m_store;
+    public:
+        explicit ServiceInjector(safe_ptr<const ServicesStore> shared_store) noexcept
+            : m_store(std::move(shared_store)) {
+            PPR_ASSERT(m_store.isValid());
+        }
+
+        template<typename T>
+            requires std::is_base_of_v<IService, T>
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] operator safe_ptr<T>() const noexcept {
+            return m_store->get<T>();
+        }
+    };
+
+    [[nodiscard]] ServiceInjector ServicesStore::inject() const noexcept {
+        return ServiceInjector(safe_ptr(this));
+    }
 }

@@ -80,14 +80,14 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(empty) {
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(insert_and_try_get) {
             MockServiceA a;
             a.value = 42;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.tryGet<MockServiceA>();
@@ -98,7 +98,7 @@ export namespace pP::tests {
         PPR_UNIT_TEST(insert_and_get) {
             MockServiceA a;
             a.value = 99;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.get<MockServiceA>();
@@ -108,7 +108,7 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(erase) {
             MockServiceA a;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
             PPR_ASSERT(loc.tryGet<MockServiceA>().isValid());
 
@@ -117,13 +117,13 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(erase_nonexistent) {
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(not loc.erase<MockServiceA>());
         };
 
         PPR_UNIT_TEST(reset) {
             MockServiceA a;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             loc.reset();
@@ -132,7 +132,7 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(duplicate_insert) {
             MockServiceA a1, a2;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a1)));
             PPR_ASSERT(not loc.insert(safe_ptr<MockServiceA>(&a2)));
         };
@@ -142,7 +142,7 @@ export namespace pP::tests {
             a.value = 10;
             MockServiceB b;
             b.fvalue = 3.14f;
-            ServiceLocator loc;
+            ServicesStore loc;
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
             PPR_ASSERT(loc.insert(safe_ptr<MockServiceB>(&b)));
 
@@ -157,10 +157,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST(parent_fallback) {
             MockServiceA a;
             a.value = 7;
-            ServiceLocator parent;
+            ServicesStore parent;
             PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
 
-            ServiceLocator child{safe_ptr<ServiceLocator>(&parent)};
+            ServicesStore child{safe_ptr<ServicesStore>(&parent)};
             auto retrieved = child.tryGet<MockServiceA>();
             PPR_ASSERT(retrieved.isValid());
             PPR_ASSERT(retrieved->value == 7);
@@ -170,10 +170,10 @@ export namespace pP::tests {
             MockServiceA parent_a, child_a;
             parent_a.value = 1;
             child_a.value = 2;
-            ServiceLocator parent;
+            ServicesStore parent;
             PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&parent_a)));
 
-            ServiceLocator child{safe_ptr<ServiceLocator>(&parent)};
+            ServicesStore child{safe_ptr<ServicesStore>(&parent)};
             PPR_ASSERT(child.insert(safe_ptr<MockServiceA>(&child_a)));
 
             auto retrieved = child.tryGet<MockServiceA>();
@@ -183,10 +183,10 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(child_erase_does_not_affect_parent) {
             MockServiceA a;
-            ServiceLocator parent;
+            ServicesStore parent;
             PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
 
-            ServiceLocator child{safe_ptr<ServiceLocator>(&parent)};
+            ServicesStore child{safe_ptr<ServicesStore>(&parent)};
             PPR_ASSERT(not child.erase<MockServiceA>());
             PPR_ASSERT(parent.tryGet<MockServiceA>().isValid());
 
