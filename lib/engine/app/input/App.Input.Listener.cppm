@@ -21,7 +21,7 @@ export namespace pP {
 
     class InputListener : public safe_object {
         struct MappingAndPriority {
-            SharedInputMapping m_mapping;
+            SharedInputMapping m_mapping{};
             int m_priority{0};
 
             [[nodiscard]] bool operator==(const MappingAndPriority &other) const noexcept;

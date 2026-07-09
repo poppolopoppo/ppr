@@ -60,6 +60,14 @@ export namespace pP {
 
         [[nodiscard]] virtual DeviceCallback::Handle whenDeviceDisconnected(DeviceCallback::Event on_disconnected) = 0;
 
+        using TriggerCallback = Callback<void(const IInputService &input, const InputActionEvent &event, const InputKey &trigger)>;
+
+        [[nodiscard]] virtual TriggerCallback::Handle whenActionStarted(TriggerCallback::Event on_started) = 0;
+
+        [[nodiscard]] virtual TriggerCallback::Handle whenActionTriggered(TriggerCallback::Event on_triggered) = 0;
+
+        [[nodiscard]] virtual TriggerCallback::Handle whenActionCompleted(TriggerCallback::Event on_completed) = 0;
+
         using UnhandledKeyCallback = Callback<void(const IInputService &input, const InputKey &input_key)>;
 
         [[nodiscard]] virtual UnhandledKeyCallback::Handle whenUnhandledKey(UnhandledKeyCallback::Event on_unhandled_key) = 0;

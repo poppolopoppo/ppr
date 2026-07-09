@@ -15,7 +15,7 @@ target_sources(EngineApp
             input/App.Input.Listener.cppm
             input/App.Input.Mapping.cppm
 
-            App.Service.Input.cppm
+            service/App.Service.Input.cppm
     PRIVATE
         Application.cpp
 
