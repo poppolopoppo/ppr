@@ -67,7 +67,7 @@ export namespace pP::tests {
             PPR_ASSERT(m.find(2) == m.end());
         };
 
-        PPR_UNIT_TEST(iteration_bfs) {
+        PPR_UNIT_TEST(iteration_sorted) {
             pP::FlatMap<int, int> m;
             m.insert({4, 40});
             m.insert({2, 20});
@@ -76,17 +76,17 @@ export namespace pP::tests {
             m.insert({3, 30});
             m.insert({5, 50});
             m.insert({7, 70});
-            std::vector<int> keys;
+            pP::Array<int> keys;
             for (auto [k, v] : m) {
                 keys.push_back(k);
             }
             PPR_ASSERT(keys.size() == 7u);
-            PPR_ASSERT(keys[0] == 4);
+            PPR_ASSERT(keys[0] == 1);
             PPR_ASSERT(keys[1] == 2);
-            PPR_ASSERT(keys[2] == 6);
-            PPR_ASSERT(keys[3] == 1);
-            PPR_ASSERT(keys[4] == 3);
-            PPR_ASSERT(keys[5] == 5);
+            PPR_ASSERT(keys[2] == 3);
+            PPR_ASSERT(keys[3] == 4);
+            PPR_ASSERT(keys[4] == 5);
+            PPR_ASSERT(keys[5] == 6);
             PPR_ASSERT(keys[6] == 7);
         };
 
@@ -95,7 +95,7 @@ export namespace pP::tests {
             m.insert({1, 10});
             m.insert({3, 30});
             m.insert({5, 50});
-            auto it = m.lowerBound(2);
+            auto it = m.lower_bound(2);
             PPR_ASSERT(it->first == 3);
         };
 
@@ -104,7 +104,7 @@ export namespace pP::tests {
             m.insert({1, 10});
             m.insert({3, 30});
             m.insert({5, 50});
-            auto it = m.upperBound(3);
+            auto it = m.upper_bound(3);
             PPR_ASSERT(it->first == 5);
         };
 
@@ -163,20 +163,6 @@ export namespace pP::tests {
             PPR_ASSERT(a.empty());
         };
 
-        PPR_UNIT_TEST(reserve) {
-            pP::FlatMap<int, int> m;
-            m.reserve(100u);
-            PPR_ASSERT(m.capacity() >= 100u);
-            for (int i = 0; i < 64; ++i) {
-                m.insert({i, i * 2});
-            }
-            for (int i = 0; i < 64; ++i) {
-                auto it = m.find(i);
-                PPR_ASSERT(it != m.end());
-                PPR_ASSERT(it->second == i * 2);
-            }
-        };
-
         PPR_UNIT_TEST(growth) {
             pP::FlatMap<int, int> m;
             for (int i = 0; i < 100; ++i) {
@@ -188,13 +174,13 @@ export namespace pP::tests {
             }
         };
 
-        PPR_UNIT_TEST(append_range) {
+        PPR_UNIT_TEST(range_insert) {
             pP::FlatMap<int, int> m;
             m.insert({1, 10});
             m.insert({3, 30});
 
-            std::vector<std::pair<int, int>> more{{2, 20}, {4, 40}, {5, 50}};
-            m.append(more);
+            pP::Array<std::pair<int, int>> more{{2, 20}, {4, 40}, {5, 50}};
+            m.insert(more.begin(), more.end());
 
             PPR_ASSERT(m.size() == 5u);
             PPR_ASSERT(m.find(1)->second == 10);
@@ -204,57 +190,30 @@ export namespace pP::tests {
             PPR_ASSERT(m.find(5)->second == 50);
         };
 
-        PPR_UNIT_TEST(append_iterator) {
-            pP::FlatMap<int, int> m;
-            m.insert({3, 30});
-
-            std::vector<std::pair<int, int>> more{{1, 10}, {2, 20}};
-            m.append(more.begin(), more.end());
-
-            PPR_ASSERT(m.size() == 3u);
-            PPR_ASSERT(m.find(1)->second == 10);
-            PPR_ASSERT(m.find(2)->second == 20);
-            PPR_ASSERT(m.find(3)->second == 30);
-        };
-
-        PPR_UNIT_TEST(append_duplicate) {
+        PPR_UNIT_TEST(range_insert_duplicate) {
             pP::FlatMap<int, int> m;
             m.insert({1, 10});
             m.insert({2, 20});
 
-            std::vector<std::pair<int, int>> dups{{2, 99}, {3, 30}};
-            m.append(dups);
+            pP::Array<std::pair<int, int>> dups{{2, 99}, {3, 30}};
+            m.insert(dups.begin(), dups.end());
 
             PPR_ASSERT(m.size() == 3u);
             PPR_ASSERT(m.find(2)->second == 20);
             PPR_ASSERT(m.find(3)->second == 30);
         };
 
-        PPR_UNIT_TEST(append_empty_range) {
+        PPR_UNIT_TEST(range_insert_empty) {
             pP::FlatMap<int, int> m;
             m.insert({1, 10});
-            m.append(std::vector<std::pair<int, int>>{});
+            pP::Array<std::pair<int, int>> no_entries;
+            m.insert(no_entries.begin(), no_entries.end());
             PPR_ASSERT(m.size() == 1u);
             PPR_ASSERT(m.find(1)->second == 10);
         };
 
-        PPR_UNIT_TEST(append_to_empty) {
-            pP::FlatMap<int, int> m;
-            std::vector<std::pair<int, int>> vals{{2, 20}, {1, 10}};
-            m.append(vals);
-            PPR_ASSERT(m.size() == 2u);
-            PPR_ASSERT(m.find(1)->second == 10);
-            PPR_ASSERT(m.find(2)->second == 20);
-        };
-
-        PPR_UNIT_TEST(append_all_duplicates) {
-            pP::FlatMap<int, int> m;
-            m.insert({1, 10});
-            m.insert({2, 20});
-
-            std::vector<std::pair<int, int>> all_dups{{1, 99}, {2, 88}};
-            m.append(all_dups);
-
+        PPR_UNIT_TEST(initializer_list) {
+            pP::FlatMap<int, int> m{{2, 20}, {1, 10}};
             PPR_ASSERT(m.size() == 2u);
             PPR_ASSERT(m.find(1)->second == 10);
             PPR_ASSERT(m.find(2)->second == 20);
@@ -269,7 +228,7 @@ export namespace pP::tests {
             FlatMap::duplicate,
             FlatMap::erase,
             FlatMap::clear,
-            FlatMap::iteration_bfs,
+            FlatMap::iteration_sorted,
             FlatMap::lower_bound,
             FlatMap::upper_bound,
             FlatMap::contains,
@@ -280,14 +239,11 @@ export namespace pP::tests {
             FlatMap::const_contains,
             FlatMap::copy,
             FlatMap::move,
-            FlatMap::reserve,
             FlatMap::growth,
-            FlatMap::append_range,
-            FlatMap::append_iterator,
-            FlatMap::append_duplicate,
-            FlatMap::append_empty_range,
-            FlatMap::append_to_empty,
-            FlatMap::append_all_duplicates,
+            FlatMap::range_insert,
+            FlatMap::range_insert_duplicate,
+            FlatMap::range_insert_empty,
+            FlatMap::initializer_list,
         });
     };
 }

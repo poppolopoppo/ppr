@@ -4,6 +4,7 @@ export module engine.core:timer;
 
 import :assert;
 import :containers.stable_vector;
+import :containers.stl;
 import :opaque;
 
 import std;
@@ -50,7 +51,7 @@ export namespace pP {
         std::atomic<long long> m_last_tick{0};
 
         std::mutex m_mutex{};
-        std::vector<Event> m_queue{};
+        Array<Event> m_queue{};
 
     public:
         using Callback = std::move_only_function<void(TimePoint) noexcept>;

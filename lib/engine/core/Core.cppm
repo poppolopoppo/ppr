@@ -4,10 +4,10 @@ export module engine.core;
 
 export import :assert;
 export import :containers;
-export import :containers.flat_map;
 export import :containers.hash_map;
 export import :containers.sparse_vector;
 export import :containers.stable_vector;
+export import :containers.stl;
 export import :concurrency.channel;
 export import :concurrency.context;
 export import :concurrency.event;

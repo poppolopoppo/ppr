@@ -45,9 +45,9 @@ export namespace pP {
 
         [[nodiscard]] const InputActionKeyMapping &getKeyMapping_(const InputBinding &binding) const noexcept;
 
-        std::flat_set<MappingAndPriority, std::less<>> m_mappings;
-        std::flat_map<SharedInputAction, InputActionEvent, std::less<>> m_action_events;
-        std::flat_multimap<InputKey, InputBinding> m_keybindings;
+        FlatSet<MappingAndPriority> m_mappings;
+        FlatMap<SharedInputAction, InputActionEvent> m_action_events;
+        FlatMultiMap<InputKey, InputBinding> m_keybindings;
 
         EInputListenerResponse m_listener_mode{EInputListenerResponse::consumed};
 

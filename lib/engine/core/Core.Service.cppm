@@ -2,10 +2,11 @@ module;
 #include "pP/Macros.h"
 export module engine.core:service;
 
-import :containers;
-import :containers.flat_map;
+import :containers.stl;
 import :hal;
+import :memory.arena;
 import :memory.pointer;
+import std;
 
 export namespace pP {
     // ------------------------------------------------------------------
@@ -84,7 +85,7 @@ export namespace pP {
 
         void reset() noexcept {
             const std::unique_lock write_lock{m_shared_mutex};
-            m_services.reset();
+            m_services.clear();
             m_parent = nullptr;
         }
 
@@ -109,21 +110,20 @@ export namespace pP {
         template<typename T>
             requires std::is_base_of_v<IService, T>
         [[nodiscard]] safe_ptr<T> tryGet() const noexcept {
-            std::vector<const ServicesStore *> visited;
+            FlatSet<const ServicesStore *, std::less<>, mem::ScratchPad> visited;
+
             auto *current = this;
             while (current) {
-                for (const auto *v: visited) {
-                    if (v == current) {
-                        return safe_ptr<T>{};
-                    }
+                if (not visited.insert(current).second) [[unlikely]] {
+                    return safe_ptr<T>{};
                 }
-                visited.push_back(current);
 
                 const IService::Uid service_key{typeUid<T>()};
                 const std::shared_lock read_lock{current->m_shared_mutex};
-                if (const auto it = current->m_services.find(service_key); it.isValid()) {
+                if (const auto it = current->m_services.find(service_key); current->m_services.end() != it) {
                     return checked_cast<T>(it->second);
                 }
+
                 current = current->m_parent.get();
             }
             return safe_ptr<T>{};
@@ -146,6 +146,7 @@ export namespace pP {
 
     class ServiceInjector {
         safe_ptr<const ServicesStore> m_store;
+
     public:
         explicit ServiceInjector(safe_ptr<const ServicesStore> shared_store) noexcept
             : m_store(std::move(shared_store)) {

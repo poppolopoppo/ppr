@@ -207,10 +207,10 @@ namespace pP {
         auto old_action_events = std::move(m_action_events);
         {
             // all that fuzz just to be able to reserve the size of the flat_map :'(
-            std::vector<SharedInputAction> action_events_keys;
+            Array<SharedInputAction> action_events_keys;
             action_events_keys.reserve(old_action_events.size());
 
-            std::vector<InputActionEvent> action_events_values;
+            Array<InputActionEvent> action_events_values;
             action_events_values.reserve(old_action_events.size());
 
             m_action_events.replace(std::move(action_events_keys), std::move(action_events_values));

@@ -188,10 +188,8 @@ export namespace pP {
     template<typename ButtonT, mem::details::TAllocator AllocatorT = mem::GPA>
         requires std::is_enum_v<ButtonT> or std::is_integral_v<ButtonT>
     class InputDigitalState {
-        using stl_allocator = mem::STL<ButtonT, AllocatorT>;
-
     public:
-        using set_type = std::flat_set<ButtonT, std::less<>, std::vector<ButtonT, stl_allocator> >;
+        using set_type = FlatSet<ButtonT>;
 
         InputDigitalState() noexcept
             requires mem::Allocator<AllocatorT>::is_stateless_v

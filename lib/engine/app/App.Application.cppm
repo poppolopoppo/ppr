@@ -47,7 +47,7 @@ export namespace pP {
         virtual void terminate();
 
     private:
-        std::vector<std::string> m_arguments{};
+        Array<std::string> m_arguments{};
         ServicesStore m_services{};
 
         std::string m_name{};

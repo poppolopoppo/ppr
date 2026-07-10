@@ -4,6 +4,7 @@ module;
 export module engine.core:io.file_watcher;
 
 import :assert;
+import :containers.stl;
 import :concurrency.event;
 import :hal;
 
@@ -31,7 +32,7 @@ export namespace pP {
         bool                          m_error_flag{false};
         bool                          m_recursive{false};
         mutable bool                  m_cache_valid{false};
-        mutable std::vector<FileChange> m_cache{};
+        mutable Array<FileChange> m_cache{};
         PulseEvent                    m_changed{};
         std::filesystem::path         m_root;
 
@@ -45,7 +46,7 @@ export namespace pP {
     public:
         DirectoryWatcher() noexcept = default;
 
-        DirectoryWatcher(const std::filesystem::path &dir, bool recursive = false);
+        explicit DirectoryWatcher(const std::filesystem::path &dir, bool recursive = false);
 
         ~DirectoryWatcher() noexcept;
 
