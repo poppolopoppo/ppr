@@ -37,9 +37,11 @@ Key rules:
   - Dots in partition names map to hierarchy: `engine.core:memory.arena` is filed as `Core.Memory.Arena.cppm`.
 - **Implementation files** mirror the interface filename but use `.cpp`:
   - `Core.Memory.Arena.cppm` interface => `Core.Memory.Arena.cpp` implementation.
-- **Test modules** use underscores in partition names: `engine.tests:core_arena`.
-  - The file is `Core.Memory.Arena.Tests.cppm`.
-- **Top-level tests umbrella**: `engine.tests` in `Core.Tests.cppm`.
+- **Test modules** use dots in the parent module name and a colon for the partition:
+  - `engine.tests.core:memory` → file `Core.Memory.Tests.cppm`.
+  - `engine.tests.app:player` → file `App.Player.Tests.cppm`.
+  - Dots in partition names map to hierarchy, same as engine core partitions.
+- **Test umbrella modules**: `engine.tests` (shared infra), `engine.tests.core` (core tests), `engine.tests.app` (app tests).
 - **Macro header**: only `include/pP/Macros.h` uses `.h` extension. All other headers
   are eliminated in favour of modules.
 
@@ -219,11 +221,15 @@ export namespace pP { ... }
 
 ## Step 7 — Create test modules
 
-Test modules follow a parallel structure to engine partitions.
+Test modules follow a parallel structure to engine partitions. There are two
+test families: `engine.tests.core` (core tests, no GLFW) and `engine.tests.app`
+(app tests, links GLFW), plus shared infrastructure in `engine.tests`.
+
+### Core Test Module (`engine.tests.core`)
 
 **File naming**: `Core.<Area>.Tests.cppm` (e.g., `Core.Memory.Arena.Tests.cppm`).
 
-**Module naming**: `engine.tests:core_arena` (underscores, not dots, after the colon).
+**Module naming**: `engine.tests.core:memory.arena` (dots for hierarchy in the partition name).
 
 **Namespace**: `export namespace pP::tests { ... }`.
 
@@ -233,7 +239,7 @@ Test modules follow a parallel structure to engine partitions.
 module;
 #include "pP/Macros.h"
 
-export module engine.tests:core_arena;
+export module engine.tests.core:memory.arena;
 
 import engine.core;
 import std;
@@ -257,21 +263,83 @@ export namespace pP::tests {
 
 **Register in umbrella**: `lib/engine/tests/core/Core.Tests.cppm`:
 ```
-export module engine.tests;
-import :core_arena;
+export module engine.tests.core;
+import :memory.arena;
 ```
 
-**Register in CMake**: `lib/engine/tests/CMakeLists.txt`:
+**Register in CMake**: `lib/engine/tests/core/CMakeLists.txt`:
 ```
-target_sources(EngineTests
+target_sources(EngineCoreTests
     PUBLIC
         FILE_SET CXX_MODULES FILES
-            core/Core.Memory.Arena.Tests.cppm
-            core/Core.Tests.cppm
+            Core.Memory.Arena.Tests.cppm
+            Core.Tests.cppm
 )
 ```
 
-The test executable already links `EngineCore` via `setup_ppr_project`.
+The core test executable links `EngineCore` + `EngineTestsShared` via `setup_ppr_project`.
+
+### App Test Module (`engine.tests.app`)
+
+**File naming**: `App.<Area>.Tests.cppm` (e.g., `App.Player.Tests.cppm`).
+
+**Module naming**: `engine.tests.app:player` (dots for parent module, colon for partition).
+
+**Structure**: Same as core tests but imports `engine.app` instead of `engine.core`.
+
+**Register in umbrella**: `lib/engine/tests/app/App.Tests.cppm`:
+```
+export module engine.tests.app;
+import :player;
+```
+
+**Register in CMake**: `lib/engine/tests/app/CMakeLists.txt`:
+```
+target_sources(EngineAppTests
+    PUBLIC
+        FILE_SET CXX_MODULES FILES
+            App.Player.Tests.cppm
+            App.Tests.cppm
+)
+```
+
+The app test executable links `EngineApp` + `EngineTestsShared` + GLFW.
+
+### Shared Infrastructure (`engine.tests`)
+
+The `engine.tests` module in `lib/engine/tests/shared/` provides `parseCli()`
+and `runSuite()` used by both test executables:
+
+```
+module;
+#include "pP/Macros.h"
+
+export module engine.tests;
+
+export namespace pP::tests {
+
+    struct TestCli {
+        UnitTest::Context m_context{};
+        unsigned m_loops{mem::is_asan_enabled_v ? 3u : 1u};
+    };
+
+    [[nodiscard]] TestCli parseCli(int argc, char *argv[]);
+    int runSuite(TestCli cli, const UnitTest &root);
+}
+```
+
+Each test executable has a thin `main.cpp`:
+
+```
+import engine.tests;
+import engine.tests.core;  // or engine.tests.app
+
+int main(const int argc, char *argv[]) {
+    namespace tests = pP::tests;
+    tests::TestCli cli = tests::parseCli(argc, argv);
+    return tests::runSuite(std::move(cli), tests::core);
+}
+```
 
 ---
 
@@ -377,10 +445,11 @@ Every new `.cppm` and `.cpp` file **must** be added to the appropriate
 causes "module not found" or unresolved symbol errors. The file is compiled only
 when listed in `target_sources`.
 
-### Pitfall 5: Test module naming uses underscores
-Partition names in tests (`engine.tests:core_arena`) use underscores, while
-engine core partitions (`engine.core:memory.arena`) use dots. This is intentional
-and must be followed.
+### Pitfall 5: Test module naming — dots, not underscores
+Test partitions use dots for hierarchy, same as engine core partitions:
+`engine.tests.core:memory.arena` (not `engine.tests:core_memory`). The colon
+separates the parent module from the partition name. Using underscores where
+dots are expected (or vice versa) causes module resolution failures.
 
 ### Pitfall 6: Using `#include` instead of `import`
 - No `#include <vector>` — use `import std;`.
@@ -420,13 +489,15 @@ and build registration across commits.
 - Only `Macros.h` is included via `#include` in module files (exception: third-party
   wrappers like `Math.cppm` may include external headers in the global module fragment).
 - All module files must begin with the global module fragment (`module;`).
-- Partition names after the colon use dots in engine core (`:memory.arena`) and
-  underscores in tests (`:core_arena`).
+- Partition names after the colon use dots for hierarchy throughout:
+  - Engine core: `:memory.arena`
+  - Tests: `:memory.arena`
 - Filenames follow the pattern `Core.<PartitionName>.cppm` where dots in the partition
   name correspond to dots in the filename.
 - Every partition must be listed in the umbrella module and in `CMakeLists.txt`.
 - CMake registration uses `FILE_SET CXX_MODULES` for `.cppm` files and `PRIVATE`
   sources for `.cpp` files.
 - Test modules use `import engine.core;` (the full module), never partition imports.
+  App test modules use `import engine.app;`.
 - Platform HAL sources follow the `Core.HAL.<platform>.<Area>.cpp` naming and are
   collected via `${HAL_PLATFORM_SOURCES}` in CMake.

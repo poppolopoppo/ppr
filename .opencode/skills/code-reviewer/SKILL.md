@@ -12,7 +12,7 @@ description: >
 
 Analyze unstaged and staged changes in tracked files, then produce a
 structured review organized by zone (engine core, game, tests, build)
-across nine dimensions.
+across ten dimensions.
 
 ---
 
@@ -35,16 +35,16 @@ vcpkg install paths are excluded automatically.
 
 | Zone | Path | Review depth |
 |------|------|-------------|
-| Engine code | `lib/*` | Full — all 9 dimensions |
-| Game code | `game/*` | Full — all 9 dimensions |
-| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 3, 8, 9 |
+| Engine code | `lib/*` | Full — all 10 dimensions |
+| Game code | `game/*` | Full — all 10 dimensions |
+| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 3, 8, 9, 10 |
 | Build system | `CMakeLists.txt`, `cmake/*.cmake` | Build correctness only |
 | Third-party wrappers | `cmake/external/*.cmake` | Minimal — version pin, no engine patches |
 | Config / docs | `*.md`, `*.json`, `.gitignore` | Skip |
 
 ---
 
-## Step 3 — Review across all 9 dimensions
+## Step 3 — Review across all 10 dimensions
 
 For each file in the diff, apply the relevant checklists below.
 
@@ -196,6 +196,18 @@ For each file in the diff, apply the relevant checklists below.
 - `[[nodiscard]]` on functions returning values
 - `PPR_FORCE_INLINE` on hot-path functions
 - Macros are forbidden outside `Macros.h`
+
+---
+
+### Dimension 10 — safe_ptr lifetime correctness
+
+- All `safe_ptr` instances pointing to an object must be released before the object is destroyed (all copies set to `nullptr` or go out of scope)
+- `safe_ptr` is NOT a shared ownership pointer — it is a debug-only lifetime checker; treat as `T*` for ownership semantics
+- `safe_ptr` acquired from `unique_ptr::get()` or `safe_ptr` `get()` requires the caller to ensure the source outlives the copy
+- Local variables holding `safe_ptr` to a service-owned object must be non-`const` and nulled before removing the object from the service
+- When storing `safe_ptr` as a class member, document the lifetime contract (who owns the source and how destruction ordering is enforced)
+- Nested function calls that create temporary `safe_ptr` copies are safe as long as the pointed-to object lives until the return of the outermost call
+- `addGamepadPlayer` / `getOrCreateKeyboardPlayer` return `safe_ptr` that must be released before the corresponding `removePlayer` call
 
 ---
 

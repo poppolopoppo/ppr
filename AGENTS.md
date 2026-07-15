@@ -5,6 +5,7 @@ Load these on demand via the `skill` tool when your task matches their domain:
 
 | Skill | Trigger Keywords | Coverage |
 |-------|-----------------|----------|
+| `clion-tools` | search, find, debug, breakpoint, build, run, diagnose | CLion MCP tools for code search, debugging, building, and diagnostics — use INSTEAD of grep/glob/bash |
 | `memory-allocator` | allocation, arena, pool, slab, poison | Allocator selection, composition, arena patterns, poison API, STL adapter, safe_ptr |
 | `module-architect` | new module, partition, `.cppm`, test module | Module naming, file structure, umbrella registration, CMake registration, pitfalls |
 | `build-system` | cmake, preset, target, dependency, linker error | Presets, setup_ppr_project, deps (CPM/vcpkg), MSVC workarounds, sanitizers |
@@ -16,17 +17,19 @@ When you encounter a file reference (e.g., @rules/general.md), load it on demand
 Do NOT preemptively load all references. Treat loaded content as mandatory instructions.
 
 ## Build System
+- Load the `clion-tools` skill when starting any task. Use CLion MCP tools INSTEAD of grep/glob/bash for code search, building, and debugging.
 - CMake 4.2+, C++23, modules enabled, experimental `import std`.
 - Presets: `msvc-dev` (recommended), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see cmake/Compilers.cmake).
 - Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
-- Build & test via CLion run configuration `EngineTests`; or build with `cmake --build --preset msvc-dev --target EngineTests` after `cmake --preset msvc-dev`.
+- Two separate test executables: `EngineCoreTests` (core, GLFW-free) and `EngineAppTests` (links glfw). Aggregate target `run-engine-tests` runs both. Build via `cmake --build out/build/msvc-dev --target EngineCoreTests` (or `EngineAppTests`). Run via `run-engine-tests` run configuration in CLion.
+- Shared test infrastructure in `lib/engine/tests/shared/` (static lib `EngineTestsShared`) provides `parseCli()` and `runSuite()` to avoid duplication between test executables.
 
 ## C++20 Modules
 - `.cppm` = interface (exports), `.cpp` = implementation (definitions), `.h` = Macros.h only.
 - Libraries: `engine.core`, `engine.math`, `engine.rhi`, `engine.app`.
 - Partitions: `engine.core:containers.hash_map` (dots = hierarchy).
-- Tests: `engine.tests:core_memory` (underscores).
+- Tests: `engine.tests.core:memory` (dots for module name, colon for partition).
 - File naming: `Core.<Partition>.cppm` / `Core.<Partition>.cpp`, platform HAL: `Core.HAL.<platform>.<Area>.cpp`.
 - Interface pattern:
   ```cpp
@@ -49,7 +52,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 - Keep `.cppm` files minimal (exports only); put definitions in `.cpp`.
 
 ## Coding Standards
-- No raw loops (prefer algorithms/ranges). No comments (code should be self-documenting).
+- No raw loops (prefer algorithms/ranges). Comments should be exceptional — only add them for genuinely surprising or non-obvious code that cannot be clarified through naming or structure alone.
 - `constexpr` everywhere, `[[nodiscard]]` on important returns, `noexcept` where possible.
 - Inlining: `PPR_FORCE_INLINE` (hot paths), `PPR_NO_INLINE` (prevent), `PPR_FLATTEN` (recursive).
 - Attributes: `PPR_EMPTY_BASES` (MSVC stateless wrappers), `PPR_LIFETIME_BOUND` (reference lifetime deps).
@@ -98,12 +101,33 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - **Concurrency:** IEvent/ISignal/Signal<...>, RawChannel (lock-free MPSC), IContext/SharedContext (Go-style cancellation).
 - **Other:** IService/typeUid<T>, Log::Category/ELevel/Emitter, TimerManager, overloaded (visitor), std23::function_ref, sort::shellSort.
 
+### safe_ptr<T>
+
+- **Debug mode** (`PPR_ENABLE_DEBUG`): reference-counted lifetime checker — asserts that no `safe_ptr` outlives the pointed-to object
+- **Release mode**: zero-overhead raw pointer (identical to `T*`)
+- **NOT** a shared ownership pointer — the user guarantees init/destroy ordering
+- All `safe_ptr` copies must be released (set to `nullptr` or go out of scope) before the owning object is destroyed
+- `safe_ptr` from `unique_ptr::get()` is correct by design: the user guarantees the `unique_ptr` outlives all `safe_ptr` instances; `safe_ptr` will assert if violated
+- `setDebugLifetimeCheckEnabled(bool)` controls the checker; disabled by default for services
+
 ## Unit Testing
 - Define: `PPR_UNIT_TEST(name) { PPR_ASSERT(cond); };` (tests are `inline constexpr` variables).
 - Flags: `UnitTest::expect_fail` (must throw), `UnitTest::fork` (child process), `UnitTest::expect_crash` (fork + expect_fail).
 - Group: `_.recurse({TestA, TestB, ...})` — supports conditional inclusion via `if constexpr (PPR_ENABLE_DEBUG)`.
-- Module pattern: `export module engine.tests:core_memory;` with `export namespace pP::tests { ... }`.
+- Module pattern: `export module engine.tests.core:memory;` with `export namespace pP::tests { ... }`.
 - CLI: `EngineTests [--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]`.
 - Fork tests spawn child process via `hal::process::spawnAndWait`. Assertions intercepted by test framework (converted to failures, not terminations).
 - Run programmatically: `pP::UnitTest::run(context, pP::tests::core);`.
 - See `lib/engine/tests/` for existing examples.
+
+## Debugging with CLion
+- ALWAYS use CLion xdebug MCP tools for debugging. Never use printf/logging when the debugger is available.
+- Workflow: start session → set breakpoint → resume → wait for pause → inspect stack/variables → step or continue.
+- Load the `clion-tools` skill for the full tool reference and examples.
+- Key tools: `clion_xdebug_start_debugger_session`, `clion_xdebug_set_breakpoint`, `clion_xdebug_control_session`, `clion_xdebug_get_stack`, `clion_xdebug_get_frame_values`, `clion_xdebug_evaluate_expression`.
+
+## Recommendations
+- Use Task agents for multi-file exploration (they get fresh context)
+- Batch parallel tool calls when possible
+- Keep file reads targeted (use offset/limit for large files)
+- When hitting blockers like compiler ICE or hard-crash, do not jump to ambitious refactors of the prepared plan: instead you **must** notify the user and ask for validation and to decide of the best direction.
