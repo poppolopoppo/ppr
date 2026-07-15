@@ -1,0 +1,23 @@
+module;
+#include "pP/Macros.h"
+
+export module engine.tests.app;
+
+import engine.core;
+import :devices;
+import :player;
+import :dispatch;
+import :snapshot;
+import :player_service;
+
+export namespace pP::tests {
+    PPR_UNIT_TEST(app) {
+        _.recurse({
+            app_devices,
+            app_player,
+            app_dispatch,
+            app_snapshot,
+            app_player_service,
+        });
+    };
+}
