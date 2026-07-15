@@ -28,6 +28,8 @@ export namespace pP {
             u32 m_seed: 8 = 0u;
         };
 
+        PPR_PRAGMA_WARNING_PUSH()
+        PPR_PRAGMA_WARNING_DISABLE_MSVC(4324)
         template<typename T>
         struct alignas(T) SparseVectorItem {
             struct FreeList { // NOLINT(*-pro-type-member-init)
@@ -49,6 +51,7 @@ export namespace pP {
                 return reinterpret_cast<const T *>(&m_storage);
             }
         };
+        PPR_PRAGMA_WARNING_POP()
     }
 
     // ------------------------------------------------------------------
@@ -402,6 +405,7 @@ export namespace pP {
             m_size_alive--;
 
             mem::poisonDestroyed(item.getValuePtr());
+            mem::unpoisonUninitialized(item.getValuePtr());
 
             new (std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
                 .m_next_free = none_v,

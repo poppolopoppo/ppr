@@ -64,6 +64,12 @@ export namespace pP::mem {
             { al.restore(mark) };
             { al.reset() };
         } && TOwningAllocator<T> && TResizableAllocator<T>;
+
+        template<typename T>
+        concept TSlabAllocator = requires(std::remove_cvref_t<T> &al)
+        {
+            { al.data() } -> std::convertible_to<std::allocation_result<void *> >;
+        } && TArenaAllocator<T>;
     }
 
     // ------------------------------------------------------------------

@@ -565,11 +565,15 @@ export namespace pP {
 
     template<typename T, std::signed_integral OffsetT = std::ptrdiff_t>
     struct [[nodiscard]] RelPtr {
+        using value_type = T;
+        using pointer = std::add_pointer_t<T>;
+        using reference = std::add_lvalue_reference_t<T>;
+
         OffsetT m_offset{0};
 
         constexpr RelPtr() noexcept = default;
 
-        explicit constexpr RelPtr(T *ptr PPR_LIFETIME_BOUND) noexcept {
+        explicit constexpr RelPtr(pointer ptr PPR_LIFETIME_BOUND) noexcept {
             setData(ptr);
         }
 
@@ -591,24 +595,24 @@ export namespace pP {
 
         constexpr RelPtr &operator =(RelPtr &&) noexcept = delete;
 
-        constexpr RelPtr &operator =(T *ptr PPR_LIFETIME_BOUND) & noexcept {
+        constexpr RelPtr &operator =(pointer ptr PPR_LIFETIME_BOUND) & noexcept {
             setData(ptr);
             return *this;
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *getData() const & noexcept {
+        constexpr pointer getData() const & noexcept {
             if (m_offset == 0) {
                 return nullptr;
             }
 
             // Use integer arithmetic to avoid pointer arithmetic UB
-            return std::bit_cast<T *>(
+            return std::bit_cast<pointer>(
                 std::bit_cast<std::uintptr_t>(this) +
                 static_cast<std::uintptr_t>(m_offset));
         }
 
-        PPR_FORCE_INLINE constexpr void setData(T *ptr PPR_LIFETIME_BOUND) & noexcept {
+        PPR_FORCE_INLINE constexpr void setData(pointer ptr PPR_LIFETIME_BOUND) & noexcept {
             if (ptr == nullptr) {
                 m_offset = 0;
                 return;
@@ -645,22 +649,22 @@ export namespace pP {
 
         [[nodiscard]] PPR_FORCE_INLINE
         // ReSharper disable once CppNonExplicitConversionOperator
-        constexpr operator T *() const & noexcept {
+        constexpr operator pointer() const & noexcept {
             return getData();
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *operator->() const & noexcept {
+        constexpr pointer operator->() const & noexcept {
             return getData();
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T &operator*() const & noexcept {
+        constexpr reference operator*() const & noexcept {
             return *getData();
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T &operator[](const std::size_t offset) const & noexcept {
+        constexpr reference operator[](const std::size_t offset) const & noexcept {
             return getData()[offset];
         }
 
@@ -863,32 +867,27 @@ export namespace pP {
     template<typename T>
     struct [[nodiscard]] ArrayView {
         using value_type = const T;
+        using pointer = std::add_pointer_t<value_type>;
+        using reference = std::add_lvalue_reference_t<value_type>;
         using size_type = std::size_t;
 
-        const T *m_data{};
+        pointer m_data{};
         std::size_t m_size{};
 
         constexpr ArrayView() noexcept = default;
 
-        constexpr ArrayView(const T *data PPR_LIFETIME_BOUND, const std::size_t size) noexcept
+        constexpr ArrayView(pointer data PPR_LIFETIME_BOUND, const std::size_t size) noexcept
             : m_data(data),
               m_size(size) {
         }
 
-        constexpr ArrayView(const std::initializer_list<T> list PPR_LIFETIME_BOUND) noexcept
-            : m_data(list.data()),
-              m_size(list.size()) {
-        }
-
-        template<std::size_t ExtentV = std::dynamic_extent>
-        // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr ArrayView(const std::span<T, ExtentV> span PPR_LIFETIME_BOUND) noexcept
-            : m_data(span.data()),
-              m_size(span.size()) {
+        constexpr ArrayView(std::initializer_list<T> init_list PPR_LIFETIME_BOUND) noexcept
+            : m_data(init_list.data()),
+              m_size(init_list.size()) {
         }
 
         template<std::ranges::contiguous_range RangeT>
-            requires std::is_same_v<std::ranges::range_value_t<RangeT>, T>
+            requires std::convertible_to<std::add_pointer_t<std::ranges::range_reference_t<RangeT> >, pointer>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr ArrayView(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
             : m_data(std::ranges::data(contiguous_range)),
@@ -944,29 +943,40 @@ export namespace pP {
     template<typename T>
     struct [[nodiscard]] RelativeView {
         using value_type = const T;
+        using pointer = std::add_pointer_t<value_type>;
+        using reference = std::add_lvalue_reference_t<value_type>;
         using size_type = u32;
 
-        RelPtr<const T, i32> m_data{};
+        RelPtr<value_type, i32> m_data{};
         size_type m_size{};
 
         constexpr RelativeView() noexcept = default;
 
-        constexpr RelativeView(const T *const ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
+        constexpr RelativeView(pointer ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
             reset(ptr, n);
         }
 
-        template<std::size_t ExtentV = std::dynamic_extent>
-        explicit constexpr RelativeView(const std::span<T, ExtentV> &span) noexcept {
+        template<typename ValueT, std::size_t ExtentV = std::dynamic_extent>
+            requires std::convertible_to<std::add_pointer_t<ValueT>, pointer>
+        explicit constexpr RelativeView(const std::span<ValueT, ExtentV> &span) noexcept {
             reset(span.data(), span.size());
         }
 
-        template<std::size_t ExtentV = std::dynamic_extent>
-        constexpr RelativeView &operator=(const std::span<T, ExtentV> &span) noexcept {
+        template<typename ValueT, std::size_t ExtentV = std::dynamic_extent>
+            requires std::convertible_to<std::add_pointer_t<ValueT>, pointer>
+        constexpr RelativeView &operator =(const std::span<ValueT, ExtentV> &span) noexcept {
             reset(span.data(), span.size());
             return *this;
         }
 
-        constexpr void reset(T *const ptr, const std::size_t n) noexcept {
+        // template<std::ranges::contiguous_range RangeT>
+        //     requires std::convertible_to<std::add_pointer_t<std::ranges::range_reference_t<RangeT>>, pointer>
+        // // ReSharper disable once CppNonExplicitConvertingConstructor
+        // constexpr RelativeView(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept {
+        //     reset(std::ranges::data(contiguous_range), std::ranges::size(contiguous_range));
+        // }
+
+        constexpr void reset(pointer ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
             m_data = ptr;
             m_size = safe_narrowing(n);
         }
@@ -975,7 +985,7 @@ export namespace pP {
             return m_size == 0u;
         }
 
-        [[nodiscard]] constexpr const T *data() const noexcept {
+        [[nodiscard]] constexpr pointer data() const noexcept {
             return m_data;
         }
 
@@ -983,21 +993,21 @@ export namespace pP {
             return m_size;
         }
 
-        [[nodiscard]] constexpr const T *begin() const & noexcept {
+        [[nodiscard]] constexpr pointer begin() const & noexcept {
             return m_data;
         }
 
-        [[nodiscard]] constexpr const T *end() const & noexcept {
+        [[nodiscard]] constexpr pointer end() const & noexcept {
             return m_data + m_size;
         }
 
-        [[nodiscard]] constexpr const T &operator[](const std::size_t index) const & noexcept {
+        [[nodiscard]] constexpr reference operator[](const std::size_t index) const & noexcept {
             PPR_ASSERT(m_data.isValid() && index < m_size);
             return m_data[index];
         }
 
-        [[nodiscard]] constexpr std::span<const T> span() const noexcept {
-            return std::span<const T>{m_data, m_size};
+        [[nodiscard]] constexpr std::span<value_type> span() const noexcept {
+            return std::span<value_type>{m_data, m_size};
         }
 
         [[nodiscard]] constexpr ArrayView<T> view() const noexcept {
@@ -1088,6 +1098,21 @@ export namespace pP {
 
         constexpr ~Stack() noexcept {
             mem::annotateContiguousContainer(m_storage.data(), N, m_count, 0u);
+        }
+
+        Stack &operator=(const Stack &other) noexcept {
+            static_assert(std::is_trivially_destructible_v<T>);
+            if (this != &other) [[likely]] {
+                mem::annotateContiguousContainer(m_storage.data(), N, 0u, N);
+                mem::annotateContiguousContainer(other.m_storage.data(), N, 0u, N);
+
+                m_count = other.m_count;
+                std::memcpy(m_storage.data(), other.m_storage.data(), N * sizeof(T));
+
+                mem::annotateContiguousContainer(m_storage.data(), N, N, m_count);
+                mem::annotateContiguousContainer(other.m_storage.data(), N, N, other.m_count);
+            }
+            return *this;
         }
 
         [[nodiscard]] constexpr bool isEmpty() const noexcept {

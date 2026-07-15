@@ -1136,10 +1136,10 @@
         <DisplayString>{*($T1*)((char*)this + m_offset)}</DisplayString>
         <Expand>
             <Item Name="[pointer]" Condition="m_offset != 0">
-                ($T1*)((char*)this + m_offset)
+                (pointer)((char*)this + m_offset)
             </Item>
             <Item Name="[pointer]" Condition="m_offset == 0">
-                ($T1*)0
+                (pointer)0
             </Item>
             <Item Name="[offset]">m_offset</Item>
         </Expand>
@@ -1152,7 +1152,7 @@
 
          Non-owning contiguous view: data pointer + size.
          ================================================================ -->
-    <Type Name="pP::array_view&lt;*&gt;">
+    <Type Name="pP::ArrayView&lt;*&gt;">
         <DisplayString Condition="m_size == 0">{{ empty }}</DisplayString>
         <DisplayString>{{ size={m_size} }} {m_data,[m_size]}</DisplayString>
         <Expand>
@@ -1172,7 +1172,7 @@
          Non-owning contiguous view using a relative pointer (halves
          the footprint of array_view on x64).
          ================================================================ -->
-    <Type Name="pP::relative_view&lt;*&gt;">
+    <Type Name="pP::RelativeView&lt;*&gt;">
         <DisplayString Condition="m_size == 0">{{ empty }}</DisplayString>
         <DisplayString>{{ size={m_size} }} {(value_type*)((char*)&amp;m_data + m_data.m_offset),[m_size]}</DisplayString>
         <Expand>

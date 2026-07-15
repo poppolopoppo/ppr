@@ -20,19 +20,19 @@ export namespace pP {
         using Event = std23::function_ref<FunctionT>;
 
         class [[nodiscard]] Handle {
-            Callback *m_callback{nullptr};
+            const Callback *m_callback{nullptr};
             SparseKeyId m_event_key{};
 
         public:
             constexpr Handle() = default;
 
-            Handle(Callback &callback, const SparseKeyId &event_key) noexcept
+            Handle(const Callback &callback, const SparseKeyId &event_key) noexcept
                 : m_callback(std::addressof(callback)), m_event_key(event_key) {
             }
 
-            ~Handle() noexcept {
+            ~Handle() {
                 if (m_callback != nullptr) {
-                    m_callback->remove(m_event_key);
+                    std::ignore = m_callback->remove(m_event_key);
                     m_callback = nullptr;
                 }
             }
@@ -54,10 +54,7 @@ export namespace pP {
             : m_events(std::forward<AllocatorT>(alloc)) {
         }
 
-        Handle add(Event &&event) const/* see mutable bellow */ {
-            if (const auto it = m_events.find(event); m_events.end() != it) [[unlikely]] {
-                return Handle(*this, it.getKey());
-            }
+        Handle add(Event event) const/* see mutable bellow */ {
             return Handle(*this, m_events.add(std::forward<Event>(event)));
         }
 
@@ -75,14 +72,19 @@ export namespace pP {
             event(std::forward<ArgsT>(args)...);
         }
         void operator()(ArgsT&&... args)
-            noexcept(noexcept(Event{}(std::forward<ArgsT>(args)...))) {
+            noexcept(noexcept(std::declval<const Event &>()(std::forward<ArgsT>(args)...))) {
             for (const Event &event : m_events) {
                 event(std::forward<ArgsT>(args)...);
             }
         }
 
     private:
-        // clear/trigger are non-const, while add/remove are const
+        // add()/remove() are const (allow client to subscribe/unsubscribe through
+        // a const reference), while clear()/operator()() remain non-const.
+        // This is an intentional design choice: a const Callback& allows adding
+        // and removing subscribers but not triggering the callback itself.
+        // The remove() call during operator()() iteration is unsafe (iterator
+        // invalidation) and callers must defer removals outside the dispatch loop.
         mutable SparseVectorInplace<Event, AllocatorT> m_events;
     };
 

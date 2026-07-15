@@ -79,7 +79,7 @@ export namespace pP {
 
     namespace details {
         template<typename T, class F, T... Is>
-        constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>)
+        PPR_FORCE_INLINE constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>)
             noexcept(noexcept(std::declval<F>()(std::integral_constant<T, Is>{}...)))
             requires std::invocable<F, std::integral_constant<T, Is>...> {
             return std::forward<F>(f)(std::integral_constant<T, Is>{}...);
@@ -87,7 +87,7 @@ export namespace pP {
     }
 
     template<std::size_t N, class F>
-    constexpr decltype(auto) static_iota(F &&f)
+    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f)
         noexcept(noexcept(details::static_iota_expand<std::size_t>(
             std::forward<F>(f),
             std::make_integer_sequence<std::size_t, N>{}))) {
@@ -97,7 +97,7 @@ export namespace pP {
     }
 
     template<typename T, T N, class F>
-    constexpr decltype(auto) static_iota(F &&f)
+    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f)
         noexcept(noexcept(details::static_iota_expand<T>(
             std::forward<F>(f),
             std::make_integer_sequence<T, N>{}))) {

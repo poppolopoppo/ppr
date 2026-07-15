@@ -152,6 +152,7 @@ export namespace pP {
 #if 0 // workaround MSVC compiler bug with concepts and ADL through module boundaries
             template<details::TOpaque OpaqueT>
 
+
 #else
             template<typename OpaqueT>
                 requires requires(OpaqueT value)
@@ -169,15 +170,11 @@ export namespace pP {
             // have no operator==, and Delegate/Formatter/Transform (function_ref) have no
             // meaningful identity.
 
-            // Returns a reference to the held value. Undefined behavior if the
-            // active alternative is not T — only call when the type is certain.
             template<typename T>
             [[nodiscard]] constexpr const T &get() const noexcept {
                 return std::get<T>(*this);
             }
 
-            // Returns a pointer to the held value, or nullptr if the active
-            // alternative is not T.
             template<typename T>
             [[nodiscard]] constexpr const T *as() const noexcept {
                 return std::get_if<T>(this);
@@ -234,16 +231,20 @@ export namespace pP {
                 using super_t = ValueVariant;
                 using super_t::super_t;
 
-                // Returns a reference to the held value. Undefined behavior if the
-                // active alternative is not T — only call when the type is certain.
                 template<typename T>
+                    requires requires(const ValueVariant &v)
+                    {
+                        { std::get<T>(v) } -> std::same_as<const T &>;
+                    }
                 [[nodiscard]] constexpr const T &get() const noexcept {
                     return std::get<T>(*this);
                 }
 
-                // Returns a pointer to the held value, or nullptr if the active
-                // alternative is not T.
                 template<typename T>
+                    requires requires(const ValueVariant &v)
+                    {
+                        { std::get_if<T>(v) } -> std::same_as<const T *>;
+                    }
                 [[nodiscard]] constexpr const T *as() const noexcept {
                     return std::get_if<T>(this);
                 }
@@ -362,25 +363,28 @@ export namespace pP {
 
             [[nodiscard]] constexpr const Dict &operator*() const noexcept {
                 PPR_ASSERT(m_data != nullptr);
+                // ReSharper disable once CppDFANullDereference
                 return *m_data;
             }
 
             [[nodiscard]] constexpr const KeyValue &operator[](const std::size_t index) const noexcept {
                 PPR_ASSERT(m_data != nullptr);
+                // ReSharper disable once CppDFANullDereference
                 return (*m_data)[index];
             }
 
             [[nodiscard]] constexpr const Value &operator[](const string_literal key) const noexcept {
                 PPR_ASSERT(m_data != nullptr);
+                // ReSharper disable once CppDFANullDereference
                 return (*m_data)[key];
             }
 
-            [[nodiscard]] constexpr const KeyValue *begin() const noexcept {
-                return m_data ? m_data->begin() : nullptr;
+            [[nodiscard]] constexpr auto begin() const noexcept {
+                return m_data ? m_data->begin() : default_value_v;
             }
 
-            [[nodiscard]] constexpr const KeyValue *end() const noexcept {
-                return m_data ? m_data->end() : nullptr;
+            [[nodiscard]] constexpr auto end() const noexcept {
+                return m_data ? m_data->end() : default_value_v;
             }
 
             constexpr Block() noexcept = default;
@@ -547,6 +551,7 @@ export namespace pP {
                 m_block = default_value_v;
                 mem::poisonDestroyed(m_alloc.ptr, m_alloc.count);
                 allocator_type::deallocateRaw(m_alloc.ptr, m_alloc.count);
+                m_alloc = {};
             }
         };
 

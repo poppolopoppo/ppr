@@ -13,6 +13,7 @@ import :memory.page_pool;
 import std;
 
 export namespace pP::mem {
+
     // ------------------------------------------------------------------
     // slab allocator has a single chunk of fixed size, which it does not own
     // ------------------------------------------------------------------
@@ -70,11 +71,11 @@ export namespace pP::mem {
         }
 
         [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept(false);
+        allocateRaw(std::size_t bytes, std::align_val_t alignment) noexcept(false);
 
-        [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept;
+        [[nodiscard]] bool resizeRaw(void *ptr, std::size_t old_size, std::size_t new_size) noexcept;
 
-        [[maybe_unused]] bool deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept;
+        [[maybe_unused]] bool deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment) noexcept;
 
         // Checkpoint the current offset for cheap scope-level rewind
         [[nodiscard]] constexpr const void *watermark() const noexcept {
@@ -82,7 +83,7 @@ export namespace pP::mem {
         }
 
         // Rewind to a previous checkpoint — no destructor calls, O(1)
-        void restore(const void *const mark) noexcept;
+        void restore(const void *mark) noexcept;
     };
 
     template<std::size_t CapacityV>
@@ -467,7 +468,7 @@ export namespace pP::mem {
         }
 
         [[nodiscard]] PPR_FORCE_INLINE
-        bool owns(const void *const ptr, const std::size_t size) noexcept {
+        bool owns(const void *const ptr, const std::size_t size) const noexcept {
             return m_arena->owns(ptr, size);
         }
 
@@ -635,6 +636,7 @@ export namespace pP::mem {
     // growable slab — single contiguous buffer that reallocates on OOM
     // ------------------------------------------------------------------
 
+#if 0 // losing pointer stability is a no-go
     template<details::TAllocator AllocatorT = ScratchPad>
     class PPR_EMPTY_BASES GrowingSlab : public AllocatorTraits<GrowingSlab<AllocatorT> > {
         static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
@@ -682,6 +684,10 @@ export namespace pP::mem {
                 poisonDestroyed(m_data, m_capacity);
                 AllocatorT::deallocateRaw(m_data, m_capacity, max_align_v);
             }
+        }
+
+        [[nodiscard]] std::allocation_result<void *> data() const noexcept {
+            return std::allocation_result<void *>(m_data, m_capacity);
         }
 
         [[nodiscard]] std::allocation_result<void *>
@@ -764,4 +770,5 @@ export namespace pP::mem {
             return {m_data, m_offset};
         }
     };
+#endif
 }

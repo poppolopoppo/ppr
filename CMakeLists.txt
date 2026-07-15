@@ -26,6 +26,9 @@ set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # set(CMAKE_EXPORT_BUILD_DATABASE ON)
 
+# Global include directory for pP/Macros.h - must be set before project() for module scanning
+include_directories(${CMAKE_SOURCE_DIR}/include)
+
 include(cmake/VCPkg.cmake)
 
 project(

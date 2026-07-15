@@ -90,12 +90,10 @@ namespace pP {
     void Log::Handler::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
         const TimePoint timestamp = std::chrono::steady_clock::now();
 
-        mem::GrowingSlab slab;
-        opaque::Block(params, slab);
+        const size_t block_size_bytes = opaque::Block::sizeOf(params);
+        const size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
 
-        const std::span<const std::byte> params_block = slab.consumed();
-        const std::size_t entry_size = sizeof(Entry) + params_block.size_bytes();
-        const auto hdr = m_messages.producerReserve(entry_size, RawChannel::wait_if_full);
+        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
         PPR_ASSERT(hdr.has_value());
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
@@ -106,8 +104,8 @@ namespace pP {
             .m_thread_id{std::this_thread::get_id()},
         };
 
-        std::memcpy(slot + sizeof(Entry), params_block.data(), params_block.size_bytes());
-        entry->m_params.m_data = reinterpret_cast<opaque::Block::Dict *>(slot + sizeof(Entry));
+        mem::Slab slab{slot + sizeof(Entry), block_size_bytes};
+        entry->m_params.resetAssumeEmpty(params, slab);
 
         m_messages.producerSubmit(*hdr);
     }
