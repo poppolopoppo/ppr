@@ -1,7 +1,7 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.tests:core_io_file_watcher;
+export module engine.tests.core:io.file_watcher;
 
 import engine.core;
 

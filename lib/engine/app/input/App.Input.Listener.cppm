@@ -76,6 +76,4 @@ export namespace pP {
 
         [[nodiscard]] EInputListenerResponse postKeyEvent(const InputMessage &message) noexcept;
     };
-
-    using SharedInputListener = safe_ptr<const InputListener>;
 }

@@ -34,9 +34,9 @@ export namespace pP {
     class KeyboardDevice : public IInputDevice {
     public:
         KeyboardState m_state{};
-        const InputDeviceID m_device_id;
+        InputDeviceID m_device_id;
 
-        KeyboardDevice() noexcept;
+        explicit KeyboardDevice(InputDeviceID device_id) noexcept;
 
         ~KeyboardDevice() noexcept override;
 

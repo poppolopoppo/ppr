@@ -118,7 +118,7 @@ namespace pP {
     }
 
     EInputListenerResponse InputListener::postKeyEvent(const InputMessage &message) noexcept {
-        if (PPR_ENSURE(message.m_key.isAny() && "any keys or axes are not supported as input")) [[unlikely]] {
+        if (message.m_key.isAny()) [[unlikely]] {
             return EInputListenerResponse::unhandled;
         }
 
@@ -228,11 +228,11 @@ namespace pP {
             }
 
             if (const auto it = old_action_events.find(action); old_action_events.end() != it) {
-                m_action_events.emplace(action, InputActionEvent(action));
-            } else {
                 m_action_events.emplace(action, std::move(it->second));
 
                 old_action_events.erase(it);
+            } else {
+                m_action_events.emplace(action, InputActionEvent(action));
             }
 
             m_keybindings.emplace(key, binding);

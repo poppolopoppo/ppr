@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_stable_vector;
+export module engine.tests.core:containers.stable_vector;
 import engine.core;
 import std;
 

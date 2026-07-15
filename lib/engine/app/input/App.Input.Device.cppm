@@ -3,13 +3,10 @@ module;
 export module engine.app:input.device;
 
 import engine.core;
+import :service.input;
 import :input.key;
 
 export namespace pP {
-    class IInputDevice;
-
-    using InputDeviceID = Numeric<u32, IInputDevice>;
-
     // ------------------------------------------------------------------
     // input messages
     // ------------------------------------------------------------------
@@ -39,6 +36,8 @@ export namespace pP {
             : m_key{std::move(key)}, m_value{std::move(value)},
               m_delta_time{delta_time}, m_device_id{device_id}, m_event{event} {
         }
+
+        constexpr ~InputMessage() noexcept = default;
 
         [[nodiscard]] constexpr bool isPressed() const noexcept {
             return m_event == EInputMessageEvent::pressed;
@@ -83,6 +82,7 @@ export namespace pP {
 
     class IInputDevice : public safe_object {
     public:
+        // ReSharper disable once CppHidingFunction
         virtual ~IInputDevice() noexcept = default;
 
         [[nodiscard]] virtual const InputDeviceID &getInputDeviceID() const noexcept = 0;

@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_hash_map;
+export module engine.tests.core:containers.hash_map;
 import engine.core;
 import std;
 

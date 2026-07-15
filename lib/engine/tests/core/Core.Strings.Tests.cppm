@@ -1,10 +1,10 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_strings;
+export module engine.tests.core:strings;
 import engine.core;
 import std;
 
-namespace pP::tests {
+export namespace pP::tests {
     namespace Strings {
         namespace Helpers {
             PPR_UNIT_TEST(char_helpers) {

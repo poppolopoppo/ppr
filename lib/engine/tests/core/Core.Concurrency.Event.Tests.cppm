@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_event;
+export module engine.tests.core:event;
 import engine.core;
 import std;
 

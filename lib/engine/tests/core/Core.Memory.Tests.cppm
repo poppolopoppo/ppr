@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_memory;
+export module engine.tests.core:memory;
 import engine.core;
 import std;
 
@@ -505,11 +505,6 @@ export namespace pP::tests {
         });
     };
 
-    // ------------------------------------------------------------------
-    // ASAN poisoning tests - these verify the poisoning API works correctly
-    // by deliberately accessing poisoned memory (which ASAN will catch)
-    // ------------------------------------------------------------------
-
     namespace Poisoning {
         namespace details {
             [[maybe_unused]] volatile int sink = 0;
@@ -580,10 +575,6 @@ export namespace pP::tests {
             buffer.deallocateRaw(ptr, count, max_align_v);
             details::access_after_poison(ptr);
         };
-
-        // ------------------------------------------------------------------
-        // Container-level ASAN annotation validation
-        // ------------------------------------------------------------------
 
         PPR_UNIT_TEST(stablevector_asan_on_erase, UnitTest::expect_crash) {
             StableVector<int> sv;
@@ -665,6 +656,66 @@ export namespace pP::tests {
             details::access_after_poison(blocks[64]);
         };
     }
+
+    namespace SafePtr {
+        struct TestObject : safe_object {
+            int m_value{};
+        };
+
+        PPR_UNIT_TEST(copy_construction_preserves_target) {
+            TestObject obj{};
+            safe_ptr<TestObject> a{&obj};
+            PPR_ASSERT(a.isValid());
+            const safe_ptr<TestObject> b{a};
+            PPR_ASSERT(b.isValid());
+            PPR_ASSERT(b.get() == &obj);
+            PPR_ASSERT(a.get() == b.get());
+        };
+
+        PPR_UNIT_TEST(copy_assignment_switches_target) {
+            TestObject obj_a{};
+            TestObject obj_b{};
+            safe_ptr<TestObject> a{&obj_a};
+            safe_ptr<TestObject> b{&obj_b};
+            PPR_ASSERT(a.get() == &obj_a);
+            PPR_ASSERT(b.get() == &obj_b);
+            b = a;
+            PPR_ASSERT(b.get() == &obj_a);
+            PPR_ASSERT(a.get() == b.get());
+        };
+
+        PPR_UNIT_TEST(self_assignment_is_safe) {
+            TestObject obj{};
+            safe_ptr<TestObject> a{&obj};
+            a = a;
+            PPR_ASSERT(a.isValid());
+            PPR_ASSERT(a.get() == &obj);
+        };
+
+        PPR_UNIT_TEST(null_copy_remains_null) {
+            const safe_ptr<TestObject> a{};
+            const safe_ptr<TestObject> b{a};
+            PPR_ASSERT(b.get() == nullptr);
+        };
+
+        PPR_UNIT_TEST(nullptr_assignment_clears) {
+            TestObject obj{};
+            safe_ptr<TestObject> a{&obj};
+            PPR_ASSERT(a.isValid());
+            a = nullptr;
+            PPR_ASSERT(!a.isValid());
+        };
+    }
+
+    PPR_UNIT_TEST(safe_ptr_test) {
+        _.recurse({
+            SafePtr::copy_construction_preserves_target,
+            SafePtr::copy_assignment_switches_target,
+            SafePtr::self_assignment_is_safe,
+            SafePtr::null_copy_remains_null,
+            SafePtr::nullptr_assignment_clears,
+        });
+    };
 
     PPR_UNIT_TEST(poisoning) {
         _.recurse({

@@ -54,7 +54,8 @@ namespace pP {
     // gamepad device
     // ------------------------------------------------------------------
 
-    GamepadDevice::GamepadDevice(const std::size_t controller_index) noexcept {
+    GamepadDevice::GamepadDevice(const InputDeviceID device_id, const std::size_t controller_index) noexcept
+        : m_device_id{device_id} {
         m_state.m_controller_index = controller_index;
     }
 

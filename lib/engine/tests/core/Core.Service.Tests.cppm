@@ -1,7 +1,7 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.tests:core_service;
+export module engine.tests.core:service;
 
 import std;
 import engine.core;

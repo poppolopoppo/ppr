@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_flat_map;
+export module engine.tests.core:containers.flat_map;
 
 import std;
 import engine.core;

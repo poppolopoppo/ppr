@@ -50,9 +50,9 @@ export namespace pP {
     class GamepadDevice : public IInputDevice {
     public:
         GamepadState m_state{};
-        const InputDeviceID m_device_id;
+        InputDeviceID m_device_id;
 
-        explicit GamepadDevice(std::size_t controller_index) noexcept;
+        explicit GamepadDevice(InputDeviceID device_id, std::size_t controller_index) noexcept;
 
         ~GamepadDevice() noexcept override;
 

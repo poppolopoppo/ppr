@@ -508,7 +508,7 @@ namespace pP {
         push_back(semicolon);
         push_back(equals);
         push_back(underscore);
-        push_back(hyphen);
+
         push_back(period);
         push_back(tilde);
         push_back(left_bracket);
@@ -638,7 +638,7 @@ namespace pP {
         push_back(semicolon);
         push_back(equals);
         push_back(underscore);
-        push_back(hyphen);
+
         push_back(period);
         push_back(tilde);
         push_back(left_bracket);

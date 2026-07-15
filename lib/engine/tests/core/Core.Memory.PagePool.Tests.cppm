@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_page_pool;
+export module engine.tests.core:memory.page_pool;
 import engine.core;
 import std;
 

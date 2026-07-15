@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_sparse_vector;
+export module engine.tests.core:containers.sparse_vector;
 import std;
 import engine.core;
 

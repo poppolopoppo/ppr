@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_enums;
+export module engine.tests.core:enums;
 import engine.core;
 import std;
 

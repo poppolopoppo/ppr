@@ -281,6 +281,8 @@ export namespace pP {
             : m_name(name), m_code(code), m_value(value) {
         }
 
+        constexpr ~InputKey() noexcept = default;
+
         [[nodiscard]] constexpr bool isAnalog() const noexcept {
             return m_value != EInputValueType::digital;
         }
@@ -525,6 +527,8 @@ export namespace pP {
     struct [[nodiscard]] InputValue final : details::InputValueVariant {
         using details::InputValueVariant::InputValueVariant;
         using details::InputValueVariant::operator=;
+
+        constexpr ~InputValue() noexcept = default;
 
         [[nodiscard]] constexpr EInputValueType getType() const noexcept {
             return static_cast<EInputValueType>(index());

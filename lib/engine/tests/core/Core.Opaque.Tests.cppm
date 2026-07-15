@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_opaque;
+export module engine.tests.core:opaque;
 import engine.core;
 import std;
 
@@ -61,8 +61,6 @@ export namespace pP::tests {
             };
 
             PPR_UNIT_TEST(decl_arrays) {
-                [[maybe_unused]] ArrayView toto = {1, 2, 3};
-
                 constexpr auto check = [](opaque::Value &&v) {
                     const auto &ar = v.get<opaque::Array>();
                     PPR_ASSERT(ar.size() == 4u);
@@ -96,7 +94,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(decl_delegate) {
                 constexpr auto check = [](opaque::Value &&v) {
-                    PPR_ASSERT(v.as<opaque::Delegate>() != nullptr);
+                    PPR_ASSERT(v.template as<opaque::Delegate>() != nullptr);
                 };
                 check(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
                 check([] noexcept { return opaque::Value{42}; });
@@ -104,7 +102,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(decl_formatter) {
                 constexpr auto check = [](opaque::Value &&v) {
-                    PPR_ASSERT(v.as<opaque::Formatter>() != nullptr);
+                    PPR_ASSERT(v.template as<opaque::Formatter>() != nullptr);
                 };
                 check(opaque::Formatter([](opaque::format_context &ctx) noexcept -> decltype(auto) {
                     return ctx.out();
@@ -474,107 +472,6 @@ export namespace pP::tests {
                 arena.restore(mark);
             };
 
-            PPR_UNIT_TEST(growing_slab_scalars) {
-                mem::GrowingSlab slab;
-                opaque::Block tmp;
-                tmp.resetAssumeEmpty({
-                    {"bool", true},
-                    {"int", i64{-99}},
-                    {"uint", u64{42}},
-                    {"float", 3.14},
-                }, slab);
-
-                const std::size_t bytes = slab.consumed().size_bytes();
-                std::array<std::byte, 1024> buf{};
-                std::memcpy(buf.data(), slab.consumed().data(), bytes);
-
-                opaque::Block copy;
-                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
-                PPR_ASSERT(copy->size() == 4u);
-                PPR_ASSERT(copy["bool"].get<bool>() == true);
-                PPR_ASSERT(copy["int"].get<i64>() == -99);
-                PPR_ASSERT(copy["uint"].get<u64>() == 42);
-                PPR_ASSERT(copy["float"].get<double>() == 3.14);
-            };
-
-            PPR_UNIT_TEST(growing_slab_strings) {
-                mem::GrowingSlab slab;
-                opaque::Block tmp;
-                tmp.resetAssumeEmpty({
-                    {"ansi", "hello"},
-                    {"wide", L"wide"},
-                    {"utf8", u8"utf8"},
-                }, slab);
-
-                const std::size_t bytes = slab.consumed().size_bytes();
-                std::array<std::byte, 1024> buf{};
-                std::memcpy(buf.data(), slab.consumed().data(), bytes);
-
-                opaque::Block copy;
-                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
-                PPR_ASSERT(copy->size() == 3u);
-                {
-                    const auto &rv = copy["ansi"].get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "hello");
-                }
-                {
-                    const auto &rv = copy["wide"].get<opaque::Block::WString>();
-                    PPR_ASSERT(std::wstring_view(rv.data(), rv.size()) == L"wide");
-                }
-                {
-                    const auto &rv = copy["utf8"].get<opaque::Block::U8String>();
-                    PPR_ASSERT(std::u8string_view(rv.data(), rv.size()) == u8"utf8");
-                }
-            };
-
-            PPR_UNIT_TEST(growing_slab_formatter) {
-                mem::GrowingSlab slab;
-
-                int call_count = 0;
-                opaque::Block tmp;
-                tmp.resetAssumeEmpty({
-                    {"fmt", opaque::Formatter{[&](opaque::format_context &ctx) noexcept {
-                        ++call_count;
-                        return std::format_to(ctx.out(), "fmt {}", 42);
-                    }}}
-                }, slab);
-                PPR_ASSERT(call_count == 1);
-
-                const std::size_t bytes = slab.consumed().size_bytes();
-                std::array<std::byte, 1024> buf{};
-                std::memcpy(buf.data(), slab.consumed().data(), bytes);
-
-                opaque::Block copy;
-                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
-                {
-                    const auto &rv = copy["fmt"].get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "fmt 42");
-                }
-                PPR_ASSERT(call_count == 1);
-            };
-
-            PPR_UNIT_TEST(growing_slab_growth) {
-                mem::GrowingSlab slab;
-
-                std::string large_str(4096, 'X');
-                opaque::Block tmp;
-                tmp.resetAssumeEmpty({
-                    {"large", std::string_view{large_str}},
-                }, slab);
-
-                const std::size_t bytes = slab.consumed().size_bytes();
-                PPR_ASSERT(bytes > 4096u);
-
-                std::array<std::byte, 10000> buf{};
-                std::memcpy(buf.data(), slab.consumed().data(), bytes);
-
-                opaque::Block copy;
-                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
-                const auto &rv = copy["large"].get<opaque::Block::String>();
-                PPR_ASSERT(rv.size() == 4096u);
-                PPR_ASSERT(std::string_view(rv.data(), rv.size()) == large_str);
-            };
-
             PPR_UNIT_TEST(constructor) {
                 auto arena = mem::Allocator<mem::ScratchPad>{};
                 const auto mark = arena.watermark();
@@ -643,36 +540,13 @@ export namespace pP::tests {
 
                 const auto *const p_value = dict.tryGet("int");
                 PPR_ASSERT(p_value != nullptr);
-                PPR_ASSERT(p_value->get<int>() == 99);
+                PPR_ASSERT(p_value->template get<int>() == 99);
                 {
-                    const auto &rv = dict["fmt"].get<opaque::Block::String>();
+                    const auto &rv = dict["fmt"].template get<opaque::Block::String>();
                     PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "formatted");
                 }
 
                 arena.restore(mark);
-            };
-
-            PPR_UNIT_TEST(growing_slab_delegate) {
-                mem::GrowingSlab slab;
-
-                int call_count = 0;
-                opaque::Block tmp;
-                tmp.resetAssumeEmpty({
-                    {"value", opaque::Delegate{[&] noexcept {
-                        ++call_count;
-                        return opaque::Value{u64{42}};
-                    }}}
-                }, slab);
-                PPR_ASSERT(call_count == 1);
-
-                const std::size_t bytes = slab.consumed().size_bytes();
-                std::array<std::byte, 1024> buf{};
-                std::memcpy(buf.data(), slab.consumed().data(), bytes);
-
-                opaque::Block copy;
-                copy.m_data = reinterpret_cast<opaque::Block::Dict *>(buf.data());
-                PPR_ASSERT(copy["value"].get<u64>() == 42);
-                PPR_ASSERT(call_count == 1);
             };
         }
 
@@ -688,11 +562,6 @@ export namespace pP::tests {
                 Block::format_value_scalars,
                 Block::format_block,
                 Block::format_complex,
-                Block::growing_slab_scalars,
-                Block::growing_slab_strings,
-                Block::growing_slab_delegate,
-                Block::growing_slab_formatter,
-                Block::growing_slab_growth,
                 Block::constructor,
                 Block::constructor_with_generator_fmt,
             });

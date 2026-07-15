@@ -56,7 +56,9 @@ namespace pP {
     // gamepad device
     // ------------------------------------------------------------------
 
-    MouseDevice::MouseDevice() noexcept = default;
+    MouseDevice::MouseDevice(const InputDeviceID device_id) noexcept
+        : m_device_id{device_id} {
+    }
 
     MouseDevice::~MouseDevice() noexcept = default;
 

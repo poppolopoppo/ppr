@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_utility;
+export module engine.tests.core:utility;
 import engine.core;
 import std;
 

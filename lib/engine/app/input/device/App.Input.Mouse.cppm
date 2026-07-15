@@ -43,9 +43,9 @@ export namespace pP {
     class MouseDevice : public IInputDevice {
     public:
         MouseState m_state{};
-        const InputDeviceID m_device_id;
+        InputDeviceID m_device_id;
 
-        MouseDevice() noexcept;
+        explicit MouseDevice(InputDeviceID device_id) noexcept;
 
         ~MouseDevice() noexcept override;
 

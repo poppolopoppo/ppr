@@ -1,27 +1,27 @@
 module;
 #include "pP/Macros.h"
 
-export module engine.tests;
+export module engine.tests.core;
 
 import engine.core;
 
-import :core_arena;
-import :core_channel;
-import :core_containers;
-import :core_flat_map;
-import :core_hash_map;
-import :core_enums;
-import :core_memory;
-import :core_page_pool;
-import :core_opaque;
-import :core_sparse_vector;
-import :core_stable_vector;
-import :core_strings;
-import :core_utility;
-import :core_event;
-import :core_context;
-import :core_io;
-import :core_io_file_watcher;
+import :arena;
+import :channel;
+import :containers;
+import :containers.flat_map;
+import :containers.hash_map;
+import :enums;
+import :memory;
+import :memory.page_pool;
+import :opaque;
+import :containers.sparse_vector;
+import :containers.stable_vector;
+import :strings;
+import :utility;
+import :event;
+import :context;
+import :io;
+import :io.file_watcher;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(memory) {
@@ -30,6 +30,7 @@ export namespace pP::tests {
             arena,
             slab,
             allocator,
+            safe_ptr_test,
             poisoning,
         });
     };

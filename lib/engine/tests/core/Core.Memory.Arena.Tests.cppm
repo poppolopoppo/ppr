@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.tests:core_arena;
+export module engine.tests.core:arena;
 import engine.core;
 import std;
 

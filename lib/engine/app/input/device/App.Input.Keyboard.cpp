@@ -35,7 +35,9 @@ namespace pP {
     // gamepad device
     // ------------------------------------------------------------------
 
-    KeyboardDevice::KeyboardDevice() noexcept = default;
+    KeyboardDevice::KeyboardDevice(const InputDeviceID device_id) noexcept
+        : m_device_id{device_id} {
+    }
 
     KeyboardDevice::~KeyboardDevice() noexcept = default;
 
