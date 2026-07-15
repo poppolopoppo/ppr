@@ -53,12 +53,12 @@ export namespace pP {
         }
 
         void incSafeRef() const noexcept {
-            m_safe_ref_count.fetch_add(1, std::memory_order_relaxed);
+            m_safe_ref_count.fetch_add(1, std::memory_order_acquire);
         }
 
         void decSafeRef() const noexcept {
-            [[maybe_unused]] const size_t prev = m_safe_ref_count.fetch_sub(1, std::memory_order_relaxed);
-            PPR_ASSERT(prev != 0 && "Debug ref count underflow!");
+            [[maybe_unused]] const int prev = m_safe_ref_count.fetch_sub(1, std::memory_order_release);
+            PPR_ASSERT(prev > 0 && "Debug ref count underflow!");
         }
 
         PPR_FORCE_INLINE friend void incSafeRefIFP(const safe_object *ptr) noexcept {
@@ -74,7 +74,7 @@ export namespace pP {
         }
 
     private:
-        mutable std::atomic<size_t> m_safe_ref_count{0};
+        mutable std::atomic<int> m_safe_ref_count{0};
     };
 
     template<typename T>
@@ -91,52 +91,57 @@ export namespace pP {
 
         explicit safe_ptr(T *const ptr) noexcept
             : m_ptr(ptr) {
-            if (m_ptr) [[likely]] {
-                m_ptr->incSafeRef();
-            }
+            incSafeRefIFP(m_ptr);
         }
 
         ~safe_ptr() noexcept {
             static_assert(std::is_base_of_v<safe_object, T>, "safe_ptr requires safe_object base");
-            if (m_ptr) {
-                m_ptr->decSafeRef();
-            }
-
+            decSafeRefIFP(m_ptr);
             m_ptr = nullptr;
         }
 
         safe_ptr(const safe_ptr &other) noexcept
             : m_ptr(other.m_ptr) {
-            if (m_ptr) [[likely]] {
-                m_ptr->incSafeRef();
-            }
+            incSafeRefIFP(m_ptr);
         }
 
-        safe_ptr &operator=(const safe_ptr &other) noexcept {
-            if (this != &other) {
-                if (m_ptr) {
-                    m_ptr->decSafeRef();
-                }
-
-                m_ptr = other.m_ptr;
-
-                if (m_ptr) {
-                    m_ptr->incSafeRef();
-                }
+        safe_ptr &operator =(const safe_ptr &other) noexcept {
+            if (this != &other) [[likely]] {
+                reset(other.m_ptr);
             }
             return *this;
         }
 
-        safe_ptr(safe_ptr &&other) noexcept : m_ptr(other.m_ptr) {
+        template<typename U>
+            requires std::convertible_to<U *, T *>
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(const safe_ptr<U> &other) noexcept
+            : m_ptr(other.m_ptr) {
+            incSafeRefIFP(m_ptr);
+        }
+
+        template<typename U>
+            requires std::convertible_to<U *, T *>
+        safe_ptr &operator=(const safe_ptr<U> &other) noexcept {
+            if (this != &other) [[likely]] {
+                reset(other.m_ptr);
+            }
+            return *this;
+        }
+
+        template<typename U>
+            requires std::convertible_to<U *, T *>
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(safe_ptr<U> &&other) noexcept
+            : m_ptr(other.m_ptr) {
             other.m_ptr = nullptr;
         }
 
-        safe_ptr &operator=(safe_ptr &&other) noexcept {
-            if (this != &other) {
-                if (m_ptr) {
-                    m_ptr->decSafeRef();
-                }
-
+        template<typename U>
+            requires std::convertible_to<U *, T *>
+        safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
+            if (this != &other) [[likely]] {
+                decSafeRefIFP(m_ptr);
                 m_ptr = other.m_ptr;
                 other.m_ptr = nullptr;
             }
@@ -144,10 +149,7 @@ export namespace pP {
         }
 
         safe_ptr &operator=(std::nullptr_t) noexcept {
-            if (m_ptr) {
-                m_ptr->decSafeRef();
-            }
-
+            decSafeRefIFP(m_ptr);
             m_ptr = nullptr;
             return *this;
         }
@@ -161,6 +163,7 @@ export namespace pP {
         [[nodiscard]] T &operator*() const noexcept {
             static_assert(std::is_base_of_v<safe_object, T>, "safe_ptr requires safe_object base");
             PPR_ASSERT(m_ptr != nullptr);
+            // ReSharper disable once CppDFANullDereference
             return *m_ptr;
         }
 
@@ -181,7 +184,13 @@ export namespace pP {
         [[nodiscard]] constexpr safe_ptr<BaseT> upcast() && noexcept {
             auto *const raw = static_cast<BaseT *>(m_ptr);
             m_ptr = nullptr;
-            return safe_ptr<BaseT>(raw);
+            return safe_ptr<BaseT>(std::in_place, raw);
+        }
+
+        void reset(T *const ptr = nullptr) noexcept {
+            decSafeRefIFP(m_ptr);
+            m_ptr = ptr;
+            incSafeRefIFP(m_ptr);
         }
 
         friend void swap(safe_ptr &lhs, safe_ptr &rhs) noexcept {
@@ -211,7 +220,7 @@ export namespace pP {
         }
 
     private:
-        T *m_ptr{};
+        T *m_ptr{nullptr};
     };
 
     template<typename T>
