@@ -44,7 +44,6 @@ int main(int argc, char *argv[]) {
 
     // std::println("app local dir: {}\n", hal::appDataLocalDir());
 
-    // 2. App logic bounds
     Application app("ppr", std::span<const char * const>(&argv[0], argc));
     const int exit_code = app.run();
 

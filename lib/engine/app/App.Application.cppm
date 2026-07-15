@@ -36,6 +36,8 @@ export namespace pP {
 
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
 
+        [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
+
         void setExitCode(int exitCode) noexcept;
 
         [[nodiscard]] int run();
@@ -47,9 +49,11 @@ export namespace pP {
         virtual void terminate();
 
     private:
-        Array<std::string> m_arguments{};
         ServicesStore m_services{};
+        std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
+        std::atomic<int> m_exitCode = 0;
 
+        Array<std::string> m_arguments{};
         std::string m_name{};
         std::string m_variant{};
 
@@ -57,8 +61,6 @@ export namespace pP {
         std::filesystem::directory_entry m_configDir{};
         std::filesystem::directory_entry m_contentDir{};
         std::filesystem::directory_entry m_workingDir{};
-
-        std::atomic<int> m_exitCode = 0;
     };
 
 }

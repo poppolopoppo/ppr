@@ -98,6 +98,15 @@ namespace pP {
         }
 
         ::glfwPollEvents();
+
+        const auto now = std::chrono::steady_clock::now();
+        const TimeSpan dt = now - m_last_frame_time;
+        m_last_frame_time = now;
+
+        if (const safe_ptr<IInputService> input_service = m_services.tryGet<IInputService>(); input_service.isValid()) {
+            input_service->postInputMessages(dt);
+        }
+
         return true;
     }
 

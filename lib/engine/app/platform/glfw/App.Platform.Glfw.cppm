@@ -4,6 +4,8 @@ export module engine.app:platform.glfw;
 
 import :platform;
 import :platform.glfw.input;
+import :platform.glfw.window;
+import :service.player;
 
 export namespace pP {
     // ------------------------------------------------------------------
@@ -20,8 +22,14 @@ export namespace pP {
 
         [[nodiscard]] safe_ptr<IWindowService> getWindowService() const noexcept override;
 
+        [[nodiscard]] safe_ptr<IPlayerService> getPlayerService() const noexcept override;
+
         void initializePlatform(Application &app) override;
 
         void shutdownPlatform(Application &app) override;
+
+    private:
+        std::unique_ptr<GlfwInput> m_input_service{};
+        GlfwWindow *m_window_service{};
     };
 }

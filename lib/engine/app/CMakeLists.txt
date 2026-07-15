@@ -15,6 +15,7 @@ target_sources(EngineApp
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
         input/App.Input.Mapping.cppm
+        App.Player.cppm
 
         platform/Glfw/App.Platform.Glfw.cppm
         platform/Glfw/App.Platform.Glfw.Input.cppm
@@ -22,9 +23,11 @@ target_sources(EngineApp
         platform/App.Platform.cppm
 
         service/App.Service.Input.cppm
+        service/App.Service.Player.cppm
         service/App.Service.Window.cppm
 
         window/App.Window.Handle.cppm
+        window/App.Window.Monitor.cppm
     PRIVATE
         App.Application.cpp
 
@@ -36,8 +39,14 @@ target_sources(EngineApp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
         input/App.Input.Mapping.cpp
+        App.Player.cpp
 
         window/App.Window.Handle.cpp
+        window/App.Window.Monitor.cpp
+
+        platform/Glfw/App.Platform.Glfw.cpp
+        platform/Glfw/App.Platform.Glfw.Input.cpp
+        platform/Glfw/App.Platform.Glfw.Window.cpp
 )
 
 setup_ppr_project(EngineApp
