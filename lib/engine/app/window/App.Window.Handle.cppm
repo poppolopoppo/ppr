@@ -10,6 +10,7 @@ import :input.listener;
 export namespace pP {
     class Window;
 
+    using SharedWindow = safe_ptr<const Window>;
     using WindowHandle = Numeric<void *, Window>;
 
     // ------------------------------------------------------------------

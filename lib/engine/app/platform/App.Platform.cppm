@@ -21,10 +21,14 @@ export namespace pP {
         int m_revision{none_v};
     };
 
+    using SharedPlatform = safe_ptr<class IPlatform>;
+
     class IPlatform : public safe_object {
     public:
         // ReSharper disable once CppHidingFunction
         virtual ~IPlatform() = default;
+
+        [[nodiscard]] static SharedPlatform get() noexcept;
 
         [[nodiscard]] virtual std::string_view getPlatformName() const noexcept = 0;
 

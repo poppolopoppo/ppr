@@ -36,6 +36,7 @@ export namespace pP {
         safe_ptr<Window> m_main_window{};
         safe_ptr<Window> m_focused_window{};
         safe_ptr<GlfwInput> m_input_service{};
+        bool m_shutdown{false};
 
         [[nodiscard]] static GlfwWindow &get() noexcept;
 

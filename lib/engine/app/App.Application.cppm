@@ -2,10 +2,14 @@ module;
 
 export module engine.app:application;
 
+import :window.handle;
 import engine.core;
 import std;
 
 export namespace pP {
+    class IInputService;
+    class IPlatform;
+    class IWindowService;
 
     class Application {
     public:
@@ -15,24 +19,27 @@ export namespace pP {
             exit_failed_init = -2,
         };
 
-        Application(std::string_view name, std::span<const char* const> argv);
+        Application(std::string_view name, std::span<const char * const> argv);
+
         virtual ~Application() noexcept;
 
-        Application(const Application&) = delete;
-        Application& operator =(const Application&) = delete;
+        Application(const Application &) = delete;
 
-        Application(Application&&) = delete;
-        Application& operator =(Application&&) = delete;
+        Application &operator =(const Application &) = delete;
+
+        Application(Application &&) = delete;
+
+        Application &operator =(Application &&) = delete;
 
         [[nodiscard]] std::string_view getName() const noexcept { return m_name; }
         [[nodiscard]] std::string_view getVariant() const noexcept { return m_variant; }
 
         [[nodiscard]] std::span<const std::string> getArguments() const noexcept { return m_arguments; }
 
-        [[nodiscard]] const std::filesystem::directory_entry& getInstallDir() const noexcept { return m_installDir; }
-        [[nodiscard]] const std::filesystem::directory_entry& getConfigDir() const noexcept { return m_configDir; }
-        [[nodiscard]] const std::filesystem::directory_entry& getContentDir() const noexcept { return m_contentDir; }
-        [[nodiscard]] const std::filesystem::directory_entry& getWorkingDir() const noexcept { return m_workingDir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_installDir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_configDir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_contentDir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_workingDir; }
 
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
 
@@ -44,15 +51,40 @@ export namespace pP {
 
     protected:
         [[nodiscard]] virtual bool initialize();
+
         [[nodiscard]] virtual bool update();
+
         virtual void render();
-        virtual void terminate();
+
+        virtual void terminate() noexcept;
+
+        [[nodiscard]] SharedContext getLifecycle() const noexcept { return m_lifecycle; }
+        [[nodiscard]] const SharedWindow &getMainWindow() const noexcept { return m_main_window; }
 
     private:
-        ServicesStore m_services{};
-        std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
-        std::atomic<int> m_exitCode = 0;
+        enum class EState : u8 {
+            created,
+            initialized,
+            terminated,
+        };
 
+        // Hot (per-frame) — first cache line
+        safe_ptr<IWindowService> m_cached_window_service{};
+        safe_ptr<IInputService> m_cached_input_service{};
+        SharedWindow m_main_window{};
+        SharedContext m_lifecycle{};
+        std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
+
+        // Cold (init/shutdown only)
+        EState m_state{EState::created};
+        ServicesStore m_services{};
+        context::CancelFunc m_cancel{};
+
+        // Cross-thread — isolated to prevent false sharing with per-frame data
+        alignas(hal::cacheline_size_v) std::atomic<int> m_exitCode{0};
+
+        // Cold (init-time)
+        safe_ptr<IPlatform> m_platform;
         Array<std::string> m_arguments{};
         std::string m_name{};
         std::string m_variant{};
@@ -62,5 +94,4 @@ export namespace pP {
         std::filesystem::directory_entry m_contentDir{};
         std::filesystem::directory_entry m_workingDir{};
     };
-
 }

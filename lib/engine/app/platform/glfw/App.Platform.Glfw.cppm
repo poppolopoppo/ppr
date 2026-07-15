@@ -29,7 +29,7 @@ export namespace pP {
         void shutdownPlatform(Application &app) override;
 
     private:
-        std::unique_ptr<GlfwInput> m_input_service{};
         GlfwWindow *m_window_service{};
+        bool m_glfw_initialized{false};
     };
 }

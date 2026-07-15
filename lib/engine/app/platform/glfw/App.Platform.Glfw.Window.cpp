@@ -87,6 +87,27 @@ namespace pP {
         initializeGlobalCallbacks_();
     }
 
+    void GlfwWindow::shutdown() {
+        if (m_shutdown) [[unlikely]] {
+            return;
+        }
+        m_shutdown = true;
+
+        m_main_window.reset();
+        m_focused_window.reset();
+        m_primary_monitor.reset();
+
+        auto windows_snapshot = std::move(m_windows);
+        m_windows.clear();
+
+        for (auto &window : windows_snapshot) {
+            m_when_window_destroyed(*window);
+            ::glfwDestroyWindow(glfwHandle_(window->m_handle));
+            (void)window->release();
+        }
+        m_monitors.clear();
+    }
+
     void GlfwWindow::setInputService(safe_ptr<GlfwInput> input_service) noexcept {
         m_input_service = std::move(input_service);
     }
@@ -351,19 +372,29 @@ namespace pP {
     }
 
     void GlfwWindow::destroyWindow(SharedWindow &&window) {
-        if (const auto it = glfwAllocation_(m_windows, *window);
-            PPR_ENSURE(m_windows.end() != it)) {
-            m_when_window_destroyed(**it);
+        auto it = std::ranges::find_if(m_windows, [&](const std::unique_ptr<Window> &owned) noexcept -> bool {
+            return owned.get() == &*window;
+        });
+        if (PPR_ENSURE(m_windows.end() != it)) {
+            const bool wasMain = (m_main_window == window);
+            const bool wasFocused = (m_focused_window == window);
 
-            if (m_main_window == window) {
+            auto extracted = std::move(*it);
+            m_windows.erase(it);
+            window = nullptr;
+
+            m_when_window_destroyed(*extracted);
+
+            if (wasMain) {
                 m_main_window = nullptr;
             }
 
-            if (m_focused_window == window) {
+            if (wasFocused) {
                 m_focused_window = nullptr;
             }
 
-            m_windows.erase(it);
+            ::glfwDestroyWindow(glfwHandle_(extracted->m_handle));
+            (void)extracted->release();
         }
     }
 

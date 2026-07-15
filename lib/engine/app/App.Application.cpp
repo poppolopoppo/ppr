@@ -1,21 +1,27 @@
 module;
 
-#include <GLFW/glfw3.h>
-
 #include "pP/Macros.h"
 
 module engine.app;
 
-import std;
+import :application;
+import :platform;
+import :service.input;
+import :service.window;
+import :window.handle;
+import :window.monitor;
 import engine.core;
 import engine.rhi;
+import std;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
     Application::Application(const std::string_view name, const std::span<const char *const> argv)
-        : m_arguments(argv.begin(), argv.end()),
+        : m_platform(IPlatform::get()),
+          m_arguments(argv.begin(), argv.end()),
           m_name(name) {
+        PPR_ASSERT(m_platform != nullptr);
     }
 
     Application::~Application() noexcept = default;
@@ -27,11 +33,14 @@ namespace pP {
     int Application::run() {
         setExitCode(exit_no_error);
 
-        if (initialize()) [[likely]] {
-            PPR_DEFER {
+        const bool initialized = initialize();
+        PPR_DEFER {
+            if (initialized) {
                 terminate();
-            };
+            }
+        };
 
+        if (initialized) [[likely]] {
             try {
                 while (update()) [[likely]] {
                     render();
@@ -47,6 +56,8 @@ namespace pP {
     }
 
     bool Application::initialize() {
+        PPR_ASSERT(m_state == EState::created);
+
         PPR_LOG(App, info, "starting application", {
             {"name", m_name},
             {"platform", hal::platformName()},
@@ -55,67 +66,82 @@ namespace pP {
             }},
         });
 
-        // set GLFW error callback to write to the logger
-        ::glfwSetErrorCallback([](const int error_code, const char *const description) {
-            PPR_LOG(App, error, "caught GLFW error", {{"error_code", error_code}, {"description", description}});
-        });
-
-        // set GLFW allocator explicitly
-        constexpr ::GLFWallocator glfw_allocator{
-            .allocate = [](const std::size_t size, [[maybe_unused]] void *user) -> void * { return std::malloc(size); },
-            .reallocate = [](void *const block, const std::size_t size, [[maybe_unused]] void *user) -> void * { return std::realloc(block, size); },
-            .deallocate = [](void *const block, [[maybe_unused]] void *user) -> void { std::free(block); },
-            .user = nullptr,
-        };
-        ::glfwInitAllocator(&glfw_allocator);
-
-        // actual initialization of GLFW
-        if (not ::glfwInit()) [[unlikely]] {
+        m_platform->initializePlatform(*this);
+        if (not m_services.tryGet<IWindowService>().isValid()) [[unlikely]] {
             setExitCode(exit_failed_init);
-            PPR_LOG(App, error, "failed to init GLFW");
             return false;
         }
-        PPR_LOG(App, info, "successfully initialized GLFW",
-            {
-                {"version", ::glfwGetVersionString()},
-            });
 
-        // rhi initialization
+        m_cached_window_service = m_services.get<IWindowService>();
+        m_cached_input_service = m_services.tryGet<IInputService>();
+
+        WindowModel model{};
+        model.m_title = m_name;
+        model.m_window_size = int2{1280, 720};
+        if (auto result = m_cached_window_service->createWindow(std::move(model))) {
+            m_main_window = std::move(*result);
+            m_cached_window_service->setMainWindow(*m_main_window);
+        } else {
+            setExitCode(exit_failed_init);
+            return false;
+        }
+
         if (not rhi::initialize()) [[unlikely]] {
             setExitCode(exit_failed_init);
-            PPR_LOG(App, error, "failed to init RHI");
             return false;
         }
-        PPR_LOG(App, info, "successfully initialized RHI");
 
+        auto [ctx, cancelFn] = context::withCancel(context::background());
+        m_lifecycle = std::move(ctx);
+        m_cancel = std::move(cancelFn);
+
+        m_state = EState::initialized;
         return true;
     }
 
     bool Application::update() {
-        if (::glfwWindowShouldClose(nullptr)) [[unlikely]] {
-            PPR_LOG(App, error, "main GLFW window should close");
+        if (m_lifecycle->error()) [[unlikely]] {
             return false;
         }
 
-        ::glfwPollEvents();
+        PPR_ASSERT(m_cached_window_service.isValid());
+        m_cached_window_service->pollEvents();
+
+        PPR_ASSERT(m_main_window.isValid());
+        if (m_cached_window_service->getWindowShouldClose(*m_main_window)) [[unlikely]] {
+            return false;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         const TimeSpan dt = now - m_last_frame_time;
         m_last_frame_time = now;
 
-        if (const safe_ptr<IInputService> input_service = m_services.tryGet<IInputService>(); input_service.isValid()) {
-            input_service->postInputMessages(dt);
+        if (m_cached_input_service.isValid()) {
+            m_cached_input_service->postInputMessages(dt);
         }
 
         return true;
     }
 
     void Application::render() {
+        PPR_ASSERT(m_cached_window_service.isValid());
+        PPR_ASSERT(m_main_window.isValid());
+        m_cached_window_service->swapWindowBuffers(*m_main_window);
     }
 
-    void Application::terminate() {
-        PPR_LOG(App, info, "terminate GLFW");
-        ::glfwTerminate();
+    void Application::terminate() noexcept {
+        if (m_state >= EState::terminated) [[unlikely]] {
+            return;
+        }
+        m_state = EState::terminated;
+        m_cancel();
+        m_main_window.reset();
+        m_cached_window_service.reset();
+        m_cached_input_service.reset();
+        try {
+            m_platform->shutdownPlatform(*this);
+        } catch (...) {
+            PPR_LOG(App, error, "exception during platform shutdown");
+        }
     }
-
 }

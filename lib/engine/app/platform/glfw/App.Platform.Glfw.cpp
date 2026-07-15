@@ -13,12 +13,14 @@ import std;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwPlatform, info, none)
 
-    std::unique_ptr<IPlatform> makeGlfwPlatform() noexcept {
-        return std::make_unique<GlfwPlatform>();
+    /*static*/
+    SharedPlatform IPlatform::get() noexcept {
+        static GlfwPlatform g_instance{};
+        return SharedPlatform(&g_instance);
     }
 
     safe_ptr<IInputService> GlfwPlatform::getInputService() const noexcept {
-        return safe_ptr<IInputService>{m_input_service.get()};
+        return safe_ptr<IInputService>{&GlfwInput::get()};
     }
 
     safe_ptr<IWindowService> GlfwPlatform::getWindowService() const noexcept {
@@ -26,7 +28,7 @@ namespace pP {
     }
 
     safe_ptr<IPlayerService> GlfwPlatform::getPlayerService() const noexcept {
-        return safe_ptr<IPlayerService>{m_input_service.get()};
+        return safe_ptr<IPlayerService>{&GlfwInput::get()};
     }
 
     std::string_view GlfwPlatform::getPlatformName() const noexcept { return "GLFW"; }
@@ -50,27 +52,36 @@ namespace pP {
         };
         ::glfwInitAllocator(&glfw_allocator);
 
-        if (not ::glfwInit()) [[unlikely]] {
+        if (not::glfwInit()) [[unlikely]] {
             PPR_LOG(GlfwPlatform, error, "failed to init GLFW");
             return;
         }
+        m_glfw_initialized = true;
 
-        m_input_service = std::make_unique<GlfwInput>();
         m_window_service = &GlfwWindow::get();
 
         m_window_service->initialize();
-        m_window_service->setInputService(safe_ptr<GlfwInput>{m_input_service.get()});
-        m_input_service->initialize();
+        GlfwInput::get().initialize();
 
-        application.getServices().insert(safe_ptr<IInputService>{m_input_service.get()});
+        m_window_service->setInputService(safe_ptr<GlfwInput>{&GlfwInput::get()});
+
+        application.getServices().insert(safe_ptr<IInputService>{&GlfwInput::get()});
         application.getServices().insert(safe_ptr<IWindowService>{m_window_service});
-        application.getServices().insert(safe_ptr<IPlayerService>{m_input_service.get()});
+        application.getServices().insert(safe_ptr<IPlayerService>{&GlfwInput::get()});
     }
 
-    void GlfwPlatform::shutdownPlatform(Application &) {
-        m_window_service->setInputService({});
-        m_window_service->shutdown();
-        m_window_service = nullptr;
-        m_input_service.reset();
+    void GlfwPlatform::shutdownPlatform(Application &application) {
+        if (m_window_service) [[likely]] {
+            m_window_service->setInputService({});
+            m_window_service->shutdown();
+            m_window_service = nullptr;
+        }
+        application.getServices().erase<IInputService>();
+        application.getServices().erase<IPlayerService>();
+        application.getServices().erase<IWindowService>();
+        GlfwInput::get().shutdown();
+        if (m_glfw_initialized) {
+            ::glfwTerminate();
+        }
     }
 }
