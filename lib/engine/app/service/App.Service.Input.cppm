@@ -3,9 +3,6 @@ module;
 export module engine.app:service.input;
 
 import engine.core;
-import :input.device;
-import :input.listener;
-import :input.mapping;
 import std;
 
 export namespace pP {
@@ -13,28 +10,43 @@ export namespace pP {
     // input service interface
     // ------------------------------------------------------------------
 
+    struct InputActionEvent;
+    struct InputKey;
+
+    class IInputDevice;
+    using InputDeviceID = Numeric<u32, IInputDevice>;
+    using SharedInputDevice = safe_ptr<const IInputDevice>;
+
+    class InputListener;
+    using SharedInputListener = safe_ptr<const InputListener>;
+
+    class InputMapping;
+    using SharedInputMapping = safe_ptr<const InputMapping>;
+
     class KeyboardState;
     class GamepadState;
     class MouseState;
 
-    class IInputService : public IService {
+    class IInputService : public virtual IService {
     public:
+        // devices:
         [[nodiscard]] virtual const KeyboardState &
         getKeyboard() const noexcept = 0;
-
-        [[nodiscard]] virtual const GamepadState &
-        getGamepad() const noexcept = 0;
 
         [[nodiscard]] virtual const MouseState &
         getMouse() const noexcept = 0;
 
-        [[nodiscard]] virtual std::optional<const IInputDevice &>
-        findInputDevice(const InputDeviceID &device_id) const noexcept = 0;
+        [[nodiscard]] virtual const GamepadState &
+        getGamepad(int controller_index) const noexcept = 0;
 
-        virtual void enumerateInputDevices(Collector<const IInputDevice &> each_device) const noexcept = 0;
+        [[nodiscard]] virtual SharedInputDevice
+        getInputDevice(const InputDeviceID &device_id) const noexcept = 0;
+
+        virtual void enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept = 0;
 
         virtual void supportedInputKeys(Collector<InputKey> supports_key) const = 0;
 
+        // input events:
         virtual void postInputMessages(TimeSpan dt) = 0;
 
         virtual void resetInputState() noexcept = 0;
@@ -47,11 +59,11 @@ export namespace pP {
         virtual bool popInputListener(const InputListener &listener) = 0;
 
         // mappings:
-        [[nodiscard]] virtual bool hasInputMapping(const InputMapping &mapping) const noexcept = 0;
+        [[nodiscard]] virtual bool hasGlobalInputMapping(const InputMapping &mapping) const noexcept = 0;
 
-        virtual void addInputMapping(SharedInputMapping mapping) = 0;
+        virtual void addGlobalInputMapping(SharedInputMapping mapping, int priority = 0) = 0;
 
-        virtual bool removeInputMapping(const InputMapping &mapping) = 0;
+        virtual bool removeGlobalInputMapping(const InputMapping &mapping) = 0;
 
         // callbacks:
         using DeviceCallback = Callback<void(const IInputService &input, const IInputDevice &device)>;
@@ -74,6 +86,8 @@ export namespace pP {
 
         using UpdateCallback = Callback<void(const IInputService &input, TimeSpan dt)>;
 
-        [[nodiscard]] virtual UpdateCallback::Handle whenUpdated(UpdateCallback::Event on_update) = 0;
+        [[nodiscard]] virtual UpdateCallback::Handle whenBeforeUpdated(UpdateCallback::Event on_update) = 0;
+
+        [[nodiscard]] virtual UpdateCallback::Handle whenAfterUpdated(UpdateCallback::Event on_update) = 0;
     };
 }

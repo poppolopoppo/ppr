@@ -13,6 +13,7 @@ export namespace pP {
 
     class IInputService;
     class IWindowService;
+    class IPlayerService;
 
     struct PlatformVersion {
         int m_major{none_v};
@@ -36,5 +37,7 @@ export namespace pP {
         [[nodiscard]] virtual safe_ptr<IInputService> getInputService() const noexcept = 0;
 
         [[nodiscard]] virtual safe_ptr<IWindowService> getWindowService() const noexcept = 0;
+
+        [[nodiscard]] virtual safe_ptr<IPlayerService> getPlayerService() const noexcept = 0;
     };
 }

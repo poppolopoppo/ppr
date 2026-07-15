@@ -10,8 +10,6 @@ import :input.listener;
 export namespace pP {
     class Window;
 
-    using SharedWindow = safe_ptr<const Window>;
-
     using WindowHandle = Numeric<void *, Window>;
 
     // ------------------------------------------------------------------
@@ -21,13 +19,14 @@ export namespace pP {
     struct WindowModel {
         std::string m_title{};
 
-        int2 framebuffer_size{};
-        int2 window_position{};
-        int2 window_size{};
+        int2 m_window_position{};
+        int2 m_window_size{};
 
-        const bool m_decorated: 1 {true};
-        const bool m_resizable: 1 {true};
-        const bool m_visible: 1 {true};
+        bool m_decorated{true};
+        bool m_focused{true};
+        bool m_iconified{false};
+        bool m_resizable{true};
+        bool m_visible{true};
     };
 
     // ------------------------------------------------------------------
@@ -45,13 +44,15 @@ export namespace pP {
     public:
         WindowHandle m_handle{};
 
+        int2 m_framebuffer_size{};
+        float2 m_content_scale{1.0};
+
         WindowCallback<> m_when_closed{};
         WindowCallback<bool> m_when_focused{};
         WindowCallback<bool> m_when_iconified{};
         WindowCallback<int2> m_when_moved{};
         WindowCallback<int2> m_when_resized{};
-
-        InputListener m_inputs{};
+        WindowCallback<float2> m_when_scaled{};
 
         Window(WindowHandle handle, WindowModel &&model) noexcept;
 
@@ -59,9 +60,9 @@ export namespace pP {
 
         Window &operator=(const Window &) = delete;
 
-        Window &operator=(Window &&) = delete;
-
         Window(Window &&other) noexcept;
+
+        Window &operator=(Window &&) noexcept = delete;
 
 #if PPR_ENABLE_ASSERTIONS
         ~Window() noexcept;
