@@ -3,6 +3,7 @@ module;
 export module engine.app:input.listener;
 
 import engine.core;
+import :input.device;
 import :input.mapping;
 
 export namespace pP {
@@ -20,6 +21,11 @@ export namespace pP {
     };
 
     class InputListener : public safe_object {
+    public:
+        using ActionCallback = std::move_only_function<void(const InputActionEvent &event, const InputKey &trigger) const noexcept>;
+        using RawKeyCallback = std::move_only_function<void(const InputMessage &message) noexcept>;
+
+    private:
         struct MappingAndPriority {
             SharedInputMapping m_mapping{};
             int m_priority{0};
@@ -49,10 +55,21 @@ export namespace pP {
         FlatMap<SharedInputAction, InputActionEvent> m_action_events;
         FlatMultiMap<InputKey, InputBinding> m_keybindings;
 
+        int m_priority{0};
         EInputListenerResponse m_listener_mode{EInputListenerResponse::consumed};
+        ActionCallback m_action_callback{};
+        RawKeyCallback m_raw_key_callback{};
 
     public:
         constexpr InputListener() = default;
+
+        [[nodiscard]] constexpr int getPriority() const noexcept {
+            return m_priority;
+        }
+
+        constexpr void setPriority(const int value) noexcept {
+            m_priority = value;
+        }
 
         [[nodiscard]] constexpr EInputListenerResponse getInputListenerMode() const noexcept {
             return m_listener_mode;
@@ -60,6 +77,14 @@ export namespace pP {
 
         constexpr void setInputListenerMode(const EInputListenerResponse value) noexcept {
             m_listener_mode = value;
+        }
+
+        void setActionCallback(ActionCallback callback) noexcept {
+            m_action_callback = std::move(callback);
+        }
+
+        void setRawKeyCallback(RawKeyCallback callback) noexcept {
+            m_raw_key_callback = std::move(callback);
         }
 
         [[nodiscard]] bool hasInputMapping(const InputMapping &mapping) const noexcept;

@@ -118,6 +118,10 @@ namespace pP {
     }
 
     EInputListenerResponse InputListener::postKeyEvent(const InputMessage &message) noexcept {
+        if (m_raw_key_callback) {
+            m_raw_key_callback(message);
+        }
+
         if (message.m_key.isAny()) [[unlikely]] {
             return EInputListenerResponse::unhandled;
         }
@@ -146,6 +150,10 @@ namespace pP {
                     invokeIFP_(key_mapping.m_when_started, event, message);
                     invokeIFP_(event.m_source->m_when_started, event, message);
 
+                    if (m_action_callback) {
+                        m_action_callback(event, message.m_key);
+                    }
+
                     PPR_LOG(Input, verbose, "event started", {
                             {"action", event.m_source->m_description.view()},
                             {"delta_time", event.m_elapsed_triggered_time},
@@ -159,6 +167,10 @@ namespace pP {
 
                     invokeIFP_(key_mapping.m_when_completed, event, message);
                     invokeIFP_(event.m_source->m_when_completed, event, message);
+
+                    if (m_action_callback) {
+                        m_action_callback(event, message.m_key);
+                    }
 
                     PPR_LOG(Input, verbose, "event completed", {
                             {"action", event.m_source->m_description.view()},
@@ -182,6 +194,10 @@ namespace pP {
 
                     invokeIFP_(key_mapping.m_when_triggered, event, message);
                     invokeIFP_(event.m_source->m_when_triggered, event, message);
+
+                    if (m_action_callback) {
+                        m_action_callback(event, message.m_key);
+                    }
 
                     PPR_LOG(Input, verbose, "event triggered", {
                             {"action", event.m_source->m_description.view()},

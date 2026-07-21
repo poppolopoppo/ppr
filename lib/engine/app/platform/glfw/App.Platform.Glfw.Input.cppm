@@ -55,6 +55,7 @@ export namespace pP {
         void feedGamepad_(GamepadDevice &gamepad, int joystick_id) noexcept;
         std::error_code routeMessage_(const InputMessage &message) noexcept;
         [[nodiscard]] EInputListenerResponse dispatchToGlobalListeners_(const InputMessage &message) noexcept;
+        [[nodiscard]] EInputListenerResponse dispatchToPushedListeners_(const InputMessage &message) noexcept;
 
     public:
         // Callbacks (cold, set at initialization)

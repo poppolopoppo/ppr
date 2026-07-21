@@ -10,6 +10,9 @@ import :service.ui;
 import :service.input;
 import :service.window;
 import :window.handle;
+import :input.key;
+import :input.device;
+import :input.listener;
 import std;
 import engine.core;
 import engine.math;
@@ -185,9 +188,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
         }
 
-        constexpr std::array<EMouseButton, 3> kPolledMouseButtons{
-            EMouseButton::left, EMouseButton::right, EMouseButton::middle
-        };
     }
 
     class ImGuiService final : public IUIService {
@@ -351,6 +351,30 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef())));
             }
 
+            m_listener.setPriority(-1000);
+            m_listener.setRawKeyCallback([this](const InputMessage &message) noexcept {
+                ImGuiIO &io = ImGui::GetIO();
+
+                if (message.m_key.isKeyboard()) {
+                    const auto *key = std::get_if<EKeyboardKey>(&message.m_key.m_code);
+                    if (key) {
+                        const ImGuiKey imgui_key = keyboardKeyToImGuiKey(*key);
+                        if (imgui_key != ImGuiKey_None) {
+                            io.AddKeyEvent(imgui_key, message.isPressed() || message.isRepeat());
+                        }
+                    }
+                } else if (message.m_key.isMouse()) {
+                    const auto *button = std::get_if<EMouseButton>(&message.m_key.m_code);
+                    if (button) {
+                        const int imgui_button = mouseButtonToImGui(*button);
+                        if (imgui_button >= 0) {
+                            io.AddMouseButtonEvent(imgui_button, message.isPressed());
+                        }
+                    }
+                }
+            });
+            m_input_service->pushInputListener(safe_ptr<InputListener>(&m_listener));
+
             PPR_LOG(UI, info, "UI service initialized", {
                     {"width", m_framebuffer_size.x},
                     {"height", m_framebuffer_size.y},
@@ -376,9 +400,47 @@ float4 fragmentMain(PsInput input) : SV_Target {
             io.DeltaTime = static_cast<float>(
                 std::chrono::duration<double>(dt).count());
 
-            // Input: poll from IInputService
+            // Input: poll remaining state (position/wheel/characters/modifiers)
             if (m_input_service.isValid()) [[likely]] {
-                pollInputState_();
+                const KeyboardState &kbd = m_input_service->getKeyboard();
+                const MouseState &mouse = m_input_service->getMouse();
+
+                // Mouse position
+                const float2 cursor{
+                    mouse.m_cursor_pos.m_raw.m_absolute.x,
+                    mouse.m_cursor_pos.m_raw.m_absolute.y,
+                };
+                if (cursor.x >= 0 && cursor.y >= 0) {
+                    io.AddMousePosEvent(cursor.x, cursor.y);
+                }
+
+                // Mouse wheel
+                const float wheel_y = mouse.m_wheel_y.m_raw.m_relative;
+                const float wheel_x = mouse.m_wheel_x.m_raw.m_relative;
+                if (wheel_y != 0.0f || wheel_x != 0.0f) {
+                    io.AddMouseWheelEvent(wheel_x, wheel_y);
+                }
+
+                // Characters
+                for (const auto &ch: kbd.m_characters) {
+                    if (ch >= 32 && ch < 0xFFFE) {
+                        io.AddInputCharacter(ch);
+                    }
+                }
+
+                // Modifier state
+                io.AddKeyEvent(ImGuiMod_Ctrl,
+                               kbd.m_keys.isDown(EKeyboardKey::left_control) ||
+                               kbd.m_keys.isDown(EKeyboardKey::right_control));
+                io.AddKeyEvent(ImGuiMod_Shift,
+                               kbd.m_keys.isDown(EKeyboardKey::left_shift) ||
+                               kbd.m_keys.isDown(EKeyboardKey::right_shift));
+                io.AddKeyEvent(ImGuiMod_Alt,
+                               kbd.m_keys.isDown(EKeyboardKey::left_alt) ||
+                               kbd.m_keys.isDown(EKeyboardKey::right_alt));
+                io.AddKeyEvent(ImGuiMod_Super,
+                               kbd.m_keys.isDown(EKeyboardKey::left_super) ||
+                               kbd.m_keys.isDown(EKeyboardKey::right_super));
             }
 
             ImGui::NewFrame();
@@ -553,6 +615,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_imgui_context = nullptr;
             }
 
+            if (m_input_service.isValid()) {
+                std::ignore = m_input_service->popInputListener(m_listener);
+            }
+
             m_input_service = nullptr;
             m_window_service = nullptr;
             m_main_window = nullptr;
@@ -595,6 +661,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
         int2 m_framebuffer_size{};
         u32 m_current_frame{0};
         FrameResources m_frame_resources[kFrameCount]{};
+        InputListener m_listener{};
         safe_ptr<IInputService> m_input_service;
         safe_ptr<IWindowService> m_window_service;
         safe_ptr<const Window> m_main_window;
@@ -673,89 +740,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
             });
 
             return default_value_v;
-        }
-
-        void pollInputState_() {
-            ImGuiIO &io = ImGui::GetIO();
-            const KeyboardState &kbd = m_input_service->getKeyboard();
-            const MouseState &mouse = m_input_service->getMouse();
-
-            // Process mouse position
-            {
-                const float2 cursor{
-                    mouse.m_cursor_pos.m_raw.m_absolute.x,
-                    mouse.m_cursor_pos.m_raw.m_absolute.y,
-                };
-                if (cursor.x >= 0 && cursor.y >= 0) {
-                    io.AddMousePosEvent(cursor.x, cursor.y);
-                }
-            }
-
-            // Process mouse wheel
-            {
-                const float wheel_y = mouse.m_wheel_y.m_raw.m_relative;
-                const float wheel_x = mouse.m_wheel_x.m_raw.m_relative;
-                if (wheel_y != 0.0f || wheel_x != 0.0f) {
-                    io.AddMouseWheelEvent(wheel_x, wheel_y);
-                }
-            }
-
-            // Process mouse buttons. The previous version built this list inline as
-            // { std::pair{EMouseButton::left, 0}, {EMouseButton::right, 1}, {EMouseButton::middle, 2} }
-            // — only the first element spells out std::pair explicitly, so the range-for's
-            // std::initializer_list<std::pair<EMouseButton,int>> gets deduced from that one
-            // element while the bare-brace elements list-initialize against it. That's not
-            // guaranteed by the standard the way a same-typed list is, so it's worth not
-            // depending on across compilers/toolchain updates. kPolledMouseButtons plus the
-            // mouseButtonToImGui() switch above (previously unused) gives the same mapping
-            // without relying on that.
-            for (const EMouseButton button: kPolledMouseButtons) {
-                const int imgui_button = mouseButtonToImGui(button);
-                if (mouse.m_buttons.isPressed(button)) {
-                    io.AddMouseButtonEvent(imgui_button, true);
-                } else if (mouse.m_buttons.isUp(button)) {
-                    io.AddMouseButtonEvent(imgui_button, false);
-                }
-            }
-
-            // Process keyboard keys
-            const auto feed_key = [&](const EKeyboardKey pprKey) {
-                const bool down = kbd.m_keys.isDown(pprKey);
-                const bool pressed = kbd.m_keys.isPressed(pprKey);
-                const bool released = kbd.m_keys.isUp(pprKey);
-                if (pressed || released) {
-                    const ImGuiKey imguiKey = keyboardKeyToImGuiKey(pprKey);
-                    if (imguiKey != ImGuiKey_None) {
-                        io.AddKeyEvent(imguiKey, down);
-                    }
-                }
-            };
-
-            // Feed all keyboard keys
-            for (u8 k = 0; k < static_cast<u8>(EKeyboardKey::right_super) + 1; k++) {
-                feed_key(static_cast<EKeyboardKey>(k));
-            }
-
-            // Process text input (characters queued by input system)
-            for (const auto &ch: kbd.m_characters) {
-                if (ch >= 32 && ch < 0xFFFE) {
-                    io.AddInputCharacter(ch);
-                }
-            }
-
-            // Modifier state
-            io.AddKeyEvent(ImGuiMod_Ctrl,
-                           kbd.m_keys.isDown(EKeyboardKey::left_control) ||
-                           kbd.m_keys.isDown(EKeyboardKey::right_control));
-            io.AddKeyEvent(ImGuiMod_Shift,
-                           kbd.m_keys.isDown(EKeyboardKey::left_shift) ||
-                           kbd.m_keys.isDown(EKeyboardKey::right_shift));
-            io.AddKeyEvent(ImGuiMod_Alt,
-                           kbd.m_keys.isDown(EKeyboardKey::left_alt) ||
-                           kbd.m_keys.isDown(EKeyboardKey::right_alt));
-            io.AddKeyEvent(ImGuiMod_Super,
-                           kbd.m_keys.isDown(EKeyboardKey::left_super) ||
-                           kbd.m_keys.isDown(EKeyboardKey::right_super));
         }
 
         [[nodiscard]] std::error_code uploadDrawData_(const ImDrawData *drawData, FrameResources *fr) {

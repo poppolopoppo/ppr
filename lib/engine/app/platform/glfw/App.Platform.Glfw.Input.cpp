@@ -24,6 +24,16 @@ namespace pP {
             m_devices.emplace(gamepad.getInputDeviceID(), safe_ptr<const IInputDevice>{&gamepad});
         }
 
+        m_global_listener.setActionCallback([this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+            if (event.isTriggerStarted()) {
+                std::ignore = m_when_action_started(*this, event, trigger);
+            } else if (event.isTriggerActive()) {
+                std::ignore = m_when_action_triggered(*this, event, trigger);
+            } else if (event.isTriggerCompleted()) {
+                std::ignore = m_when_action_completed(*this, event, trigger);
+            }
+        });
+
         return default_value_v;
     }
 
@@ -238,6 +248,16 @@ namespace pP {
         return m_global_listener.postKeyEvent(message);
     }
 
+    EInputListenerResponse GlfwInput::dispatchToPushedListeners_(const InputMessage &message) noexcept {
+        for (const SharedInputListener &listener : m_listeners) {
+            if (const EInputListenerResponse response = listener->postKeyEvent(message);
+                response == EInputListenerResponse::consumed) {
+                return EInputListenerResponse::consumed;
+            }
+        }
+        return EInputListenerResponse::unhandled;
+    }
+
     std::error_code GlfwInput::routeMessage_(const InputMessage &message) noexcept {
         SharedPlayer player;
         if (const auto player_id = m_graph.findPlayerForDevice(message.m_device_id)) {
@@ -247,15 +267,21 @@ namespace pP {
         if (player) {
             if (const EInputListenerResponse response = player->getListener().postKeyEvent(message);
                 response == EInputListenerResponse::unhandled) {
-                if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
-                    PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
+                if (const EInputListenerResponse pushed = dispatchToPushedListeners_(message);
+                    pushed == EInputListenerResponse::unhandled) {
+                    if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
+                        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
+                    }
                 }
             }
             return default_value_v;
         }
 
-        if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
-            PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
+        if (const EInputListenerResponse pushed = dispatchToPushedListeners_(message);
+            pushed == EInputListenerResponse::unhandled) {
+            if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
+                PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
+            }
         }
 
         return default_value_v;
@@ -314,7 +340,12 @@ namespace pP {
 
 
     void GlfwInput::pushInputListener(SharedInputListener listener) {
-        m_listeners.push_back(std::move(listener));
+        const int priority = listener->getPriority();
+        const auto it = std::ranges::find_if(m_listeners,
+            [priority](const SharedInputListener &existing) noexcept {
+                return existing->getPriority() < priority;
+            });
+        m_listeners.insert(it, std::move(listener));
     }
 
     bool GlfwInput::popInputListener(const InputListener &listener) {

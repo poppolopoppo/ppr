@@ -18,7 +18,7 @@ export namespace pP {
     using SharedInputDevice = safe_ptr<const IInputDevice>;
 
     class InputListener;
-    using SharedInputListener = safe_ptr<const InputListener>;
+    using SharedInputListener = safe_ptr<InputListener>;
 
     class InputMapping;
     using SharedInputMapping = safe_ptr<const InputMapping>;
