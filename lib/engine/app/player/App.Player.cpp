@@ -10,8 +10,6 @@ namespace pP {
         : m_id{id} {
     }
 
-    Player::~Player() noexcept = default;
-
     void Player::pushDeviceView(SharedInputDevice device) noexcept {
         m_device_views.pushBack(std::move(device));
     }

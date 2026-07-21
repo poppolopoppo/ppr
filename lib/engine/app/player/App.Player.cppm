@@ -48,14 +48,12 @@ export namespace pP {
     public:
         explicit Player(PlayerIdentity id) noexcept;
 
-        ~Player() noexcept;
-
         [[nodiscard]] const PlayerIdentity &getIdentity() const noexcept {
             return m_id;
         }
 
-        [[nodiscard]] const PlayerId &getUserId() const noexcept {
-            return m_id.m_user_id;
+        [[nodiscard]] u64 getUserId() const noexcept {
+            return *m_id.m_user_id;
         }
 
         [[nodiscard]] InputListener &getListener() noexcept {
