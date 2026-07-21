@@ -25,13 +25,7 @@ export namespace pP {
             : m_map(std::exchange(other.m_map, nullptr)) {
         }
 
-        MappedFile &operator=(MappedFile &&other) noexcept {
-            if (this != &other) {
-                unmap_();
-                m_map = std::exchange(other.m_map, nullptr);
-            }
-            return *this;
-        }
+        MappedFile &operator=(MappedFile &&other) noexcept;
 
         MappedFile(const MappedFile &) = delete;
         MappedFile &operator=(const MappedFile &) = delete;
@@ -40,48 +34,22 @@ export namespace pP {
             unmap_();
         }
 
-        [[nodiscard]] std::span<const std::byte> span() const noexcept {
-            if (m_map == nullptr) {
-                return {};
-            }
-            return std::span(
-                static_cast<const std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map));
-        }
-
-        [[nodiscard]] std::span<std::byte> span() noexcept {
-            if (m_map == nullptr) {
-                return {};
-            }
-            return std::span(
-                static_cast<std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map));
-        }
-
-        [[nodiscard]] std::size_t size() const noexcept {
-            return m_map != nullptr ? hal::io::mapSize(m_map) : 0u;
-        }
-
-        [[nodiscard]] bool isValid() const noexcept {
+        [[nodiscard]] constexpr bool isValid() const noexcept {
             return m_map != nullptr;
         }
 
-        explicit MappedFile(hal::io::MapHandle map) noexcept
-            : m_map(map) {
-            if (m_map != nullptr) {
-                mem::unpoisonUninitialized(
-                    static_cast<std::byte *>(hal::io::mapData(m_map)),
-                    hal::io::mapSize(m_map));
-            }
-        }
+        [[nodiscard]] const char *c_str() const noexcept;
+
+        [[nodiscard]] std::span<const std::byte> span() const noexcept;
+
+        [[nodiscard]] std::span<std::byte> span() noexcept;
+
+        [[nodiscard]] std::size_t size() const noexcept;
+
+        explicit MappedFile(hal::io::MapHandle map) noexcept;
 
     private:
-        void unmap_() noexcept {
-            if (m_map != nullptr) {
-                hal::io::unmapFile(m_map);
-                m_map = nullptr;
-            }
-        }
+        void unmap_() noexcept;
     };
 
     template<> struct details::relocatable<MappedFile> : std::true_type {};
@@ -92,14 +60,6 @@ export namespace pP::io {
 
     [[nodiscard]] std::expected<MappedFile, std::error_code>
     mapFile(const std::filesystem::path &path,
-            const hal::io::OpenFlags flags = {}) noexcept {
-        try {
-            return MappedFile(hal::io::mapFile(path, flags));
-        } catch (const std::system_error &e) {
-            return std::unexpected(e.code());
-        } catch (const std::bad_alloc &) {
-            return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
-        }
-    }
+            const hal::io::OpenFlags flags = {}) noexcept;
 
 }

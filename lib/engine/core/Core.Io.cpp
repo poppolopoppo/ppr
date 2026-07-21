@@ -16,6 +16,47 @@ namespace {
 }
 
 // ------------------------------------------------------------------
+// IoFile
+// ------------------------------------------------------------------
+
+IoFile &IoFile::operator=(IoFile &&other) noexcept {
+    if (this != &other) {
+        close_();
+        m_port_handle = std::exchange(other.m_port_handle, nullptr);
+        m_file = std::exchange(other.m_file, nullptr);
+    }
+    return *this;
+}
+
+void IoFile::close_() noexcept {
+    if (m_file != nullptr) {
+        hal::io::closeFile(m_port_handle, m_file);
+        m_file = nullptr;
+        m_port_handle = nullptr;
+    }
+}
+
+// ------------------------------------------------------------------
+// IoRequest
+// ------------------------------------------------------------------
+
+void IoRequest::complete_(const u64 bytes, const std::error_code ec) noexcept {
+    u8 expected = 1u;
+    if (m_state.compare_exchange_strong(expected, 2u, std::memory_order_acq_rel)) {
+        m_bytes = bytes;
+        m_error = ec;
+        m_completed.emitEvent();
+    }
+}
+
+IoRequest::~IoRequest() noexcept {
+    if (isPending()) {
+        (void)cancel();
+    }
+    PPR_VERIFY(not isPending());
+}
+
+// ------------------------------------------------------------------
 // IoPort
 // ------------------------------------------------------------------
 

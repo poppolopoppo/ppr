@@ -83,19 +83,26 @@ export namespace pP {
             : m_parent{std::move(parent)} {
         }
 
-        void reset() noexcept {
+        void reset() noexcept;
+
+        template<typename T>
+            requires std::is_base_of_v<IService, T>
+        [[nodiscard]] bool insert(const safe_ptr<T> &service) {
+            PPR_ASSERT(service.isValid());
+            const IService::Uid service_key{typeUid<T>()};
+
             const std::unique_lock write_lock{m_shared_mutex};
-            m_services.clear();
-            m_parent = nullptr;
+            return m_services.insert({service_key, safe_ptr<IService>(service)}).second;
         }
 
         template<typename T>
             requires std::is_base_of_v<IService, T>
-        bool insert(safe_ptr<T> &&service) {
+        [[nodiscard]] bool insert(safe_ptr<T> &&service) {
+            PPR_ASSERT(service.isValid());
             const IService::Uid service_key{typeUid<T>()};
 
             const std::unique_lock write_lock{m_shared_mutex};
-            return m_services.insert({service_key, std::move(service).template upcast<IService>()}).second;
+            return m_services.insert({service_key, safe_ptr<IService>(std::move(service))}).second;
         }
 
         template<typename T>

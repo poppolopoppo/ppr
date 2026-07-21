@@ -13,6 +13,22 @@ import std;
 namespace pP {
 
     // ------------------------------------------------------------------
+    // time point and duration representations
+    // ------------------------------------------------------------------
+
+    TimePoint time::now() noexcept {
+        return std::chrono::steady_clock::now();
+    }
+
+    TimeSpan time::since(const TimePoint started_at) noexcept {
+        return now() - started_at;
+    }
+
+    double time::seconds(const TimeSpan duration) noexcept {
+        return std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
+    }
+
+    // ------------------------------------------------------------------
     // schedule events in the future, at a specific time
     // ------------------------------------------------------------------
 

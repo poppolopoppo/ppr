@@ -29,14 +29,7 @@ export namespace pP {
               m_file(std::exchange(other.m_file, nullptr)) {
         }
 
-        IoFile &operator=(IoFile &&other) noexcept {
-            if (this != &other) {
-                close_();
-                m_port_handle = std::exchange(other.m_port_handle, nullptr);
-                m_file = std::exchange(other.m_file, nullptr);
-            }
-            return *this;
-        }
+        IoFile &operator=(IoFile &&other) noexcept;
 
         IoFile(const IoFile &) = delete;
         IoFile &operator=(const IoFile &) = delete;
@@ -60,13 +53,7 @@ export namespace pP {
             : m_port_handle(port), m_file(file) {
         }
 
-        void close_() noexcept {
-            if (m_file != nullptr) {
-                hal::io::closeFile(m_port_handle, m_file);
-                m_file = nullptr;
-                m_port_handle = nullptr;
-            }
-        }
+        void close_() noexcept;
     };
 
     // ------------------------------------------------------------------
@@ -86,14 +73,7 @@ export namespace pP {
         hal::io::FileHandle m_active_file{nullptr};
         alignas(max_align_v) std::byte m_overlapped_storage[kOverlappedSize]{};
 
-        void complete_(const u64 bytes, const std::error_code ec) noexcept {
-            u8 expected = 1u;
-            if (m_state.compare_exchange_strong(expected, 2u, std::memory_order_acq_rel)) {
-                m_bytes = bytes;
-                m_error = ec;
-                m_completed.emitEvent();
-            }
-        }
+        void complete_(const u64 bytes, const std::error_code ec) noexcept;
 
     public:
         IoRequest() noexcept = default;
@@ -103,12 +83,7 @@ export namespace pP {
         IoRequest(IoRequest &&) = delete;
         IoRequest &operator=(IoRequest &&) = delete;
 
-        ~IoRequest() noexcept {
-            if (isPending()) {
-                (void)cancel();
-            }
-            PPR_VERIFY(not isPending());
-        }
+        ~IoRequest() noexcept;
 
         TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
             return m_completed.subscribeEvent(signal);

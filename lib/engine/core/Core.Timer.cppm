@@ -18,9 +18,9 @@ export namespace pP {
     using TimeSpan = std::chrono::steady_clock::duration;
 
     namespace time {
-        [[nodiscard]] double seconds(const TimeSpan duration) noexcept {
-            return std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
-        }
+        [[nodiscard]] TimePoint now() noexcept;
+        [[nodiscard]] TimeSpan since(TimePoint started_at) noexcept;
+        [[nodiscard]] double seconds(TimeSpan duration) noexcept;
     }
 
     // ------------------------------------------------------------------
