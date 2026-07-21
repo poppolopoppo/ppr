@@ -16,6 +16,10 @@ namespace pP {
         input.m_player_service = safe_ptr<IPlayerService>{this};
     }
 
+    GlfwPlayer::~GlfwPlayer() noexcept {
+        m_input->m_player_service.reset();
+    }
+
     SharedPlayer GlfwPlayer::getPlayer(const PlayerId &id) const noexcept {
         return m_graph->getPlayer(id);
     }

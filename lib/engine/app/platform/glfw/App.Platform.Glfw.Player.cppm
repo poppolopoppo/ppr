@@ -15,6 +15,7 @@ export namespace pP {
 
     public:
         explicit GlfwPlayer(GlfwInput &input) noexcept;
+        ~GlfwPlayer() noexcept override;
 
         [[nodiscard]] static safe_ptr<GlfwPlayer> get() noexcept;
 
