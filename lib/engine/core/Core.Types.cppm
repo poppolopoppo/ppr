@@ -216,4 +216,37 @@ export namespace pP {
             swap(lhs.m_value, rhs.m_value);
         }
     };
+
+    // ------------------------------------------------------------------
+    // traits to extract properties from a function signature (since std::result_of was deprecated)
+    // ------------------------------------------------------------------
+
+    namespace details {
+        template<typename T>
+        struct FunctionTraits;
+
+        template<typename ReturnT, typename... ArgsT>
+        struct FunctionTraits<ReturnT(ArgsT...)> {
+            static constexpr bool is_noexcept = false;
+            using return_type = ReturnT;
+            using params_type = std::tuple<ArgsT...>;
+        };
+
+        template<typename ReturnT, typename... ArgsT>
+        struct FunctionTraits<ReturnT(ArgsT...) noexcept> {
+            static constexpr bool is_noexcept = true;
+            using return_type = ReturnT;
+            using params_type = std::tuple<ArgsT...>;
+        };
+
+        template<typename T>
+        using function_result_t = FunctionTraits<T>::return_type;
+
+        template<typename FunctionT, typename ReturnT>
+        concept TFunctionReturning =
+                std::conjunction_v<
+                    std::is_function<FunctionT>,
+                    std::is_same<function_result_t<FunctionT>, ReturnT>
+                >;
+    }
 }

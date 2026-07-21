@@ -54,6 +54,10 @@ export namespace pP {
         const CharT *m_str{nullptr};
 
     public:
+        constexpr basic_string_literal(std::in_place_t, const CharT *const literal) noexcept
+            : m_str(literal) {
+        }
+
         template<std::size_t nLen> requires (nLen > 0u)
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_literal(const CharT (&str)[nLen]) noexcept
@@ -109,6 +113,10 @@ export namespace pP {
     using string_literal = basic_string_literal<char>;
     using wstring_literal = basic_string_literal<wchar_t>;
     using u8string_literal = basic_string_literal<char8_t>;
+
+    [[nodiscard]] constexpr string_literal operator ""_l(const char *literal) noexcept {
+        return string_literal(std::in_place, literal);
+    }
 
     namespace hal::native {
         using string_literal = basic_string_literal<char_t>;

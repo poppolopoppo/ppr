@@ -12,6 +12,16 @@ export namespace pP {
         return std::underlying_type_t<EnumT>(value);
     }
 
+    template<typename EnumT> requires std::is_enum_v<EnumT>
+    [[nodiscard]] constexpr EnumT enumCombine(const EnumT lhs, const EnumT rhs) noexcept {
+        return static_cast<EnumT>(enumOrd(lhs) | enumOrd(rhs));
+    }
+
+    template<typename EnumT> requires std::is_enum_v<EnumT>
+    [[nodiscard]] constexpr bool enumContains(const EnumT flags, const EnumT value) noexcept {
+        return (enumOrd(flags) & enumOrd(value)) == enumOrd(value);
+    }
+
     // ------------------------------------------------------------------
     // enum flags
     // ------------------------------------------------------------------

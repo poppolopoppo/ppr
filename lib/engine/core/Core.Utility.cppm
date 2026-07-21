@@ -74,6 +74,54 @@ export namespace pP {
     inline constexpr std::size_t bit_count_v = sizeof(std::unwrap_ref_decay_t<T>) * 8u;
 
     // ------------------------------------------------------------------
+    // general purpose hasFailed() check (ADL target for hasSucceeded)
+    // ------------------------------------------------------------------
+
+    template<typename T = void>
+    using Expected = std::expected<T, std::error_code>;
+
+    [[nodiscard]] constexpr const std::error_code &make_error_code(const std::error_code &err) noexcept {
+        return err;
+    }
+
+    // return the first error which actually failed
+    [[nodiscard]] constexpr std::error_code make_error_code(const std::initializer_list<std::error_code> ilist) noexcept {
+        for (const std::error_code &err : ilist) {
+            if (err) [[unlikely]] {
+                return err;
+            }
+        }
+        return default_value_v;
+    }
+
+    template<typename T>
+    [[nodiscard]] constexpr std::error_code make_error_code(const std::expected<T, std::error_code> &expected) noexcept {
+        return expected.error_or(default_value_v);
+    }
+
+    [[nodiscard]] constexpr bool hasFailed(const bool result) noexcept {
+        return not result;
+    }
+
+    [[nodiscard]] constexpr bool hasFailed(const std::error_code &err) noexcept {
+        return static_cast<bool>(err);
+    }
+
+    template<typename T>
+    [[nodiscard]] constexpr bool hasFailed(const std::expected<T, std::error_code> &expected) noexcept {
+        return not expected.has_value();
+    }
+
+    template<typename T>
+        requires requires (const T &result)
+    {
+        { hasFailed(result) } -> std::convertible_to<bool>;
+    }
+    PPR_FORCE_INLINE [[nodiscard]] constexpr bool hasSucceeded(const T &result) noexcept {
+        return not hasFailed(result);
+    }
+
+    // ------------------------------------------------------------------
     // expand a callable over an index sequence to perform compile-time unrolling
     // ------------------------------------------------------------------
 
