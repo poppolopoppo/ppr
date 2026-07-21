@@ -9,6 +9,7 @@ target_sources(EngineAppTests
             App.Dispatch.Tests.cppm
             App.Snapshot.Tests.cppm
             App.PlayerService.Tests.cppm
+            App.Player.Graph.Tests.cppm
 )
 
 setup_ppr_project(EngineAppTests
