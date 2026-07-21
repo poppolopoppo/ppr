@@ -94,6 +94,39 @@ Arena<SmallPage> &ScratchPad::getArenaTLS_() noexcept {
     return g_instance_tls;
 }
 
+#if PPR_ENABLE_DEBUG
+namespace details {
+
+ScopedArenaWithDebug::~ScopedArenaWithDebug() noexcept {
+    if (m_depth < 0)
+        return;
+    i32 &g_depth_tls = getDepthTLS();
+    PPR_ASSERT(g_depth_tls == m_depth);
+    g_depth_tls = m_depth - 1u;
+}
+
+ScopedArenaWithDebug::ScopedArenaWithDebug(ScopedArenaWithDebug &&other) noexcept
+    : ScopedArena(std::move(other)),
+      m_depth(other.m_depth) {
+    other.m_depth = -1;
+}
+
+ScopedArenaWithDebug &ScopedArenaWithDebug::operator=(ScopedArenaWithDebug &&other) noexcept {
+    if (m_depth >= 0) {
+        i32 &g_depth_tls = getDepthTLS();
+        PPR_ASSERT(g_depth_tls == m_depth);
+        g_depth_tls = m_depth - 1u;
+    }
+
+    ScopedArena::operator=(std::move(other));
+    m_depth = other.m_depth;
+    other.m_depth = -1;
+    return *this;
+}
+
+} // namespace details
+#endif
+
 }
 
 template class pP::mem::Arena<pP::mem::HugePage>;

@@ -138,18 +138,11 @@ export namespace pP::mem {
         static constexpr std::size_t reserved_size_v = 16ull << 30u; // 16.0 GiB
         static constexpr std::size_t num_reserved_blocks_v = reserved_size_v / block_size_v;
 
-        [[nodiscard]] static PagePool &getGlobalPool() noexcept {
-            alignas(hal::cacheline_size_v) static PagePool g_instance{
-                block_size_v,
-                num_reserved_blocks_v
-            };
-            return g_instance;
-        }
+        [[nodiscard]] static PagePool &getGlobalPool() noexcept;
 
-        [[nodiscard]] static auto &getThreadLocalCache() noexcept {
-            alignas(hal::cacheline_size_v) thread_local LocalCache<block_size_v, Static<&getGlobalPool> > g_instance_tls{};
-            return g_instance_tls;
-        }
+        using local_block_cache_t = LocalCache<block_size_v, Static<&getGlobalPool> >;
+
+        [[nodiscard]] static local_block_cache_t &getThreadLocalCache() noexcept;
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>
@@ -191,17 +184,11 @@ export namespace pP::mem {
         using pooling_allocator_t = HintedPooling<block_size_v, HugePage, num_reserved_blocks_v, LocalHint>;
         static_assert(pooling_allocator_t::pool_size_v == HugePage::block_size_v);
 
-        [[nodiscard]] static pooling_allocator_t &getGlobalPool() noexcept {
-            alignas(hal::cacheline_size_v) static pooling_allocator_t g_instance{};
-            return g_instance;
-        }
+        [[nodiscard]] static pooling_allocator_t &getGlobalPool() noexcept;
 
-        [[nodiscard]] static auto &getThreadLocalCache() noexcept {
-            alignas(hal::cacheline_size_v) thread_local
-                    LocalCache<block_size_v, Static<&getGlobalPool>, 2u>
-                    g_instance_tls{};
-            return g_instance_tls;
-        }
+        using local_block_cache_t = LocalCache<block_size_v, Static<&getGlobalPool>, 2u>;
+
+        [[nodiscard]] static local_block_cache_t &getThreadLocalCache() noexcept;
 
         [[nodiscard]] PPR_FORCE_INLINE
         static std::allocation_result<void *>

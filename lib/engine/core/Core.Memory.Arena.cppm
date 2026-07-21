@@ -531,36 +531,14 @@ export namespace pP::mem {
                   , m_depth(++getDepthTLS()) {
             }
 
-            ~ScopedArenaWithDebug() noexcept {
-                if (m_depth < 0)
-                    return;
-                i32 &g_depth_tls = getDepthTLS();
-                PPR_ASSERT(g_depth_tls == m_depth);
-                g_depth_tls = m_depth - 1u;
-            }
+            ~ScopedArenaWithDebug() noexcept;
 
             ScopedArenaWithDebug(const ScopedArenaWithDebug &) = delete;
 
             ScopedArenaWithDebug &operator=(const ScopedArenaWithDebug &) = delete;
 
-            ScopedArenaWithDebug(ScopedArenaWithDebug &&other) noexcept
-                : ScopedArena(std::move(other)),
-                  m_depth(other.m_depth) {
-                other.m_depth = -1;
-            }
-
-            ScopedArenaWithDebug &operator=(ScopedArenaWithDebug &&other) noexcept {
-                if (m_depth >= 0) {
-                    i32 &g_depth_tls = getDepthTLS();
-                    PPR_ASSERT(g_depth_tls == m_depth);
-                    g_depth_tls = m_depth - 1u;
-                }
-
-                ScopedArena::operator=(std::move(other));
-                m_depth = other.m_depth;
-                other.m_depth = -1;
-                return *this;
-            }
+            ScopedArenaWithDebug(ScopedArenaWithDebug &&other) noexcept;
+            ScopedArenaWithDebug &operator=(ScopedArenaWithDebug &&other) noexcept;
         };
 
         template<>
