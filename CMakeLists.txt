@@ -48,7 +48,7 @@ project(
         LANGUAGES CXX C)
 
 #include(CTest)
-#enable_testing()
+enable_testing()
 
 # Define sanitizer and static analyzer options
 option(PPR_ENABLE_DEVELOPER_MODE "Enable developer mode with warning-as-errors and sanitizers" FALSE)
