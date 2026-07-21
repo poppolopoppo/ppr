@@ -21,7 +21,7 @@ export namespace pP::tests {
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
             .m_local_index = 0u,
-            .m_kind = EPlayerKind::gamepad, };
+            .m_kind = EPlayerKind::gamepad, };;
 
         PPR_ASSERT(keyboard == keyboard);
         PPR_ASSERT(keyboard != gamepad);
