@@ -388,9 +388,6 @@ export namespace pP {
         using iterator = details::StableVectorIterator<T, AllocatorT>;
         using const_iterator = details::StableVectorIterator<const T, AllocatorT>;
 
-        static_assert(std::random_access_iterator<iterator>);
-        static_assert(std::random_access_iterator<const_iterator>);
-
         constexpr StableVector() noexcept
             requires std::is_default_constructible_v<allocator_type> = default;
 
@@ -463,11 +460,13 @@ export namespace pP {
         }
 
         constexpr StableVector(const StableVector &other) noexcept
+            requires std::is_copy_constructible_v<allocator_type>
             : allocator_type(other) {
             assignAssumeEmpty(other);
         }
 
-        constexpr StableVector &operator =(const StableVector &other) noexcept {
+        constexpr StableVector &operator =(const StableVector &other) noexcept
+            requires std::is_copy_assignable_v<allocator_type> {
             if (this == &other) [[unlikely]] {
                 return *this;
             }
@@ -479,11 +478,13 @@ export namespace pP {
         }
 
         constexpr StableVector(StableVector &&rvalue) noexcept
+            requires std::is_move_constructible_v<allocator_type>
             : allocator_type(std::move(rvalue)) {
             spliceAssumeEmpty(rvalue);
         }
 
-        constexpr StableVector &operator =(StableVector &&rvalue) noexcept {
+        constexpr StableVector &operator =(StableVector &&rvalue) noexcept
+            requires std::is_move_assignable_v<allocator_type> {
             if (this == &rvalue) [[unlikely]] {
                 return *this;
             }
@@ -495,6 +496,9 @@ export namespace pP {
         }
 
         constexpr ~StableVector() noexcept {
+            static_assert(std::random_access_iterator<iterator>);
+            static_assert(std::random_access_iterator<const_iterator>);
+
             reset();
         }
 

@@ -21,9 +21,6 @@ export namespace pP {
         };
     }
 
-    template<typename T>
-    using Collector = std23::function_ref<void (const T &push_back)>;
-
     // ------------------------------------------------------------------
     // relocatable objects can be safely mem-copied instead of moving them
     // ------------------------------------------------------------------
@@ -64,6 +61,48 @@ export namespace pP {
             std::construct_at(uninitialized, std::move(*src));
         }
     }
+
+    // ------------------------------------------------------------------
+    // collector for generic push back container abstraction
+    // ------------------------------------------------------------------
+
+    template<typename T>
+    struct Collector : std23::function_ref<std::error_code (const T &push_back)> {
+        using super_t = std23::function_ref<std::error_code (const T &push_back)>;
+        using super_t::super_t;
+        using super_t::operator=;
+        using super_t::operator();
+
+        template<std::input_iterator IteratorT>
+            requires std::convertible_to<typename std::iterator_traits<IteratorT>::reference, const T &>
+        [[nodiscard]] std::error_code append(const IteratorT first, const IteratorT last) const {
+            for (IteratorT it = first; it != last; ++it) {
+                if (const std::error_code err = operator()(*it)) [[unlikely]] {
+                    return err;
+                }
+            }
+            return default_value_v;
+        }
+
+        [[nodiscard]] std::error_code append(std::initializer_list<T> ilist) const {
+            return append(ilist.begin(), ilist.end());
+        }
+
+        template<std::ranges::input_range RangeT>
+            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, const T &>
+        [[nodiscard]] std::error_code append(const RangeT &input_range) const {
+            return append(std::ranges::begin(input_range), std::ranges::end(input_range));
+        }
+
+        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)>> enumerators) const {
+            for (const auto enumerate : enumerators) {
+                if (const std::error_code err = enumerate(*this)) [[unlikely]] {
+                    return err;
+                }
+            }
+            return default_value_v;
+        }
+    };
 
     // ------------------------------------------------------------------
     // general purpose index iterator with random access

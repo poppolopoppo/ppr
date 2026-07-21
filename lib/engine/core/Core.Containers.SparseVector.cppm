@@ -455,6 +455,9 @@ export namespace pP {
 
         using stable_vector::capacity;
 
+        using iterator = details::SparseVectorIterator<T, AllocatorT>;
+        using const_iterator = details::SparseVectorIterator<const T, AllocatorT>;
+
         constexpr SparseVector() noexcept
             requires std::is_default_constructible_v<allocator_type> = default;
 
@@ -539,6 +542,9 @@ export namespace pP {
         }
 
         constexpr ~SparseVector() noexcept {
+            static_assert(std::bidirectional_iterator<iterator>);
+            static_assert(std::bidirectional_iterator<const_iterator>);
+
             reset();
         }
 
@@ -549,12 +555,6 @@ export namespace pP {
         [[nodiscard]] constexpr std::size_t size() const noexcept {
             return m_size_alive;
         }
-
-        using iterator = details::SparseVectorIterator<T, AllocatorT>;
-        using const_iterator = details::SparseVectorIterator<const T, AllocatorT>;
-
-        static_assert(std::bidirectional_iterator<iterator>);
-        static_assert(std::bidirectional_iterator<const_iterator>);
 
         [[nodiscard]] constexpr iterator begin() noexcept {
             if (const auto first = stable_vector::begin(); first != stable_vector::end()) {
