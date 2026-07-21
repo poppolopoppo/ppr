@@ -19,9 +19,11 @@
 // ------------------------------------------------------------------
 
 #if defined(PPR_ENABLE_SANITIZER_ADDRESS) || PPR_ENABLE_DEBUG
-#   define PPR_ENABLE_MEMORY_POISONING 1
+#   define PPR_ENABLE_MEMORY_POISONING      1
+#   define PPR_ENABLE_SAFE_OBJECT_TRACKING  1
 #else
-#   define PPR_ENABLE_MEMORY_POISONING 0
+#   define PPR_ENABLE_MEMORY_POISONING      0
+#   define PPR_ENABLE_SAFE_OBJECT_TRACKING  0
 #endif
 
 // ------------------------------------------------------------------
@@ -79,6 +81,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_FORCE_INLINE [[msvc::forceinline]]
 #   define PPR_LIFETIME_BOUND [[msvc::lifetimebound]]
 #   define PPR_NO_INLINE [[msvc::noinline]]
+#   define PPR_OFFSETOF(_STRUCT, _MEMBER) __builtin_offsetof(_STRUCT, _MEMBER)
 #   define PPR_PRAGMA_WARNING_PUSH() __pragma(warning(push))
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE) __pragma(warning(disable : _WARNING_CODE))
 #   define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID)
@@ -102,6 +105,7 @@ extern "C" void _ReadWriteBarrier();
 #      define PPR_PRAGMA_WARNING_POP() __pragma(gcc diagnostic pop)
 #   endif
 #   define PPR_NO_INLINE [[gnu::noinline]]
+#   define PPR_OFFSETOF(_STRUCT, _MEMBER) __builtin_offsetof(_STRUCT, _MEMBER)
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE)
 #else
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME)
@@ -112,6 +116,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_FORCE_INLINE
 #   define PPR_LIFETIME_BOUND
 #   define PPR_NO_INLINE
+#   define PPR_OFFSETOF(_STRUCT, _MEMBER) ((::size_t)&reinterpret_cast<char const volatile&>((((_STRUCT*)0)->_MEMBER)))
 #   define PPR_PRAGMA_WARNING_PUSH()
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE)
 #   define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID)
@@ -175,13 +180,12 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_ASSERT(...) PPR_DETAILS_ASSERTION_IMPL(require, __VA_ARGS__)
 #   define PPR_VERIFY(...) PPR_DETAILS_ASSERTION_IMPL(verify, __VA_ARGS__)
 
-#   define PPR_ENSURE(...)                                                                                                                   \
-       ((__VA_ARGS__) ? true                                                                                                                 \
-                      : (                                                                                                                    \
-                            []() PPR_ATTRIBUTE_CODE_SEGMENT(".ppr_dbg") {                                                                    \
-                               pP::Assertion::onFailure(pP::Assertion::ensure, PPR_STRINGIZE(__VA_ARGS__), std::source_location::current()); \
-                            }(),                                                                                                             \
-                            false))
+#   define PPR_ENSURE(...) \
+    ((__VA_ARGS__) ? true  : ( \
+        []() PPR_ATTRIBUTE_CODE_SEGMENT(".ppr_dbg") {                                                                    \
+           pP::Assertion::onFailure(pP::Assertion::ensure, PPR_STRINGIZE(__VA_ARGS__), std::source_location::current()); \
+        }(),                                                                                                             \
+        false))
 
 #else
 #   define PPR_ASSERT(...) PPR_ASSUME(__VA_ARGS__)
@@ -204,6 +208,7 @@ extern "C" void _ReadWriteBarrier();
        namespace details::log {                               \
            [[nodiscard]] pP::Log::Category &_NAME() noexcept; \
        }
+
 #   define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)  \
        namespace details::log {                                \
            [[nodiscard]] pP::Log::Category &_NAME() noexcept { \
@@ -215,9 +220,15 @@ extern "C" void _ReadWriteBarrier();
                return g_instance;                              \
            }                                                   \
        }
+
 #   define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...) \
        pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
+
+#   define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) \
+        pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
+
 #   define PPR_FLUSH_LOG() pP::Log::flush()
+
 #else
 #   define PPR_DECLARE_LOG_CATEGORY(_NAME)
 #   define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)
@@ -226,10 +237,53 @@ extern "C" void _ReadWriteBarrier();
 #endif
 
 // ------------------------------------------------------------------
+// error handling -- return-on-failure with logging
+// works with std::error_code and rhi::Result via pP::failed()
+// ------------------------------------------------------------------
+
+#define PPR_RETURN_ON_FAIL(_CATEGORY, ...)                                  \
+    if (auto const PPR_ANONYMIZE(_ppr_result) = (__VA_ARGS__);              \
+        hasFailed(PPR_ANONYMIZE(_ppr_result))) [[unlikely]] {               \
+        PPR_LOG(_CATEGORY, error,                                           \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+        });                                                                 \
+        return PPR_ANONYMIZE(_ppr_result);                                  \
+    }
+
+#define PPR_RETURN_ERROR_ON_FAIL(_CATEGORY, ...)                            \
+    if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
+        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
+        PPR_LOG(_CATEGORY, error,                                           \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            {"category", PPR_ANONYMIZE(_errc).category().name()},           \
+            {"value", PPR_ANONYMIZE(_errc).value()},                        \
+            {"message", PPR_ANONYMIZE(_errc).message()}                     \
+        });                                                                 \
+        return PPR_ANONYMIZE(_errc);                                        \
+    }
+
+#define PPR_RETURN_UNEXPECTED_ON_FAIL(_CATEGORY, ...)                       \
+    if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
+        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
+        PPR_LOG(_CATEGORY, error,                                           \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            {"category", PPR_ANONYMIZE(_errc).category().name()},           \
+            {"value", PPR_ANONYMIZE(_errc).value()},                        \
+            {"message", PPR_ANONYMIZE(_errc).message()}                     \
+        });                                                                 \
+        return std::unexpected{PPR_ANONYMIZE(_errc)};                       \
+    }
+
+#define RHI_RETURN_ERROR_ON_FAIL(_CATEGORY, ...)                              \
+    PPR_RETURN_ERROR_ON_FAIL(_CATEGORY, pP::rhi::result(__VA_ARGS__))
+
+// ------------------------------------------------------------------
 // unit tests
 // ------------------------------------------------------------------
 
 #define PPR_ENABLE_UNIT_TESTS 1
 
 #define PPR_UNIT_TEST(_NAME, ...) \
-    inline constexpr auto _NAME = pP::UnitTest::Named(PPR_STRINGIZE(_NAME), {__VA_ARGS__}) / []([[maybe_unused]] pP::UnitTest::IRun & _) -> void
+    inline constexpr auto _NAME = \
+        pP::UnitTest::Named(PPR_STRINGIZE(_NAME), {__VA_ARGS__}) / \
+            []([[maybe_unused]] pP::UnitTest::IRun & _) -> void
