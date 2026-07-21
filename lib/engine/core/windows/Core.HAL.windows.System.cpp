@@ -1,6 +1,6 @@
 module;
 
-#include "Core.HAL.windows.include.h"
+#include "Core.HAL.windows.include.hpp"
 
 // BCryptGenRandom()
 #include <bcrypt.h>
