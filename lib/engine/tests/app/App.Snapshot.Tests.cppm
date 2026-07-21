@@ -9,7 +9,11 @@ import std;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(snapshot_captures_frame_messages) {
-        const PlayerId id{.m_kind = EPlayerKind::keyboard, .m_local_index = 0u, .m_user_id = 0u};
+        constexpr PlayerIdentity id{
+            .m_user_id = default_value_v,
+            .m_device_id = default_value_v,
+            .m_local_index = 0u,
+            .m_kind = EPlayerKind::keyboard, };
 
         Player player{id};
 

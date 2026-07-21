@@ -18,7 +18,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST(supported_keys_non_empty) {
             const KeyboardDevice device{InputDeviceID{0u}};
             u32 count = 0u;
-            device.supportedInputKeys([&](const InputKey &) noexcept { ++count; });
+            PPR_VERIFY(not device.supportedInputKeys([&](const InputKey &) noexcept -> std::error_code {
+                ++count;
+                return default_value_v;
+                }));
             PPR_ASSERT(count > 0u);
         };
 
@@ -27,9 +30,10 @@ export namespace pP::tests {
             device.m_state.setKeyPressed(EKeyboardKey::space);
 
             Array<InputMessage> messages;
-            device.postInputMessages(zero_v, [&](const InputMessage &msg) {
+            PPR_VERIFY(not device.postInputMessages(zero_v, [&](const InputMessage &msg) -> std::error_code {
                 messages.push_back(msg);
-            });
+                return default_value_v;
+                }));
 
             PPR_ASSERT(messages.size() == 2u);
             PPR_ASSERT(messages[0u].m_device_id == InputDeviceID{0u});
@@ -44,9 +48,10 @@ export namespace pP::tests {
             device.resetInputState();
 
             Array<InputMessage> messages;
-            device.postInputMessages(zero_v, [&](const InputMessage &msg) {
+            PPR_VERIFY(not device.postInputMessages(zero_v, [&](const InputMessage &msg) -> std::error_code {
                 messages.push_back(msg);
-            });
+                return default_value_v;
+                }));
 
             PPR_ASSERT(messages.empty());
         };
@@ -71,7 +76,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST(supported_keys_include_mouse) {
             const MouseDevice device{InputDeviceID{0u}};
             u32 count = 0u;
-            device.supportedInputKeys([&](const InputKey &) noexcept { ++count; });
+            PPR_VERIFY(not device.supportedInputKeys([&](const InputKey &) noexcept -> std::error_code {
+                ++count;
+                return default_value_v;
+                }));
             PPR_ASSERT(count > 0u);
         };
     }

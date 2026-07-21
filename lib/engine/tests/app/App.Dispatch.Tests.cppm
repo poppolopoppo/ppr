@@ -9,7 +9,11 @@ import std;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(dispatch_player_mapping_to_action) {
-        const PlayerId id{.m_kind = EPlayerKind::keyboard, .m_local_index = 0u, .m_user_id = 0u};
+        constexpr PlayerIdentity id{
+            .m_user_id = default_value_v,
+            .m_device_id = default_value_v,
+            .m_local_index = 0u,
+            .m_kind = EPlayerKind::keyboard, };
 
         InputAction action{"Jump", EInputValueType::digital, EInputActionFlags::none};
         InputMapping mapping{"PlayerControls"};

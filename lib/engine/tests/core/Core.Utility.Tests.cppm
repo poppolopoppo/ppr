@@ -178,6 +178,22 @@ export namespace pP::tests {
             PPR_ASSERT(ctx.m_shuffle_seed.has_value());
             PPR_ASSERT(*ctx.m_shuffle_seed == 42u);
         };
+
+        PPR_UNIT_TEST(errc_not_found_is_error) {
+            const auto ec = make_error_code(std::errc::no_such_device);
+            PPR_ASSERT(!!ec);
+            PPR_ASSERT(ec.value() == enumOrd(std::errc::no_such_device));
+        };
+
+        PPR_UNIT_TEST(failed_ec_zero_returns_false) {
+            std::error_code ec{};
+            PPR_ASSERT(not hasFailed(ec));
+        };
+
+        PPR_UNIT_TEST(failed_ec_nonzero_returns_true) {
+            std::error_code ec{42, std::generic_category()};
+            PPR_ASSERT(hasFailed(ec));
+        };
     }
 
     PPR_UNIT_TEST(utility) {
@@ -196,6 +212,9 @@ export namespace pP::tests {
             Utility::static_iota_fill_array,
             Utility::static_iota_compile_types,
             Utility::shuffle_context_seed,
+            Utility::errc_not_found_is_error,
+            Utility::failed_ec_zero_returns_false,
+            Utility::failed_ec_nonzero_returns_true,
         });
     };
 }

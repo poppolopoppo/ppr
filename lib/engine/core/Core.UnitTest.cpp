@@ -220,7 +220,7 @@ namespace pP {
         const char *bullet = is_group ? "\u21B3" : "\u2022";
         const char *icon = m_status == pass ? "\u2705" : "\u274C";
 
-        std::println(std::cout, " {} {:>3}/{:<3}  {} {:<60} ({})",
+        std::println(std::cout, " {} {:>3}/{:<3}  {} {:<70} ({})",
                      icon,
                      m_num_passed,
                      m_num_passed + m_num_failed,
@@ -232,7 +232,7 @@ namespace pP {
             std::println(std::cout, "    \u2514\u2500 {}", m_failure);
         }
         if (is_group) {
-            std::println(std::cout, "----------------------------------------------------------------------");
+            std::println(std::cout, "-----------------------------------------------------------------------------------------------");
         }
 
         std::cout.flush();

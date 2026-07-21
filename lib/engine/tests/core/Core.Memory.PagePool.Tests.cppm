@@ -7,30 +7,7 @@ import std;
 export namespace pP::tests {
     namespace PagePool {
         PPR_UNIT_TEST(bit_tree_mechanics) {
-            mem::BitmapTree tree;
-            const mem::BitmapTree::BuildInfos infos(128u);
-
-            std::byte storage[1024];
-            tree.initialize(infos, {storage, infos.getAllocationSize()}, false);
-            PPR_ASSERT(!tree.isFull());
-
-            bool was_empty = false;
-            const u32 b1 = tree.allocate(infos, was_empty);
-
-            PPR_ASSERT(b1 == 0u);
-            PPR_ASSERT(was_empty);
-            PPR_ASSERT(tree.isAllocated(infos, 0u));
-
-            const auto range = tree.allocateContiguous(infos, 10u, was_empty);
-            PPR_ASSERT(range.m_first_bit == 1u);
-            PPR_ASSERT(range.m_bit_count == 10u);
-            PPR_ASSERT(!was_empty);
-
-            tree.deallocate(infos, 0u);
-            PPR_ASSERT(!tree.isAllocated(infos, 0u));
-
-            const u32 next = tree.nextAllocateBit(infos, 0u);
-            PPR_ASSERT(next == 0u);
+            mem::UnitTest::bit_tree_mechanics();
         };
 
         PPR_UNIT_TEST(bundle_flow) {

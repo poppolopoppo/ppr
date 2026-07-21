@@ -11,18 +11,33 @@ static pP::KeyboardDevice s_test_keyboard{pP::InputDeviceID{0u}};
 
 export namespace pP::tests {
     PPR_UNIT_TEST(player_id_ordering) {
-        const PlayerId keyboard{.m_kind = EPlayerKind::keyboard, .m_local_index = 0u, .m_user_id = 0u};
-        const PlayerId gamepad{.m_kind = EPlayerKind::gamepad, .m_local_index = 0u, .m_user_id = 0u};
+        constexpr PlayerIdentity keyboard{
+            .m_user_id = default_value_v,
+            .m_device_id = default_value_v,
+            .m_local_index = 0u,
+            .m_kind = EPlayerKind::keyboard, };
+
+        constexpr PlayerIdentity gamepad{
+            .m_user_id = default_value_v,
+            .m_device_id = default_value_v,
+            .m_local_index = 0u,
+            .m_kind = EPlayerKind::gamepad, };
+
         PPR_ASSERT(keyboard == keyboard);
         PPR_ASSERT(keyboard != gamepad);
         PPR_ASSERT(keyboard < gamepad);
     };
 
     PPR_UNIT_TEST(player_construction_and_device_views) {
-        const PlayerId id{.m_kind = EPlayerKind::keyboard, .m_local_index = 0u, .m_user_id = 0u};
+        constexpr PlayerIdentity id{
+            .m_user_id = default_value_v,
+            .m_device_id = default_value_v,
+            .m_local_index = 0u,
+            .m_kind = EPlayerKind::keyboard, };
+
         Player player{id};
-        PPR_ASSERT(player.getId() == id);
-        PPR_ASSERT(player.getDeviceViews().empty());
+        PPR_ASSERT(player.getIdentity() == id);
+        PPR_ASSERT(player.getDeviceViews().isEmpty());
 
         player.pushDeviceView(safe_ptr<const IInputDevice>{&s_test_keyboard});
         PPR_ASSERT(player.getDeviceViews().size() == 1u);

@@ -14,7 +14,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(error_is_none) {
                 const SharedContext ctx = context::background();
-                PPR_ASSERT(not ctx->error().has_value());
+                PPR_ASSERT(not ctx->error());
             };
 
             PPR_UNIT_TEST(value_is_none) {
@@ -41,7 +41,7 @@ export namespace pP::tests {
                 const auto [ctx, cancel] = context::withCancel(context::background());
                 cancel();
                 PPR_ASSERT(ctx->pollEvent());
-                PPR_ASSERT(ctx->error().has_value());
+                PPR_ASSERT(!!ctx->error());
             };
 
             PPR_UNIT_TEST(cancel_is_idempotent) {
@@ -49,7 +49,7 @@ export namespace pP::tests {
                 cancel();
                 cancel();
                 cancel();
-                PPR_ASSERT(ctx->error().has_value());
+                PPR_ASSERT(!!ctx->error());
                 PPR_ASSERT(ctx->pollEvent());
             };
 
@@ -58,7 +58,7 @@ export namespace pP::tests {
                 const auto [child, cancel_child] = context::withCancel(parent);
                 cancel_parent();
                 PPR_ASSERT(child->pollEvent());
-                PPR_ASSERT(child->error().has_value());
+                PPR_ASSERT(!!child->error());
             };
 
             PPR_UNIT_TEST(grandparent_cancel_propagates) {
@@ -74,7 +74,7 @@ export namespace pP::tests {
                 const auto [child, cancel_child] = context::withCancel(parent);
                 cancel_child();
                 PPR_ASSERT(!parent->pollEvent());
-                PPR_ASSERT(!parent->error().has_value());
+                PPR_ASSERT(!parent->error());
             };
         }
 
@@ -95,15 +95,15 @@ export namespace pP::tests {
                 const std::error_code err{42, std::generic_category()};
                 cancel_(err);
                 PPR_ASSERT(ctx->pollEvent());
-                PPR_ASSERT(ctx->error().has_value());
+                PPR_ASSERT(!!ctx->error());
             };
 
             PPR_UNIT_TEST(clause_error_matches) {
                 const auto [ctx, cancel_] = context::withCancelClause(context::background());
                 const std::error_code err{42, std::generic_category()};
                 cancel_(err);
-                PPR_ASSERT(ctx->error().has_value());
-                PPR_ASSERT(ctx->error()->value() == 42);
+                PPR_ASSERT(!!ctx->error());
+                PPR_ASSERT(ctx->error().value() == 42);
             };
         }
 
@@ -127,7 +127,7 @@ export namespace pP::tests {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
                 const SharedContext child = context::withoutCancel(parent);
                 cancel_parent();
-                PPR_ASSERT(not child->error().has_value());
+                PPR_ASSERT(not child->error());
             };
         }
 
