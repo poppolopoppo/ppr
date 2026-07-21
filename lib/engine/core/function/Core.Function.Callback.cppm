@@ -65,7 +65,7 @@ export namespace pP {
             return Handle(*this, m_events.add(std::forward<Event>(event)));
         }
 
-        bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
+        [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
             return m_events.erase(event_key);
         }
 
@@ -125,7 +125,7 @@ export namespace pP {
     template<
         details::TFunctionReturning<std::error_code> FunctionT,
         mem::details::TAllocator AllocatorT = mem::GPA>
-    class DeferredCallback final {
+    class CallbackSink final {
         using function_traits = details::FunctionTraits<FunctionT>;
 #if 0 // forward declaration of pP::Window is breaking std::is_base_of<> :/
         using params_type = details::ForwardAsLValue<typename function_traits::params_type>;
@@ -133,30 +133,30 @@ export namespace pP {
         using params_type = typename function_traits::params_type;
 #endif
 
-        Callback<FunctionT, AllocatorT> m_callback;
-        std::optional<params_type> m_deferred_params;
+        Callback<FunctionT, AllocatorT> m_callback{};
+        std::optional<params_type> m_deferred_params{};
 
     public:
         using Event = Callback<FunctionT, AllocatorT>::Event;
         using Handle = Callback<FunctionT, AllocatorT>::Handle;
 
-        DeferredCallback() noexcept
+        CallbackSink() noexcept
             requires std::is_default_constructible_v<AllocatorT>
         = default;
 
-        explicit DeferredCallback(const AllocatorT &alloc) noexcept
+        explicit CallbackSink(const AllocatorT &alloc) noexcept
             : m_callback(alloc) {
         }
 
-        explicit DeferredCallback(AllocatorT &&alloc) noexcept
+        explicit CallbackSink(AllocatorT &&alloc) noexcept
             : m_callback(std::forward<AllocatorT>(alloc)) {
         }
 
-        Handle add(Event event) const/* see mutable bellow */ {
+        [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
             return m_callback.add(std::move(event));
         }
 
-        bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
+        [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
             return m_callback.remove(event_key);
         }
 
@@ -164,7 +164,7 @@ export namespace pP {
             m_callback.clear();
         }
 
-        [[nodiscard]] std::error_code flush() noexcept(function_traits::is_noexcept) {
+        [[nodiscard]] std::error_code sink() noexcept(function_traits::is_noexcept) {
             if (m_deferred_params) {
                 return std::apply(m_callback, std::exchange(m_deferred_params, std::nullopt).value());
             }

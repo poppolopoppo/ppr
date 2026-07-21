@@ -35,12 +35,12 @@ namespace pP {
 
     std::error_code Window::update() {
         return make_error_code({
-            m_when_closed.flush(),
-            m_when_focused.flush(),
-            m_when_iconified.flush(),
-            m_when_moved.flush(),
-            m_when_resized.flush(),
-            m_when_scaled.flush()
+            m_when_closed.sink(),
+            m_when_focused.sink(),
+            m_when_iconified.sink(),
+            m_when_moved.sink(),
+            m_when_resized.sink(),
+            m_when_scaled.sink()
         });
     }
 }
