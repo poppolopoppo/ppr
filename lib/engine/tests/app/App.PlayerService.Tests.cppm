@@ -14,11 +14,11 @@ export namespace pP::tests {
 
         auto keyboard_result = input->getOrCreateKeyboardPlayer();
         PPR_ASSERT(keyboard_result.has_value());
-        safe_ptr<Player> keyboard = *keyboard_result;
+        safe_ptr<Player> keyboard = std::move(*keyboard_result);
         PPR_ASSERT(keyboard.get() != nullptr);
         PPR_ASSERT(keyboard->getIdentity().m_kind == EPlayerKind::keyboard);
 
-        const PlayerId keyboard_id = keyboard->getUserId();
+        const PlayerId keyboard_id{keyboard->getUserId()};
         u32 count = 0u;
         input->enumeratePlayers([&](const SharedPlayer &) noexcept -> std::error_code {
             ++count;
@@ -36,7 +36,7 @@ export namespace pP::tests {
 
         auto gamepad_result = input->addGamepadPlayer(0u);
         PPR_ASSERT(gamepad_result.has_value());
-        safe_ptr<Player> gamepad = *gamepad_result;
+        safe_ptr<Player> gamepad = std::move(*gamepad_result);
         PPR_ASSERT(gamepad.get() != nullptr);
         PPR_ASSERT(gamepad->getIdentity().m_kind == EPlayerKind::gamepad);
 
@@ -49,7 +49,7 @@ export namespace pP::tests {
         });
         PPR_ASSERT(found);
 
-        const PlayerId gamepad_id = gamepad->getUserId();
+        const PlayerId gamepad_id{gamepad->getUserId()};
         gamepad = nullptr;
         PPR_ASSERT(input->removePlayer(gamepad_id) == default_value_v);
     };
@@ -65,16 +65,16 @@ export namespace pP::tests {
 
         auto first_result = input->getOrCreateKeyboardPlayer();
         PPR_ASSERT(first_result.has_value());
-        safe_ptr<Player> first = *first_result;
+        safe_ptr<Player> first = std::move(*first_result);
         PPR_ASSERT(first.get() != nullptr);
 
         auto second_result = input->getOrCreateKeyboardPlayer();
         PPR_ASSERT(second_result.has_value());
-        safe_ptr<Player> second = *second_result;
+        safe_ptr<Player> second = std::move(*second_result);
         PPR_ASSERT(second.get() != nullptr);
         PPR_ASSERT(first.get() == second.get());
 
-        const PlayerId player_id = first->getUserId();
+        const PlayerId player_id{first->getUserId()};
         first = nullptr;
         second = nullptr;
         PPR_ASSERT(input->removePlayer(player_id) == default_value_v);
@@ -99,9 +99,9 @@ export namespace pP::tests {
 
         auto player_result = input->getOrCreateKeyboardPlayer();
         PPR_ASSERT(player_result.has_value());
-        safe_ptr<Player> player = *player_result;
+        safe_ptr<Player> player = std::move(*player_result);
 
-        const PlayerId id = player->getUserId();
+        const PlayerId id{player->getUserId()};
         player = nullptr;
         PPR_ASSERT(input->removePlayer(id) == default_value_v);
 

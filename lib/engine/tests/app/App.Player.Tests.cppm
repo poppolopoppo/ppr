@@ -7,8 +7,6 @@ import engine.core;
 import engine.app;
 import std;
 
-static pP::KeyboardDevice s_test_keyboard{pP::InputDeviceID{0u}};
-
 export namespace pP::tests {
     PPR_UNIT_TEST(player_id_ordering) {
         constexpr PlayerIdentity keyboard{
@@ -35,11 +33,13 @@ export namespace pP::tests {
             .m_local_index = 0u,
             .m_kind = EPlayerKind::keyboard, };
 
+        KeyboardDevice test_keyboard{InputDeviceID{0u}};
+
         Player player{id};
         PPR_ASSERT(player.getIdentity() == id);
         PPR_ASSERT(player.getDeviceViews().isEmpty());
 
-        player.pushDeviceView(safe_ptr<const IInputDevice>{&s_test_keyboard});
+        player.pushDeviceView(safe_ptr<const IInputDevice>{&test_keyboard});
         PPR_ASSERT(player.getDeviceViews().size() == 1u);
     };
 

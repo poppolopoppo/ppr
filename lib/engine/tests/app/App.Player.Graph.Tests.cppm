@@ -7,25 +7,40 @@ import engine.core;
 import engine.app;
 import std;
 
-namespace {
-    struct GraphTestService : pP::IPlayerService {
-        pP::SharedPlayer getPlayer(const pP::PlayerId &) const noexcept override { return {}; }
-        void enumeratePlayers(pP::Collector<pP::SharedPlayer>) const noexcept override {}
-        pP::Expected<pP::SharedPlayer> getOrCreateKeyboardPlayer() override {
+namespace pP {
+    struct GraphTestService : IPlayerService {
+        SharedPlayer getPlayer(const PlayerId &) const noexcept override { return {}; }
+        void enumeratePlayers(Collector<SharedPlayer>) const noexcept override {}
+        Expected<SharedPlayer> getOrCreateKeyboardPlayer() override {
             return std::unexpected{make_error_code(std::errc::not_supported)};
         }
-        pP::Expected<pP::SharedPlayer> addGamepadPlayer(pP::u32) override {
+        Expected<SharedPlayer> addGamepadPlayer(u32) override {
             return std::unexpected{make_error_code(std::errc::not_supported)};
         }
-        std::error_code removePlayer(const pP::PlayerId &) override { return pP::default_value_v; }
-        pP::IPlayerService::PlayerCallback::Handle whenPlayerAdded(pP::IPlayerService::PlayerCallback::Event) override { return {}; }
-        pP::IPlayerService::PlayerCallback::Handle whenPlayerRemoved(pP::IPlayerService::PlayerCallback::Event) override { return {}; }
+        std::error_code removePlayer(const PlayerId &) override { return default_value_v; }
+        PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event) override { return {}; }
+        PlayerCallback::Handle whenPlayerRemoved(PlayerCallback::Event) override { return {}; }
     };
 
-    pP::KeyboardDevice g_test_keyboard{pP::InputDeviceID{100u}};
-    pP::MouseDevice g_test_mouse{pP::InputDeviceID{101u}};
-    pP::GamepadDevice g_test_gamepad{pP::InputDeviceID{102u}, 0u};
-    GraphTestService g_test_service{};
+    [[nodiscard]] KeyboardDevice &getTestKeyboard() noexcept {
+        static KeyboardDevice g_instance{InputDeviceID{100u}};
+        return g_instance;
+    }
+
+    [[nodiscard]] MouseDevice &getTestMouse() noexcept {
+        static MouseDevice g_instance{InputDeviceID{101u}};
+        return g_instance;
+    }
+
+    [[nodiscard]] GamepadDevice &getTestGamepad() noexcept {
+        static GamepadDevice g_instance{InputDeviceID{102u}, 0u};
+        return g_instance;
+    }
+
+    [[nodiscard]] GraphTestService &getTestGraphService() noexcept {
+        static GraphTestService g_instance{};
+        return g_instance;
+    }
 }
 
 export namespace pP::tests {
@@ -44,7 +59,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        auto result = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        auto result = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
         PPR_ASSERT(result.has_value());
         SharedPlayer player = *result;
         PPR_ASSERT(player.get() != nullptr);
@@ -58,7 +73,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         SharedPlayer retrieved = graph.getPlayer(user_id);
         PPR_ASSERT(retrieved.get() != nullptr);
@@ -75,7 +90,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         auto found = graph.findPlayerForDevice(InputDeviceID{100u});
         PPR_ASSERT(found.has_value());
@@ -96,8 +111,8 @@ export namespace pP::tests {
         PlayerGraph graph{};
         GraphTestService service{};
 
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{1u}, g_test_keyboard, g_test_mouse);
-        std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, g_test_gamepad);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{1u}, getTestKeyboard(), getTestMouse());
+            std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, getTestGamepad());
 
         u32 count = 0u;
         bool has_keyboard = false;
@@ -118,7 +133,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         auto err = graph.removePlayer(service, user_id);
         PPR_ASSERT(err == default_value_v);
@@ -138,8 +153,8 @@ export namespace pP::tests {
         PlayerGraph graph{};
         GraphTestService service{};
 
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{1u}, g_test_keyboard, g_test_mouse);
-        std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, g_test_gamepad);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{1u}, getTestKeyboard(), getTestMouse());
+        std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, getTestGamepad());
 
         graph.clear();
 
@@ -156,10 +171,10 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        auto first = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        auto first = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
         PPR_ASSERT(first.has_value());
 
-        auto second = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        auto second = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
         PPR_ASSERT(second.has_value());
         PPR_ASSERT(first->get() == second->get());
     };
@@ -169,12 +184,13 @@ export namespace pP::tests {
         GraphTestService service{};
 
         u32 call_count = 0u;
-        std::ignore = graph.whenPlayerAdded([&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_added = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
             ++call_count;
             return default_value_v;
-        });
+        };
+        auto added_handle = graph.whenPlayerAdded(on_added);
 
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, getTestKeyboard(), getTestMouse());
         PPR_ASSERT(call_count == 1u);
     };
 
@@ -183,13 +199,14 @@ export namespace pP::tests {
         GraphTestService service{};
 
         const PlayerId user_id{42u};
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         u32 call_count = 0u;
-        std::ignore = graph.whenPlayerRemoved([&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_removed = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
             ++call_count;
             return default_value_v;
-        });
+        };
+        auto removed_handle = graph.whenPlayerRemoved(on_removed);
 
         std::ignore = graph.removePlayer(service, user_id);
         PPR_ASSERT(call_count == 1u);
@@ -200,14 +217,16 @@ export namespace pP::tests {
         GraphTestService service{};
 
         u32 added_count = 0u;
-        std::ignore = graph.whenPlayerAdded([&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_added = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
             ++added_count;
             return default_value_v;
-        });
+        };
+        auto added_handle = graph.whenPlayerAdded(on_added);
+        added_handle.release();
 
         graph.clear();
 
-        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, g_test_keyboard, g_test_mouse);
+        std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, getTestKeyboard(), getTestMouse());
         PPR_ASSERT(added_count == 0u);
     };
 
