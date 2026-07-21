@@ -8,10 +8,11 @@ import :input.keyboard;
 import :input.listener;
 import :input.mouse;
 import :input.player;
+import :player.graph;
 import :service.player;
 
 export namespace pP {
-    class GlfwInput final : public IInputService, public IPlayerService {
+    class GlfwInput final : public IInputService {
     public:
         // Hot data (game thread)
         KeyboardDevice m_keyboard{InputDeviceID{0u}};
@@ -28,11 +29,15 @@ export namespace pP {
         InputListener m_global_listener{};
         Array<SharedInputListener> m_listeners{};
 
-        FlatMap<PlayerId, std::unique_ptr<Player>> m_players{};
+        PlayerGraph m_graph{};
 
         // Hot per-frame callbacks (placed near device data for cache locality)
         UpdateCallback m_when_before_updated{};
         UpdateCallback m_when_after_updated{};
+
+        // Held key/mouse button state (hot, accessed per-frame)
+        FlatSet<EKeyboardKey> m_held_keys{};
+        FlatSet<EMouseButton> m_held_mouse_buttons{};
 
         // input feeding (game thread, driven by GLFW callbacks):
         void onKey(int key, int scancode, int action, int mods) noexcept;
@@ -43,16 +48,12 @@ export namespace pP {
 
     private:
         bool m_gamepads_ever_connected{};
-        FlatSet<EKeyboardKey> m_held_keys{};
-        FlatSet<EMouseButton> m_held_mouse_buttons{};
-
-        FlatMap<InputDeviceID, PlayerId> m_device_to_player{};
 
         UnhandledKeyCallback m_when_unhandled_key{};
 
-        void pollGamepads_() noexcept;
+        std::error_code pollGamepads_() noexcept;
         void feedGamepad_(GamepadDevice &gamepad, int joystick_id) noexcept;
-        void routeMessage_(const InputMessage &message) noexcept;
+        std::error_code routeMessage_(const InputMessage &message) noexcept;
         [[nodiscard]] EInputListenerResponse dispatchToGlobalListeners_(const InputMessage &message) noexcept;
 
     public:
@@ -64,16 +65,15 @@ export namespace pP {
         DeviceCallback m_when_device_connected{};
         DeviceCallback m_when_device_disconnected{};
 
-        PlayerCallback m_when_player_added{};
-        PlayerCallback m_when_player_removed{};
+        safe_ptr<IPlayerService> m_player_service{};
 
     public:
         GlfwInput() noexcept = default;
 
         [[nodiscard]] static GlfwInput &get() noexcept;
 
-        void initialize();
-        void shutdown();
+        std::error_code initialize();
+        std::error_code shutdown();
 
         // ------------------------------------------------------------------
         // IInputService overrides
@@ -91,11 +91,11 @@ export namespace pP {
         [[nodiscard]] SharedInputDevice
         getInputDevice(const InputDeviceID &device_id) const noexcept override;
 
-        void enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept override;
+        [[nodiscard]] std::error_code enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept override;
 
-        void supportedInputKeys(Collector<InputKey> supports_key) const override;
+        [[nodiscard]] std::error_code supportedInputKeys(Collector<InputKey> supports_key) const override;
 
-        void postInputMessages(TimeSpan dt) override;
+        [[nodiscard]] std::error_code postInputMessages(TimeSpan dt) override;
 
         void resetInputState() noexcept override;
 
@@ -129,26 +129,5 @@ export namespace pP {
         [[nodiscard]] UpdateCallback::Handle whenBeforeUpdated(UpdateCallback::Event on_update) override;
 
         [[nodiscard]] UpdateCallback::Handle whenAfterUpdated(UpdateCallback::Event on_update) override;
-
-        // ------------------------------------------------------------------
-        // IPlayerService overrides
-        // ------------------------------------------------------------------
-
-        [[nodiscard]] safe_ptr<Player> getPlayer(const PlayerId &id) const noexcept override;
-
-        void enumeratePlayers(Collector<safe_ptr<Player>> each_player) const noexcept override;
-
-        [[nodiscard]] safe_ptr<Player> getOrCreateKeyboardPlayer() override;
-
-        [[nodiscard]] safe_ptr<Player> addGamepadPlayer(u32 user_id, u32 controller_index) override;
-
-        [[nodiscard]] bool removePlayer(const PlayerId &id) override;
-
-        [[nodiscard]] PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event on_added) override;
-
-        [[nodiscard]] PlayerCallback::Handle whenPlayerRemoved(PlayerCallback::Event on_removed) override;
-
-        // Test support: clear all player state (used by test suite isolation)
-        void resetPlayers() noexcept;
     };
 }

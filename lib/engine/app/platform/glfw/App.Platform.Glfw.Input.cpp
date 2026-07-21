@@ -1,43 +1,40 @@
 module;
-#include <GLFW/glfw3.h>
+
 #include "pP/Macros.h"
+#include "App.Platform.Glfw.include.hpp"
 
 module engine.app;
 
-import :platform.glfw.input;
 import std;
+import :platform.glfw.input;
 
 namespace pP {
+    PPR_DEFINE_LOG_CATEGORY(GlfwInput, info, none);
+
     /*static*/
     GlfwInput &GlfwInput::get() noexcept {
         static GlfwInput g_instance{};
         return g_instance;
     }
 
-    safe_ptr<IPlayerService> getDefaultPlayerService() noexcept {
-        return safe_ptr<IPlayerService>{&GlfwInput::get()};
-    }
-
-    void resetDefaultPlayerService() noexcept {
-        GlfwInput::get().resetPlayers();
-    }
-
-    void GlfwInput::initialize() {
+    std::error_code GlfwInput::initialize() {
         m_devices.emplace(InputDeviceID{0u}, safe_ptr<const IInputDevice>{&m_keyboard});
         m_devices.emplace(InputDeviceID{1u}, safe_ptr<const IInputDevice>{&m_mouse});
-        for (GamepadDevice &gamepad : m_gamepads) {
+        for (GamepadDevice &gamepad: m_gamepads) {
             m_devices.emplace(gamepad.getInputDeviceID(), safe_ptr<const IInputDevice>{&gamepad});
         }
 
-        (void)getOrCreateKeyboardPlayer();
+        return default_value_v;
     }
 
-    void GlfwInput::shutdown() {
-        m_players.clear();
-        m_device_to_player.clear();
+    std::error_code GlfwInput::shutdown() {
+        m_player_service.reset();
+        m_graph.clear();
         m_devices.clear();
         m_held_keys.clear();
         m_held_mouse_buttons.clear();
+
+        return default_value_v;
     }
 
     // ------------------------------------------------------------------
@@ -57,19 +54,21 @@ namespace pP {
     }
 
     SharedInputDevice GlfwInput::getInputDevice(const InputDeviceID &device_id) const noexcept {
-        return m_devices.at(device_id);
+        const auto it = m_devices.find(device_id);
+        return it != m_devices.end() ? it->second : SharedInputDevice{};
     }
 
-    void GlfwInput::enumerateInputDevices(Collector<const SharedInputDevice &> each_device) const noexcept {
-        for (const SharedInputDevice &device: m_devices.values()) {
-            each_device(device);
-        }
+    std::error_code GlfwInput::enumerateInputDevices(const Collector<SharedInputDevice> each_device) const noexcept {
+        return each_device.append(m_devices.values());
     }
 
-    void GlfwInput::supportedInputKeys(const Collector<InputKey> supports_key) const {
+    std::error_code GlfwInput::supportedInputKeys(const Collector<InputKey> supports_key) const {
         for (const SharedInputDevice &device: m_devices.values()) {
-            device->supportedInputKeys(supports_key);
+            if (const auto err = device->supportedInputKeys(supports_key)) [[unlikely]] {
+                return err;
+            }
         }
+        return default_value_v;
     }
 
     // ------------------------------------------------------------------
@@ -156,7 +155,7 @@ namespace pP {
             return;
         }
 
-        const EMouseButton mapped = static_cast<EMouseButton>(button);
+        const auto mapped = static_cast<EMouseButton>(button);
         if (action == GLFW_RELEASE) {
             m_held_mouse_buttons.erase(mapped);
         } else {
@@ -173,10 +172,11 @@ namespace pP {
         m_mouse.m_state.addWheelDeltaY(static_cast<int>(y_offset));
     }
 
-    void GlfwInput::pollGamepads_() noexcept {
+    std::error_code GlfwInput::pollGamepads_() noexcept {
         if (!m_gamepads_ever_connected) [[likely]] {
-            return;
+            return default_value_v;
         }
+
         for (std::size_t i = 0; i < m_gamepads.size(); ++i) {
             GamepadDevice &gamepad = m_gamepads[i];
             const int joystick_id = static_cast<int>(i);
@@ -185,38 +185,47 @@ namespace pP {
 
             if (present && !was_connected) {
                 m_gamepads_ever_connected = true;
-                (void)addGamepadPlayer(static_cast<u32>(i), static_cast<u32>(i));
+                PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_player_service->addGamepadPlayer(static_cast<u32>(i)));
+
                 gamepad.m_state.setStatus(i, true);
                 feedGamepad_(gamepad, joystick_id);
-                m_when_device_connected(*this, gamepad);
+
+                PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_connected(*this, gamepad));
             } else if (!present && was_connected) {
                 gamepad.m_state.setStatus(i, false);
-                m_when_device_disconnected(*this, gamepad);
-                m_device_to_player.erase(gamepad.getInputDeviceID());
-                (void)removePlayer(PlayerId{
-                    .m_kind = EPlayerKind::gamepad,
-                    .m_local_index = safe_narrowing(i),
-                    .m_user_id = static_cast<u32>(i),
-                });
+                PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_disconnected(*this, gamepad));
+
+                if (const auto player_id = m_graph.findPlayerForDevice(gamepad.getInputDeviceID())) {
+                    PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_player_service->removePlayer(*player_id));
+                }
             } else if (present) {
                 feedGamepad_(gamepad, joystick_id);
             }
         }
+
+        return default_value_v;
     }
 
     void GlfwInput::feedGamepad_(GamepadDevice &gamepad, const int joystick_id) noexcept {
         int axes_count = 0;
         const float *const axes = ::glfwGetJoystickAxes(joystick_id, &axes_count);
         if (axes != nullptr) {
-            if (axes_count > 0) gamepad.m_state.m_left_stick.set(float2{axes[0], axes[1]});
-            if (axes_count > 2) gamepad.m_state.m_right_stick.set(float2{axes[2], axes[3]});
-            if (axes_count > 4) gamepad.m_state.m_left_trigger.set(axes[4]);
-            if (axes_count > 5) gamepad.m_state.m_right_trigger.set(axes[5]);
+            if (axes_count > 0) {
+                gamepad.m_state.m_left_stick.set(float2{axes[0], axes[1]});
+            }
+            if (axes_count > 2) {
+                gamepad.m_state.m_right_stick.set(float2{axes[2], axes[3]});
+            }
+            if (axes_count > 4) {
+                gamepad.m_state.m_left_trigger.set(axes[4]);
+            }
+            if (axes_count > 5) {
+                gamepad.m_state.m_right_trigger.set(axes[5]);
+            }
         }
 
         int buttons_count = 0;
-        const unsigned char *const buttons = ::glfwGetJoystickButtons(joystick_id, &buttons_count);
-        if (buttons != nullptr) {
+        if (const unsigned char *const buttons = ::glfwGetJoystickButtons(joystick_id, &buttons_count)) {
             for (int b = 0; b < buttons_count && b <= 13; ++b) {
                 if (buttons[b] == GLFW_PRESS) {
                     gamepad.m_state.m_buttons.setPressed(static_cast<EGamepadButton>(b));
@@ -229,50 +238,57 @@ namespace pP {
         return m_global_listener.postKeyEvent(message);
     }
 
-    void GlfwInput::routeMessage_(const InputMessage &message) noexcept {
-        const auto it = m_device_to_player.find(message.m_device_id);
-        const safe_ptr<Player> player = (it != m_device_to_player.end())
-            ? getPlayer(it->second)
-            : safe_ptr<Player>{};
+    std::error_code GlfwInput::routeMessage_(const InputMessage &message) noexcept {
+        SharedPlayer player;
+        if (const auto player_id = m_graph.findPlayerForDevice(message.m_device_id)) {
+            player = m_graph.getPlayer(*player_id);
+        }
 
         if (player) {
-            const EInputListenerResponse response = player->getListener().postKeyEvent(message);
-            if (response == EInputListenerResponse::unhandled) {
+            if (const EInputListenerResponse response = player->getListener().postKeyEvent(message);
+                response == EInputListenerResponse::unhandled) {
                 if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
-                    m_when_unhandled_key(*this, message.m_key);
+                    PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
                 }
             }
-            return;
+            return default_value_v;
         }
 
         if (dispatchToGlobalListeners_(message) == EInputListenerResponse::unhandled) {
-            m_when_unhandled_key(*this, message.m_key);
+            PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_unhandled_key(*this, message.m_key));
         }
+
+        return default_value_v;
     }
 
-    void GlfwInput::postInputMessages(const TimeSpan dt) {
-        m_when_before_updated(*this, dt);
+    std::error_code GlfwInput::postInputMessages(const TimeSpan dt) {
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_before_updated(*this, dt));
 
-        pollGamepads_();
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, pollGamepads_());
 
-        for (const EKeyboardKey key : m_held_keys) {
+        for (const EKeyboardKey key: m_held_keys) {
             m_keyboard.m_state.m_keys.setPressed(key);
         }
-        for (const EMouseButton button : m_held_mouse_buttons) {
+        for (const EMouseButton button: m_held_mouse_buttons) {
             m_mouse.m_state.m_buttons.setPressed(button);
         }
 
-        const auto route = [&](const InputMessage &message) {
-            routeMessage_(message);
+        const auto route = [&](const InputMessage &message) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwInput, routeMessage_(message));
+            return default_value_v;
         };
 
-        m_keyboard.postInputMessages(dt, route);
-        m_mouse.postInputMessages(dt, route);
-        for (GamepadDevice &gamepad : m_gamepads) {
-            gamepad.postInputMessages(dt, route);
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_keyboard.postInputMessages(dt, route));
+
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_mouse.postInputMessages(dt, route));
+
+        for (GamepadDevice &gamepad: m_gamepads) {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwInput, gamepad.postInputMessages(dt, route));
         }
 
-        m_when_after_updated(*this, dt);
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_after_updated(*this, dt));
+
+        return default_value_v;
     }
 
     void GlfwInput::resetInputState() noexcept {
@@ -365,86 +381,5 @@ namespace pP {
 
     auto GlfwInput::whenAfterUpdated(UpdateCallback::Event on_update) -> UpdateCallback::Handle {
         return m_when_after_updated.add(std::move(on_update));
-    }
-
-    // ------------------------------------------------------------------
-    // player service
-    // ------------------------------------------------------------------
-
-    [[nodiscard]] safe_ptr<Player> GlfwInput::getPlayer(const PlayerId &id) const noexcept {
-        if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {
-            return safe_ptr<Player>{it->second.get()};
-        }
-        return safe_ptr<Player>{};
-    }
-
-    void GlfwInput::enumeratePlayers(const Collector<safe_ptr<Player>> each_player) const noexcept {
-        for (const auto &[id, player] : m_players) {
-            each_player(safe_ptr<Player>{player.get()});
-        }
-    }
-
-    [[nodiscard]] safe_ptr<Player> GlfwInput::getOrCreateKeyboardPlayer() {
-        const PlayerId id{.m_kind = EPlayerKind::keyboard, .m_local_index = 0u, .m_user_id = 0u};
-        if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {
-            return safe_ptr<Player>{it->second.get()};
-        }
-
-        auto player = std::make_unique<Player>(id);
-        player->pushDeviceView(safe_ptr<const IInputDevice>{&m_keyboard});
-        player->pushDeviceView(safe_ptr<const IInputDevice>{&m_mouse});
-        const auto ptr = safe_ptr<Player>{player.get()};
-        m_players.emplace(id, std::move(player));
-        m_device_to_player.emplace(InputDeviceID{0u}, id);
-        m_device_to_player.emplace(InputDeviceID{1u}, id);
-        m_when_player_added(*this, *ptr);
-        return ptr;
-    }
-
-    [[nodiscard]] safe_ptr<Player> GlfwInput::addGamepadPlayer(const u32 user_id, const u32 controller_index) {
-        const PlayerId id{
-            .m_kind = EPlayerKind::gamepad,
-            .m_local_index = safe_narrowing(controller_index),
-            .m_user_id = user_id,
-        };
-
-        auto player = std::make_unique<Player>(id);
-        player->pushDeviceView(safe_ptr<const IInputDevice>{&m_gamepads[controller_index]});
-        const auto ptr = safe_ptr<Player>{player.get()};
-        m_players.emplace(id, std::move(player));
-        m_device_to_player.emplace(m_gamepads[controller_index].getInputDeviceID(), id);
-        m_when_player_added(*this, *ptr);
-        return ptr;
-    }
-
-    bool GlfwInput::removePlayer(const PlayerId &id) {
-        if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {
-            m_when_player_removed(*this, *it->second);
-            for (auto dit = m_device_to_player.begin(); dit != m_device_to_player.end(); ) {
-                if (dit->second == id) {
-                    dit = m_device_to_player.erase(dit);
-                } else {
-                    ++dit;
-                }
-            }
-            m_players.erase(it);
-            return true;
-        }
-        return false;
-    }
-
-    auto GlfwInput::whenPlayerAdded(PlayerCallback::Event on_added) -> PlayerCallback::Handle {
-        return m_when_player_added.add(std::move(on_added));
-    }
-
-    auto GlfwInput::whenPlayerRemoved(PlayerCallback::Event on_removed) -> PlayerCallback::Handle {
-        return m_when_player_removed.add(std::move(on_removed));
-    }
-
-    void GlfwInput::resetPlayers() noexcept {
-        m_when_player_removed.clear();
-        m_when_player_added.clear();
-        m_players.clear();
-        m_device_to_player.clear();
     }
 }

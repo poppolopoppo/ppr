@@ -1,5 +1,5 @@
 module;
-#include <GLFW/glfw3.h>
+
 #include "pP/Macros.h"
 export module engine.app:platform.glfw.window;
 
@@ -9,9 +9,8 @@ import engine.core;
 
 export namespace pP {
     class GlfwWindow final : public IWindowService {
-        void initializeMonitors_();
-
-        void initializeGlobalCallbacks_();
+        [[nodiscard]] std::error_code initializeMonitors_();
+        [[nodiscard]] std::error_code updateWindows_() const;
 
         GlfwWindow() noexcept = default;
 
@@ -36,13 +35,14 @@ export namespace pP {
         safe_ptr<Window> m_main_window{};
         safe_ptr<Window> m_focused_window{};
         safe_ptr<GlfwInput> m_input_service{};
+
         bool m_shutdown{false};
 
         [[nodiscard]] static GlfwWindow &get() noexcept;
 
-        void initialize();
+        std::error_code initialize();
 
-        void shutdown();
+        std::error_code shutdown() noexcept;
 
         void setInputService(safe_ptr<GlfwInput> input_service) noexcept;
 
@@ -51,16 +51,16 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         // events:
-        void pollEvents() override;
+        [[nodiscard]] std::error_code pollEvents() override;
 
-        void waitEvents() override;
+        [[nodiscard]] std::error_code waitEvents() override;
 
         // monitors:
-        void enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept override;
+        [[nodiscard]] std::error_code enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept override;
 
         [[nodiscard]] SharedMonitor getPrimaryMonitor() const noexcept override;
 
-        void enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept override;
+        [[nodiscard]] std::error_code enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept override;
 
         void setMonitorGamma(const Monitor &monitor, float gamma) noexcept override;
 
@@ -75,7 +75,7 @@ export namespace pP {
             const SharedMonitor &fullscreen,
             const SharedWindow &share_resources_with) override;
 
-        void destroyWindow(SharedWindow &&window) override;
+        [[nodiscard]] std::error_code destroyWindow(SharedWindow &&window) override;
 
         [[nodiscard]] SharedWindow getFocusedWindow() const noexcept override;
 
@@ -111,6 +111,8 @@ export namespace pP {
         void restoreWindow(const Window &window) override;
 
         void swapWindowBuffers(const Window &window) override;
+
+        [[nodiscard]] void *getNativeHandle(const Window &window) const noexcept override;
 
         // window clipboard:
         void setWindowClipboardString(const Window &window, const std::string_view &text) override;

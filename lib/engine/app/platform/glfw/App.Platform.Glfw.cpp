@@ -1,17 +1,57 @@
 module;
-#include <GLFW/glfw3.h>
 #include "pP/Macros.h"
+#include "App.Platform.Glfw.include.hpp"
 
 module engine.app;
 
 import :platform.glfw;
 import :platform.glfw.input;
+import :platform.glfw.player;
 import :platform.glfw.window;
-import engine.core;
 import std;
+import engine.core;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwPlatform, info, none)
+
+    namespace platform {
+        class GlfwErrorCategory : public std::error_category {
+        public:
+            [[nodiscard]] const char *name() const noexcept override { return "glfw"; }
+
+            [[nodiscard]] std::string message(const int ev) const override {
+                switch (static_cast<errc>(ev)) {
+                    case errc::ok: return "indicates success";
+                    case errc::fail: return "generic failure code - meaning a serious error occurred and the call couldn't complete";
+                    case errc::initialization_failed: return "indicates that the plaform failed to initialize";
+                    case errc::invalid_argument: return "indicates that an argument passed in as parameter to a method is invalid";
+
+                    default: return std::format("unknown glfw result ({})", ev);
+                }
+            }
+
+            [[nodiscard]] std::error_condition default_error_condition(const int ev) const noexcept override {
+                switch (static_cast<errc>(ev)) {
+                    case errc::invalid_argument: return std::errc::invalid_argument;
+                    default: return {ev, *this};
+                }
+            }
+        };
+
+        static constexpr GlfwErrorCategory g_glfw_error_category{};
+
+        [[nodiscard]] const std::error_category &error_category() noexcept {
+            return g_glfw_error_category;
+        }
+
+        [[nodiscard]] std::error_code make_error_code(const int result) noexcept {
+            return result == GL_TRUE ? std::error_code{} : std::error_code{static_cast<int>(errc::fail), g_glfw_error_category};
+        }
+
+        [[nodiscard]] std::error_code make_error_code(const errc error_code) noexcept {
+            return make_error_code(enumOrd(error_code));
+        }
+    }
 
     /*static*/
     SharedPlatform IPlatform::get() noexcept {
@@ -28,18 +68,18 @@ namespace pP {
     }
 
     safe_ptr<IPlayerService> GlfwPlatform::getPlayerService() const noexcept {
-        return safe_ptr<IPlayerService>{&GlfwInput::get()};
+        return GlfwPlayer::get();
     }
 
     std::string_view GlfwPlatform::getPlatformName() const noexcept { return "GLFW"; }
 
-    PlatformVersion GlfwPlatform::getPlatformVersion() const noexcept {
+    platform::Version GlfwPlatform::getPlatformVersion() const noexcept {
         int major = 0, minor = 0, revision = 0;
         ::glfwGetVersion(&major, &minor, &revision);
-        return PlatformVersion{.m_major = major, .m_minor = minor, .m_revision = revision};
+        return {.m_major = major, .m_minor = minor, .m_revision = revision};
     }
 
-    void GlfwPlatform::initializePlatform(Application &application) {
+    std::error_code GlfwPlatform::initialize(Application &application) {
         ::glfwSetErrorCallback([](int error_code, const char *description) {
             PPR_LOG(GlfwPlatform, error, "GLFW error", {{"error_code", error_code}, {"description", description}});
         });
@@ -54,34 +94,49 @@ namespace pP {
 
         if (not::glfwInit()) [[unlikely]] {
             PPR_LOG(GlfwPlatform, error, "failed to init GLFW");
-            return;
+            return platform::errc::initialization_failed;
         }
         m_glfw_initialized = true;
 
-        m_window_service = &GlfwWindow::get();
+        m_window_service = safe_ptr(&GlfwWindow::get());
 
         m_window_service->initialize();
-        GlfwInput::get().initialize();
 
-        m_window_service->setInputService(safe_ptr<GlfwInput>{&GlfwInput::get()});
+        const safe_ptr input_service{&GlfwInput::get()};
+        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, input_service->initialize());
 
-        application.getServices().insert(safe_ptr<IInputService>{&GlfwInput::get()});
-        application.getServices().insert(safe_ptr<IWindowService>{m_window_service});
-        application.getServices().insert(safe_ptr<IPlayerService>{&GlfwInput::get()});
+        m_window_service->setInputService(input_service);
+
+        ServicesStore &app_services = application.getServices();
+        std::ignore = app_services.insert(safe_ptr<IInputService>{input_service});
+        std::ignore = app_services.insert(safe_ptr<IWindowService>{m_window_service});
+        std::ignore = app_services.insert(safe_ptr<IPlayerService>{GlfwPlayer::get()});
+
+        return default_value_v;
     }
 
-    void GlfwPlatform::shutdownPlatform(Application &application) {
+    std::error_code GlfwPlatform::shutdown(Application &application) {
+        if (not m_glfw_initialized) [[unlikely]] {
+            return default_value_v;
+        }
+
+        PPR_ASSERT(m_window_service.isValid());
         if (m_window_service) [[likely]] {
             m_window_service->setInputService({});
             m_window_service->shutdown();
             m_window_service = nullptr;
         }
-        application.getServices().erase<IInputService>();
-        application.getServices().erase<IPlayerService>();
-        application.getServices().erase<IWindowService>();
-        GlfwInput::get().shutdown();
-        if (m_glfw_initialized) {
-            ::glfwTerminate();
-        }
+
+        ServicesStore &app_services = application.getServices();
+        app_services.erase<IInputService>();
+        app_services.erase<IPlayerService>();
+        app_services.erase<IWindowService>();
+
+        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, GlfwInput::get().shutdown());
+
+        ::glfwTerminate();
+        m_glfw_initialized = false;
+
+        return default_value_v;
     }
 }
