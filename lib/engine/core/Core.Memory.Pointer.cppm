@@ -5,6 +5,8 @@ export module engine.core:memory.pointer;
 #if PPR_ENABLE_DEBUG
 import std;
 import :assert;
+#endif
+#if PPR_ENABLE_SAFE_OBJECT_TRACKING
 import :containers.sparse_vector;
 #endif
 
@@ -28,7 +30,7 @@ export namespace pP {
     public:
         safe_object() noexcept = default;
 
-        virtual ~safe_object() noexcept;
+        ~safe_object() noexcept;
 
         // Relocation/copying changes object identity: the new instance starts
         // unobserved, and the source must not be observed at the time of the op.
@@ -70,7 +72,7 @@ export namespace pP {
         };
 
         mutable std::mutex m_referencer_barrier{};
-        mutable SparseVectorInplace<Referencer> m_references;
+        mutable SparseVectorInplace<Referencer> m_references{};
 #endif
     };
 

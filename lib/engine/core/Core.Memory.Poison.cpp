@@ -1,8 +1,6 @@
 module;
 #include "pP/Macros.h"
 
-#include <cstdint>
-
 #if PPR_ENABLE_SANITIZER_ADDRESS
 #   include <sanitizer/asan_interface.h>
 #endif

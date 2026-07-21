@@ -459,7 +459,8 @@ export namespace pP {
         using const_iterator = details::SparseVectorIterator<const T, AllocatorT>;
 
         constexpr SparseVector() noexcept
-            requires std::is_default_constructible_v<allocator_type> = default;
+            requires std::is_default_constructible_v<allocator_type> : stable_vector() {
+        }
 
         explicit constexpr SparseVector(const std::size_t initial_capacity) noexcept
             requires std::is_default_constructible_v<allocator_type> {
