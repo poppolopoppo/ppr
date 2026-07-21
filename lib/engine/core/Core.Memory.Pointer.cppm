@@ -2,79 +2,76 @@ module;
 #include "pP/Macros.h"
 export module engine.core:memory.pointer;
 
+#if PPR_ENABLE_DEBUG
 import std;
 import :assert;
+import :containers.sparse_vector;
+#endif
 
 export namespace pP {
 #if PPR_ENABLE_DEBUG
+
     // ------------------------------------------------------------------
     // Debug mode: lifetime safety checks **ENABLED**
     // ------------------------------------------------------------------
+
+    class safe_object;
+
+    using safe_referencer_key = SparseKeyId;
+
+    namespace details {
+        template<typename T>
+        concept TSafeObject = std::is_base_of_v<safe_object, T>;
+    }
 
     class safe_object {
     public:
         safe_object() noexcept = default;
 
-        ~safe_object() {
-            PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                "Checkable destroyed while CheckedPtr references still exist!");
-        }
+        virtual ~safe_object() noexcept;
 
         // Relocation/copying changes object identity: the new instance starts
         // unobserved, and the source must not be observed at the time of the op.
-        safe_object(safe_object &&other) noexcept {
-            PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                "Source of move construction is still observed by a CheckedPtr!");
-        }
+        safe_object(safe_object &&other) noexcept;
 
-        safe_object &operator=(safe_object &&other) noexcept {
-            if (this != &other) {
-                PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                    "Target of move assignment is still observed by a CheckedPtr!");
-                PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                    "Source of move assignment is still observed by a CheckedPtr!");
-            }
-            return *this;
-        }
+        safe_object &operator=(safe_object &&other) noexcept;
 
-        safe_object(const safe_object &other) noexcept {
-            PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                "Source of copy construction is still observed by a CheckedPtr!");
-        }
+        safe_object(const safe_object &other) noexcept;
 
-        safe_object &operator=(const safe_object &other) noexcept {
-            if (this != &other) {
-                PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                    "Target of copy assignment is still observed by a CheckedPtr!");
-                PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-                    "Source of copy assignment is still observed by a CheckedPtr!");
-            }
-            return *this;
-        }
+        safe_object &operator=(const safe_object &other) noexcept;
 
-        void incSafeRef() const noexcept {
-            m_safe_ref_count.fetch_add(1, std::memory_order_acquire);
-        }
+        safe_referencer_key incSafeRef(const void *derived) const noexcept;
 
-        void decSafeRef() const noexcept {
-            [[maybe_unused]] const int prev = m_safe_ref_count.fetch_sub(1, std::memory_order_release);
-            PPR_ASSERT(prev > 0 && "Debug ref count underflow!");
-        }
+        void decSafeRef(const void *derived, safe_referencer_key referencer_key) const noexcept;
 
-        PPR_FORCE_INLINE friend void incSafeRefIFP(const safe_object *ptr) noexcept {
+        template<details::TSafeObject T>
+        PPR_FORCE_INLINE friend std::optional<safe_referencer_key> incSafeRefIFP(const T *ptr) noexcept {
             if (ptr) [[likely]] {
-                ptr->incSafeRef();
+                return ptr->incSafeRef(ptr);
             }
+            return std::nullopt;
         }
 
-        PPR_FORCE_INLINE friend void decSafeRefIFP(const safe_object *ptr) noexcept {
+        template<details::TSafeObject T>
+        PPR_FORCE_INLINE friend void decSafeRefIFP(const T *ptr, std::optional<safe_referencer_key> &referencer_key) noexcept {
             if (ptr) [[likely]] {
-                ptr->decSafeRef();
+                ptr->decSafeRef(ptr, *referencer_key);
+                referencer_key.reset();
             }
         }
 
     private:
         mutable std::atomic<int> m_safe_ref_count{0};
+
+#if PPR_ENABLE_SAFE_OBJECT_TRACKING
+        struct Referencer {
+            const void *m_derived{nullptr};
+            std::stacktrace m_callstack{};
+        };
+
+        mutable std::mutex m_referencer_barrier{};
+        mutable SparseVectorInplace<Referencer> m_references;
+#endif
     };
 
     template<typename T>
@@ -82,8 +79,11 @@ export namespace pP {
         template<typename U>
         friend class safe_ptr;
 
-        explicit safe_ptr(std::in_place_t, T *const ptr) noexcept
-            : m_ptr(ptr) {
+        T *m_ptr{nullptr};
+        std::optional<safe_referencer_key> m_key{};
+
+        explicit safe_ptr(std::in_place_t, T *const ptr, safe_referencer_key key) noexcept
+            : m_ptr(ptr), m_key(key) {
         }
 
     public:
@@ -91,18 +91,18 @@ export namespace pP {
 
         explicit safe_ptr(T *const ptr) noexcept
             : m_ptr(ptr) {
-            incSafeRefIFP(m_ptr);
+            m_key = incSafeRefIFP(m_ptr);
         }
 
         ~safe_ptr() noexcept {
             static_assert(std::is_base_of_v<safe_object, T>, "safe_ptr requires safe_object base");
-            decSafeRefIFP(m_ptr);
+            decSafeRefIFP(m_ptr, m_key);
             m_ptr = nullptr;
         }
 
         safe_ptr(const safe_ptr &other) noexcept
             : m_ptr(other.m_ptr) {
-            incSafeRefIFP(m_ptr);
+            m_key = incSafeRefIFP(m_ptr);
         }
 
         safe_ptr &operator =(const safe_ptr &other) noexcept {
@@ -116,8 +116,7 @@ export namespace pP {
             requires std::convertible_to<U *, T *>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(const safe_ptr<U> &other) noexcept
-            : m_ptr(other.m_ptr) {
-            incSafeRefIFP(m_ptr);
+            : safe_ptr(other.m_ptr) {
         }
 
         template<typename U>
@@ -133,35 +132,41 @@ export namespace pP {
             requires std::convertible_to<U *, T *>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(safe_ptr<U> &&other) noexcept
-            : m_ptr(other.m_ptr) {
+            : m_ptr(other.m_ptr),
+              m_key(other.m_key) {
             other.m_ptr = nullptr;
+            other.m_key.reset();
         }
 
         template<typename U>
             requires std::convertible_to<U *, T *>
         safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
             if (this != &other) [[likely]] {
-                decSafeRefIFP(m_ptr);
+                decSafeRefIFP(m_ptr, m_key);
+
                 m_ptr = other.m_ptr;
+                m_key = other.m_key;
+
                 other.m_ptr = nullptr;
+                other.m_key.reset();
             }
             return *this;
         }
 
         safe_ptr &operator=(std::nullptr_t) noexcept {
-            decSafeRefIFP(m_ptr);
+            decSafeRefIFP(m_ptr, m_key);
             m_ptr = nullptr;
             return *this;
         }
 
         [[nodiscard]] T *operator->() const noexcept {
-            static_assert(std::is_base_of_v<safe_object, T>, "safe_ptr requires safe_object base");
+            static_assert(details::TSafeObject<T>, "safe_ptr requires safe_object base");
             PPR_ASSERT(m_ptr != nullptr);
             return m_ptr;
         }
 
         [[nodiscard]] T &operator*() const noexcept {
-            static_assert(std::is_base_of_v<safe_object, T>, "safe_ptr requires safe_object base");
+            static_assert(details::TSafeObject<T>, "safe_ptr requires safe_object base");
             PPR_ASSERT(m_ptr != nullptr);
             // ReSharper disable once CppDFANullDereference
             return *m_ptr;
@@ -188,13 +193,9 @@ export namespace pP {
         }
 
         void reset(T *const ptr = nullptr) noexcept {
-            decSafeRefIFP(m_ptr);
+            decSafeRefIFP(m_ptr, m_key);
             m_ptr = ptr;
-            incSafeRefIFP(m_ptr);
-        }
-
-        friend void swap(safe_ptr &lhs, safe_ptr &rhs) noexcept {
-            std::swap(lhs.m_ptr, rhs.m_ptr);
+            m_key = incSafeRefIFP(m_ptr);
         }
 
         [[nodiscard]] friend bool operator==(const safe_ptr &lhs, T *rhs) noexcept {
@@ -213,14 +214,15 @@ export namespace pP {
             return lhs.m_ptr <=> rhs.m_ptr;
         }
 
+        friend void swap(safe_ptr &lhs, safe_ptr &rhs) noexcept {
+            std::swap(lhs.m_ptr, rhs.m_ptr);
+        }
+
         template<typename DerivedT>
             requires std::is_base_of_v<T, DerivedT>
         [[nodiscard]] friend safe_ptr<DerivedT> checked_cast(const safe_ptr &safe) noexcept {
             return safe_ptr<DerivedT>(checked_cast<DerivedT>(safe.m_ptr));
         }
-
-    private:
-        T *m_ptr{nullptr};
     };
 
     template<typename T>
