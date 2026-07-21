@@ -32,13 +32,6 @@ namespace pP::ui {
     }
 #endif
 
-    void setupImGuiErrorCallback(ImGuiContext *ctx) noexcept {
-        ctx->ErrorCallback = [](ImGuiContext *, void *, const char *msg) {
-            PPR_LOG_RAW(UI, error, msg);
-        };
-        ctx->ErrorCallbackUserData = nullptr;
-    }
-
     namespace {
         constexpr std::string_view kImGuiShader = R"(
 struct VsInput {
@@ -230,7 +223,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGui::SetCurrentContext(m_imgui_context);
 
             // Register runtime error callback for ImGui recoverable errors
-            setupImGuiErrorCallback(m_imgui_context);
+            m_imgui_context->ErrorCallback = [](ImGuiContext *, void *, const char *msg) {
+                PPR_LOG_RAW(UI, error, msg);
+            };
+            m_imgui_context->ErrorCallbackUserData = nullptr;
 
             ImGuiIO &io = ImGui::GetIO();
             io.ConfigErrorRecovery = true;

@@ -35,7 +35,5 @@ export namespace pP {
 
     namespace ui {
         [[nodiscard]] std::unique_ptr<IUIService> createImGuiService();
-
-        void setupImGuiErrorCallback(ImGuiContext *ctx) noexcept;
     }
 }
