@@ -24,34 +24,34 @@ export namespace pP {
     class IWindowService : public virtual IService {
     public:
         // events:
-        virtual void pollEvents() = 0;
+        [[nodiscard]] virtual std::error_code pollEvents() = 0;
 
-        virtual void waitEvents() = 0;
+        [[nodiscard]] virtual std::error_code waitEvents() = 0;
 
         // monitors:
-        virtual void enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept = 0;
+        [[nodiscard]] virtual std::error_code enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept = 0;
 
         [[nodiscard]] virtual SharedMonitor getPrimaryMonitor() const noexcept = 0;
 
-        virtual void enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept = 0;
+        [[nodiscard]] virtual std::error_code enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept = 0;
 
         virtual void setMonitorGamma(const Monitor &monitor, float gamma) noexcept = 0;
 
         // monitor callbacks:
 
-        using MonitorCallback = Callback<void(const Monitor &monitor)>;
+        using MonitorCallback = Callback<std::error_code (const Monitor &monitor)>;
 
         [[nodiscard]] virtual MonitorCallback::Handle whenMonitorConnected(MonitorCallback::Event on_connected) noexcept = 0;
 
         [[nodiscard]] virtual MonitorCallback::Handle whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept = 0;
 
         // windows:
-        [[nodiscard]] virtual std::expected<SharedWindow, std::error_code> createWindow(
+        [[nodiscard]] virtual Expected<SharedWindow> createWindow(
             WindowModel &&definition,
             const SharedMonitor &fullscreen = {},
             const SharedWindow &share_resources_with = {}) = 0;
 
-        virtual void destroyWindow(SharedWindow &&window) = 0;
+        [[nodiscard]] virtual std::error_code destroyWindow(SharedWindow &&window) = 0;
 
         [[nodiscard]] virtual SharedWindow getFocusedWindow() const noexcept = 0;
 
@@ -88,6 +88,8 @@ export namespace pP {
 
         virtual void swapWindowBuffers(const Window &window) = 0;
 
+        [[nodiscard]] virtual void *getNativeHandle(const Window &window) const noexcept = 0;
+
         // window clipboard:
         virtual void setWindowClipboardString(const Window &window, const std::string_view &text) = 0;
 
@@ -95,7 +97,7 @@ export namespace pP {
 
         // window callbacks:
 
-        using WindowCallback = Callback<void(const Window &window)>;
+        using WindowCallback = Callback<std::error_code (const Window &window)>;
 
         [[nodiscard]] virtual WindowCallback::Handle whenWindowCreated(WindowCallback::Event on_connected) noexcept = 0;
 
@@ -103,24 +105,30 @@ export namespace pP {
 
         [[nodiscard]] virtual WindowCallback::Handle whenWindowClosed(WindowCallback::Event on_closed) noexcept = 0;
 
-        using WindowFocusedCallback = Callback<void(const Window &window, bool focused)>;
+        using WindowFocusedCallback = Callback<std::error_code (const Window &window, bool focused)>;
 
         [[nodiscard]] virtual WindowFocusedCallback::Handle whenWindowFocused(WindowFocusedCallback::Event on_focused) noexcept = 0;
 
-        using WindowIconifiedCallback = Callback<void(const Window &window, bool iconified)>;
+        using WindowIconifiedCallback = Callback<std::error_code (const Window &window, bool iconified)>;
 
         [[nodiscard]] virtual WindowIconifiedCallback::Handle whenWindowIconified(WindowIconifiedCallback::Event on_iconified) noexcept = 0;
 
-        using WindowMovedCallback = Callback<void(const Window &window, const int2 &old_position)>;
+        using WindowMovedCallback = Callback<std::error_code (const Window &window, const int2 &old_position)>;
 
         [[nodiscard]] virtual WindowMovedCallback::Handle whenWindowMoved(WindowMovedCallback::Event on_moved) noexcept = 0;
 
-        using WindowResizedCallback = Callback<void(const Window &window, const int2 &old_size)>;
+        using WindowResizedCallback = Callback<std::error_code (const Window &window, const int2 &old_size)>;
 
         [[nodiscard]] virtual WindowResizedCallback::Handle whenWindowResized(WindowResizedCallback::Event on_resized) noexcept = 0;
 
-        using WindowScaledCallback = Callback<void(const Window &window, const float2 &old_scale)>;
+        using WindowScaledCallback = Callback<std::error_code (const Window &window, const float2 &old_scale)>;
 
         [[nodiscard]] virtual WindowScaledCallback::Handle whenWindowScaled(WindowScaledCallback::Event on_scaled) noexcept = 0;
     };
+
+    extern template class Callback<std::error_code (const Monitor &)>;
+    extern template class Callback<std::error_code (const Window &)>;
+    extern template class Callback<std::error_code (const Window &, bool)>;
+    extern template class Callback<std::error_code (const Window &, const int2 &)>;
+    extern template class Callback<std::error_code (const Window &, const float2 &)>;
 }

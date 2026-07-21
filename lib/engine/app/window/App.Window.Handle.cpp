@@ -32,4 +32,15 @@ namespace pP {
         swap(release, m_handle);
         return release;
     }
+
+    std::error_code Window::update() {
+        return make_error_code({
+            m_when_closed.flush(),
+            m_when_focused.flush(),
+            m_when_iconified.flush(),
+            m_when_moved.flush(),
+            m_when_resized.flush(),
+            m_when_scaled.flush()
+        });
+    }
 }

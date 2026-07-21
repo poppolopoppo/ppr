@@ -5,7 +5,6 @@ export module engine.app:window.handle;
 import engine.core;
 import engine.math;
 import std;
-import :input.listener;
 
 export namespace pP {
     class Window;
@@ -35,7 +34,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename... ArgsT>
-    using WindowCallback = Callback<void(const Window &window, ArgsT...)>;
+    using WindowCallback = DeferredCallback<std::error_code (const Window &window, ArgsT...)>;
 
     // ------------------------------------------------------------------
     // actual window instance
@@ -70,5 +69,12 @@ export namespace pP {
 #endif
 
         [[nodiscard]] WindowHandle release() noexcept;
+
+        [[nodiscard]] std::error_code update();
     };
+
+    extern template class DeferredCallback<std::error_code (const Window &)>;
+    extern template class DeferredCallback<std::error_code (const Window &, bool)>;
+    extern template class DeferredCallback<std::error_code (const Window &, int2)>;
+    extern template class DeferredCallback<std::error_code (const Window &, float2)>;
 }
