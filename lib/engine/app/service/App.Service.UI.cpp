@@ -1,6 +1,8 @@
 module;
 
 #include "pP/Macros.h"
+#include "App.Service.UI.imgui.hpp"
+#include <imgui_internal.h>
 
 module engine.app;
 
@@ -8,19 +10,10 @@ import :service.ui;
 import :service.input;
 import :service.window;
 import :window.handle;
-
 import std;
 import engine.core;
+import engine.math;
 import engine.rhi;
-
-PPR_PRAGMA_WARNING_PUSH()
-//  '#include <source_location>' in the purview of module 'engine.app' appears erroneous.
-//  Consider moving that directive before the module declaration,
-//  or replace the textual inclusion with 'import <source_location>;'.
-PPR_PRAGMA_WARNING_DISABLE_MSVC(5244)
-#include "App.Service.UI.imgui.hpp"
-#include <imgui_internal.h>
-PPR_PRAGMA_WARNING_POP()
 
 namespace pP::ui {
     PPR_DEFINE_LOG_CATEGORY(UI, info, none)
@@ -38,6 +31,13 @@ namespace pP::ui {
         PPR_LOG_RAW(UI, debug, buffer);
     }
 #endif
+
+    void setupImGuiErrorCallback(ImGuiContext *ctx) noexcept {
+        ctx->ErrorCallback = [](ImGuiContext *, void *, const char *msg) {
+            PPR_LOG_RAW(UI, error, msg);
+        };
+        ctx->ErrorCallbackUserData = nullptr;
+    }
 
     namespace {
         constexpr std::string_view kImGuiShader = R"(
@@ -181,7 +181,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
         }
 
-        int mouseButtonToImGui(const EMouseButton button) noexcept {
+        [[nodiscard]] int mouseButtonToImGui(const EMouseButton button) noexcept {
             switch (button) {
                 case EMouseButton::left: return 0;
                 case EMouseButton::right: return 1;
@@ -191,6 +191,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 default: return -1;
             }
         }
+
+        constexpr std::array<EMouseButton, 3> kPolledMouseButtons{
+            EMouseButton::left, EMouseButton::right, EMouseButton::middle
+        };
     }
 
     class ImGuiService final : public IUIService {
@@ -226,10 +230,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGui::SetCurrentContext(m_imgui_context);
 
             // Register runtime error callback for ImGui recoverable errors
-            m_imgui_context->ErrorCallback = [](ImGuiContext *, [[maybe_unused]] void *user_data, const char *msg) {
-                PPR_LOG_RAW(UI, error, msg);
-            };
-            m_imgui_context->ErrorCallbackUserData = nullptr;
+            setupImGuiErrorCallback(m_imgui_context);
 
             ImGuiIO &io = ImGui::GetIO();
             io.ConfigErrorRecovery = true;
@@ -286,16 +287,16 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // Create input layout
             {
                 rhi::InputElementDesc elements[] = {
-                    {"POSITION", 0, rhi::Format::RG32Float, 0, 0},
+                    {"POSITION", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, pos), 0},
                     {"TEXCOORD", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, uv), 0},
                     {"COLOR", 0, rhi::Format::RGBA8Unorm, PPR_OFFSETOF(ImDrawVert, col), 0},
                 };
 
                 PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createInputLayout(
-                                             safe_narrowing(sizeof(ImDrawVert)),
-                                             elements,
-                                             3u,
-                                             m_input_layout.writeRef())));
+                    safe_narrowing(sizeof(ImDrawVert)),
+                    elements,
+                    3u,
+                    m_input_layout.writeRef())));
             }
 
             // Create font sampler
@@ -328,8 +329,14 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 color_target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
                 color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
                 color_target.color.op = rhi::BlendOp::Add;
-                color_target.alpha.srcFactor = rhi::BlendFactor::InvSrcAlpha;
-                color_target.alpha.dstFactor = rhi::BlendFactor::Zero;
+                // Alpha channel must follow the same One/InvSrcAlpha convention every official
+                // ImGui backend uses (confirmed against imgui_impl_vulkan.cpp/imgui_impl_dx12.cpp):
+                // srcAlpha=One, dstAlpha=InvSrcAlpha. The previous InvSrcAlpha/Zero pairing left
+                // the alpha channel of any render target ImGui draws into with the wrong coverage,
+                // which only shows up once you composite that target elsewhere (editor viewports,
+                // render-to-texture panels, etc.) rather than a plain opaque swapchain.
+                color_target.alpha.srcFactor = rhi::BlendFactor::One;
+                color_target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
                 color_target.alpha.op = rhi::BlendOp::Add;
                 color_target.writeMask = rhi::RenderTargetWriteMask::All;
 
@@ -351,7 +358,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "UI service initialized", {
                     {"width", m_framebuffer_size.x},
                     {"height", m_framebuffer_size.y},
-                    });
+            });
 
             return {};
         }
@@ -360,10 +367,16 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGui::SetCurrentContext(m_imgui_context);
             ImGuiIO &io = ImGui::GetIO();
 
-            // Display size and framebuffer scale
+            // Display size and framebuffer scale. DisplaySize is already given to us in
+            // framebuffer pixels (see m_framebuffer_size below), so the scale factor between
+            // "logical" and "physical" coordinates is 1:1 here — set it explicitly rather than
+            // relying on ImGui's default so renderOverlay()'s scissor-rect math (which now also
+            // multiplies by this factor) stays correct if a logical/physical split is introduced
+            // later.
             io.DisplaySize = ImVec2(
                 static_cast<float>(m_framebuffer_size.x),
                 static_cast<float>(m_framebuffer_size.y));
+            io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             io.DeltaTime = static_cast<float>(
                 std::chrono::duration<double>(dt).count());
 
@@ -373,6 +386,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             ImGui::NewFrame();
+
+            static bool g_show_demo_window{true};
+            ImGui::ShowDemoWindow(&g_show_demo_window);
+
             return default_value_v;
         }
 
@@ -428,7 +445,30 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 }
             }
 
-            // Render all draw lists
+            // Render state fields that stay constant across every draw call in this pass —
+            // hoisted out of the loop below so only the scissor rect is rebuilt per command.
+            rhi::RenderState render_state{};
+            render_state.viewports[0] = rhi::Viewport::fromSize(fb_width, fb_height);
+            render_state.viewportCount = 1;
+            render_state.vertexBuffers[0] = rhi::BufferOffsetPair(fr->m_vertex_buffer.get(), 0);
+            render_state.vertexBufferCount = 1;
+            render_state.indexBuffer = rhi::BufferOffsetPair(fr->m_index_buffer.get(), 0);
+            render_state.indexFormat = sizeof(ImDrawIdx) == 2
+                                    ? rhi::IndexFormat::Uint16
+                                    : rhi::IndexFormat::Uint32;
+            render_state.scissorRectCount = 1;
+
+            // clip_off/clip_scale convert an ImDrawCmd's ClipRect (display coordinates) into
+            // framebuffer pixels, matching every official ImGui backend's RenderDrawData.
+            const ImVec2 clip_off = drawData->DisplayPos;
+            const ImVec2 clip_scale = io.DisplayFramebufferScale;
+
+            // Render all draw lists. Vertex/index data for every ImDrawList was concatenated
+            // back-to-back into one shared buffer pair by uploadDrawData_ below, so each draw
+            // must add the running base offset of all prior lists on top of the command's own
+            // list-local VtxOffset/IdxOffset — otherwise every list after the first reads from
+            // the wrong place in the buffer. The two accumulators below previously were computed
+            // and never actually applied to the draw arguments.
             u32 globalVtxOffset = 0;
             u32 globalIdxOffset = 0;
             for (int n = 0; n < drawData->CmdListsCount; n++) {
@@ -442,39 +482,42 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         continue;
                     }
 
-                    // Compute scissor rect (clip in display coords)
-                    const int clip_x = static_cast<int>(cmd->ClipRect.x - drawData->DisplayPos.x);
-                    const int clip_y = static_cast<int>(cmd->ClipRect.y - drawData->DisplayPos.y);
-                    const int clip_w = static_cast<int>(cmd->ClipRect.z - cmd->ClipRect.x);
-                    const int clip_h = static_cast<int>(cmd->ClipRect.w - cmd->ClipRect.y);
+                    // Clip rect in framebuffer pixels, clamped to the framebuffer bounds. The
+                    // clamp to >= 0 is required, not cosmetic: ClipRect can legitimately extend
+                    // past the top/left edge of the display (a window dragged partially
+                    // off-screen, a scrolled child region, etc.), and casting a negative float
+                    // straight to uint32_t wraps around to a huge value, corrupting the scissor
+                    // rect instead of just clipping it away.
+                    ImVec2 clip_min{
+                        (cmd->ClipRect.x - clip_off.x) * clip_scale.x,
+                        (cmd->ClipRect.y - clip_off.y) * clip_scale.y
+                    };
+                    ImVec2 clip_max{
+                        (cmd->ClipRect.z - clip_off.x) * clip_scale.x,
+                        (cmd->ClipRect.w - clip_off.y) * clip_scale.y
+                    };
+                    clip_min.x = std::max(clip_min.x, 0.0f);
+                    clip_min.y = std::max(clip_min.y, 0.0f);
+                    clip_max.x = std::min(clip_max.x, fb_width);
+                    clip_max.y = std::min(clip_max.y, fb_height);
 
-                    if (clip_w <= 0 || clip_h <= 0) {
+                    if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y) {
                         continue;
                     }
 
-                    rhi::RenderState render_state{};
-                    render_state.viewports[0] = rhi::Viewport::fromSize(fb_width, fb_height);
-                    render_state.viewportCount = 1;
                     render_state.scissorRects[0] = rhi::ScissorRect{
-                        static_cast<u32>(clip_x),
-                        static_cast<u32>(clip_y),
-                        static_cast<u32>(clip_x + clip_w),
-                        static_cast<u32>(clip_y + clip_h)
+                        static_cast<u32>(clip_min.x),
+                        static_cast<u32>(clip_min.y),
+                        static_cast<u32>(clip_max.x),
+                        static_cast<u32>(clip_max.y)
                     };
-                    render_state.scissorRectCount = 1;
-                    render_state.vertexBuffers[0] = rhi::BufferOffsetPair(fr->m_vertex_buffer.get(), 0);
-                    render_state.vertexBufferCount = 1;
-                    render_state.indexBuffer = rhi::BufferOffsetPair(fr->m_index_buffer.get(), 0);
-                    render_state.indexFormat = sizeof(ImDrawIdx) == 2
-                                                   ? rhi::IndexFormat::Uint16
-                                                   : rhi::IndexFormat::Uint32;
                     pass.setRenderState(render_state);
 
                     rhi::DrawArguments draw_arguments{};
                     draw_arguments.vertexCount = cmd->ElemCount;
                     draw_arguments.instanceCount = 1;
-                    draw_arguments.startIndexLocation = cmd->IdxOffset;
-                    draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset);
+                    draw_arguments.startIndexLocation = cmd->IdxOffset + globalIdxOffset;
+                    draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + globalVtxOffset);
                     draw_arguments.startInstanceLocation = 0;
                     pass.drawIndexed(draw_arguments);
                 }
@@ -531,7 +574,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "UI surface resize", {
                     {"width", new_size.x},
                     {"height", new_size.y},
-                    });
+            });
             return default_value_v;
         }
 
@@ -626,12 +669,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             m_fontTextureView = std::move(view);
 
             // Store texture ID for ImGui
-            io.Fonts->SetTexID(m_fontTextureView);
+            io.Fonts->SetTexID(m_fontTextureView.get());
 
             PPR_LOG(UI, info, "font texture created", {
-                    {"width", width},
-                    {"height", height},
-                    });
+                {"width", width},
+                {"height", height},
+            });
 
             return default_value_v;
         }
@@ -661,15 +704,20 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 }
             }
 
-            // Process mouse buttons
-            for (const auto &[button_enum, imgui_button]: {
-                     std::pair{EMouseButton::left, 0},
-                     {EMouseButton::right, 1},
-                     {EMouseButton::middle, 2},
-                 }) {
-                if (mouse.m_buttons.isPressed(button_enum)) {
+            // Process mouse buttons. The previous version built this list inline as
+            // { std::pair{EMouseButton::left, 0}, {EMouseButton::right, 1}, {EMouseButton::middle, 2} }
+            // — only the first element spells out std::pair explicitly, so the range-for's
+            // std::initializer_list<std::pair<EMouseButton,int>> gets deduced from that one
+            // element while the bare-brace elements list-initialize against it. That's not
+            // guaranteed by the standard the way a same-typed list is, so it's worth not
+            // depending on across compilers/toolchain updates. kPolledMouseButtons plus the
+            // mouseButtonToImGui() switch above (previously unused) gives the same mapping
+            // without relying on that.
+            for (const EMouseButton button: kPolledMouseButtons) {
+                const int imgui_button = mouseButtonToImGui(button);
+                if (mouse.m_buttons.isPressed(button)) {
                     io.AddMouseButtonEvent(imgui_button, true);
-                } else if (mouse.m_buttons.isUp(button_enum)) {
+                } else if (mouse.m_buttons.isUp(button)) {
                     io.AddMouseButtonEvent(imgui_button, false);
                 }
             }

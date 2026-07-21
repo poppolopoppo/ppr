@@ -1,19 +1,12 @@
 module;
 #include "pP/Macros.h"
+#include "App.Service.UI.imgui.hpp"
 export module engine.app:service.ui;
 
 import engine.core;
 import engine.math;
 import engine.rhi;
 import std;
-
-PPR_PRAGMA_WARNING_PUSH()
-//  '#include <source_location>' in the purview of module 'engine.app' appears erroneous.
-//  Consider moving that directive before the module declaration,
-//  or replace the textual inclusion with 'import <source_location>;'.
-PPR_PRAGMA_WARNING_DISABLE_MSVC(5244)
-#include "App.Service.UI.imgui.hpp"
-PPR_PRAGMA_WARNING_POP()
 
 export namespace pP {
     class IInputService;
@@ -42,5 +35,7 @@ export namespace pP {
 
     namespace ui {
         [[nodiscard]] std::unique_ptr<IUIService> createImGuiService();
+
+        void setupImGuiErrorCallback(ImGuiContext *ctx) noexcept;
     }
 }

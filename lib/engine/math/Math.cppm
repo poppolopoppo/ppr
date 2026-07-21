@@ -1,7 +1,7 @@
 module;
 
 #include "pP/Macros.h"
-#include "mango/math/math.hpp"
+#include <mango/math/math.hpp>
 
 export module engine.math;
 

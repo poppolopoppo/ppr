@@ -68,6 +68,6 @@ target_sources(EngineApp
 
 setup_ppr_project(EngineApp
         INTERNAL_PUBLIC_DEPS EngineCore EngineMath EngineRHI
-        EXTERNAL_SYSTEM_PRIVATE_DEPS glfw
+        EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango
         EXTERNAL_SYSTEM_PUBLIC_DEPS imgui
 )
