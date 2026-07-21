@@ -87,12 +87,14 @@ export namespace pP {
 
         [[nodiscard]] virtual const InputDeviceID &getInputDeviceID() const noexcept = 0;
 
-        virtual void supportedInputKeys(Collector<InputKey> supports_key) const = 0;
+        [[nodiscard]] virtual std::error_code supportedInputKeys(Collector<InputKey> supports_key) const = 0;
 
-        virtual void postInputMessages(TimeSpan dt, Collector<InputMessage> post_event) = 0;
+        [[nodiscard]] virtual std::error_code postInputMessages(TimeSpan dt, Collector<InputMessage> post_event) = 0;
 
         virtual void resetInputState() noexcept = 0;
     };
+
+    using SharedInputDevice = safe_ptr<const IInputDevice>;
 
     // ------------------------------------------------------------------
     // analog axis input state
@@ -104,7 +106,6 @@ export namespace pP {
         using const_reference = std::conditional_t<
             std::is_trivially_copyable_v<T>,
             const T, const T &>;
-
         details::input_value<value_type> m_raw{};
         details::input_value<value_type> m_filtered{};
 
@@ -298,32 +299,43 @@ export namespace pP {
             return not(m_buttons_up.empty() && m_buttons_down.empty());
         }
 
-        void postInputMessages(
+        std::error_code postInputMessages(
             const InputDeviceID &device_id,
             const TimeSpan dt,
             const Collector<InputMessage> post_event) const noexcept {
-            const auto post_button_event = [&](const ButtonT button, const EInputMessageEvent event) {
+            const auto post_button_event = [&](const ButtonT button, const EInputMessageEvent event) -> std::error_code {
                 if (const std::optional<InputKey> input_key = InputKey::from(button);
                     input_key.has_value()) {
                     PPR_ASSERT(EInputValueType::digital == input_key->m_value);
 
-                    post_event(InputMessage(
+                    if (const std::error_code err = post_event(InputMessage(
                         input_key.value(),
                         InputDigital(EInputMessageEvent::released != event),
                         dt, device_id, event
-                    ));
+                    ))) [[unlikely]] {
+                        return err;
+                    }
                 }
+                return default_value_v;
             };
 
             for (const ButtonT button: m_buttons_down) {
-                post_button_event(button, EInputMessageEvent::pressed);
+                if (const std::error_code err = post_button_event(button, EInputMessageEvent::pressed)) [[unlikely]] {
+                    return err;
+                }
             }
             for (const ButtonT button: m_buttons_pressed) {
-                post_button_event(button, EInputMessageEvent::repeat);
+                if (const std::error_code err = post_button_event(button, EInputMessageEvent::repeat)) [[unlikely]] {
+                    return err;
+                }
             }
             for (const ButtonT button: m_buttons_up) {
-                post_button_event(button, EInputMessageEvent::released);
+                if (const std::error_code err = post_button_event(button, EInputMessageEvent::released)) [[unlikely]] {
+                    return err;
+                }
             }
+
+            return default_value_v;
         }
 
         void reset() noexcept {

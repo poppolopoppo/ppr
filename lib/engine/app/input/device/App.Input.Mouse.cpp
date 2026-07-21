@@ -62,12 +62,14 @@ namespace pP {
 
     MouseDevice::~MouseDevice() noexcept = default;
 
-    void MouseDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
-        InputKey::enumerateMouseAxes(supports_key);
-        InputKey::enumerateMouseButtons(supports_key);
+    std::error_code MouseDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
+        if (const std::error_code err = InputKey::enumerateMouseAxes(supports_key)) [[unlikely]] {
+            return err;
+        }
+        return InputKey::enumerateMouseButtons(supports_key);
     }
 
-    void MouseDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
+    std::error_code MouseDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
         m_state.update(dt);
 
         const bool enable_filtered_inputs = m_state.m_enable_filtered_inputs;
@@ -90,7 +92,7 @@ namespace pP {
             enable_filtered_inputs,
             dt, post_event);
 
-        m_state.m_buttons.postInputMessages(m_device_id, dt, post_event);
+        return m_state.m_buttons.postInputMessages(m_device_id, dt, post_event);
     }
 
     void MouseDevice::resetInputState() noexcept {

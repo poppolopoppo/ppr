@@ -78,9 +78,9 @@ export namespace pP {
             return m_device_id;
         }
 
-        void supportedInputKeys(Collector<InputKey> supports_key) const override;
+        [[nodiscard]] std::error_code supportedInputKeys(Collector<InputKey> supports_key) const override;
 
-        void postInputMessages(TimeSpan dt, Collector<InputMessage> post_event) override;
+        [[nodiscard]] std::error_code postInputMessages(TimeSpan dt, Collector<InputMessage> post_event) override;
 
         void resetInputState() noexcept override;
     };

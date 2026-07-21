@@ -41,14 +41,14 @@ namespace pP {
 
     KeyboardDevice::~KeyboardDevice() noexcept = default;
 
-    void KeyboardDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
-        InputKey::enumerateKeyboardKeys(supports_key);
+    std::error_code KeyboardDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
+        return InputKey::enumerateKeyboardKeys(supports_key);
     }
 
-    void KeyboardDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
+    std::error_code KeyboardDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
         m_state.update(dt);
 
-        m_state.m_keys.postInputMessages(m_device_id, dt, post_event);
+        return m_state.m_keys.postInputMessages(m_device_id, dt, post_event);
     }
 
     void KeyboardDevice::resetInputState() noexcept {

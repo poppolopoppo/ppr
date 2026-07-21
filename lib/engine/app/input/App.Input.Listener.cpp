@@ -250,10 +250,11 @@ namespace pP {
                     map_key(action_keymap.m_key, action_keymap.m_action, binding);
                 } else {
                     // expand AnyKey to all possible keys
-                    InputKey::enumerateAll([&](const InputKey &key) {
+                    InputKey::enumerateAll([&](const InputKey &key) -> std::error_code {
                         if (key.m_value == action_keymap.m_key.m_value) {
                             map_key(key, action_keymap.m_action, binding);
                         }
+                        return default_value_v;
                     });
                 }
             }

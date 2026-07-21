@@ -61,16 +61,18 @@ namespace pP {
 
     GamepadDevice::~GamepadDevice() noexcept = default;
 
-    void GamepadDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
-        InputKey::enumerateGamepadAxes(supports_key);
-        InputKey::enumerateGamepadButtons(supports_key);
+    std::error_code GamepadDevice::supportedInputKeys(const Collector<InputKey> supports_key) const {
+        if (const std::error_code err = InputKey::enumerateGamepadAxes(supports_key)) [[unlikely]] {
+            return err;
+        }
+        return InputKey::enumerateGamepadButtons(supports_key);
     }
 
-    void GamepadDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
+    std::error_code GamepadDevice::postInputMessages(const TimeSpan dt, const Collector<InputMessage> post_event) {
         m_state.update(dt);
 
         if (not m_state.m_connected) [[likely]] {
-            return;
+            return default_value_v;
         }
 
         const bool enable_filtered_inputs = m_state.m_enable_filtered_inputs;
@@ -99,7 +101,7 @@ namespace pP {
             enable_filtered_inputs,
             dt, post_event);
 
-        m_state.m_buttons.postInputMessages(m_device_id, dt, post_event);
+        return m_state.m_buttons.postInputMessages(m_device_id, dt, post_event);
     }
 
     void GamepadDevice::resetInputState() noexcept {

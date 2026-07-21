@@ -315,17 +315,17 @@ export namespace pP {
 
         [[nodiscard]] friend opaque::Value opaqueValue(const InputKey &value) noexcept;
 
-        static void enumerateAll(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateAll(Collector<InputKey> push_back) noexcept;
 
-        static void enumerateKeyboardKeys(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateKeyboardKeys(Collector<InputKey> push_back) noexcept;
 
-        static void enumerateGamepadAxes(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateGamepadAxes(Collector<InputKey> push_back) noexcept;
 
-        static void enumerateGamepadButtons(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateGamepadButtons(Collector<InputKey> push_back) noexcept;
 
-        static void enumerateMouseAxes(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateMouseAxes(Collector<InputKey> push_back) noexcept;
 
-        static void enumerateMouseButtons(Collector<InputKey> push_back) noexcept;
+        static std::error_code enumerateMouseButtons(Collector<InputKey> push_back) noexcept;
 
         [[nodiscard]] static std::optional<InputKey> from(EKeyboardKey value) noexcept;
 
