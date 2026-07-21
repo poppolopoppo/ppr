@@ -13,7 +13,7 @@ export namespace pP {
     public:
         virtual ~IContext() = default;
 
-        [[nodiscard]] virtual std::optional<std::error_code>
+        [[nodiscard]] virtual std::error_code
         error() const noexcept = 0;
 
         [[nodiscard]] virtual std::optional<const opaque::Block::Value *>
