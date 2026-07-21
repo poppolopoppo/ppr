@@ -15,41 +15,59 @@ target_sources(EngineApp
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
         input/App.Input.Mapping.cppm
-        App.Player.cppm
 
-        platform/Glfw/App.Platform.Glfw.cppm
-        platform/Glfw/App.Platform.Glfw.Input.cppm
-        platform/Glfw/App.Platform.Glfw.Window.cppm
+        platform/glfw/App.Platform.Glfw.cppm
+        platform/glfw/App.Platform.Glfw.Input.cppm
+        platform/glfw/App.Platform.Glfw.Player.cppm
+        platform/glfw/App.Platform.Glfw.Window.cppm
         platform/App.Platform.cppm
+
+        player/App.Player.cppm
+        player/App.Player.Graph.cppm
+
+        renderer/App.Renderer.cppm
 
         service/App.Service.Input.cppm
         service/App.Service.Player.cppm
+        service/App.Service.UI.cppm
         service/App.Service.Window.cppm
 
         window/App.Window.Handle.cppm
         window/App.Window.Monitor.cppm
+
+
     PRIVATE
         App.Application.cpp
 
         input/device/App.Input.Gamepad.cpp
         input/device/App.Input.Keyboard.cpp
         input/device/App.Input.Mouse.cpp
-
         input/App.Input.Action.cpp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
         input/App.Input.Mapping.cpp
-        App.Player.cpp
+
+        platform/glfw/App.Platform.Glfw.include.hpp
+        platform/glfw/App.Platform.Glfw.cpp
+        platform/glfw/App.Platform.Glfw.Input.cpp
+        platform/glfw/App.Platform.Glfw.Player.cpp
+        platform/glfw/App.Platform.Glfw.Window.cpp
+
+        player/App.Player.cpp
+        player/App.Player.Graph.cpp
 
         window/App.Window.Handle.cpp
         window/App.Window.Monitor.cpp
 
-        platform/Glfw/App.Platform.Glfw.cpp
-        platform/Glfw/App.Platform.Glfw.Input.cpp
-        platform/Glfw/App.Platform.Glfw.Window.cpp
+        renderer/App.Renderer.cpp
+
+        service/App.Service.UI.cpp
+
+        App.TemplateInstantiations.cpp
 )
 
 setup_ppr_project(EngineApp
         INTERNAL_PUBLIC_DEPS EngineCore EngineMath EngineRHI
         EXTERNAL_SYSTEM_PRIVATE_DEPS glfw
+        EXTERNAL_SYSTEM_PUBLIC_DEPS imgui
 )

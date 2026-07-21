@@ -820,7 +820,7 @@ export namespace std {
     };
 
     template<pP::opaque::details::TOpaque OpaqueT>
-    [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const std::optional<OpaqueT> &opt) noexcept {
+    [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const optional<OpaqueT> &opt) noexcept {
         if (opt.has_value()) {
             return opaqueValue(opt.value());
         }
