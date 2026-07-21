@@ -12,13 +12,80 @@ Load these on demand via the `skill` tool when your task matches their domain:
 | `hal-developer` | hal, platform, porting, syscall | 10 areas across 4 platforms, syscall mapping, stub conventions, adding a platform |
 | `concurrency-patterns` | channel, signal, event, context, cancellation | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
 
+## Architecture Overview
+
+Module dependency chain (entry point):
+```
+game/main.cpp → engine.app → engine.core  (foundation)
+                            → engine.math  (vector math)
+                            → engine.rhi   (GPU)
+```
+
+### engine.core — Foundation Library (`lib/engine/core/`)
+
+35 module partitions providing all fundamental abstractions:
+
+- **Types & Safety** (`Core.Types.cppm`): `u8`-`u64`/`i8`-`i64` shorthands, sentinel values (`default_value_v`, `zero_v`, `none_v`, `umax_v`), `Numeric<T,TagT>` strong wrapper, `hash_t`, `relocatable<T>` trait
+- **Containers** (7 partitions): `Stack<T,N>`, `RingBuffer<T,N>`, `SparseVector<T>`, `StableVector<T>`, `HashMap<K,V>`/`HashSet<K>`, `FlatMap<K,V>`, `Bitmask<T,N>`, `ArrayView`, `RelativeView`, `TransformView`, `RelPtr`, `TagPtr`
+- **Memory** (6 partitions): Allocator concepts (`TAllocator`, `TOwningAllocator`, `TBlockAllocator`, `TArenaAllocator`, `TSlabAllocator`), `GPA` (operator new), `OS` (page alloc), `PMR` (polymorphic dispatch), `HugePage` (2 MiB pools), `SmallPage` (32/64 KiB pools), `Arena`/`ScopedArena`/`ScratchPad` (TLS), `PagePool`/`LocalCache`/`HintedPooling`, composite allocators (`InSitu`, `Fallback`, `Threshold`, `Pooling`, `Static`), `Allocation<T,A>`, `Allocator<A>`, `STL<A>` adapter, poison/ASAN annotations
+- **Concurrency** (3 partitions): `RawChannel` (lock-free MPSC), `IEvent`/`ISignal`/`Signal<Events...>` (compile-time event multiplexing), `IContext`/`SharedContext` (Go-style cancellation tree)
+- **HAL** (`Core.HAL.cppm`): Platform abstraction over `pP::hal` — page memory, ring buffer, async I/O, file watching, process spawning, debugger, deadline timers, native string transcoding. Implemented per-platform in `lib/engine/core/<platform>/` (windows, linux, darwin, generic — 13 source files each)
+- **IO** (3 partitions): `hal::io` submit/poll/wait async I/O, memory-mapped files, directory watching
+- **Services** (`Core.Service.cppm`): `IService` base with compile-time `typeUid<T>()` hash key, `ServicesStore` (thread-safe `FlatMap` with parent-chain fallback), `ServiceInjector` for implicit DI
+- **Other**: `Logger`, `TimerManager`, `UnitTest` framework, `Callback<T>` with RAII Handle, `function_ref`, `Opaque` (variant/persistent/unique values and builder), string utilities, hashing infrastructure
+
+### engine.math — Vector Math (`lib/engine/math/Math.cppm`)
+
+Wraps `mango::math` into `namespace pP`:
+- Type aliases: `float2/3/4`, `int2/3/4`, `uint2/3/4`, `float3x3`, `float4x4`
+- Functions: `dot`, `dot2`, `lerp`, `normalize`, `distance`, `vector_cast`, `checked_cast` for vectors
+- Matrix ops: `translate`, `scale`, `rotate`, `perspectiveD3D`, `lookAt`, `inverse`, `affineInverse`, `adjoint`, `oblique`
+- Integration: `hashValue()` for hashing, `opaqueValue()` for serialization
+
+### engine.rhi — GPU Abstraction (`lib/engine/rhi/RHI.cppm` + `RHI.cpp`)
+
+Wraps Slang-RHI into `namespace pP::rhi`:
+- Core types: `IDevice`, `IAdapter`, `IBuffer`, `ICommandBuffer`, `ICommandQueue`, `IRenderPipeline`, `IComputePipeline`, `IShaderProgram`, `ITexture`, `ITextureView`, `ISurface`, `IFence`, `IHeap`, `IInputLayout`
+- Descriptors: `BufferDesc`, `DeviceDesc`, `RenderPipelineDesc`, `ShaderProgramDesc`, `SurfaceConfig`, etc.
+- `IRhiService` interface — singleton service pattern wrapping `rhi::IRHI` and `rhi::IDevice` lifecycle
+
+### engine.app — Application Layer (`lib/engine/app/`, 25 partitions)
+
+- **Application** (`App.Application.cppm`): Main loop class with virtual `initialize()`/`update()`/`render()`/`terminate()`, service store, per-frame timing, exit code management, directory resolution (install/config/content/working)
+- **Input** (9 partitions): `IInputService` — keyboard/mouse/gamepad device states, listener stack (`pushInputListener`/`popInputListener`), action/mapping system (`InputMapping` binds keys to `InputAction` with `InputModifierEvent`/`InputTriggerEvent` callbacks), device enumeration
+- **Window** (2 partitions): `IWindowService` — monitor enumeration, window creation/destruction/resize/move, event callbacks (`whenWindowResized`, `whenWindowFocused`, etc.)
+- **Player** (2 partitions): `IPlayerService` — player identity management, graph-based state machine (`Player::Graph`), keyboard/gamepad player binding
+- **Platform**: GLFW backend (`platform/glfw/`, 9 files) implementing `IPlatform`, `IInputService`, `IPlayerService`, `IWindowService`
+- **Renderer** (`App.Renderer.cppm`): `Renderer` class — `initialize(IRhiService, IWindowService, Window)` sets up pipeline, `render()` submits frame, `onResize()` handles surface resize
+
+### Key Design Patterns
+
+- **Service Locator**: `IService` → compile-time `typeUid<T>()` → `ServicesStore` with parent-chain walk → `ServiceInjector` for implicit dependency injection. Safe via `safe_ptr<T>` (debug: ref-counted lifetime check, release: raw pointer).
+- **Allocator Composition**: Concepts tiered from `TAllocator` up to `TSlabAllocator`. Concrete allocators composed via `InSitu<T,N>` (inline storage), `Fallback<A,B>` (try A, then B), `Threshold<N,A,B>` (small→A, large→B), `Pooling<N,A>` (pool from A), `LocalCache<N,A,C>` (TLS cache over pool), `HintedPooling`. Wrap with `Allocator<A>` (type erasure), `PMR` (vtable dispatch), `STL<A>` (std:: adapter).
+- **Event Multiplexing**: `IEvent` base → `Signal<Events...>` with compile-time composition and `std::counting_semaphore` → `select(events...)` Go-style helper for range-for over events.
+- **Lock-free MPSC**: `RawChannel` for inter-thread message passing without mutex contention.
+- **Cancellation Tree**: `IContext`/`SharedContext` — Go-style context propagation with deadline support.
+- **Opaque Serialization**: `opaque::Value` (type-erased variant), `opaque::Block` (persistent byte buffer), `opaque::Unique` (RAII owning handle), `Block::Builder` (serialization builder).
+
+### Test Infrastructure
+
+Two separate test executables:
+- `EngineCoreTests` (`lib/engine/tests/core/`) — GLFW-free; tests memory, containers, concurrency, IO, strings, utility, opaque, services, enums
+- `EngineAppTests` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests
+
+Shared in `lib/engine/tests/shared/` as static lib `EngineTestsShared` providing `parseCli()` and `runSuite()` to avoid duplication. Tests use `PPR_UNIT_TEST(name)` macros compiled as `inline constexpr` variables with `UnitTest` tree grouping, fork/crash support, and `--run-test --shuffle --loop` CLI.
+
+### Entry Point (`game/main.cpp`)
+
+Imports all four engine modules, constructs `pP::Application(name, argv)`, calls `app.run()`. The application resolves install/config/content/working directories, discovers and initializes registered services (input, window, player, RHI), then runs the per-frame update/render loop until exit.
+
 ## External File Loading
 When you encounter a file reference (e.g., @rules/general.md), load it on demand.
 Do NOT preemptively load all references. Treat loaded content as mandatory instructions.
 
 ## Build System
 - Load the `clion-tools` skill when starting any task. Use CLion MCP tools INSTEAD of grep/glob/bash for code search, building, and debugging.
-- CMake 4.2+, C++23, modules enabled, experimental `import std`.
+- CMake 4.3+, C++23, modules enabled, experimental `import std`.
 - Presets: `msvc-dev` (recommended), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see cmake/Compilers.cmake).
 - Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
@@ -131,3 +198,6 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - Batch parallel tool calls when possible
 - Keep file reads targeted (use offset/limit for large files)
 - When hitting blockers like compiler ICE or hard-crash, do not jump to ambitious refactors of the prepared plan: instead you **must** notify the user and ask for validation and to decide of the best direction.
+
+## CMake Version Tracking
+- **CMake 4.4 synthetic target genex leak**: Single-config Ninja (CMAKE_BUILD_TYPE per preset) is used to avoid CMake 4.4's multi-config genex evaluation gap for C++ module synthetic targets. When CMake 4.5+ is adopted, test whether the `default` preset can switch back to `"Ninja Multi-Config"` without producing conflicting flags (e.g., `/Od` + `/Ox` in Debug synth targets). The `default` preset's description in CMakePresets.json contains a searchable reminder.

@@ -9,6 +9,11 @@ else ()
     message(STATUS "Using preconfigured cmake toolchain file: ${CMAKE_TOOLCHAIN_FILE}")
 endif ()
 
+# Use per-object debug info (/Z7) instead of shared PDB (/Zi).
+# This is required for ccache support and avoids PDB lock contention
+# in parallel builds.
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded" CACHE STRING "" FORCE)
+
 # Enable C++ exceptions (required by the C++ Standard Library module)
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
 

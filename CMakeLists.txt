@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2 FATAL_ERROR)
+cmake_minimum_required(VERSION 4.3 FATAL_ERROR)
 
 include(cmake/PreventInSourceBuilds.cmake)
 
@@ -7,14 +7,24 @@ include(cmake/PreventInSourceBuilds.cmake)
 if(CMAKE_VERSION VERSION_LESS "4.3.0")
     # https://github.com/Kitware/CMake/blob/v4.2.4/Help/dev/experimental.rst
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
-else()
+elseif(CMAKE_VERSION VERSION_LESS "4.4.0")
     # https://github.com/Kitware/CMake/blob/v4.3.2/Help/dev/experimental.rst
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
+else()
+    # https://github.com/Kitware/CMake/blob/v4.4.0/Help/dev/experimental.rst
+    set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
 endif()
-# set(CMAKE_EXPERIMENTAL_EXPORT_BUILD_DATABASE "73194a1d-c0b5-41b9-9190-a4512925e192")
+
+# Build database export (used by editors and static analysis tools)
+if(CMAKE_VERSION VERSION_LESS "4.4.0")
+    set(CMAKE_EXPERIMENTAL_EXPORT_BUILD_DATABASE "73194a1d-c0b5-41b9-9190-a4512925e192")
+else()
+    set(CMAKE_EXPERIMENTAL_EXPORT_BUILD_DATABASE "70ef007e-b743-492d-9407-e35eeac03a40")
+endif()
+# Unchanged across 4.2–4.4
 # set(CMAKE_EXPERIMENTAL_EXPORT_PACKAGE_DEPENDENCIES "1942b4fa-b2c5-4546-9385-83f254070067")
-# set(CMAKE_EXPERIMENTAL_EXPORT_PACKAGE_INFO "b80be207-778e-46ba-8080-b23bba22639e")
-# set(CMAKE_EXPERIMENTAL_FIND_CPS_PACKAGES "e82e467b-f997-4464-8ace-b00808fff261")
+# Replaces CMAKE_EXPERIMENTAL_EXPORT_PACKAGE_INFO (removed in 4.3)
+# set(CMAKE_EXPERIMENTAL_MAPPED_PACKAGE_INFO "ababa1b5-7099-495f-a9cd-e22d38f274f2")
 
 # Set defaults for standard
 set(CMAKE_CXX_STANDARD 23)
@@ -26,8 +36,8 @@ set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # set(CMAKE_EXPORT_BUILD_DATABASE ON)
 
-# Global include directory for pP/Macros.h - must be set before project() for module scanning
-include_directories(${CMAKE_SOURCE_DIR}/include)
+# Directory for pP/Macros.h - available to module scanning and all targets
+set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include")
 
 include(cmake/VCPkg.cmake)
 
@@ -55,7 +65,7 @@ option(PPR_WARNINGS_AS_ERRORS "Treat warnings as errors" FALSE)
 
 if(PPR_ENABLE_DEVELOPER_MODE)
     message(STATUS "Enable developer mode with config=${CMAKE_BUILD_TYPE}")
-    #set(ENABLE_CACHE TRUE) # keep ccache as a separate opt-in
+    set(ENABLE_CACHE TRUE) # ccache for non-module TUs (external deps, .cpp impl files)
     set(PPR_ENABLE_SANITIZER_ADDRESS TRUE)
     set(PPR_ENABLE_SANITIZER_UNDEFINED TRUE)
     #set(PPR_ENABLE_CLANG_TIDY TRUE) # clang-tidy is not working with modules yet, so we need to disable it for now

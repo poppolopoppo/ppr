@@ -8,13 +8,15 @@
   "configurePresets": [
     {
       "name": "default",
-      "description": "Default configuration using Ninja Multi-Config and vcpkg for dependencies (manifest mode)",
-      "generator": "Ninja Multi-Config",
+      "description": "Default configuration using Ninja and vcpkg for dependencies (manifest mode). Uses single-config Ninja to avoid CMake 4.4 synthetic target genex leak into multi-config C++ module BMIs. Revisit once CMake fixes multi-config genex evaluation for synthetic targets.",
+      "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENABLE_CACHE": "ON",
         "CPM_SOURCE_CACHE": "${sourceDir}/out/cpm_cache",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/out/vcpkg_installed"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/out/build/${presetName}/vcpkg_installed"
       }
     },
     {
@@ -90,6 +92,7 @@
       "description": "Target Windows with the msvc compiler, release build type",
       "inherits": "windows-default",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"
@@ -103,7 +106,7 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
-        "PPR_ENABLE_DEVELOPER_MODE": "OM"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
@@ -117,6 +120,7 @@
       "description": "Release build with Clang/LLVM on Windows.",
       "inherits": "windows-default",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"
@@ -146,6 +150,7 @@
       "description": "Release build with GCC.",
       "inherits": "unix-like-default",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"
@@ -168,6 +173,7 @@
       "description": "Release build with Clang",
       "inherits": "unix-like-default",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"

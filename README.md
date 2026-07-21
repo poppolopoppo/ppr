@@ -30,7 +30,7 @@ ppr/
 
 ## Prerequisites
 
-- **CMake** 4.2 or later
+- **CMake** 4.3 or later
 - **C++23 compliant compiler** (MSVC 17.8+, GCC 14+, Clang 18+)
 - **Vulkan SDK** (for Vulkan backend)
 - **Git** with submodules support
