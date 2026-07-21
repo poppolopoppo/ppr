@@ -1,8 +1,6 @@
 module;
 
 #include "pP/Macros.h"
-#include "App.Service.UI.imgui.hpp"
-#include <imgui_internal.h>
 
 module engine.app;
 
@@ -10,9 +8,19 @@ import :service.ui;
 import :service.input;
 import :service.window;
 import :window.handle;
+
 import std;
 import engine.core;
 import engine.rhi;
+
+PPR_PRAGMA_WARNING_PUSH()
+//  '#include <source_location>' in the purview of module 'engine.app' appears erroneous.
+//  Consider moving that directive before the module declaration,
+//  or replace the textual inclusion with 'import <source_location>;'.
+PPR_PRAGMA_WARNING_DISABLE_MSVC(5244)
+#include "App.Service.UI.imgui.hpp"
+#include <imgui_internal.h>
+PPR_PRAGMA_WARNING_POP()
 
 namespace pP::ui {
     PPR_DEFINE_LOG_CATEGORY(UI, info, none)
@@ -284,10 +292,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 };
 
                 PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createInputLayout(
-                    safe_narrowing(sizeof(ImDrawVert)),
-                    elements,
-                    3u,
-                    m_input_layout.writeRef())));
+                                             safe_narrowing(sizeof(ImDrawVert)),
+                                             elements,
+                                             3u,
+                                             m_input_layout.writeRef())));
             }
 
             // Create font sampler
@@ -343,7 +351,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "UI service initialized", {
                     {"width", m_framebuffer_size.x},
                     {"height", m_framebuffer_size.y},
-            });
+                    });
 
             return {};
         }
@@ -458,8 +466,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     render_state.vertexBufferCount = 1;
                     render_state.indexBuffer = rhi::BufferOffsetPair(fr->m_index_buffer.get(), 0);
                     render_state.indexFormat = sizeof(ImDrawIdx) == 2
-                                            ? rhi::IndexFormat::Uint16
-                                            : rhi::IndexFormat::Uint32;
+                                                   ? rhi::IndexFormat::Uint16
+                                                   : rhi::IndexFormat::Uint32;
                     pass.setRenderState(render_state);
 
                     rhi::DrawArguments draw_arguments{};
@@ -523,7 +531,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "UI surface resize", {
                     {"width", new_size.x},
                     {"height", new_size.y},
-            });
+                    });
             return default_value_v;
         }
 
@@ -618,12 +626,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             m_fontTextureView = std::move(view);
 
             // Store texture ID for ImGui
-            io.Fonts->SetTexID(std::bit_cast<ImTextureID>(m_fontTextureView.get()));
+            io.Fonts->SetTexID(m_fontTextureView);
 
             PPR_LOG(UI, info, "font texture created", {
-                {"width", width},
-                {"height", height},
-            });
+                    {"width", width},
+                    {"height", height},
+                    });
 
             return default_value_v;
         }
