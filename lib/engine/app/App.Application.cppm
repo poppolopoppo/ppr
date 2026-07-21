@@ -8,17 +8,13 @@ import std;
 
 export namespace pP {
     class IInputService;
+    class IUIService;
     class IPlatform;
     class IWindowService;
+    class Renderer;
 
-    class Application {
+    class Application : public safe_object {
     public:
-        enum EExitCode : int {
-            exit_no_error = 0,
-            exit_exception = -1,
-            exit_failed_init = -2,
-        };
-
         Application(std::string_view name, std::span<const char * const> argv);
 
         virtual ~Application() noexcept;
@@ -45,21 +41,23 @@ export namespace pP {
 
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
 
-        void setExitCode(int exitCode) noexcept;
+        [[nodiscard]] bool shouldClose() const noexcept { return m_should_close; }
 
-        [[nodiscard]] int run();
+        void requestApplicationExit() noexcept;
+
+        [[nodiscard]] std::error_code run();
 
     protected:
-        [[nodiscard]] virtual bool initialize();
+        [[nodiscard]] virtual std::error_code initialize();
 
-        [[nodiscard]] virtual bool update();
+        [[nodiscard]] virtual std::error_code update();
 
-        virtual void render();
+        [[nodiscard]] virtual std::error_code render();
 
-        virtual void terminate() noexcept;
+        [[nodiscard]] virtual std::error_code shutdown() noexcept;
 
-        [[nodiscard]] SharedContext getLifecycle() const noexcept { return m_lifecycle; }
-        [[nodiscard]] const SharedWindow &getMainWindow() const noexcept { return m_main_window; }
+        [[nodiscard]] constexpr const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
+        [[nodiscard]] constexpr const SharedWindow &getMainWindow() const noexcept { return m_main_window; }
 
     private:
         enum class EState : u8 {
@@ -74,16 +72,17 @@ export namespace pP {
         SharedWindow m_main_window{};
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
+        bool m_should_close{false};
 
         // Cold (init/shutdown only)
-        EState m_state{EState::created};
         ServicesStore m_services{};
         context::CancelFunc m_cancel{};
-
-        // Cross-thread — isolated to prevent false sharing with per-frame data
-        alignas(hal::cacheline_size_v) std::atomic<int> m_exitCode{0};
+        WindowCallback<int2>::Handle m_resize_handle{};
+        EState m_state{EState::created};
 
         // Cold (init-time)
+        std::unique_ptr<IUIService> m_ui_service;
+        std::unique_ptr<Renderer> m_renderer;
         safe_ptr<IPlatform> m_platform;
         Array<std::string> m_arguments{};
         std::string m_name{};

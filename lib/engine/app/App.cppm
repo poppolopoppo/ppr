@@ -2,9 +2,6 @@ module;
 
 export module engine.app;
 
-import engine.core;
-import std;
-
 export import :input.action;
 export import :input.device;
 export import :input.gamepad;
@@ -15,9 +12,13 @@ export import :input.mouse;
 export import :input.mapping;
 export import :input.player;
 
-export import :application;
-export import :platform;
 export import :service.input;
 export import :service.player;
-export import :window.handle;
+export import :service.ui;
 export import :service.window;
+
+export import :application;
+export import :platform;
+export import :player.graph;
+export import :renderer;
+export import :window.handle;
