@@ -30,7 +30,7 @@ export namespace pP {
     class IService : public safe_object {
     public:
         // ReSharper disable once CppHidingFunction
-        virtual ~IService() noexcept = default;
+        virtual ~IService() = default;
 
         struct Uid {
             hash_t m_hash_value{};

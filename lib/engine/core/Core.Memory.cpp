@@ -82,7 +82,7 @@ namespace pP {
     }
 #endif
 
-    safe_object::~safe_object() noexcept {
+    safe_object::~safe_object() noexcept(false) {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
         {
             const std::unique_lock scope_lock{m_referencer_barrier};
@@ -108,7 +108,7 @@ namespace pP {
 
     // Relocation/copying changes object identity: the new instance starts
     // unobserved, and the source must not be observed at the time of the op.
-    safe_object::safe_object(safe_object &&other) noexcept {
+    safe_object::safe_object(safe_object &&other) {
         PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
             "Source of move construction is still observed by a safe_ptr!");
     }
@@ -123,7 +123,7 @@ namespace pP {
         return *this;
     }
 
-    safe_object::safe_object(const safe_object &other) noexcept {
+    safe_object::safe_object(const safe_object &other) {
         PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
             "Source of copy construction is still observed by a safe_ptr!");
     }

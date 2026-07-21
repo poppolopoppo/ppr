@@ -30,15 +30,15 @@ export namespace pP {
     public:
         safe_object() noexcept = default;
 
-        ~safe_object() noexcept;
+        ~safe_object() noexcept(false);
 
         // Relocation/copying changes object identity: the new instance starts
         // unobserved, and the source must not be observed at the time of the op.
-        safe_object(safe_object &&other) noexcept;
+        safe_object(safe_object &&other);
 
         safe_object &operator=(safe_object &&other) noexcept;
 
-        safe_object(const safe_object &other) noexcept;
+        safe_object(const safe_object &other);
 
         safe_object &operator=(const safe_object &other) noexcept;
 

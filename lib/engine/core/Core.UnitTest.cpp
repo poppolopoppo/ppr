@@ -185,8 +185,9 @@ namespace pP {
                      "\tin function: {}\n"
                      "\tin test: {}\n\n"
                      "Callstack:\n{}",
-                     std::string_view(condition.m_site.file_name()), condition.m_site.line(), std::string_view(condition.m_message),
-                     std::string_view(condition.m_site.function_name()), getTestId(), backtrace);
+                     condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
+                     condition.m_site.function_name(), getTestId(),
+                     backtrace);
         std::cerr.flush();
 
         throw std::logic_error(condition.m_message);

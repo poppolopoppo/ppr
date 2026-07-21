@@ -705,6 +705,24 @@ export namespace pP::tests {
             a = nullptr;
             PPR_ASSERT(!a.isValid());
         };
+
+        PPR_UNIT_TEST(safe_object_destroy_with_live_ref, UnitTest::expect_crash) {
+            auto *obj = new TestObject{};
+            safe_ptr<TestObject> ptr{obj};
+            delete obj;
+        };
+
+        PPR_UNIT_TEST(safe_object_move_with_live_ref, UnitTest::expect_crash) {
+            TestObject src{};
+            safe_ptr<TestObject> ptr{&src};
+            TestObject dst{std::move(src)};
+        };
+
+        PPR_UNIT_TEST(safe_object_copy_with_live_ref, UnitTest::expect_crash) {
+            TestObject src{};
+            safe_ptr<TestObject> ptr{&src};
+            TestObject dst{src};
+        };
     }
 
     PPR_UNIT_TEST(safe_ptr_test) {
@@ -715,6 +733,14 @@ export namespace pP::tests {
             SafePtr::null_copy_remains_null,
             SafePtr::nullptr_assignment_clears,
         });
+
+        if constexpr (PPR_ENABLE_ASSERTIONS) {
+            _.recurse({
+                SafePtr::safe_object_destroy_with_live_ref,
+                SafePtr::safe_object_move_with_live_ref,
+                SafePtr::safe_object_copy_with_live_ref,
+            });
+        }
     };
 
     PPR_UNIT_TEST(poisoning) {
