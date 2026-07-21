@@ -30,9 +30,9 @@ export namespace pP {
             fatal,
         };
 
-        [[nodiscard]] static std::basic_string_view<char> toString(std::type_identity_t<char>, const ELevel level) noexcept;
-        [[nodiscard]] static std::basic_string_view<char8_t> toString(std::type_identity_t<char8_t>, const ELevel level) noexcept;
-        [[nodiscard]] static std::basic_string_view<wchar_t> toString(std::type_identity_t<wchar_t>, const ELevel level) noexcept;
+        [[nodiscard]] static std::basic_string_view<char> toString(std::type_identity_t<char>, ELevel level) noexcept;
+        [[nodiscard]] static std::basic_string_view<char8_t> toString(std::type_identity_t<char8_t>, ELevel level) noexcept;
+        [[nodiscard]] static std::basic_string_view<wchar_t> toString(std::type_identity_t<wchar_t>, ELevel level) noexcept;
 
         struct Category {
             enum EFlags : u8 {
@@ -84,42 +84,13 @@ export namespace pP {
 
         static Policy setWriterPolicy(Policy writer_policy) noexcept;
 
-        static void log(const Emitter &emitter, const string_literal message, const opaque::Dict params = {}) noexcept;
+        static void log(const Emitter &emitter, string_literal message, opaque::Dict params = {}) noexcept;
+
+        static void logRaw(const Emitter &emitter, std::string_view copy_message, opaque::Dict params = {}) noexcept;
 
         static void flush() noexcept;
 
-        class Handler {
-#ifdef PPR_LOG_BUFFER_SIZE
-            static constexpr std::size_t buffer_size_v = PPR_LOG_BUFFER_SIZE;
-#else
-            static constexpr std::size_t buffer_size_v = 2ull << 20u;
-#endif
-
-            void defaultWriter_(const Entry &entry) const noexcept;
-
-            static void backgroundWorkerLoop_(Handler &handler) noexcept;
-
-            alignas(hal::cacheline_size_v) RawChannel m_messages;
-
-            alignas(hal::cacheline_size_v) std::mutex m_writer_barrier{};
-            Policy m_writer_policy;
-
-            alignas(hal::cacheline_size_v) std::jthread m_background_worker{};
-            const TimePoint m_started_at{};
-
-            Handler() noexcept;
-
-        public:
-            ~Handler() noexcept;
-
-            [[nodiscard]] static Handler &get() noexcept;
-
-            Policy setWriterPolicy(Policy writer_policy) noexcept;
-
-            void flush() noexcept;
-
-            void log(const Emitter &emitter, const string_literal message, const opaque::Dict params = {}) noexcept;
-        };
+        class Handler;
     };
 
     PPR_PRAGMA_WARNING_POP()

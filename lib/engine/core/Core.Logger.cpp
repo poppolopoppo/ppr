@@ -1,4 +1,5 @@
 module;
+#include "../../../out/build/msvc-dev/vcpkg_installed/x64-windows/include/fmt/base.h"
 #include "pP/Macros.h"
 module engine.core;
 import :logger;
@@ -13,21 +14,21 @@ namespace pP {
         template<details::TChar CharT>
         [[nodiscard]] constexpr std::basic_string_view<CharT> toString_(const Log::ELevel level) noexcept {
             switch (level) {
-                using enum Log::ELevel;
-            case debug:
-                return PPR_LITERAL_FOR(CharT, "👾");
-            case verbose:
-                return PPR_LITERAL_FOR(CharT, "👁️");
-            case info:
-                return PPR_LITERAL_FOR(CharT, "ℹ️");
-            case emphasis:
-                return PPR_LITERAL_FOR(CharT, "👉");
-            case warning:
-                return PPR_LITERAL_FOR(CharT, "⚠️");
-            case error:
-                return PPR_LITERAL_FOR(CharT, "❌");
-            case fatal:
-                return PPR_LITERAL_FOR(CharT, "💀");
+                    using enum Log::ELevel;
+                case debug:
+                    return PPR_LITERAL_FOR(CharT, "👾");
+                case verbose:
+                    return PPR_LITERAL_FOR(CharT, "👁️");
+                case info:
+                    return PPR_LITERAL_FOR(CharT, "ℹ️");
+                case emphasis:
+                    return PPR_LITERAL_FOR(CharT, "👉");
+                case warning:
+                    return PPR_LITERAL_FOR(CharT, "⚠️");
+                case error:
+                    return PPR_LITERAL_FOR(CharT, "❌");
+                case fatal:
+                    return PPR_LITERAL_FOR(CharT, "💀");
             }
             std::unreachable();
         }
@@ -46,20 +47,43 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
-    // asynchronous logger
+    // asynchronous log handler
     // ------------------------------------------------------------------
 
-    Log::Policy Log::setWriterPolicy(Policy writer_policy) noexcept {
-        return Handler::get().setWriterPolicy(writer_policy);
-    }
+    class Log::Handler {
+#ifdef PPR_LOG_BUFFER_SIZE
+        static constexpr std::size_t buffer_size_v = PPR_LOG_BUFFER_SIZE;
+#else
+        static constexpr std::size_t buffer_size_v = 2ull << 20u;
+#endif
 
-    void Log::flush() noexcept {
-        Handler::get().flush();
-    }
+        void defaultWriter_(const Entry &entry) const noexcept;
 
-    void Log::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
-        Handler::get().log(emitter, message, params);
-    }
+        static void backgroundWorkerLoop_(Handler &handler) noexcept;
+
+        alignas(hal::cacheline_size_v) RawChannel m_messages;
+
+        alignas(hal::cacheline_size_v) std::mutex m_writer_barrier{};
+        Policy m_writer_policy;
+
+        alignas(hal::cacheline_size_v) std::jthread m_background_worker{};
+        const TimePoint m_started_at{};
+
+        Handler() noexcept;
+
+    public:
+        ~Handler() noexcept;
+
+        [[nodiscard]] static Handler &get() noexcept;
+
+        Policy setWriterPolicy(Policy writer_policy) noexcept;
+
+        void flush() noexcept;
+
+        void log(const Emitter &emitter, string_literal message, opaque::Dict params = {}) noexcept;
+
+        void logRaw(const Emitter &emitter, std::string_view copy_message, opaque::Dict params = {}) noexcept;
+    };
 
     Log::Handler::Handler() noexcept
         : m_messages(buffer_size_v),
@@ -84,20 +108,20 @@ namespace pP {
     }
 
     void Log::Handler::flush() noexcept {
-        PPR_VERIFY(m_messages.flush().has_value());
+        std::ignore = m_messages.flush();
     }
 
     void Log::Handler::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
         const TimePoint timestamp = std::chrono::steady_clock::now();
 
-        const size_t block_size_bytes = opaque::Block::sizeOf(params);
-        const size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
+        const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
+        const std::size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
 
         const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
         PPR_ASSERT(hdr.has_value());
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
-        auto *const entry = new (slot) Entry{
+        auto *const entry = new(slot) Entry{
             .m_message{message.view()},
             .m_site{emitter},
             .m_timestamp{timestamp},
@@ -110,17 +134,52 @@ namespace pP {
         m_messages.producerSubmit(*hdr);
     }
 
+    void Log::Handler::logRaw(const Emitter &emitter, const std::string_view message, const opaque::Dict params) noexcept {
+        const TimePoint timestamp = std::chrono::steady_clock::now();
+
+        const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
+        const std::size_t message_size_bytes = alignForward(message.size() * sizeof(message[0]), max_align_v);
+        const std::size_t entry_size_bytes = sizeof(Entry) + message_size_bytes + block_size_bytes;
+
+        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
+        PPR_ASSERT(hdr.has_value());
+
+        auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
+
+        auto *const embedded_message = reinterpret_cast<char *>(slot + sizeof(Entry));
+        std::memcpy(embedded_message, message.data(), message.size() * sizeof(message[0]));
+
+        auto *const entry = new(slot) Entry{
+            .m_message{embedded_message, message.size()},
+            .m_site{emitter},
+            .m_timestamp{timestamp},
+            .m_thread_id{std::this_thread::get_id()},
+        };
+
+        mem::Slab slab{slot + sizeof(Entry) + message_size_bytes, block_size_bytes};
+        entry->m_params.resetAssumeEmpty(params, slab);
+
+        m_messages.producerSubmit(*hdr);
+    }
+
     void Log::Handler::defaultWriter_(const Entry &entry) const noexcept {
         using namespace std::chrono;
         const auto elapsed_seconds = duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count() / 1e9;
 
 #if 0
-        hal::outputDebugFmt("[{:08.3f}][{}][{}] {} -- {} {}\n", elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
-            toString_<char>(entry.m_site.m_verbosity), entry.m_message, entry.m_params);
+        hal::outputDebugFmt("{} [{:08.3f}][{}][{}] -- {} {}\n",
+                            toString_<char>(entry.m_site.m_verbosity),
+                            elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
+                            entry.m_message, entry.m_params);
 #else
-        std::println(std::cout, "[{:08.3f}][{}][{}] {} -- {} {}", elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
-            toString_<char>(entry.m_site.m_verbosity), entry.m_message, entry.m_params);
-        std::cout.flush();
+        std::println(std::cout, "{} {:08.3f} | {} [{}] -- {} {}",
+                     toString_<char>(entry.m_site.m_verbosity),
+                     elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
+                     entry.m_message, entry.m_params);
+
+        if (entry.m_site.m_verbosity > ELevel::verbose) {
+            std::cout.flush();
+        }
 #endif
     }
 
@@ -143,4 +202,23 @@ namespace pP {
         }
     }
 
+    // ------------------------------------------------------------------
+    // public api for the logger
+    // ------------------------------------------------------------------
+
+    Log::Policy Log::setWriterPolicy(Policy writer_policy) noexcept {
+        return Handler::get().setWriterPolicy(writer_policy);
+    }
+
+    void Log::flush() noexcept {
+        Handler::get().flush();
+    }
+
+    void Log::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
+        Handler::get().log(emitter, message, params);
+    }
+
+    void Log::logRaw(const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
+        Handler::get().logRaw(emitter, copy_message, params);
+    }
 }
