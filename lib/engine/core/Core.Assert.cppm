@@ -36,14 +36,7 @@ export namespace pP {
 
         using Policy = std23::function_ref<void(const Assertion &assert)>;
 
-        template<std::size_t nLenP1>
-        static void onFailure(const EType type, const char (&message)[nLenP1], const std::source_location &site) {
-            Handler::get().onAssertFailure(Assertion{
-                .m_site = site,
-                .m_message = message,
-                .m_type = type
-            });
-        }
+        static void onFailure(const EType type, const char *message, const std::source_location &site);
 
         static Policy setFailurePolicy(Policy &&on_assert_failure) noexcept;
 

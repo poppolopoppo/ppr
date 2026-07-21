@@ -10,7 +10,6 @@ import std;
 
 #if PPR_ENABLE_ASSERTIONS
 namespace pP {
-
     void Assertion::Handler::defaultAssertFailure_(const Assertion &condition) {
         char buffer[2048];
         const auto [out, size] = std::format_to_n(
@@ -53,5 +52,13 @@ namespace pP {
         return Handler::get().setFailurePolicy(std::move(on_assert_failure));
     }
 
+    void Assertion::onFailure(const EType type, const char *message, const std::source_location &site) {
+        Handler::get().onAssertFailure(
+            Assertion{
+                .m_site = site,
+                .m_message = message,
+                .m_type = type
+            });
+    }
 }
 #endif
