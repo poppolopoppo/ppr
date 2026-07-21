@@ -82,6 +82,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_LIFETIME_BOUND [[msvc::lifetimebound]]
 #   define PPR_NO_INLINE [[msvc::noinline]]
 #   define PPR_OFFSETOF(_STRUCT, _MEMBER) __builtin_offsetof(_STRUCT, _MEMBER)
+#   define PPR_PRAGMA_SYSTEM_HEADER()
 #   define PPR_PRAGMA_WARNING_PUSH() __pragma(warning(push))
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE) __pragma(warning(disable : _WARNING_CODE))
 #   define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID)
@@ -98,11 +99,13 @@ extern "C" void _ReadWriteBarrier();
 #      define PPR_PRAGMA_WARNING_PUSH() __pragma(clang diagnostic push)
 #      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) __pragma(clang diagnostic ignored #_WARNING_ID)
 #      define PPR_PRAGMA_WARNING_POP() __pragma(clang diagnostic pop)
+#      define PPR_PRAGMA_SYSTEM_HEADER() __pragma(clang system_header)
 #   else
 #      define PPR_LIFETIME_BOUND [[gcc::lifetimebound]]
 #      define PPR_PRAGMA_WARNING_PUSH() __pragma(gcc diagnostic push)
 #      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) __pragma(gcc diagnostic ignored #_WARNING_ID)
 #      define PPR_PRAGMA_WARNING_POP() __pragma(gcc diagnostic pop)
+#      define PPR_PRAGMA_SYSTEM_HEADER() __pragma(gcc system_header)
 #   endif
 #   define PPR_NO_INLINE [[gnu::noinline]]
 #   define PPR_OFFSETOF(_STRUCT, _MEMBER) __builtin_offsetof(_STRUCT, _MEMBER)
@@ -121,6 +124,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_PRAGMA_WARNING_DISABLE_MSVC(_WARNING_CODE)
 #   define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID)
 #   define PPR_PRAGMA_WARNING_POP()
+#   define PPR_PRAGMA_SYSTEM_HEADER()
 #endif
 
 // ------------------------------------------------------------------
