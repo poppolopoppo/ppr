@@ -15,3 +15,11 @@ add_custom_command(TARGET VideoGameApp POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_RUNTIME_DLLS:VideoGameApp> $<TARGET_FILE_DIR:VideoGameApp>
 )
+
+# Copy shader assets to output directory
+add_custom_command(TARGET VideoGameApp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets/shaders"
+        "$<TARGET_FILE_DIR:VideoGameApp>/shaders"
+        COMMENT "Copying shader assets"
+)
