@@ -72,4 +72,8 @@ namespace pP {
         static GlfwPlayer g_instance{GlfwInput::get()};
         return safe_ptr{&g_instance};
     }
+
+    safe_ptr<IPlayerService> IPlayerService::get() noexcept {
+        return GlfwPlayer::get();
+    }
 }

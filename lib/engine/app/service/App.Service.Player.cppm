@@ -12,6 +12,8 @@ export namespace pP {
 
     class IPlayerService : public virtual IService {
     public:
+        [[nodiscard]] static safe_ptr<IPlayerService> get() noexcept;
+
         [[nodiscard]] virtual SharedPlayer getPlayer(const PlayerId &id) const noexcept = 0;
 
         virtual void enumeratePlayers(Collector<SharedPlayer> each_player) const noexcept = 0;
