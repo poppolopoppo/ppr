@@ -2,7 +2,7 @@
 add_executable(VideoGameApp main.cpp)
 
 setup_ppr_project(VideoGameApp
-  INTERNAL_PUBLIC_DEPS EngineCore EngineApp EngineMath EngineRHI
+  INTERNAL_PUBLIC_DEPS EngineCore EngineApp EngineMath EngineShader EngineRHI
 )
 
 # Ensure runtime DLLs from linked targets are placed next to the exe.

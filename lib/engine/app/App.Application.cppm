@@ -47,6 +47,8 @@ export namespace pP {
 
         [[nodiscard]] std::error_code run();
 
+        using ApplicationCallback = Callback<std::error_code (const Application &app)>;
+
     protected:
         [[nodiscard]] virtual std::error_code initialize();
 

@@ -6,7 +6,6 @@ module engine.tests;
 import std;
 
 namespace pP::tests {
-
     static std::atomic<bool> g_tests_failed{false};
 
     TestCli parseCli(const int argc, char *argv[]) {
@@ -82,14 +81,13 @@ namespace pP::tests {
             }
             if (cli.m_loops > 1 && cli.m_context.m_shuffle_seed.has_value()) {
                 std::cout << "[Running tests][Loop: " << iter << "/" << cli.m_loops
-                          << "][Shuffle: " << std::hex << std::uppercase
-                          << std::setw(16) << std::setfill('0')
-                          << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]"
-                          << std::endl;
+                        << "][Shuffle: " << std::hex << std::uppercase
+                        << std::setw(16) << std::setfill('0')
+                        << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]"
+                        << std::endl;
             }
             UnitTest::run(cli.m_context, root);
         }
         return g_tests_failed ? -1 : 0;
     }
-
 }

@@ -1,0 +1,293 @@
+module;
+#include "pP/Macros.h"
+#include <slang.h>
+#include <slang-com-ptr.h>
+
+export module engine.tests.core:shader;
+
+import engine.core;
+import engine.shader;
+import engine.rhi;
+import std;
+
+export namespace pP::tests {
+    // ------------------------------------------------------------------
+    // A. Shader Error Codes
+    // ------------------------------------------------------------------
+    namespace ShaderErrC {
+        static_assert(static_cast<int>(shader::errc::ok) == SLANG_OK);
+        static_assert(static_cast<int>(shader::errc::not_found) == SLANG_E_NOT_FOUND);
+        static_assert(static_cast<int>(shader::errc::invalid_arg) == SLANG_E_INVALID_ARG);
+        static_assert(static_cast<int>(shader::errc::not_implemented) == SLANG_E_NOT_IMPLEMENTED);
+        static_assert(static_cast<int>(shader::errc::out_of_memory) == SLANG_E_OUT_OF_MEMORY);
+        static_assert(static_cast<int>(shader::errc::cannot_open) == SLANG_E_CANNOT_OPEN);
+
+        PPR_UNIT_TEST(errc_enum_values) {
+            PPR_ASSERT(static_cast<int>(shader::errc::ok) == SLANG_OK);
+            PPR_ASSERT(static_cast<int>(shader::errc::not_found) == SLANG_E_NOT_FOUND);
+            PPR_ASSERT(static_cast<int>(shader::errc::invalid_arg) == SLANG_E_INVALID_ARG);
+            PPR_ASSERT(static_cast<int>(shader::errc::not_implemented) == SLANG_E_NOT_IMPLEMENTED);
+            PPR_ASSERT(static_cast<int>(shader::errc::out_of_memory) == SLANG_E_OUT_OF_MEMORY);
+            PPR_ASSERT(static_cast<int>(shader::errc::cannot_open) == SLANG_E_CANNOT_OPEN);
+        };
+
+        PPR_UNIT_TEST(errc_category_name) {
+            const auto &cat = shader::error_category();
+            PPR_ASSERT(std::string_view(cat.name()) == "slang");
+        };
+
+        PPR_UNIT_TEST(errc_ok_not_error) {
+            auto ec = shader::make_error_code(shader::errc::ok);
+            PPR_ASSERT(!ec);
+
+            ec = shader::make_error_code(shader::errc::not_found);
+            PPR_ASSERT(!!ec);
+            PPR_ASSERT(ec.category().name() == std::string_view("slang"));
+        };
+
+        PPR_UNIT_TEST(errc_make_error_code_from_result) {
+            auto ec = shader::make_error_code(SLANG_OK);
+            PPR_ASSERT(!ec);
+
+            ec = shader::make_error_code(SLANG_FAIL);
+            PPR_ASSERT(!!ec);
+        };
+
+        PPR_UNIT_TEST(errc_result_convenience) {
+            auto ec = shader::result(SLANG_OK);
+            PPR_ASSERT(!ec);
+
+            ec = shader::result(SLANG_FAIL);
+            PPR_ASSERT(!!ec);
+        };
+
+        PPR_UNIT_TEST(errc_error_condition_mapping) {
+            auto ec = shader::make_error_code(shader::errc::invalid_arg);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::invalid_argument);
+
+            ec = shader::make_error_code(shader::errc::not_found);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::no_such_file_or_directory);
+
+            ec = shader::make_error_code(shader::errc::time_out);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::timed_out);
+
+            ec = shader::make_error_code(shader::errc::buffer_too_small);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::result_out_of_range);
+
+            ec = shader::make_error_code(shader::errc::not_implemented);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::function_not_supported);
+
+            ec = shader::make_error_code(shader::errc::out_of_memory);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::not_enough_memory);
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // B. RHI Error Codes
+    // ------------------------------------------------------------------
+    namespace RhiErrC {
+        PPR_UNIT_TEST(rhi_error_category_name) {
+            const auto &cat = rhi::error_category();
+            PPR_ASSERT(std::string_view(cat.name()) == "slang-rhi");
+        };
+
+        PPR_UNIT_TEST(rhi_make_error_code) {
+            auto ec = rhi::make_error_code(rhi::errc::ok);
+            PPR_ASSERT(!ec);
+
+            ec = rhi::make_error_code(rhi::errc::not_found);
+            PPR_ASSERT(!!ec);
+            PPR_ASSERT(ec.category().name() == std::string_view("slang-rhi"));
+
+            ec = rhi::make_error_code(rhi::errc::unknown_error);
+            PPR_ASSERT(!!ec);
+
+            ec = rhi::result(SLANG_OK);
+            PPR_ASSERT(!ec);
+
+            ec = rhi::result(SLANG_FAIL);
+            PPR_ASSERT(!!ec);
+        };
+
+        PPR_UNIT_TEST(rhi_error_condition_mapping) {
+            auto ec = rhi::make_error_code(rhi::errc::invalid_arg);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::invalid_argument);
+
+            ec = rhi::make_error_code(rhi::errc::not_found);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::no_such_file_or_directory);
+
+            ec = rhi::make_error_code(rhi::errc::time_out);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::timed_out);
+
+            ec = rhi::make_error_code(rhi::errc::buffer_too_small);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::result_out_of_range);
+
+            ec = rhi::make_error_code(rhi::errc::out_of_memory);
+            PPR_ASSERT(ec.default_error_condition() == std::errc::not_enough_memory);
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // C. Diagnose & ModuleHandle
+    // ------------------------------------------------------------------
+    namespace ModHandle {
+        PPR_UNIT_TEST(diagnose_default_construct) {
+            shader::Diagnose diag;
+            slang::IBlob **ref = diag.writeRef();
+            PPR_ASSERT(ref != nullptr);
+            PPR_ASSERT(*ref == nullptr);
+        };
+
+        PPR_UNIT_TEST(module_handle_default) {
+            shader::SharedModule handle;
+            PPR_ASSERT(handle.get() == nullptr);
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // D. Shader Compilation & Reflection
+    // ------------------------------------------------------------------
+    namespace ShaderComp {
+        constexpr string_literal kTriangleShader = R"(
+struct VSOutput {
+    float4 position : SV_Position;
+    float3 color : COLOR;
+};
+[shader("vertex")]
+VSOutput vertexMain(float3 position : POSITION, float3 color : COLOR) {
+    VSOutput output;
+    output.position = float4(position, 1.0);
+    output.color = color;
+    return output;
+}
+[shader("fragment")]
+float4 fragmentMain(VSOutput input) : SV_Target {
+    return float4(input.color, 1.0);
+}
+)";
+
+        PPR_UNIT_TEST(compile_simple_triangle_shader) {
+            const auto svc = IShaderService::get();
+            PPR_ASSERT(!svc->initialize());
+
+            auto handle = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader.data());
+            PPR_ASSERT(handle.has_value());
+
+            auto *module = handle->get();
+            PPR_ASSERT(module != nullptr);
+
+            shader::ComPtr<slang::IEntryPoint> vertex_ep;
+            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+            PPR_ASSERT(vertex_ep != nullptr);
+
+            shader::ComPtr<slang::IEntryPoint> fragment_ep;
+            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+            PPR_ASSERT(fragment_ep != nullptr);
+        };
+
+        constexpr string_literal kParamShader = R"(
+struct Constants {
+    float4x4 g_proj;
+    float4 g_color;
+    float g_intensity;
+};
+ConstantBuffer<Constants> g_constants : register(b0);
+
+struct VSOutput {
+    float4 position : SV_Position;
+    float4 color : COLOR;
+};
+[shader("vertex")]
+VSOutput vertexMain(float3 position : POSITION) {
+    VSOutput output;
+    output.position = mul(g_constants.g_proj, float4(position, 1.0));
+    output.color = g_constants.g_color;
+    return output;
+}
+[shader("fragment")]
+float4 fragmentMain(VSOutput input) : SV_Target {
+    return input.color * g_constants.g_intensity;
+}
+)";
+
+        PPR_UNIT_TEST(compile_invalid_shader_recovery) {
+            const auto svc = IShaderService::get();
+            PPR_ASSERT(!svc->initialize());
+
+            auto handle = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@");
+            PPR_ASSERT(!handle.has_value());
+            PPR_ASSERT(!!handle.error());
+
+            handle = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader.data());
+            PPR_ASSERT(handle.has_value());
+            PPR_ASSERT(handle->get() != nullptr);
+        };
+
+        PPR_UNIT_TEST(shader_parameter_reflection) {
+            const auto svc = IShaderService::get();
+            PPR_ASSERT(!svc->initialize());
+
+            auto handle = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader.data());
+            PPR_ASSERT(handle.has_value());
+
+            auto *module = handle->get();
+            PPR_ASSERT(module != nullptr);
+
+            shader::ComPtr<slang::IEntryPoint> vertex_ep;
+            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+
+            shader::ComPtr<slang::IEntryPoint> fragment_ep;
+            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+
+            slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
+            shader::ComPtr<slang::IComponentType> linked_program;
+            PPR_ASSERT(SLANG_SUCCEEDED(
+                module->getSession()->createCompositeComponentType(entry_points, 2, linked_program.writeRef())));
+
+            auto *layout = linked_program->getLayout();
+            PPR_ASSERT(layout != nullptr);
+
+            // Find g_constants in global parameters
+            bool found = false;
+            const auto count = layout->getParameterCount();
+            PPR_ASSERT(count > 0);
+            for (unsigned i = 0; i < count; ++i) {
+                auto *param = layout->getParameterByIndex(i);
+                PPR_ASSERT(param != nullptr);
+                if (std::string_view(param->getName()) == "g_constants") {
+                    found = true;
+                    auto *type_layout = param->getTypeLayout();
+                    PPR_ASSERT(type_layout != nullptr);
+                    PPR_ASSERT(type_layout->getSize() > 0);
+                    auto *type = param->getType();
+                    PPR_ASSERT(type != nullptr);
+                    PPR_ASSERT(type->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
+                    break;
+                }
+            }
+            PPR_ASSERT(found);
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Parent aggregator
+    // ------------------------------------------------------------------
+    PPR_UNIT_TEST(shader) {
+        _.recurse({
+            ShaderErrC::errc_enum_values,
+            ShaderErrC::errc_category_name,
+            ShaderErrC::errc_ok_not_error,
+            ShaderErrC::errc_make_error_code_from_result,
+            ShaderErrC::errc_result_convenience,
+            ShaderErrC::errc_error_condition_mapping,
+            RhiErrC::rhi_error_category_name,
+            RhiErrC::rhi_make_error_code,
+            RhiErrC::rhi_error_condition_mapping,
+            ModHandle::diagnose_default_construct,
+            ModHandle::module_handle_default,
+            ShaderComp::compile_simple_triangle_shader,
+            ShaderComp::compile_invalid_shader_recovery,
+            ShaderComp::shader_parameter_reflection,
+        });
+    };
+}

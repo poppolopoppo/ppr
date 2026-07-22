@@ -13,13 +13,6 @@ import engine.core;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(Shader, info, none)
 
-    using ::slang::IBlob;
-    using ::slang::IComponentType;
-    using ::slang::IEntryPoint;
-    using ::slang::IGlobalSession;
-    using ::slang::IModule;
-    using ::slang::ISession;
-
     namespace shader {
         class SlangErrorCategory : public std::error_category {
         public:
@@ -80,7 +73,7 @@ namespace pP {
             return make_error_code(static_cast<Result>(error_code));
         }
 
-        void diagnoseIfNeeded(slang::IBlob *diagnostic_blob) {
+        void diagnoseIfNeeded(IBlob *diagnostic_blob) {
             if (diagnostic_blob) {
                 const std::string_view message{
                     static_cast<const char *>(diagnostic_blob->getBufferPointer()),
@@ -89,311 +82,88 @@ namespace pP {
                 PPR_LOG_RAW(Shader, error, message);
             }
         }
-    }
-
-    IModule *ModuleHandle::get() const noexcept {
-        return m_state ? m_state->m_module.get() : nullptr;
-    }
-
-    bool ModuleHandle::wasReloaded() noexcept {
-        return m_state ? m_state->m_reloaded.exchange(false) : false;
-    }
-
-    // ------------------------------------------------------------------
-    // internal compile result type
-    // ------------------------------------------------------------------
-
-    struct CompileResult {
-        std::shared_ptr<ModuleState> target;
-        shader::ComPtr<IModule> module;
-        std::error_code ec;
-    };
-
-    // ------------------------------------------------------------------
-    // ShaderService — singleton implementing IShaderService
-    // ------------------------------------------------------------------
-
-    class ShaderService final : public IShaderService {
-        shader::ComPtr<slang::IGlobalSession> m_global_session;
-        shader::ComPtr<slang::ISession> m_session;
-
-        // Compile thread
-        std::jthread m_compile_thread;
-        std::mutex m_job_mutex;
-        std::condition_variable m_job_cv;
-        std::deque<std::shared_ptr<CompileResult>> m_job_queue;
-        std::atomic<bool> m_shutdown{false};
-
-        // Thread-safe result storage (producer: compile thread, consumer: poll)
-        std::mutex m_result_mutex;
-        std::deque<CompileResult> m_results;
-
-        // Active modules: canonical path → ModuleState
-        std::unordered_map<std::string, std::shared_ptr<ModuleState>> m_modules_by_path;
-
-        // Directory watchers: directory path → DirectoryWatcher
-        std::unordered_map<std::string, std::unique_ptr<DirectoryWatcher>> m_watchers_by_dir;
-
-    public:
-        ShaderService() noexcept = default;
-
-        ~ShaderService() noexcept override {
-            m_shutdown = true;
-            m_job_cv.notify_all();
-        }
 
         // ------------------------------------------------------------------
-        // IShaderService
+        // ShaderService — singleton implementing IShaderService
         // ------------------------------------------------------------------
 
-        std::error_code initialize() override {
-            if (m_global_session) {
-                PPR_LOG(Shader, warning, "Shader service already initialized");
-                return make_error_code(shader::errc::ok);
+        class ShaderService final : public IShaderService {
+            ComPtr<IGlobalSession> m_global_session{};
+            ComPtr<ISession> m_session{};
+
+        public:
+            ShaderService() noexcept = default;
+
+            // ------------------------------------------------------------------
+            // IShaderService
+            // ------------------------------------------------------------------
+
+            std::error_code initialize() override {
+                if (m_global_session) {
+                    PPR_LOG(Shader, warning, "Shader service already initialized");
+                    return errc::ok;
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(Shader, createGlobalSession(m_global_session.writeRef()));
+
+                // Create a default session for compilation
+                PPR_RETURN_ERROR_ON_FAIL(Shader, m_global_session->createSession({}, m_session.writeRef()));
+
+                PPR_LOG(Shader, info, "Shader service initialized");
+                return errc::ok;
             }
 
-            shader::ComPtr<slang::IGlobalSession> session;
-            const auto create_result = ::slang::createGlobalSession(session.writeRef());
-            if (SLANG_FAILED(create_result)) {
-                PPR_LOG(Shader, error, "failed to create Slang global session");
-                return shader::make_error_code(create_result);
-            }
-            m_global_session = std::move(session);
+            std::error_code shutdown() override {
+                if (not m_global_session) {
+                    return errc::uninitialized;
+                }
 
-            // Create a default session for compilation
-            shader::ComPtr<slang::ISession> default_session;
-            const auto session_result = m_global_session->createSession({}, default_session.writeRef());
-            if (SLANG_FAILED(session_result)) {
-                PPR_LOG(Shader, error, "failed to create Slang compilation session");
-                return shader::make_error_code(session_result);
-            }
-            m_session = std::move(default_session);
+                m_session.setNull();
+                m_global_session.setNull();
 
-            // Start the compile thread
-            m_compile_thread = std::jthread([this] { compileThread_(); });
-
-            PPR_LOG(Shader, info, "Shader service initialized");
-            return make_error_code(shader::errc::ok);
-        }
-
-        slang::IGlobalSession *getGlobalSession() const noexcept override {
-            return m_global_session.get();
-        }
-
-        std::expected<ModuleHandle, std::error_code> loadModuleFromFile(
-            const std::filesystem::path &path,
-            const string_literal module_name) override {
-            // Map the file and copy source
-            auto mapped = io::mapFile(path);
-            if (not mapped) {
-                PPR_LOG(Shader, error, "failed to map shader file", {{"path", path.string().c_str()}});
-                return std::unexpected(mapped.error());
+                PPR_LOG(Shader, info, "Shader service shutdown");
+                return errc::ok;
             }
 
-            const std::string source(mapped->c_str(), mapped->size());
-
-            // Compile synchronously for the initial load
-            shader::Diagnose diagnostics;
-            shader::ComPtr<IModule> module;
-            *module.writeRef() = m_session->loadModuleFromSourceString(
-                module_name.data(),
-                path.generic_string().c_str(),
-                source.c_str(),
-                diagnostics.writeRef());
-
-            if (not module) {
-                PPR_LOG(Shader, error, "failed to compile shader", {{"path", path.string().c_str()}});
-                return std::unexpected(shader::make_error_code(shader::errc::invalid_arg));
+            IGlobalSession *getGlobalSession() const noexcept override {
+                return m_global_session.get();
             }
 
-            // Create the module state, storing the source for hot-reload
-            auto state = std::make_shared<ModuleState>();
-            state->m_module = std::move(module);
-            state->m_source_path = path.generic_string();
-            state->m_module_name = module_name.data();
-            state->m_source = source;
-
-            // Register for file watching
-            const auto canonical_path = std::filesystem::weakly_canonical(path);
-            const auto dir = canonical_path.parent_path().generic_string();
-            const auto full_path = canonical_path.generic_string();
-
-            if (m_watchers_by_dir.find(dir) == m_watchers_by_dir.end()) {
-                auto watcher = std::make_unique<DirectoryWatcher>(std::filesystem::path(dir));
-                m_watchers_by_dir.emplace(dir, std::move(watcher));
-            }
-
-            m_modules_by_path.emplace(full_path, state);
-
-            ModuleHandle handle;
-            ModuleStateAccess::setState(handle, std::move(state));
-            return handle;
-        }
-
-        std::expected<ModuleHandle, std::error_code> loadModuleFromSource(
-            const string_literal module_name,
-            const char *path,
-            const char *source) override {
-            shader::Diagnose diagnostics;
-            shader::ComPtr<IModule> module;
-            *module.writeRef() = m_session->loadModuleFromSourceString(
-                module_name.data(),
-                path,
-                source,
-                diagnostics.writeRef());
-
-            if (not module) {
-                PPR_LOG(Shader, error, "failed to compile shader module from source", {
-                    {"name", module_name.data()}
+            Expected<SharedModule> loadModuleFromFile(
+                const std::filesystem::path &path,
+                const char *module_name) override {
+                return io::mapFile(path).and_then([&](MappedFile &&mapped) -> Expected<SharedModule> {
+                    return loadModuleFromSource(module_name, path.generic_string().c_str(), mapped.c_str());
                 });
-                return std::unexpected(shader::make_error_code(shader::errc::invalid_arg));
             }
 
-            auto state = std::make_shared<ModuleState>();
-            state->m_module = std::move(module);
-            state->m_source_path = path;
-            state->m_module_name = module_name.data();
-            state->m_source = source;
+            Expected<SharedModule> loadModuleFromSource(
+                const char *module_name,
+                const char *path,
+                const char *source) override {
+                Diagnose diagnostics;
+                ComPtr<IModule> module;
+                *module.writeRef() = m_session->loadModuleFromSourceString(
+                    module_name,
+                    path,
+                    source,
+                    diagnostics.writeRef());
 
-            ModuleHandle handle;
-            ModuleStateAccess::setState(handle, std::move(state));
-            return handle;
-        }
-
-        std::future<std::error_code> reloadModule(ModuleHandle &handle) override {
-            if (not ModuleStateAccess::getState(handle)) {
-                std::promise<std::error_code> p;
-                auto future = p.get_future();
-                p.set_value(shader::make_error_code(shader::errc::invalid_arg));
-                return future;
-            }
-
-            auto promise = std::make_shared<std::promise<std::error_code>>();
-            auto future = promise->get_future();
-
-            auto job = std::make_shared<CompileResult>();
-            job->target = ModuleStateAccess::getState(handle);
-
-            {
-                std::lock_guard lock(m_job_mutex);
-                m_job_queue.push_back(std::move(job));
-            }
-            m_job_cv.notify_one();
-
-            return future;
-        }
-
-        void poll() override {
-            // 1. Poll file watchers for changes
-            for (auto &[dir_path, watcher] : m_watchers_by_dir) {
-                std::error_code ec;
-                watcher->poll(ec);
-                if (ec && ec != std::errc::result_out_of_range) {
-                    continue;
-                }
-
-                for (const auto &change : watcher->changes()) {
-                    const auto full_path = (std::filesystem::path(dir_path) / change.m_filename).generic_string();
-                    const auto it = m_modules_by_path.find(full_path);
-                    if (it == m_modules_by_path.end()) {
-                        continue;
-                    }
-
-                    auto &state = it->second;
-
-                    // Re-map the changed file
-                    auto mapped = io::mapFile(std::filesystem::path(full_path));
-                    if (not mapped) {
-                        continue;
-                    }
-
-                    // Update stored source for subsequent explicit reloads
-                    state->m_source.assign(mapped->c_str(), mapped->size());
-
-                    auto job = std::make_shared<CompileResult>();
-                    job->target = state;
-
-                    {
-                        std::lock_guard lock(m_job_mutex);
-                        m_job_queue.push_back(std::move(job));
-                    }
-                    m_job_cv.notify_one();
-                }
-            }
-
-            // 2. Drain results (compile thread → main thread)
-            std::deque<CompileResult> pending;
-            {
-                std::lock_guard lock(m_result_mutex);
-                pending.swap(m_results);
-            }
-
-            for (auto &r : pending) {
-                if (r.ec) {
-                    PPR_LOG(Shader, error, "shader recompilation failed", {
-                        {"path", r.target ? r.target->m_source_path.c_str() : "unknown"}
+                if (not module) {
+                    PPR_LOG(Shader, error, "failed to compile shader module from source", {
+                        {"name", module_name},
+                        {"path", path}
                     });
-                } else if (r.target) {
-                    r.target->m_module = std::move(r.module);
-                    r.target->m_reloaded.store(true, std::memory_order_release);
-                    PPR_LOG(Shader, info, "shader recompiled", {
-                        {"path", r.target->m_source_path.c_str()}
-                    });
-                }
-            }
-        }
-
-    private:
-        // ------------------------------------------------------------------
-        // compile thread: picks up jobs, compiles, sends results back
-        // ------------------------------------------------------------------
-
-        void compileThread_() {
-            while (not m_shutdown) {
-                std::shared_ptr<CompileResult> job;
-                {
-                    std::unique_lock lock(m_job_mutex);
-                    m_job_cv.wait(lock, [this] { return m_shutdown || not m_job_queue.empty(); });
-                    if (m_shutdown) {
-                        break;
-                    }
-                    job = std::move(m_job_queue.front());
-                    m_job_queue.pop_front();
+                    return std::unexpected(make_error_code(errc::invalid_arg));
                 }
 
-                auto result = compileModule_(job);
-
-                if (not m_shutdown) {
-                    std::lock_guard lock(m_result_mutex);
-                    m_results.push_back(std::move(result));
-                }
+                return module;
             }
-        }
-
-        [[nodiscard]] CompileResult compileModule_(const std::shared_ptr<CompileResult> &job) {
-            CompileResult result;
-            result.target = job->target;
-
-            shader::Diagnose diagnostics;
-            shader::ComPtr<IModule> module;
-            *module.writeRef() = m_session->loadModuleFromSourceString(
-                job->target->m_module_name.c_str(),
-                job->target->m_source_path.c_str(),
-                job->target->m_source.c_str(),
-                diagnostics.writeRef());
-
-            if (not module) {
-                result.ec = shader::make_error_code(shader::errc::invalid_arg);
-            } else {
-                result.module = std::move(module);
-            }
-
-            return result;
-        }
-    };
+        };
+    }
 
     safe_ptr<IShaderService> IShaderService::get() noexcept {
-        static ShaderService g_instance{};
+        static shader::ShaderService g_instance{};
         return safe_ptr<IShaderService>(&g_instance);
     }
 }

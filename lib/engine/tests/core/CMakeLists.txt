@@ -25,7 +25,7 @@ target_sources(EngineCoreTests
 )
 
 setup_ppr_project(EngineCoreTests
-  INTERNAL_PUBLIC_DEPS EngineCore EngineTestsShared
+  INTERNAL_PUBLIC_DEPS EngineCore EngineShader EngineRHI EngineTestsShared
 )
 
 if(MSVC)

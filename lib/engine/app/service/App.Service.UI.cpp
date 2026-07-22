@@ -1,6 +1,8 @@
 module;
 
 #include "pP/Macros.h"
+#include <slang.h>
+#include <slang-com-ptr.h>
 #include "App.Service.UI.imgui.hpp"
 #include <imgui_internal.h>
 
@@ -17,6 +19,7 @@ import std;
 import engine.core;
 import engine.math;
 import engine.rhi;
+import engine.shader;
 
 namespace pP::ui {
     PPR_DEFINE_LOG_CATEGORY(UI, info, none)
@@ -243,40 +246,39 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             m_framebuffer_size = main_window.m_framebuffer_size;
 
-            // Compile ImGui shaders
+            // Compile ImGui shaders via IShaderService
             {
-                rhi::ComPtr<shader::ISession> slangSession = device.getSlangSession();
-                if (not slangSession) {
-                    PPR_LOG(UI, error, "failed to get Slang session from device");
-                    return rhi::errc::not_available;
+                const safe_ptr<IShaderService> shader_service = IShaderService::get();
+                PPR_ASSERT(shader_service.isValid());
+
+                auto handle = shader_service->loadModuleFromSource(
+                    "imgui",
+                    "imgui.slang",
+                    kImGuiShader.data());
+                if (not handle) {
+                    return handle.error();
                 }
+                m_imgui_shader_handle = std::move(*handle);
 
-                shader::Diagnose diagnostics;
-                const shader::ComPtr<shader::IModule> module(
-                    slangSession->loadModuleFromSourceString(
-                        "imgui",
-                        "imgui.slang",
-                        kImGuiShader.data(),
-                        diagnostics.writeRef()));
+                shader::ComPtr<slang::IModule> module;
+                module = m_imgui_shader_handle.get();
+                PPR_ASSERT(module);
 
-                if (not module) {
-                    return shader::errc::cannot_open;
-                }
-
-                shader::ComPtr<shader::IEntryPoint> vertex_ep;
+                shader::ComPtr<slang::IEntryPoint> vertex_ep;
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
 
-                shader::ComPtr<shader::IEntryPoint> fragment_ep;
+                shader::ComPtr<slang::IEntryPoint> fragment_ep;
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
 
-                shader::IComponentType *entryPoints[] = {vertex_ep, fragment_ep};
+                slang::IComponentType *entryPoints[] = {vertex_ep.get(), fragment_ep.get()};
 
                 rhi::ShaderProgramDesc program_desc{};
                 program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-                program_desc.slangGlobalScope = module;
+                program_desc.slangGlobalScope = module.get();
                 program_desc.slangEntryPoints = entryPoints;
                 program_desc.slangEntryPointCount = std::size(entryPoints);
 
+                shader::Diagnose diagnostics;
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(device.createShaderProgram(program_desc, m_program.writeRef(), diagnostics.writeRef())));
             }
 
@@ -353,22 +355,20 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             m_listener.setPriority(-1000);
             m_listener.setRawKeyCallback([this](const InputMessage &message) noexcept {
-                ImGuiIO &io = ImGui::GetIO();
+                ImGuiIO &imgui_io = ImGui::GetIO();
 
                 if (message.m_key.isKeyboard()) {
-                    const auto *key = std::get_if<EKeyboardKey>(&message.m_key.m_code);
-                    if (key) {
+                    if (const auto *key = std::get_if<EKeyboardKey>(&message.m_key.m_code)) {
                         const ImGuiKey imgui_key = keyboardKeyToImGuiKey(*key);
                         if (imgui_key != ImGuiKey_None) {
-                            io.AddKeyEvent(imgui_key, message.isPressed() || message.isRepeat());
+                            imgui_io.AddKeyEvent(imgui_key, message.isPressed() || message.isRepeat());
                         }
                     }
                 } else if (message.m_key.isMouse()) {
-                    const auto *button = std::get_if<EMouseButton>(&message.m_key.m_code);
-                    if (button) {
+                    if (const auto *button = std::get_if<EMouseButton>(&message.m_key.m_code)) {
                         const int imgui_button = mouseButtonToImGui(*button);
                         if (imgui_button >= 0) {
-                            io.AddMouseButtonEvent(imgui_button, message.isPressed());
+                            imgui_io.AddMouseButtonEvent(imgui_button, message.isPressed());
                         }
                     }
                 }
@@ -456,8 +456,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGuiIO &io = ImGui::GetIO();
 
             ImGui::Render();
-            auto *drawData = ImGui::GetDrawData();
-            if (not drawData or not drawData->Valid) {
+            auto *draw_data = ImGui::GetDrawData();
+            if (not draw_data or not draw_data->Valid) {
                 return default_value_v;
             }
 
@@ -469,7 +469,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // Upload vertex/index data for this frame
             auto *const fr = &m_frame_resources[m_current_frame];
-            PPR_RETURN_ON_FAIL(UI, uploadDrawData_(drawData, fr));
+            PPR_RETURN_ON_FAIL(UI, uploadDrawData_(draw_data, fr));
 
             // Bind pipeline
             auto *const root_obj = pass.bindPipeline(m_pipeline.get());
@@ -482,10 +482,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // Set projection matrix (orthographic)
             {
-                const float L = drawData->DisplayPos.x;
-                const float R = drawData->DisplayPos.x + drawData->DisplaySize.x;
-                const float T = drawData->DisplayPos.y;
-                const float B = drawData->DisplayPos.y + drawData->DisplaySize.y;
+                const float L = draw_data->DisplayPos.x;
+                const float R = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+                const float T = draw_data->DisplayPos.y;
+                const float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
 
                 const float4x4 orthographic = float4x4::orthoD3D(L, R, B, T, -1.0f, 1.0f);
                 RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_proj"].setData(orthographic.data(), sizeof(orthographic)));
@@ -493,10 +493,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // Bind font texture and sampler
             {
-                auto *textureView = m_fontTextureView.get();
+                auto *texture_view = m_fontTextureView.get();
                 auto *sampler = m_font_sampler.get();
-                if (textureView) {
-                    RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontTexture"].setBinding(rhi::Binding(textureView)));
+                if (texture_view) {
+                    RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontTexture"].setBinding(rhi::Binding(texture_view)));
                 }
                 if (sampler) {
                     RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontSampler"].setBinding(rhi::Binding(sampler)));
@@ -518,7 +518,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // clip_off/clip_scale convert an ImDrawCmd's ClipRect (display coordinates) into
             // framebuffer pixels, matching every official ImGui backend's RenderDrawData.
-            const ImVec2 clip_off = drawData->DisplayPos;
+            const ImVec2 clip_off = draw_data->DisplayPos;
             const ImVec2 clip_scale = io.DisplayFramebufferScale;
 
             // Render all draw lists. Vertex/index data for every ImDrawList was concatenated
@@ -527,10 +527,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // list-local VtxOffset/IdxOffset — otherwise every list after the first reads from
             // the wrong place in the buffer. The two accumulators below previously were computed
             // and never actually applied to the draw arguments.
-            u32 globalVtxOffset = 0;
-            u32 globalIdxOffset = 0;
-            for (int n = 0; n < drawData->CmdListsCount; n++) {
-                const auto *cmdList = drawData->CmdLists[n];
+            u32 global_vtx_offset = 0;
+            u32 global_idx_offset = 0;
+            for (int n = 0; n < draw_data->CmdListsCount; n++) {
+                const auto *cmdList = draw_data->CmdLists[n];
 
                 for (int i = 0; i < cmdList->CmdBuffer.Size; i++) {
                     const auto *cmd = &cmdList->CmdBuffer[i];
@@ -574,14 +574,14 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     rhi::DrawArguments draw_arguments{};
                     draw_arguments.vertexCount = cmd->ElemCount;
                     draw_arguments.instanceCount = 1;
-                    draw_arguments.startIndexLocation = cmd->IdxOffset + globalIdxOffset;
-                    draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + globalVtxOffset);
+                    draw_arguments.startIndexLocation = cmd->IdxOffset + global_idx_offset;
+                    draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + global_vtx_offset);
                     draw_arguments.startInstanceLocation = 0;
                     pass.drawIndexed(draw_arguments);
                 }
 
-                globalVtxOffset += cmdList->VtxBuffer.Size;
-                globalIdxOffset += cmdList->IdxBuffer.Size;
+                global_vtx_offset += cmdList->VtxBuffer.Size;
+                global_idx_offset += cmdList->IdxBuffer.Size;
             }
 
             // Advance to next frame resource
@@ -662,6 +662,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
         u32 m_current_frame{0};
         FrameResources m_frame_resources[kFrameCount]{};
         InputListener m_listener{};
+        shader::SharedModule m_imgui_shader_handle;
         safe_ptr<IInputService> m_input_service;
         safe_ptr<IWindowService> m_window_service;
         safe_ptr<const Window> m_main_window;

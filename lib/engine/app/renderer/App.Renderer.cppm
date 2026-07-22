@@ -5,6 +5,7 @@ export module engine.app:renderer;
 import :service.window;
 import engine.core;
 import engine.rhi;
+import engine.shader;
 import std;
 
 export namespace pP {
@@ -27,12 +28,16 @@ export namespace pP {
         [[nodiscard]] std::error_code shutdown();
 
     private:
+        [[nodiscard]] std::error_code rebuildPipeline_(rhi::IDevice &device);
+
         rhi::ComPtr<rhi::ICommandQueue> m_queue;
         rhi::ComPtr<rhi::ISurface> m_surface;
         rhi::ComPtr<rhi::IRenderPipeline> m_pipeline;
         rhi::ComPtr<rhi::IBuffer> m_vertex_buffer;
         rhi::ComPtr<rhi::IInputLayout> m_input_layout;
         rhi::ComPtr<rhi::IShaderProgram> m_program;
+
+        shader::SharedModule m_triangle_shader;
 
         rhi::Format m_surface_format{rhi::Format::Undefined};
 

@@ -43,10 +43,20 @@ export namespace pP::shader {
     using Slang::ComPtr;
     using Slang::Result;
 
-    void diagnoseIfNeeded(slang::IBlob *diagnostic_blob);
+    using slang::IBlob;
+    using slang::IComponentType;
+    using slang::IEntryPoint;
+    using slang::IGlobalSession;
+    using slang::IModule;
+    using slang::ISession;
+
+    using namespace Slang;
+    using namespace slang;
+
+    void diagnoseIfNeeded(IBlob *diagnostic_blob);
 
     struct Diagnose {
-        ComPtr<slang::IBlob> m_diagnostics{};
+        ComPtr<IBlob> m_diagnostics{};
 
         Diagnose() noexcept = default;
 
@@ -54,61 +64,30 @@ export namespace pP::shader {
             diagnoseIfNeeded(m_diagnostics.get());
         }
 
-        [[nodiscard]] slang::IBlob **writeRef() noexcept {
+        [[nodiscard]] IBlob **writeRef() noexcept {
             return m_diagnostics.writeRef();
         }
     };
+
+    using SharedModule = ComPtr<IModule>;
 }
 
 export namespace pP {
-    struct ModuleState {
-        shader::ComPtr<slang::IModule> m_module;
-        std::atomic<bool> m_reloaded{false};
-        std::string m_source_path;
-        std::string m_module_name;
-        std::string m_source;
-    };
-
-    class ModuleHandle {
-    public:
-        ModuleHandle() noexcept = default;
-
-        [[nodiscard]] slang::IModule *get() const noexcept;
-
-        [[nodiscard]] bool wasReloaded() noexcept;
-
-    private:
-        friend struct ModuleStateAccess;
-        std::shared_ptr<ModuleState> m_state;
-    };
-
-    struct ModuleStateAccess {
-        static void setState(ModuleHandle &handle, std::shared_ptr<ModuleState> state) noexcept {
-            handle.m_state = std::move(state);
-        }
-
-        [[nodiscard]] static std::shared_ptr<ModuleState> &getState(ModuleHandle &handle) noexcept {
-            return handle.m_state;
-        }
-    };
-
     class IShaderService : public IService {
     public:
         [[nodiscard]] static safe_ptr<IShaderService> get() noexcept;
 
         [[nodiscard]] virtual std::error_code initialize() = 0;
 
+        [[nodiscard]] virtual std::error_code shutdown() = 0;
+
         [[nodiscard]] virtual slang::IGlobalSession *getGlobalSession() const noexcept = 0;
 
-        [[nodiscard]] virtual std::expected<ModuleHandle, std::error_code>
-        loadModuleFromFile(const std::filesystem::path &path, string_literal module_name) = 0;
+        [[nodiscard]] virtual Expected<shader::SharedModule>
+        loadModuleFromFile(const std::filesystem::path &path, const char *module_name) = 0;
 
-        [[nodiscard]] virtual std::expected<ModuleHandle, std::error_code>
-        loadModuleFromSource(string_literal module_name, const char *path, const char *source) = 0;
-
-        [[nodiscard]] virtual std::future<std::error_code> reloadModule(ModuleHandle &handle) = 0;
-
-        virtual void poll() = 0;
+        [[nodiscard]] virtual Expected<shader::SharedModule>
+        loadModuleFromSource(const char *module_name, const char *path, const char *source) = 0;
     };
 }
 

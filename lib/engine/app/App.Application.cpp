@@ -14,6 +14,7 @@ import :window.handle;
 import :window.monitor;
 import engine.core;
 import engine.rhi;
+import engine.shader;
 import std;
 
 namespace pP {
@@ -85,8 +86,13 @@ namespace pP {
             return result.error();
         }
 
+        // Shader service must be initialized before RHI to provide the shared global session
+        const safe_ptr<IShaderService> shader_service = IShaderService::get();
+        PPR_RETURN_ERROR_ON_FAIL(App, shader_service->initialize());
+        std::ignore = m_services.insert(shader_service);
+
         const safe_ptr<IRhiService> rhi_service = IRhiService::get();
-        PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default));
+        PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default, shader_service->getGlobalSession()));
         std::ignore = m_services.insert(rhi_service);
 
         if (auto renderer = std::make_unique<Renderer>()) {
@@ -203,6 +209,8 @@ namespace pP {
 
         m_services.erase<IRhiService>();
         PPR_RETURN_ERROR_ON_FAIL(App, IRhiService::get()->shutdown());
+
+        m_services.erase<IShaderService>();
 
         m_main_window.reset();
         m_cached_input_service.reset();

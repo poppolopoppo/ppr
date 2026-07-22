@@ -135,7 +135,7 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code initialize(
             rhi::DeviceType device_type,
-            slang::IGlobalSession *global_session = nullptr) = 0;
+            slang::IGlobalSession *global_session) = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 

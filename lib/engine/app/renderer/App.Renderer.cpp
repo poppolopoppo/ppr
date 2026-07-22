@@ -1,5 +1,7 @@
 module;
 #include "pP/Macros.h"
+#include <slang.h>
+#include <slang-com-ptr.h>
 module engine.app;
 
 import :renderer;
@@ -8,33 +10,12 @@ import :window.handle;
 import std;
 import engine.core;
 import engine.rhi;
+import engine.shader;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(Renderer, info, none)
 
     namespace {
-        constexpr string_literal kTriangleShader = R"(
-struct VertexInput {
-    float3 position : POSITION;
-    float3 color : COLOR;
-};
-struct VertexOutput {
-    float4 position : SV_Position;
-    float3 color : COLOR;
-};
-[shader("vertex")]
-VertexOutput vertexMain(VertexInput input) {
-    VertexOutput output;
-    output.position = float4(input.position, 1.0);
-    output.color = input.color;
-    return output;
-}
-[shader("fragment")]
-float4 fragmentMain(VertexOutput input) : SV_Target {
-    return float4(input.color, 1.0);
-}
-)";
-
         struct DummyVertex {
             float position[3];
             float color[3];
@@ -45,34 +26,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
             {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
             {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
         };
-    } // namespace (impl)
+    }
 
     namespace fs = std::filesystem;
-
-    namespace {
-        [[nodiscard]] std::expected<void, std::error_code> loadShaderFromFile(
-            shader::ISession &session,
-            const string_literal module_name,
-            const fs::path &shader_path,
-            shader::IModule **out_shader_module) {
-            return io::mapFile(shader_path).and_then(
-                [&](MappedFile &&source_file) -> std::expected<void, std::error_code> {
-                    shader::Diagnose diagnostics;
-                    *out_shader_module = session.loadModuleFromSourceString(
-                        module_name.data(),
-                        shader_path.generic_string().c_str(),
-                        source_file.c_str(),
-                        diagnostics.writeRef());
-
-                    if (not*out_shader_module) {
-                        PPR_LOG(Renderer, error, "failed to parse shader module", {{"path", shader_path.c_str()}});
-                        return std::unexpected{make_error_code(shader::errc::invalid_arg)};
-                    }
-
-                    return default_value_v;
-                });
-        }
-    } // namespace
 
     rhi::Format Renderer::getSurfaceFormat() const noexcept {
         return m_surface_format;
@@ -110,28 +66,32 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
             m_surface_format = m_surface->getInfo().preferredFormat;
         }
 
-
-        // Compile shaders
+        // Load shaders via IShaderService
         {
-            rhi::ComPtr<shader::ISession> slang_session;
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.getSlangSession(slang_session.writeRef()));
+            const safe_ptr<IShaderService> shader_service = IShaderService::get();
+            PPR_ASSERT(shader_service.isValid());
 
-            shader::ComPtr<shader::IModule> module;
-            PPR_RETURN_ERROR_ON_FAIL(
-                Renderer,
-                loadShaderFromFile(
-                    *slang_session,
-                    "triangle",
-                    content_dir / TEXT("shaders") / TEXT("triangle.slang"),
-                    module.writeRef()));
+            auto handle = shader_service->loadModuleFromFile(
+                content_dir / TEXT("shaders") / TEXT("triangle.slang"),
+                "triangle");
+            if (not handle) {
+                return handle.error();
+            }
+            m_triangle_shader = std::move(*handle);
+        }
 
-            shader::ComPtr<shader::IEntryPoint> vertex_ep;
+        // Create shader program
+        {
+            shader::ComPtr<slang::IModule> module;
+            module = m_triangle_shader.get();
+
+            shader::ComPtr<slang::IEntryPoint> vertex_ep;
             RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
 
-            shader::ComPtr<shader::IEntryPoint> fragment_ep;
+            shader::ComPtr<slang::IEntryPoint> fragment_ep;
             RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
 
-            shader::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
+            slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
 
             rhi::ShaderProgramDesc program_desc{};
             program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
@@ -203,6 +163,14 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
         PPR_ASSERT(m_queue);
         PPR_ASSERT(m_pipeline);
 
+#if 0
+        // Hot-reload check: rebuild pipeline if shader was recompiled
+        if (m_triangle_shader.wasReloaded()) {
+            rhi::IDevice &device = IRhiService::get()->getDevice();
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, rebuildPipeline_(device));
+        }
+#endif
+
         // Acquire next back-buffer image
         rhi::ComPtr<rhi::ITexture> image;
         RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->acquireNextImage(image.writeRef()));
@@ -267,6 +235,52 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
         return default_value_v;
     }
 
+    std::error_code Renderer::rebuildPipeline_(rhi::IDevice &device) {
+        PPR_LOG(Renderer, info, "shader hot-reloaded, rebuilding pipeline");
+
+        shader::ComPtr<slang::IModule> module;
+        module = m_triangle_shader.get();
+
+        shader::ComPtr<slang::IEntryPoint> vertex_ep;
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
+
+        shader::ComPtr<slang::IEntryPoint> fragment_ep;
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
+
+        slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
+
+        rhi::ShaderProgramDesc program_desc{};
+        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        program_desc.slangGlobalScope = module.get();
+        program_desc.slangEntryPoints = entry_points;
+        program_desc.slangEntryPointCount = 2u;
+
+        shader::ComPtr<rhi::IShaderProgram> new_program;
+        {
+            shader::Diagnose diagnostics;
+            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createShaderProgram(program_desc, new_program.writeRef(), diagnostics.writeRef()));
+        }
+
+        const rhi::SurfaceInfo &surface_info = m_surface->getInfo();
+
+        rhi::ColorTargetDesc color_target{};
+        color_target.format = surface_info.preferredFormat;
+        color_target.enableBlend = false;
+
+        rhi::RenderPipelineDesc pipeline_desc{};
+        pipeline_desc.program = new_program.get();
+        pipeline_desc.inputLayout = m_input_layout.get();
+        pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+        pipeline_desc.targets = &color_target;
+        pipeline_desc.targetCount = 1;
+        pipeline_desc.label = "triangle pipeline";
+
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef()));
+
+        m_program = std::move(new_program);
+        return default_value_v;
+    }
+
     std::error_code Renderer::onResize(int2 new_size) {
         PPR_ASSERT(m_surface);
         if (new_size.x <= 0 || new_size.y <= 0) {
@@ -317,4 +331,4 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
 
         return default_value_v;
     }
-} // namespace pP
+}

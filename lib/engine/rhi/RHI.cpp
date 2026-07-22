@@ -205,8 +205,10 @@ namespace pP::rhi {
             DeviceDesc desc{};
             desc.deviceType = device_type;
             desc.slang.slangGlobalSession = global_session;
+
             desc.requiredFeatures = required_features;
             desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
+
 #if PPR_ENABLE_DEBUG
             desc.enableValidation = true;
 #endif
