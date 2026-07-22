@@ -11,96 +11,11 @@ module;
 export module engine.rhi;
 
 import engine.core;
+import engine.shader;
 import std;
 
 namespace slang_rhi {
     using namespace rhi;
-}
-
-export namespace pP::shader {
-    enum class errc : int {
-        //! SLANG_OK indicates success
-        ok = SLANG_OK,
-
-        //! SLANG_FAIL is the generic failure code - meaning a serious error occurred and the call
-        //! couldn't complete
-        unknown_error = SLANG_FAIL,
-
-        //! Functionality is not implemented
-        not_implemented = SLANG_E_NOT_IMPLEMENTED,
-        //! Interface not be found
-        no_interface = SLANG_E_NO_INTERFACE,
-        //! Operation was aborted (did not correctly complete)
-        abort = SLANG_E_ABORT,
-
-        //! Indicates that a handle passed in as parameter to a method is invalid.
-        invalid_handle = SLANG_E_INVALID_HANDLE,
-        //! Indicates that an argument passed in as parameter to a method is invalid.
-        invalid_arg = SLANG_E_INVALID_ARG,
-        //! Operation could not complete - ran out of memory
-        out_of_memory = SLANG_E_OUT_OF_MEMORY,
-
-        // Supplied buffer is too small to be able to complete
-        buffer_too_small = SLANG_E_BUFFER_TOO_SMALL,
-        //! Used to identify a Result that has yet to be initialized.
-        //! It defaults to failure such that if used incorrectly will fail, as similar in concept to
-        //! using an uninitialized variable.
-        uninitialized = SLANG_E_UNINITIALIZED,
-        //! Returned from an async method meaning the output is invalid (thus an error), but a result
-        //! for the request is pending, and will be returned on a subsequent call with the async handle.
-        pending = SLANG_E_PENDING,
-        //! Indicates a file/resource could not be opened
-        cannot_open = SLANG_E_CANNOT_OPEN,
-        //! Indicates a file/resource could not be found
-        not_found = SLANG_E_NOT_FOUND,
-        //! An unhandled internal failure (typically from unhandled exception)
-        internal_fail = SLANG_E_INTERNAL_FAIL,
-        //! Could not complete because some underlying feature (hardware or software) was not available
-        not_available = SLANG_E_NOT_AVAILABLE,
-        //! Could not complete because the operation times out.
-        time_out = SLANG_E_TIME_OUT,
-    };
-
-    [[nodiscard]] const std::error_category &error_category() noexcept;
-
-    [[nodiscard]] std::error_code make_error_code(Slang::Result result) noexcept;
-
-    [[nodiscard]] std::error_code make_error_code(errc error_code) noexcept;
-
-    // shorter alias, because Slang::Result is just an int32 :/
-    [[nodiscard]] std::error_code result(const Slang::Result result) noexcept {
-        return make_error_code(result);
-    }
-
-    using Slang::ComPtr;
-    using Slang::Result;
-
-    using ::slang::IBindlessResourceMetadata;
-    using ::slang::IBlob;
-    using ::slang::IByteCodeRunner;
-    using ::slang::ICompileRequest;
-    using ::slang::IComponentType;
-    using ::slang::IEntryPoint;
-    using ::slang::IGlobalSession;
-    using ::slang::IMetadata;
-    using ::slang::IModule;
-    using ::slang::ISession;
-
-    void diagnoseIfNeeded(IBlob *diagnostic_blob);
-
-    struct Diagnose {
-        ComPtr<IBlob> m_diagnostics{};
-
-        Diagnose() noexcept = default;
-
-        ~Diagnose() {
-            diagnoseIfNeeded(m_diagnostics.get());
-        }
-
-        [[nodiscard]] IBlob **writeRef() noexcept {
-            return m_diagnostics.writeRef();
-        }
-    };
 }
 
 export namespace pP::rhi {
@@ -218,7 +133,9 @@ export namespace pP {
     public:
         [[nodiscard]] static safe_ptr<IRhiService> get() noexcept;
 
-        [[nodiscard]] virtual std::error_code initialize(rhi::DeviceType device_type) = 0;
+        [[nodiscard]] virtual std::error_code initialize(
+            rhi::DeviceType device_type,
+            slang::IGlobalSession *global_session = nullptr) = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 
@@ -227,7 +144,3 @@ export namespace pP {
         [[nodiscard]] virtual rhi::IDevice &getDevice() const noexcept = 0;
     };
 }
-
-export template<>
-struct std::is_error_code_enum<pP::rhi::errc> : true_type {
-};

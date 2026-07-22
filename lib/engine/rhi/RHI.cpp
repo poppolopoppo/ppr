@@ -10,20 +10,21 @@ module engine.rhi;
 
 import std;
 import engine.core;
+import engine.shader;
 
-namespace pP::shader {
-    PPR_DEFINE_LOG_CATEGORY(Shader, info, none)
+namespace pP::rhi {
+    PPR_DEFINE_LOG_CATEGORY(RHI, info, none)
 
     // ------------------------------------------------------------------
-    // slang error codes
+    // slang-rhi error codes
     // ------------------------------------------------------------------
 
-    class SlangErrorCategory : public std::error_category {
+    class SlangRhiErrorCategory final : public std::error_category {
     public:
-        [[nodiscard]] const char *name() const noexcept override { return "slang"; }
+        [[nodiscard]] const char *name() const noexcept override { return "slang-rhi"; }
 
         [[nodiscard]] std::string message(const int ev) const override {
-            switch (static_cast<Result>(ev)) {
+            switch (static_cast<Slang::Result>(ev)) {
                 case SLANG_OK: return "indicates success";
                 case SLANG_FAIL: return "generic failure code - meaning a serious error occurred and the call couldn't complete";
                 case SLANG_E_NOT_IMPLEMENTED: return "functionality is not implemented";
@@ -42,16 +43,16 @@ namespace pP::shader {
                 case SLANG_E_NOT_AVAILABLE: return "could not complete because some underlying feature (hardware or software) was not available";
                 case SLANG_E_TIME_OUT: return "could not complete because the operation times out";
 
-                default: return std::format("unknown slang result ({})", ev);
+                default: return std::format("unknown slang-rhi result ({})", ev);
             }
         }
 
         [[nodiscard]] std::error_condition default_error_condition(const int ev) const noexcept override {
-            return slang_error_condition(*this, ev);
+            return slangRhiErrorCondition_(*this, ev);
         }
 
-        [[nodiscard]] static std::error_condition slang_error_condition(const std::error_category &category, const int ev) noexcept {
-            switch (static_cast<Result>(ev)) {
+        [[nodiscard]] static std::error_condition slangRhiErrorCondition_(const std::error_category &category, const int ev) noexcept {
+            switch (static_cast<Slang::Result>(ev)) {
                 case SLANG_E_INVALID_ARG: return std::errc::invalid_argument;
                 case SLANG_E_OUT_OF_MEMORY: return std::errc::not_enough_memory;
                 case SLANG_E_NOT_FOUND: return std::errc::no_such_file_or_directory;
@@ -63,59 +64,18 @@ namespace pP::shader {
         }
     };
 
-    static constexpr SlangErrorCategory g_slang_error_category{};
-
-    [[nodiscard]] const std::error_category &error_category() noexcept {
-        return g_slang_error_category;
-    }
-
-    [[nodiscard]] std::error_code make_error_code(const Result result) noexcept {
-        return SLANG_SUCCEEDED(result) ? std::error_code{} : std::error_code{result, g_slang_error_category};
-    }
-
-    [[nodiscard]] std::error_code make_error_code(const errc error_code) noexcept {
-        return make_error_code(static_cast<Result>(error_code));
-    }
-
-    void diagnoseIfNeeded(IBlob *diagnostic_blob) {
-        if (diagnostic_blob) {
-            const std::string_view message{
-                static_cast<const char *>(diagnostic_blob->getBufferPointer()),
-                safe_narrowing(diagnostic_blob->getBufferSize())
-            };
-            PPR_LOG_RAW(Shader, error, message);
-        }
-    }
-}
-
-namespace pP::rhi {
-    PPR_DEFINE_LOG_CATEGORY(RHI, info, none)
-
-    // ------------------------------------------------------------------
-    // slang-rhi error codes
-    // ------------------------------------------------------------------
-
-    class SlangRhiErrorCategory final : public shader::SlangErrorCategory {
-    public:
-        [[nodiscard]] const char *name() const noexcept override { return "slang-rhi"; }
-
-        [[nodiscard]] std::error_condition default_error_condition(const int ev) const noexcept override {
-            return slang_error_condition(*this, ev);
-        }
-    };
-
     static constexpr SlangRhiErrorCategory g_slang_rhi_error_category{};
 
     [[nodiscard]] const std::error_category &error_category() noexcept {
         return g_slang_rhi_error_category;
     }
 
-    [[nodiscard]] std::error_code make_error_code(const Slang::Result result) noexcept {
+    [[nodiscard]] std::error_code make_error_code(const ::slang_rhi::Result result) noexcept {
         return SLANG_SUCCEEDED(result) ? std::error_code{} : std::error_code{result, g_slang_rhi_error_category};
     }
 
     [[nodiscard]] std::error_code make_error_code(const errc error_code) noexcept {
-        return make_error_code(static_cast<Slang::Result>(error_code));
+        return make_error_code(static_cast<::slang_rhi::Result>(error_code));
     }
 
     // ------------------------------------------------------------------
@@ -212,7 +172,9 @@ namespace pP::rhi {
             return *m_device;
         }
 
-        [[nodiscard]] std::error_code initialize(const DeviceType device_type) override {
+        [[nodiscard]] std::error_code initialize(
+            const DeviceType device_type,
+            slang::IGlobalSession *global_session) override {
             if (m_device) {
                 PPR_LOG(RHI, warning, "RHI already initialized");
                 return errc::ok;
@@ -242,6 +204,7 @@ namespace pP::rhi {
 
             DeviceDesc desc{};
             desc.deviceType = device_type;
+            desc.slang.slangGlobalSession = global_session;
             desc.requiredFeatures = required_features;
             desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
 #if PPR_ENABLE_DEBUG

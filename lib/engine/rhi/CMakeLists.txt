@@ -9,6 +9,6 @@ target_sources(EngineRHI
 )
 
 setup_ppr_project(EngineRHI
-  INTERNAL_PUBLIC_DEPS EngineCore
+  INTERNAL_PUBLIC_DEPS EngineCore EngineShader
   EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang
 )
