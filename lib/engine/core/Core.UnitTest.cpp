@@ -10,6 +10,22 @@ import :function.ref;
 
 import std;
 
+namespace std {
+    template<pP::details::TChar CharT>
+    struct formatter<pP::UnitTest::Id, CharT>
+            : formatter<std::basic_string<CharT>, CharT> // ← inherit parse + all specs
+    {
+        template<typename FormatContextT>
+        auto format(const pP::UnitTest::Id &value, FormatContextT &ctx) const
+            -> decltype(ctx.out()) {
+            std::basic_string<CharT> buf;
+            auto output(std::back_inserter(buf));
+            value.format<CharT>(output);
+            return formatter<std::basic_string<CharT>, CharT>::format(buf, ctx);
+        }
+    };
+}
+
 namespace pP {
     // ------------------------------------------------------------------
     // Unit test helper
@@ -33,10 +49,13 @@ namespace pP {
     }
 
     void UnitTest::run(IRun &run) const noexcept {
-        try {
-            auto &impl = checked_cast<RunImpl>(run);
-            impl.start();
+        auto &impl = checked_cast<RunImpl>(run);
+        impl.start();
+        PPR_DEFER {
+            impl.stop();
+        };
 
+        try {
             if ((m_flags & fork) == none) [[likely]] {
                 m_run(run);
 
@@ -57,7 +76,7 @@ namespace pP {
             }
 
             run.success();
-        } catch (std::exception &e) {
+        } catch (const std::exception &e) {
             if (isExpectedToFail()) {
                 run.success();
             } else {
@@ -203,9 +222,9 @@ namespace pP {
         m_start_time = std::chrono::steady_clock::now();
     }
 
-    UnitTest::RunImpl::~RunImpl() {
-        const std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
-        const std::chrono::steady_clock::duration duration_from_start = end_time - m_start_time;
+    void UnitTest::RunImpl::stop() noexcept {
+        m_end_time = std::chrono::steady_clock::now();
+        const TimeSpan test_duration{m_end_time - m_start_time};
 
 #if PPR_ENABLE_ASSERTIONS
         PPR_DEFER {
@@ -227,7 +246,7 @@ namespace pP {
                      m_num_passed + m_num_failed,
                      bullet,
                      test_id,
-                     TimeDuration{duration_from_start});
+                     test_duration);
 
         if (m_status == fail) {
             std::println(std::cout, "    \u2514\u2500 {}", m_failure);

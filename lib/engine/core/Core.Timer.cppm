@@ -69,6 +69,35 @@ export namespace pP {
 }
 
 export namespace std {
+    template<pP::details::TChar CharT>
+    struct formatter<pP::TimeSpan, CharT> {
+        template<typename FormatParseContextT>
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+            return ctx.begin();
+        }
+
+        template<typename FormatContextT>
+        auto format(const pP::TimeSpan &td, FormatContextT &ctx) const
+            -> decltype(ctx.out()) {
+            using namespace std::chrono;
+            const auto ns = duration_cast<nanoseconds>(td).count();
+
+            if (ns < 1'000) {
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}ns"), ns);
+            }
+            if (ns < 100'000) {
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}µs"), ns / 1'000.0);
+            }
+            if (ns < 1'000'000) {
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}µs"), duration_cast<microseconds>(td).count());
+            }
+            if (ns < 1'000'000'000LL) {
+                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), ns / 1'000'000.0);
+            }
+            return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), ns / 1'000'000'000.0);
+        }
+    };
+
     [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const pP::TimePoint &value) noexcept {
         return value.time_since_epoch().count();
     }

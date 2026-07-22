@@ -20,14 +20,6 @@ namespace pP {
         [[nodiscard]] bool startInChildProcess_(RunImpl &run) const;
 
     public:
-        struct TimeDuration {
-            std::chrono::steady_clock::duration m_value;
-
-            explicit constexpr TimeDuration(const std::chrono::steady_clock::duration value) noexcept
-                : m_value(value) {
-            }
-        };
-
         enum EFlags : u32 {
             none = 0,
             expect_fail = 1 << 0,
@@ -71,7 +63,7 @@ namespace pP {
 
         struct [[nodiscard]] IRun {
         protected:
-            ~IRun() = default;
+            virtual ~IRun() = default;
 
         public:
             [[nodiscard]] virtual Id getTestId() const noexcept = 0;
@@ -184,6 +176,7 @@ namespace pP {
             std::string m_failure{"???"};
 
             std::chrono::steady_clock::time_point m_start_time{};
+            std::chrono::steady_clock::time_point m_end_time{};
 
             u32 m_num_passed{0u};
             u32 m_num_failed{0u};
@@ -196,9 +189,8 @@ namespace pP {
 
             RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept;
 
-            ~RunImpl();
-
             void start() noexcept;
+            void stop() noexcept;
 
             [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept;
 
@@ -221,50 +213,4 @@ namespace pP {
         };
     };
 }
-
-namespace std {
-    template<pP::details::TChar CharT>
-    struct formatter<pP::UnitTest::Id, CharT>
-            : formatter<std::basic_string<CharT>, CharT> // ← inherit parse + all specs
-    {
-        template<typename FormatContextT>
-        auto format(const pP::UnitTest::Id &value, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
-            std::basic_string<CharT> buf;
-            auto output(std::back_inserter(buf));
-            value.format<CharT>(output);
-            return formatter<std::basic_string<CharT>, CharT>::format(buf, ctx);
-        }
-    };
-
-    template<pP::details::TChar CharT>
-    struct formatter<pP::UnitTest::TimeDuration, CharT> {
-        template<typename FormatParseContextT>
-        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
-            return ctx.begin();
-        }
-
-        template<typename FormatContextT>
-        auto format(const pP::UnitTest::TimeDuration &td, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
-            using namespace std::chrono;
-            const auto ns = duration_cast<nanoseconds>(td.m_value).count();
-
-            if (ns < 1'000) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}ns"), ns);
-            }
-            if (ns < 100'000) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}µs"), ns / 1'000.0);
-            }
-            if (ns < 1'000'000) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}µs"), duration_cast<microseconds>(td.m_value).count());
-            }
-            if (ns < 1'000'000'000LL) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), ns / 1'000'000.0);
-            }
-            return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), ns / 1'000'000'000.0);
-        }
-    };
-}
-
 
