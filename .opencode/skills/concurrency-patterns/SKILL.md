@@ -12,6 +12,28 @@ description: >
 
 # Concurrency Patterns Guide
 
+## Quick Reference — Choosing a Concurrency Primitive
+
+| Pattern | When to Use | Key Classes | Header/Partition |
+|---------|------------|-------------|------------------|
+| **RawChannel** | Async MPSC message passing between threads. Fixed-capacity, lock-free producer path. | `RawChannel`, `Channel<T>`, `ChannelWriter<T>`, `ChannelReader<T>` | `Core.Concurrency.cppm` |
+| **IEvent / Signal** | Wait on one or more event sources (I/O, timers, channels). Compile-time multiplexing with `select()`. | `IEvent`, `PulseEvent`, `BroadcastEvent`, `NeverEvent`, `Signal<EventsT...>` | `Core.Concurrency.Event.cppm` |
+| **IContext** | Go-style cancellation tree with deadlines. Propagate cancellation to goroutines/workers. | `IContext`, `SharedContext`, `Background`, `WithCancel`, `WithDeadline`, `WithTimeout` | `Core.Concurrency.Context.cppm` |
+
+### Quick API Patterns
+
+```
+RawChannel:  producerReserve(size, policy) → producerSubmit(record) / producerDiscard(record)
+             consumerAcquire() → consumerRelease(record)
+Signal:      Signal<Event1, Event2> sig{event1, event2}; for (auto& e : select(sig)) { ... }
+Context:     auto ctx = IContext::WithCancel(IContext::Background());
+             ctx->cancel();  // propagates to all derived contexts
+```
+
+Return to the full guide below for detailed construction, lifecycle, thread-safety, and integration patterns.
+
+---
+
 ## 1. RawChannel — Lock-Free MPSC Ring Buffer
 
 RawChannel is a multi-producer, single-consumer (MPSC) lock-free circular buffer
@@ -68,7 +90,7 @@ RawChannel chan{num_elements, element_size};
 The producer follows a **reserve / submit** two-phase protocol:
 
 ```cpp
-// Reserve space — returns RecordHeader or EError
+// Reserve space — returns std::expected<Record, EError>
 auto record = chan.producerReserve(sizeof(MyData), RawChannel::wait_if_full);
 
 if (record.has_value()) {
@@ -347,7 +369,7 @@ hierarchy of contexts.
 
 ```cpp
 class IContext : public IEvent {
-    virtual std::optional<std::error_code> error() const noexcept = 0;
+    virtual std::error_code error() const noexcept = 0;
     virtual std::optional<const opaque::Block::Value*> value(string_literal user_key) const noexcept = 0;
 };
 
@@ -365,7 +387,7 @@ carries no values:
 ```cpp
 SharedContext bg = context::background();
 bg->pollEvent();                // always false (NeverEvent)
-bg->error();                    // nullopt
+bg->error();                    // std::error_code{} (no error)
 bg->value("key");               // nullopt
 ```
 
@@ -405,7 +427,7 @@ a custom `std::error_code`:
 ```cpp
 auto [ctx, cancel_with_code] = context::withCancelClause(parent);
 cancel_with_code(std::error_code{42, std::generic_category()});
-ctx->error()->value() == 42;    // true
+ctx->error().value() == 42;    // true
 ```
 
 ### 3.4 WithoutCancel — Sever the Tree
@@ -419,7 +441,7 @@ auto child = context::withoutCancel(parent);
 
 cancel_parent();
 child->pollEvent();             // false — parent cancellation severed
-child->error();                 // nullopt — never has error
+child->error();                 // std::error_code{} (no error)
 ```
 
 ### 3.5 WithValue — Attach Data
@@ -452,6 +474,7 @@ auto ctx = context::withDeadlineCause(parent, deadline, my_error_code);
 auto ctx = context::withTimeoutCause(parent, delay, my_error_code);
 ```
 
+- `withDeadline` and `withTimeout` accept an optional `TimerManager &timer` parameter (defaults to `TimerManager::mainTimer()`).
 - `withDeadline` and `withTimeout` both derive from `CancelContext`.
 - They schedule a timer callback via `TimerManager::schedule()`.
 - The timer uses a `weak_ptr` to the deadline context, so it is safe if the
@@ -809,7 +832,7 @@ auto [parent, cancel_parent] = context::withCancel(context::background());
 auto child = context::withoutCancel(parent);
 cancel_parent();
 PPR_ASSERT(!child->pollEvent());                     // severed
-PPR_ASSERT(!child->error().has_value());
+PPR_ASSERT(!child->error());
 ```
 
 **Timeout** — requires ticking the timer:

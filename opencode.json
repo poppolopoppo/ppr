@@ -2,10 +2,18 @@
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
   "model": "opencode/big-pickle",
+  "agent": {
+    "plan": {
+      "model": "opencode/deepseek-v4-flash-free"
+    },
+    "build": {
+      "model": "opencode/deepseek-v4-flash-free"
+    }
+  },
   "skills": { "paths": [".opencode/skills"] },
   "permission": {
     "read": { "*": "allow" },
-    "edit": "allow",
+    "edit": { "*": "allow" },
     "bash": { "*": "allow", "rm -rf *": "deny", "sudo *": "deny" }
   },
   "mcp": {

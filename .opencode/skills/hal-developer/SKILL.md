@@ -9,12 +9,34 @@ description: >
   mapped files, directory watching, native string transcoding, and system
   queries (platform name, user name, directories). It lives in module partition
   `engine.core:hal`, re-exported via `engine.core`, with per-platform source
-  files under `lib/engine/core/<platform>/`. Agents should use this skill
+  files under `lib/engine/core/hal/<platform>/`. Agents should use this skill
   whenever a task touches `Core.HAL.*.cppm`, any `Core.HAL.<platform>.*.cpp`,
   `cmake/HAL.cmake`, or `lib/engine/core/CMakeLists.txt` HAL source selection.
 ---
 
 # HAL Developer Guide
+
+## Quick Reference — Required API by Area
+
+| Area | Namespace | Key Functions | Platform Files |
+|------|-----------|---------------|----------------|
+| System | `pP::hal` | `platformName()`, `userName()`, `homeDirectory()`, `executableDirectory()` | `Core.HAL.*.System.cpp` |
+| Memory | `pP::hal` | `pageAlloc()`, `pageFree()`, `pageCommit()`, `pageDecommit()`, `pageProtect()`, `offerToOS()`, `reclaimFromOS()` | `Core.HAL.*.Memory.cpp` |
+| Ring buffer | `pP::hal` | `ringBufferAlloc()`, `ringBufferFree()` | Windows only: `Core.HAL.windows.RingBuffer.cpp` |
+| Debugger | `pP::hal` | `outputDebug()`, `isDebuggerPresent()`, `breakpoint()` | `Core.HAL.*.Debugger.cpp` |
+| Strings | `pP::hal` | `widen()`, `narrow()`, `acquireNativeString()`, `releaseNativeString()` | `Core.HAL.*.Strings.cpp` |
+| Process | `pP::hal::process` | `executablePath()`, `spawnAndWait()`, `terminate()` | `Core.HAL.*.Process.cpp` |
+| Timer | `pP::hal::timer` | `setDeadline()`, `cancelDeadline()` | `Core.HAL.*.Timer.cpp` |
+| I/O | `pP::hal::io` | `submit()`, `poll()`, `wait()` | `Core.HAL.*.Io.cpp` |
+| Mapped files | `pP::hal::io` | `map()`, `unmap()` | `Core.HAL.*.IoMap.cpp` |
+| Dir watching | `pP::hal::io` | `watch()`, `unwatch()` | `Core.HAL.*.IoWatch.cpp` |
+| Filesystem | `pP::hal` | `getKnownDirectory()` | `Core.HAL.*.Filesystem.cpp` |
+
+Platform directories: `lib/engine/core/hal/{windows,linux,darwin,generic}/`
+
+Return to the full guide below for detailed per-platform implementation notes.
+
+---
 
 ## 1. Architecture Overview
 
@@ -45,10 +67,10 @@ Core.HAL.<platform>.<Area>.cpp
 
 | Platform | Directory | Identifier (`PPR_HAL_PLATFORM`) |
 |----------|-----------|----------------------------------|
-| Windows | `lib/engine/core/windows/` | `windows` |
-| Linux | `lib/engine/core/linux/` | `linux` |
-| Darwin (macOS) | `lib/engine/core/darwin/` | `darwin` |
-| Generic (stub) | `lib/engine/core/generic/` | `generic` |
+| Windows | `lib/engine/core/hal/windows/` | `windows` |
+| Linux | `lib/engine/core/hal/linux/` | `linux` |
+| Darwin (macOS) | `lib/engine/core/hal/darwin/` | `darwin` |
+| Generic (stub) | `lib/engine/core/hal/generic/` | `generic` |
 
 ### Platform detection (`cmake/HAL.cmake`)
 
@@ -70,16 +92,16 @@ The 10 standard areas are always compiled via a glob pattern:
 
 ```cmake
 set(HAL_PLATFORM_SOURCES
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Filesystem.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Io.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.IoMap.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.IoWatch.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Memory.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Process.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Strings.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.System.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Timer.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Filesystem.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Io.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.IoMap.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.IoWatch.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Memory.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Process.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Strings.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.System.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Timer.cpp
 )
 ```
 
@@ -88,8 +110,8 @@ Two **Windows-only** files are appended when `PPR_HAL_PLATFORM == "windows"`:
 ```cmake
 if(PPR_HAL_PLATFORM STREQUAL "windows")
     list(APPEND HAL_PLATFORM_SOURCES
-        windows/Core.HAL.windows.Random.cpp
-        windows/Core.HAL.windows.RingBuffer.cpp
+        hal/windows/Core.HAL.windows.Random.cpp
+        hal/windows/Core.HAL.windows.RingBuffer.cpp
     )
 endif()
 ```
@@ -137,7 +159,7 @@ Key points:
 ```cpp
 module;
 
-#include "Core.HAL.windows.include.h"  // <-- platform-specific preamble
+#include "Core.HAL.windows.include.hpp"  // <-- platform-specific preamble
 // ... additional platform headers ...
 
 module engine.core;
@@ -160,7 +182,7 @@ Key points:
 - It explicitly `import :hal;` to bring the partition declarations into scope.
 - Definitions use `namespace pP::hal` or `namespace pP::hal::process` etc.
 
-### Windows-specific preamble (`Core.HAL.windows.include.h`)
+### Windows-specific preamble (`Core.HAL.windows.include.hpp`)
 
 ```cpp
 #pragma once
@@ -870,7 +892,7 @@ std::mt19937_64 randomNumberGenerator() noexcept {
 }
 ```
 
-On Windows, `std::random_device` is backed by `BCryptGenRandom`. This file does NOT include `Core.HAL.windows.include.h`; it only includes `"pP/Macros.h"`.
+On Windows, `std::random_device` is backed by `BCryptGenRandom`. This file does NOT include `Core.HAL.windows.include.hpp`; it only includes `"pP/Macros.h"`.
 
 ### Ring Buffer (`Core.HAL.windows.RingBuffer.cpp`)
 
@@ -881,7 +903,7 @@ See Section 4.1 for implementation details. This file also defines two helper ty
 
 Both are used internally by `ringBufferAlloc`/`ringBufferFree`.
 
-### Include preamble (`Core.HAL.windows.include.h`)
+### Include preamble (`Core.HAL.windows.include.hpp`)
 
 Every Windows HAL `.cpp` file includes this in its global module fragment. It:
 
@@ -932,7 +954,7 @@ throw std::runtime_error("<operation> not implemented for <platform> platform");
 Unit tests are in `lib/engine/tests/core/` using the `PPR_UNIT_TEST` macro:
 
 ```cpp
-export module engine.tests:core_io;
+export module engine.tests.core:io;
 import engine.core;
 
 export namespace pP::tests {
@@ -1148,11 +1170,11 @@ PPR_UNIT_TEST(mapped_file_read) {
 ```bash
 # Build and run
 cmake --preset msvc-dev
-cmake --build --preset msvc-dev --target EngineTests
-ctest --preset msvc-dev -R EngineTests
+cmake --build --preset msvc-dev --target EngineCoreTests
+ctest --preset msvc-dev -R EngineCoreTests
 
 # Run a specific test
-./build/msvc-dev/bin/EngineTests --run-test core/memory/page_alloc_free
+./build/msvc-dev/bin/EngineCoreTests --run-test core/memory/page_alloc_free
 ```
 
 ---
@@ -1172,23 +1194,23 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 
 2. **Create the platform directory**
    ```
-   lib/engine/core/freebsd/
+   lib/engine/core/hal/freebsd/
    ```
 
 3. **Create the 10 required implementation files**
    Each file follows the pattern:
-   ```
-   Core.HAL.freebsd.Memory.cpp
-   Core.HAL.freebsd.Debugger.cpp
-   Core.HAL.freebsd.Filesystem.cpp
-   Core.HAL.freebsd.Io.cpp
-   Core.HAL.freebsd.IoMap.cpp
-   Core.HAL.freebsd.IoWatch.cpp
-   Core.HAL.freebsd.Process.cpp
-   Core.HAL.freebsd.Strings.cpp
-   Core.HAL.freebsd.System.cpp
-   Core.HAL.freebsd.Timer.cpp
-   ```
+    ```
+    hal/freebsd/Core.HAL.freebsd.Memory.cpp
+    hal/freebsd/Core.HAL.freebsd.Debugger.cpp
+    hal/freebsd/Core.HAL.freebsd.Filesystem.cpp
+    hal/freebsd/Core.HAL.freebsd.Io.cpp
+    hal/freebsd/Core.HAL.freebsd.IoMap.cpp
+    hal/freebsd/Core.HAL.freebsd.IoWatch.cpp
+    hal/freebsd/Core.HAL.freebsd.Process.cpp
+    hal/freebsd/Core.HAL.freebsd.Strings.cpp
+    hal/freebsd/Core.HAL.freebsd.System.cpp
+    hal/freebsd/Core.HAL.freebsd.Timer.cpp
+    ```
 
 4. **For each file, implement the module structure**
    ```cpp
@@ -1242,7 +1264,7 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 
 ### Sources of inspiration
 
-- **Windows**: Heavy use of Win32 API (`VirtualAlloc2`, `CreateIoCompletionPort`, `ReadDirectoryChangesW`, `CreateTimerQueueTimer`, `WideCharToMultiByte`). The `Core.HAL.windows.include.h` preamble suppresses unused Windows headers.
+- **Windows**: Heavy use of Win32 API (`VirtualAlloc2`, `CreateIoCompletionPort`, `ReadDirectoryChangesW`, `CreateTimerQueueTimer`, `WideCharToMultiByte`). The `Core.HAL.windows.include.hpp` preamble suppresses unused Windows headers.
 - **Linux POSIX + Linux-specific**: `mmap`, `mprotect`, `madvise`, `inotify`, `timer_create`, `io_uring` (stub).
 - **Darwin POSIX + Darwin-specific**: `mmap`, `mprotect`, `madvise`, `kqueue` (stub), `_NSGetExecutablePath`, `sysctl` for debugger detection.
 - **Generic**: Pure standard C++ (`std::jthread`, `directory_iterator`, `std::getenv`). Intended as a fallback and pattern reference.

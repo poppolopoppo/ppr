@@ -11,6 +11,18 @@ Load these on demand via the `skill` tool when your task matches their domain:
 | `build-system` | cmake, preset, target, dependency, linker error | Presets, setup_ppr_project, deps (CPM/vcpkg), MSVC workarounds, sanitizers |
 | `hal-developer` | hal, platform, porting, syscall | 10 areas across 4 platforms, syscall mapping, stub conventions, adding a platform |
 | `concurrency-patterns` | channel, signal, event, context, cancellation | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
+| `code-reviewer` | review, check, conventions, code quality | Review against AGENTS.md conventions, C++ best practices, safe_ptr lifetime |
+| `git-commit-planner` | commit, stage, plan, hunk | Hunk-level analysis, cumulative-state rule, atomic commit ordering |
+| `plan-executor` | execute, plan, phase, build | Execute structured refactoring plans from `.opencode/plans/` phase by phase |
+| `unit-test-updater` | test, coverage, PPR_UNIT_TEST | Analyze git diffs and update/add C++ unit tests |
+
+## Available Commands
+Use these custom commands to invoke predefined multi-agent workflows:
+
+| Command | Trigger Keywords | Coverage |
+|---------|-----------------|----------|
+| `/parallel-plan` | plan, design, architecture, proposal | Multi-model parallel planning — 3 independent proposals → 3 cross-reviews → final synthesis. Use for architecture decisions and complex refactoring. |
+| `/review` | review, audit, inspect, check | Parallel code review across 4 dimensions (security/memory, performance/cache, correctness/edge, conventions/style) with correlated summary. |
 
 ## Architecture Overview
 
@@ -18,18 +30,19 @@ Module dependency chain (entry point):
 ```
 game/main.cpp → engine.app → engine.core  (foundation)
                             → engine.math  (vector math)
+                            → engine.shader (shader compilation)
                             → engine.rhi   (GPU)
 ```
 
 ### engine.core — Foundation Library (`lib/engine/core/`)
 
-35 module partitions providing all fundamental abstractions:
+31 module partitions providing all fundamental abstractions:
 
 - **Types & Safety** (`Core.Types.cppm`): `u8`-`u64`/`i8`-`i64` shorthands, sentinel values (`default_value_v`, `zero_v`, `none_v`, `umax_v`), `Numeric<T,TagT>` strong wrapper, `hash_t`, `relocatable<T>` trait
-- **Containers** (7 partitions): `Stack<T,N>`, `RingBuffer<T,N>`, `SparseVector<T>`, `StableVector<T>`, `HashMap<K,V>`/`HashSet<K>`, `FlatMap<K,V>`, `Bitmask<T,N>`, `ArrayView`, `RelativeView`, `TransformView`, `RelPtr`, `TagPtr`
+- **Containers** (5 partitions): `Stack<T,N>`, `RingBuffer<T,N>`, `SparseVector<T>`, `StableVector<T>`, `HashMap<K,V>`/`HashSet<K>`, `FlatMap<K,V>`, `Bitmask<T,N>`, `ArrayView`, `RelativeView`, `TransformView`, `RelPtr`, `TagPtr`
 - **Memory** (6 partitions): Allocator concepts (`TAllocator`, `TOwningAllocator`, `TBlockAllocator`, `TArenaAllocator`, `TSlabAllocator`), `GPA` (operator new), `OS` (page alloc), `PMR` (polymorphic dispatch), `HugePage` (2 MiB pools), `SmallPage` (32/64 KiB pools), `Arena`/`ScopedArena`/`ScratchPad` (TLS), `PagePool`/`LocalCache`/`HintedPooling`, composite allocators (`InSitu`, `Fallback`, `Threshold`, `Pooling`, `Static`), `Allocation<T,A>`, `Allocator<A>`, `STL<A>` adapter, poison/ASAN annotations
 - **Concurrency** (3 partitions): `RawChannel` (lock-free MPSC), `IEvent`/`ISignal`/`Signal<Events...>` (compile-time event multiplexing), `IContext`/`SharedContext` (Go-style cancellation tree)
-- **HAL** (`Core.HAL.cppm`): Platform abstraction over `pP::hal` — page memory, ring buffer, async I/O, file watching, process spawning, debugger, deadline timers, native string transcoding. Implemented per-platform in `lib/engine/core/<platform>/` (windows, linux, darwin, generic — 13 source files each)
+- **HAL** (`Core.HAL.cppm`): Platform abstraction over `pP::hal` — page memory, ring buffer, async I/O, file watching, process spawning, debugger, deadline timers, native string transcoding. Implemented per-platform in `lib/engine/core/hal/<platform>/` (windows, linux, darwin, generic — Windows has 13 files, Linux/Darwin/Generic have 10 each)
 - **IO** (3 partitions): `hal::io` submit/poll/wait async I/O, memory-mapped files, directory watching
 - **Services** (`Core.Service.cppm`): `IService` base with compile-time `typeUid<T>()` hash key, `ServicesStore` (thread-safe `FlatMap` with parent-chain fallback), `ServiceInjector` for implicit DI
 - **Other**: `Logger`, `TimerManager`, `UnitTest` framework, `Callback<T>` with RAII Handle, `function_ref`, `Opaque` (variant/persistent/unique values and builder), string utilities, hashing infrastructure
@@ -49,10 +62,19 @@ Wraps Slang-RHI into `namespace pP::rhi`:
 - Descriptors: `BufferDesc`, `DeviceDesc`, `RenderPipelineDesc`, `ShaderProgramDesc`, `SurfaceConfig`, etc.
 - `IRhiService` interface — singleton service pattern wrapping `rhi::IRHI` and `rhi::IDevice` lifecycle
 
-### engine.app — Application Layer (`lib/engine/app/`, 25 partitions)
+### engine.shader — Shader Compilation (`lib/engine/shader/Shader.cppm` + `Shader.cpp`)
+
+Provides Slang shader compilation with hot-reload and background compilation:
+- `IShaderService` interface — singleton service pattern wrapping `slang::Session` and `slang::Registry` lifecycle
+- `ModuleHandle` — RAII wrapper for compiled shader modules
+- File watching and hot-reload support via `hal::io`
+- Background compile thread for async shader compilation
+- Imported by `engine.rhi` (for `IShaderProgram` creation) and `engine.app` (for pipeline rebuild on reload)
+
+### engine.app — Application Layer (`lib/engine/app/`, 24 partitions)
 
 - **Application** (`App.Application.cppm`): Main loop class with virtual `initialize()`/`update()`/`render()`/`terminate()`, service store, per-frame timing, exit code management, directory resolution (install/config/content/working)
-- **Input** (9 partitions): `IInputService` — keyboard/mouse/gamepad device states, listener stack (`pushInputListener`/`popInputListener`), action/mapping system (`InputMapping` binds keys to `InputAction` with `InputModifierEvent`/`InputTriggerEvent` callbacks), device enumeration
+- **Input** (8 partitions): `IInputService` — keyboard/mouse/gamepad device states, listener stack (`pushInputListener`/`popInputListener`), action/mapping system (`InputMapping` binds keys to `InputAction` with `InputModifierEvent`/`InputTriggerEvent` callbacks), device enumeration
 - **Window** (2 partitions): `IWindowService` — monitor enumeration, window creation/destruction/resize/move, event callbacks (`whenWindowResized`, `whenWindowFocused`, etc.)
 - **Player** (2 partitions): `IPlayerService` — player identity management, graph-based state machine (`Player::Graph`), keyboard/gamepad player binding
 - **Platform**: GLFW backend (`platform/glfw/`, 9 files) implementing `IPlatform`, `IInputService`, `IPlayerService`, `IWindowService`
@@ -77,7 +99,7 @@ Shared in `lib/engine/tests/shared/` as static lib `EngineTestsShared` providing
 
 ### Entry Point (`game/main.cpp`)
 
-Imports all four engine modules, constructs `pP::Application(name, argv)`, calls `app.run()`. The application resolves install/config/content/working directories, discovers and initializes registered services (input, window, player, RHI), then runs the per-frame update/render loop until exit.
+Imports all five engine modules, constructs `pP::Application(name, argv)`, calls `app.run()`. The application resolves install/config/content/working directories, discovers and initializes registered services (input, window, player, RHI, shader), then runs the per-frame update/render loop until exit.
 
 ## External File Loading
 When you encounter a file reference (e.g., @rules/general.md), load it on demand.
@@ -94,7 +116,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 
 ## C++20 Modules
 - `.cppm` = interface (exports), `.cpp` = implementation (definitions), `.h` = Macros.h only.
-- Libraries: `engine.core`, `engine.math`, `engine.rhi`, `engine.app`.
+- Libraries: `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.app`.
 - Partitions: `engine.core:containers.hash_map` (dots = hierarchy).
 - Tests: `engine.tests.core:memory` (dots for module name, colon for partition).
 - File naming: `Core.<Partition>.cppm` / `Core.<Partition>.cpp`, platform HAL: `Core.HAL.<platform>.<Area>.cpp`.
@@ -123,7 +145,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 - `constexpr` everywhere, `[[nodiscard]]` on important returns, `noexcept` where possible.
 - Inlining: `PPR_FORCE_INLINE` (hot paths), `PPR_NO_INLINE` (prevent), `PPR_FLATTEN` (recursive).
 - Attributes: `PPR_EMPTY_BASES` (MSVC stateless wrappers), `PPR_LIFETIME_BOUND` (reference lifetime deps).
-- Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), PPR_UNIT_TEST. No others.
+- Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), PPR_UNIT_TEST, and internal helper macros (stringize, concat, pragma, etc.). No macros from other sources.
 
 ## Type Safety
 - `checked_cast<ToT>(v)` — safe narrowing/widening + downcast (dynamic_cast debug, static_cast release).
@@ -145,7 +167,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 - `Assertion::setFailurePolicy()` lets tests intercept assertions.
 
 ## HAL
-Platform code in `lib/engine/core/<platform>/`. Supported: windows, linux, darwin, generic (stub). Selected via `PPR_HAL_PLATFORM` (cmake/HAL.cmake).
+Platform code in `lib/engine/core/hal/<platform>/`. Supported: windows, linux, darwin, generic (stub). Selected via `PPR_HAL_PLATFORM` (cmake/HAL.cmake).
 - `pP::hal`: pageAlloc/Free/Commit/Decommit/Protect/OfferToOS/ReclaimFromOS, ringBufferAlloc/Free, outputDebug, isDebuggerPresent, breakpoint.
 - Sub-namespaces: `process` (executablePath, spawnAndWait, terminate), `timer` (setDeadline, cancelDeadline), `io` (async I/O, file watches), `native` (string transcoding).
 - See `Core.HAL.cppm` for full API surface.
@@ -166,7 +188,7 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - **Strings:** string_literal, static_string<N>, char helpers (toLower, etc.), lazy transforms (caseFold, stringEscape, trim, etc.).
 - **Opaque values:** opaque::Value (variant), opaque::Block (persistent), opaque::Unique (RAII owning), Block::Builder.
 - **Concurrency:** IEvent/ISignal/Signal<...>, RawChannel (lock-free MPSC), IContext/SharedContext (Go-style cancellation).
-- **Other:** IService/typeUid<T>, Log::Category/ELevel/Emitter, TimerManager, overloaded (visitor), std23::function_ref, sort::shellSort.
+- **Other:** IService/typeUid<T>, Log::Category/ELevel/Emitter, TimerManager, overloaded (visitor), std23::function_ref.
 
 ### safe_ptr<T>
 
@@ -175,7 +197,6 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - **NOT** a shared ownership pointer — the user guarantees init/destroy ordering
 - All `safe_ptr` copies must be released (set to `nullptr` or go out of scope) before the owning object is destroyed
 - `safe_ptr` from `unique_ptr::get()` is correct by design: the user guarantees the `unique_ptr` outlives all `safe_ptr` instances; `safe_ptr` will assert if violated
-- `setDebugLifetimeCheckEnabled(bool)` controls the checker; disabled by default for services
 
 ## Unit Testing
 - Define: `PPR_UNIT_TEST(name) { PPR_ASSERT(cond); };` (tests are `inline constexpr` variables).

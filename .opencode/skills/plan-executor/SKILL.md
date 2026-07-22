@@ -2,9 +2,10 @@
 name: plan-executor
 description: >
   Executes structured refactoring plans from .opencode/plans/*.md phase by
-  phase, with build verification and test validation after each step. Use
+  phase, with compile verification and test validation after each step. Use
   this skill whenever the user says "execute the plan", "run the plan",
   "apply the refactoring", "implement phase", or "commit the changes".
+triggers: execute, plan, phase, refactoring, commit
 ---
 
 # Plan Executor
@@ -50,14 +51,22 @@ After ALL steps in the phase are applied:
 
 Run the build and test suite to verify the phase is correct:
 
-```powershell
-# Build core library
-cmake --build out/build/msvc-dev --target EngineCore --config Debug
+Prefer using CLion run configurations when available (see `clion-tools` skill):
 
-# Build and run tests (msvc-dev enables ASAN on Windows)
-cmake --build out/build/msvc-dev --target EngineTests --config Debug
-out/build/msvc-dev/EngineTests --shuffle
 ```
+clion_execute_run_configuration(configurationName="EngineCore")
+clion_execute_run_configuration(configurationName="EngineCoreTests", programArguments="--shuffle")
+```
+
+If CLion is unavailable, use CMake presets directly:
+
+```powershell
+cmake --build --preset msvc-dev --target EngineCore
+cmake --build --preset msvc-dev --target EngineCoreTests
+ctest --preset msvc-dev
+```
+
+Use the appropriate preset for your platform (`msvc-dev`, `clang-dev`, `gcc-dev`).
 
 **If build or tests fail:**
 
@@ -72,14 +81,9 @@ out/build/msvc-dev/EngineTests --shuffle
 
 ## Step 4 — Commit the phase
 
-```powershell
-git add -A
-git commit -m "<phase-name>: <short description>"
-```
-
-Use a descriptive message that matches the plan's phase description.
-Each commit must be a buildable intermediate state — no phase leaves
-the tree broken.
+Load the `git-commit-planner` skill to analyze the current changes and produce an
+ordered commit plan with conventional commit messages. Each commit must be a
+buildable intermediate state — no phase leaves the tree broken.
 
 ---
 
@@ -107,7 +111,7 @@ conflicts, a build error is unfixable):
 ## Constraints
 
 - Always build after each phase, never after multiple phases
-- Always test after build (`EngineTests --shuffle` catches ASAN violations)
+- Always test after build (`EngineCoreTests --shuffle` catches ASAN violations)
 - Never modify the plan file itself unless the user asks
 - Keep commits per-phase, never batch phases into one commit
 - If a phase has no code changes (pure planning), skip build/test

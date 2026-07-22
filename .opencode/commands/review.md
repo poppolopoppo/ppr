@@ -1,8 +1,8 @@
 ---
-description: Parallel code review using multiple @code-review subagents with correlated summary
+description: Parallel code review using multiple task agents (code-reviewer skill) with correlated summary
 ---
 
-Review the current git changes using FOUR (4) @code-review subagents running in parallel.
+Review the current git changes using FOUR (4) `task` subagents (type: `general`) running in parallel, each loading the `code-reviewer` skill.
 
 {user's optional scope: specific files or focus areas follow the command}
 

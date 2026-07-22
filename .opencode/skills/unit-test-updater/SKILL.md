@@ -54,13 +54,13 @@ For each changed function, type, or constant, classify the nature of the change:
 ### Framework rules (from AGENTS.md):
 
 1. **File:** `lib/engine/tests/core/Core.<Subsystem>.Tests.cppm`
-2. **Module declaration:** `export module engine.tests:core_<subsystem>;`
+2. **Module declaration:** `export module engine.tests.core:<subsystem>;`
 3. **Includes:** `module;` + `#include "pP/Macros.h"` then `export module ...;` + `import engine.core;` + `import std;`
 4. **Namespace:** All tests in `namespace pP::tests`
 5. **Nested grouping:** Use inner namespaces for sub-grouping
 6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_ASSERT(...); };`
 7. **Parent tests:** `PPR_UNIT_TEST(subsystem) { _.recurse(Group::sub_test); };`
-8. **Top-level registration:** In `Core.Tests.cppm`, add `import :core_<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
+8. **Top-level registration:** In `Core.Tests.cppm`, add `import :<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
 9. **Assertions:** Use `PPR_ASSERT()` only
 10. **Code style:** No comments, `constexpr` everywhere, `[[nodiscard]]`, no raw loops, prefer algorithms/ranges
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... }` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
@@ -122,19 +122,29 @@ PPR_UNIT_TEST(subsystem) {
 
 ### In `lib/engine/tests/core/Core.Tests.cppm`:
 
-1. Add `import :core_<subsystem>;` at the top
+1. Add `import :<subsystem>;` at the top
 2. Add `_.recurse(<subsystem>);` inside the appropriate parent test (e.g., `containers`, `memory`, `strings`)
 
 ---
 
 ## Step 5 — Verify
 
-Build and run the test executable to confirm all tests pass:
+Build and run the test executable to confirm all tests pass.
 
-```bash
-cmake --build build --target VideoGameApp
-./build/game/VideoGameApp
+Prefer CLion MCP tools (see `clion-tools` skill and AGENTS.md §Debugging):
+
 ```
+clion_execute_run_configuration(configurationName="EngineCoreTests", programArguments="--shuffle")
+```
+
+If CLion is unavailable, use CMake presets directly:
+
+```powershell
+cmake --build --preset msvc-dev --target EngineCoreTests
+ctest --preset msvc-dev
+```
+
+Use the appropriate preset for your platform (`msvc-dev`, `clang-dev`, `gcc-dev`).
 
 If any test fails, treat the failure as a bug — do not weaken assertions.
 

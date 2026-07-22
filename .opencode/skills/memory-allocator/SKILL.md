@@ -12,6 +12,26 @@ description: >
 
 # Memory Allocator Guide
 
+## Quick Reference — Choosing an Allocator
+
+| Scenario | Recommended Allocator | Key API |
+|----------|----------------------|---------|
+| Single object, small array, temp buffer | `GPA` | `GPA::allocateRaw(bytes, alignment)` |
+| Multi-MB buffer, file I/O scratch | `OS` | `OS::allocateRaw(bytes, alignment)` |
+| Backend for arenas/pools | `HugePage` (2 MiB blocks) | `HugePage::allocateRaw(bytes, alignment)` |
+| Transient scratch in hot code | `SmallPage` (32/64 KiB blocks) | `SmallPage::allocateRaw(bytes, alignment)` |
+| Persistent batch LIFO (frame data) | `Arena<>` (defaults to `HugePage`) | `arena.allocateRaw(bytes, alignment)` |
+| Short-lived TLS temp work | `ScratchPad` | `ScratchPad::allocateRaw(bytes, alignment)` |
+| Fixed buffer arena (stack/mmap) | `Slab` / `InSituSlab<Cap>` | `slab.allocateRaw(bytes, alignment)` |
+| Composable: try A then B | `Fallback<A, B>` | `allocator.allocateRaw(bytes, alignment)` |
+| Composable: small → A, large → B | `Threshold<N, A, B>` | `allocator.allocateRaw(bytes, alignment)` |
+| Pool + TLS cache | `Pooling` / `LocalCache` | `allocator.allocateRaw(bytes, alignment)` |
+| std:: container adapter | `STL<A>` | `STL<A>{allocator}` wraps any `TAllocator` |
+
+Return to the full guide below for detailed semantics, composition patterns, and poison/ASAN usage.
+
+---
+
 ## 1. Allocator Hierarchy Overview
 
 All allocators live in `namespace pP::mem` and are modeled as standalone classes
@@ -199,6 +219,17 @@ void restore(const void *mark) noexcept;
 // keeping the first slab's allocation).
 void reset() noexcept;
 ```
+
+### `TSlabAllocator` (extends TArenaAllocator)
+Adds direct data access for slab-style allocators, enabling zero-copy iteration
+over allocated blocks:
+
+```cpp
+// Returns {ptr, count} — the raw allocation backing the current slab.
+[[nodiscard]] std::allocation_result<void *> data() noexcept;
+```
+
+Satisfied by `Slab`, `InSituSlab`, and `Arena<T>`.
 
 ### Concept usage examples from tests
 

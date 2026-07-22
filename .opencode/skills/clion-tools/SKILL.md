@@ -93,13 +93,13 @@ clion_execute_run_configuration(
 
 ### Run from code location
 ```
-clion_get_run_configurations(filePath="lib/engine/tests/Core.Memory.cppm")
-clion_execute_run_configuration(filePath="lib/engine/tests/Core.Memory.cppm", line=42)
+clion_get_run_configurations(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm")
+clion_execute_run_configuration(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm", line=42)
 ```
 
 ### Run terminal commands
 ```
-clion_execute_terminal_command(command="cmake --build --preset msvc-dev --target EngineTests")
+clion_execute_terminal_command(command="cmake --build --preset msvc-dev --target EngineCoreTests")
 ```
 
 **When to prefer CLion over bash:**
@@ -117,7 +117,7 @@ clion_xdebug_start_debugger_session(configurationName="EngineTests")
 ```
 Or from a code location:
 ```
-clion_xdebug_start_debugger_session(filePath="lib/engine/tests/Core.Memory.cppm", line=42)
+clion_xdebug_start_debugger_session(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm", line=42)
 ```
 
 ### Set breakpoints
@@ -209,13 +209,6 @@ clion_get_compiler_info(filePath="lib/engine/core/Core.Memory.cppm")
 ### Get full IDE diagnostic snapshot
 ```
 clion_get_diagnostic_info(includeToolchains=true, includeBuildSystemWorkspaces=true)
-```
-
-### Inspect database schema (if applicable)
-```
-clion_list_database_connections()
-clion_list_database_schemas(connectionId="...", selectedOnly=false)
-clion_get_database_object_description(connectionId="...", databaseName="...", schemaName="...", kind="table", objectName="...")
 ```
 
 ## 5. Open Files in IDE

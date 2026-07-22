@@ -4,8 +4,10 @@ description: >
   Reviews local git modifications against AGENTS.md conventions,
   modern C++ best practices for real-time applications (games/engines),
   and AI prompt engineering principles. Use this skill whenever the
-  user says "review my changes", "check my code", "does this follow
-  the conventions", or "code review please".
+  user says "review my changes", "check my code", "audit my changes",
+  "inspect the diff", "analyze the code", "does this follow the conventions",
+  or "code review please".
+triggers: review, check, audit, inspect, analyze, code quality, conventions
 ---
 
 # Code Reviewer
@@ -191,7 +193,7 @@ For each file in the diff, apply the relevant checklists below.
 - `static_assert` with error messages validate design assumptions
 - ABI impact called out for exported class layout changes
 - No raw loops — prefer algorithms and ranges
-- No comments — code should be self-documenting
+- No comments on obvious code — comments should be exceptional, only for genuinely surprising or non-obvious code that cannot be clarified through naming or structure alone
 - `constexpr` everywhere — prefer compile-time evaluation
 - `[[nodiscard]]` on functions returning values
 - `PPR_FORCE_INLINE` on hot-path functions

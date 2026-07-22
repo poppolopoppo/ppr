@@ -10,7 +10,7 @@ Plan the following task using the SCIENTIFIC PEER REVIEW method:
 
 ## Phase 1 — Independent Proposals (parallel)
 
-Spawn THREE (3) @general subagents in **parallel**. Each produces a complete,
+Spawn THREE (3) `task` subagents (type: `general`) in **parallel**. Each produces a complete,
 independent plan. They do NOT communicate with each other.
 
 - A — **Aggressive**: Propose novel, ambitious approaches. Optimize for performance and elegance first.|
@@ -31,7 +31,7 @@ using the standard plan format:
 
 ## Phase 2 — Cross Review (parallel)
 
-Spawn THREE (3) @general subagents in parallel. Each reads ALL three
+Spawn THREE (3) `task` subagents (type: `general`) in parallel. Each reads ALL three
 proposals from Phase 1, then:
 
 1. Identifies strengths and weaknesses of each proposal

@@ -364,28 +364,28 @@ Rules:
 
 ## Step 9 — Platform HAL implementation pattern
 
-HAL implementations live in `lib/engine/core/<platform>/` where `<platform>` is
+HAL implementations live in `lib/engine/core/hal/<platform>/` where `<platform>` is
 `windows`, `linux`, `darwin`, or `generic`.
 
 **File naming**: `Core.HAL.<platform>.<Area>.cpp`
 Examples:
-- `windows/Core.HAL.windows.Memory.cpp`
-- `windows/Core.HAL.windows.Debugger.cpp`
-- `windows/Core.HAL.windows.Io.cpp`
-- `windows/Core.HAL.windows.Timer.cpp`
+- `hal/windows/Core.HAL.windows.Memory.cpp`
+- `hal/windows/Core.HAL.windows.Debugger.cpp`
+- `hal/windows/Core.HAL.windows.Io.cpp`
+- `hal/windows/Core.HAL.windows.Timer.cpp`
 
 **CMake registration**: In `lib/engine/core/CMakeLists.txt`, a variable collects
 platform sources:
 ```cmake
 set(HAL_PLATFORM_SOURCES
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
-    ${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Memory.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Memory.cpp
     ...
 )
 if(PPR_HAL_PLATFORM STREQUAL "windows")
     list(APPEND HAL_PLATFORM_SOURCES
-        windows/Core.HAL.windows.Random.cpp        # Windows-only
-        windows/Core.HAL.windows.RingBuffer.cpp    # Windows-only
+        hal/windows/Core.HAL.windows.Random.cpp        # Windows-only
+        hal/windows/Core.HAL.windows.RingBuffer.cpp    # Windows-only
     )
 endif()
 ```
@@ -397,7 +397,7 @@ of `target_sources`.
 ```
 module;
 
-#include "Core.HAL.windows.include.h"   // Platform-specific includes
+#include "Core.HAL.windows.include.hpp"   // Platform-specific includes
 #include <Memoryapi.h>
 
 module engine.core;

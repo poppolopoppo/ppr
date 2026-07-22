@@ -7,25 +7,38 @@ A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](http
 - **C++23 Modules** - Clean module-based architecture with `.cppm` interface files
 - **Cross-Platform Rendering** - Hardware abstraction via Slang-RHI supporting Vulkan, DirectX 12, and more
 - **Advanced Math Library** - Full vector/matrix/quaternion math with easing functions and spline interpolation
-- **Custom Memory Management** - GPA (General Purpose Allocator), Arena, PagePool, and BitmapTree allocators
+- **Custom Memory Management** - GPA (General Purpose Allocator), Arena, PagePool, BitmapTree, and Slab allocators
 - **Type-Safe Containers** - `StableVector`, `SparseVector`, `HashMap`, `HashSet`, `Stack`, `RingBuffer`
-- **Platform Abstraction Layer** - Unified HAL for filesystem, memory, and OS interactions
-- **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST` macro
+- **Platform Abstraction Layer** - Unified HAL for filesystem, memory, async I/O, and OS interactions
+- **Shader Compilation** - Slang shader compilation with hot-reload and background compilation
+- **Dear ImGui Integration** - UI service with listener-based input dispatch
+- **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST`, fork/crash support, CTest integration
 - **Assertions System** - Tiered assertions (`PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE`)
+- **error_code Lifecycle** - Consistent error propagation across all services and APIs
 
 ## Project Structure
 
+> **Note**: For the canonical and most up-to-date architecture overview, module descriptions, and partition counts, see [AGENTS.md](AGENTS.md) → "Architecture Overview." The structure below is a high-level summary.
+
 ```
 ppr/
+├── assets/            # Game assets (shaders, etc.)
 ├── lib/engine/
-│   ├── core/          # Core utilities (containers, memory, strings, HAL)
+│   ├── core/          # Core utilities
+│   │   ├── memory/    #   Allocators (GPA, Arena, PagePool, ...)
+│   │   ├── containers/#   Containers (HashMap, StableVector, ...)
+│   │   ├── concurrency/#  Concurrency (channels, events, contexts)
+│   │   ├── io/        #   Async I/O, file watchers
+│   │   ├── hal/       #   Platform abstraction (windows, linux, darwin, generic)
+│   │   └── function/  #   Function wrappers (Callback, function_ref)
 │   ├── math/          # Math module (wraps mango::math)
+│   ├── shader/        # Shader compilation and hot-reload
 │   ├── rhi/           # Rendering hardware interface (wraps slang-rhi)
-│   ├── app/           # Application layer with GLFW integration
-│   └── tests/         # Unit tests
+│   ├── app/           # Application layer with GLFW + ImGui
+│   └── tests/         # Unit tests (core, app, shared)
 ├── game/              # Game application entry point
 ├── cmake/             # CMake modules and toolchain files
-└── include/           # Legacy headers and macros
+└── include/           # pP/Macros.h only
 ```
 
 ## Prerequisites
@@ -42,19 +55,28 @@ ppr/
 git clone https://github.com/poppolopoppo/ppr.git
 cd ppr
 
-# Configure with CMake
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Configure with CMake presets (recommended)
+cmake --preset msvc-dev
 
 # Build
-cmake --build build --config Release
+cmake --build out/build/msvc-dev
 ```
+
+Available presets: `msvc-dev` (default Windows), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`.
 
 ### Developer Mode
 
 Enable additional checks and sanitizers:
 
 ```bash
-cmake -B build -DPPR_ENABLE_DEVELOPER_MODE=ON
+cmake --preset developer
+```
+
+Or manually:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPPR_ENABLE_DEVELOPER_MODE=ON
+cmake --build build
 ```
 
 ### Available CMake Options
@@ -68,6 +90,9 @@ cmake -B build -DPPR_ENABLE_DEVELOPER_MODE=ON
 | `PPR_ENABLE_CLANG_TIDY` | Run clang-tidy | OFF |
 | `PPR_ENABLE_CPPCHECK` | Run cppcheck | OFF |
 | `PPR_ENABLE_UNITY_BUILD` | Unity build for faster compilation | OFF |
+| `PPR_WARNINGS_AS_ERRORS` | Treat warnings as errors | OFF |
+| `ENABLE_CACHE` | Enable compiler cache (ccache) for non-module TUs | OFF (ON in dev mode) |
+| `PPR_HAL_PLATFORM` | HAL platform override (windows, linux, darwin, generic) | auto-detected |
 
 ## Dependencies
 
@@ -80,12 +105,14 @@ Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://
 - `simdjson` - Fast JSON parsing
 - `glfw3` - Windowing and input
 - `vulkan-headers` - Vulkan API headers
+- `slang` - Shader compiler (fetched automatically via slang-rhi)
 
 ### CPM Packages
 - `slang-rhi` - Rendering hardware interface
 - `mango` - Math and image library
 - `rapidhash` - Fast hashing
 - `stb` - Image loading (stb_image)
+- `imgui` - Dear ImGui UI library (v1.91.8-docking)
 
 ## Usage
 
@@ -94,12 +121,15 @@ Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://
 ```cpp
 import engine.core;
 import engine.math;
+import engine.shader;
 import engine.rhi;
 import engine.app;
+import std;
 
 int main(int argc, char* argv[]) {
-    app::Application app("MyGame", std::span{argv, argc});
-    return app.run();
+    pP::Application app("MyGame", std::span{argv, argc});
+    std::error_code err = app.run();
+    return err.value();
 }
 ```
 
@@ -108,9 +138,9 @@ int main(int argc, char* argv[]) {
 ```cpp
 import engine.math;
 
-math::float3 position{1.0f, 2.0f, 3.0f};
-math::float4x4 view = math::lookAt(position, target, up);
-auto projected = math::perspective(60.0f, aspect, 0.1f, 1000.0f);
+pP::float3 position{1.0f, 2.0f, 3.0f};
+pP::float4x4 view = pP::lookAt(position, target, up);
+auto projected = pP::perspective(60.0f, aspect, 0.1f, 1000.0f);
 ```
 
 ### Container Usage
@@ -130,8 +160,9 @@ auto handle = sparse.add(42.0f);
 |--------|-------------|
 | `engine.core` | Core exports (assert, arena, containers, enums, hal, hash_map, memory, strings) |
 | `engine.math` | Math types and functions (float2-4, float3x3, float4x4, Quaternion, easing) |
+| `engine.shader` | Shader compilation, hot-reload, IShaderService |
 | `engine.rhi` | Rendering interface (device, buffers, shaders, command buffers) |
-| `engine.app` | Application framework (window, input, lifecycle) |
+| `engine.app` | Application framework (window, input, lifecycle, UI) |
 
 ## Coding Standards
 
@@ -140,19 +171,41 @@ auto handle = sparse.add(42.0f);
 - **`[[nodiscard]]`** - Mark functions returning important values
 - **`PPR_FORCE_INLINE`** - Hot-path optimization
 - **`noexcept`** - Mark non-throwing functions
-- **No comments** - Self-documenting code
-- **No macros** - Except those in `ppr/Macros.h`
+- **Comments** - Only for genuinely surprising or non-obvious code that cannot be clarified through naming or structure alone
+- **Macros** - Only from `include/pP/Macros.h` (assertions, logging, inlining, unit tests)
 
 ## Testing
 
-Run the built-in unit tests:
+Two separate test executables are provided:
 
-```cpp
-import engine.core;
-pP::UnitTest::run(pP::tests::core);
+- **`EngineCoreTests`** — GLFW-free; tests memory, containers, concurrency, IO, strings, services
+- **`EngineAppTests`** — Links GLFW; tests platform-dependent features
+
+They share a common test infrastructure library (`EngineTestsShared`) in `lib/engine/tests/shared/`.
+
+### Via CTest
+
+```bash
+ctest --preset msvc-dev
 ```
 
-Define tests with:
+### Direct Execution
+
+```bash
+out/build/msvc-dev/EngineCoreTests --shuffle
+out/build/msvc-dev/EngineAppTests --run-test App.Player
+```
+
+### Options
+
+```
+--run-test <path>    Run specific test (e.g., Core.Memory)
+--shuffle [<seed>]   Randomize test order
+--loop <N>           Repeat N times
+--help               Show all options
+```
+
+### Defining Tests
 
 ```cpp
 PPR_UNIT_TEST(my_test) {
