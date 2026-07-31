@@ -71,13 +71,11 @@ namespace pP {
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
             PPR_ASSERT(shader_service.isValid());
 
-            auto handle = shader_service->loadModuleFromFile(
-                content_dir / TEXT("shaders") / TEXT("triangle.slang"),
-                "triangle");
-            if (not handle) {
-                return handle.error();
-            }
-            m_triangle_shader = std::move(*handle);
+            PPR_RETURN_ERROR_ON_FAIL(Renderer,
+                shader_service->loadModuleFromFile(
+                    content_dir / TEXT("shaders") / TEXT("triangle.slang"),
+                    "triangle",
+                    m_triangle_shader.writeRef()));
         }
 
         // Create shader program

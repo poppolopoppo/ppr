@@ -3,7 +3,7 @@ module;
 #include <slang.h>
 #include <slang-com-ptr.h>
 
-export module engine.tests.core:shader;
+export module engine.tests.app:shader;
 
 import engine.core;
 import engine.shader;
@@ -170,10 +170,11 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             const auto svc = IShaderService::get();
             PPR_ASSERT(!svc->initialize());
 
-            auto handle = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader.data());
-            PPR_ASSERT(handle.has_value());
+            shader::SharedModule handle;
+            const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader.data(), handle.writeRef());
+            PPR_ASSERT(!ec);
 
-            auto *module = handle->get();
+            auto *module = handle.get();
             PPR_ASSERT(module != nullptr);
 
             shader::ComPtr<slang::IEntryPoint> vertex_ep;
@@ -214,23 +215,24 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             const auto svc = IShaderService::get();
             PPR_ASSERT(!svc->initialize());
 
-            auto handle = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@");
-            PPR_ASSERT(!handle.has_value());
-            PPR_ASSERT(!!handle.error());
+            shader::SharedModule handle;
+            const auto bad_ec = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@", handle.writeRef());
+            PPR_ASSERT(!!bad_ec);
 
-            handle = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader.data());
-            PPR_ASSERT(handle.has_value());
-            PPR_ASSERT(handle->get() != nullptr);
+            const auto recovery_ec = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader.data(), handle.writeRef());
+            PPR_ASSERT(!recovery_ec);
+            PPR_ASSERT(handle.get() != nullptr);
         };
 
         PPR_UNIT_TEST(shader_parameter_reflection) {
             const auto svc = IShaderService::get();
             PPR_ASSERT(!svc->initialize());
 
-            auto handle = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader.data());
-            PPR_ASSERT(handle.has_value());
+            shader::SharedModule handle;
+            const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader.data(), handle.writeRef());
+            PPR_ASSERT(!ec);
 
-            auto *module = handle->get();
+            auto *module = handle.get();
             PPR_ASSERT(module != nullptr);
 
             shader::ComPtr<slang::IEntryPoint> vertex_ep;
@@ -239,10 +241,13 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             shader::ComPtr<slang::IEntryPoint> fragment_ep;
             PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
 
-            slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
-            shader::ComPtr<slang::IComponentType> linked_program;
+            slang::IComponentType *components[] = {module, vertex_ep.get(), fragment_ep.get()};
+            shader::ComPtr<slang::IComponentType> composite;
             PPR_ASSERT(SLANG_SUCCEEDED(
-                module->getSession()->createCompositeComponentType(entry_points, 2, linked_program.writeRef())));
+                module->getSession()->createCompositeComponentType(components, 3, composite.writeRef())));
+
+            shader::ComPtr<slang::IComponentType> linked_program;
+            PPR_ASSERT(SLANG_SUCCEEDED(composite->link(linked_program.writeRef())));
 
             auto *layout = linked_program->getLayout();
             PPR_ASSERT(layout != nullptr);
@@ -258,10 +263,13 @@ float4 fragmentMain(VSOutput input) : SV_Target {
                     found = true;
                     auto *type_layout = param->getTypeLayout();
                     PPR_ASSERT(type_layout != nullptr);
-                    PPR_ASSERT(type_layout->getSize() > 0);
                     auto *type = param->getType();
                     PPR_ASSERT(type != nullptr);
                     PPR_ASSERT(type->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
+
+                    auto *element_layout = type_layout->getElementTypeLayout();
+                    PPR_ASSERT(element_layout != nullptr);
+                    PPR_ASSERT(element_layout->getSize() > 0);
                     break;
                 }
             }
@@ -272,7 +280,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     // ------------------------------------------------------------------
     // Parent aggregator
     // ------------------------------------------------------------------
-    PPR_UNIT_TEST(shader) {
+    PPR_UNIT_TEST(app_shader) {
         _.recurse({
             ShaderErrC::errc_enum_values,
             ShaderErrC::errc_category_name,

@@ -10,6 +10,7 @@ import :dispatch;
 import :snapshot;
 import :player_service;
 import :player_graph;
+import :shader;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(app) {
@@ -20,6 +21,7 @@ export namespace pP::tests {
             app_snapshot,
             app_player_service,
             app_player_graph,
+            app_shader,
         });
     };
 }

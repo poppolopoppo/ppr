@@ -251,14 +251,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 const safe_ptr<IShaderService> shader_service = IShaderService::get();
                 PPR_ASSERT(shader_service.isValid());
 
-                auto handle = shader_service->loadModuleFromSource(
-                    "imgui",
-                    "imgui.slang",
-                    kImGuiShader.data());
-                if (not handle) {
-                    return handle.error();
-                }
-                m_imgui_shader_handle = std::move(*handle);
+                PPR_RETURN_ERROR_ON_FAIL(UI,
+                    shader_service->loadModuleFromSource(
+                        "imgui",
+                        "imgui.slang",
+                        kImGuiShader.data(),
+                        m_imgui_shader_handle.writeRef()));
 
                 shader::ComPtr<slang::IModule> module;
                 module = m_imgui_shader_handle.get();

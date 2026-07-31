@@ -106,8 +106,15 @@ namespace pP {
 
                 PPR_RETURN_ERROR_ON_FAIL(Shader, createGlobalSession(m_global_session.writeRef()));
 
-                // Create a default session for compilation
-                PPR_RETURN_ERROR_ON_FAIL(Shader, m_global_session->createSession({}, m_session.writeRef()));
+                // Create a default session for compilation with a portable SPIR-V target
+                TargetDesc target_desc{};
+                target_desc.format = SLANG_SPIRV;
+
+                SessionDesc session_desc{};
+                session_desc.targets = &target_desc;
+                session_desc.targetCount = 1;
+
+                PPR_RETURN_ERROR_ON_FAIL(Shader, m_global_session->createSession(session_desc, m_session.writeRef()));
 
                 PPR_LOG(Shader, info, "Shader service initialized");
                 return errc::ok;
@@ -129,35 +136,38 @@ namespace pP {
                 return m_global_session.get();
             }
 
-            Expected<SharedModule> loadModuleFromFile(
+            std::error_code loadModuleFromFile(
                 const std::filesystem::path &path,
-                const char *module_name) override {
-                return io::mapFile(path).and_then([&](MappedFile &&mapped) -> Expected<SharedModule> {
-                    return loadModuleFromSource(module_name, path.generic_string().c_str(), mapped.c_str());
-                });
+                const char *module_name,
+                IModule **out_module) override {
+                const auto mapped = io::mapFile(path);
+                if (not mapped) {
+                    return mapped.error();
+                }
+                return loadModuleFromSource(module_name, path.generic_string().c_str(), mapped->c_str(), out_module);
             }
 
-            Expected<SharedModule> loadModuleFromSource(
+            std::error_code loadModuleFromSource(
                 const char *module_name,
                 const char *path,
-                const char *source) override {
+                const char *source,
+                IModule **out_module) override {
                 Diagnose diagnostics;
-                ComPtr<IModule> module;
-                *module.writeRef() = m_session->loadModuleFromSourceString(
+                *out_module = m_session->loadModuleFromSourceString(
                     module_name,
                     path,
                     source,
                     diagnostics.writeRef());
 
-                if (not module) {
+                if (not *out_module) {
                     PPR_LOG(Shader, error, "failed to compile shader module from source", {
                         {"name", module_name},
                         {"path", path}
                     });
-                    return std::unexpected(make_error_code(errc::invalid_arg));
+                    return make_error_code(errc::invalid_arg);
                 }
 
-                return module;
+                return errc::ok;
             }
         };
     }
