@@ -45,6 +45,9 @@ namespace pP::hal {
 #endif
     }
 
+    void disableSystemErrorReporting() noexcept {
+    }
+
     void installDebugAssertHooks() noexcept {
 #if PPR_ENABLE_ASSERTIONS
         std::signal(SIGABRT, [](int) {

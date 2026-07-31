@@ -34,6 +34,9 @@ namespace pP {
     }
 
     std::error_code Application::run() {
+        hal::disableSystemErrorReporting();
+        hal::installDebugAssertHooks();
+
         PPR_RETURN_ERROR_ON_FAIL(App, initialize());
         PPR_DEFER {
             if (const std::error_code err = shutdown()) {

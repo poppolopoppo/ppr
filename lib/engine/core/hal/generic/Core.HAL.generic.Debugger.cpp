@@ -27,6 +27,9 @@ namespace pP::hal {
     void breakpointIfDebugging() noexcept {
     }
 
+    void disableSystemErrorReporting() noexcept {
+    }
+
     void installDebugAssertHooks() noexcept {
     }
 }

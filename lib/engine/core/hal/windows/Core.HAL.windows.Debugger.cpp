@@ -55,6 +55,7 @@ namespace pP::hal {
 
     void disableSystemErrorReporting() noexcept {
         ::_set_error_mode(_OUT_TO_STDERR);
+        ::_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 
         for (const int channel: {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
             ::_CrtSetReportMode(channel, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
