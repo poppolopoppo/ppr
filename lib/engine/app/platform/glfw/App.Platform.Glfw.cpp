@@ -100,7 +100,7 @@ namespace pP {
 
         m_window_service = safe_ptr(&GlfwWindow::get());
 
-        m_window_service->initialize();
+        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_window_service->initialize());
 
         const safe_ptr input_service{&GlfwInput::get()};
         PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, input_service->initialize());
