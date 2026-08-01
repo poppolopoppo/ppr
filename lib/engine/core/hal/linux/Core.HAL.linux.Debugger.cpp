@@ -1,6 +1,10 @@
 module;
 
+#include <fcntl.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
 #include <csignal>
 
 #include "pP/Macros.h"
@@ -55,5 +59,45 @@ namespace pP::hal {
             ::_Exit(3);
         });
 #endif
+    }
+
+    // ------------------------------------------------------------------
+    // thread names (visible to debuggers)
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] ThreadId currentThreadId() noexcept {
+        return ThreadId{static_cast<u64>(::syscall(SYS_gettid))};
+    }
+
+    void setThreadName(const std::string_view name) noexcept {
+        char buffer[16]{}; // comm limit: 15 chars + NUL
+        std::memcpy(buffer, name.data(), std::min(name.size(), sizeof(buffer) - 1u));
+        std::ignore = ::prctl(PR_SET_NAME, buffer, 0u, 0u, 0u);
+    }
+
+    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+        const std::string comm_path = "/proc/" + std::to_string(thread_id.m_value) + "/comm";
+
+        const int fd = ::open(comm_path.c_str(), O_RDONLY);
+        if (fd < 0) {
+            return 0u;
+        }
+        PPR_DEFER { ::close(fd); };
+
+        char raw[16]{};
+        const auto result = ::read(fd, raw, sizeof(raw) - 1u);
+        if (result <= 0) {
+            return 0u;
+        }
+
+        std::size_t length = static_cast<std::size_t>(result);
+        if (raw[length - 1u] == '\n') {
+            --length;
+        }
+
+        if (out_buffer != nullptr && capacity > 0u) {
+            std::memcpy(out_buffer, raw, std::min(length, capacity));
+        }
+        return length;
     }
 }

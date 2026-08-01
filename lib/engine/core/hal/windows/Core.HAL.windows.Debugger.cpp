@@ -127,4 +127,66 @@ namespace pP::hal {
         std::set_terminate(&terminateHandler);
 #endif
     }
+
+    // ------------------------------------------------------------------
+    // thread names (visible to debuggers)
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] ThreadId currentThreadId() noexcept {
+        return ThreadId{::GetCurrentThreadId()};
+    }
+
+    void setThreadName(const std::string_view name) noexcept {
+        using SetThreadDescriptionFn = HRESULT(WINAPI *)(HANDLE, PCWSTR);
+        static const auto set_thread_description = reinterpret_cast<SetThreadDescriptionFn>(
+            ::GetProcAddress(::GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription"));
+
+        if (set_thread_description != nullptr) {
+            const std::wstring wide_name = native::from(name);
+            std::ignore = set_thread_description(::GetCurrentThread(), wide_name.c_str());
+            return;
+        }
+
+        char legacy_buffer[128];
+        if (::IsDebuggerPresent() && name.size() < std::size(legacy_buffer)) {
+            std::memcpy(legacy_buffer, name.data(), name.size());
+            legacy_buffer[name.size()] = '\0';
+
+            struct ThreadNameInfo {
+                DWORD m_type{0x1000};
+                LPCSTR m_name;
+                DWORD m_thread_id{DWORD(-1)};
+                DWORD m_flags{0};
+            };
+            const ThreadNameInfo info{.m_name = legacy_buffer};
+            ::RaiseException(0x406D1388, 0u, sizeof(info) / sizeof(ULONG_PTR), reinterpret_cast<const ULONG_PTR *>(&info));
+        }
+    }
+
+    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+        using GetThreadDescriptionFn = HRESULT(WINAPI *)(HANDLE, PWSTR *);
+        static const auto get_thread_description = reinterpret_cast<GetThreadDescriptionFn>(
+            ::GetProcAddress(::GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription"));
+
+        if (get_thread_description == nullptr) {
+            return 0u;
+        }
+
+        const HANDLE thread = ::OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(thread_id.m_value));
+        if (thread == nullptr) {
+            return 0u;
+        }
+        PPR_DEFER { ::CloseHandle(thread); };
+
+        PWSTR wide_name = nullptr;
+        if (FAILED(get_thread_description(thread, &wide_name))) {
+            return 0u;
+        }
+        PPR_DEFER { ::LocalFree(wide_name); };
+
+        if (out_buffer == nullptr || capacity == 0u) {
+            return transcode(std::wstring_view(wide_name), static_cast<char *>(nullptr), 0u);
+        }
+        return transcode(std::wstring_view(wide_name), out_buffer, capacity);
+    }
 }

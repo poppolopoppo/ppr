@@ -365,6 +365,46 @@ export namespace pP {
         void installDebugAssertHooks() noexcept;
 
         // ------------------------------------------------------------------
+        // thread names (visible to debuggers)
+        // ------------------------------------------------------------------
+
+        struct ThreadId {
+            u64 m_value{0u};
+
+            [[nodiscard]] friend constexpr bool operator==(const ThreadId lhs, const ThreadId rhs) noexcept {
+                return lhs.m_value == rhs.m_value;
+            }
+
+            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(const ThreadId lhs, const ThreadId rhs) noexcept {
+                return lhs.m_value <=> rhs.m_value;
+            }
+
+            friend constexpr void swap(ThreadId &lhs, ThreadId &rhs) noexcept {
+                std::swap(lhs.m_value, rhs.m_value);
+            }
+        };
+
+        [[nodiscard]] ThreadId currentThreadId() noexcept;
+
+        void setThreadName(std::string_view name) noexcept;
+
+        // buffer-based query, transcode convention: returns chars written;
+        // when the buffer is too small, returns the full required size (caller detects truncation).
+        // `nullptr, 0` returns the full required size. Never allocates.
+        [[nodiscard]] std::size_t getThreadName(ThreadId thread_id, char *out_buffer, std::size_t capacity) noexcept;
+
+        [[nodiscard]] inline std::string getThreadName(const ThreadId thread_id) {
+            const std::size_t length = getThreadName(thread_id, nullptr, 0u);
+            constexpr std::size_t max_thread_name_bytes = 256;
+            const std::size_t capped = length > max_thread_name_bytes ? max_thread_name_bytes : length;
+            std::string name(capped, char{});
+            if (capped > 0u) [[likely]] {
+                std::ignore = getThreadName(thread_id, name.data(), name.size());
+            }
+            return name;
+        }
+
+        // ------------------------------------------------------------------
         // process
         // ------------------------------------------------------------------
 
@@ -547,4 +587,28 @@ export namespace pP {
         }
 #endif
     }
+}
+
+export namespace std {
+    // renders the thread debug name into the format buffer; unnamed threads fall back to the numeric id
+    template<pP::details::TChar CharT>
+    struct formatter<pP::hal::ThreadId, CharT> {
+        template<typename FormatParseContextT>
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+            return ctx.begin();
+        }
+
+        template<typename FormatContextT>
+        auto format(const pP::hal::ThreadId &thread_id, FormatContextT &ctx) const -> decltype(ctx.out()) {
+            char stack_buffer[64]{};
+            const std::size_t length = pP::hal::getThreadName(thread_id, stack_buffer, sizeof(stack_buffer));
+            if constexpr (std::same_as<CharT, char>) {
+                if (length > 0u) [[likely]] {
+                    return std::format_to(ctx.out(), "{}", std::string_view(stack_buffer, length));
+                }
+            }
+            (void)thread_id;
+            return std::format_to(ctx.out(), "{}", thread_id.m_value);
+        }
+    };
 }

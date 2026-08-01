@@ -11,6 +11,7 @@ import :containers;
 import :containers.flat_map;
 import :containers.hash_map;
 import :enums;
+import :hal;
 import :memory;
 import :memory.page_pool;
 import :opaque;
@@ -64,6 +65,7 @@ export namespace pP::tests {
             context,
             io,
             file_watcher,
+            hal,
             utility,
         });
     };

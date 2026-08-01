@@ -6,6 +6,7 @@ target_sources(EngineCoreTests
             Core.Opaque.Tests.cppm
             Core.Service.Tests.cppm
             Core.Enums.Tests.cppm
+            Core.HAL.Tests.cppm
             Core.Memory.Tests.cppm
             Core.Memory.Arena.Tests.cppm
             Core.Memory.PagePool.Tests.cppm

@@ -32,4 +32,23 @@ namespace pP::hal {
 
     void installDebugAssertHooks() noexcept {
     }
+
+    // ------------------------------------------------------------------
+    // thread names (visible to debuggers)
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] ThreadId currentThreadId() noexcept {
+        return ThreadId{0u};
+    }
+
+    void setThreadName(const std::string_view name) noexcept {
+        (void)name;
+    }
+
+    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+        (void)thread_id;
+        (void)out_buffer;
+        (void)capacity;
+        return 0u;
+    }
 }

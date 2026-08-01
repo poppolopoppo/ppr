@@ -23,8 +23,10 @@ namespace pP::hal {
             CP_ACP, 0,
             ansi.data(), static_cast<int>(ansi.size()),
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])));
-        PPR_ASSERT(n_chars == ansi.size() || (n_chars > 0 && n_chars <= capacity));
-        return n_chars;
+        if (n_chars == 0) {
+            return transcode(ansi, static_cast<wchar_t *>(nullptr), 0u);
+        }
+        return static_cast<std::size_t>(n_chars);
     }
 
     [[nodiscard]] std::size_t transcode(const std::u8string_view utf8, wchar_t *p_dst, const std::size_t capacity) noexcept {
@@ -33,8 +35,10 @@ namespace pP::hal {
             CP_UTF8, 0,
             reinterpret_cast<LPCCH>(utf8.data()), static_cast<int>(utf8.size()),
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])));
-        PPR_ASSERT(n_chars <= utf8.size() || (n_chars > 0 && n_chars <= capacity));
-        return n_chars;
+        if (n_chars == 0) {
+            return transcode(utf8, static_cast<wchar_t *>(nullptr), 0u);
+        }
+        return static_cast<std::size_t>(n_chars);
     }
 
     [[nodiscard]] std::size_t transcode(const std::wstring_view wide, char8_t *p_dst, const std::size_t capacity) noexcept {
@@ -43,7 +47,9 @@ namespace pP::hal {
             wide.data(), static_cast<int>(wide.size()),
             reinterpret_cast<LPSTR>(p_dst), static_cast<int>(capacity * sizeof(p_dst[0])),
             nullptr, nullptr);
-        PPR_ASSERT(n_bytes >= wide.size() || (n_bytes > 0 && n_bytes <= capacity));
+        if (n_bytes == 0) {
+            return transcode(wide, static_cast<char8_t *>(nullptr), 0u);
+        }
         return static_cast<std::size_t>(n_bytes);
     }
 
@@ -53,7 +59,9 @@ namespace pP::hal {
             wide.data(), static_cast<int>(wide.size()),
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])),
             nullptr, nullptr);
-        PPR_ASSERT(n_bytes >= wide.size() || (n_bytes > 0 && n_bytes <= capacity));
+        if (n_bytes == 0) {
+            return transcode(wide, static_cast<char *>(nullptr), 0u);
+        }
         return static_cast<std::size_t>(n_bytes);
     }
 
