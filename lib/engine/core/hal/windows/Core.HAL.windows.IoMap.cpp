@@ -45,8 +45,7 @@ namespace pP::hal::io {
 
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: mapFile CreateFileW failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         PPR_DEFER { ::CloseHandle(file); };
@@ -54,8 +53,7 @@ namespace pP::hal::io {
         ::LARGE_INTEGER file_size{};
         if (not::GetFileSizeEx(file, &file_size)) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: mapFile GetFileSizeEx failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         if (file_size.QuadPart == 0) [[unlikely]] {
@@ -75,8 +73,7 @@ namespace pP::hal::io {
 
         if (mapping == nullptr) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: mapFile CreateFileMappingW failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         void *const data = ::MapViewOfFile(
@@ -88,8 +85,7 @@ namespace pP::hal::io {
         if (data == nullptr) [[unlikely]] {
             ::CloseHandle(mapping);
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: mapFile MapViewOfFile failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *md = new MapHandleData();

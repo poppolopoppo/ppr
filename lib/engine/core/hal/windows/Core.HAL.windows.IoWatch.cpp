@@ -55,8 +55,7 @@ namespace pP::hal::io {
 
         if (hDir == INVALID_HANDLE_VALUE) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: openWatch CreateFileW failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *data = new WatchHandleData();
@@ -68,8 +67,7 @@ namespace pP::hal::io {
             ::CloseHandle(hDir);
             delete data;
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: openWatch CreateEvent failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         startWatch_(data);

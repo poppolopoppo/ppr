@@ -38,8 +38,7 @@ namespace pP::hal::io {
             INVALID_HANDLE_VALUE, nullptr, 0, 0);
         if (port == nullptr) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: CreateIoCompletionPort failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *data = new IoHandleData();
@@ -90,16 +89,14 @@ namespace pP::hal::io {
 
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: CreateFileW failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         if (::CreateIoCompletionPort(file, io_data->m_port,
                                      std::bit_cast<::ULONG_PTR>(file), 0) == nullptr) [[unlikely]] {
             ::CloseHandle(file);
             throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()),
-                "pP::io: CreateIoCompletionPort (assoc) failed");
+                std::error_code(::GetLastError(), std::system_category()));
         }
 
         ::SetFileCompletionNotificationModes(file, FILE_SKIP_SET_EVENT_ON_HANDLE);
