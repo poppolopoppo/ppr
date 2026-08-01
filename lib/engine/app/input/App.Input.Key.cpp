@@ -323,6 +323,13 @@ namespace pP {
             case EKeyboardKey::numpad7: return numpad7;
             case EKeyboardKey::numpad8: return numpad8;
             case EKeyboardKey::numpad9: return numpad9;
+            case EKeyboardKey::numpad_multiply: return numpad_multiply;
+            case EKeyboardKey::numpad_add: return numpad_add;
+            case EKeyboardKey::numpad_subtract: return numpad_subtract;
+            case EKeyboardKey::numpad_decimal: return numpad_decimal;
+            case EKeyboardKey::numpad_divide: return numpad_divide;
+            case EKeyboardKey::numpad_enter: return numpad_enter;
+            case EKeyboardKey::numpad_equal: return numpad_equal;
             case EKeyboardKey::f1: return f1;
             case EKeyboardKey::f2: return f2;
             case EKeyboardKey::f3: return f3;
@@ -490,6 +497,13 @@ namespace pP {
             numpad7,
             numpad8,
             numpad9,
+            numpad_multiply,
+            numpad_add,
+            numpad_subtract,
+            numpad_decimal,
+            numpad_divide,
+            numpad_enter,
+            numpad_equal,
             multiply,
             add,
             subtract,
@@ -613,6 +627,13 @@ namespace pP {
     const InputKey InputKey::numpad7{"numpad7", EKeyboardKey::numpad7, EInputValueType::digital};
     const InputKey InputKey::numpad8{"numpad8", EKeyboardKey::numpad8, EInputValueType::digital};
     const InputKey InputKey::numpad9{"numpad9", EKeyboardKey::numpad9, EInputValueType::digital};
+    const InputKey InputKey::numpad_multiply{"numpad_multiply", EKeyboardKey::numpad_multiply, EInputValueType::digital};
+    const InputKey InputKey::numpad_add{"numpad_add", EKeyboardKey::numpad_add, EInputValueType::digital};
+    const InputKey InputKey::numpad_subtract{"numpad_subtract", EKeyboardKey::numpad_subtract, EInputValueType::digital};
+    const InputKey InputKey::numpad_decimal{"numpad_decimal", EKeyboardKey::numpad_decimal, EInputValueType::digital};
+    const InputKey InputKey::numpad_divide{"numpad_divide", EKeyboardKey::numpad_divide, EInputValueType::digital};
+    const InputKey InputKey::numpad_enter{"numpad_enter", EKeyboardKey::numpad_enter, EInputValueType::digital};
+    const InputKey InputKey::numpad_equal{"numpad_equal", EKeyboardKey::numpad_equal, EInputValueType::digital};
     const InputKey InputKey::multiply{"multiply", EKeyboardKey::asterix, EInputValueType::digital};
     const InputKey InputKey::add{"add", EKeyboardKey::plus, EInputValueType::digital};
     const InputKey InputKey::subtract{"subtract", EKeyboardKey::minus, EInputValueType::digital};

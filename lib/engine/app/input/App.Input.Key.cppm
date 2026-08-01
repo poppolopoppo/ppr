@@ -94,6 +94,14 @@ export namespace pP {
         numpad8,
         numpad9,
 
+        numpad_multiply,
+        numpad_add,
+        numpad_subtract,
+        numpad_decimal,
+        numpad_divide,
+        numpad_enter,
+        numpad_equal,
+
         // function
 
         f1,
@@ -424,6 +432,14 @@ export namespace pP {
         static const InputKey numpad7;
         static const InputKey numpad8;
         static const InputKey numpad9;
+
+        static const InputKey numpad_multiply;
+        static const InputKey numpad_add;
+        static const InputKey numpad_subtract;
+        static const InputKey numpad_decimal;
+        static const InputKey numpad_divide;
+        static const InputKey numpad_enter;
+        static const InputKey numpad_equal;
 
         static const InputKey multiply;
         static const InputKey add;

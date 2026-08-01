@@ -53,9 +53,9 @@ struct PsInput {
 struct ProjConstants {
     float4x4 m_matrix;
 };
-[[vk::binding(0, 0)]] ConstantBuffer<ProjConstants> g_proj;
-[[vk::binding(1, 0)]] Texture2D g_fontTexture;
-[[vk::binding(2, 0)]] SamplerState g_fontSampler;
+        ConstantBuffer<ProjConstants> g_proj : register(b0, space0);
+        Texture2D g_fontTexture : register(t0, space0);
+        SamplerState g_fontSampler : register(s0, space0);
 [shader("vertex")]
 PsInput vertexMain(VsInput input) {
     PsInput output;
@@ -155,17 +155,24 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::x: return ImGuiKey_X;
                 case EKeyboardKey::y: return ImGuiKey_Y;
                 case EKeyboardKey::z: return ImGuiKey_Z;
-                case EKeyboardKey::numpad0: return ImGuiKey_Keypad0;
-                case EKeyboardKey::numpad1: return ImGuiKey_Keypad1;
-                case EKeyboardKey::numpad2: return ImGuiKey_Keypad2;
-                case EKeyboardKey::numpad3: return ImGuiKey_Keypad3;
-                case EKeyboardKey::numpad4: return ImGuiKey_Keypad4;
-                case EKeyboardKey::numpad5: return ImGuiKey_Keypad5;
-                case EKeyboardKey::numpad6: return ImGuiKey_Keypad6;
-                case EKeyboardKey::numpad7: return ImGuiKey_Keypad7;
-                case EKeyboardKey::numpad8: return ImGuiKey_Keypad8;
-                case EKeyboardKey::numpad9: return ImGuiKey_Keypad9;
-                case EKeyboardKey::period: return ImGuiKey_Period;
+                 case EKeyboardKey::numpad0: return ImGuiKey_Keypad0;
+                 case EKeyboardKey::numpad1: return ImGuiKey_Keypad1;
+                 case EKeyboardKey::numpad2: return ImGuiKey_Keypad2;
+                 case EKeyboardKey::numpad3: return ImGuiKey_Keypad3;
+                 case EKeyboardKey::numpad4: return ImGuiKey_Keypad4;
+                 case EKeyboardKey::numpad5: return ImGuiKey_Keypad5;
+                 case EKeyboardKey::numpad6: return ImGuiKey_Keypad6;
+                 case EKeyboardKey::numpad7: return ImGuiKey_Keypad7;
+                 case EKeyboardKey::numpad8: return ImGuiKey_Keypad8;
+                 case EKeyboardKey::numpad9: return ImGuiKey_Keypad9;
+                 case EKeyboardKey::numpad_multiply: return ImGuiKey_KeypadMultiply;
+                 case EKeyboardKey::numpad_add: return ImGuiKey_KeypadAdd;
+                 case EKeyboardKey::numpad_subtract: return ImGuiKey_KeypadSubtract;
+                 case EKeyboardKey::numpad_decimal: return ImGuiKey_KeypadDecimal;
+                 case EKeyboardKey::numpad_divide: return ImGuiKey_KeypadDivide;
+                 case EKeyboardKey::numpad_enter: return ImGuiKey_KeypadEnter;
+                 case EKeyboardKey::numpad_equal: return ImGuiKey_KeypadEqual;
+                 case EKeyboardKey::period: return ImGuiKey_Period;
                 case EKeyboardKey::comma: return ImGuiKey_Comma;
                 case EKeyboardKey::semicolon: return ImGuiKey_Semicolon;
                 case EKeyboardKey::slash: return ImGuiKey_Slash;
@@ -233,8 +240,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             ImGuiIO &io = ImGui::GetIO();
             io.ConfigErrorRecovery = true;
-            io.ConfigErrorRecoveryEnableAssert = true;
-            io.ConfigErrorRecoveryEnableDebugLog = true;
+            io.ConfigErrorRecoveryEnableAssert = PPR_ENABLE_ASSERTIONS;
+            io.ConfigErrorRecoveryEnableDebugLog = PPR_ENABLE_ASSERTIONS;
             io.ConfigErrorRecoveryEnableTooltip = false;
 
             io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
@@ -443,8 +450,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             ImGui::NewFrame();
 
+#if PPR_ENABLE_DEBUG
             static bool g_show_demo_window{true};
             ImGui::ShowDemoWindow(&g_show_demo_window);
+#endif
 
             return default_value_v;
         }
@@ -472,7 +481,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // Bind pipeline
             auto *const root_obj = pass.bindPipeline(m_pipeline.get());
             if (not root_obj) {
-                return default_value_v;
+                return std::make_error_code(std::errc::not_supported);
             }
 
             // Set up bindings via ShaderCursor (auto-resolves binding range indices)
@@ -644,7 +653,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
     private:
         static constexpr u32 kFrameCount = 2;
-        static constexpr u32 kInitialBufferSize = 16384;
 
         rhi::Format m_swapchain_format{rhi::Format::Undefined};
         ImGuiContext *m_imgui_context{nullptr};
@@ -786,17 +794,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // Map and copy vertex data
             {
                 void *mapped_vtx = nullptr;
-                if (hasFailed(device.mapBuffer(fr->m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx))) {
-                    PPR_LOG(UI, error, "failed to map vertex buffer");
-                    return default_value_v;
-                }
+                RHI_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(fr->m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx));
 
                 void *mapped_idx = nullptr;
-                if (hasFailed(device.mapBuffer(fr->m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx))) {
-                    PPR_LOG(UI, error, "failed to map index buffer");
-                    device.unmapBuffer(fr->m_vertex_buffer.get());
-                    return default_value_v;
-                }
+                RHI_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(fr->m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
 
                 auto *vtx_dst = static_cast<ImDrawVert *>(mapped_vtx);
                 auto *idx_dst = static_cast<ImDrawIdx *>(mapped_idx);
