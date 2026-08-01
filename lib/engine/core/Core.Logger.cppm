@@ -2,9 +2,10 @@ module;
 #include "pP/Macros.h"
 export module engine.core:logger;
 
-import :memory.allocator;
 import :concurrency.channel;
 import :enums;
+import :hal;
+import :memory.allocator;
 import :opaque;
 import :strings;
 import :timer;
@@ -77,7 +78,7 @@ export namespace pP {
             Emitter m_site;
 
             TimePoint m_timestamp;
-            std::thread::id m_thread_id;
+            hal::ThreadId m_thread_id;
         };
 
         using Policy = std23::function_ref<void(const Entry &)>;

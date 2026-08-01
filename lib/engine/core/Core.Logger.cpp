@@ -2,6 +2,7 @@ module;
 #include "../../../out/build/msvc-dev/vcpkg_installed/x64-windows/include/fmt/base.h"
 #include "pP/Macros.h"
 module engine.core;
+import :hal;
 import :logger;
 import std;
 
@@ -125,7 +126,7 @@ namespace pP {
             .m_message{message.view()},
             .m_site{emitter},
             .m_timestamp{timestamp},
-            .m_thread_id{std::this_thread::get_id()},
+            .m_thread_id{hal::currentThreadId()},
         };
 
         mem::Slab slab{slot + sizeof(Entry), block_size_bytes};
@@ -153,7 +154,7 @@ namespace pP {
             .m_message{embedded_message, message.size()},
             .m_site{emitter},
             .m_timestamp{timestamp},
-            .m_thread_id{std::this_thread::get_id()},
+            .m_thread_id{hal::currentThreadId()},
         };
 
         mem::Slab slab{slot + sizeof(Entry) + message_size_bytes, block_size_bytes};
@@ -168,14 +169,15 @@ namespace pP {
 
 #if 0
         hal::outputDebugFmt("{} [{:08.3f}][{}][{}] -- {} {}\n",
-                            toString_<char>(entry.m_site.m_verbosity),
-                            elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
-                            entry.m_message, entry.m_params);
+            toString_<char>(entry.m_site.m_verbosity),
+            elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
+            entry.m_message, entry.m_params);
 #else
-        std::println(std::cout, "{} {:08.3f} | {} [{}] -- {} {}",
-                     toString_<char>(entry.m_site.m_verbosity),
-                     elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
-                     entry.m_message, entry.m_params);
+        std::println(std::cout, "{:08.3f} {} {} [{:16}] -- {} {}",
+            elapsed_seconds, entry.m_thread_id,
+            toString_<char>(entry.m_site.m_verbosity),
+            entry.m_site.m_category.m_name.view(),
+            entry.m_message, entry.m_params);
 
         if (entry.m_site.m_verbosity > ELevel::verbose) {
             std::cout.flush();
