@@ -48,7 +48,9 @@ namespace pP {
 
         // Create surface from native window handle
         void *const native = window_service.getNativeHandle(window);
-        PPR_ASSERT(native != nullptr);
+        if (native == nullptr) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
 
         const auto wh = rhi::WindowHandle::fromHwnd(native);
         RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createSurface(wh, m_surface.writeRef()));
