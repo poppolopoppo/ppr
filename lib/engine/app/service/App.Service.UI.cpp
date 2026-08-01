@@ -155,24 +155,24 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::x: return ImGuiKey_X;
                 case EKeyboardKey::y: return ImGuiKey_Y;
                 case EKeyboardKey::z: return ImGuiKey_Z;
-                 case EKeyboardKey::numpad0: return ImGuiKey_Keypad0;
-                 case EKeyboardKey::numpad1: return ImGuiKey_Keypad1;
-                 case EKeyboardKey::numpad2: return ImGuiKey_Keypad2;
-                 case EKeyboardKey::numpad3: return ImGuiKey_Keypad3;
-                 case EKeyboardKey::numpad4: return ImGuiKey_Keypad4;
-                 case EKeyboardKey::numpad5: return ImGuiKey_Keypad5;
-                 case EKeyboardKey::numpad6: return ImGuiKey_Keypad6;
-                 case EKeyboardKey::numpad7: return ImGuiKey_Keypad7;
-                 case EKeyboardKey::numpad8: return ImGuiKey_Keypad8;
-                 case EKeyboardKey::numpad9: return ImGuiKey_Keypad9;
-                 case EKeyboardKey::numpad_multiply: return ImGuiKey_KeypadMultiply;
-                 case EKeyboardKey::numpad_add: return ImGuiKey_KeypadAdd;
-                 case EKeyboardKey::numpad_subtract: return ImGuiKey_KeypadSubtract;
-                 case EKeyboardKey::numpad_decimal: return ImGuiKey_KeypadDecimal;
-                 case EKeyboardKey::numpad_divide: return ImGuiKey_KeypadDivide;
-                 case EKeyboardKey::numpad_enter: return ImGuiKey_KeypadEnter;
-                 case EKeyboardKey::numpad_equal: return ImGuiKey_KeypadEqual;
-                 case EKeyboardKey::period: return ImGuiKey_Period;
+                case EKeyboardKey::numpad0: return ImGuiKey_Keypad0;
+                case EKeyboardKey::numpad1: return ImGuiKey_Keypad1;
+                case EKeyboardKey::numpad2: return ImGuiKey_Keypad2;
+                case EKeyboardKey::numpad3: return ImGuiKey_Keypad3;
+                case EKeyboardKey::numpad4: return ImGuiKey_Keypad4;
+                case EKeyboardKey::numpad5: return ImGuiKey_Keypad5;
+                case EKeyboardKey::numpad6: return ImGuiKey_Keypad6;
+                case EKeyboardKey::numpad7: return ImGuiKey_Keypad7;
+                case EKeyboardKey::numpad8: return ImGuiKey_Keypad8;
+                case EKeyboardKey::numpad9: return ImGuiKey_Keypad9;
+                case EKeyboardKey::numpad_multiply: return ImGuiKey_KeypadMultiply;
+                case EKeyboardKey::numpad_add: return ImGuiKey_KeypadAdd;
+                case EKeyboardKey::numpad_subtract: return ImGuiKey_KeypadSubtract;
+                case EKeyboardKey::numpad_decimal: return ImGuiKey_KeypadDecimal;
+                case EKeyboardKey::numpad_divide: return ImGuiKey_KeypadDivide;
+                case EKeyboardKey::numpad_enter: return ImGuiKey_KeypadEnter;
+                case EKeyboardKey::numpad_equal: return ImGuiKey_KeypadEqual;
+                case EKeyboardKey::period: return ImGuiKey_Period;
                 case EKeyboardKey::comma: return ImGuiKey_Comma;
                 case EKeyboardKey::semicolon: return ImGuiKey_Semicolon;
                 case EKeyboardKey::slash: return ImGuiKey_Slash;
@@ -197,7 +197,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 default: return -1;
             }
         }
-
     }
 
     class ImGuiService final : public IUIService {
@@ -381,9 +380,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             m_input_service->pushInputListener(safe_ptr<InputListener>(&m_listener));
 
             PPR_LOG(UI, info, "UI service initialized", {
-                    {"width", m_framebuffer_size.x},
-                    {"height", m_framebuffer_size.y},
-            });
+                {"width", m_framebuffer_size.x},
+                {"height", m_framebuffer_size.y},
+                });
 
             return {};
         }
@@ -435,17 +434,17 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 // Modifier state
                 io.AddKeyEvent(ImGuiMod_Ctrl,
-                               kbd.m_keys.isDown(EKeyboardKey::left_control) ||
-                               kbd.m_keys.isDown(EKeyboardKey::right_control));
+                    kbd.m_keys.isDown(EKeyboardKey::left_control) ||
+                    kbd.m_keys.isDown(EKeyboardKey::right_control));
                 io.AddKeyEvent(ImGuiMod_Shift,
-                               kbd.m_keys.isDown(EKeyboardKey::left_shift) ||
-                               kbd.m_keys.isDown(EKeyboardKey::right_shift));
+                    kbd.m_keys.isDown(EKeyboardKey::left_shift) ||
+                    kbd.m_keys.isDown(EKeyboardKey::right_shift));
                 io.AddKeyEvent(ImGuiMod_Alt,
-                               kbd.m_keys.isDown(EKeyboardKey::left_alt) ||
-                               kbd.m_keys.isDown(EKeyboardKey::right_alt));
+                    kbd.m_keys.isDown(EKeyboardKey::left_alt) ||
+                    kbd.m_keys.isDown(EKeyboardKey::right_alt));
                 io.AddKeyEvent(ImGuiMod_Super,
-                               kbd.m_keys.isDown(EKeyboardKey::left_super) ||
-                               kbd.m_keys.isDown(EKeyboardKey::right_super));
+                    kbd.m_keys.isDown(EKeyboardKey::left_super) ||
+                    kbd.m_keys.isDown(EKeyboardKey::right_super));
             }
 
             ImGui::NewFrame();
@@ -519,8 +518,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             render_state.vertexBufferCount = 1;
             render_state.indexBuffer = rhi::BufferOffsetPair(fr->m_index_buffer.get(), 0);
             render_state.indexFormat = sizeof(ImDrawIdx) == 2
-                                    ? rhi::IndexFormat::Uint16
-                                    : rhi::IndexFormat::Uint32;
+                                           ? rhi::IndexFormat::Uint16
+                                           : rhi::IndexFormat::Uint32;
             render_state.scissorRectCount = 1;
 
             // clip_off/clip_scale convert an ImDrawCmd's ClipRect (display coordinates) into
@@ -641,9 +640,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             m_framebuffer_size = new_size;
             PPR_LOG(UI, info, "UI surface resize", {
-                    {"width", new_size.x},
-                    {"height", new_size.y},
-            });
+                {"width", new_size.x},
+                {"height", new_size.y},
+                });
             return default_value_v;
         }
 
@@ -744,7 +743,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "font texture created", {
                 {"width", width},
                 {"height", height},
-            });
+                });
 
             return default_value_v;
         }
