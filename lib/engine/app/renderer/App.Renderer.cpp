@@ -76,6 +76,8 @@ namespace pP {
                     content_dir / TEXT("shaders") / TEXT("triangle.slang"),
                     "triangle",
                     m_triangle_shader.writeRef()));
+
+            PPR_ASSERT(m_triangle_shader);
         }
 
         // Create shader program
