@@ -217,6 +217,7 @@ namespace pP {
         m_services.erase<IRhiService>();
         PPR_RETURN_ERROR_ON_FAIL(App, IRhiService::get()->shutdown());
 
+        PPR_RETURN_ERROR_ON_FAIL(App, IShaderService::get()->shutdown());
         m_services.erase<IShaderService>();
 
         m_main_window.reset();
