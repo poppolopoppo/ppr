@@ -720,7 +720,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 static_cast<u32>(pixelDataSize / height), // row pitch
                 {static_cast<u32>(width), static_cast<u32>(height), 1});
 
-            encoder->setTextureState(texture.get(), rhi::ResourceState::ShaderResource);
+            encoder->setTextureState(texture.get(), rhi::SubresourceRange{0, 1, 0, 1}, rhi::ResourceState::ShaderResource);
 
             rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
             PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(encoder->finish(cmd_buffer.writeRef())));
