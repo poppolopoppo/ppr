@@ -156,6 +156,24 @@ namespace pP::rhi {
     }
 #endif
 
+    [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const DeviceType device_type) noexcept {
+        switch (device_type) {
+            case DeviceType::D3D11:
+            case DeviceType::D3D12:
+                return SLANG_DXBC;
+            case DeviceType::Vulkan:
+            case DeviceType::WGPU:
+                return SLANG_SPIRV;
+            case DeviceType::Metal:
+                return SLANG_METAL;
+            case DeviceType::CPU:
+                return SLANG_SHADER_HOST_CALLABLE;
+            case DeviceType::CUDA:
+                return SLANG_CUDA_OBJECT_CODE;
+        }
+        std::unreachable();
+    }
+
     // ------------------------------------------------------------------
     // slang RHI service
     // ------------------------------------------------------------------
@@ -220,6 +238,15 @@ namespace pP::rhi {
             PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
             m_device = std::move(device);
+
+            const std::error_code target_ec =
+                IShaderService::get()->setTargetFormat(toSlangCompileTarget_(m_device->getDeviceType()));
+            if (target_ec) {
+                PPR_LOG(RHI, error, "failed to configure shader compilation target", {
+                    {"message", target_ec.message()}
+                });
+                return target_ec;
+            }
 
             PPR_LOG(RHI, info, "RHI device created successfully", {
                     {"device_type", getDeviceTypeName_(device_type)}

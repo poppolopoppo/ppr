@@ -81,6 +81,10 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 
+        /// Selects the code generation target (e.g. DXBC for D3D12, SPIR-V for Vulkan).
+        /// Must be called before any module is loaded; calling it after returns invalid_arg.
+        [[nodiscard]] virtual std::error_code setTargetFormat(SlangCompileTarget target_format) = 0;
+
         [[nodiscard]] virtual slang::IGlobalSession *getGlobalSession() const noexcept = 0;
 
         [[nodiscard]] virtual std::error_code

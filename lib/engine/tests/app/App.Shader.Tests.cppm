@@ -275,6 +275,34 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             }
             PPR_ASSERT(found);
         };
+
+        PPR_UNIT_TEST(set_target_format_lifecycle) {
+            const auto svc = IShaderService::get();
+            std::ignore = svc->shutdown();
+
+            // Not initialized yet — target format must fail with uninitialized
+            PPR_ASSERT(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::uninitialized));
+
+            PPR_ASSERT(!svc->initialize());
+
+            // Setting the same format is a no-op
+            PPR_ASSERT(!svc->setTargetFormat(SLANG_DXBC));
+
+            // Changing the format before any module load recreates the session
+            PPR_ASSERT(!svc->setTargetFormat(SLANG_SPIRV));
+
+            {
+                shader::SharedModule handle;
+                PPR_ASSERT(!svc->loadModuleFromSource("target_probe", "target_probe.slang", kTriangleShader, handle.writeRef()));
+                PPR_ASSERT(handle.get() != nullptr);
+
+                // Changing the format after modules are loaded must fail
+                PPR_ASSERT(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::invalid_arg));
+            }
+
+            // Restore a clean, default-target state for the remaining tests
+            PPR_ASSERT(!svc->shutdown());
+        };
     }
 
     // ------------------------------------------------------------------
@@ -296,6 +324,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             ShaderComp::compile_simple_triangle_shader,
             ShaderComp::compile_invalid_shader_recovery,
             ShaderComp::shader_parameter_reflection,
+            ShaderComp::set_target_format_lifecycle,
         });
     };
 }
