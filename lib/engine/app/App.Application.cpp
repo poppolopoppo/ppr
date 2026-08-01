@@ -75,6 +75,10 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->initialize(*this));
 
+        m_content_dir = std::filesystem::directory_entry(hal::process::currentExecutablePath().parent_path());
+        m_workingDir = std::filesystem::directory_entry(std::filesystem::current_path());
+        m_installDir = m_content_dir;
+
         m_cached_window_service = m_services.get<IWindowService>();
         m_cached_input_service = m_services.get<IInputService>();
         PPR_ASSERT(m_cached_input_service.isValid());
