@@ -105,7 +105,7 @@ namespace pP {
                     *rhi_service,
                     *m_cached_window_service,
                     *m_main_window,
-                    m_contentDir.path()));
+                    m_content_dir.path()));
 
             m_resize_handle = m_main_window->m_when_resized.add([self{safe_ptr{this}}](const Window &window, const int2 &) -> std::error_code {
                 const int2 fb = window.m_framebuffer_size;

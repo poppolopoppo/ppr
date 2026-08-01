@@ -34,7 +34,7 @@ export namespace pP {
 
         [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_installDir; }
         [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_configDir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_contentDir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_content_dir; }
         [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_workingDir; }
 
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
@@ -92,7 +92,7 @@ export namespace pP {
 
         std::filesystem::directory_entry m_installDir{};
         std::filesystem::directory_entry m_configDir{};
-        std::filesystem::directory_entry m_contentDir{};
+        std::filesystem::directory_entry m_content_dir{};
         std::filesystem::directory_entry m_workingDir{};
     };
 }
