@@ -119,7 +119,9 @@ namespace pP {
         const std::size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
 
         const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
-        PPR_ASSERT(hdr.has_value());
+        if (not PPR_ENSURE(hdr.has_value())) [[unlikely]] {
+            return;
+        }
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
         auto *const entry = new(slot) Entry{
@@ -143,7 +145,9 @@ namespace pP {
         const std::size_t entry_size_bytes = sizeof(Entry) + message_size_bytes + block_size_bytes;
 
         const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
-        PPR_ASSERT(hdr.has_value());
+        if (not PPR_ENSURE(hdr.has_value())) [[unlikely]] {
+            return;
+        }
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
 
