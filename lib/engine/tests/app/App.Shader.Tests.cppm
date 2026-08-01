@@ -171,7 +171,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             PPR_ASSERT(!svc->initialize());
 
             shader::SharedModule handle;
-            const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader.data(), handle.writeRef());
+            const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader, handle.writeRef());
             PPR_ASSERT(!ec);
 
             auto *module = handle.get();
@@ -219,7 +219,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             const auto bad_ec = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@", handle.writeRef());
             PPR_ASSERT(!!bad_ec);
 
-            const auto recovery_ec = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader.data(), handle.writeRef());
+            const auto recovery_ec = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef());
             PPR_ASSERT(!recovery_ec);
             PPR_ASSERT(handle.get() != nullptr);
         };
@@ -229,7 +229,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             PPR_ASSERT(!svc->initialize());
 
             shader::SharedModule handle;
-            const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader.data(), handle.writeRef());
+            const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader, handle.writeRef());
             PPR_ASSERT(!ec);
 
             auto *module = handle.get();

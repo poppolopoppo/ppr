@@ -84,6 +84,52 @@ namespace pP {
         }
 
         // ------------------------------------------------------------------
+        // MappedFileBlob — owns a MappedFile and exposes it as an ISlangBlob
+        // ------------------------------------------------------------------
+
+        class MappedFileBlob final : public IBlob {
+            MappedFile m_file{};
+            std::atomic<u32> m_ref_count{0};
+
+        public:
+            explicit MappedFileBlob(MappedFile file) noexcept
+                : m_file(std::move(file)) {
+            }
+
+            // ISlangUnknown
+            SLANG_NO_THROW SlangResult SLANG_MCALL
+            queryInterface(const SlangUUID &uuid, void **out_object) override {
+                if (uuid == ISlangUnknown::getTypeGuid() or uuid == ISlangBlob::getTypeGuid()) {
+                    addRef();
+                    *out_object = static_cast<IBlob *>(this);
+                    return SLANG_OK;
+                }
+                return SLANG_E_NO_INTERFACE;
+            }
+
+            SLANG_NO_THROW uint32_t SLANG_MCALL addRef() override {
+                return ++m_ref_count;
+            }
+
+            SLANG_NO_THROW uint32_t SLANG_MCALL release() override {
+                const u32 count = --m_ref_count;
+                if (count == 0) {
+                    delete this;
+                }
+                return count;
+            }
+
+            // ISlangBlob
+            SLANG_NO_THROW void const *SLANG_MCALL getBufferPointer() override {
+                return m_file.c_str();
+            }
+
+            SLANG_NO_THROW size_t SLANG_MCALL getBufferSize() override {
+                return m_file.size();
+            }
+        };
+
+        // ------------------------------------------------------------------
         // ShaderService — singleton implementing IShaderService
         // ------------------------------------------------------------------
 
@@ -140,23 +186,42 @@ namespace pP {
                 const std::filesystem::path &path,
                 const char *module_name,
                 IModule **out_module) override {
-                const auto mapped = io::mapFile(path);
+                auto mapped = io::mapFile(path);
                 if (not mapped) {
                     return mapped.error();
                 }
-                return loadModuleFromSource(module_name, path.generic_string().c_str(), mapped->c_str(), out_module);
+
+                const auto source_blob = ComPtr<IBlob>{new MappedFileBlob(std::move(*mapped))};
+                const std::string path_string = path.generic_string();
+
+                Diagnose diagnostics;
+                *out_module = m_session->loadModuleFromSource(
+                    module_name,
+                    path_string.c_str(),
+                    source_blob,
+                    diagnostics.writeRef());
+
+                if (not *out_module) {
+                    PPR_LOG(Shader, error, "failed to compile shader module from file", {
+                        {"name", module_name},
+                        {"path", path_string}
+                    });
+                    return make_error_code(errc::invalid_arg);
+                }
+
+                return errc::ok;
             }
 
             std::error_code loadModuleFromSource(
                 const char *module_name,
                 const char *path,
-                const char *source,
+                const string_literal source,
                 IModule **out_module) override {
                 Diagnose diagnostics;
                 *out_module = m_session->loadModuleFromSourceString(
                     module_name,
                     path,
-                    source,
+                    source.data(),
                     diagnostics.writeRef());
 
                 if (not *out_module) {

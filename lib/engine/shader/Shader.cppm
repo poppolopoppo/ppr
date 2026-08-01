@@ -87,10 +87,10 @@ export namespace pP {
         loadModuleFromFile(const std::filesystem::path &path, const char *module_name, shader::IModule **out_module) = 0;
 
         [[nodiscard]] virtual std::error_code
-        loadModuleFromSource(const char *module_name, const char *path, const char *source, shader::IModule **out_module) = 0;
+        loadModuleFromSource(const char *module_name, const char *path, string_literal source, shader::IModule **out_module) = 0;
     };
 }
 
 export template<>
-struct std::is_error_code_enum<pP::shader::errc> : true_type {
+struct std::is_error_code_enum<pP::shader::errc> : true_type { // NOLINT(*-dcl58-cpp)
 };

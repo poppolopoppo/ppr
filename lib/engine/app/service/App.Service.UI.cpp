@@ -39,7 +39,7 @@ namespace pP::ui {
 #endif
 
     namespace {
-        constexpr std::string_view kImGuiShader = R"(
+        constexpr string_literal kImGuiShader = R"(
 struct VsInput {
     float2 pos : POSITION;
     float2 uv  : TEXCOORD;
@@ -255,7 +255,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     shader_service->loadModuleFromSource(
                         "imgui",
                         "imgui.slang",
-                        kImGuiShader.data(),
+                        kImGuiShader,
                         m_imgui_shader_handle.writeRef()));
 
                 shader::ComPtr<slang::IModule> module;
