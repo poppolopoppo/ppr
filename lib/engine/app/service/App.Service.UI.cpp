@@ -242,7 +242,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             io.BackendRendererName = "pP_SlangRHI";
 
             // Get graphics queue
-            PPR_RETURN_ON_FAIL(UI, rhi::result(m_device->getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+            RHI_RETURN_ERROR_ON_FAIL(UI, m_device->getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
 
             m_framebuffer_size = main_window.m_framebuffer_size;
 
