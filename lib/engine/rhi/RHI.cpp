@@ -10,6 +10,7 @@ module engine.rhi;
 
 import std;
 import engine.core;
+import engine.math;
 import engine.shader;
 
 namespace pP::rhi {
@@ -175,6 +176,44 @@ namespace pP::rhi {
     }
 
     // ------------------------------------------------------------------
+    // projection free functions
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] float4x4 getOrthoMatrix(
+        const DeviceType type,
+        const float width,
+        const float height) noexcept {
+        const auto conv = projectionConventionFromDeviceType(type);
+        switch (conv) {
+            case EProjectionConvention::D3D:
+                return float4x4::orthoD3D(0.0f, width, height, 0.0f, -1.0f, 1.0f);
+            case EProjectionConvention::VK:
+                return float4x4::orthoVK(0.0f, width, 0.0f, height, -1.0f, 1.0f);
+            default:
+                return float4x4::orthoD3D(0.0f, width, height, 0.0f, -1.0f, 1.0f);
+        }
+    }
+
+    [[nodiscard]] float4x4 getPerspectiveMatrix(
+        const DeviceType type,
+        const float fov,
+        const float aspect,
+        const float near_,
+        const float far_) noexcept {
+        const float yfov = fov;
+        const float xfov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
+        const auto conv = projectionConventionFromDeviceType(type);
+        switch (conv) {
+            case EProjectionConvention::D3D:
+                return float4x4::perspectiveD3D(xfov, yfov, near_, far_);
+            case EProjectionConvention::VK:
+                return float4x4::perspectiveVK(xfov, yfov, near_, far_);
+            default:
+                return float4x4::perspectiveD3D(xfov, yfov, near_, far_);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // slang RHI service
     // ------------------------------------------------------------------
 
@@ -261,6 +300,12 @@ namespace pP::rhi {
 
             PPR_RETURN_ERROR_ON_FAIL(RHI, ::slang_rhi::destroyRHI());
             return errc::ok;
+        }
+
+        [[nodiscard]] rhi::Result createRenderPipeline(
+            const rhi::RenderPipelineDesc &desc,
+            rhi::IRenderPipeline **outPipeline) override {
+            return m_device->createRenderPipeline(desc, outPipeline);
         }
     };
 }

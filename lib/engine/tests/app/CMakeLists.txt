@@ -11,6 +11,7 @@ target_sources(EngineAppTests
             App.PlayerService.Tests.cppm
             App.Player.Graph.Tests.cppm
             App.Shader.Tests.cppm
+            App.Viewport.Tests.cppm
 )
 
 setup_ppr_project(EngineAppTests

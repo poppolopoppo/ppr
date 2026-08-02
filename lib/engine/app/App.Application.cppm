@@ -3,6 +3,7 @@ module;
 export module engine.app:application;
 
 import :window.handle;
+import :viewport;
 import engine.core;
 import std;
 
@@ -78,6 +79,10 @@ export namespace pP {
 
         // Cold (init/shutdown only)
         ServicesStore m_services{};
+        ServicesStore m_scene_services{safe_ptr<ServicesStore>(&m_services)};
+        ServicesStore m_ui_services{safe_ptr<ServicesStore>(&m_services)};
+        ViewportConfig m_scene_viewport{};
+        ViewportConfig m_ui_viewport{};
         context::CancelFunc m_cancel{};
         WindowCallback<int2>::Handle m_resize_handle{};
         EState m_state{EState::created};

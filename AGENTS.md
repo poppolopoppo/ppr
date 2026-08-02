@@ -60,7 +60,9 @@ Wraps `mango::math` into `namespace pP`:
 Wraps Slang-RHI into `namespace pP::rhi`:
 - Core types: `IDevice`, `IAdapter`, `IBuffer`, `ICommandBuffer`, `ICommandQueue`, `IRenderPipeline`, `IComputePipeline`, `IShaderProgram`, `ITexture`, `ITextureView`, `ISurface`, `IFence`, `IHeap`, `IInputLayout`
 - Descriptors: `BufferDesc`, `DeviceDesc`, `RenderPipelineDesc`, `ShaderProgramDesc`, `SurfaceConfig`, etc.
-- `IRhiService` interface — singleton service pattern wrapping `rhi::IRHI` and `rhi::IDevice` lifecycle
+- Projection helpers: `EProjectionConvention` (D3D/Vulkan depth conventions), `projectionConventionFromDeviceType()`, `getOrthoMatrix()`, `getPerspectiveMatrix()` — backend-aware matrix computation
+- `IRhiService` interface — singleton service pattern wrapping `rhi::IRHI` and `rhi::IDevice` lifecycle; `createRenderPipeline()` virtual for pipeline creation from a render pass
+- Implementation note: `App.Viewport.cppm`/`App.Viewport.cpp` is a partition pair — the `.cppm` holds declarations, the `.cpp` uses `module engine.app; import :viewport;` (never `module engine.app:viewport;`)
 
 ### engine.shader — Shader Compilation (`lib/engine/shader/Shader.cppm` + `Shader.cpp`)
 
@@ -77,8 +79,9 @@ Provides Slang shader compilation with hot-reload and background compilation:
 - **Input** (8 partitions): `IInputService` — keyboard/mouse/gamepad device states, listener stack (`pushInputListener`/`popInputListener`), action/mapping system (`InputMapping` binds keys to `InputAction` with `InputModifierEvent`/`InputTriggerEvent` callbacks), device enumeration
 - **Window** (2 partitions): `IWindowService` — monitor enumeration, window creation/destruction/resize/move, event callbacks (`whenWindowResized`, `whenWindowFocused`, etc.)
 - **Player** (2 partitions): `IPlayerService` — player identity management, graph-based state machine (`Player::Graph`), keyboard/gamepad player binding
+- **Viewport** (1 partition, `renderer/App.Viewport.cppm`): multi-viewport render abstractions — `ViewportConfig` (plain data, `int2 framebuffer_size`), `ViewportEntry` (per-frame bundle: render pipeline + viewport + scissor + `function_ref` draw callback; NOT default-constructible — use designated aggregate init, and hoist draw lambdas into named variables: `function_ref` does not own its target), `EProjectionConvention`/`projectionConventionFromDeviceType` (D3D vs VK conventions), backend-aware projection helpers. Per-viewport isolation: `Application` keeps child `ServicesStore`s (e.g. `m_scene_services`/`m_ui_services`) chained to the root store — services registered there are visible only to their viewport, with parent-chain fallback
 - **Platform**: GLFW backend (`platform/glfw/`, 9 files) implementing `IPlatform`, `IInputService`, `IPlayerService`, `IWindowService`
-- **Renderer** (`App.Renderer.cppm`): `Renderer` class — `initialize(IRhiService, IWindowService, Window)` sets up pipeline, `render()` submits frame, `onResize()` handles surface resize
+- **Renderer** (`App.Renderer.cppm`): `Renderer` class — `initialize(IRhiService, IWindowService, Window)` sets up pipeline, `render(span<const ViewportEntry>)` submits multi-viewport frames (viewport/scissor binding per entry via `RenderState`), backward-compat `render(optional<OverlayCallback>)` wrapper, `onResize()` handles surface resize
 
 ### Key Design Patterns
 

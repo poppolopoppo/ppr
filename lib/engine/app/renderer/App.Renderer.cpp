@@ -40,6 +40,8 @@ namespace pP {
         const Window &window,
         const fs::path &content_dir) {
         m_framebuffer_size = window.m_framebuffer_size;
+        m_device_type = rhi_service.getDevice().getDeviceType();
+        m_rhi_service = safe_ptr{&rhi_service};
 
         rhi::IDevice &device = rhi_service.getDevice();
 
@@ -47,13 +49,7 @@ namespace pP {
         RHI_RETURN_ERROR_ON_FAIL(Renderer, device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
 
         // Create surface from native window handle
-        void *const native = window_service.getNativeHandle(window);
-        if (native == nullptr) [[unlikely]] {
-            return std::make_error_code(std::errc::invalid_argument);
-        }
-
-        const auto wh = rhi::WindowHandle::fromHwnd(native);
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createSurface(wh, m_surface.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, createSurface_(window_service, window));
 
         // Configure swap chain
         {
@@ -160,83 +156,6 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Renderer::render(const std::optional<OverlayCallback> overlay) {
-        PPR_ASSERT(m_surface);
-        PPR_ASSERT(m_queue);
-        PPR_ASSERT(m_pipeline);
-
-#if 0
-        // Hot-reload check: rebuild pipeline if shader was recompiled
-        if (m_triangle_shader.wasReloaded()) {
-            rhi::IDevice &device = IRhiService::get()->getDevice();
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, rebuildPipeline_(device));
-        }
-#endif
-
-        // Acquire next back-buffer image
-        rhi::ComPtr<rhi::ITexture> image;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->acquireNextImage(image.writeRef()));
-
-        u32 w = image->getDesc().size.width;
-        u32 h = image->getDesc().size.height;
-
-        // Create command encoder
-        rhi::ComPtr<rhi::ICommandEncoder> encoder;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->createCommandEncoder(encoder.writeRef()));
-
-        // Begin render pass
-        rhi::RenderPassColorAttachment color_attachment{};
-        color_attachment.view = image->getDefaultView();
-        color_attachment.loadOp = rhi::LoadOp::Clear;
-        color_attachment.clearValue[0] = 0.1f;
-        color_attachment.clearValue[1] = 0.1f;
-        color_attachment.clearValue[2] = 0.2f;
-        color_attachment.clearValue[3] = 1.0f;
-
-        rhi::RenderPassDesc render_pass_desc{};
-        render_pass_desc.colorAttachments = &color_attachment;
-        render_pass_desc.colorAttachmentCount = 1;
-
-        rhi::IRenderPassEncoder *const pass = encoder->beginRenderPass(render_pass_desc);
-        PPR_ASSERT(pass != nullptr);
-
-        // Bind pipeline and state
-        pass->bindPipeline(m_pipeline.get());
-
-        pass->setRenderState({
-            .viewports = {rhi::Viewport::fromSize(static_cast<float>(w), static_cast<float>(h))},
-            .viewportCount = 1,
-            .scissorRects = {rhi::ScissorRect::fromSize(w, h)},
-            .scissorRectCount = 1,
-            .vertexBuffers = {rhi::BufferOffsetPair(m_vertex_buffer.get(), 0)},
-            .vertexBufferCount = 1,
-        });
-
-        // Draw triangle
-        rhi::DrawArguments draw_args{};
-        draw_args.vertexCount = 3;
-        draw_args.instanceCount = 1;
-        pass->draw(draw_args);
-
-        // Draw overlay (e.g. Dear ImGui)
-        if (overlay) {
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, (*overlay)(*pass));
-        }
-
-        // End pass and finish encoder
-        pass->end();
-
-        rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(cmd_buffer.writeRef()));
-
-        // Submit and present
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->submit(cmd_buffer.get()));
-
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->present());
-
-        return default_value_v;
-    }
-
     std::error_code Renderer::rebuildPipeline_(rhi::IDevice &device) {
         PPR_LOG(Renderer, info, "shader hot-reloaded, rebuilding pipeline");
 
@@ -311,26 +230,131 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Renderer::shutdown() {
-        PPR_LOG(Renderer, info, "Renderer shut down");
+std::error_code Renderer::shutdown() {
+    PPR_LOG(Renderer, info, "Renderer shut down");
 
-        PPR_DEFER {
-            m_pipeline.setNull();
-            m_vertex_buffer.setNull();
-            m_input_layout.setNull();
-            m_program.setNull();
-            m_surface.setNull();
-            m_queue.setNull();
-        };
+    PPR_DEFER {
+        m_pipeline.setNull();
+        m_vertex_buffer.setNull();
+        m_input_layout.setNull();
+        m_program.setNull();
+        m_surface.setNull();
+        m_queue.setNull();
+    };
 
-        if (m_queue) {
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
-        }
-
-        if (m_surface) {
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->unconfigure());
-        }
-
-        return default_value_v;
+    if (m_queue) {
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
     }
+
+    if (m_surface) {
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->unconfigure());
+    }
+
+    return default_value_v;
+}
+
+std::error_code Renderer::createSurface_(IWindowService &window_service, const Window &window) {
+    void *const native = window_service.getNativeHandle(window);
+    if (native == nullptr) [[unlikely]] {
+        return std::make_error_code(std::errc::invalid_argument);
+    }
+
+    const auto wh = rhi::WindowHandle::fromHwnd(native);
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_rhi_service->getDevice().createSurface(wh, m_surface.writeRef()));
+
+    rhi::SurfaceConfig surface_config{};
+    surface_config.width = static_cast<u32>(m_framebuffer_size.x);
+    surface_config.height = static_cast<u32>(m_framebuffer_size.y);
+    surface_config.desiredImageCount = 3;
+    surface_config.vsync = true;
+
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
+
+    m_surface_format = m_surface->getInfo().preferredFormat;
+    return default_value_v;
+}
+
+std::error_code Renderer::render(const std::optional<OverlayCallback> overlay) {
+    if (overlay) {
+        const ViewportEntry entry{
+            .viewport = rhi::Viewport{
+                0.0f, 0.0f,
+                static_cast<float>(m_framebuffer_size.x),
+                static_cast<float>(m_framebuffer_size.y),
+                0.0f, 1.0f},
+            .scissor = rhi::ScissorRect{
+                0, 0,
+                static_cast<uint32_t>(m_framebuffer_size.x),
+                static_cast<uint32_t>(m_framebuffer_size.y)},
+            .draw = *overlay};
+        return render(std::span{&entry, 1});
+    }
+    return render(std::span<const ViewportEntry>{});
+}
+
+std::error_code Renderer::render(const std::span<const ViewportEntry> viewports) {
+    PPR_ASSERT(m_surface);
+    PPR_ASSERT(m_queue);
+
+#if 0
+    // Hot-reload check: rebuild pipeline if shader was recompiled
+    if (m_triangle_shader.wasReloaded()) {
+        rhi::IDevice &device = IRhiService::get()->getDevice();
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, rebuildPipeline_(device));
+    }
+#endif
+
+    // Acquire next back-buffer image
+    rhi::ComPtr<rhi::ITexture> image;
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->acquireNextImage(image.writeRef()));
+
+    // Create command encoder
+    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->createCommandEncoder(encoder.writeRef()));
+
+    // Begin render pass
+    rhi::RenderPassColorAttachment color_attachment{};
+    color_attachment.view = image->getDefaultView();
+    color_attachment.loadOp = rhi::LoadOp::Clear;
+    color_attachment.clearValue[0] = 0.1f;
+    color_attachment.clearValue[1] = 0.1f;
+    color_attachment.clearValue[2] = 0.2f;
+    color_attachment.clearValue[3] = 1.0f;
+
+    rhi::RenderPassDesc render_pass_desc{};
+    render_pass_desc.colorAttachments = &color_attachment;
+    render_pass_desc.colorAttachmentCount = 1;
+
+    rhi::IRenderPassEncoder *const pass = encoder->beginRenderPass(render_pass_desc);
+    PPR_ASSERT(pass != nullptr);
+
+    // Render each viewport
+    for (const auto &entry : viewports) {
+        if (entry.pipeline) {
+            pass->bindPipeline(entry.pipeline.get());
+        }
+
+        pass->setRenderState({
+            .viewports = {entry.viewport},
+            .viewportCount = 1,
+            .scissorRects = {entry.scissor},
+            .scissorRectCount = 1,
+        });
+
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, entry.draw(*pass));
+    }
+
+    // End pass and finish encoder
+    pass->end();
+
+    rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(cmd_buffer.writeRef()));
+
+    // Submit and present
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->submit(cmd_buffer.get()));
+
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->present());
+
+    return default_value_v;
+}
 }

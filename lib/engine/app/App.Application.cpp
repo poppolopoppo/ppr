@@ -10,6 +10,7 @@ import :renderer;
 import :service.input;
 import :service.ui;
 import :service.window;
+import :viewport;
 import :window.handle;
 import :window.monitor;
 import engine.core;
@@ -113,6 +114,8 @@ namespace pP {
 
             m_resize_handle = m_main_window->m_when_resized.add([self{safe_ptr{this}}](const Window &window, const int2 &) -> std::error_code {
                 const int2 fb = window.m_framebuffer_size;
+                self->m_scene_viewport.framebuffer_size = fb;
+                self->m_ui_viewport.framebuffer_size = fb;
                 if (self->m_renderer) {
                     PPR_RETURN_ERROR_ON_FAIL(App, self->m_renderer->onResize(fb));
                 }
@@ -125,6 +128,10 @@ namespace pP {
             m_renderer = std::move(renderer);
         }
 
+        // Set initial viewport configs from window framebuffer size
+        m_scene_viewport.framebuffer_size = m_main_window->m_framebuffer_size;
+        m_ui_viewport.framebuffer_size = m_main_window->m_framebuffer_size;
+
         if (auto ui = ui::createImGuiService()) {
             PPR_RETURN_ERROR_ON_FAIL(
                 App,
@@ -132,7 +139,7 @@ namespace pP {
                     *m_cached_input_service, *m_main_window,
                     m_renderer->getSurfaceFormat()));
 
-            std::ignore = m_services.insert(safe_ptr{ui.get()});
+            std::ignore = m_ui_services.insert(safe_ptr{ui.get()});
             m_ui_service = std::move(ui);
         }
 
@@ -167,22 +174,60 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Application::render() {
-        PPR_ASSERT(m_cached_window_service.isValid());
-        PPR_ASSERT(m_main_window.isValid());
+std::error_code Application::render() {
+    PPR_ASSERT(m_cached_window_service.isValid());
+    PPR_ASSERT(m_main_window.isValid());
 
-        if (m_renderer) [[likely]] {
-            std::optional<Renderer::OverlayCallback> overlay;
-            if (m_ui_service) {
-                overlay = Renderer::OverlayCallback{std23::nontype<&IUIService::renderOverlay>, m_ui_service.get()};
-            }
-            PPR_RETURN_ERROR_ON_FAIL(App, m_renderer->render(std::move(overlay)));
-        } else {
-            m_cached_window_service->swapWindowBuffers(*m_main_window);
-        }
+    if (m_renderer) [[likely]] {
+        const rhi::DeviceType device_type = IRhiService::get()->getDevice().getDeviceType();
+        const int2 fb = m_main_window->m_framebuffer_size;
+        const float aspect = static_cast<float>(fb.x) / static_cast<float>(fb.y);
 
-        return default_value_v;
+        const auto scene_draw = [scene_store = safe_ptr<ServicesStore>(&m_scene_services),
+                                 proj = rhi::getPerspectiveMatrix(device_type, 45.0f, aspect, 0.1f, 1000.0f)]
+                                (rhi::IRenderPassEncoder &) -> std::error_code {
+            return default_value_v;
+        };
+        const ViewportEntry scene_entry{
+            .viewport = rhi::Viewport{
+                0.0f, 0.0f,
+                static_cast<float>(fb.x),
+                static_cast<float>(fb.y),
+                0.0f, 1.0f},
+            .scissor = rhi::ScissorRect{
+                0, 0,
+                static_cast<uint32_t>(fb.x),
+                static_cast<uint32_t>(fb.y)},
+            .draw = scene_draw,
+        };
+
+        const auto ui_draw = [ui_store = safe_ptr<ServicesStore>(&m_ui_services),
+                              proj = rhi::getOrthoMatrix(device_type, static_cast<float>(fb.x), static_cast<float>(fb.y))]
+                             (rhi::IRenderPassEncoder &pass) -> std::error_code {
+            auto ui = ui_store->get<IUIService>();
+            return ui->renderOverlay(pass, proj);
+        };
+        const ViewportEntry ui_entry{
+            .viewport = rhi::Viewport{
+                0.0f, 0.0f,
+                static_cast<float>(fb.x),
+                static_cast<float>(fb.y),
+                0.0f, 1.0f},
+            .scissor = rhi::ScissorRect{
+                0, 0,
+                static_cast<uint32_t>(fb.x),
+                static_cast<uint32_t>(fb.y)},
+            .draw = ui_draw,
+        };
+
+        const ViewportEntry viewports[] = {scene_entry, ui_entry};
+        PPR_RETURN_ERROR_ON_FAIL(App, m_renderer->render(viewports));
+    } else {
+        m_cached_window_service->swapWindowBuffers(*m_main_window);
     }
+
+    return default_value_v;
+}
 
     std::error_code Application::shutdown() noexcept {
         if (m_state >= EState::terminated) [[unlikely]] {
@@ -204,7 +249,7 @@ namespace pP {
         m_cancel();
 
         if (m_ui_service) {
-            m_services.erase<IUIService>();
+            m_ui_services.erase<IUIService>();
             PPR_RETURN_ERROR_ON_FAIL(App, m_ui_service->shutdown());
             m_ui_service.reset();
         }

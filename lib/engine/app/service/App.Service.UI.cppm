@@ -26,7 +26,9 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code newFrame(TimeSpan dt) = 0;
 
-        [[nodiscard]] virtual std::error_code renderOverlay(rhi::IRenderPassEncoder &pass) = 0;
+        [[nodiscard]] virtual std::error_code renderOverlay(
+            rhi::IRenderPassEncoder &pass,
+            const float4x4 &projection) = 0;
 
         [[nodiscard]] virtual std::error_code onResize(int2 new_size) = 0;
 

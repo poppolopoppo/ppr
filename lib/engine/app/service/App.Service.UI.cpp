@@ -457,7 +457,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             return default_value_v;
         }
 
-        std::error_code renderOverlay(rhi::IRenderPassEncoder &pass) override {
+        std::error_code renderOverlay(rhi::IRenderPassEncoder &pass, const float4x4 &projection) override {
             ImGui::SetCurrentContext(m_imgui_context);
             ImGuiIO &io = ImGui::GetIO();
 
@@ -486,16 +486,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // Set up bindings via ShaderCursor (auto-resolves binding range indices)
             rhi::ShaderCursor root_cursor(root_obj);
 
-            // Set projection matrix (orthographic)
-            {
-                const float L = draw_data->DisplayPos.x;
-                const float R = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-                const float T = draw_data->DisplayPos.y;
-                const float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
-
-                const float4x4 orthographic = float4x4::orthoD3D(L, R, B, T, -1.0f, 1.0f);
-                RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_proj"].setData(orthographic.data(), sizeof(orthographic)));
-            }
+            // Set projection matrix (passed by Application — backend-correct)
+            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_proj"].setData(projection.data(), sizeof(projection)));
 
             // Bind font texture and sampler
             {

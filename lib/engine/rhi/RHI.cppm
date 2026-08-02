@@ -11,6 +11,7 @@ module;
 export module engine.rhi;
 
 import engine.core;
+import engine.math;
 import engine.shader;
 import std;
 
@@ -69,6 +70,40 @@ export namespace pP::rhi {
     using slang_rhi::DeviceInfo;
     using slang_rhi::DeviceLimits;
     using slang_rhi::DeviceType;
+
+    enum class EProjectionConvention {
+        D3D,
+        VK,
+    };
+
+    [[nodiscard]] constexpr EProjectionConvention projectionConventionFromDeviceType(
+        const DeviceType type) noexcept {
+        switch (type) {
+            case DeviceType::D3D11:
+            case DeviceType::D3D12:
+            case DeviceType::Default:
+                return EProjectionConvention::D3D;
+            case DeviceType::Vulkan:
+            case DeviceType::Metal:
+            case DeviceType::WGPU:
+                return EProjectionConvention::VK;
+            default:
+                return EProjectionConvention::D3D;
+        }
+    }
+
+    [[nodiscard]] float4x4 getOrthoMatrix(
+        const DeviceType type,
+        const float width,
+        const float height) noexcept;
+
+    [[nodiscard]] float4x4 getPerspectiveMatrix(
+        const DeviceType type,
+        const float fov,
+        const float aspect,
+        const float near_,
+        const float far_) noexcept;
+
     using slang_rhi::DrawArguments;
     using slang_rhi::Format;
     using slang_rhi::FormatInfo;
@@ -142,5 +177,9 @@ export namespace pP {
         [[nodiscard]] virtual rhi::IRHI &getInstance() const noexcept = 0;
 
         [[nodiscard]] virtual rhi::IDevice &getDevice() const noexcept = 0;
+
+        [[nodiscard]] virtual rhi::Result createRenderPipeline(
+            const rhi::RenderPipelineDesc &desc,
+            rhi::IRenderPipeline **outPipeline) = 0;
     };
 }

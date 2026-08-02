@@ -26,6 +26,7 @@ target_sources(EngineApp
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
+        renderer/App.Viewport.cppm
 
         service/App.Service.Input.cppm
         service/App.Service.Player.cppm
@@ -34,8 +35,6 @@ target_sources(EngineApp
 
         window/App.Window.Handle.cppm
         window/App.Window.Monitor.cppm
-
-
     PRIVATE
         App.Application.cpp
 
@@ -60,6 +59,7 @@ target_sources(EngineApp
         window/App.Window.Monitor.cpp
 
         renderer/App.Renderer.cpp
+        renderer/App.Viewport.cpp
 
         service/App.Service.UI.cpp
 
