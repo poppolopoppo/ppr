@@ -24,7 +24,7 @@ namespace pP::hal {
             ansi.data(), static_cast<int>(ansi.size()),
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])));
         if (n_chars == 0) {
-            return transcode(ansi, static_cast<wchar_t *>(nullptr), 0u);
+            return static_cast<std::size_t>(::MultiByteToWideChar(CP_ACP, 0, ansi.data(), static_cast<int>(ansi.size()), nullptr, 0));
         }
         return static_cast<std::size_t>(n_chars);
     }
@@ -36,7 +36,7 @@ namespace pP::hal {
             reinterpret_cast<LPCCH>(utf8.data()), static_cast<int>(utf8.size()),
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])));
         if (n_chars == 0) {
-            return transcode(utf8, static_cast<wchar_t *>(nullptr), 0u);
+            return static_cast<std::size_t>(::MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<LPCCH>(utf8.data()), static_cast<int>(utf8.size()), nullptr, 0));
         }
         return static_cast<std::size_t>(n_chars);
     }
@@ -48,7 +48,7 @@ namespace pP::hal {
             reinterpret_cast<LPSTR>(p_dst), static_cast<int>(capacity * sizeof(p_dst[0])),
             nullptr, nullptr);
         if (n_bytes == 0) {
-            return transcode(wide, static_cast<char8_t *>(nullptr), 0u);
+            return static_cast<std::size_t>(::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr));
         }
         return static_cast<std::size_t>(n_bytes);
     }
@@ -60,7 +60,7 @@ namespace pP::hal {
             p_dst, static_cast<int>(capacity * sizeof(p_dst[0])),
             nullptr, nullptr);
         if (n_bytes == 0) {
-            return transcode(wide, static_cast<char *>(nullptr), 0u);
+            return static_cast<std::size_t>(::WideCharToMultiByte(CP_ACP, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr));
         }
         return static_cast<std::size_t>(n_bytes);
     }
