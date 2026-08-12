@@ -29,10 +29,6 @@ setup_ppr_project(EngineCoreTests
   INTERNAL_PUBLIC_DEPS EngineCore EngineShader EngineRHI EngineTestsShared
 )
 
-if(MSVC)
-    target_compile_options(EngineCoreTests PRIVATE /bigobj)
-endif()
-
 # MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
 if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     # When using C++23 modules with /MT, the compiler generates C++ mangled references

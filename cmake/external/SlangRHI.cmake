@@ -5,10 +5,18 @@
 set(SLANG_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(SLANG_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# In dev (ASAN) builds, make STL container annotations neutral for LNK2038
+# while keeping them active at runtime (see cmake/compiler/MSVC.cmake).
+if (PPR_ENABLE_SANITIZER_ADDRESS)
+    set(SLANG_ANNOTATE_STL_FLAG "/D_ANNOTATE_STL")
+endif ()
+
 CPMAddPackage(
     NAME slang-rhi
     GITHUB_REPOSITORY shader-slang/slang-rhi
     GIT_TAG main
+    CMAKE_ARGS
+        "-DCMAKE_CXX_FLAGS=${SLANG_ANNOTATE_STL_FLAG}"
     OPTIONS
         "SLANG_RHI_FETCH_SLANG ON"
         "SLANG_RHI_BUILD_SHARED OFF"

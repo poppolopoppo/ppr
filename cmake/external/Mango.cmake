@@ -10,6 +10,12 @@
 # When mango is added as a CPM sub-project, it needs CMAKE_PREFIX_PATH explicitly
 # set to find the locally-installed vcpkg packages (not the system vcpkg location).
 
+# In dev (ASAN) builds, make STL container annotations neutral for LNK2038
+# while keeping them active at runtime (see cmake/compiler/MSVC.cmake).
+if (PPR_ENABLE_SANITIZER_ADDRESS)
+    set(MANGO_ANNOTATE_STL_FLAG "/D_ANNOTATE_STL")
+endif ()
+
 CPMAddPackage(
     NAME mango
     #GITHUB_REPOSITORY t0rakka/mango
@@ -19,6 +25,7 @@ CPMAddPackage(
     CMAKE_ARGS
         "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
         "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        "-DCMAKE_CXX_FLAGS=${MANGO_ANNOTATE_STL_FLAG}"
     OPTIONS
         "ENABLE_AVX ON"
         "ENABLE_AVX2 ON"
@@ -32,6 +39,19 @@ CPMAddPackage(
 )
 
 set_target_properties(mango PROPERTIES CXX_MODULE_STD OFF)
+
+# Remove /MP and /arch:AVX* from mango's INTERFACE_COMPILE_OPTIONS so they
+# don't propagate to PPR targets. These per-target flags cause CMake to create
+# separate @cmake_cxx_std synth targets with different flags, triggering
+# "Disagreement of the location of the 'std' module" errors and C2678 type
+# mismatches between synth targets. mango doesn't use import std; its /MP and
+# /arch:AVX2 remain on mango's own compilation (via PRIVATE/PUBLIC), but PPR
+# consumers get consistent flags from the global add_compile_options instead.
+get_target_property(_mango_iface_opts mango INTERFACE_COMPILE_OPTIONS)
+if(_mango_iface_opts)
+    list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX")
+    set_target_properties(mango PROPERTIES INTERFACE_COMPILE_OPTIONS "${_mango_iface_opts}")
+endif()
 
 # Mark mango includes as SYSTEM to suppress warnings from external headers
 get_target_property(mango_inc mango INTERFACE_INCLUDE_DIRECTORIES)

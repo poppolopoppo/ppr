@@ -20,6 +20,12 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
 # Ensure /utf-8 is applied to every target that builds or imports modules.
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
+# /bigobj is needed for large module interface TUs. Applying it globally (rather
+# than as a per-target PRIVATE option on EngineCoreTests/EngineAppTests) keeps all
+# @cmake_cxx_std synth targets consistent — per-target /bigobj creates a divergent
+# synth that triggers "Disagreement of the location of the 'std' module" errors.
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
+
 # The /Zc:__cplusplus compiler option enables the __cplusplus preprocessor macro to report an updated
 # value for recent C++ language standards support.
 # By default, Visual Studio always returns the value 199711L for the __cplusplus preprocessor macro.
@@ -55,15 +61,8 @@ set(PPR_PROJECT_WARNINGS_CXX
         /wd5050 # possible incompatible environment while importing module 'std': _UTF8 is defined in current command line and not in module command line
 )
 
-# Disable STL ASan annotations to prevent LNK2038 mismatch when mixing
-# std module (compiled without /fsanitize=address) with user modules (compiled with it).
-# TODO: generate a custom modules.json to compile a custom std module with /fsanitize=address
 if (PPR_ENABLE_SANITIZER_ADDRESS)
-    add_compile_definitions(
-            _DISABLE_STRING_ANNOTATION
-            _DISABLE_VECTOR_ANNOTATION
-            _DISABLE_OPTIONAL_ANNOTATION
-    )
+    add_compile_options("/D_ANNOTATE_STL")
 endif ()
 
 if (PPR_WARNINGS_AS_ERRORS)
