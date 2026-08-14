@@ -19,7 +19,7 @@
   "mcp": {
     "clion": {
       "type": "remote",
-      "url": "http://127.0.0.1:64342/sse",
+      "url": "http://127.0.0.1:64362/stream",
       "enabled": true
     }
   }
