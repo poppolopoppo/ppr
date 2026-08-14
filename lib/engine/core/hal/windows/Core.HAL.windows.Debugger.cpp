@@ -58,8 +58,10 @@ namespace pP::hal {
         ::_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 
         for (const int channel: {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+#if PPR_ENABLE_DEBUG
             ::_CrtSetReportMode(channel, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
             ::_CrtSetReportFile(channel, _CRTDBG_FILE_STDERR);
+#endif
         }
 
         ::SetErrorMode(SEM_NOGPFAULTERRORBOX |

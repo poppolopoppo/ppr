@@ -11,7 +11,7 @@
 #else
 #   define PPR_ENABLE_DEBUG 0
 #   define PPR_DECL_IF_DEBUG(...)
-#   define PPR_EXPR_IF_DEBUG(...) (void)0
+#   define PPR_EXPR_IF_DEBUG(...)
 #endif
 
 // ------------------------------------------------------------------
@@ -74,7 +74,7 @@ extern "C" void _ReadWriteBarrier();
 #   pragma intrinsic(_ReadWriteBarrier)
 
 #   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME) __declspec(code_seg(_NAME))
-#   define PPR_ASSUME(...) [[assume(__VA_ARGS__)]]
+#   define PPR_ASSUME(...) __assume(__VA_ARGS__)
 #   define PPR_COMPILER_READWRITE_BARRIER() ::_ReadWriteBarrier()
 #   define PPR_EMPTY_BASES __declspec(empty_bases)
 #   define PPR_FLATTEN [[msvc::flatten]]

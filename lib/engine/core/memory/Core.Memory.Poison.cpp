@@ -80,6 +80,8 @@ void poisonFlood(const PoisonPattern pattern, const void *const ptr, const std::
 
 #endif
 
+#if PPR_ENABLE_MEMORY_POISONING
+
 namespace pP::mem {
 
 // ------------------------------------------------------------------
@@ -189,6 +191,8 @@ void annotateDoubleEndedContiguousContainer(
 }
 
 }
+
+#endif // PPR_ENABLE_MEMORY_POISONING
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
 extern "C" const char* __asan_default_options()

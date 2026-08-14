@@ -103,7 +103,7 @@ export namespace pP {
         }
         return nullptr;
 #else
-        return static_cast<ToT *>(value);
+        return dynamic_cast<ToT *>(value);
 #endif
     }
 

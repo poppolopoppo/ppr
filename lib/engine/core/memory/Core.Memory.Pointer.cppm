@@ -2,8 +2,9 @@ module;
 #include "pP/Macros.h"
 export module engine.core:memory.pointer;
 
-#if PPR_ENABLE_DEBUG
 import std;
+
+#if PPR_ENABLE_DEBUG
 import :assert;
 #endif
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
@@ -11,20 +12,20 @@ import :containers.sparse_vector;
 #endif
 
 export namespace pP {
+    class safe_object;
+
+    namespace details {
+        template<typename T>
+        concept TSafeObject = std::is_base_of_v<safe_object, T>;
+    }
+
 #if PPR_ENABLE_DEBUG
 
     // ------------------------------------------------------------------
     // Debug mode: lifetime safety checks **ENABLED**
     // ------------------------------------------------------------------
 
-    class safe_object;
-
     using safe_referencer_key = SparseKeyId;
-
-    namespace details {
-        template<typename T>
-        concept TSafeObject = std::is_base_of_v<safe_object, T>;
-    }
 
     class safe_object {
     public:
@@ -246,13 +247,121 @@ export namespace pP {
     };
 
     template<typename T>
-        requires std::is_base_of_v<safe_object, T>
-    using safe_ptr = std::add_pointer_t<T>;
+    struct safe_ptr {
+        template<typename U>
+        friend class safe_ptr;
+
+        using pointer = std::add_pointer_t<T>;
+
+    private:
+        pointer m_ptr{nullptr};
+
+    public:
+        safe_ptr() noexcept = default;
+
+        explicit safe_ptr(pointer ptr) noexcept
+            : m_ptr(ptr) {
+        }
+
+        template<typename U>
+            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(const safe_ptr<U> &other) noexcept
+            : m_ptr(other.m_ptr) {
+        }
+
+        template<typename U>
+            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(safe_ptr<U> &&other) noexcept
+            : m_ptr(other.m_ptr) {
+            other.m_ptr = nullptr;
+        }
+
+        safe_ptr &operator=(pointer ptr) noexcept {
+            m_ptr = ptr;
+            return *this;
+        }
+
+        safe_ptr &operator=(std::nullptr_t) noexcept {
+            m_ptr = nullptr;
+            return *this;
+        }
+
+        safe_ptr(const safe_ptr &) noexcept = default;
+        safe_ptr(safe_ptr &&) noexcept = default;
+
+        safe_ptr &operator=(const safe_ptr &) noexcept = default;
+        safe_ptr &operator=(safe_ptr &&) noexcept = default;
+
+        template<typename U>
+            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+        safe_ptr &operator=(const safe_ptr<U> &other) noexcept {
+            m_ptr = other.m_ptr;
+            return *this;
+        }
+
+        template<typename U>
+            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+        safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
+            m_ptr = other.m_ptr;
+            other.m_ptr = nullptr;
+            return *this;
+        }
+
+        [[nodiscard]] pointer operator->() const noexcept {
+            return m_ptr;
+        }
+
+        [[nodiscard]] T &operator*() const noexcept {
+            return *m_ptr;
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return m_ptr != nullptr;
+        }
+
+        [[nodiscard]] constexpr bool isValid() const noexcept {
+            return m_ptr != nullptr;
+        }
+
+        [[nodiscard]] constexpr pointer get() const noexcept {
+            return m_ptr;
+        }
+
+        void reset(T *const ptr = nullptr) noexcept {
+            m_ptr = ptr;
+        }
+
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, pointer rhs) noexcept {
+            return lhs.m_ptr == rhs;
+        }
+
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, std::nullptr_t) noexcept {
+            return lhs.m_ptr == nullptr;
+        }
+
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, const safe_ptr &rhs) noexcept {
+            return lhs.m_ptr == rhs.m_ptr;
+        }
+
+        [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, pointer rhs) noexcept {
+            return lhs.m_ptr <=> rhs;
+        }
+
+        [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, const safe_ptr &rhs) noexcept {
+            return lhs.m_ptr <=> rhs.m_ptr;
+        }
+
+        template<typename DerivedT>
+            requires std::is_base_of_v<T, DerivedT>
+        [[nodiscard]] friend safe_ptr<DerivedT> checked_cast(const safe_ptr &safe) noexcept {
+            return safe_ptr<DerivedT>(checked_cast<DerivedT>(safe.m_ptr));
+        }
+    };
 
     template<typename T>
         requires std::is_base_of_v<safe_object, T>
-    [[nodiscard]] safe_ptr<T> safe_ptr(T *const ptr) noexcept {
-        return ptr;
-    }
+    safe_ptr(T *) -> safe_ptr<T>;
 #endif
 }

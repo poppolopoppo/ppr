@@ -82,6 +82,7 @@ namespace pP {
     }
 #endif
 
+    #if PPR_ENABLE_DEBUG
     safe_object::~safe_object() noexcept(false) {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
         {
@@ -159,4 +160,5 @@ namespace pP {
         PPR_VERIFY(m_references.erase(referencer_key));
 #endif
     }
+#endif // PPR_ENABLE_DEBUG
 }
