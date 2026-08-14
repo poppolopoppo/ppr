@@ -170,10 +170,10 @@ export namespace pP::tests {
             ui.value = 2;
 
             ServicesStore parent;
-            PPR_ASSERT(parent.insert(safe_ptr<MockSceneService>(&scene)));
+            PPR_VERIFY(parent.insert(safe_ptr<MockSceneService>(&scene)));
 
             ServicesStore ui_store{safe_ptr<ServicesStore>(&parent)};
-            PPR_ASSERT(ui_store.insert(safe_ptr<MockUiService>(&ui)));
+            PPR_VERIFY(ui_store.insert(safe_ptr<MockUiService>(&ui)));
 
             const auto scene_svc = ui_store.tryGet<MockSceneService>();
             PPR_ASSERT(scene_svc.isValid());
@@ -192,11 +192,11 @@ export namespace pP::tests {
             MockUiService ui;
 
             ServicesStore parent;
-            PPR_ASSERT(parent.insert(safe_ptr<MockSceneService>(&scene)));
+            PPR_VERIFY(parent.insert(safe_ptr<MockSceneService>(&scene)));
 
             ServicesStore ui_store{safe_ptr<ServicesStore>(&parent)};
-            PPR_ASSERT(ui_store.insert(safe_ptr<MockUiService>(&ui)));
-            PPR_ASSERT(ui_store.erase<MockUiService>());
+            PPR_VERIFY(ui_store.insert(safe_ptr<MockUiService>(&ui)));
+            PPR_VERIFY(ui_store.erase<MockUiService>());
 
             const auto scene_svc = ui_store.tryGet<MockSceneService>();
             PPR_ASSERT(scene_svc.isValid());

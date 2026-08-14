@@ -88,7 +88,7 @@ export namespace pP::tests {
             MockServiceA a;
             a.value = 42;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.tryGet<MockServiceA>();
             PPR_ASSERT(retrieved.isValid());
@@ -99,7 +99,7 @@ export namespace pP::tests {
             MockServiceA a;
             a.value = 99;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.get<MockServiceA>();
             PPR_ASSERT(retrieved.isValid());
@@ -109,22 +109,22 @@ export namespace pP::tests {
         PPR_UNIT_TEST(erase) {
             MockServiceA a;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
             PPR_ASSERT(loc.tryGet<MockServiceA>().isValid());
 
-            PPR_ASSERT(loc.erase<MockServiceA>());
+            PPR_VERIFY(loc.erase<MockServiceA>());
             PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(erase_nonexistent) {
             ServicesStore loc;
-            PPR_ASSERT(not loc.erase<MockServiceA>());
+            PPR_VERIFY(not loc.erase<MockServiceA>());
         };
 
         PPR_UNIT_TEST(reset) {
             MockServiceA a;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             loc.reset();
             PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
@@ -133,8 +133,8 @@ export namespace pP::tests {
         PPR_UNIT_TEST(duplicate_insert) {
             MockServiceA a1, a2;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a1)));
-            PPR_ASSERT(not loc.insert(safe_ptr<MockServiceA>(&a2)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a1)));
+            PPR_VERIFY(not loc.insert(safe_ptr<MockServiceA>(&a2)));
         };
 
         PPR_UNIT_TEST(multi_type_routing) {
@@ -143,8 +143,8 @@ export namespace pP::tests {
             MockServiceB b;
             b.fvalue = 3.14f;
             ServicesStore loc;
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
-            PPR_ASSERT(loc.insert(safe_ptr<MockServiceB>(&b)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(loc.insert(safe_ptr<MockServiceB>(&b)));
 
             PPR_ASSERT(loc.tryGet<MockServiceA>().isValid());
             PPR_ASSERT(loc.tryGet<MockServiceA>()->value == 10);
@@ -158,7 +158,7 @@ export namespace pP::tests {
             MockServiceA a;
             a.value = 7;
             ServicesStore parent;
-            PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
             auto retrieved = child.tryGet<MockServiceA>();
@@ -171,10 +171,10 @@ export namespace pP::tests {
             parent_a.value = 1;
             child_a.value = 2;
             ServicesStore parent;
-            PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&parent_a)));
+            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&parent_a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
-            PPR_ASSERT(child.insert(safe_ptr<MockServiceA>(&child_a)));
+            PPR_VERIFY(child.insert(safe_ptr<MockServiceA>(&child_a)));
 
             auto retrieved = child.tryGet<MockServiceA>();
             PPR_ASSERT(retrieved.isValid());
@@ -184,10 +184,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST(child_erase_does_not_affect_parent) {
             MockServiceA a;
             ServicesStore parent;
-            PPR_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
-            PPR_ASSERT(not child.erase<MockServiceA>());
+            PPR_VERIFY(not child.erase<MockServiceA>());
             PPR_ASSERT(parent.tryGet<MockServiceA>().isValid());
 
             auto retrieved = child.tryGet<MockServiceA>();

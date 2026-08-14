@@ -381,8 +381,8 @@ export namespace pP::tests {
 
             mem::Allocation<int, RecordingAllocator> empty{};
             PPR_ASSERT(!empty.isValid());
-            PPR_ASSERT(!empty.resize(backend, 0u));
-            PPR_ASSERT(empty.resize(backend, 4u));
+            PPR_VERIFY(!empty.resize(backend, 0u));
+            PPR_VERIFY(empty.resize(backend, 4u));
             PPR_ASSERT(empty.isValid());
             PPR_ASSERT(empty.count() == 4u);
             empty.deallocateAssumeNotEmpty(backend);
@@ -400,8 +400,8 @@ export namespace pP::tests {
                 alloc.data()[i] = static_cast<int>(i);
             }
 
-            PPR_ASSERT(!alloc.resize(backend, 8u));
-            PPR_ASSERT(alloc.resize(backend, 2u));
+            PPR_VERIFY(!alloc.resize(backend, 8u));
+            PPR_VERIFY(alloc.resize(backend, 2u));
             PPR_ASSERT(alloc.count() == 2u);
             PPR_ASSERT(alloc.data()[0] == 0);
             PPR_ASSERT(alloc.data()[1] == 1);

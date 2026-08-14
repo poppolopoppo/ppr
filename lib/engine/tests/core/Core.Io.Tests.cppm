@@ -188,7 +188,7 @@ export namespace pP::tests {
                 IoRequest req;
                 PPR_ASSERT(not req.isPending());
                 PPR_ASSERT(not req.pollEvent());
-                PPR_ASSERT(not req.cancel());
+                PPR_VERIFY(not req.cancel());
             };
 
             PPR_UNIT_TEST(i_event_interface) {
@@ -379,7 +379,7 @@ export namespace pP::tests {
                 auto signal = select(req);
                 PPR_ASSERT(not signal.poll().has_value());
 
-                PPR_ASSERT(not req.cancel());
+                PPR_VERIFY(not req.cancel());
                 PPR_ASSERT(not req.pollEvent());
 
                 req.resetEvent();

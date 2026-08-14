@@ -168,7 +168,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
         PPR_UNIT_TEST(compile_simple_triangle_shader) {
             const auto svc = IShaderService::get();
-            PPR_ASSERT(!svc->initialize());
+            PPR_VERIFY(!svc->initialize());
 
             shader::SharedModule handle;
             const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader, handle.writeRef());
@@ -178,11 +178,11 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             PPR_ASSERT(module != nullptr);
 
             shader::ComPtr<slang::IEntryPoint> vertex_ep;
-            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+            PPR_VERIFY(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
             PPR_ASSERT(vertex_ep != nullptr);
 
             shader::ComPtr<slang::IEntryPoint> fragment_ep;
-            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+            PPR_VERIFY(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
             PPR_ASSERT(fragment_ep != nullptr);
         };
 
@@ -213,7 +213,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
         PPR_UNIT_TEST(compile_invalid_shader_recovery) {
             const auto svc = IShaderService::get();
-            PPR_ASSERT(!svc->initialize());
+            PPR_VERIFY(!svc->initialize());
 
             shader::SharedModule handle;
             const auto bad_ec = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@", handle.writeRef());
@@ -226,7 +226,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
         PPR_UNIT_TEST(shader_parameter_reflection) {
             const auto svc = IShaderService::get();
-            PPR_ASSERT(!svc->initialize());
+            PPR_VERIFY(!svc->initialize());
 
             shader::SharedModule handle;
             const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader, handle.writeRef());
@@ -236,18 +236,18 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             PPR_ASSERT(module != nullptr);
 
             shader::ComPtr<slang::IEntryPoint> vertex_ep;
-            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+            PPR_VERIFY(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
 
             shader::ComPtr<slang::IEntryPoint> fragment_ep;
-            PPR_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+            PPR_VERIFY(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
 
             slang::IComponentType *components[] = {module, vertex_ep.get(), fragment_ep.get()};
             shader::ComPtr<slang::IComponentType> composite;
-            PPR_ASSERT(SLANG_SUCCEEDED(
+            PPR_VERIFY(SLANG_SUCCEEDED(
                 module->getSession()->createCompositeComponentType(components, 3, composite.writeRef())));
 
             shader::ComPtr<slang::IComponentType> linked_program;
-            PPR_ASSERT(SLANG_SUCCEEDED(composite->link(linked_program.writeRef())));
+            PPR_VERIFY(SLANG_SUCCEEDED(composite->link(linked_program.writeRef())));
 
             auto *layout = linked_program->getLayout();
             PPR_ASSERT(layout != nullptr);
@@ -281,27 +281,27 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             std::ignore = svc->shutdown();
 
             // Not initialized yet — target format must fail with uninitialized
-            PPR_ASSERT(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::uninitialized));
+            PPR_VERIFY(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::uninitialized));
 
-            PPR_ASSERT(!svc->initialize());
+            PPR_VERIFY(!svc->initialize());
 
             // Setting the same format is a no-op
-            PPR_ASSERT(!svc->setTargetFormat(SLANG_DXBC));
+            PPR_VERIFY(!svc->setTargetFormat(SLANG_DXBC));
 
             // Changing the format before any module load recreates the session
-            PPR_ASSERT(!svc->setTargetFormat(SLANG_SPIRV));
+            PPR_VERIFY(!svc->setTargetFormat(SLANG_SPIRV));
 
             {
                 shader::SharedModule handle;
-                PPR_ASSERT(!svc->loadModuleFromSource("target_probe", "target_probe.slang", kTriangleShader, handle.writeRef()));
+                PPR_VERIFY(!svc->loadModuleFromSource("target_probe", "target_probe.slang", kTriangleShader, handle.writeRef()));
                 PPR_ASSERT(handle.get() != nullptr);
 
                 // Changing the format after modules are loaded must fail
-                PPR_ASSERT(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::invalid_arg));
+                PPR_VERIFY(svc->setTargetFormat(SLANG_DXBC) == make_error_code(shader::errc::invalid_arg));
             }
 
             // Restore a clean, default-target state for the remaining tests
-            PPR_ASSERT(!svc->shutdown());
+            PPR_VERIFY(!svc->shutdown());
         };
     }
 

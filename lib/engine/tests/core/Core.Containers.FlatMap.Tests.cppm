@@ -49,12 +49,12 @@ export namespace pP::tests {
             m.insert({1, 10});
             m.insert({2, 20});
             m.insert({3, 30});
-            PPR_ASSERT(m.erase(2));
+            PPR_VERIFY(m.erase(2));
             PPR_ASSERT(m.size() == 2u);
             PPR_ASSERT(m.find(2) == m.end());
             PPR_ASSERT(m.find(1) != m.end());
             PPR_ASSERT(m.find(3) != m.end());
-            PPR_ASSERT(m.erase(99) == 0u);
+            PPR_VERIFY(m.erase(99) == 0u);
         };
 
         PPR_UNIT_TEST(clear) {

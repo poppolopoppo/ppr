@@ -27,7 +27,7 @@ export namespace pP::tests {
         PPR_ASSERT(count >= 1u);
 
         keyboard = nullptr;
-        PPR_ASSERT(input->removePlayer(keyboard_id) == default_value_v);
+        PPR_VERIFY(input->removePlayer(keyboard_id) == default_value_v);
     };
 
     PPR_UNIT_TEST(gamepad_player_creation) {
@@ -51,13 +51,13 @@ export namespace pP::tests {
 
         const PlayerId gamepad_id{gamepad->getUserId()};
         gamepad = nullptr;
-        PPR_ASSERT(input->removePlayer(gamepad_id) == default_value_v);
+        PPR_VERIFY(input->removePlayer(gamepad_id) == default_value_v);
     };
 
     PPR_UNIT_TEST(remove_nonexistent_player_returns_false) {
         const safe_ptr<IPlayerService> input = IPlayerService::get();
         const PlayerId fake_id{umax_v};
-        PPR_ASSERT(input->removePlayer(fake_id) != default_value_v);
+        PPR_VERIFY(input->removePlayer(fake_id) != default_value_v);
     };
 
     PPR_UNIT_TEST(get_or_create_keyboard_is_idempotent) {
@@ -77,7 +77,7 @@ export namespace pP::tests {
         const PlayerId player_id{first->getUserId()};
         first = nullptr;
         second = nullptr;
-        PPR_ASSERT(input->removePlayer(player_id) == default_value_v);
+        PPR_VERIFY(input->removePlayer(player_id) == default_value_v);
     };
 
     PPR_UNIT_TEST(player_service_callbacks) {
@@ -103,7 +103,7 @@ export namespace pP::tests {
 
         const PlayerId id{player->getUserId()};
         player = nullptr;
-        PPR_ASSERT(input->removePlayer(id) == default_value_v);
+        PPR_VERIFY(input->removePlayer(id) == default_value_v);
 
         PPR_ASSERT(added_count == 1u);
         PPR_ASSERT(removed_count == 1u);

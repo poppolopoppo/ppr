@@ -882,17 +882,10 @@ export namespace pP::tests {
             // Consumer: use select with wait/poll, draining all messages on wakeup
             int received = 0;
             int seed_recv = 0;
-            auto signal = select(chan_a, chan_b, chan_c);
 
-            while (received < messages_per_producer * num_channels) {
-                auto event = signal.poll();
-                if (not event.has_value()) {
-                    signal.wait();
-                    event = signal.poll();
-                }
-
+            for (auto &event : select(chan_a, chan_b, chan_c)) {
                 // Drain ALL messages from the ready channel
-                RawChannel *const p_chan = std::visit([](RawChannel *p) { return p; }, *event);
+                RawChannel *const p_chan = std::visit([](RawChannel *p) { return p; }, event);
                 while (true) {
                     const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
                     if (not recv.has_value()) {
@@ -903,7 +896,9 @@ export namespace pP::tests {
                     ++received;
                 }
 
-                signal.reset(*event);
+                if (received >= messages_per_producer * num_channels) {
+                    break;
+                }
             }
 
             prod_a.join();

@@ -73,7 +73,7 @@ export namespace pP::tests {
             const u32 first = m.pop();
             PPR_ASSERT(first == 2u);
             m.set(1);
-            PPR_ASSERT(m.popAssumeNotEmpty() != umax_v);
+            PPR_VERIFY(m.popAssumeNotEmpty() != umax_v);
         };
 
         PPR_UNIT_TEST(bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst) {
@@ -181,10 +181,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST(stack_push_pop_and_iterator) {
             Stack<int, 4> s;
             PPR_ASSERT(s.isEmpty());
-            PPR_ASSERT(s.push(10));
-            PPR_ASSERT(s.push(20));
+            PPR_VERIFY(s.push(10));
+            PPR_VERIFY(s.push(20));
             PPR_ASSERT(s.size() == 2u);
-            PPR_ASSERT(s.pop().value() == 20);
+            PPR_VERIFY(s.pop().value() == 20);
             int sum = 0;
             for (int v: s)
                 sum += v;
@@ -193,29 +193,29 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(stack_overflow_and_clear) {
             Stack<int, 2> s;
-            PPR_ASSERT(s.push(1));
-            PPR_ASSERT(s.push(2));
-            PPR_ASSERT(!s.push(3));
+            PPR_VERIFY(s.push(1));
+            PPR_VERIFY(s.push(2));
+            PPR_VERIFY(!s.push(3));
             s.clear();
             PPR_ASSERT(s.isEmpty());
         };
 
         PPR_UNIT_TEST(ringbuffer_push_pop_wrap) {
             RingBuffer<int, 4> rb;
-            PPR_ASSERT(rb.pushBack(1));
-            PPR_ASSERT(rb.pushBack(2));
-            PPR_ASSERT(rb.pushBack(3));
-            PPR_ASSERT(rb.pushBack(4));
-            PPR_ASSERT(not rb.pushBack(5));
-            PPR_ASSERT(rb.popFront().value() == 1);
-            PPR_ASSERT(rb.pushBack(5));
+            PPR_VERIFY(rb.pushBack(1));
+            PPR_VERIFY(rb.pushBack(2));
+            PPR_VERIFY(rb.pushBack(3));
+            PPR_VERIFY(rb.pushBack(4));
+            PPR_VERIFY(not rb.pushBack(5));
+            PPR_VERIFY(rb.popFront().value() == 1);
+            PPR_VERIFY(rb.pushBack(5));
             PPR_ASSERT(rb[0] == 2 && rb[3] == 5);
         };
 
         PPR_UNIT_TEST(ringbuffer_pop_empty_resets_positions) {
             RingBuffer<int, 2> rb;
-            PPR_ASSERT(!rb.popFront().has_value());
-            PPR_ASSERT(!rb.popBack().has_value());
+            PPR_VERIFY(!rb.popFront().has_value());
+            PPR_VERIFY(!rb.popBack().has_value());
         };
 
         PPR_UNIT_TEST(shellsort_empty_and_single) {
