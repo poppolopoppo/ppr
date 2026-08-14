@@ -69,7 +69,37 @@ export namespace pP::shader {
         }
     };
 
-    using SharedModule = ComPtr<IModule>;
+    /// Borrowed view of a module compiled by (and owned by) the active session.
+    /// The session keeps each module alive until `IShaderService::shutdown()`; callers
+    /// must not release it — releasing a session-owned module double-frees it at shutdown.
+    export class SharedModule {
+    public:
+        SharedModule() noexcept = default;
+
+        [[nodiscard]] slang::IModule *get() const noexcept {
+            return m_module;
+        }
+
+        [[nodiscard]] slang::IModule &operator*() const noexcept {
+            return *m_module;
+        }
+
+        [[nodiscard]] slang::IModule *operator->() const noexcept {
+            return m_module;
+        }
+
+        [[nodiscard]] operator bool() const noexcept {
+            return m_module != nullptr;
+        }
+
+        /// Address of the stored pointer, filled in by the load functions.
+        [[nodiscard]] slang::IModule **writeRef() noexcept {
+            return &m_module;
+        }
+
+    private:
+        slang::IModule *m_module = nullptr;
+    };
 }
 
 export namespace pP {

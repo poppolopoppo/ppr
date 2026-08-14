@@ -264,9 +264,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         kImGuiShader,
                         m_imgui_shader_handle.writeRef()));
 
-                shader::ComPtr<slang::IModule> module;
-                module = m_imgui_shader_handle.get();
-                PPR_ASSERT(module);
+                slang::IModule *module = m_imgui_shader_handle.get();
+                PPR_ASSERT(module != nullptr);
 
                 shader::ComPtr<slang::IEntryPoint> vertex_ep;
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
@@ -278,7 +277,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 rhi::ShaderProgramDesc program_desc{};
                 program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-                program_desc.slangGlobalScope = module.get();
+                program_desc.slangGlobalScope = module;
                 program_desc.slangEntryPoints = entryPoints;
                 program_desc.slangEntryPointCount = std::size(entryPoints);
 

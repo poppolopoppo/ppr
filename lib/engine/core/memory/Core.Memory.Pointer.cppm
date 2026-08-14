@@ -247,7 +247,7 @@ export namespace pP {
     };
 
     template<typename T>
-    struct safe_ptr {
+    class safe_ptr {
         template<typename U>
         friend class safe_ptr;
 

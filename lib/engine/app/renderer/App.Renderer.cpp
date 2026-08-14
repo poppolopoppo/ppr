@@ -80,8 +80,7 @@ namespace pP {
 
         // Create shader program
         {
-            shader::ComPtr<slang::IModule> module;
-            module = m_triangle_shader.get();
+            slang::IModule *module = m_triangle_shader.get();
 
             shader::ComPtr<slang::IEntryPoint> vertex_ep;
             RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
@@ -93,7 +92,7 @@ namespace pP {
 
             rhi::ShaderProgramDesc program_desc{};
             program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-            program_desc.slangGlobalScope = module.get();
+            program_desc.slangGlobalScope = module;
             program_desc.slangEntryPoints = entry_points;
             program_desc.slangEntryPointCount = 2u;
 
@@ -159,8 +158,7 @@ namespace pP {
     std::error_code Renderer::rebuildPipeline_(rhi::IDevice &device) {
         PPR_LOG(Renderer, info, "shader hot-reloaded, rebuilding pipeline");
 
-        shader::ComPtr<slang::IModule> module;
-        module = m_triangle_shader.get();
+        slang::IModule *module = m_triangle_shader.get();
 
         shader::ComPtr<slang::IEntryPoint> vertex_ep;
         RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
@@ -172,7 +170,7 @@ namespace pP {
 
         rhi::ShaderProgramDesc program_desc{};
         program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-        program_desc.slangGlobalScope = module.get();
+        program_desc.slangGlobalScope = module;
         program_desc.slangEntryPoints = entry_points;
         program_desc.slangEntryPointCount = 2u;
 

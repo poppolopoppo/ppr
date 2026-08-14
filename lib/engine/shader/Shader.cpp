@@ -207,7 +207,7 @@ namespace pP {
                 }
 
                 if (m_modules_loaded) {
-                    PPR_LOG(Shader, warning, "shutting down with loaded modules — release modules before shutdown");
+                    PPR_LOG(Shader, warning, "shutting down with loaded modules — modules are owned by the session and will be destroyed with it");
                 }
                 m_modules_loaded = false;
                 m_session.setNull();
