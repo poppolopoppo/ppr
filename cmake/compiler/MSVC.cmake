@@ -26,6 +26,21 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 # synth that triggers "Disagreement of the location of the 'std' module" errors.
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
 
+# Release profile: /O2 /Ob2 /DNDEBUG come from the CMAKE_BUILD_TYPE. On top of
+# that, maximize performance with AVX2 codegen (replaces the SSE2 baseline;
+# requires a 2013+ CPU) and whole-program global-data optimization (/Gw).
+# Applied globally so module synth targets (including the std module BMI) see
+# exactly the same flags — divergent flags break module BCI location matching.
+option(PPR_RELEASE_PERF_FLAGS "Enable extra release-only performance flags (/arch:AVX2 /Gw)" ON)
+if (PPR_RELEASE_PERF_FLAGS)
+    # Each flag must be its own genex element: a single "/arch:AVX2 /Gw" string
+    # is quoted as one argv token and cl.exe rejects it with D9002.
+    add_compile_options(
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/arch:AVX2>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/Gw>"
+    )
+endif ()
+
 # The /Zc:__cplusplus compiler option enables the __cplusplus preprocessor macro to report an updated
 # value for recent C++ language standards support.
 # By default, Visual Studio always returns the value 199711L for the __cplusplus preprocessor macro.

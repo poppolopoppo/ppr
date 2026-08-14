@@ -15,6 +15,7 @@ Load these on demand via the `skill` tool when your task matches their domain:
 | `git-commit-planner` | commit, stage, plan, hunk | Hunk-level analysis, cumulative-state rule, atomic commit ordering |
 | `plan-executor` | execute, plan, phase, build | Execute structured refactoring plans from `.opencode/plans/` phase by phase |
 | `unit-test-updater` | test, coverage, PPR_UNIT_TEST | Analyze git diffs and update/add C++ unit tests |
+| `validation` | validate, verify, after change, compile all configs, pre-commit | Post-change checklist: compile the full project in every platform-relevant build config, run engine tests, and review diffs against AGENTS.md (parallel builds, serial review) |
 
 ## Available Commands
 Use these custom commands to invoke predefined multi-agent workflows:
