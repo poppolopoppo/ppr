@@ -11,7 +11,7 @@
 #else
 #   define PPR_ENABLE_DEBUG 0
 #   define PPR_DECL_IF_DEBUG(...)
-#   define PPR_EXPR_IF_DEBUG(...)
+#   define PPR_EXPR_IF_DEBUG(...) (void)0
 #endif
 
 // ------------------------------------------------------------------

@@ -135,19 +135,19 @@ export namespace pP {
             constexpr HashMapIterator &operator =(HashMapIterator &&) noexcept = default;
 
             constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot_maybe_invalid) noexcept
-                : m_hash_table(p_map), m_slot(slot_maybe_invalid)
-                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
+                : m_hash_table(p_map), m_slot(slot_maybe_invalid) {
+                PPR_EXPR_IF_DEBUG(m_revision = p_map->m_revision);
                 initFromIndex_();
             }
 
             constexpr HashMapIterator(std::in_place_t, hashmap_pointer p_map PPR_LIFETIME_BOUND, const u32 slot) noexcept
-                : m_hash_table(p_map), m_slot(slot)
-                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
+                : m_hash_table(p_map), m_slot(slot) {
+                PPR_EXPR_IF_DEBUG(m_revision = p_map->m_revision);
             }
 
             constexpr HashMapIterator(hashmap_pointer p_map PPR_LIFETIME_BOUND, const MaxValue end) noexcept
-                : m_hash_table(p_map), m_slot(end)
-                PPR_EXPR_IF_DEBUG(, m_revision(p_map->m_revision)) {
+                : m_hash_table(p_map), m_slot(end) {
+                PPR_EXPR_IF_DEBUG(m_revision = p_map->m_revision);
             }
 
             using non_const_iterator = HashMapIterator<
@@ -157,8 +157,8 @@ export namespace pP {
 
             explicit constexpr HashMapIterator(const non_const_iterator &other) noexcept
                 requires std::is_const_v<ValueT>
-                : m_hash_table(other.m_hash_table), m_slot(other.m_slot)
-                PPR_EXPR_IF_DEBUG(, m_revision(other.m_revision)) {
+                : m_hash_table(other.m_hash_table), m_slot(other.m_slot) {
+                PPR_EXPR_IF_DEBUG(m_revision = other.m_revision);
             }
 
             constexpr HashMapIterator &operator =(const non_const_iterator &other) noexcept
