@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:opaque;
 import engine.core;
 import std;
@@ -9,65 +9,65 @@ export namespace pP::tests {
         namespace Value {
             PPR_UNIT_TEST(decl_scalars) {
                 constexpr opaque::Value boolean(true);
-                PPR_ASSERT(boolean.get<bool>() == true);
+                PPR_TEST_ASSERT(boolean.get<bool>() == true);
 
                 constexpr opaque::Value signed_int(i64{-1});
-                PPR_ASSERT(signed_int.get<i64>() == -1);
+                PPR_TEST_ASSERT(signed_int.get<i64>() == -1);
 
                 constexpr opaque::Value unsigned_int(u64{42u});
-                PPR_ASSERT(unsigned_int.get<u64>() == 42u);
+                PPR_TEST_ASSERT(unsigned_int.get<u64>() == 42u);
 
                 constexpr opaque::Value single_fp(0.0f);
-                PPR_ASSERT(single_fp.get<float>() == 0.0f);
+                PPR_TEST_ASSERT(single_fp.get<float>() == 0.0f);
 
                 constexpr opaque::Value double_fp(1.0);
-                PPR_ASSERT(double_fp.get<double>() == 1.0);
+                PPR_TEST_ASSERT(double_fp.get<double>() == 1.0);
 
                 constexpr opaque::Value ansi_str("ansi");
-                PPR_ASSERT(ansi_str.get<std::string_view>() == "ansi");
+                PPR_TEST_ASSERT(ansi_str.get<std::string_view>() == "ansi");
 
                 constexpr opaque::Value wide_str(L"wide");
-                PPR_ASSERT(wide_str.get<std::wstring_view>() == L"wide");
+                PPR_TEST_ASSERT(wide_str.get<std::wstring_view>() == L"wide");
 
                 constexpr opaque::Value utf8_str(u8"utf8");
-                PPR_ASSERT(utf8_str.get<std::u8string_view>() == u8"utf8");
+                PPR_TEST_ASSERT(utf8_str.get<std::u8string_view>() == u8"utf8");
 
                 constexpr opaque::Value char_val('x');
-                PPR_ASSERT(char_val.get<char>() == 'x');
+                PPR_TEST_ASSERT(char_val.get<char>() == 'x');
 
                 constexpr opaque::Value wchar_val(L'x');
-                PPR_ASSERT(wchar_val.get<wchar_t>() == L'x');
+                PPR_TEST_ASSERT(wchar_val.get<wchar_t>() == L'x');
 
                 constexpr opaque::Value char8_val(u8'x');
-                PPR_ASSERT(char8_val.get<char8_t>() == u8'x');
+                PPR_TEST_ASSERT(char8_val.get<char8_t>() == u8'x');
 
                 constexpr opaque::Value i8_val(i8{-1});
-                PPR_ASSERT(i8_val.get<i8>() == -1);
+                PPR_TEST_ASSERT(i8_val.get<i8>() == -1);
 
                 constexpr opaque::Value i16_val(i16{-2});
-                PPR_ASSERT(i16_val.get<i16>() == -2);
+                PPR_TEST_ASSERT(i16_val.get<i16>() == -2);
 
                 constexpr opaque::Value i32_val(i32{-3});
-                PPR_ASSERT(i32_val.get<i32>() == -3);
+                PPR_TEST_ASSERT(i32_val.get<i32>() == -3);
 
                 constexpr opaque::Value u8_val(u8{1});
-                PPR_ASSERT(u8_val.get<u8>() == 1);
+                PPR_TEST_ASSERT(u8_val.get<u8>() == 1);
 
                 constexpr opaque::Value u16_val(u16{2});
-                PPR_ASSERT(u16_val.get<u16>() == 2);
+                PPR_TEST_ASSERT(u16_val.get<u16>() == 2);
 
                 constexpr opaque::Value u32_val(u32{3});
-                PPR_ASSERT(u32_val.get<u32>() == 3);
+                PPR_TEST_ASSERT(u32_val.get<u32>() == 3);
             };
 
             PPR_UNIT_TEST(decl_arrays) {
                 constexpr auto check = [](opaque::Value &&v) {
                     const auto &ar = v.get<opaque::Array>();
-                    PPR_ASSERT(ar.size() == 4u);
-                    PPR_ASSERT(ar[0].get<bool>() == true);
-                    PPR_ASSERT(ar[1].get<i64>() == -1);
-                    PPR_ASSERT(ar[2].get<u64>() == 42u);
-                    PPR_ASSERT(ar[3].get<std::string_view>() == "ansi");
+                    PPR_TEST_ASSERT(ar.size() == 4u);
+                    PPR_TEST_ASSERT(ar[0].get<bool>() == true);
+                    PPR_TEST_ASSERT(ar[1].get<i64>() == -1);
+                    PPR_TEST_ASSERT(ar[2].get<u64>() == 42u);
+                    PPR_TEST_ASSERT(ar[3].get<std::string_view>() == "ansi");
                 };
                 check(opaque::Array{true, i64{-1}, u64{42u}, "ansi"});
 
@@ -78,9 +78,9 @@ export namespace pP::tests {
             PPR_UNIT_TEST(decl_dict) {
                 constexpr auto check = [](opaque::Value &&v) {
                     const auto &map = v.get<opaque::Dict>();
-                    PPR_ASSERT(map.size() == 2u);
-                    PPR_ASSERT(map[0].second.get<bool>() == false);
-                    PPR_ASSERT(map[1].second.get<u64>() == 42u);
+                    PPR_TEST_ASSERT(map.size() == 2u);
+                    PPR_TEST_ASSERT(map[0].second.get<bool>() == false);
+                    PPR_TEST_ASSERT(map[1].second.get<u64>() == 42u);
                 };
                 check(opaque::Dict{{"male", false}, {"age", u64{42u}}});
 
@@ -94,7 +94,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(decl_delegate) {
                 constexpr auto check = [](opaque::Value &&v) {
-                    PPR_ASSERT(v.template as<opaque::Delegate>() != nullptr);
+                    PPR_TEST_ASSERT(v.template as<opaque::Delegate>() != nullptr);
                 };
                 check(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
                 check([] noexcept { return opaque::Value{42}; });
@@ -102,7 +102,7 @@ export namespace pP::tests {
 
             PPR_UNIT_TEST(decl_formatter) {
                 constexpr auto check = [](opaque::Value &&v) {
-                    PPR_ASSERT(v.template as<opaque::Formatter>() != nullptr);
+                    PPR_TEST_ASSERT(v.template as<opaque::Formatter>() != nullptr);
                 };
                 check(opaque::Formatter([](opaque::format_context &ctx) noexcept -> decltype(auto) {
                     return ctx.out();
@@ -117,24 +117,24 @@ export namespace pP::tests {
             };
 
             PPR_UNIT_TEST(decl_as_nullptr) {
-                PPR_ASSERT(opaque::Value{i64{1}}.as<float>() == nullptr);
-                PPR_ASSERT(opaque::Value{true}.as<i64>() == nullptr);
-                PPR_ASSERT(opaque::Value{"str"}.as<u64>() == nullptr);
-                PPR_ASSERT(opaque::Value{3.14}.as<bool>() == nullptr);
+                PPR_TEST_ASSERT(opaque::Value{i64{1}}.as<float>() == nullptr);
+                PPR_TEST_ASSERT(opaque::Value{true}.as<i64>() == nullptr);
+                PPR_TEST_ASSERT(opaque::Value{"str"}.as<u64>() == nullptr);
+                PPR_TEST_ASSERT(opaque::Value{3.14}.as<bool>() == nullptr);
             };
 
             PPR_UNIT_TEST(format_scalar) {
                 std::string str;
                 str = std::format("{}", opaque::Value{42});
-                PPR_ASSERT(str == "42");
+                PPR_TEST_ASSERT(str == "42");
                 str = std::format("{}", opaque::Value{true});
-                PPR_ASSERT(str == "true");
+                PPR_TEST_ASSERT(str == "true");
                 str = std::format("{}", opaque::Value{3.140});
-                PPR_ASSERT(str == "3.14");
+                PPR_TEST_ASSERT(str == "3.14");
                 str = std::format("{}", opaque::Value{"hi"});
-                PPR_ASSERT(str == R"("hi")");
+                PPR_TEST_ASSERT(str == R"("hi")");
                 str = std::format("{}", opaque::Value{-1.0f});
-                PPR_ASSERT(str == "-1");
+                PPR_TEST_ASSERT(str == "-1");
             };
 
             PPR_UNIT_TEST(format_array) {
@@ -147,7 +147,7 @@ export namespace pP::tests {
                     }
                 });
                 constexpr std::string_view expected = R"EXPECT([1, true, "ansi", "wide", 3.14151618, "the answer is 42"])EXPECT";
-                PPR_ASSERT(expected == res);
+                PPR_TEST_ASSERT(expected == res);
             };
 
             PPR_UNIT_TEST(format_object) {
@@ -167,7 +167,7 @@ export namespace pP::tests {
                 });
                 constexpr std::string_view expected =
                         R"EXPECT({"FirstName": "John", "LastName": "Doe", "Age": 41, "Height": 1.83, "Hobbies": ["coding", "gaming", "joking"]})EXPECT";
-                PPR_ASSERT(expected == res);
+                PPR_TEST_ASSERT(expected == res);
             };
 
             PPR_UNIT_TEST(format_delegate) {
@@ -176,11 +176,11 @@ export namespace pP::tests {
                 };
                 const auto res = fmt(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
                 constexpr std::string_view expected = "42";
-                PPR_ASSERT(expected == res);
+                PPR_TEST_ASSERT(expected == res);
 
                 const auto res2 = fmt([] noexcept { return opaque::Value{3.14}; });
                 constexpr std::string_view expected2 = "3.14";
-                PPR_ASSERT(expected2 == res2);
+                PPR_TEST_ASSERT(expected2 == res2);
             };
 
             PPR_UNIT_TEST(format_formatter) {
@@ -191,7 +191,7 @@ export namespace pP::tests {
                     return std::format_to(ctx.out(), "This is {:02} formatted {}", 1, "text");
                 });
                 constexpr std::string_view expected = R"EXPECT("This is 01 formatted text")EXPECT";
-                PPR_ASSERT(expected == res);
+                PPR_TEST_ASSERT(expected == res);
             };
         }
 
@@ -216,46 +216,46 @@ export namespace pP::tests {
                 using BV = opaque::Block::Value;
 
                 constexpr BV v_bool(true);
-                PPR_ASSERT(v_bool.get<bool>() == true);
+                PPR_TEST_ASSERT(v_bool.get<bool>() == true);
 
                 constexpr BV v_char('x');
-                PPR_ASSERT(v_char.get<char>() == 'x');
+                PPR_TEST_ASSERT(v_char.get<char>() == 'x');
 
                 constexpr BV v_wchar(L'x');
-                PPR_ASSERT(v_wchar.get<wchar_t>() == L'x');
+                PPR_TEST_ASSERT(v_wchar.get<wchar_t>() == L'x');
 
                 constexpr BV v_char8(u8'x');
-                PPR_ASSERT(v_char8.get<char8_t>() == u8'x');
+                PPR_TEST_ASSERT(v_char8.get<char8_t>() == u8'x');
 
                 constexpr BV v_i8(i8{-1});
-                PPR_ASSERT(v_i8.get<i8>() == -1);
+                PPR_TEST_ASSERT(v_i8.get<i8>() == -1);
 
                 constexpr BV v_i16(i16{-2});
-                PPR_ASSERT(v_i16.get<i16>() == -2);
+                PPR_TEST_ASSERT(v_i16.get<i16>() == -2);
 
                 constexpr BV v_i32(i32{-3});
-                PPR_ASSERT(v_i32.get<i32>() == -3);
+                PPR_TEST_ASSERT(v_i32.get<i32>() == -3);
 
                 constexpr BV v_i64(i64{-4});
-                PPR_ASSERT(v_i64.get<i64>() == -4);
+                PPR_TEST_ASSERT(v_i64.get<i64>() == -4);
 
                 constexpr BV v_u8(u8{1});
-                PPR_ASSERT(v_u8.get<u8>() == 1);
+                PPR_TEST_ASSERT(v_u8.get<u8>() == 1);
 
                 constexpr BV v_u16(u16{2});
-                PPR_ASSERT(v_u16.get<u16>() == 2);
+                PPR_TEST_ASSERT(v_u16.get<u16>() == 2);
 
                 constexpr BV v_u32(u32{3});
-                PPR_ASSERT(v_u32.get<u32>() == 3);
+                PPR_TEST_ASSERT(v_u32.get<u32>() == 3);
 
                 constexpr BV v_u64(u64{4});
-                PPR_ASSERT(v_u64.get<u64>() == 4);
+                PPR_TEST_ASSERT(v_u64.get<u64>() == 4);
 
                 constexpr BV v_float(0.5f);
-                PPR_ASSERT(v_float.get<float>() == 0.5f);
+                PPR_TEST_ASSERT(v_float.get<float>() == 0.5f);
 
                 constexpr BV v_double(1.5);
-                PPR_ASSERT(v_double.get<double>() == 1.5);
+                PPR_TEST_ASSERT(v_double.get<double>() == 1.5);
             };
 
             PPR_UNIT_TEST(builder_scalars) {
@@ -265,7 +265,7 @@ export namespace pP::tests {
                 auto test = [&]<typename ArgT>(const opaque::Value &init, ArgT expected) {
                     opaque::Block::Value target;
                     opaque::Block::Builder{target, arena}.dup(init);
-                    PPR_ASSERT(target.get<ArgT>() == expected);
+                    PPR_TEST_ASSERT(target.get<ArgT>() == expected);
                 };
 
                 test(opaque::Value{true}, true);
@@ -294,19 +294,19 @@ export namespace pP::tests {
                 builder.dup("hello");
                 {
                     const auto &rv = target->get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "hello");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "hello");
                 }
 
                 builder.dup(opaque::Value{L"wide"});
                 {
                     const auto &rv = target->get<opaque::Block::WString>();
-                    PPR_ASSERT(std::wstring_view(rv.data(), rv.size()) == L"wide");
+                    PPR_TEST_ASSERT(std::wstring_view(rv.data(), rv.size()) == L"wide");
                 }
 
                 builder.dup(opaque::Value{u8"utf8"});
                 {
                     const auto &rv = target->get<opaque::Block::U8String>();
-                    PPR_ASSERT(std::u8string_view(rv.data(), rv.size()) == u8"utf8");
+                    PPR_TEST_ASSERT(std::u8string_view(rv.data(), rv.size()) == u8"utf8");
                 }
 
                 arena.restore(mark);
@@ -322,12 +322,12 @@ export namespace pP::tests {
                 builder.dup(opaque::Array{true, i64{42}, "str"});
 
                 const auto &arr = target.get<opaque::Block::Array>();
-                PPR_ASSERT(arr.size() == 3u);
-                PPR_ASSERT(arr[0].get<bool>() == true);
-                PPR_ASSERT(arr[1].get<i64>() == 42);
+                PPR_TEST_ASSERT(arr.size() == 3u);
+                PPR_TEST_ASSERT(arr[0].get<bool>() == true);
+                PPR_TEST_ASSERT(arr[1].get<i64>() == 42);
                 {
                     const auto &rv = arr[2].get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "str");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "str");
                 }
 
                 arena.restore(mark);
@@ -345,20 +345,20 @@ export namespace pP::tests {
                     arena
                 };
 
-                PPR_ASSERT(block->size() == 2u);
+                PPR_TEST_ASSERT(block->size() == 2u);
                 {
                     const auto &rv = block[0].first;
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "name");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "name");
                 }
                 {
                     const auto &rv = block[0].second.get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "ppr");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "ppr");
                 }
                 {
                     const auto &rv = block[1].first;
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "count");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "count");
                 }
-                PPR_ASSERT(block[1].second.get<u64>() == 42);
+                PPR_TEST_ASSERT(block[1].second.get<u64>() == 42);
 
                 arena.restore(mark);
             };
@@ -375,7 +375,7 @@ export namespace pP::tests {
                 });
                 {
                     const auto &rv = target.get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "fmt 42");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "fmt 42");
                 }
 
                 arena.restore(mark);
@@ -389,10 +389,10 @@ export namespace pP::tests {
                 opaque::Block::Builder builder{target, arena};
 
                 builder.dup(opaque::Delegate{[] noexcept { return opaque::Value{u64{42}}; }});
-                PPR_ASSERT(target.get<u64>() == 42);
+                PPR_TEST_ASSERT(target.get<u64>() == 42);
 
                 builder.dup(opaque::Value{opaque::Delegate{[] noexcept { return opaque::Value{3.14}; }}});
-                PPR_ASSERT(target.get<double>() == 3.14);
+                PPR_TEST_ASSERT(target.get<double>() == 3.14);
 
                 arena.restore(mark);
             };
@@ -400,18 +400,18 @@ export namespace pP::tests {
             PPR_UNIT_TEST(format_value_scalars) {
                 using BV = opaque::Block::Value;
 
-                PPR_ASSERT(std::format("{}", BV{true}) == "true");
-                PPR_ASSERT(std::format("{}", BV{char{'x'}}) == "x");
-                PPR_ASSERT(std::format("{}", BV{i8{-1}}) == "-1");
-                PPR_ASSERT(std::format("{}", BV{i16{-2}}) == "-2");
-                PPR_ASSERT(std::format("{}", BV{i32{-3}}) == "-3");
-                PPR_ASSERT(std::format("{}", BV{i64{-4}}) == "-4");
-                PPR_ASSERT(std::format("{}", BV{u8{1}}) == "1");
-                PPR_ASSERT(std::format("{}", BV{u16{2}}) == "2");
-                PPR_ASSERT(std::format("{}", BV{u32{3}}) == "3");
-                PPR_ASSERT(std::format("{}", BV{u64{4}}) == "4");
-                PPR_ASSERT(std::format("{}", BV{0.5f}) == "0.5");
-                PPR_ASSERT(std::format("{}", BV{1.5}) == "1.5");
+                PPR_TEST_ASSERT(std::format("{}", BV{true}) == "true");
+                PPR_TEST_ASSERT(std::format("{}", BV{char{'x'}}) == "x");
+                PPR_TEST_ASSERT(std::format("{}", BV{i8{-1}}) == "-1");
+                PPR_TEST_ASSERT(std::format("{}", BV{i16{-2}}) == "-2");
+                PPR_TEST_ASSERT(std::format("{}", BV{i32{-3}}) == "-3");
+                PPR_TEST_ASSERT(std::format("{}", BV{i64{-4}}) == "-4");
+                PPR_TEST_ASSERT(std::format("{}", BV{u8{1}}) == "1");
+                PPR_TEST_ASSERT(std::format("{}", BV{u16{2}}) == "2");
+                PPR_TEST_ASSERT(std::format("{}", BV{u32{3}}) == "3");
+                PPR_TEST_ASSERT(std::format("{}", BV{u64{4}}) == "4");
+                PPR_TEST_ASSERT(std::format("{}", BV{0.5f}) == "0.5");
+                PPR_TEST_ASSERT(std::format("{}", BV{1.5}) == "1.5");
             };
 
             PPR_UNIT_TEST(format_block) {
@@ -430,21 +430,21 @@ export namespace pP::tests {
 
                 // format Block::Value holding a string (exercises string_view overload)
                 const std::string val_str = std::format("{}", dict[0].second);
-                PPR_ASSERT(val_str == R"("ppr")");
+                PPR_TEST_ASSERT(val_str == R"("ppr")");
 
                 // format Block::KeyValue (exercises formatter<Block::KeyValue>)
                 const std::string kv_str = std::format("{}", dict[0]);
                 constexpr std::string_view expected_kv = R"("name": "ppr")";
-                PPR_ASSERT(kv_str == expected_kv);
+                PPR_TEST_ASSERT(kv_str == expected_kv);
 
                 // format Block::Dict (exercises formatter<Block::Dict>)
                 const std::string dict_str = std::format("{}", dict);
                 constexpr std::string_view expected_dict = R"({"name": "ppr", "count": 42})";
-                PPR_ASSERT(dict_str == expected_dict);
+                PPR_TEST_ASSERT(dict_str == expected_dict);
 
                 // format Block (exercises formatter<Block>)
                 const std::string block_str = std::format("{}", block);
-                PPR_ASSERT(block_str == expected_dict);
+                PPR_TEST_ASSERT(block_str == expected_dict);
 
                 arena.restore(mark);
             };
@@ -467,7 +467,7 @@ export namespace pP::tests {
                 const std::string result = std::format("{}", block);
                 constexpr std::string_view expected =
                         R"({"active": true, "name": "test", "count": 7, "tags": ["a", "b", "c"], "meta": {"x": 1.5}})";
-                PPR_ASSERT(result == expected);
+                PPR_TEST_ASSERT(result == expected);
 
                 arena.restore(mark);
             };
@@ -488,7 +488,7 @@ export namespace pP::tests {
                 };
 
                 const auto &dict = *block.m_data;
-                PPR_ASSERT(dict.size() == 5u);
+                PPR_TEST_ASSERT(dict.size() == 5u);
 
                 auto find = [&](const char *key) -> const opaque::Block::Value & {
                     for (u32 i = 0; i < dict.size(); ++i) {
@@ -497,18 +497,18 @@ export namespace pP::tests {
                             return dict[i].second;
                         }
                     }
-                    PPR_ASSERT(!"key not found");
+                    PPR_TEST_ASSERT(!"key not found");
                     static opaque::Block::Value fallback{};
                     return fallback;
                 };
 
-                PPR_ASSERT(find("bool").get<bool>() == true);
-                PPR_ASSERT(find("int").get<i64>() == -99);
-                PPR_ASSERT(find("uint").get<u64>() == 42);
-                PPR_ASSERT(find("float").get<double>() == 3.14);
+                PPR_TEST_ASSERT(find("bool").get<bool>() == true);
+                PPR_TEST_ASSERT(find("int").get<i64>() == -99);
+                PPR_TEST_ASSERT(find("uint").get<u64>() == 42);
+                PPR_TEST_ASSERT(find("float").get<double>() == 3.14);
                 {
                     const auto &rv = find("str").get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "hello");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "hello");
                 }
 
                 arena.restore(mark);
@@ -536,14 +536,14 @@ export namespace pP::tests {
                 };
 
                 const auto &dict = *block.m_data;
-                PPR_ASSERT(dict.size() == 3u);
+                PPR_TEST_ASSERT(dict.size() == 3u);
 
                 const auto *const p_value = dict.tryGet("int");
-                PPR_ASSERT(p_value != nullptr);
-                PPR_ASSERT(p_value->template get<int>() == 99);
+                PPR_TEST_ASSERT(p_value != nullptr);
+                PPR_TEST_ASSERT(p_value->template get<int>() == 99);
                 {
                     const auto &rv = dict["fmt"].template get<opaque::Block::String>();
-                    PPR_ASSERT(std::string_view(rv.data(), rv.size()) == "formatted");
+                    PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "formatted");
                 }
 
                 arena.restore(mark);

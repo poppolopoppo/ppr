@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:io;
 import engine.core;
 import std;
@@ -20,11 +20,11 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
-                PPR_ASSERT(file.isValid());
+                PPR_TEST_ASSERT(file.isValid());
                 file.close();
-                PPR_ASSERT(not file.isValid());
+                PPR_TEST_ASSERT(not file.isValid());
             };
 
             PPR_UNIT_TEST(move_semantics) {
@@ -40,18 +40,18 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto file = std::move(*file_result);
-                PPR_ASSERT(file.isValid());
+                PPR_TEST_ASSERT(file.isValid());
 
                 auto file2 = std::move(file);
-                PPR_ASSERT(not file.isValid());
-                PPR_ASSERT(file2.isValid());
+                PPR_TEST_ASSERT(not file.isValid());
+                PPR_TEST_ASSERT(file2.isValid());
             };
 
             PPR_UNIT_TEST(default_constructed_invalid) {
                 IoFile file;
-                PPR_ASSERT(not file.isValid());
+                PPR_TEST_ASSERT(not file.isValid());
             };
 
             PPR_UNIT_TEST(double_close_safe) {
@@ -67,12 +67,12 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
-                PPR_ASSERT(file.isValid());
+                PPR_TEST_ASSERT(file.isValid());
                 file.close();
                 file.close();
-                PPR_ASSERT(not file.isValid());
+                PPR_TEST_ASSERT(not file.isValid());
             };
         }
 
@@ -90,14 +90,14 @@ export namespace pP::tests {
                 }
 
                 auto mapped_result = io::mapFile(path);
-                PPR_ASSERT(mapped_result.has_value());
+                PPR_TEST_ASSERT(mapped_result.has_value());
                 auto &mapped = *mapped_result;
-                PPR_ASSERT(mapped.isValid());
-                PPR_ASSERT(mapped.size() == kContent.size());
+                PPR_TEST_ASSERT(mapped.isValid());
+                PPR_TEST_ASSERT(mapped.size() == kContent.size());
 
                 const auto sp = mapped.span();
-                PPR_ASSERT(sp.size() == kContent.size());
-                PPR_ASSERT(std::memcmp(sp.data(), kContent.data(), kContent.size()) == 0);
+                PPR_TEST_ASSERT(sp.size() == kContent.size());
+                PPR_TEST_ASSERT(std::memcmp(sp.data(), kContent.data(), kContent.size()) == 0);
             };
 
             PPR_UNIT_TEST(empty_file) {
@@ -111,11 +111,11 @@ export namespace pP::tests {
                 }
 
                 auto mapped_result = io::mapFile(path);
-                PPR_ASSERT(mapped_result.has_value());
+                PPR_TEST_ASSERT(mapped_result.has_value());
                 auto &mapped = *mapped_result;
-                PPR_ASSERT(mapped.isValid());
-                PPR_ASSERT(mapped.size() == 0u);
-                PPR_ASSERT(mapped.span().empty());
+                PPR_TEST_ASSERT(mapped.isValid());
+                PPR_TEST_ASSERT(mapped.size() == 0u);
+                PPR_TEST_ASSERT(mapped.span().empty());
             };
 
             PPR_UNIT_TEST(move_semantics) {
@@ -131,21 +131,21 @@ export namespace pP::tests {
                 }
 
                 auto mapped_result = io::mapFile(path);
-                PPR_ASSERT(mapped_result.has_value());
+                PPR_TEST_ASSERT(mapped_result.has_value());
                 auto mapped = std::move(*mapped_result);
-                PPR_ASSERT(mapped.isValid());
+                PPR_TEST_ASSERT(mapped.isValid());
 
                 auto mapped2 = std::move(mapped);
-                PPR_ASSERT(not mapped.isValid());
-                PPR_ASSERT(mapped2.isValid());
-                PPR_ASSERT(mapped2.size() == kContent.size());
+                PPR_TEST_ASSERT(not mapped.isValid());
+                PPR_TEST_ASSERT(mapped2.isValid());
+                PPR_TEST_ASSERT(mapped2.size() == kContent.size());
             };
 
             PPR_UNIT_TEST(default_constructed_invalid) {
                 MappedFile mapped;
-                PPR_ASSERT(not mapped.isValid());
-                PPR_ASSERT(mapped.size() == 0u);
-                PPR_ASSERT(mapped.span().empty());
+                PPR_TEST_ASSERT(not mapped.isValid());
+                PPR_TEST_ASSERT(mapped.size() == 0u);
+                PPR_TEST_ASSERT(mapped.span().empty());
             };
 
             PPR_UNIT_TEST(write_content) {
@@ -162,22 +162,22 @@ export namespace pP::tests {
                 }
 
                 auto mapped_result = io::mapFile(path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
-                PPR_ASSERT(mapped_result.has_value());
+                PPR_TEST_ASSERT(mapped_result.has_value());
                 auto &mapped = *mapped_result;
-                PPR_ASSERT(mapped.isValid());
-                PPR_ASSERT(mapped.size() == kInitial.size());
+                PPR_TEST_ASSERT(mapped.isValid());
+                PPR_TEST_ASSERT(mapped.size() == kInitial.size());
 
                 {
                     auto sp = mapped.span();
-                    PPR_ASSERT(not sp.empty());
+                    PPR_TEST_ASSERT(not sp.empty());
                     std::memcpy(sp.data(), kWrite.data(), kWrite.size());
                 }
 
                 {
                     const auto &cm = mapped;
                     const auto sp = cm.span();
-                    PPR_ASSERT(std::memcmp(sp.data(), kWrite.data(), kWrite.size()) == 0);
-                    PPR_ASSERT(sp[kInitial.size() - 1u] == std::byte{'!'});
+                    PPR_TEST_ASSERT(std::memcmp(sp.data(), kWrite.data(), kWrite.size()) == 0);
+                    PPR_TEST_ASSERT(sp[kInitial.size() - 1u] == std::byte{'!'});
                 }
             };
         }
@@ -186,19 +186,19 @@ export namespace pP::tests {
             PPR_UNIT_TEST(default_state) {
                 auto port = io::createPort();
                 IoRequest req;
-                PPR_ASSERT(not req.isPending());
-                PPR_ASSERT(not req.pollEvent());
-                PPR_VERIFY(not req.cancel());
+                PPR_TEST_ASSERT(not req.isPending());
+                PPR_TEST_ASSERT(not req.pollEvent());
+                PPR_TEST_ASSERT(not req.cancel());
             };
 
             PPR_UNIT_TEST(i_event_interface) {
                 auto port = io::createPort();
                 IoRequest req;
 
-                PPR_ASSERT(not req.pollEvent());
+                PPR_TEST_ASSERT(not req.pollEvent());
 
                 auto signal = select(req);
-                PPR_ASSERT(not signal.poll().has_value());
+                PPR_TEST_ASSERT(not signal.poll().has_value());
             };
 
             PPR_UNIT_TEST(read_completes) {
@@ -215,9 +215,9 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
-                PPR_ASSERT(file.isValid());
+                PPR_TEST_ASSERT(file.isValid());
 
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
@@ -227,18 +227,18 @@ export namespace pP::tests {
 
                 auto signal = select(req);
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
-                PPR_ASSERT(result.value() == std::addressof(req));
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result.value() == std::addressof(req));
 
-                PPR_ASSERT(req.bytesTransferred() == kContent.size());
-                PPR_ASSERT(not req.error());
-                PPR_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
+                PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
+                PPR_TEST_ASSERT(not req.error());
+                PPR_TEST_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
             };
 
             PPR_UNIT_TEST(poll_idle_returns_zero) {
                 auto port = io::createPort();
                 const std::size_t n = port.pollCompletions();
-                PPR_ASSERT(n == 0u);
+                PPR_TEST_ASSERT(n == 0u);
             };
 
             PPR_UNIT_TEST(reset_and_reuse) {
@@ -255,7 +255,7 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
 
                 IoRequest req;
@@ -264,8 +264,8 @@ export namespace pP::tests {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
                     (void) port.pollCompletions();
-                    PPR_ASSERT(req.pollEvent());
-                    PPR_ASSERT(req.bytesTransferred() == kContent.size());
+                    PPR_TEST_ASSERT(req.pollEvent());
+                    PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
                 }
 
                 req.resetEvent();
@@ -274,8 +274,8 @@ export namespace pP::tests {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
                     (void) port.pollCompletions();
-                    PPR_ASSERT(req.pollEvent());
-                    PPR_ASSERT(req.bytesTransferred() == kContent.size());
+                    PPR_TEST_ASSERT(req.pollEvent());
+                    PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
                 }
             };
 
@@ -293,7 +293,7 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
 
                 IoRequest req;
@@ -305,9 +305,9 @@ export namespace pP::tests {
                 PulseEvent timer;
                 auto signal = select(req, timer);
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
-                PPR_ASSERT(result->index() == 0u);
-                PPR_ASSERT(req.bytesTransferred() == kContent.size());
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result->index() == 0u);
+                PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
             };
 
             PPR_UNIT_TEST(cancel_inflight) {
@@ -324,21 +324,21 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
                 const bool was = req.cancel();
-                PPR_ASSERT(not req.isPending());
+                PPR_TEST_ASSERT(not req.isPending());
 
                 (void) port.pollCompletions();
 
                 if (was) {
-                    PPR_ASSERT(not req.pollEvent());
+                    PPR_TEST_ASSERT(not req.pollEvent());
                 } else {
-                    PPR_ASSERT(req.bytesTransferred() == kContent.size());
+                    PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
                     req.resetEvent();
                 }
             };
@@ -357,7 +357,7 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
                 IoRequest req;
                 std::array<std::byte, 64> buf{};
@@ -366,8 +366,8 @@ export namespace pP::tests {
                 const bool first = req.cancel();
                 (void) first;
                 const bool second = req.cancel();
-                PPR_ASSERT(not second);
-                PPR_ASSERT(not req.isPending());
+                PPR_TEST_ASSERT(not second);
+                PPR_TEST_ASSERT(not req.isPending());
 
                 (void) port.pollCompletions();
             };
@@ -377,16 +377,16 @@ export namespace pP::tests {
                 IoRequest req;
 
                 auto signal = select(req);
-                PPR_ASSERT(not signal.poll().has_value());
+                PPR_TEST_ASSERT(not signal.poll().has_value());
 
-                PPR_VERIFY(not req.cancel());
-                PPR_ASSERT(not req.pollEvent());
+                PPR_TEST_ASSERT(not req.cancel());
+                PPR_TEST_ASSERT(not req.pollEvent());
 
                 req.resetEvent();
-                PPR_ASSERT(not req.pollEvent());
+                PPR_TEST_ASSERT(not req.pollEvent());
 
                 auto signal2 = select(req);
-                PPR_ASSERT(not signal2.poll().has_value());
+                PPR_TEST_ASSERT(not signal2.poll().has_value());
             };
 
             PPR_UNIT_TEST(cancel_then_destroy) {
@@ -403,7 +403,7 @@ export namespace pP::tests {
 
                 auto port = io::createPort();
                 auto file_result = port.open(path);
-                PPR_ASSERT(file_result.has_value());
+                PPR_TEST_ASSERT(file_result.has_value());
                 auto &file = *file_result;
                 {
                     IoRequest req;
@@ -412,7 +412,7 @@ export namespace pP::tests {
                     (void) req.cancel();
                     (void) port.pollCompletions();
                 }
-                PPR_ASSERT(true);
+                PPR_TEST_ASSERT(true);
             };
         }
 

@@ -280,14 +280,3 @@ extern "C" void _ReadWriteBarrier();
 
 #define RHI_RETURN_ERROR_ON_FAIL(_CATEGORY, ...)                              \
     PPR_RETURN_ERROR_ON_FAIL(_CATEGORY, pP::rhi::result(__VA_ARGS__))
-
-// ------------------------------------------------------------------
-// unit tests
-// ------------------------------------------------------------------
-
-#define PPR_ENABLE_UNIT_TESTS 1
-
-#define PPR_UNIT_TEST(_NAME, ...) \
-    inline constexpr auto _NAME = \
-        pP::UnitTest::Named(PPR_STRINGIZE(_NAME), {__VA_ARGS__}) / \
-            []([[maybe_unused]] pP::UnitTest::IRun & _) -> void

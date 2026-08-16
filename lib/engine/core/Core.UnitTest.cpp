@@ -7,6 +7,7 @@ import :unit_test;
 import :assert;
 import :hal;
 import :function.ref;
+import :utility;
 
 import std;
 
@@ -30,6 +31,13 @@ namespace pP {
     // ------------------------------------------------------------------
     // Unit test helper
     // ------------------------------------------------------------------
+
+    [[noreturn]] void onTestAssertionFailure(const char *message, const std::source_location &site) {
+        const std::string text = std::format(
+            "{}({}): TEST assert failed: \"{}\"\n\tin function: {}\n",
+            site.file_name(), site.line(), message, site.function_name());
+        throw std::logic_error{text};
+    }
 
     bool UnitTest::startInChildProcess_(RunImpl &run) const {
         if (run.m_context.isChildRun()) {
@@ -55,32 +63,50 @@ namespace pP {
             impl.stop();
         };
 
+        bool failed = false;
+        std::string failure_message;
+
         try {
             if ((m_flags & fork) == none) [[likely]] {
-                m_run(run);
-
-                if (isExpectedToFail()) [[unlikely]] {
-                    run.failWith("test succeeded, but it was expected to fail");
-                    return;
+                if (m_run_ec != nullptr) {
+                    const auto ec = m_run_ec(run);
+                    if (hasFailed(ec)) {
+                        failed = true;
+                        failure_message = ec.message();
+                    }
+                } else {
+                    m_run(run);
                 }
             } else {
-                if (not startInChildProcess_(impl)) {
-                    if (not isExpectedToFail()) [[unlikely]] {
-                        run.failWith("child process exited with an error");
-                        return;
-                    }
-                } else if (isExpectedToFail()) [[unlikely]] {
-                    run.failWith("test succeeded, but it was expected to fail");
-                    return;
+                PPR_ASSERT(m_run_ec == nullptr && "error-code tests cannot be forked");
+                const bool child_ok = startInChildProcess_(impl);
+                if (not child_ok) {
+                    failed = true;
+                    failure_message = "child process exited with an error";
                 }
             }
-
-            run.success();
         } catch (const std::exception &e) {
             if (isExpectedToFail()) {
                 run.success();
+                return;
+            }
+            run.failWith(e.what());
+            return;
+        }
+
+        if (failed) {
+            if (isExpectedToFail()) {
+                run.success();
+            } else if (impl.m_status != pass) {
+                // already recorded (group propagation / handler)
             } else {
-                run.failWith(e.what());
+                run.failWith(failure_message.empty() ? "test failed" : failure_message.c_str());
+            }
+        } else {
+            if (isExpectedToFail()) {
+                run.failWith("test succeeded, but it was expected to fail");
+            } else if (impl.m_status == pass) {
+                run.success();
             }
         }
     }

@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.app:player_graph;
 
@@ -51,7 +51,7 @@ export namespace pP::tests {
             ++count;
             return default_value_v;
         });
-        PPR_ASSERT(count == 0u);
+        PPR_TEST_ASSERT(count == 0u);
     };
 
     PPR_UNIT_TEST(player_graph_add_keyboard_player) {
@@ -60,12 +60,12 @@ export namespace pP::tests {
 
         const PlayerId user_id{42u};
         auto result = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
-        PPR_ASSERT(result.has_value());
+        PPR_TEST_ASSERT(result.has_value());
         SharedPlayer player = *result;
-        PPR_ASSERT(player.get() != nullptr);
-        PPR_ASSERT(player->getIdentity().m_kind == EPlayerKind::keyboard);
-        PPR_ASSERT(player->getIdentity().m_user_id == user_id);
-        PPR_ASSERT(player->getIdentity().m_device_id == InputDeviceID{100u});
+        PPR_TEST_ASSERT(player.get() != nullptr);
+        PPR_TEST_ASSERT(player->getIdentity().m_kind == EPlayerKind::keyboard);
+        PPR_TEST_ASSERT(player->getIdentity().m_user_id == user_id);
+        PPR_TEST_ASSERT(player->getIdentity().m_device_id == InputDeviceID{100u});
     };
 
     PPR_UNIT_TEST(player_graph_get_player_by_id) {
@@ -76,13 +76,13 @@ export namespace pP::tests {
         std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         SharedPlayer retrieved = graph.getPlayer(user_id);
-        PPR_ASSERT(retrieved.get() != nullptr);
+        PPR_TEST_ASSERT(retrieved.get() != nullptr);
     };
 
     PPR_UNIT_TEST(player_graph_get_nonexistent_player_returns_null) {
         const PlayerGraph graph{};
         SharedPlayer retrieved = graph.getPlayer(PlayerId{999u});
-        PPR_ASSERT(retrieved.get() == nullptr);
+        PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
     PPR_UNIT_TEST(player_graph_find_player_for_device) {
@@ -93,18 +93,18 @@ export namespace pP::tests {
         std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         auto found = graph.findPlayerForDevice(InputDeviceID{100u});
-        PPR_ASSERT(found.has_value());
-        PPR_ASSERT(*found == user_id);
+        PPR_TEST_ASSERT(found.has_value());
+        PPR_TEST_ASSERT(*found == user_id);
 
         found = graph.findPlayerForDevice(InputDeviceID{101u});
-        PPR_ASSERT(found.has_value());
-        PPR_ASSERT(*found == user_id);
+        PPR_TEST_ASSERT(found.has_value());
+        PPR_TEST_ASSERT(*found == user_id);
     };
 
     PPR_UNIT_TEST(player_graph_find_nonexistent_device_returns_nullopt) {
         const PlayerGraph graph{};
         auto found = graph.findPlayerForDevice(InputDeviceID{999u});
-        PPR_ASSERT(!found.has_value());
+        PPR_TEST_ASSERT(!found.has_value());
     };
 
     PPR_UNIT_TEST(player_graph_enumerate_players) {
@@ -123,9 +123,9 @@ export namespace pP::tests {
             if (p->getIdentity().m_kind == EPlayerKind::gamepad) has_gamepad = true;
             return default_value_v;
         });
-        PPR_ASSERT(count == 2u);
-        PPR_ASSERT(has_keyboard);
-        PPR_ASSERT(has_gamepad);
+        PPR_TEST_ASSERT(count == 2u);
+        PPR_TEST_ASSERT(has_keyboard);
+        PPR_TEST_ASSERT(has_gamepad);
     };
 
     PPR_UNIT_TEST(player_graph_remove_player) {
@@ -136,17 +136,17 @@ export namespace pP::tests {
         std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         auto err = graph.removePlayer(service, user_id);
-        PPR_ASSERT(err == default_value_v);
+        PPR_TEST_ASSERT(err == default_value_v);
 
         SharedPlayer retrieved = graph.getPlayer(user_id);
-        PPR_ASSERT(retrieved.get() == nullptr);
+        PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
     PPR_UNIT_TEST(player_graph_remove_nonexistent_player_fails) {
         PlayerGraph graph{};
         GraphTestService service{};
         auto err = graph.removePlayer(service, PlayerId{999u});
-        PPR_ASSERT(err != default_value_v);
+        PPR_TEST_ASSERT(err != default_value_v);
     };
 
     PPR_UNIT_TEST(player_graph_clear_removes_all_players) {
@@ -163,7 +163,7 @@ export namespace pP::tests {
             ++count;
             return default_value_v;
         });
-        PPR_ASSERT(count == 0u);
+        PPR_TEST_ASSERT(count == 0u);
     };
 
     PPR_UNIT_TEST(player_graph_get_or_create_keyboard_is_idempotent) {
@@ -172,11 +172,11 @@ export namespace pP::tests {
 
         const PlayerId user_id{42u};
         auto first = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
-        PPR_ASSERT(first.has_value());
+        PPR_TEST_ASSERT(first.has_value());
 
         auto second = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
-        PPR_ASSERT(second.has_value());
-        PPR_ASSERT(first->get() == second->get());
+        PPR_TEST_ASSERT(second.has_value());
+        PPR_TEST_ASSERT(first->get() == second->get());
     };
 
     PPR_UNIT_TEST(player_graph_when_player_added_callback) {
@@ -191,7 +191,7 @@ export namespace pP::tests {
         auto added_handle = graph.whenPlayerAdded(on_added);
 
         std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, getTestKeyboard(), getTestMouse());
-        PPR_ASSERT(call_count == 1u);
+        PPR_TEST_ASSERT(call_count == 1u);
     };
 
     PPR_UNIT_TEST(player_graph_when_player_removed_callback) {
@@ -209,7 +209,7 @@ export namespace pP::tests {
         auto removed_handle = graph.whenPlayerRemoved(on_removed);
 
         std::ignore = graph.removePlayer(service, user_id);
-        PPR_ASSERT(call_count == 1u);
+        PPR_TEST_ASSERT(call_count == 1u);
     };
 
     PPR_UNIT_TEST(player_graph_clear_also_clears_callbacks) {
@@ -227,7 +227,7 @@ export namespace pP::tests {
         graph.clear();
 
         std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, getTestKeyboard(), getTestMouse());
-        PPR_ASSERT(added_count == 0u);
+        PPR_TEST_ASSERT(added_count == 0u);
     };
 
     PPR_UNIT_TEST(app_player_graph) {

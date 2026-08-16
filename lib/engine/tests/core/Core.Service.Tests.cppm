@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.core:service;
 
@@ -11,7 +11,7 @@ export namespace pP::tests {
         PPR_UNIT_TEST(type_uid_identity) {
             constexpr pP::hash_t id_a = typeUid<int>();
             constexpr pP::hash_t id_b = typeUid<int>();
-            PPR_ASSERT(id_a == id_b);
+            PPR_TEST_ASSERT(id_a == id_b);
         };
 
         PPR_UNIT_TEST(type_uid_unique_types) {
@@ -19,25 +19,25 @@ export namespace pP::tests {
             constexpr pP::hash_t id_float = typeUid<float>();
             constexpr pP::hash_t id_double = typeUid<double>();
             constexpr pP::hash_t id_char = typeUid<char>();
-            PPR_ASSERT(id_int != id_float);
-            PPR_ASSERT(id_int != id_double);
-            PPR_ASSERT(id_float != id_double);
-            PPR_ASSERT(id_int != id_char);
+            PPR_TEST_ASSERT(id_int != id_float);
+            PPR_TEST_ASSERT(id_int != id_double);
+            PPR_TEST_ASSERT(id_float != id_double);
+            PPR_TEST_ASSERT(id_int != id_char);
         };
 
         PPR_UNIT_TEST(type_uid_template_identity) {
             constexpr pP::hash_t id_a = typeUid<std::pair<int, float>>();
             constexpr pP::hash_t id_b = typeUid<std::pair<int, float>>();
-            PPR_ASSERT(id_a == id_b);
+            PPR_TEST_ASSERT(id_a == id_b);
         };
 
         PPR_UNIT_TEST(type_uid_unique_templates) {
             constexpr pP::hash_t id_pair = typeUid<std::pair<int, float>>();
             constexpr pP::hash_t id_tuple = typeUid<std::tuple<int, float>>();
             constexpr pP::hash_t id_vector = typeUid<std::vector<int>>();
-            PPR_ASSERT(id_pair != id_tuple);
-            PPR_ASSERT(id_pair != id_vector);
-            PPR_ASSERT(id_tuple != id_vector);
+            PPR_TEST_ASSERT(id_pair != id_tuple);
+            PPR_TEST_ASSERT(id_pair != id_vector);
+            PPR_TEST_ASSERT(id_tuple != id_vector);
         };
 
         PPR_UNIT_TEST(type_uid_cv_qualified) {
@@ -45,17 +45,17 @@ export namespace pP::tests {
             constexpr pP::hash_t id_const_int = typeUid<const int>();
             constexpr pP::hash_t id_volatile_int = typeUid<volatile int>();
             constexpr pP::hash_t id_ref = typeUid<int&>();
-            PPR_ASSERT(id_int != id_const_int);
-            PPR_ASSERT(id_int != id_volatile_int);
-            PPR_ASSERT(id_int != id_ref);
+            PPR_TEST_ASSERT(id_int != id_const_int);
+            PPR_TEST_ASSERT(id_int != id_volatile_int);
+            PPR_TEST_ASSERT(id_int != id_ref);
         };
 
         PPR_UNIT_TEST(type_uid_pointer_types) {
             constexpr pP::hash_t id_int_ptr = typeUid<int*>();
             constexpr pP::hash_t id_float_ptr = typeUid<float*>();
             constexpr pP::hash_t id_int_ptr_ptr = typeUid<int**>();
-            PPR_ASSERT(id_int_ptr != id_float_ptr);
-            PPR_ASSERT(id_int_ptr != id_int_ptr_ptr);
+            PPR_TEST_ASSERT(id_int_ptr != id_float_ptr);
+            PPR_TEST_ASSERT(id_int_ptr != id_int_ptr_ptr);
         };
     }
 
@@ -81,60 +81,60 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(empty) {
             ServicesStore loc;
-            PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(insert_and_try_get) {
             MockServiceA a;
             a.value = 42;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.tryGet<MockServiceA>();
-            PPR_ASSERT(retrieved.isValid());
-            PPR_ASSERT(retrieved->value == 42);
+            PPR_TEST_ASSERT(retrieved.isValid());
+            PPR_TEST_ASSERT(retrieved->value == 42);
         };
 
         PPR_UNIT_TEST(insert_and_get) {
             MockServiceA a;
             a.value = 99;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             auto retrieved = loc.get<MockServiceA>();
-            PPR_ASSERT(retrieved.isValid());
-            PPR_ASSERT(retrieved->value == 99);
+            PPR_TEST_ASSERT(retrieved.isValid());
+            PPR_TEST_ASSERT(retrieved->value == 99);
         };
 
         PPR_UNIT_TEST(erase) {
             MockServiceA a;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
-            PPR_ASSERT(loc.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(loc.tryGet<MockServiceA>().isValid());
 
-            PPR_VERIFY(loc.erase<MockServiceA>());
-            PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(loc.erase<MockServiceA>());
+            PPR_TEST_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(erase_nonexistent) {
             ServicesStore loc;
-            PPR_VERIFY(not loc.erase<MockServiceA>());
+            PPR_TEST_ASSERT(not loc.erase<MockServiceA>());
         };
 
         PPR_UNIT_TEST(reset) {
             MockServiceA a;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
 
             loc.reset();
-            PPR_ASSERT(not loc.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(duplicate_insert) {
             MockServiceA a1, a2;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a1)));
-            PPR_VERIFY(not loc.insert(safe_ptr<MockServiceA>(&a2)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a1)));
+            PPR_TEST_ASSERT(not loc.insert(safe_ptr<MockServiceA>(&a2)));
         };
 
         PPR_UNIT_TEST(multi_type_routing) {
@@ -143,27 +143,27 @@ export namespace pP::tests {
             MockServiceB b;
             b.fvalue = 3.14f;
             ServicesStore loc;
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceA>(&a)));
-            PPR_VERIFY(loc.insert(safe_ptr<MockServiceB>(&b)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceB>(&b)));
 
-            PPR_ASSERT(loc.tryGet<MockServiceA>().isValid());
-            PPR_ASSERT(loc.tryGet<MockServiceA>()->value == 10);
-            PPR_ASSERT(loc.tryGet<MockServiceB>().isValid());
+            PPR_TEST_ASSERT(loc.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(loc.tryGet<MockServiceA>()->value == 10);
+            PPR_TEST_ASSERT(loc.tryGet<MockServiceB>().isValid());
 
             const float v = loc.tryGet<MockServiceB>()->fvalue;
-            PPR_ASSERT(v > 3.139f && v < 3.141f);
+            PPR_TEST_ASSERT(v > 3.139f && v < 3.141f);
         };
 
         PPR_UNIT_TEST(parent_fallback) {
             MockServiceA a;
             a.value = 7;
             ServicesStore parent;
-            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
             auto retrieved = child.tryGet<MockServiceA>();
-            PPR_ASSERT(retrieved.isValid());
-            PPR_ASSERT(retrieved->value == 7);
+            PPR_TEST_ASSERT(retrieved.isValid());
+            PPR_TEST_ASSERT(retrieved->value == 7);
         };
 
         PPR_UNIT_TEST(child_override) {
@@ -171,27 +171,27 @@ export namespace pP::tests {
             parent_a.value = 1;
             child_a.value = 2;
             ServicesStore parent;
-            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&parent_a)));
+            PPR_TEST_ASSERT(parent.insert(safe_ptr<MockServiceA>(&parent_a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
-            PPR_VERIFY(child.insert(safe_ptr<MockServiceA>(&child_a)));
+            PPR_TEST_ASSERT(child.insert(safe_ptr<MockServiceA>(&child_a)));
 
             auto retrieved = child.tryGet<MockServiceA>();
-            PPR_ASSERT(retrieved.isValid());
-            PPR_ASSERT(retrieved->value == 2);
+            PPR_TEST_ASSERT(retrieved.isValid());
+            PPR_TEST_ASSERT(retrieved->value == 2);
         };
 
         PPR_UNIT_TEST(child_erase_does_not_affect_parent) {
             MockServiceA a;
             ServicesStore parent;
-            PPR_VERIFY(parent.insert(safe_ptr<MockServiceA>(&a)));
+            PPR_TEST_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
-            PPR_VERIFY(not child.erase<MockServiceA>());
-            PPR_ASSERT(parent.tryGet<MockServiceA>().isValid());
+            PPR_TEST_ASSERT(not child.erase<MockServiceA>());
+            PPR_TEST_ASSERT(parent.tryGet<MockServiceA>().isValid());
 
             auto retrieved = child.tryGet<MockServiceA>();
-            PPR_ASSERT(retrieved.isValid());
+            PPR_TEST_ASSERT(retrieved.isValid());
         };
     }
 

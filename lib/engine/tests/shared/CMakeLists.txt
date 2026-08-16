@@ -11,3 +11,5 @@ target_sources(EngineTestsShared
 setup_ppr_project(EngineTestsShared
     INTERNAL_PUBLIC_DEPS EngineCore
 )
+
+target_include_directories(EngineTestsShared PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)

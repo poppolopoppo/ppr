@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.core:hal;
 
@@ -10,9 +10,9 @@ export namespace pP::tests {
     namespace HALTests {
         PPR_UNIT_TEST(thread_id) {
             const auto tid = hal::currentThreadId();
-            PPR_ASSERT(tid == hal::currentThreadId());
+            PPR_TEST_ASSERT(tid == hal::currentThreadId());
             if (hal::platformName() != "generic") {
-                PPR_ASSERT(tid.m_value != 0u);
+                PPR_TEST_ASSERT(tid.m_value != 0u);
             }
         };
 
@@ -25,19 +25,19 @@ export namespace pP::tests {
             hal::setThreadName(expected);
 
             if (hal::platformName() == "generic") {
-                PPR_ASSERT(hal::getThreadName(tid).empty());
+                PPR_TEST_ASSERT(hal::getThreadName(tid).empty());
                 return;
             }
 
-            PPR_ASSERT(hal::getThreadName(tid) == expected);
+            PPR_TEST_ASSERT(hal::getThreadName(tid) == expected);
 
             char buffer[64]{};
             const std::size_t written = hal::getThreadName(tid, buffer, sizeof(buffer));
-            PPR_ASSERT(written == expected.size());
-            PPR_ASSERT(std::string_view(buffer, written) == expected);
+            PPR_TEST_ASSERT(written == expected.size());
+            PPR_TEST_ASSERT(std::string_view(buffer, written) == expected);
 
             const std::size_t required = hal::getThreadName(tid, nullptr, 0u);
-            PPR_ASSERT(required == expected.size());
+            PPR_TEST_ASSERT(required == expected.size());
 
             // NB: std::format("{}", tid) triggers MSVC C3546 in consteval
             // format-string checking for module-partition types (u64 / ThreadId).
@@ -57,7 +57,7 @@ export namespace pP::tests {
 
             char small[4]{};
             const std::size_t written = hal::getThreadName(tid, small, sizeof(small));
-            PPR_ASSERT(written > sizeof(small));
+            PPR_TEST_ASSERT(written > sizeof(small));
         };
 
         PPR_UNIT_TEST(worker_thread_name) {
@@ -79,7 +79,7 @@ export namespace pP::tests {
             }
 
             if (hal::platformName() != "generic") {
-                PPR_ASSERT(hal::getThreadName(tid.load()) == "PPR_Worker");
+                PPR_TEST_ASSERT(hal::getThreadName(tid.load()) == "PPR_Worker");
             }
 
             release.store(true);

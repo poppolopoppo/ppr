@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.app:viewport;
 
@@ -12,17 +12,17 @@ import std;
 export namespace pP::tests {
     namespace ProjectionConv {
         PPR_UNIT_TEST(device_type_mapping) {
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D11) == rhi::EProjectionConvention::D3D);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D12) == rhi::EProjectionConvention::D3D);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Default) == rhi::EProjectionConvention::D3D);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Vulkan) == rhi::EProjectionConvention::VK);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Metal) == rhi::EProjectionConvention::VK);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::WGPU) == rhi::EProjectionConvention::VK);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D11) == rhi::EProjectionConvention::D3D);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D12) == rhi::EProjectionConvention::D3D);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Default) == rhi::EProjectionConvention::D3D);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Vulkan) == rhi::EProjectionConvention::VK);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Metal) == rhi::EProjectionConvention::VK);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::WGPU) == rhi::EProjectionConvention::VK);
         };
 
         PPR_UNIT_TEST(unknown_device_type_falls_back_to_d3d) {
             const auto unknown = static_cast<rhi::DeviceType>(0x7F);
-            PPR_ASSERT(rhi::projectionConventionFromDeviceType(unknown) == rhi::EProjectionConvention::D3D);
+            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(unknown) == rhi::EProjectionConvention::D3D);
         };
 
         PPR_UNIT_TEST(constexpr_evaluable) {
@@ -36,27 +36,27 @@ export namespace pP::tests {
         PPR_UNIT_TEST(d3d_y_down_depth_0_1) {
             const auto m = rhi::getOrthoMatrix(rhi::DeviceType::D3D12, 800.0f, 600.0f);
 
-            PPR_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
-            PPR_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
-            PPR_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
 
-            PPR_ASSERT(std::abs(m(2, 2) - 0.5f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 2) - 0.5f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 2) - 0.5f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 2) - 0.5f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
         };
 
         PPR_UNIT_TEST(vk_y_down_depth_minus1_1) {
             const auto m = rhi::getOrthoMatrix(rhi::DeviceType::Vulkan, 800.0f, 600.0f);
 
-            PPR_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
-            PPR_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
-            PPR_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
 
-            PPR_ASSERT(std::abs(m(2, 2) + 0.5f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 2)) < kEps);
-            PPR_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 2) + 0.5f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 2)) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
         };
 
         PPR_UNIT_TEST(conventions_share_xy_mapping) {
@@ -69,7 +69,7 @@ export namespace pP::tests {
                     if (depth_mapping) {
                         continue;
                     }
-                    PPR_ASSERT(std::abs(d3d(row, col) - vk(row, col)) < kEps);
+                    PPR_TEST_ASSERT(std::abs(d3d(row, col) - vk(row, col)) < kEps);
                 }
             }
         };
@@ -84,14 +84,14 @@ export namespace pP::tests {
             const auto m = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
 
             const float y_scale = 1.0f / std::tan(fov * 0.5f);
-            PPR_ASSERT(std::abs(m(1, 1) - y_scale) < kEps);
-            PPR_ASSERT(m(0, 0) < m(1, 1));
+            PPR_TEST_ASSERT(std::abs(m(1, 1) - y_scale) < kEps);
+            PPR_TEST_ASSERT(m(0, 0) < m(1, 1));
 
             const float a = 1000.0f / (1000.0f - 0.1f);
-            PPR_ASSERT(std::abs(m(2, 2) - a) < kEps);
-            PPR_ASSERT(std::abs(m(3, 2) + a * 0.1f) < kEps);
-            PPR_ASSERT(std::abs(m(2, 3) - 1.0f) < kEps);
-            PPR_ASSERT(std::abs(m(3, 3)) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 2) - a) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 2) + a * 0.1f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 3) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 3)) < kEps);
         };
 
         PPR_UNIT_TEST(vk_depth_range_y_flip) {
@@ -99,13 +99,13 @@ export namespace pP::tests {
             const auto m = rhi::getPerspectiveMatrix(rhi::DeviceType::Vulkan, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
 
             const float y_scale = 1.0f / std::tan(fov * 0.5f);
-            PPR_ASSERT(std::abs(m(1, 1) + y_scale) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(1, 1) + y_scale) < kEps);
 
             const float c = (1000.0f + 0.1f) / (0.1f - 1000.0f) * 0.5f;
             const float d = 2.0f * 0.1f * 1000.0f / (0.1f - 1000.0f) * 0.5f;
-            PPR_ASSERT(std::abs(m(2, 2) - c) < kEps);
-            PPR_ASSERT(std::abs(m(3, 2) - d) < kEps);
-            PPR_ASSERT(std::abs(m(3, 3) - d) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 2) - c) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 2) - d) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 3) - d) < kEps);
         };
 
         PPR_UNIT_TEST(conventions_share_x_scale) {
@@ -113,7 +113,7 @@ export namespace pP::tests {
             const auto d3d = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
             const auto vk = rhi::getPerspectiveMatrix(rhi::DeviceType::Vulkan, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
 
-            PPR_ASSERT(std::abs(d3d(0, 0) - vk(0, 0)) < kEps);
+            PPR_TEST_ASSERT(std::abs(d3d(0, 0) - vk(0, 0)) < kEps);
         };
     }
 
@@ -123,17 +123,17 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(config_plain_data) {
             ViewportConfig config;
-            PPR_ASSERT(config.framebuffer_size.x == 0);
-            PPR_ASSERT(config.framebuffer_size.y == 0);
+            PPR_TEST_ASSERT(config.framebuffer_size.x == 0);
+            PPR_TEST_ASSERT(config.framebuffer_size.y == 0);
 
             config.framebuffer_size = int2(1920, 1080);
             const ViewportConfig copy = config;
-            PPR_ASSERT(copy.framebuffer_size == config.framebuffer_size);
+            PPR_TEST_ASSERT(copy.framebuffer_size == config.framebuffer_size);
         };
 
         PPR_UNIT_TEST(entry_aggregate_init_and_draw) {
             int calls = 0;
-            const auto draw = [&calls](rhi::IRenderPassEncoder &) -> std::error_code {
+            const auto draw = [&calls](rhi::IRenderPassEncoder &, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
                 ++calls;
                 return default_value_v;
             };
@@ -143,14 +143,16 @@ export namespace pP::tests {
                 .draw = draw,
             };
 
-            PPR_ASSERT(entry.pipeline.get() == nullptr);
-            PPR_ASSERT(entry.viewport.extentX == 800.0f);
-            PPR_ASSERT(entry.scissor.maxX == 800);
+            PPR_TEST_ASSERT(entry.pipeline.get() == nullptr);
+            PPR_TEST_ASSERT(entry.viewport.extentX == 800.0f);
+            PPR_TEST_ASSERT(entry.scissor.maxX == 800);
 
             auto *const dummy_pass = static_cast<rhi::IRenderPassEncoder *>(nullptr);
-            const auto ec = entry.draw(*dummy_pass);
-            PPR_ASSERT(!ec);
-            PPR_ASSERT(calls == 1);
+            const rhi::Viewport vp = entry.viewport;
+            const rhi::ScissorRect sc = entry.scissor;
+            const auto ec = entry.draw(*dummy_pass, vp, sc);
+            PPR_TEST_ASSERT(!ec);
+            PPR_TEST_ASSERT(calls == 1);
         };
     }
 
@@ -170,20 +172,20 @@ export namespace pP::tests {
             ui.value = 2;
 
             ServicesStore parent;
-            PPR_VERIFY(parent.insert(safe_ptr<MockSceneService>(&scene)));
+            PPR_TEST_ASSERT(parent.insert(safe_ptr<MockSceneService>(&scene)));
 
             ServicesStore ui_store{safe_ptr<ServicesStore>(&parent)};
-            PPR_VERIFY(ui_store.insert(safe_ptr<MockUiService>(&ui)));
+            PPR_TEST_ASSERT(ui_store.insert(safe_ptr<MockUiService>(&ui)));
 
             const auto scene_svc = ui_store.tryGet<MockSceneService>();
-            PPR_ASSERT(scene_svc.isValid());
-            PPR_ASSERT(scene_svc->value == 1);
+            PPR_TEST_ASSERT(scene_svc.isValid());
+            PPR_TEST_ASSERT(scene_svc->value == 1);
 
             const auto ui_svc = ui_store.tryGet<MockUiService>();
-            PPR_ASSERT(ui_svc.isValid());
-            PPR_ASSERT(ui_svc->value == 2);
+            PPR_TEST_ASSERT(ui_svc.isValid());
+            PPR_TEST_ASSERT(ui_svc->value == 2);
 
-            PPR_ASSERT(not parent.tryGet<MockUiService>().isValid());
+            PPR_TEST_ASSERT(not parent.tryGet<MockUiService>().isValid());
         };
 
         PPR_UNIT_TEST(child_erase_keeps_parent_visible) {
@@ -192,15 +194,15 @@ export namespace pP::tests {
             MockUiService ui;
 
             ServicesStore parent;
-            PPR_VERIFY(parent.insert(safe_ptr<MockSceneService>(&scene)));
+            PPR_TEST_ASSERT(parent.insert(safe_ptr<MockSceneService>(&scene)));
 
             ServicesStore ui_store{safe_ptr<ServicesStore>(&parent)};
-            PPR_VERIFY(ui_store.insert(safe_ptr<MockUiService>(&ui)));
-            PPR_VERIFY(ui_store.erase<MockUiService>());
+            PPR_TEST_ASSERT(ui_store.insert(safe_ptr<MockUiService>(&ui)));
+            PPR_TEST_ASSERT(ui_store.erase<MockUiService>());
 
             const auto scene_svc = ui_store.tryGet<MockSceneService>();
-            PPR_ASSERT(scene_svc.isValid());
-            PPR_ASSERT(scene_svc->value == 7);
+            PPR_TEST_ASSERT(scene_svc.isValid());
+            PPR_TEST_ASSERT(scene_svc->value == 7);
         };
     }
 

@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:containers.stable_vector;
 import engine.core;
 import std;
@@ -9,20 +9,20 @@ export namespace pP::tests {
         PPR_UNIT_TEST(growth_and_indexing) {
             pP::StableVector<int> vec;
 
-            PPR_ASSERT(vec.isEmpty());
-            PPR_ASSERT(vec.size() == 0);
+            PPR_TEST_ASSERT(vec.isEmpty());
+            PPR_TEST_ASSERT(vec.size() == 0);
 
             for (std::size_t i = 0; i < 20; ++i) {
                 vec.pushBack(static_cast<int>(i));
             }
 
             for (std::size_t i = 0; i < 20; ++i) {
-                PPR_ASSERT(vec[i] == static_cast<int>(i));
+                PPR_TEST_ASSERT(vec[i] == static_cast<int>(i));
             }
 
             vec.reserve(100);
-            PPR_ASSERT(vec.capacity() >= 100);
-            PPR_ASSERT(vec.size() == 20);
+            PPR_TEST_ASSERT(vec.capacity() >= 100);
+            PPR_TEST_ASSERT(vec.size() == 20);
         };
 
         PPR_UNIT_TEST(iterator_navigation) {
@@ -34,17 +34,17 @@ export namespace pP::tests {
             auto it = vec.begin();
 
             it += 50;
-            PPR_ASSERT(*it == 50);
-            PPR_ASSERT(it.getIndex() == 50);
+            PPR_TEST_ASSERT(*it == 50);
+            PPR_TEST_ASSERT(it.getIndex() == 50);
 
-            PPR_ASSERT(vec.end() - vec.begin() == 64);
+            PPR_TEST_ASSERT(vec.end() - vec.begin() == 64);
 
             auto back_it = vec.end();
             --back_it;
-            PPR_ASSERT(*back_it == 63);
+            PPR_TEST_ASSERT(*back_it == 63);
 
-            PPR_ASSERT(vec.begin() + 10 == vec.begin() + 10);
-            PPR_ASSERT(vec.begin() + vec.size() == vec.end());
+            PPR_TEST_ASSERT(vec.begin() + 10 == vec.begin() + 10);
+            PPR_TEST_ASSERT(vec.begin() + vec.size() == vec.end());
         };
 
         struct Mock {
@@ -58,34 +58,34 @@ export namespace pP::tests {
             {
                 pP::StableVector<Mock> vec;
                 vec.resize(10);
-                PPR_ASSERT(Mock::count == 10);
+                PPR_TEST_ASSERT(Mock::count == 10);
 
                 vec.clear();
-                PPR_ASSERT(Mock::count == 0);
-                PPR_ASSERT(vec.size() == 0);
+                PPR_TEST_ASSERT(Mock::count == 0);
+                PPR_TEST_ASSERT(vec.size() == 0);
 
                 vec.resize(5);
-                PPR_ASSERT(Mock::count == 5);
+                PPR_TEST_ASSERT(Mock::count == 5);
             }
-            PPR_ASSERT(Mock::count == 0);
+            PPR_TEST_ASSERT(Mock::count == 0);
         };
 
         PPR_UNIT_TEST(modifiers) {
             pP::StableVector<int> vec = {0, 1, 2, 3, 4};
 
             vec.erase(2);
-            PPR_ASSERT(vec.size() == 4);
-            PPR_ASSERT(vec[2] == 3);
+            PPR_TEST_ASSERT(vec.size() == 4);
+            PPR_TEST_ASSERT(vec[2] == 3);
 
             vec.eraseSwapBack(0);
-            PPR_ASSERT(vec[0] == 4);
+            PPR_TEST_ASSERT(vec[0] == 4);
 
             pP::StableVector<int> other;
             other.pushBack(99);
             vec = std::move(other);
-            PPR_ASSERT(vec.size() == 1);
-            PPR_ASSERT(vec[0] == 99);
-            PPR_ASSERT(other.isEmpty());
+            PPR_TEST_ASSERT(vec.size() == 1);
+            PPR_TEST_ASSERT(vec[0] == 99);
+            PPR_TEST_ASSERT(other.isEmpty());
         };
 
         PPR_UNIT_TEST(memory_compaction) {
@@ -97,11 +97,11 @@ export namespace pP::tests {
             vec.reserve(128);
 
             vec.shrinkToFit();
-            PPR_ASSERT(vec.capacity() >= 10);
-            PPR_ASSERT(vec.capacity() < 128);
+            PPR_TEST_ASSERT(vec.capacity() >= 10);
+            PPR_TEST_ASSERT(vec.capacity() < 128);
 
             for (std::size_t i = 0; i < 10; ++i) {
-                PPR_ASSERT(vec[i] == static_cast<int>(i));
+                PPR_TEST_ASSERT(vec[i] == static_cast<int>(i));
             }
         };
     }

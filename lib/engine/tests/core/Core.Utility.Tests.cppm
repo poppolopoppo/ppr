@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:utility;
 import engine.core;
 import std;
@@ -8,76 +8,76 @@ export namespace pP::tests {
     namespace Utility {
         PPR_UNIT_TEST(divide_round_up_basic) {
             constexpr auto exact = divideRoundUp(9u, 3u);
-            PPR_ASSERT(exact == 3u);
+            PPR_TEST_ASSERT(exact == 3u);
 
             constexpr auto remainder = divideRoundUp(10u, 3u);
-            PPR_ASSERT(remainder == 4u);
+            PPR_TEST_ASSERT(remainder == 4u);
 
             constexpr auto zero_value = divideRoundUp(0u, 5u);
-            PPR_ASSERT(zero_value == 0u);
+            PPR_TEST_ASSERT(zero_value == 0u);
 
             constexpr auto single_unit = divideRoundUp(1u, 5u);
-            PPR_ASSERT(single_unit == 1u);
+            PPR_TEST_ASSERT(single_unit == 1u);
 
             constexpr auto equal = divideRoundUp(5u, 5u);
-            PPR_ASSERT(equal == 1u);
+            PPR_TEST_ASSERT(equal == 1u);
 
             constexpr auto large = divideRoundUp(1000u, 3u);
-            PPR_ASSERT(large == 334u);
+            PPR_TEST_ASSERT(large == 334u);
         };
 
         PPR_UNIT_TEST(align_backward_basic) {
             constexpr auto aligned = alignBackward(8u, 8u);
-            PPR_ASSERT(aligned == 8u);
+            PPR_TEST_ASSERT(aligned == 8u);
 
             constexpr auto needs_rounding = alignBackward(10u, 8u);
-            PPR_ASSERT(needs_rounding == 8u);
+            PPR_TEST_ASSERT(needs_rounding == 8u);
 
             constexpr auto zero = alignBackward(0u, 8u);
-            PPR_ASSERT(zero == 0u);
+            PPR_TEST_ASSERT(zero == 0u);
 
             constexpr auto below_alignment = alignBackward(7u, 8u);
-            PPR_ASSERT(below_alignment == 0u);
+            PPR_TEST_ASSERT(below_alignment == 0u);
 
             constexpr auto multiple = alignBackward(24u, 8u);
-            PPR_ASSERT(multiple == 24u);
+            PPR_TEST_ASSERT(multiple == 24u);
 
             constexpr auto power_of_2 = alignBackward(15u, 16u);
-            PPR_ASSERT(power_of_2 == 0u);
+            PPR_TEST_ASSERT(power_of_2 == 0u);
         };
 
         PPR_UNIT_TEST(align_forward_basic) {
             constexpr auto aligned = alignForward(8u, 8u);
-            PPR_ASSERT(aligned == 8u);
+            PPR_TEST_ASSERT(aligned == 8u);
 
             constexpr auto needs_rounding = alignForward(10u, 8u);
-            PPR_ASSERT(needs_rounding == 16u);
+            PPR_TEST_ASSERT(needs_rounding == 16u);
 
             constexpr auto zero = alignForward(0u, 8u);
-            PPR_ASSERT(zero == 0u);
+            PPR_TEST_ASSERT(zero == 0u);
 
             constexpr auto one = alignForward(1u, 8u);
-            PPR_ASSERT(one == 8u);
+            PPR_TEST_ASSERT(one == 8u);
 
             constexpr auto exact = alignForward(16u, 8u);
-            PPR_ASSERT(exact == 16u);
+            PPR_TEST_ASSERT(exact == 16u);
 
             constexpr auto single = alignForward(1u, 1u);
-            PPR_ASSERT(single == 1u);
+            PPR_TEST_ASSERT(single == 1u);
         };
 
         PPR_UNIT_TEST(align_forward_align_val) {
             constexpr auto a1 = alignForward(10u, std::align_val_t{8});
-            PPR_ASSERT(a1 == 16u);
+            PPR_TEST_ASSERT(a1 == 16u);
 
             constexpr auto a2 = alignForward(8u, std::align_val_t{8});
-            PPR_ASSERT(a2 == 8u);
+            PPR_TEST_ASSERT(a2 == 8u);
 
             constexpr auto a3 = alignForward(0u, std::align_val_t{8});
-            PPR_ASSERT(a3 == 0u);
+            PPR_TEST_ASSERT(a3 == 0u);
 
             constexpr auto a4 = alignForward(1u, std::align_val_t{16});
-            PPR_ASSERT(a4 == 16u);
+            PPR_TEST_ASSERT(a4 == 16u);
         };
 
         PPR_UNIT_TEST(align_pointer_forward) {
@@ -85,11 +85,11 @@ export namespace pP::tests {
             const auto base = reinterpret_cast<std::uintptr_t>(data);
             auto *unaligned = reinterpret_cast<int *>(base + 1);
             auto *aligned = alignForward(unaligned, std::align_val_t{4});
-            PPR_ASSERT(reinterpret_cast<std::uintptr_t>(aligned) % 4 == 0u);
-            PPR_ASSERT(aligned > unaligned);
+            PPR_TEST_ASSERT(reinterpret_cast<std::uintptr_t>(aligned) % 4 == 0u);
+            PPR_TEST_ASSERT(aligned > unaligned);
 
             auto *already = alignForward(data, std::align_val_t{alignof(int)});
-            PPR_ASSERT(already == data);
+            PPR_TEST_ASSERT(already == data);
         };
 
         PPR_UNIT_TEST(align_pointer_backward) {
@@ -97,11 +97,11 @@ export namespace pP::tests {
             const auto base = reinterpret_cast<std::uintptr_t>(data);
             auto *unaligned = reinterpret_cast<int *>(base + 5);
             auto *aligned = alignBackward(unaligned, std::align_val_t{4});
-            PPR_ASSERT(reinterpret_cast<std::uintptr_t>(aligned) % 4 == 0u);
-            PPR_ASSERT(aligned < unaligned);
+            PPR_TEST_ASSERT(reinterpret_cast<std::uintptr_t>(aligned) % 4 == 0u);
+            PPR_TEST_ASSERT(aligned < unaligned);
 
             auto *already = alignBackward(data, std::align_val_t{alignof(int)});
-            PPR_ASSERT(already == data);
+            PPR_TEST_ASSERT(already == data);
         };
 
         PPR_UNIT_TEST(alignment_traits) {
@@ -109,7 +109,7 @@ export namespace pP::tests {
             static_assert(alignof_v<double> == std::align_val_t{alignof(double)});
             static_assert(alignof_v<void *> == std::align_val_t{alignof(void *)});
             static_assert(alignof_v<u64> == std::align_val_t{alignof(u64)});
-            PPR_ASSERT(static_cast<std::size_t>(max_align_v) >= alignof(std::max_align_t));
+            PPR_TEST_ASSERT(static_cast<std::size_t>(max_align_v) >= alignof(std::max_align_t));
         };
 
         PPR_UNIT_TEST(bit_count) {
@@ -129,7 +129,7 @@ export namespace pP::tests {
                 return (0u + ... + Is);
             };
             constexpr auto r = static_iota<5u>(sum);
-            PPR_ASSERT(r == 0u + 1u + 2u + 3u + 4u);
+            PPR_TEST_ASSERT(r == 0u + 1u + 2u + 3u + 4u);
         };
 
         PPR_UNIT_TEST(static_iota_typed) {
@@ -137,7 +137,7 @@ export namespace pP::tests {
                 return (0 + ... + Is);
             };
             constexpr auto r = static_iota<int, 5>(sum);
-            PPR_ASSERT(r == 0 + 1 + 2 + 3 + 4);
+            PPR_TEST_ASSERT(r == 0 + 1 + 2 + 3 + 4);
         };
 
         PPR_UNIT_TEST(static_iota_empty) {
@@ -145,7 +145,7 @@ export namespace pP::tests {
                 return (0u + ... + Is);
             };
             constexpr auto r = static_iota<0u>(sum);
-            PPR_ASSERT(r == 0u);
+            PPR_TEST_ASSERT(r == 0u);
         };
 
         PPR_UNIT_TEST(static_iota_fill_array) {
@@ -156,10 +156,10 @@ export namespace pP::tests {
                 });
                 return result;
             }();
-            PPR_ASSERT(arr[0] == 0);
-            PPR_ASSERT(arr[1] == 1);
-            PPR_ASSERT(arr[2] == 2);
-            PPR_ASSERT(arr[3] == 3);
+            PPR_TEST_ASSERT(arr[0] == 0);
+            PPR_TEST_ASSERT(arr[1] == 1);
+            PPR_TEST_ASSERT(arr[2] == 2);
+            PPR_TEST_ASSERT(arr[3] == 3);
         };
 
         PPR_UNIT_TEST(static_iota_compile_types) {
@@ -167,32 +167,32 @@ export namespace pP::tests {
                 return sizeof...(Is);
             };
             constexpr auto r = static_iota<3u>(check);
-            PPR_ASSERT(r == 3u);
+            PPR_TEST_ASSERT(r == 3u);
         };
 
         PPR_UNIT_TEST(shuffle_context_seed) {
             UnitTest::Context ctx{};
-            PPR_ASSERT(not ctx.m_shuffle_seed.has_value());
+            PPR_TEST_ASSERT(not ctx.m_shuffle_seed.has_value());
 
             ctx.m_shuffle_seed = 42u;
-            PPR_ASSERT(ctx.m_shuffle_seed.has_value());
-            PPR_ASSERT(*ctx.m_shuffle_seed == 42u);
+            PPR_TEST_ASSERT(ctx.m_shuffle_seed.has_value());
+            PPR_TEST_ASSERT(*ctx.m_shuffle_seed == 42u);
         };
 
         PPR_UNIT_TEST(errc_not_found_is_error) {
             const auto ec = make_error_code(std::errc::no_such_device);
-            PPR_ASSERT(!!ec);
-            PPR_ASSERT(ec.value() == enumOrd(std::errc::no_such_device));
+            PPR_TEST_ASSERT(!!ec);
+            PPR_TEST_ASSERT(ec.value() == enumOrd(std::errc::no_such_device));
         };
 
         PPR_UNIT_TEST(failed_ec_zero_returns_false) {
             std::error_code ec{};
-            PPR_ASSERT(not hasFailed(ec));
+            PPR_TEST_ASSERT(not hasFailed(ec));
         };
 
         PPR_UNIT_TEST(failed_ec_nonzero_returns_true) {
             std::error_code ec{42, std::generic_category()};
-            PPR_ASSERT(hasFailed(ec));
+            PPR_TEST_ASSERT(hasFailed(ec));
         };
     }
 

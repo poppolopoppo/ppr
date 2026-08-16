@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:context;
 import engine.core;
 import std;
@@ -9,17 +9,17 @@ export namespace pP::tests {
         namespace Background {
             PPR_UNIT_TEST(done_is_never_event) {
                 const SharedContext ctx = context::background();
-                PPR_ASSERT(ctx->pollEvent() == false);
+                PPR_TEST_ASSERT(ctx->pollEvent() == false);
             };
 
             PPR_UNIT_TEST(error_is_none) {
                 const SharedContext ctx = context::background();
-                PPR_ASSERT(not ctx->error());
+                PPR_TEST_ASSERT(not ctx->error());
             };
 
             PPR_UNIT_TEST(value_is_none) {
                 const SharedContext ctx = context::background();
-                PPR_ASSERT(not ctx->value("key").has_value());
+                PPR_TEST_ASSERT(not ctx->value("key").has_value());
             };
         }
 
@@ -34,14 +34,14 @@ export namespace pP::tests {
         namespace Cancel {
             PPR_UNIT_TEST(done_initially_empty) {
                 const auto [ctx, cancel] = context::withCancel(context::background());
-                PPR_ASSERT(ctx->pollEvent() == false);
+                PPR_TEST_ASSERT(ctx->pollEvent() == false);
             };
 
             PPR_UNIT_TEST(manual_cancel_fires_done) {
                 const auto [ctx, cancel] = context::withCancel(context::background());
                 cancel();
-                PPR_ASSERT(ctx->pollEvent());
-                PPR_ASSERT(!!ctx->error());
+                PPR_TEST_ASSERT(ctx->pollEvent());
+                PPR_TEST_ASSERT(!!ctx->error());
             };
 
             PPR_UNIT_TEST(cancel_is_idempotent) {
@@ -49,16 +49,16 @@ export namespace pP::tests {
                 cancel();
                 cancel();
                 cancel();
-                PPR_ASSERT(!!ctx->error());
-                PPR_ASSERT(ctx->pollEvent());
+                PPR_TEST_ASSERT(!!ctx->error());
+                PPR_TEST_ASSERT(ctx->pollEvent());
             };
 
             PPR_UNIT_TEST(parent_cancel_propagates) {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
                 const auto [child, cancel_child] = context::withCancel(parent);
                 cancel_parent();
-                PPR_ASSERT(child->pollEvent());
-                PPR_ASSERT(!!child->error());
+                PPR_TEST_ASSERT(child->pollEvent());
+                PPR_TEST_ASSERT(!!child->error());
             };
 
             PPR_UNIT_TEST(grandparent_cancel_propagates) {
@@ -66,15 +66,15 @@ export namespace pP::tests {
                 const auto [parent, cancel_parent] = context::withCancel(gp);
                 const auto [child, cancel_child] = context::withCancel(parent);
                 cancel_gp();
-                PPR_ASSERT(child->pollEvent());
+                PPR_TEST_ASSERT(child->pollEvent());
             };
 
             PPR_UNIT_TEST(child_cancel_does_not_affect_parent) {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
                 const auto [child, cancel_child] = context::withCancel(parent);
                 cancel_child();
-                PPR_ASSERT(!parent->pollEvent());
-                PPR_ASSERT(!parent->error());
+                PPR_TEST_ASSERT(!parent->pollEvent());
+                PPR_TEST_ASSERT(!parent->error());
             };
         }
 
@@ -94,16 +94,16 @@ export namespace pP::tests {
                 const auto [ctx, cancel_] = context::withCancelClause(context::background());
                 const std::error_code err{42, std::generic_category()};
                 cancel_(err);
-                PPR_ASSERT(ctx->pollEvent());
-                PPR_ASSERT(!!ctx->error());
+                PPR_TEST_ASSERT(ctx->pollEvent());
+                PPR_TEST_ASSERT(!!ctx->error());
             };
 
             PPR_UNIT_TEST(clause_error_matches) {
                 const auto [ctx, cancel_] = context::withCancelClause(context::background());
                 const std::error_code err{42, std::generic_category()};
                 cancel_(err);
-                PPR_ASSERT(!!ctx->error());
-                PPR_ASSERT(ctx->error().value() == 42);
+                PPR_TEST_ASSERT(!!ctx->error());
+                PPR_TEST_ASSERT(ctx->error().value() == 42);
             };
         }
 
@@ -120,14 +120,14 @@ export namespace pP::tests {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
                 const SharedContext child = context::withoutCancel(parent);
                 cancel_parent();
-                PPR_ASSERT(not child->pollEvent());
+                PPR_TEST_ASSERT(not child->pollEvent());
             };
 
             PPR_UNIT_TEST(error_always_none) {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
                 const SharedContext child = context::withoutCancel(parent);
                 cancel_parent();
-                PPR_ASSERT(not child->error());
+                PPR_TEST_ASSERT(not child->error());
             };
         }
 
@@ -146,7 +146,7 @@ export namespace pP::tests {
                     const SharedContext ctx = context::withAfterFunc(
                         parent, [&called](const IContext &) noexcept { called = true; });
                 }
-                PPR_ASSERT(called);
+                PPR_TEST_ASSERT(called);
             };
 
             PPR_UNIT_TEST(callback_receives_context) {
@@ -158,7 +158,7 @@ export namespace pP::tests {
                             received_correct_context = (&c != nullptr);
                         });
                 }
-                PPR_ASSERT(received_correct_context);
+                PPR_TEST_ASSERT(received_correct_context);
             };
         }
 
@@ -174,14 +174,14 @@ export namespace pP::tests {
                 const SharedContext parent = context::background();
                 const SharedContext ctx = context::withValue(parent, "test_key", opaque::Value{42});
                 const auto val = ctx->value("test_key");
-                PPR_ASSERT(val.has_value());
+                PPR_TEST_ASSERT(val.has_value());
             };
 
             PPR_UNIT_TEST(missing_key_returns_none) {
                 const SharedContext parent = context::background();
                 const SharedContext ctx = context::withValue(parent, "test_key", opaque::Value{42});
                 const auto val = ctx->value("other_key");
-                PPR_ASSERT(!val.has_value());
+                PPR_TEST_ASSERT(!val.has_value());
             };
 
             PPR_UNIT_TEST(values_from_parent_fallback) {
@@ -190,7 +190,7 @@ export namespace pP::tests {
                 const SharedContext child = context::withValue(
                     parent, "child_key", 42);
                 const auto parent_val = child->value("parent_key");
-                PPR_ASSERT(parent_val.has_value());
+                PPR_TEST_ASSERT(parent_val.has_value());
             };
         }
 
@@ -207,7 +207,7 @@ export namespace pP::tests {
                 const TimePoint dl = TimerManager::mainTimer().now() + std::chrono::seconds(60);
                 const auto [parent, cancel_] = context::withCancel(context::background());
                 const SharedContext ctx = context::withDeadline(parent, dl);
-                PPR_ASSERT(ctx->pollEvent() == false);
+                PPR_TEST_ASSERT(ctx->pollEvent() == false);
                 std::ignore = cancel_;
             };
 
@@ -216,13 +216,13 @@ export namespace pP::tests {
                 const TimePoint dl = TimerManager::mainTimer().now() + std::chrono::seconds(60);
                 const SharedContext child = context::withDeadline(parent, dl);
                 cancel_parent();
-                PPR_ASSERT(child->pollEvent());
+                PPR_TEST_ASSERT(child->pollEvent());
             };
 
             PPR_UNIT_TEST(timeout_sets_deadline) {
                 const SharedContext ctx = context::withTimeout(
                     context::background(), std::chrono::milliseconds(150));
-                PPR_ASSERT(ctx->pollEvent() == false);
+                PPR_TEST_ASSERT(ctx->pollEvent() == false);
 
                 TimerManager &timer = TimerManager::mainTimer();
 

@@ -19,6 +19,8 @@ setup_ppr_project(EngineAppTests
     EXTERNAL_SYSTEM_PRIVATE_DEPS glfw
 )
 
+target_include_directories(EngineAppTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
+
 # MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
 if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(EngineAppTests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")

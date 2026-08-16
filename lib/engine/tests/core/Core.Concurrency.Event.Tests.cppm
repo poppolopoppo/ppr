@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:event;
 import engine.core;
 import std;
@@ -16,7 +16,7 @@ export namespace pP::tests {
             }
 
             void notify([[maybe_unused]] const std::size_t event_tag) noexcept override {
-                PPR_ASSERT(event_tag == m_expected_tag);
+                PPR_TEST_ASSERT(event_tag == m_expected_tag);
             }
 
             void wait() noexcept override {
@@ -27,13 +27,13 @@ export namespace pP::tests {
         namespace Never {
             PPR_UNIT_TEST(poll_returns_false) {
                 NeverEvent event;
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
 
             PPR_UNIT_TEST(subscribe_returns_default) {
                 NeverEvent event;
                 const auto restore = event.subscribeEvent(TagPtr<ISignal>{nullptr, 0u});
-                PPR_ASSERT(restore.isNull());
+                PPR_TEST_ASSERT(restore.isNull());
             };
 
             PPR_UNIT_TEST(unsubscribe_noop) {
@@ -44,35 +44,35 @@ export namespace pP::tests {
             PPR_UNIT_TEST(reset_noop) {
                 NeverEvent event;
                 event.resetEvent();
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
         }
 
         namespace Pulse {
             PPR_UNIT_TEST(poll_initially_false) {
                 PulseEvent event;
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
 
             PPR_UNIT_TEST(emit_sets_flag) {
                 PulseEvent event;
                 event.emitEvent();
-                PPR_ASSERT(event.pollEvent());
+                PPR_TEST_ASSERT(event.pollEvent());
             };
 
             PPR_UNIT_TEST(reset_clears_flag) {
                 PulseEvent event;
                 event.emitEvent();
-                PPR_ASSERT(event.pollEvent());
+                PPR_TEST_ASSERT(event.pollEvent());
                 event.resetEvent();
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
 
             PPR_UNIT_TEST(emit_twice_stays_set) {
                 PulseEvent event;
                 event.emitEvent();
                 event.emitEvent();
-                PPR_ASSERT(event.pollEvent());
+                PPR_TEST_ASSERT(event.pollEvent());
             };
 
             PPR_UNIT_TEST(reset_then_emit_sets_again) {
@@ -80,18 +80,18 @@ export namespace pP::tests {
                 event.emitEvent();
                 event.resetEvent();
                 event.emitEvent();
-                PPR_ASSERT(event.pollEvent());
+                PPR_TEST_ASSERT(event.pollEvent());
             };
 
             PPR_UNIT_TEST(subscribe_returns_previous) {
                 PulseEvent event;
                 DummySignal dummy{5u};
                 auto prev = event.subscribeEvent(TagPtr<ISignal>{&dummy, dummy.m_expected_tag});
-                PPR_ASSERT(prev.isNull());
-                PPR_ASSERT(prev.getTag() == 0u);
+                PPR_TEST_ASSERT(prev.isNull());
+                PPR_TEST_ASSERT(prev.getTag() == 0u);
                 prev = event.subscribeEvent(prev);
-                PPR_ASSERT(prev.getData() == &dummy);
-                PPR_ASSERT(prev.getTag() == dummy.m_expected_tag);
+                PPR_TEST_ASSERT(prev.getData() == &dummy);
+                PPR_TEST_ASSERT(prev.getTag() == dummy.m_expected_tag);
             };
 
             PPR_UNIT_TEST(unsubscribe_restores_previous) {
@@ -99,37 +99,37 @@ export namespace pP::tests {
                 const TagPtr<ISignal> dummy{nullptr, 5u};
                 const auto prev = event.subscribeEvent(dummy);
                 event.unsubscribeEvent(dummy, prev);
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
         }
 
         namespace Broadcast {
             PPR_UNIT_TEST(poll_initially_false) {
                 BroadcastEvent event;
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
 
             PPR_UNIT_TEST(emit_sets_flag) {
                 BroadcastEvent event;
                 event.emitEvent();
-                PPR_ASSERT(event.pollEvent());
+                PPR_TEST_ASSERT(event.pollEvent());
             };
 
             PPR_UNIT_TEST(reset_clears_flag) {
                 BroadcastEvent event;
                 event.emitEvent();
                 event.resetEvent();
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
 
             PPR_UNIT_TEST(subscribe_returns_default) {
                 BroadcastEvent event;
                 DummySignal dummy{5u};
                 auto prev = event.subscribeEvent(TagPtr<ISignal>{&dummy, dummy.m_expected_tag});
-                PPR_ASSERT(prev.isNull());
-                PPR_ASSERT(prev.getTag() == 0u);
+                PPR_TEST_ASSERT(prev.isNull());
+                PPR_TEST_ASSERT(prev.getTag() == 0u);
                 prev = event.subscribeEvent(prev);
-                PPR_ASSERT(prev.getData() == nullptr);
+                PPR_TEST_ASSERT(prev.getData() == nullptr);
             };
 
             PPR_UNIT_TEST(unsubscribe_removes_subscriber) {
@@ -137,7 +137,7 @@ export namespace pP::tests {
                 const TagPtr<ISignal> dummy{nullptr, 5u};
                 const auto prev = event.subscribeEvent(dummy);
                 event.unsubscribeEvent(dummy, prev);
-                PPR_ASSERT(!event.pollEvent());
+                PPR_TEST_ASSERT(!event.pollEvent());
             };
         }
 
@@ -146,7 +146,7 @@ export namespace pP::tests {
                 PulseEvent event;
                 auto signal = select(event);
                 const auto result = signal.poll();
-                PPR_ASSERT(!result.has_value());
+                PPR_TEST_ASSERT(!result.has_value());
             };
 
             PPR_UNIT_TEST(poll_after_emit_returns_event) {
@@ -154,8 +154,8 @@ export namespace pP::tests {
                 auto signal = select(event);
                 event.emitEvent();
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
-                PPR_ASSERT(result.value() == std::addressof(event));
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result.value() == std::addressof(event));
             };
 
             PPR_UNIT_TEST(reset_clears_pending) {
@@ -163,10 +163,10 @@ export namespace pP::tests {
                 auto signal = select(event);
                 event.emitEvent();
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result.has_value());
                 signal.reset();
                 const auto result2 = signal.poll();
-                PPR_ASSERT(!result2.has_value());
+                PPR_TEST_ASSERT(!result2.has_value());
             };
 
             PPR_UNIT_TEST(iterator_sentinel) {
@@ -175,7 +175,7 @@ export namespace pP::tests {
                 event.emitEvent();
                 const auto it = signal.begin();
                 const auto end = signal.end();
-                PPR_ASSERT(it != end);
+                PPR_TEST_ASSERT(it != end);
             };
         }
 
@@ -186,8 +186,8 @@ export namespace pP::tests {
                 auto signal = select(a, b);
                 a.emitEvent();
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
-                PPR_ASSERT(result->index() == 0u);
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result->index() == 0u);
             };
 
             PPR_UNIT_TEST(poll_two_events_emits_second) {
@@ -196,8 +196,8 @@ export namespace pP::tests {
                 auto signal = select(a, b);
                 b.emitEvent();
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
-                PPR_ASSERT(result->index() == 1u);
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result->index() == 1u);
             };
 
             PPR_UNIT_TEST(reset_clears_specific_event) {
@@ -206,10 +206,10 @@ export namespace pP::tests {
                 auto signal = select(a, b);
                 a.emitEvent();
                 const auto result = signal.poll();
-                PPR_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(result.has_value());
                 signal.reset(*result);
                 const auto result2 = signal.poll();
-                PPR_ASSERT(!result2.has_value());
+                PPR_TEST_ASSERT(!result2.has_value());
             };
 
             PPR_UNIT_TEST(both_events_set) {
@@ -219,9 +219,9 @@ export namespace pP::tests {
                 a.emitEvent();
                 b.emitEvent();
                 const auto r1 = signal.poll();
-                PPR_ASSERT(r1.has_value());
+                PPR_TEST_ASSERT(r1.has_value());
                 const auto r2 = signal.poll();
-                PPR_ASSERT(r2.has_value());
+                PPR_TEST_ASSERT(r2.has_value());
             };
         }
 

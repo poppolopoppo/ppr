@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.app:snapshot;
 
@@ -27,8 +27,8 @@ export namespace pP::tests {
         player.pushFrameMessage(message);
 
         const InputFrameSnapshot snapshot = player.sample();
-        PPR_ASSERT(snapshot.m_player_id == id);
-        PPR_ASSERT(snapshot.m_messages.size() == 1u);
+        PPR_TEST_ASSERT(snapshot.m_player_id == id);
+        PPR_TEST_ASSERT(snapshot.m_messages.size() == 1u);
     };
 
     PPR_UNIT_TEST(app_snapshot) {

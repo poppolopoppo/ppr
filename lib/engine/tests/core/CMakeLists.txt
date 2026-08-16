@@ -29,6 +29,8 @@ setup_ppr_project(EngineCoreTests
   INTERNAL_PUBLIC_DEPS EngineCore EngineShader EngineRHI EngineTestsShared
 )
 
+target_include_directories(EngineCoreTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
+
 # MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
 if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     # When using C++23 modules with /MT, the compiler generates C++ mangled references

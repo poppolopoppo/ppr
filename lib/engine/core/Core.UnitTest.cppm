@@ -13,6 +13,10 @@ namespace pP {
     // Unit test helper
     // ------------------------------------------------------------------
 
+    export [[noreturn]] void onTestAssertionFailure(
+        const char *message,
+        const std::source_location &site);
+
     export class UnitTest {
     protected:
         struct RunImpl;
@@ -57,7 +61,7 @@ namespace pP {
                     *output++ = CharT('/');
                 }
                 const std::string_view name{m_run->m_test.m_name};
-                return std::format_to(output, "{}", name);
+                return std::ranges::copy(name, output).out;
             }
         };
 
@@ -96,11 +100,20 @@ namespace pP {
 
         using test_func_t = void (*)(IRun &run);
 
+        using test_func_ec_t = std::error_code (*)(IRun &run);
+
         consteval UnitTest(
             const char *const name,
             const test_func_t test,
             const EFlags flags = none) noexcept
             : m_name(name), m_run(test), m_flags(flags) {
+        }
+
+        consteval UnitTest(
+            const char *const name,
+            const test_func_ec_t test,
+            const EFlags flags = none) noexcept
+            : m_name(name), m_run_ec(test), m_flags(flags) {
         }
 
         [[nodiscard]] constexpr bool isExpectedToFail() const noexcept {
@@ -149,6 +162,11 @@ namespace pP {
             consteval UnitTest operator /(CallbackT &&callback) const noexcept {
                 return UnitTest(m_name, callback, m_flags);
             }
+
+            template<std::convertible_to<test_func_ec_t> CallbackT>
+            consteval UnitTest operator /(CallbackT &&callback) const noexcept {
+                return UnitTest(m_name, callback, m_flags);
+            }
         };
 
         static constexpr EFlags aggregateFlags(std::initializer_list<EFlags> flags) noexcept {
@@ -162,6 +180,7 @@ namespace pP {
     protected:
         const char *m_name{nullptr};
         test_func_t m_run{nullptr};
+        test_func_ec_t m_run_ec{nullptr};
         EFlags m_flags{none};
 
         struct RunImpl final : IRun {

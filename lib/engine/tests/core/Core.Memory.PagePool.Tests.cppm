@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 export module engine.tests.core:memory.page_pool;
 import engine.core;
 import std;
@@ -25,8 +25,8 @@ export namespace pP::tests {
             pool.deallocateRaw(ptrs[15], 4096u);
 
             const auto a1 = pool.allocateRaw();
-            PPR_ASSERT(a1.ptr != nullptr);
-            PPR_ASSERT(pool.owns(a1.ptr, 4096u));
+            PPR_TEST_ASSERT(a1.ptr != nullptr);
+            PPR_TEST_ASSERT(pool.owns(a1.ptr, 4096u));
         };
 
         PPR_UNIT_TEST(shrink_mechanics) {
@@ -38,7 +38,7 @@ export namespace pP::tests {
             pool.shrinkToFit();
 
             const void *p2 = pool.allocateRaw().ptr;
-            PPR_ASSERT(p2 != nullptr);
+            PPR_TEST_ASSERT(p2 != nullptr);
             pool.deallocateRaw(p2, 4096u);
         };
 
@@ -48,7 +48,7 @@ export namespace pP::tests {
             void *ptrs[64];
             for (std::size_t i = 0u; i < 64u; ++i) {
                 ptrs[i] = pool.allocateRaw().ptr;
-                PPR_ASSERT(ptrs[i] != nullptr);
+                PPR_TEST_ASSERT(ptrs[i] != nullptr);
             }
 
             for (std::size_t i = 0u; i < 64u; ++i) {
@@ -57,7 +57,7 @@ export namespace pP::tests {
 
             for (std::size_t i = 0u; i < 64u; ++i) {
                 ptrs[i] = pool.allocateRaw().ptr;
-                PPR_ASSERT(ptrs[i] != nullptr);
+                PPR_TEST_ASSERT(ptrs[i] != nullptr);
             }
 
             for (std::size_t i = 0u; i < 64u; ++i) {

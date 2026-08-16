@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.core:io.file_watcher;
 
@@ -42,15 +42,15 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
+            PPR_TEST_ASSERT(not ec);
 
             { std::ofstream ofs(td.path / "test.txt"); ofs << "hello"; }
 
-            PPR_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(pollUntilChanges(w));
             const auto c = w.changes();
-            PPR_ASSERT(c.size() > 0u);
+            PPR_TEST_ASSERT(c.size() > 0u);
             const auto act = c[0].m_action;
-            PPR_ASSERT(act == WatchEvent::Action::added || act == WatchEvent::Action::modified);
+            PPR_TEST_ASSERT(act == WatchEvent::Action::added || act == WatchEvent::Action::modified);
         };
 
         PPR_UNIT_TEST(modify_file) {
@@ -63,17 +63,17 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
+            PPR_TEST_ASSERT(not ec);
 
             {
                 std::ofstream ofs(td.path / "data.bin", std::ios::binary | std::ios::app);
                 ofs.put(42);
             }
 
-            PPR_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(pollUntilChanges(w));
             const auto c = w.changes();
-            PPR_ASSERT(c.size() > 0u);
-            PPR_ASSERT(c[0].m_action == WatchEvent::Action::modified);
+            PPR_TEST_ASSERT(c.size() > 0u);
+            PPR_TEST_ASSERT(c[0].m_action == WatchEvent::Action::modified);
         };
 
         PPR_UNIT_TEST(delete_file) {
@@ -84,14 +84,14 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
+            PPR_TEST_ASSERT(not ec);
 
             std::filesystem::remove(td.path / "todelete.txt");
 
-            PPR_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(pollUntilChanges(w));
             const auto c = w.changes();
-            PPR_ASSERT(c.size() > 0u);
-            PPR_ASSERT(c[0].m_action == WatchEvent::Action::removed);
+            PPR_TEST_ASSERT(c.size() > 0u);
+            PPR_TEST_ASSERT(c[0].m_action == WatchEvent::Action::removed);
         };
 
         PPR_UNIT_TEST(poll_idempotent_no_changes) {
@@ -99,12 +99,12 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
-            PPR_ASSERT(w.changes().empty());
+            PPR_TEST_ASSERT(not ec);
+            PPR_TEST_ASSERT(w.changes().empty());
 
             w.poll(ec);
-            PPR_ASSERT(not ec);
-            PPR_ASSERT(w.changes().empty());
+            PPR_TEST_ASSERT(not ec);
+            PPR_TEST_ASSERT(w.changes().empty());
         };
 
         PPR_UNIT_TEST(changes_cached_until_next_poll) {
@@ -112,17 +112,17 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
-            PPR_ASSERT(w.changes().empty());
+            PPR_TEST_ASSERT(not ec);
+            PPR_TEST_ASSERT(w.changes().empty());
 
             { std::ofstream ofs(td.path / "cached.txt"); ofs << "x"; }
-            PPR_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(pollUntilChanges(w));
 
             const auto c1 = w.changes();
-            PPR_ASSERT(not c1.empty());
+            PPR_TEST_ASSERT(not c1.empty());
 
             const auto c2 = w.changes();
-            PPR_ASSERT(c2.size() == c1.size());
+            PPR_TEST_ASSERT(c2.size() == c1.size());
         };
 
         PPR_UNIT_TEST(i_event_interface) {
@@ -130,15 +130,15 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
-            PPR_ASSERT(not w.pollEvent());
+            PPR_TEST_ASSERT(not ec);
+            PPR_TEST_ASSERT(not w.pollEvent());
 
             { std::ofstream ofs(td.path / "event_test.txt"); ofs << "x"; }
-            PPR_ASSERT(pollUntilChanges(w));
-            PPR_ASSERT(not w.changes().empty());
+            PPR_TEST_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(not w.changes().empty());
 
             w.resetEvent();
-            PPR_ASSERT(w.changes().empty());
+            PPR_TEST_ASSERT(w.changes().empty());
         };
 
         PPR_UNIT_TEST(multiple_files) {
@@ -146,15 +146,15 @@ export namespace pP::tests {
             DirectoryWatcher w(td.path);
             std::error_code ec;
             w.poll(ec);
-            PPR_ASSERT(not ec);
+            PPR_TEST_ASSERT(not ec);
 
             { std::ofstream ofs(td.path / "a.txt"); ofs << "a"; }
             { std::ofstream ofs(td.path / "b.txt"); ofs << "b"; }
             { std::ofstream ofs(td.path / "c.txt"); ofs << "c"; }
 
-            PPR_ASSERT(pollUntilChanges(w));
+            PPR_TEST_ASSERT(pollUntilChanges(w));
             const auto c = w.changes();
-            PPR_ASSERT(not c.empty());
+            PPR_TEST_ASSERT(not c.empty());
         };
 
     }

@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.app:player;
 
@@ -21,9 +21,9 @@ export namespace pP::tests {
             .m_local_index = 0u,
             .m_kind = EPlayerKind::gamepad, };;
 
-        PPR_ASSERT(keyboard == keyboard);
-        PPR_ASSERT(keyboard != gamepad);
-        PPR_ASSERT(keyboard < gamepad);
+        PPR_TEST_ASSERT(keyboard == keyboard);
+        PPR_TEST_ASSERT(keyboard != gamepad);
+        PPR_TEST_ASSERT(keyboard < gamepad);
     };
 
     PPR_UNIT_TEST(player_construction_and_device_views) {
@@ -36,11 +36,11 @@ export namespace pP::tests {
         KeyboardDevice test_keyboard{InputDeviceID{0u}};
 
         Player player{id};
-        PPR_ASSERT(player.getIdentity() == id);
-        PPR_ASSERT(player.getDeviceViews().isEmpty());
+        PPR_TEST_ASSERT(player.getIdentity() == id);
+        PPR_TEST_ASSERT(player.getDeviceViews().isEmpty());
 
         player.pushDeviceView(safe_ptr<const IInputDevice>{&test_keyboard});
-        PPR_ASSERT(player.getDeviceViews().size() == 1u);
+        PPR_TEST_ASSERT(player.getDeviceViews().size() == 1u);
     };
 
     PPR_UNIT_TEST(app_player) {

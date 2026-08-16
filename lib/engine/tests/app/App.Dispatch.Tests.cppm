@@ -1,5 +1,5 @@
 module;
-#include "pP/Macros.h"
+#include "pP/UnitTest.h"
 
 export module engine.tests.app:dispatch;
 
@@ -31,11 +31,11 @@ export namespace pP::tests {
         };
 
         const EInputListenerResponse response = player.getListener().postKeyEvent(message);
-        PPR_ASSERT(response != EInputListenerResponse::unhandled);
+        PPR_TEST_ASSERT(response != EInputListenerResponse::unhandled);
 
         const std::optional<InputValue> value = player.getActionValue(action);
-        PPR_ASSERT(value.has_value());
-        PPR_ASSERT(std::get<InputDigital>(*value) == InputDigital{true});
+        PPR_TEST_ASSERT(value.has_value());
+        PPR_TEST_ASSERT(std::get<InputDigital>(*value) == InputDigital{true});
     };
 
     PPR_UNIT_TEST(is_any_key_returns_unhandled) {
@@ -49,7 +49,7 @@ export namespace pP::tests {
 
         InputListener listener{};
         const EInputListenerResponse response = listener.postKeyEvent(message);
-        PPR_ASSERT(response == EInputListenerResponse::unhandled);
+        PPR_TEST_ASSERT(response == EInputListenerResponse::unhandled);
     };
 
     PPR_UNIT_TEST(app_dispatch) {
