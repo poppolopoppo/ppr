@@ -99,7 +99,7 @@ Two separate test executables:
 - `EngineCoreTests` (`lib/engine/tests/core/`) — GLFW-free; tests memory, containers, concurrency, IO, strings, utility, opaque, services, enums
 - `EngineAppTests` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests
 
-Shared in `lib/engine/tests/shared/` as static lib `EngineTestsShared` providing `parseCli()` and `runSuite()` to avoid duplication. Tests use `PPR_UNIT_TEST(name)` macros compiled as `inline constexpr` variables with `UnitTest` tree grouping, fork/crash support, and `--run-test --shuffle --loop` CLI.
+Shared in `lib/engine/tests/shared/` as static lib `EngineTestsShared` providing `parseCli()` and `runSuite()` to avoid duplication. Tests use `PPR_UNIT_TEST(name)` macros compiled as `inline constexpr` variables with `UnitTest` tree grouping, fork/crash support, and `--run-test --shuffle --loop` CLI. Test code includes the test-only header `"pP/UnitTest.h"` (from `lib/engine/tests/include/`, registered per test target) which provides `PPR_UNIT_TEST`, `PPR_TEST_ASSERT` (functional in release builds — always throws, unlike engine `PPR_ASSERT` which compiles to `[[assume]]`), and `PPR_UNIT_TEST_ERRC` (error-code opt-in bodies).
 
 ### Entry Point (`game/main.cpp`)
 
@@ -149,7 +149,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 - `constexpr` everywhere, `[[nodiscard]]` on important returns, `noexcept` where possible.
 - Inlining: `PPR_FORCE_INLINE` (hot paths), `PPR_NO_INLINE` (prevent), `PPR_FLATTEN` (recursive).
 - Attributes: `PPR_EMPTY_BASES` (MSVC stateless wrappers), `PPR_LIFETIME_BOUND` (reference lifetime deps).
-- Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), PPR_UNIT_TEST, and internal helper macros (stringize, concat, pragma, etc.). No macros from other sources.
+- Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), and internal helper macros (stringize, concat, pragma, etc.). Test-only macros (`PPR_UNIT_TEST`, `PPR_TEST_ASSERT`, `PPR_UNIT_TEST_ERRC`) live in `lib/engine/tests/include/pP/UnitTest.h`, not in `Macros.h`. No macros from other sources.
 
 ## Type Safety
 - `checked_cast<ToT>(v)` — safe narrowing/widening + downcast (dynamic_cast debug, static_cast release).
@@ -203,13 +203,15 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - `safe_ptr` from `unique_ptr::get()` is correct by design: the user guarantees the `unique_ptr` outlives all `safe_ptr` instances; `safe_ptr` will assert if violated
 
 ## Unit Testing
-- Define: `PPR_UNIT_TEST(name) { PPR_ASSERT(cond); };` (tests are `inline constexpr` variables).
+- Define: `PPR_UNIT_TEST(name) { PPR_TEST_ASSERT(cond); };` (tests are `inline constexpr` variables).
+- `PPR_TEST_ASSERT` is functional in all build configs (throws `std::logic_error` via `onTestAssertionFailure`) — tests must never use `PPR_ASSERT`/`PPR_VERIFY`, which compile to `[[assume]]` in release. Test files include `"pP/UnitTest.h"` (test-only header; not part of the engine).
 - Flags: `UnitTest::expect_fail` (must throw), `UnitTest::fork` (child process), `UnitTest::expect_crash` (fork + expect_fail).
 - Group: `_.recurse({TestA, TestB, ...})` — supports conditional inclusion via `if constexpr (PPR_ENABLE_DEBUG)`.
 - Module pattern: `export module engine.tests.core:memory;` with `export namespace pP::tests { ... }`.
-- CLI: `EngineTests [--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]`.
+- CLI: `EngineTests [--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]` — test paths use `/` separators (e.g. `--run-test core/hal/thread_id`).
 - Fork tests spawn child process via `hal::process::spawnAndWait`. Assertions intercepted by test framework (converted to failures, not terminations).
 - Run programmatically: `pP::UnitTest::run(context, pP::tests::core);`.
+- Optional error-code bodies: `PPR_UNIT_TEST_ERRC(name) { PPR_TEST_ASSERT_ERRC(cond); return {}; }` — the ec-reporting `run()` path (set `UnitTest::Context::m_fail_with` for message output).
 - See `lib/engine/tests/` for existing examples.
 
 ## Debugging with CLion

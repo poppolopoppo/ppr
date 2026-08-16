@@ -136,6 +136,7 @@ For each file in the diff, apply the relevant checklists below.
 - No throwing from destructors during stack unwinding (calls `std::terminate`)
 - Exceptions not used for control flow in engine layer
 - `PPR_ASSERT` for invariants (compiles away in release), `PPR_VERIFY` for side effects, `PPR_ENSURE` for post-conditions
+- **Test files only:** assert with `PPR_TEST_ASSERT` (from `"pP/UnitTest.h"`, functional in release) — flag any `PPR_ASSERT`/`PPR_VERIFY` inside `PPR_UNIT_TEST` bodies (they compile to `[[assume]]` in release and the test would silently pass)
 - `std::nothrow` used with `operator new` in `GPA::allocateRaw`
 - **Exception safety guarantees:** each function's guarantee is deliberate:
   - **No‑throw:** `noexcept` functions provide the no‑throw guarantee

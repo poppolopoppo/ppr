@@ -55,13 +55,13 @@ For each changed function, type, or constant, classify the nature of the change:
 
 1. **File:** `lib/engine/tests/core/Core.<Subsystem>.Tests.cppm`
 2. **Module declaration:** `export module engine.tests.core:<subsystem>;`
-3. **Includes:** `module;` + `#include "pP/Macros.h"` then `export module ...;` + `import engine.core;` + `import std;`
+3. **Includes:** `module;` + `#include "pP/UnitTest.h"` (test-only header — do NOT include `"pP/Macros.h"`) then `export module ...;` + `import engine.core;` + `import std;`
 4. **Namespace:** All tests in `namespace pP::tests`
 5. **Nested grouping:** Use inner namespaces for sub-grouping
-6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_ASSERT(...); };`
+6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };`
 7. **Parent tests:** `PPR_UNIT_TEST(subsystem) { _.recurse(Group::sub_test); };`
 8. **Top-level registration:** In `Core.Tests.cppm`, add `import :<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
-9. **Assertions:** Use `PPR_ASSERT()` only
+9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
 10. **Code style:** No comments, `constexpr` everywhere, `[[nodiscard]]`, no raw loops, prefer algorithms/ranges
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... }` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
 12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... }` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
