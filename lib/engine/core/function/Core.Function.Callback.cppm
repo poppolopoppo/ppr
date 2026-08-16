@@ -32,6 +32,25 @@ export namespace pP {
                 : m_callback(std::addressof(callback)), m_event_key(event_key) {
             }
 
+            Handle(const Handle &) = delete;
+            Handle &operator=(const Handle &) = delete;
+
+            Handle(Handle &&other) noexcept
+                : m_callback(std::exchange(other.m_callback, nullptr)),
+                  m_event_key(std::exchange(other.m_event_key, default_value_v)) {
+            }
+
+            Handle &operator=(Handle &&other) noexcept {
+                if (this != std::addressof(other)) {
+                    if (m_callback != nullptr) {
+                        std::ignore = m_callback->remove(m_event_key);
+                    }
+                    m_callback = std::exchange(other.m_callback, nullptr);
+                    m_event_key = std::exchange(other.m_event_key, default_value_v);
+                }
+                return *this;
+            }
+
             ~Handle() {
                 if (m_callback != nullptr) {
                     std::ignore = m_callback->remove(m_event_key);
@@ -62,7 +81,8 @@ export namespace pP {
         }
 
         [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
-            return Handle(*this, m_events.add(std::forward<Event>(event)));
+            const SparseKeyId event_key = m_events.add(std::forward<Event>(event));
+            return Handle(*this, event_key);
         }
 
         [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
