@@ -1,4 +1,5 @@
 #include "pP/Macros.h"
+#include <imgui.h>
 
 import engine.core;
 import engine.math;
@@ -25,11 +26,19 @@ namespace demo {
         }
 
         std::error_code update() override {
-            if (time::since(*m_started_at) > std::chrono::seconds(5)) {
-                return make_error_code(std::errc::timed_out);
-            }
+            // if (time::since(*m_started_at) > std::chrono::seconds(5)) {
+            //     return make_error_code(std::errc::timed_out);
+            // }
 
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update());
+
+#if PPR_ENABLE_DEBUG
+            if (auto ui = getUiServices().get<IUIService>()) {
+                ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui->getContext()));
+                static bool g_show_demo_window{true};
+                ImGui::ShowDemoWindow(&g_show_demo_window);
+            }
+#endif
 
             return default_value_v;
         }

@@ -12,7 +12,8 @@ target_sources(EngineAppTests
             App.Player.Graph.Tests.cppm
             App.Shader.Tests.cppm
             App.Viewport.Tests.cppm
-)
+            App.PixelReadback.Tests.cppm
+    )
 
 setup_ppr_project(EngineAppTests
     INTERNAL_PUBLIC_DEPS EngineApp EngineTestsShared
@@ -25,6 +26,14 @@ target_include_directories(EngineAppTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine
 if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(EngineAppTests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
+
+# Copy shader assets next to the test executable so Renderer can find them via content_dir
+add_custom_command(TARGET EngineAppTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets/shaders"
+        "$<TARGET_FILE_DIR:EngineAppTests>/shaders"
+        COMMENT "Copying shader assets"
+)
 
 add_test(NAME EngineAppUnitTests COMMAND EngineAppTests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 

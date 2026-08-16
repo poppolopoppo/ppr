@@ -28,6 +28,7 @@ namespace pP {
 
     WindowHandle Window::release() noexcept {
         PPR_ASSERT(m_handle != nullptr);
+
         WindowHandle release{nullptr};
         swap(release, m_handle);
         return release;

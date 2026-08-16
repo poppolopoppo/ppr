@@ -50,16 +50,14 @@ struct PsInput {
     float2 uv  : TEXCOORD0;
     float4 col : COLOR0;
 };
-struct ProjConstants {
-    float4x4 m_matrix;
-};
-        ConstantBuffer<ProjConstants> g_proj : register(b0, space0);
+float2 g_scale;
+        float2 g_offset;
         Texture2D g_fontTexture : register(t0, space0);
         SamplerState g_fontSampler : register(s0, space0);
 [shader("vertex")]
 PsInput vertexMain(VsInput input) {
     PsInput output;
-    output.pos = mul(g_proj.m_matrix, float4(input.pos, 0.0, 1.0));
+    output.pos = float4(input.pos * g_scale + g_offset, 0.0, 1.0);
     output.uv = input.uv;
     output.col = input.col;
     return output;
@@ -371,7 +369,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     if (const auto *button = std::get_if<EMouseButton>(&message.m_key.m_code)) {
                         const int imgui_button = mouseButtonToImGui(*button);
                         if (imgui_button >= 0) {
-                            imgui_io.AddMouseButtonEvent(imgui_button, message.isPressed());
+                            imgui_io.AddMouseButtonEvent(imgui_button, message.isPressed() || message.isRepeat());
                         }
                     }
                 }
@@ -433,30 +431,25 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 // Modifier state
                 io.AddKeyEvent(ImGuiMod_Ctrl,
-                    kbd.m_keys.isDown(EKeyboardKey::left_control) ||
-                    kbd.m_keys.isDown(EKeyboardKey::right_control));
+                    kbd.m_keys.isPressed(EKeyboardKey::left_control) ||
+                    kbd.m_keys.isPressed(EKeyboardKey::right_control));
                 io.AddKeyEvent(ImGuiMod_Shift,
-                    kbd.m_keys.isDown(EKeyboardKey::left_shift) ||
-                    kbd.m_keys.isDown(EKeyboardKey::right_shift));
+                    kbd.m_keys.isPressed(EKeyboardKey::left_shift) ||
+                    kbd.m_keys.isPressed(EKeyboardKey::right_shift));
                 io.AddKeyEvent(ImGuiMod_Alt,
-                    kbd.m_keys.isDown(EKeyboardKey::left_alt) ||
-                    kbd.m_keys.isDown(EKeyboardKey::right_alt));
+                    kbd.m_keys.isPressed(EKeyboardKey::left_alt) ||
+                    kbd.m_keys.isPressed(EKeyboardKey::right_alt));
                 io.AddKeyEvent(ImGuiMod_Super,
-                    kbd.m_keys.isDown(EKeyboardKey::left_super) ||
-                    kbd.m_keys.isDown(EKeyboardKey::right_super));
+                    kbd.m_keys.isPressed(EKeyboardKey::left_super) ||
+                    kbd.m_keys.isPressed(EKeyboardKey::right_super));
             }
 
             ImGui::NewFrame();
 
-#if PPR_ENABLE_DEBUG
-            static bool g_show_demo_window{true};
-            ImGui::ShowDemoWindow(&g_show_demo_window);
-#endif
-
             return default_value_v;
         }
 
-        std::error_code renderOverlay(rhi::IRenderPassEncoder &pass, const float4x4 &projection) override {
+        std::error_code renderOverlay(rhi::IRenderPassEncoder &pass, const float2 &framebuffer_size) override {
             ImGui::SetCurrentContext(m_imgui_context);
             ImGuiIO &io = ImGui::GetIO();
 
@@ -485,8 +478,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // Set up bindings via ShaderCursor (auto-resolves binding range indices)
             rhi::ShaderCursor root_cursor(root_obj);
 
-            // Set projection matrix (passed by Application — backend-correct)
-            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_proj"].setData(projection.data(), sizeof(projection)));
+            // Set 2D ortho scale/offset uniforms (reference slang-gfx ImGui backend
+            // style — plain root uniforms, no ConstantBuffer wrapper).
+            const float2 scale{2.0f / framebuffer_size.x, -2.0f / framebuffer_size.y};
+            const float2 offset{-1.0f, 1.0f};
+            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_scale"].setData(&scale, sizeof(float2)));
+            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_offset"].setData(&offset, sizeof(float2)));
 
             // Bind font texture and sampler
             {

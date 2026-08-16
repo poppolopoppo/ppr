@@ -136,6 +136,7 @@ export namespace pP::rhi {
     using slang_rhi::SamplerDesc;
     using slang_rhi::ScissorRect;
     using slang_rhi::ShaderOffset;
+    using slang_rhi::SubresourceLayout;
     using slang_rhi::SubresourceRange;
     using slang_rhi::TextureAddressingMode;
     using slang_rhi::TextureDesc;

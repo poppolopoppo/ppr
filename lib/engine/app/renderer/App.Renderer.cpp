@@ -284,10 +284,36 @@ std::error_code Renderer::render(const std::optional<OverlayCallback> overlay) {
                 0, 0,
                 static_cast<uint32_t>(m_framebuffer_size.x),
                 static_cast<uint32_t>(m_framebuffer_size.y)},
-            .draw = *overlay};
+            .draw = [overlay](rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
+                return (*overlay)(pass);
+            }};
         return render(std::span{&entry, 1});
     }
     return render(std::span<const ViewportEntry>{});
+}
+
+std::error_code Renderer::drawTriangle(
+    rhi::IRenderPassEncoder &pass,
+    const rhi::Viewport &viewport,
+    const rhi::ScissorRect &scissor) {
+    PPR_ASSERT(m_pipeline);
+    PPR_ASSERT(m_vertex_buffer);
+    PPR_ASSERT(m_input_layout);
+
+    pass.bindPipeline(m_pipeline.get());
+
+    const rhi::BufferOffsetPair vertex_buffer{m_vertex_buffer.get(), 0};
+    pass.setRenderState({
+        .viewports = {viewport},
+        .viewportCount = 1,
+        .scissorRects = {scissor},
+        .scissorRectCount = 1,
+        .vertexBuffers = {vertex_buffer},
+        .vertexBufferCount = 1,
+    });
+
+    pass.draw({.vertexCount = 3});
+    return default_value_v;
 }
 
 std::error_code Renderer::render(const std::span<const ViewportEntry> viewports) {
@@ -306,13 +332,30 @@ std::error_code Renderer::render(const std::span<const ViewportEntry> viewports)
     rhi::ComPtr<rhi::ITexture> image;
     RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->acquireNextImage(image.writeRef()));
 
+    PPR_RETURN_ERROR_ON_FAIL(Renderer, renderInto_(*image, viewports));
+
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->present());
+    return default_value_v;
+}
+
+std::error_code Renderer::renderInto(rhi::ITexture &target, std::span<const ViewportEntry> viewports) {
+    PPR_RETURN_ERROR_ON_FAIL(Renderer, renderInto_(target, viewports));
+
+    // Wait so the caller can read back the rendered target
+    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
+    return default_value_v;
+}
+
+std::error_code Renderer::renderInto_(rhi::ITexture &target, std::span<const ViewportEntry> viewports) {
+    PPR_ASSERT(m_queue);
+
     // Create command encoder
     rhi::ComPtr<rhi::ICommandEncoder> encoder;
     RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->createCommandEncoder(encoder.writeRef()));
 
     // Begin render pass
     rhi::RenderPassColorAttachment color_attachment{};
-    color_attachment.view = image->getDefaultView();
+    color_attachment.view = target.getDefaultView();
     color_attachment.loadOp = rhi::LoadOp::Clear;
     color_attachment.clearValue[0] = 0.1f;
     color_attachment.clearValue[1] = 0.1f;
@@ -332,14 +375,7 @@ std::error_code Renderer::render(const std::span<const ViewportEntry> viewports)
             pass->bindPipeline(entry.pipeline.get());
         }
 
-        pass->setRenderState({
-            .viewports = {entry.viewport},
-            .viewportCount = 1,
-            .scissorRects = {entry.scissor},
-            .scissorRectCount = 1,
-        });
-
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, entry.draw(*pass));
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, entry.draw(*pass, entry.viewport, entry.scissor));
     }
 
     // End pass and finish encoder
@@ -348,10 +384,8 @@ std::error_code Renderer::render(const std::span<const ViewportEntry> viewports)
     rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
     RHI_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(cmd_buffer.writeRef()));
 
-    // Submit and present
+    // Submit (no wait — present() or the renderInto() wrapper synchronizes)
     RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->submit(cmd_buffer.get()));
-
-    RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->present());
 
     return default_value_v;
 }

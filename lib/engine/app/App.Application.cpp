@@ -112,18 +112,8 @@ namespace pP {
                     *m_main_window,
                     m_content_dir.path()));
 
-            m_resize_handle = m_main_window->m_when_resized.add([self{safe_ptr{this}}](const Window &window, const int2 &) -> std::error_code {
-                const int2 fb = window.m_framebuffer_size;
-                self->m_scene_viewport.framebuffer_size = fb;
-                self->m_ui_viewport.framebuffer_size = fb;
-                if (self->m_renderer) {
-                    PPR_RETURN_ERROR_ON_FAIL(App, self->m_renderer->onResize(fb));
-                }
-                if (self->m_ui_service) {
-                    PPR_RETURN_ERROR_ON_FAIL(App, self->m_ui_service->onResize(fb));
-                }
-                return default_value_v;
-            });
+            m_resize_handle = m_main_window->m_when_resized.add(
+                std23::function_ref{std23::nontype<&Application::onWindowResized_>, this});
 
             m_renderer = std::move(renderer);
         }
@@ -149,6 +139,24 @@ namespace pP {
 
         m_state = EState::initialized;
         return default_value_v;
+    }
+
+    std::error_code Application::onWindowResized_(const Window &window, int2) {
+        const int2 fb = window.m_framebuffer_size;
+        m_scene_viewport.framebuffer_size = fb;
+        m_ui_viewport.framebuffer_size = fb;
+
+        std::error_code renderer_err;
+        if (m_renderer) {
+            renderer_err = m_renderer->onResize(fb);
+        }
+
+        std::error_code ui_err;
+        if (m_ui_service) {
+            ui_err = m_ui_service->onResize(fb);
+        }
+
+        return make_error_code({renderer_err, ui_err});
     }
 
     std::error_code Application::update() {
@@ -179,14 +187,13 @@ std::error_code Application::render() {
     PPR_ASSERT(m_main_window.isValid());
 
     if (m_renderer) [[likely]] {
-        const rhi::DeviceType device_type = IRhiService::get()->getDevice().getDeviceType();
         const int2 fb = m_main_window->m_framebuffer_size;
-        const float aspect = static_cast<float>(fb.x) / static_cast<float>(fb.y);
 
-        const auto scene_draw = [scene_store = safe_ptr<ServicesStore>(&m_scene_services),
-                                 proj = rhi::getPerspectiveMatrix(device_type, 45.0f, aspect, 0.1f, 1000.0f)]
-                                (rhi::IRenderPassEncoder &) -> std::error_code {
-            return default_value_v;
+        // m_renderer is a std::unique_ptr<Renderer> member; this raw capture is
+        // valid because render() is synchronous and m_renderer outlives the call.
+        const auto scene_draw = [renderer = m_renderer.get()]
+                                (rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
+            return renderer->drawTriangle(pass, viewport, scissor);
         };
         const ViewportEntry scene_entry{
             .viewport = rhi::Viewport{
@@ -201,11 +208,14 @@ std::error_code Application::render() {
             .draw = scene_draw,
         };
 
+        // ui_store is a safe_ptr to m_ui_services (an Application member), used only
+        // within this render() call, so m_ui_services outlives the lambda. Debug
+        // mode ref-counts the capture; release mode is a plain pointer copy.
         const auto ui_draw = [ui_store = safe_ptr<ServicesStore>(&m_ui_services),
-                              proj = rhi::getOrthoMatrix(device_type, static_cast<float>(fb.x), static_cast<float>(fb.y))]
-                             (rhi::IRenderPassEncoder &pass) -> std::error_code {
+                              ui_size = float2{static_cast<float>(fb.x), static_cast<float>(fb.y)}]
+                             (rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
             auto ui = ui_store->get<IUIService>();
-            return ui->renderOverlay(pass, proj);
+            return ui->renderOverlay(pass, ui_size);
         };
         const ViewportEntry ui_entry{
             .viewport = rhi::Viewport{
@@ -265,7 +275,9 @@ std::error_code Application::render() {
         PPR_RETURN_ERROR_ON_FAIL(App, IShaderService::get()->shutdown());
         m_services.erase<IShaderService>();
 
-        m_main_window.reset();
+        if (m_main_window.isValid()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(App, m_cached_window_service->destroyWindow(std::move(m_main_window)));
+        }
         m_cached_input_service.reset();
         m_cached_window_service.reset();
 

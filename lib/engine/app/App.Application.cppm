@@ -62,6 +62,8 @@ export namespace pP {
         [[nodiscard]] constexpr const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
         [[nodiscard]] constexpr const SharedWindow &getMainWindow() const noexcept { return m_main_window; }
 
+        [[nodiscard]] ServicesStore &getUiServices() noexcept { return m_ui_services; }
+
     private:
         enum class EState : u8 {
             created,
@@ -85,6 +87,7 @@ export namespace pP {
         ViewportConfig m_ui_viewport{};
         context::CancelFunc m_cancel{};
         WindowCallback<int2>::Handle m_resize_handle{};
+        std::error_code onWindowResized_(const Window &window, int2 old_size);
         EState m_state{EState::created};
 
         // Cold (init-time)

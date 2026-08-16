@@ -285,16 +285,16 @@ namespace pP {
 
     static void glfwWindowSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) noexcept {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        const int2 old_size = window.m_window_size;
         window.m_window_size = int2{size_x, size_y};
-        window.m_when_resized(window, old_size);
     }
 
+    // The framebuffer callback below is the single driver of m_when_resized: rendering and
+    // ImGui are sized from m_framebuffer_size, and CallbackSink stores only the first deferred
+    // event per poll cycle, so notifying from both callbacks would drop the framebuffer one.
     static void glfwFramebufferSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) noexcept {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        const int2 old_framebuffer_size = window.m_framebuffer_size;
         window.m_framebuffer_size = int2{size_x, size_y};
-        window.m_when_resized(window, old_framebuffer_size);
+        window.m_when_resized(window, window.m_framebuffer_size);
     }
 
     static void glfwWindowContentScaleCallback_(::GLFWwindow *p_glfw_window, const float scale_x, const float scale_y) noexcept {
