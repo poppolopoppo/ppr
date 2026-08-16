@@ -363,5 +363,12 @@ export namespace pP {
     template<typename T>
         requires std::is_base_of_v<safe_object, T>
     safe_ptr(T *) -> safe_ptr<T>;
+
+    // Zero-overhead invariant: in release builds safe_ptr<T> must be a drop-in
+    // replacement for a raw T* (pointer-sized, trivially copyable/destructible).
+    // A future edit that adds state or non-trivial ops will fail this compile.
+    static_assert(sizeof(safe_ptr<safe_object>) == sizeof(safe_object *));
+    static_assert(std::is_trivially_copyable_v<safe_ptr<safe_object>>);
+    static_assert(std::is_trivially_destructible_v<safe_ptr<safe_object>>);
 #endif
 }
