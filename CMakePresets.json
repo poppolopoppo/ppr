@@ -132,6 +132,33 @@
       }
     },
     {
+      "name": "msvc-live",
+      "displayName": "MSVC Live (Edit & Continue, Debug)",
+      "description": "Ninja single-config Debug with /ZI (EditAndContinue) for VS2026 Open Folder Edit&Continue + IntelliSense. No ASAN, no optimizations, no ccache. VS generator cannot be used because import std requires Ninja.",
+      "inherits": "windows-default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PPR_ENABLE_DEVELOPER_MODE": "OFF",
+        "PPR_ENABLE_SANITIZER_ADDRESS": "OFF",
+        "PPR_ENABLE_SANITIZER_UNDEFINED": "OFF",
+        "ENABLE_CACHE": "OFF",
+        "PPR_RELEASE_PERF_FLAGS": "OFF",
+        "PPR_EDIT_AND_CONTINUE": "ON"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "intelliSenseMode": "windows-msvc-x64"
+        }
+      }
+    },
+    {
       "name": "gcc-dev",
       "displayName": "GCC Developer **DO NOT WORK WITH MODULES**",
       "hidden": true,

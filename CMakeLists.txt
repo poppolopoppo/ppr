@@ -62,6 +62,7 @@ option(PPR_ENABLE_UNITY_BUILD "Enable unity build for faster builds" FALSE)
 option(PPR_ENABLE_CLANG_TIDY "Enable clang-tidy" FALSE)
 option(PPR_ENABLE_CPPCHECK "Enable cppcheck" FALSE)
 option(PPR_WARNINGS_AS_ERRORS "Treat warnings as errors" FALSE)
+option(PPR_EDIT_AND_CONTINUE "Enable Edit & Continue (Debug, /ZI). VS generator cannot be used with import std." FALSE)
 
 if(PPR_ENABLE_DEVELOPER_MODE)
     message(STATUS "Enable developer mode with config=${CMAKE_BUILD_TYPE}")
@@ -71,6 +72,34 @@ if(PPR_ENABLE_DEVELOPER_MODE)
     #set(PPR_ENABLE_CLANG_TIDY TRUE) # clang-tidy is not working with modules yet, so we need to disable it for now
     set(PPR_ENABLE_CPPCHECK TRUE)
     set(PPR_WARNINGS_AS_ERRORS TRUE)
+endif()
+
+# ---------------------------------------------------------------------------
+# Configuration validation: reject incompatible PPR_ENABLE_* combinations.
+# Presets are authored to be valid; these guards catch manual misconfiguration
+# (e.g. toggling several flags by hand without a preset).
+# ---------------------------------------------------------------------------
+if(PPR_EDIT_AND_CONTINUE)
+    if(NOT CMAKE_GENERATOR STREQUAL "Ninja" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE requires the Ninja generator and MSVC compiler "
+                "(VS Edit & Continue is an MSVC feature; import std requires Ninja).")
+    endif()
+    if(PPR_ENABLE_SANITIZER_ADDRESS)
+        message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE is incompatible with PPR_ENABLE_SANITIZER_ADDRESS "
+                "(ASan disables Edit & Continue).")
+    endif()
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE requires CMAKE_BUILD_TYPE=Debug "
+                "(Edit & Continue needs non-optimized code). Current: '${CMAKE_BUILD_TYPE}'.")
+    endif()
+endif()
+
+# Sanitizer mutual exclusions (cannot be combined on any toolchain).
+if(PPR_ENABLE_SANITIZER_THREAD AND (PPR_ENABLE_SANITIZER_ADDRESS OR PPR_ENABLE_SANITIZER_LEAK))
+    message(FATAL_ERROR "PPR_ENABLE_SANITIZER_THREAD conflicts with Address/Leak sanitizers.")
+endif()
+if(PPR_ENABLE_SANITIZER_MEMORY AND (PPR_ENABLE_SANITIZER_ADDRESS OR PPR_ENABLE_SANITIZER_THREAD OR PPR_ENABLE_SANITIZER_LEAK))
+    message(FATAL_ERROR "PPR_ENABLE_SANITIZER_MEMORY conflicts with Address/Thread/Leak sanitizers.")
 endif()
 
 # Include helper modules
