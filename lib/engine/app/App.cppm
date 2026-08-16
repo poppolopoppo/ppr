@@ -23,3 +23,4 @@ export import :player.graph;
 export import :renderer;
 export import :viewport;
 export import :window.handle;
+export import :window.monitor;
