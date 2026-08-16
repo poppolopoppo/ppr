@@ -76,9 +76,7 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none);
 
     static opaque::Value opaqueStacktraceFrame_(const std::stacktrace &referencer, const std::size_t index) noexcept {
-        static std::string g_unsafe_entry_cache{};
-        g_unsafe_entry_cache = std::to_string(referencer[index]);
-        return g_unsafe_entry_cache;
+        return std::to_string(referencer[index]);
     }
 #endif
 
