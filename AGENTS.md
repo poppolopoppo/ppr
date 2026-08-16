@@ -13,6 +13,7 @@ Load these on demand via the `skill` tool when your task matches their domain:
 | `concurrency-patterns` | channel, signal, event, context, cancellation | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
 | `code-reviewer` | review, check, conventions, code quality | Review against AGENTS.md conventions, C++ best practices, safe_ptr lifetime |
 | `git-commit-planner` | commit, stage, plan, hunk | Hunk-level analysis, cumulative-state rule, atomic commit ordering |
+| `git-log-fast-navigation` | git log, history, fzf, ripgrep, navigate | Fast log formatting, rg-based commit/diff search, fzf interactive browsing, .gitconfig aliases |
 | `plan-executor` | execute, plan, phase, build | Execute structured refactoring plans from `.opencode/plans/` phase by phase |
 | `unit-test-updater` | test, coverage, PPR_UNIT_TEST | Analyze git diffs and update/add C++ unit tests |
 | `validation` | validate, verify, after change, compile all configs, pre-commit | Post-change checklist: compile the full project in every platform-relevant build config, run engine tests, and review diffs against AGENTS.md (parallel builds, serial review) |
