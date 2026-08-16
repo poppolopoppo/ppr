@@ -600,3 +600,13 @@ http-client.private.env.json
 
 # Github Copilot persisted session migrations, see: https://github.com/microsoft/copilot-intellij-feedback/issues/712#issuecomment-3322062215
 .idea/**/copilot.data.migration.*.xml
+
+# Local IDE run configuration (machine-specific)
+.idea/CommandlineArgs-local.xml
+
+# opencode planning and runtime artifacts
+.opencode/plans/
+.opencodec/
+
+# ImGui runtime state
+imgui.ini
