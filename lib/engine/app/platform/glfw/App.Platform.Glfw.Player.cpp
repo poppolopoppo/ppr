@@ -17,7 +17,9 @@ namespace pP {
     }
 
     GlfwPlayer::~GlfwPlayer() noexcept {
-        m_input->m_player_service.reset();
+        if (m_input) {
+            m_input->m_player_service.reset();
+        }
     }
 
     SharedPlayer GlfwPlayer::getPlayer(const PlayerId &id) const noexcept {
