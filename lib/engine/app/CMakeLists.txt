@@ -5,6 +5,7 @@ target_sources(EngineApp
         FILE_SET CXX_MODULES FILES
         App.cppm
         App.Application.cppm
+        App.Imgui.cppm
 
         input/device/App.Input.Gamepad.cppm
         input/device/App.Input.Keyboard.cppm
@@ -71,3 +72,6 @@ setup_ppr_project(EngineApp
         EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango
         EXTERNAL_SYSTEM_PUBLIC_DEPS imgui
 )
+
+# `import imgui;` (C++20 binding for Dear ImGui) must be resolvable from every engine.app importer.
+target_link_libraries(EngineApp PUBLIC ImGuiModule)

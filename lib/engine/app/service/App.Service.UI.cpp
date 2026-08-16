@@ -3,12 +3,17 @@ module;
 #include "pP/Macros.h"
 #include <slang.h>
 #include <slang-com-ptr.h>
-#include "App.Service.UI.imgui.hpp"
-#include <imgui_internal.h>
 
 module engine.app;
 
+import :imgui;
+import imgui_internal;
 import :service.ui;
+
+// imgui.h historically placed its declarations in the global namespace; the C++20 `imgui` module
+// exports them under `ImGui::`, so re-establish the global visibility here for the unqualified
+// names (ImGuiContext, ImGuiIO, ImDrawVert, ImGuiKey_*, ...) used throughout this file.
+using namespace ImGui;
 import :service.input;
 import :service.window;
 import :window.handle;

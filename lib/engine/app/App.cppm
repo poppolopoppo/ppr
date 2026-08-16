@@ -16,6 +16,7 @@ export import :service.input;
 export import :service.player;
 export import :service.ui;
 export import :service.window;
+export import :imgui;
 
 export import :application;
 export import :platform;

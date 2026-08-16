@@ -1,11 +1,15 @@
 #include "pP/Macros.h"
-#include <imgui.h>
 
 import engine.core;
 import engine.math;
 import engine.rhi;
 import engine.app;
+import imgui_internal;
 import std;
+
+// The `imgui` module re-exports ImGui names unqualified; bring them into scope here so the
+// qualified `ImGui::` calls used in the debug demo path resolve.
+using namespace ImGui;
 
 namespace demo {
     using namespace pP;

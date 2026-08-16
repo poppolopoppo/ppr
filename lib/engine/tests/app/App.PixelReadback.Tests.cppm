@@ -1,7 +1,6 @@
 module;
 
 #include "pP/UnitTest.h"
-#include <imgui.h>
 
 export module engine.tests.app:pixel_readback;
 
@@ -10,7 +9,12 @@ import engine.math;
 import engine.rhi;
 import engine.shader;
 import engine.app;
+import imgui_internal;
 import std;
+
+// The `imgui` module re-exports ImGui names unqualified; bring them into scope here so the
+// qualified `ImGui::` calls (SetCurrentContext/ShowDemoWindow) and `ImGuiContext` resolve.
+using namespace ImGui;
 
 export namespace pP::tests {
     namespace detail {
