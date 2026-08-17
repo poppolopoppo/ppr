@@ -114,7 +114,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 ## Build System
 - Load the `clion-tools` skill when starting any task. Use CLion MCP tools INSTEAD of grep/glob/bash for code search, building, and debugging.
 - CMake 4.3+, C++23, modules enabled, experimental `import std`.
-- Presets: `msvc-dev` (recommended), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
+- Presets: `msvc-dev` (recommended), `msvc-live` (Debug Edit&Continue, no ASAN), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see cmake/Compilers.cmake).
 - Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
 - Two separate test executables: `EngineCoreTests` (core, GLFW-free) and `EngineAppTests` (links glfw). Aggregate target `run-engine-tests` runs both. Build via `cmake --build out/build/msvc-dev --target EngineCoreTests` (or `EngineAppTests`). Run via `run-engine-tests` run configuration in CLion.

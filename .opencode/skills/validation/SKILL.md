@@ -20,7 +20,7 @@ Run after every modification, before committing.
 
 Run in pwsh (Windows) / bash (Unix):
 - Windows (`$IsWindows` is true, or `$env:OS` is `Windows_NT`)
-  → presets: **`msvc-dev`**, **`msvc-rel`**
+  → presets: **`msvc-dev`**, **`msvc-live`**, **`msvc-rel`**
 - Unix (`uname -s` is `Linux` or `Darwin`) → presets: **`clang-dev`**, **`clang-rel`**
 
 Skip `clang-cl-*` (no C++20 module support in this repo) and `gcc-*`
@@ -36,6 +36,7 @@ parallel subagents):
 
 ```powershell
 cmake --preset msvc-dev
+cmake --preset msvc-live
 cmake --preset msvc-rel
 ```
 
@@ -113,7 +114,7 @@ Never weaken assertions or tests to silence a finding — fix the root cause.
 ## Step 3 — Aggregate report
 
 Combine everything into one pass/fail summary:
-- Build status per preset (dev + rel).
+- Build status per preset (dev + live + rel).
 - Test status per preset (list any failures).
 - Review findings by severity (Error / Warning / Suggestion).
 
@@ -140,7 +141,12 @@ All green → validation complete. Any red → Step 4.
 
 - Presets are selected by platform; never compile `clang-cl-*` or `gcc-*` here.
 - `-dev` presets run with ASAN + warnings-as-errors (Developer Mode); `-rel`
-  catches optimization-only issues. Both must pass.
+  catches optimization-only issues; `msvc-live` (Debug, `/ZI` Edit&Continue,
+  no ASAN, no optimizations, no ccache) validates the Edit&Continue config.
+  All must pass.
+- `msvc-live` is a full uncached rebuild per cycle (no ccache; `/ZI` Debug
+  codegen differs from `msvc-dev`), so budget for a full-build wait — run it
+  in the parallel build batch, never serially after the other presets.
 - Build the FULL project per preset, including `VideoGameApp` — tests alone do
   not prove the whole configuration compiles.
 - `ctest --preset` is invalid here (no `testPresets` in CMakePresets.json);
