@@ -111,8 +111,14 @@ Imports all five engine modules, constructs `pP::Application(name, argv)`, calls
 When you encounter a file reference (e.g., @rules/general.md), load it on demand.
 Do NOT preemptively load all references. Treat loaded content as mandatory instructions.
 
+## Tool Usage
+Use tools in this priority order:
+1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging.
+2. **Internal tools** (read/edit/grep/glob/task) for file and content operations — reading and editing known files, quick text search, subagent delegation.
+3. **PowerShell (pwsh) only** for shell commands on Windows — never mix in other shells (Bash, cmd, Git Bash, etc.); use bash on Unix. `rg` (ripgrep) is an allowed exception for fast content search.
+
 ## Build System
-- Load the `clion-tools` skill when starting any task. Use CLion MCP tools INSTEAD of grep/glob/bash for code search, building, and debugging.
+- Load the `clion-tools` skill when starting any task. Follow the Tool Usage priority: CLion MCP tools for code search, building, and debugging; internal tools for file and content operations.
 - CMake 4.3+, C++23, modules enabled, experimental `import std`.
 - Presets: `msvc-dev` (recommended), `msvc-live` (Debug Edit&Continue, no ASAN), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see cmake/Compilers.cmake).
