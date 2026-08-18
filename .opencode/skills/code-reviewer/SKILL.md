@@ -214,7 +214,33 @@ For each file in the diff, apply the relevant checklists below.
 
 ---
 
-## Step 4 — Generate per-zone report
+## Step 4 — Validate each finding (mandatory parallel fact-check)
+
+After the global review pass (Step 3) produces candidate findings, EVERY finding must be
+individually validated against the actual source BEFORE any result is presented to the user.
+This step is mandatory — never skip it and never present unvalidated findings.
+
+**Procedure:**
+1. Collect the complete list of candidate findings (all zones, all severities) from Step 3.
+2. Spawn ONE parallel subagent per finding (background, `oracle` type, each loading this
+   `code-reviewer` skill). Each subagent receives only its single finding and is instructed to:
+   - Read the ACTUAL cited source file(s) at the cited location — **never the full diff**.
+     (Reading the whole diff previously caused context exhaustion and wrong line numbers.)
+   - Trace the real code path to confirm or refute the claim.
+   - Return `VERDICT: Confirmed | Partially correct | Incorrect | Cannot determine`,
+     with `Evidence` (file:line + key snippet) and an `Assessment` of whether the cited
+     severity is over/under-stated.
+3. Reconcile all verdicts. Drop or downgrade any finding rated `Incorrect`; keep `Partially
+   correct` only with its stated nuance. Present ONLY the validated, reconciled results to the
+   user, grouped by severity, and flag any finding corroborated by ≥2 reviewers as high confidence.
+
+**Why:** The global pass alone produced false positives — including two fabricated ❌ Errors and
+several wrong line numbers. Per-item validation against source catches misreadings before they
+reach the user.
+
+---
+
+## Step 5 — Generate per-zone report
 
 Each finding uses this structure:
 
@@ -245,7 +271,7 @@ return {ptr, size};
 
 ---
 
-## Step 5 — Summary table
+## Step 6 — Summary table
 
 ```
 ## Summary
@@ -269,3 +295,21 @@ return {ptr, size};
 - Every finding must cite a specific rule from AGENTS.md or a named C++ best practice
 - Engine code (`lib/`) findings take priority over `game/`
 - For diffs with >10 files, ask user which zones to focus on
+
+## Orchestrator & OMO Integration
+
+**Contract:** Review skill. The orchestrator triggers it and aggregates; the 10 review dimensions are fanned out to parallel subagents (`@oracle` / `code-reviewer` skill), with `@explorer` supplying concrete examples. It never edits code.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Gather diff context | `@explorer` | Isolated git/read |
+| Review dimensions (memory, threads, UB, …) | parallel `@oracle` subagents | Independent lanes |
+| Validate each finding (fact-check) | parallel `@oracle` subagents, one per item | Independent lanes; must finish before presenting |
+| Reconcile validated verdicts + severity rank | orchestrator | Single summary |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — reviewers need `skills: ["code-reviewer"]` or `simplify`; `@explorer` `skills: []`.
+- **Background orchestration** — run the dimension reviews as parallel background subagents; reconcile on the Job Board.
+- **Session reuse** — cache the diff context; re-run only on newly added files.
+- **`orchestratorPrompt` routing** — trigger on "review", "check my code", "audit changes".

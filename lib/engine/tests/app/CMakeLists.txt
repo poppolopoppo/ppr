@@ -4,6 +4,7 @@ target_sources(EngineAppTests
     PUBLIC
         FILE_SET CXX_MODULES FILES
             App.Tests.cppm
+            App.Camera.Tests.cppm
             App.Devices.Tests.cppm
             App.Player.Tests.cppm
             App.Dispatch.Tests.cppm

@@ -14,7 +14,8 @@
   "permission": {
     "read": { "*": "allow" },
     "edit": { "*": "allow" },
-    "bash": { "*": "allow", "rm -rf *": "deny", "sudo *": "deny" }
+    "bash": { "*": "allow", "rm -rf *": "deny", "sudo *": "deny" },
+    "clion_*": { "*": "allow" }
   },
   "mcp": {
     "clion": {

@@ -501,3 +501,20 @@ and build registration across commits.
   App test modules use `import engine.app;`.
 - Platform HAL sources follow the `Core.HAL.<platform>.<Area>.cpp` naming and are
   collected via `${HAL_PLATFORM_SOURCES}` in CMake.
+
+## Orchestrator & OMO Integration
+
+**Contract:** This is a reference/guidance skill. The orchestrator consults it, then delegates actual module/CMake creation to `@fixer` and recon to `@explorer`. It never authors `.cppm`/`.cpp`/CMake by hand in the main lane.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Find partition/umbrella/CMake patterns | `@explorer` | Template discovery |
+| Scaffold `.cppm`/`.cpp` + register umbrella + CMake | `@fixer` | Bounded implementation |
+| Compile-check new module | `clion-tools` skill / background build | Fast feedback |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` needs no skills; `@explorer` `skills: []`.
+- **Background orchestration** — compile-check as a background subagent.
+- **Session reuse** — reuse `@explorer` when scaffolding several partitions.
+- **`orchestratorPrompt` routing** — trigger on "add a module partition", "new top-level library", "register test module".

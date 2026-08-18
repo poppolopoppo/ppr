@@ -162,3 +162,22 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 - **Keep tests self-contained.** Each `PPR_UNIT_TEST` should be independent.
 - **If the diff has no public API changes** (e.g., internal refactor, comment fix), output "No test changes required" and stop.
 - **Large diffs:** Group related changes and ask the user which area to test first.
+
+## Orchestrator & OMO Integration
+
+**Contract:** The orchestrator plans the test coverage and delegates all file edits to `@fixer`. It never writes test `.cppm` files directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Locate corresponding test files / naming | `@explorer` | Fast codebase recon |
+| Classify diff into required test actions | `@oracle` (or orchestrator) | Judgment on API change type |
+| Write `PPR_UNIT_TEST` bodies + umbrella registration | `@fixer` | Bounded implementation |
+| Verify build/test of new tests | background build subagent | Reuse validation lane |
+| Convention check | `code-reviewer` skill | AGENTS.md compliance |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` needs no extra skills; `@explorer` needs `skills: []`, `mcps: []`.
+- **Background orchestration** — build+run the new tests as a background subagent, reconciled before reporting.
+- **Session reuse** — reuse the `@explorer` session when scanning multiple changed subsystems.
+- **`orchestratorPrompt` routing** — trigger on "add tests", "update tests for my changes", "test the new code".

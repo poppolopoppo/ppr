@@ -937,3 +937,20 @@ but do not trap access — use the ASAN preset for active detection.
     manages a live prefix within a larger buffer (like `std::vector` or
     `Arena`'s slab). Call `annotateContiguousContainer(storage, capacity, old_live, new_live)`
     every time the live region boundary moves.
+
+## Orchestrator & OMO Integration
+
+**Contract:** Reference skill for allocator selection. The orchestrator consults it, then delegates usage-search to `@explorer`, application to `@fixer`, and design review to `@oracle`. It never edits allocator code directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Grep real allocator usage (`mem::Arena`, `Fallback<`, …) | `@explorer` | Fast recon |
+| Apply allocator change | `@fixer` | Bounded edit |
+| Review allocator choice | `@oracle` | Trade-off judgment |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []`.
+- **Custom agent** — optionally a `memory-advisor` custom agent (prompt + `orchestratorPrompt`) that answers "which allocator for X" using this skill's tables.
+- **Background orchestration** — fire parallel `@explorer` greps for different scenarios.
+- **`orchestratorPrompt` routing** — trigger on "choose allocator", "allocator for scratch/TLS/large buffer".

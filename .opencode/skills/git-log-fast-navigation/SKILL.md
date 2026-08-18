@@ -127,3 +127,19 @@ If missing on Windows, install via winget or scoop:
 winget install BurntSushi.ripgrep.MSVC
 winget install junegunn.fzf
 ```
+
+## Orchestrator & OMO Integration
+
+**Contract:** Reference skill. The orchestrator uses it to decide which git/log/fzf pipeline to run, then delegates execution to `@explorer`. It never runs shell pipelines directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Run `git log | fzf`, `rg` searches, branch selectors | `@explorer` | Shell execution isolated to subagent |
+| Summarize findings | orchestrator | Planning/aggregation |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — restrict `@explorer` to `git`, `rg`, `fzf` via a custom agent or MCP allow-list so no arbitrary shell escapes occur.
+- **Custom agent** — optionally define a `git-nav` custom agent (prompt + `orchestratorPrompt`) wrapping these pipelines.
+- **Session reuse** — reuse the `@explorer` session to cache the last `fzf` selection across repeated queries.
+- **`orchestratorPrompt` routing** — trigger on 'navigate history', 'find the commit that…', 'show recent changes'.

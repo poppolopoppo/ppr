@@ -75,8 +75,23 @@ namespace pP {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
     PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none);
 
-    static opaque::Value opaqueStacktraceFrame_(const std::stacktrace &referencer, const std::size_t index) noexcept {
-        return std::to_string(referencer[index]);
+    // Stable storage for the formatters used during the safe_object teardown
+    // log (the error path when a safe_ptr has outlived its object). MSVC's
+    // std::function rejects noexcept function types, so we store a small
+    // callable struct instead; the Formatter (non-owning function_ref)
+    // references the struct instance in the vector, so no temporary string is
+    // ever referenced by the serialization.
+    struct StacktraceFrameFormatter {
+        const std::stacktrace_entry *entry;
+        void operator()(opaque::format_context &ctx) const noexcept {
+            ctx.write(std::to_string(*entry));
+        }
+    };
+
+    static opaque::Value opaqueStacktraceFrame_(
+        const std::vector<StacktraceFrameFormatter> &formatters,
+        const std::size_t index) noexcept {
+        return opaque::Formatter{formatters[index]};
     }
 #endif
 
@@ -86,14 +101,27 @@ namespace pP {
         {
             const std::unique_lock scope_lock{m_referencer_barrier};
             for (const auto [index, referencer]: std::ranges::enumerate_view(m_references)) {
+                const std::stacktrace &callstack = referencer.m_callstack;
+
+                // The formatters below hold raw pointers into `callstack`
+                // (referencer.m_callstack). PPR_LOG must serialize the
+                // stacktrace field synchronously under the lock within this
+                // iteration — the entry pointers must not outlive the loop.
+                std::vector<StacktraceFrameFormatter> frame_formatters;
+                frame_formatters.reserve(callstack.size());
+                for (const std::stacktrace_entry &entry: callstack) {
+                    const std::stacktrace_entry *const entry_ptr = &entry;
+                    frame_formatters.emplace_back(StacktraceFrameFormatter{entry_ptr});
+                }
+
                 PPR_LOG(SafeObject, warning, "safe_object destroyed with live reference", {
                     {"typename", typeid(*static_cast<const safe_object *>(referencer.m_derived)).name()},
                     {"address", std::bit_cast<std::uintptr_t>(referencer.m_derived)},
                     {"index", index},
                     {"stacktrace", [&]() noexcept -> opaque::TransformView {
                         return opaque::TransformView(
-                            referencer.m_callstack.size(),
-                            {std23::nontype<&opaqueStacktraceFrame_>, referencer.m_callstack});
+                            callstack.size(),
+                            {std23::nontype<&opaqueStacktraceFrame_>, frame_formatters});
                     }},
                 });
             }

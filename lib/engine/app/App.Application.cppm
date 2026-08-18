@@ -2,6 +2,8 @@ module;
 
 export module engine.app:application;
 
+import :camera;
+import :input.replay;
 import :window.handle;
 import :viewport;
 import engine.core;
@@ -71,9 +73,14 @@ export namespace pP {
             terminated,
         };
 
-        // Hot (per-frame) — first cache line
+        // Hot (per-frame): cached service pointers and the camera service, valid
+        // for the application lifetime. m_input_replay is cold (init/teardown
+        // only) but must stay declared before m_camera_service so it outlives it
+        // (members destroy in reverse declaration order).
         safe_ptr<IWindowService> m_cached_window_service{};
         safe_ptr<IInputService> m_cached_input_service{};
+        InputReplay m_input_replay{};
+        CameraService m_camera_service{};
         SharedWindow m_main_window{};
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};

@@ -155,10 +155,13 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(Shader, createGlobalSession(m_global_session.writeRef()));
 
                 // Create a compilation session for the active backend's target format
+                // Set row-major matrix layout for maximum portability across APIs (D3D, Vulkan, OpenGL, Metal)
+                // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
 
                 SessionDesc session_desc{};
+                session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
                 session_desc.targets = &target_desc;
                 session_desc.targetCount = 1;
 
@@ -186,10 +189,13 @@ namespace pP {
                 m_target_format = target_format;
                 m_session.setNull();
 
+                // Set row-major matrix layout for maximum portability across APIs (D3D, Vulkan, OpenGL, Metal)
+                // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
 
                 SessionDesc session_desc{};
+                session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
                 session_desc.targets = &target_desc;
                 session_desc.targetCount = 1;
 

@@ -5,6 +5,14 @@
 set(CPM_DOWNLOAD_VERSION 0.42.1)
 set(CPM_HASH_SUM "f3a6dcc6a04ce9e7f51a127307fa4f699fb2bade357a8eb4c5b45df76e1dc6a5")
 
+# CPM_DIRECTORY/CPM_VERSION are INTERNAL cache entries pinning the location of the
+# first-included CPM.cmake. Configuring via --preset (CPM_SOURCE_CACHE set) vs CLion
+# (no preset) downloads CPM to different locations; the stale entry then makes CPM's
+# early-return guard fire and CPMAddPackage stays undefined. Drop it so the include
+# below always re-initializes CPM from the location we actually download to.
+unset(CPM_DIRECTORY CACHE)
+unset(CPM_VERSION CACHE)
+
 if(CPM_SOURCE_CACHE)
   set(CPM_DOWNLOAD_LOCATION "${CPM_SOURCE_CACHE}/cpm/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
 elseif(DEFINED ENV{CPM_SOURCE_CACHE})

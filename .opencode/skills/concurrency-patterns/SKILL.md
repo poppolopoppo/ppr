@@ -1093,3 +1093,20 @@ void consumer(size_t index) {
   unsubscribe or destroy the `Signal` first.
 - **`std::error_code` values in context cancellation must use
   `std::generic_category()`.** The `CancelContext` asserts this in debug builds.
+
+## Orchestrator & OMO Integration
+
+**Contract:** Reference skill for PPR concurrency primitives. The orchestrator consults it, then delegates usage-search to `@explorer`, implementation to `@fixer`, and thread-safety review to `@oracle`. It never edits concurrency code directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Grep `RawChannel`/`IContext`/`select()` usage | `@explorer` | Fast recon |
+| Implement/refactor concurrency code | `@fixer` | Bounded edit |
+| Review thread-safety design | `@oracle` | Correctness judgment |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `clion_search_symbol`/`clion_search_text` (or `skills: []`).
+- **Custom agent** — optionally per-primitive custom agents (`conc-signal`, `conc-context`) with narrow MCP allow-lists.
+- **Session reuse** — cache query results per session to avoid re-grepping.
+- **`orchestratorPrompt` routing** — trigger on "use RawChannel", "cancel via IContext", "signal multiplexing".

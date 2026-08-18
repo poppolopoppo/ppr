@@ -80,8 +80,9 @@ namespace pP::hal {
         PPR_ASSERT(std::bit_cast<std::uintptr_t>(ptr) % page_size == 0u);
         PPR_ASSERT(size % page_size == 0u);
 
-        mem::poisonDestroyed(ptr, size);
-
+        // Genuine OS page mapping: the region may contain already-decommitted
+        // pages, so writing poison patterns here would fault. Decommit itself
+        // makes the memory inaccessible, catching use-after-free at the OS level.
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
@@ -95,8 +96,8 @@ namespace pP::hal {
     }
 
     void pageOfferToOS(void *const ptr, const std::size_t size) noexcept(false) {
-        mem::poisonDestroyed(ptr, size);
-
+        // Genuine OS page mapping: offered pages must not be poisoned (the
+        // offer itself makes the memory dead, catching use-after-free).
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }
@@ -115,8 +116,9 @@ namespace pP::hal {
         (void) size;
 #endif
 
-        mem::poisonDestroyed(ptr, size);
-
+        // Genuine OS page mapping: the region may contain already-decommitted
+        // pages, so writing poison patterns here would fault. Unmapping itself
+        // makes the memory inaccessible, catching use-after-free at the OS level.
         if (::munmap(ptr, size) != 0) [[unlikely]] {
             throw std::bad_alloc();
         }

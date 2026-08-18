@@ -170,20 +170,22 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             const auto svc = IShaderService::get();
             PPR_TEST_ASSERT(!svc->initialize());
 
-            shader::SharedModule handle;
-            const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader, handle.writeRef());
-            PPR_TEST_ASSERT(!ec);
+            {
+                shader::SharedModule handle;
+                const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader, handle.writeRef());
+                PPR_TEST_ASSERT(!ec);
 
-            auto *module = handle.get();
-            PPR_TEST_ASSERT(module != nullptr);
+                auto *module = handle.get();
+                PPR_TEST_ASSERT(module != nullptr);
 
-            shader::ComPtr<slang::IEntryPoint> vertex_ep;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
-            PPR_TEST_ASSERT(vertex_ep != nullptr);
+                shader::ComPtr<slang::IEntryPoint> vertex_ep;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+                PPR_TEST_ASSERT(vertex_ep != nullptr);
 
-            shader::ComPtr<slang::IEntryPoint> fragment_ep;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
-            PPR_TEST_ASSERT(fragment_ep != nullptr);
+                shader::ComPtr<slang::IEntryPoint> fragment_ep;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+                PPR_TEST_ASSERT(fragment_ep != nullptr);
+            }
 
             std::ignore = svc->shutdown();
         };
@@ -232,52 +234,55 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             const auto svc = IShaderService::get();
             PPR_TEST_ASSERT(!svc->initialize());
 
-            shader::SharedModule handle;
-            const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader, handle.writeRef());
-            PPR_TEST_ASSERT(!ec);
+            {
+                shader::SharedModule handle;
+                const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader, handle.writeRef());
+                PPR_TEST_ASSERT(!ec);
 
-            auto *module = handle.get();
-            PPR_TEST_ASSERT(module != nullptr);
+                auto *module = handle.get();
+                PPR_TEST_ASSERT(module != nullptr);
 
-            shader::ComPtr<slang::IEntryPoint> vertex_ep;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
+                shader::ComPtr<slang::IEntryPoint> vertex_ep;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
 
-            shader::ComPtr<slang::IEntryPoint> fragment_ep;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
+                shader::ComPtr<slang::IEntryPoint> fragment_ep;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
 
-            slang::IComponentType *components[] = {module, vertex_ep.get(), fragment_ep.get()};
-            shader::ComPtr<slang::IComponentType> composite;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(
-                module->getSession()->createCompositeComponentType(components, 3, composite.writeRef())));
+                slang::IComponentType *components[] = {module, vertex_ep.get(), fragment_ep.get()};
+                shader::ComPtr<slang::IComponentType> composite;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(
+                    module->getSession()->createCompositeComponentType(components, 3, composite.writeRef())));
 
-            shader::ComPtr<slang::IComponentType> linked_program;
-            PPR_TEST_ASSERT(SLANG_SUCCEEDED(composite->link(linked_program.writeRef())));
+                shader::ComPtr<slang::IComponentType> linked_program;
+                PPR_TEST_ASSERT(SLANG_SUCCEEDED(composite->link(linked_program.writeRef())));
 
-            auto *layout = linked_program->getLayout();
-            PPR_TEST_ASSERT(layout != nullptr);
+                auto *layout = linked_program->getLayout();
+                PPR_TEST_ASSERT(layout != nullptr);
 
-            // Find g_constants in global parameters
-            bool found = false;
-            const auto count = layout->getParameterCount();
-            PPR_TEST_ASSERT(count > 0);
-            for (unsigned i = 0; i < count; ++i) {
-                auto *param = layout->getParameterByIndex(i);
-                PPR_TEST_ASSERT(param != nullptr);
-                if (std::string_view(param->getName()) == "g_constants") {
-                    found = true;
-                    auto *type_layout = param->getTypeLayout();
-                    PPR_TEST_ASSERT(type_layout != nullptr);
-                    auto *type = param->getType();
-                    PPR_TEST_ASSERT(type != nullptr);
-                    PPR_TEST_ASSERT(type->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
+                // Find g_constants in global parameters
+                bool found = false;
+                const auto count = layout->getParameterCount();
+                PPR_TEST_ASSERT(count > 0);
+                for (unsigned i = 0; i < count; ++i) {
+                    auto *param = layout->getParameterByIndex(i);
+                    PPR_TEST_ASSERT(param != nullptr);
+                    if (std::string_view(param->getName()) == "g_constants") {
+                        found = true;
+                        auto *type_layout = param->getTypeLayout();
+                        PPR_TEST_ASSERT(type_layout != nullptr);
+                        auto *type = param->getType();
+                        PPR_TEST_ASSERT(type != nullptr);
+                        PPR_TEST_ASSERT(type->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
 
-                    auto *element_layout = type_layout->getElementTypeLayout();
-                    PPR_TEST_ASSERT(element_layout != nullptr);
-                    PPR_TEST_ASSERT(element_layout->getSize() > 0);
-                    break;
+                        auto *element_layout = type_layout->getElementTypeLayout();
+                        PPR_TEST_ASSERT(element_layout != nullptr);
+                        PPR_TEST_ASSERT(element_layout->getSize() > 0);
+                        break;
+                    }
                 }
+                PPR_TEST_ASSERT(found);
             }
-            PPR_TEST_ASSERT(found);
+
             std::ignore = svc->shutdown();
         };
 

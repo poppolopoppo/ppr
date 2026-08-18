@@ -64,37 +64,30 @@ export namespace pP::tests {
 
         TestApp app{"PixelReadback", std::span<const char * const>{}};
 
-        if (auto ec = app.boot(); ec) {
-            _.logFmt("skipping app_pixel_readback: engine bootstrap failed");
-            return;
-        }
+        PPR_TEST_ASSERT(app.boot().value() == 0);
 
         PPR_DEFER {
             (void) app.teardown();
         };
 
         const auto rhi_service = app.getServices().get<IRhiService>();
+        PPR_TEST_ASSERT(!!rhi_service);
+
         const auto window_service = app.getServices().get<IWindowService>();
+        PPR_TEST_ASSERT(!!window_service);
+
         const auto input_service = app.getServices().get<IInputService>();
-        if (not rhi_service or not window_service or not input_service) {
-            _.logFmt("skipping app_pixel_readback: core services unavailable");
-            return;
-        }
+        PPR_TEST_ASSERT(!!input_service);
 
         const auto assets = findAssetsDir();
-        if (assets.empty()) {
-            _.logFmt("skipping app_pixel_readback: could not locate assets/shaders");
-            return;
-        }
+        PPR_TEST_ASSERT(not assets.empty());
 
         auto offscreen_window = window_service->createWindow(WindowModel{
             .m_window_size = int2{static_cast<int>(kTargetSize), static_cast<int>(kTargetSize)},
             .m_visible = false,
         });
-        if (not offscreen_window) {
-            _.logFmt("skipping app_pixel_readback: could not create offscreen window");
-            return;
-        }
+
+        PPR_TEST_ASSERT(!!offscreen_window);
 
         PPR_DEFER {
             if (offscreen_window) {
@@ -103,10 +96,7 @@ export namespace pP::tests {
         };
 
         Renderer renderer;
-        if (auto ec = renderer.initialize(*rhi_service, *window_service, **offscreen_window, assets); ec) {
-            _.logFmt("skipping app_pixel_readback: renderer init failed");
-            return;
-        }
+        PPR_TEST_ASSERT(renderer.initialize(*rhi_service, *window_service, **offscreen_window, assets).value() == 0);
 
         const rhi::Format format = renderer.getSurfaceFormat();
         rhi::IDevice &device = rhi_service->getDevice();
@@ -162,12 +152,21 @@ export namespace pP::tests {
 
         // ---- Triangle pass ----
         auto target = makeTarget(kTargetSize, kTargetSize);
-        if (not target) {
-            return;
+        PPR_TEST_ASSERT(!!target);
+
+        // Use a real perspective camera (the 4-arg path VideoGameApp actually uses)
+        // so this test faithfully reproduces the production transform instead of the
+        // identity-camera 3-arg overload, which never exercises Camera::viewProjection().
+        Camera scene_camera;
+        {
+            const float4x4 view = lookAt(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
+            const float4x4 proj = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, 60.0f * std::numbers::pi_v<float> / 180.0f, 1.0f, 0.1f, 1000.0f);
+            scene_camera.setView(view);
+            scene_camera.setProjection(proj);
         }
 
-        const auto scene_draw = [&renderer](rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
-            return renderer.drawTriangle(pass, viewport, scissor);
+        const auto scene_draw = [&renderer, &scene_camera](rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
+            return renderer.drawTriangle(pass, scene_camera, viewport, scissor);
         };
         const ViewportEntry scene_entry{
             .viewport = full_viewport,
@@ -175,15 +174,10 @@ export namespace pP::tests {
             .draw = scene_draw,
         };
 
-        if (auto ec = renderer.renderInto(*target, std::span{&scene_entry, 1}); ec) {
-            _.logFmt("skipping app_pixel_readback: scene render failed");
-            return;
-        }
+        PPR_TEST_ASSERT(renderer.renderInto(*target, std::span{&scene_entry, 1}).value() == 0);
 
         auto data = readback(target.get(), kTargetSize, kTargetSize);
-        if (data.empty()) {
-            return;
-        }
+        PPR_TEST_ASSERT(not data.empty());
         const u32 row_pitch = kTargetSize * 4u;
 
         const auto read_channel = channelReader(format);
@@ -198,24 +192,24 @@ export namespace pP::tests {
             return read_channel(pixel(x, y), channel) < 0.4f;
         };
 
-        if (not is_dominant(128u, 90u, 0) || not is_recessive(128u, 90u, 1) || not is_recessive(128u, 90u, 2)) {
-            _.log(("app_pixel_readback: expected RED at top-center, got r=" + std::to_string(read_channel(pixel(128u, 90u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(128u, 90u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(128u, 90u), 2)))
+        if (not is_dominant(128u, 106u, 0) || not is_recessive(128u, 106u, 1) || not is_recessive(128u, 106u, 2)) {
+            _.log(("app_pixel_readback: expected RED at (128,106), got r=" + std::to_string(read_channel(pixel(128u, 106u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(128u, 106u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(128u, 106u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }
-        if (not is_dominant(188u, 188u, 1) || not is_recessive(188u, 188u, 0) || not is_recessive(188u, 188u, 2)) {
-            _.log(("app_pixel_readback: expected GREEN at bottom-right, got r=" + std::to_string(read_channel(pixel(188u, 188u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(188u, 188u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(188u, 188u), 2)))
+        if (not is_dominant(106u, 150u, 1) || not is_recessive(106u, 150u, 0) || not is_recessive(106u, 150u, 2)) {
+            _.log(("app_pixel_readback: expected GREEN at (106,150), got r=" + std::to_string(read_channel(pixel(106u, 150u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(106u, 150u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(106u, 150u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }
-        if (not is_dominant(68u, 188u, 2) || not is_recessive(68u, 188u, 0) || not is_recessive(68u, 188u, 1)) {
-            _.log(("app_pixel_readback: expected BLUE at bottom-left, got r=" + std::to_string(read_channel(pixel(68u, 188u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(68u, 188u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(68u, 188u), 2)))
+        if (not is_dominant(150u, 150u, 2) || not is_recessive(150u, 150u, 0) || not is_recessive(150u, 150u, 1)) {
+            _.log(("app_pixel_readback: expected BLUE at (150,150), got r=" + std::to_string(read_channel(pixel(150u, 150u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(150u, 150u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(150u, 150u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }

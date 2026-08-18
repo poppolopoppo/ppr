@@ -234,6 +234,24 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - Keep file reads targeted (use offset/limit for large files)
 - When hitting blockers like compiler ICE or hard-crash, do not jump to ambitious refactors of the prepared plan: instead you **must** notify the user and ask for validation and to decide of the best direction.
 
+## Matrix Layout Conventions
+
+**PPR conventions (verified):**
+- **Storage**: Row-major (HLSL/DirectX compatible), set explicitly in `lib/engine/shader/Shader.cpp` via `session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;`
+- **Vector–matrix multiply**: `mul(float4, matrix)` — row-vector convention (matrix on the right), matching `mango::math`. Do **not** use `mul(matrix, float4)`, which transposes the transform, flips view-space Z, and yields negative W (clipped geometry).
+- **Camera / shader**: `m_view * m_projection` for viewProjection; shader does `mul(float4(input.position, 1.0), g_frame.m_view_projection)`.
+- **RHI**: D3D vs VK projection Z-range handled via `EProjectionConvention`. No explicit `row_major`/`column_major` qualifiers in shaders (relies on HLSL default).
+
+**Why row-major:** It is the only layout reliably portable across D3D, Vulkan, OpenGL, Metal, and CUDA. Slang's library API defaults to row-major (the `slangc` CLI defaults to column-major); PPR overrides it at the session level. Per-target layouts can be mixed via separate `SessionDesc`s.
+
+**Handedness:** Slang-RHI does not enforce or override coordinate handedness (D3D traditionally left-handed, OpenGL/Vulkan right-handed, Metal varies) — that is the math library's responsibility. Configure the host math library to row-major and be explicit about vector interpretation for portability.
+
+**Non-4x4 caveat:** Non-4x4 matrices (e.g. 4×3) may have size/alignment mismatches; insert a manual transpose at the host-to-shader boundary if sizes differ.
+
+**References**
+- Slang user guide: https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a1-01-matrix-layout.html
+- `lib/engine/shader/Shader.cpp` (rows 158-164, 192-198)
+
 ## CMake Version Tracking
 - **CMake 4.4 synthetic target genex leak**: Single-config Ninja (CMAKE_BUILD_TYPE per preset) is used to avoid CMake 4.4's multi-config genex evaluation gap for C++ module synthetic targets. When CMake 4.5+ is adopted, test whether the `default` preset can switch back to `"Ninja Multi-Config"` without producing conflicting flags (e.g., `/Od` + `/Ox` in Debug synth targets). The `default` preset's description in CMakePresets.json contains a searchable reminder.
 - **Root-scope module targets break `@cmake_cxx_std.lib` links**: CMake creates the synthetic `std` module target (`@cmake_cxx_std.lib`) in the directory scope of the first target that needs it (any target with `FILE_SET CXX_MODULES` when `CXX_MODULE_STD` is ON, regardless of whether its sources `import std;`). If that target lives in the TOP-LEVEL scope (e.g., a target defined via `include()`d cmake file rather than `add_subdirectory()`), the std library is referenced in link lines as the bare name `@cmake_cxx_std.lib` — the leading `@` is MSVC response-file syntax, so the linker drops it and every link fails with `LNK2001: unresolved external symbol std::_General_precision_tables_2<...>::_Max_P` (or similar std-module implicit-inline definitions). Fix: set `CXX_MODULE_STD OFF` on such targets (see `cmake/external/DearImGui.cmake`, where `ImGuiModule` triggered this via LNK2001 on `_Max_P`). When adopting a newer CMake, test whether root-scope module targets still produce a bare `@`-prefixed std lib reference.

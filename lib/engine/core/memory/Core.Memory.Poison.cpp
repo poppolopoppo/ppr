@@ -48,6 +48,12 @@ void poisonFlood(const PoisonPattern pattern, const void *const ptr, const std::
         return;
     }
 
+    // Genuine OS page mappings (hal::pageAlloc / pageDecommit / pageFree /
+    // pageOfferToOS) must never reach this function: their backing pages may
+    // be decommitted or mapped read-only, so writing poison patterns there is
+    // an invalid access. Those callers skip poisoning themselves; heap-backed
+    // page-aligned blocks (arenas, slabs, pools) are always safe to poison.
+
     auto next_pattern = [rng{poisonSeed(pattern, ptr, size_bytes)}]() mutable noexcept -> u64 {
         rng = hash::mix(rng);
         return rng;

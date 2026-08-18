@@ -223,3 +223,21 @@ clion_open_file_in_editor(filePath="lib/engine/core/Core.Memory.cppm")
 - **Debug:** ALWAYS use `clion_xdebug_*` tools for debugging. Never use printf/logging for debugging when the debugger is available.
 - **Diagnose:** Use `clion_get_file_problems` to check for errors before and after edits.
 - **Batch:** When multiple independent CLion calls are needed, batch them in parallel (e.g. `clion_search_symbol` + `clion_get_run_configurations` in the same message).
+
+## Orchestrator & OMO Integration
+
+**Contract:** This skill is the catalog of CLion MCP tools. The orchestrator uses it to decide *which* `clion_*` call to make, then delegates the call (and any follow-up edits) to the appropriate subagent. The orchestrator does not invoke MCP tools as a substitute for planning.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Symbol/file search before a debug session | `@explorer` | Pre-flight recon |
+| Run build/test run configurations | background build subagent | Heavy, parallelizable |
+| Debug session (breakpoints, eval) | `@oracle` (or orchestrator + CLion) | Diagnosis |
+| Apply fix from inspection | `@fixer` | Bounded edit |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — orchestrator already has `mcps: ["*","!context7"]` (includes `clion`); scope subagents to only the `clion_*` tools they need.
+- **Background orchestration** — run configurations execute as background subagents.
+- **Session reuse** — cache run-configuration names; reuse the debug session across `--run-test` prompts.
+- **`orchestratorPrompt` routing** — trigger on "search the codebase", "build", "debug", "run EngineTests".

@@ -203,3 +203,20 @@ After all commits, add a short **Summary** section:
   strategy first and ask the user to confirm before writing all bodies in full.
 - If `git status` shows **merge conflicts** or a detached HEAD, report it and
   stop — do not propose commits until the tree is clean.
+
+## Orchestrator & OMO Integration
+
+**Contract:** Analysis skill. The orchestrator drives it; diff retrieval is delegated to `@explorer` and the grouping/ordering heuristics to `@oracle`. It never edits the index or runs `git commit`.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| `git status`/`diff`/`log` retrieval | `@explorer` | Isolated shell |
+| Apply grouping + dependency ordering | `@oracle` | Judgment on commit boundaries |
+| Emit plan | orchestrator | Aggregation |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` restricted to `git status/diff/log` (custom agent or allow-list).
+- **Background orchestration** — fetch diff in background while orchestrator previews scope.
+- **Session reuse** — reuse `@explorer` for incremental diffs after user tweaks.
+- **`orchestratorPrompt` routing** — trigger on 'commit', 'stage', 'plan my changes', 'how should I split this'.

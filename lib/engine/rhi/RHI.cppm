@@ -152,6 +152,11 @@ export namespace pP::rhi {
     using slang_rhi::Viewport;
     using slang_rhi::ShaderCursor;
     using slang_rhi::WindowHandle;
+
+    using slang_rhi::DebugLayerOptions;
+    using slang_rhi::DebugMessageSource;
+    using slang_rhi::DebugMessageType;
+    using slang_rhi::MarkerColor;
 }
 
 export namespace pP {

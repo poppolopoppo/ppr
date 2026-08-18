@@ -825,7 +825,7 @@ export namespace pP::mem {
 
     public:
         constexpr InSitu() noexcept {
-            poisonReserved(&m_storage);
+            poisonReserved(m_storage, sizeof(m_storage));
         }
 
         constexpr ~InSitu() noexcept {
@@ -833,7 +833,9 @@ export namespace pP::mem {
             PPR_ASSERT(m_status == status_free_ && "In-situ buffer is still in use during destruction");
             m_status = status_used_; // disable use-after-free
 #endif
-            poisonReserved(&m_storage);
+            // unpoison the whole embedded region so the enclosing object / stack
+            // reuse stays addressable, even if blocks are still allocated
+            unpoisonUninitialized(m_storage, sizeof(m_storage));
         }
 
         InSitu(const InSitu &) = delete;
@@ -863,14 +865,14 @@ export namespace pP::mem {
             return {aligned_ptr, space};
         }
 
-        constexpr void deallocateRaw([[maybe_unused]] const void *const ptr,
-                                     [[maybe_unused]] const std::size_t bytes,
+        constexpr void deallocateRaw(const void *const ptr,
+                                     const std::size_t bytes,
                                      [[maybe_unused]] const std::align_val_t alignment) noexcept {
             PPR_ASSERT(m_status == status_used_ && "Trying to deallocate an in-situ buffer that isn't exhausted");
             PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, bytes) && "Trying to deallocate a pointer outside of the in-situ buffer");
 
             m_status = status_free_;
-            poisonReserved(&m_storage);
+            poisonReserved(const_cast<void *>(ptr), bytes);
         }
 
         [[nodiscard]] constexpr bool

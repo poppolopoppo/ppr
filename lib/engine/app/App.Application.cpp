@@ -5,6 +5,8 @@ module;
 module engine.app;
 
 import :application;
+import :camera;
+import :input.replay;
 import :platform;
 import :renderer;
 import :service.input;
@@ -84,6 +86,16 @@ namespace pP {
         m_cached_input_service = m_services.get<IInputService>();
         PPR_ASSERT(m_cached_input_service.isValid());
 
+        // Wrap the platform input in a replay decorator, then initialize the camera
+        // service against the wrapped input so the free-cam controller sees replay.
+        m_input_replay.setParent(m_services.get<IInputService>());
+        m_input_replay.setMode(EInputReplayMode::replay);
+        m_services.erase<IInputService>();
+        std::ignore = m_services.insert(safe_ptr<IInputService>{&m_input_replay});
+        m_cached_input_service = m_services.get<IInputService>();
+        std::ignore = m_camera_service.initialize(*m_services.get<IInputService>());
+        std::ignore = m_services.insert(safe_ptr<ICameraService>{&m_camera_service});
+
         if (auto result = m_cached_window_service->createWindow(WindowModel{
             .m_title = m_name,
             .m_window_size = int2{1280, 720},
@@ -103,6 +115,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default, shader_service->getGlobalSession()));
         std::ignore = m_services.insert(rhi_service);
 
+        m_camera_service.setDeviceType(rhi_service->getDevice().getDeviceType());
+
         if (auto renderer = std::make_unique<Renderer>()) {
             PPR_RETURN_ERROR_ON_FAIL(
                 App,
@@ -121,6 +135,7 @@ namespace pP {
         // Set initial viewport configs from window framebuffer size
         m_scene_viewport.framebuffer_size = m_main_window->m_framebuffer_size;
         m_ui_viewport.framebuffer_size = m_main_window->m_framebuffer_size;
+        m_camera_service.setViewportSize(m_main_window->m_framebuffer_size);
 
         if (auto ui = ui::createImGuiService()) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -143,6 +158,7 @@ namespace pP {
 
     std::error_code Application::onWindowResized_(const Window &window, int2) {
         const int2 fb = window.m_framebuffer_size;
+        m_camera_service.setViewportSize(fb);
         m_scene_viewport.framebuffer_size = fb;
         m_ui_viewport.framebuffer_size = fb;
 
@@ -175,6 +191,8 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_cached_input_service->postInputMessages(dt));
 
+        m_camera_service.update(dt);
+
         if (m_ui_service) [[likely]] {
             PPR_RETURN_ERROR_ON_FAIL(App, m_ui_service->newFrame(dt));
         }
@@ -191,9 +209,9 @@ std::error_code Application::render() {
 
         // m_renderer is a std::unique_ptr<Renderer> member; this raw capture is
         // valid because render() is synchronous and m_renderer outlives the call.
-        const auto scene_draw = [renderer = m_renderer.get()]
+        const auto scene_draw = [this, renderer = m_renderer.get()]
                                 (rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
-            return renderer->drawTriangle(pass, viewport, scissor);
+            return renderer->drawTriangle(pass, m_camera_service.camera(), viewport, scissor);
         };
         const ViewportEntry scene_entry{
             .viewport = rhi::Viewport{
@@ -244,9 +262,17 @@ std::error_code Application::render() {
             return default_value_v;
         }
 
+        m_camera_service.deactivateController();
+        m_input_replay.detachParent();
+
         m_resize_handle.release();
 
         PPR_DEFER {
+            // Drop service-store refs to member-owned services (m_input_replay,
+            // m_camera_service) before those members are destroyed.
+            m_services.erase<IInputService>();
+            m_services.erase<ICameraService>();
+
             m_ui_service.reset();
             m_renderer.reset();
 

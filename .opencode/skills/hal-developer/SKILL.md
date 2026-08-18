@@ -1280,3 +1280,21 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 - Memory operations must pair `mem::poisonDestroyed` (before release) and `mem::unpoisonUninitialized` (after allocation) for ASAN compatibility.
 - `pageAlloc` must throw `std::bad_alloc` on failure; other memory operations may use `std::bad_alloc` or `std::system_error`.
 - `ringBufferAlloc`/`ringBufferFree` are **Windows-only**; other platforms may leave them unimplemented (they are not in the standard 10-file set for POSIX platforms).
+
+## Orchestrator & OMO Integration
+
+**Contract:** Reference skill for HAL work. The orchestrator consults it, then delegates platform implementation to `@fixer`/`@oracle` and recon to `@explorer`. It never writes HAL `.cpp` files directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Locate existing HAL patterns / APIs | `@explorer` | Template discovery |
+| Implement a new platform / area | `@fixer` + `@oracle` | Bounded impl + architecture |
+| Generate `PPR_UNIT_TEST` bodies | `@fixer` | Test scaffolding |
+| Compile + run HAL tests | background build subagent | Reuse validation lane |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` `skills: []`; restrict HAL edits to `lib/engine/core/hal/<platform>/` + `cmake/HAL.cmake` via allow-list.
+- **Custom agent** — optionally a `hal-impl` custom agent that scaffolds the 10 platform `.cpp` files from this skill's checklist.
+- **Background orchestration** — run HAL tests as a background subagent in parallel with impl.
+- **`orchestratorPrompt` routing** — trigger on 'add HAL platform', 'implement <area> for <platform>', 'HAL test for…'.

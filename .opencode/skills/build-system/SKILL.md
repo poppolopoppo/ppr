@@ -154,3 +154,22 @@ Platform sources are under `lib/engine/core/hal/<platform>/` with filenames like
 - **ccache + modules:** Module targets must call `ppr_disable_compiler_cache()` — ccache doesn't handle BMI content
 - **vcpkg not found:** Set `VCPKG_ROOT` environment variable or use `cmake --preset vcpkg`
 - **GCC modules:** GCC presets are hidden (`gcc-dev`, `gcc-rel`) — GCC does not support C++20 modules yet
+
+## Orchestrator & OMO Integration
+
+**Contract:** Reference/guidance skill for CMake/presets/deps. The orchestrator consults it, then delegates CMake/CMakeLists edits to `@fixer`, recon to `@explorer`, and build execution to background subagents. It never authors CMake or runs `cmake` in the main lane.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Locate preset/CMakeLists patterns | `@explorer` | Template discovery |
+| Edit `CMakeLists.txt` / `CMakePresets.json` | `@fixer` | Bounded implementation |
+| Configure + build presets | background build subagent | Heavy, parallelizable |
+| Diagnose linker/module errors | `@oracle` + `clion-tools` | Root-cause judgment |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` `skills: []`; `@explorer` `skills: []`; orchestrator keeps `mcps: ["*","!context7"]` (includes `clion`).
+- **Custom agent** — optionally a `preset-manager` custom agent that handles cache-safe sequential `cmake --preset` setup and returns configured preset paths.
+- **Background orchestration** — configure once sequentially, then launch one build subagent per preset in parallel; reconcile on the Job Board.
+- **Session reuse** — reuse the build subagent session across presets to amortize CMake cache warm-up.
+- **`orchestratorPrompt` routing** — trigger on 'cmake', 'preset', 'build target', 'linker error', 'dependency'.

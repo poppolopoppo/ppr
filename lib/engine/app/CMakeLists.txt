@@ -7,6 +7,8 @@ target_sources(EngineApp
         App.Application.cppm
         App.Imgui.cppm
 
+        camera/App.Camera.cppm
+
         input/device/App.Input.Gamepad.cppm
         input/device/App.Input.Keyboard.cppm
         input/device/App.Input.Mouse.cppm
@@ -16,6 +18,7 @@ target_sources(EngineApp
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
         input/App.Input.Mapping.cppm
+        input/App.Input.Replay.cppm
 
         platform/glfw/App.Platform.Glfw.cppm
         platform/glfw/App.Platform.Glfw.Input.cppm
@@ -39,6 +42,8 @@ target_sources(EngineApp
     PRIVATE
         App.Application.cpp
 
+        camera/App.Camera.cpp
+
         input/device/App.Input.Gamepad.cpp
         input/device/App.Input.Keyboard.cpp
         input/device/App.Input.Mouse.cpp
@@ -46,6 +51,7 @@ target_sources(EngineApp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
         input/App.Input.Mapping.cpp
+        input/App.Input.Replay.cpp
 
         platform/glfw/App.Platform.Glfw.include.hpp
         platform/glfw/App.Platform.Glfw.cpp

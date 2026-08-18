@@ -115,3 +115,21 @@ conflicts, a build error is unfixable):
 - Never modify the plan file itself unless the user asks
 - Keep commits per-phase, never batch phases into one commit
 - If a phase has no code changes (pure planning), skip build/test
+
+## Orchestrator & OMO Integration
+
+**Contract:** The orchestrator reads the plan, sequences the phases, and delegates every file edit/`git mv`/CMake change to `@fixer`. It never edits production source directly.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Verify file paths / CMakeLists locations | `@explorer` | Pre-flight recon |
+| Execute each step (edit/move/write/CMake) | `@fixer` | Bounded mechanical implementation |
+| Build + test after each phase | background build subagent | Reuse validation lane |
+| Commit planning | `git-commit-planner` skill | Atomic, buildable commits |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` carries no skill load; orchestrator keeps `skills: ["*"]`.
+- **Background orchestration** — run per-phase build verification as a background subagent; gate phase progression on its result.
+- **Session reuse** — keep one `@fixer` session per phase to preserve edit context.
+- **`orchestratorPrompt` routing** — trigger on "execute the plan", "run the plan", "apply the refactoring".

@@ -13,6 +13,7 @@ import :player_graph;
 import :shader;
 import :viewport;
 import :pixel_readback;
+import :camera;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(app) {
@@ -26,6 +27,7 @@ export namespace pP::tests {
             app_shader,
             app_viewport,
             app_pixel_readback,
+            app_camera,
         });
     };
 }

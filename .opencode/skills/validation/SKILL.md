@@ -154,3 +154,21 @@ All green → validation complete. Any red → Step 4.
 - Subagents use `cmake`/`ctest` only; debugging uses CLion (see `clion-tools`).
 - Code review findings must cite a specific AGENTS.md rule or named C++
   best practice.
+
+## Orchestrator & OMO Integration
+
+**Contract:** This skill runs *with* the orchestrator. The orchestrator plans the validation matrix and delegates every build/test cycle to background subagents — it never compiles or runs `ctest` in the main lane.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Configure + build each preset | background `task` subagent (general/fixer) | Heavy, parallelizable; keeps orchestrator lane free |
+| Run `EngineCoreTests` / `EngineAppTests` / `ctest` | same build subagent | Co-located with the build it validates |
+| Triage build/test failures | `@fixer` + `@oracle` | Bounded fixes and architecture calls |
+| Diff review (10 dimensions) | `code-reviewer` skill (or `@oracle`) | Independent review lane |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — orchestrator needs `skills: ["*"]` (has it) and `mcps: ["*","!context7"]` (has `clion`); build subagents need only `bash`/cmake access.
+- **Background orchestration** — launch one build subagent per preset in parallel; reconcile on the Background Job Board before the summary.
+- **Session reuse** — reuse one build subagent session across presets to amortize CMake cache warm-up.
+- **`orchestratorPrompt` routing** — trigger on "validate", "verify before commit", "run engine tests", or after any code change.

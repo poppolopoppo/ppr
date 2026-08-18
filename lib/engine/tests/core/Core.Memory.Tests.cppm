@@ -241,6 +241,33 @@ export namespace pP::tests {
             insitu.deallocateRaw(third.ptr, third.count, max_align_v);
         };
 
+        PPR_UNIT_TEST(insitu_embedded_destroy_roundtrip) {
+            struct Enclosing {
+                mem::InSitu<64u> buffer{};
+                int m_value{42};
+            };
+
+            Enclosing enclosing{};
+            const auto [ptr, count] = enclosing.buffer.allocateRaw(24u, max_align_v);
+            PPR_TEST_ASSERT(ptr != nullptr);
+            PPR_TEST_ASSERT(enclosing.buffer.owns(ptr, 24u));
+            enclosing.buffer.deallocateRaw(ptr, count, max_align_v);
+
+            // Destroy and re-create the in-situ buffer in place while the
+            // enclosing object stays alive: the destructor must unpoison the
+            // embedded storage so the enclosing object remains addressable.
+            std::destroy_at(&enclosing.buffer);
+            auto *const raw_bytes = reinterpret_cast<std::byte *>(&enclosing);
+            raw_bytes[0] = std::byte{0xAB};
+            std::construct_at(&enclosing.buffer);
+
+            PPR_TEST_ASSERT(enclosing.m_value == 42);
+
+            const auto [reused, reused_count] = enclosing.buffer.allocateRaw(16u, max_align_v);
+            PPR_TEST_ASSERT(reused != nullptr);
+            enclosing.buffer.deallocateRaw(reused, reused_count, max_align_v);
+        };
+
         PPR_UNIT_TEST(fallback_prefers_primary_then_secondary) {
             mem::Fallback<mem::InSitu<32u>, ResizeOnlyAllocator> alloc{};
 
@@ -502,6 +529,7 @@ export namespace pP::tests {
             Allocator::allocation_raii_and_relocate,
             Allocator::allocation_create_destroy_non_trivial,
             Allocator::allocation_index_operator,
+            Allocator::insitu_embedded_destroy_roundtrip,
         });
     };
 
@@ -712,16 +740,20 @@ export namespace pP::tests {
             delete obj;
         };
 
-        PPR_UNIT_TEST(safe_object_move_with_live_ref, UnitTest::expect_crash) {
-            TestObject src{};
-            safe_ptr<TestObject> ptr{&src};
-            TestObject dst{std::move(src)};
+        PPR_UNIT_TEST(safe_object_move_with_live_ref, UnitTest::expect_fail) {
+            if constexpr (PPR_ENABLE_DEBUG) {
+                TestObject src{};
+                safe_ptr<TestObject> ptr{&src};
+                TestObject dst{std::move(src)};
+            }
         };
 
-        PPR_UNIT_TEST(safe_object_copy_with_live_ref, UnitTest::expect_crash) {
-            TestObject src{};
-            safe_ptr<TestObject> ptr{&src};
-            TestObject dst{src};
+        PPR_UNIT_TEST(safe_object_copy_with_live_ref, UnitTest::expect_fail) {
+            if constexpr (PPR_ENABLE_DEBUG) {
+                TestObject src{};
+                safe_ptr<TestObject> ptr{&src};
+                TestObject dst{src};
+            }
         };
     }
 

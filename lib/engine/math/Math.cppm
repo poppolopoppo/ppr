@@ -32,6 +32,15 @@ export namespace pP {
     using mango::math::normalize;
     using mango::math::sqrt;
     using mango::math::rsqrt;
+    using mango::math::inverse;
+    using mango::math::transpose;
+    using mango::math::cross;
+    using mango::math::clamp;
+
+    // mango::lookat takes (target, viewer, up); eye/target are intentionally swapped — do NOT reorder to (eye, target, up).
+    [[nodiscard]] float4x4 lookAt(const float3 &eye, const float3 &target, const float3 &up) noexcept {
+        return float4x4::lookat(target, eye, up);
+    }
 
     using mango::math::operator!=;
     using mango::math::operator&;

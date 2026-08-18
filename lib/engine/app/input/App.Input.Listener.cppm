@@ -23,7 +23,7 @@ export namespace pP {
     class InputListener : public safe_object {
     public:
         using ActionCallback = std::move_only_function<void(const InputActionEvent &event, const InputKey &trigger) const noexcept>;
-        using RawKeyCallback = std::move_only_function<void(const InputMessage &message) noexcept>;
+        using RawKeyCallback = std::move_only_function<void(const InputMessage &message)>;
 
     private:
         struct MappingAndPriority {

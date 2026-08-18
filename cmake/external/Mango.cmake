@@ -40,16 +40,17 @@ CPMAddPackage(
 
 set_target_properties(mango PROPERTIES CXX_MODULE_STD OFF)
 
-# Remove /MP and /arch:AVX* from mango's INTERFACE_COMPILE_OPTIONS so they
+# Remove /MP, /arch:AVX*, and /Ox from mango's INTERFACE_COMPILE_OPTIONS so they
 # don't propagate to PPR targets. These per-target flags cause CMake to create
 # separate @cmake_cxx_std synth targets with different flags, triggering
 # "Disagreement of the location of the 'std' module" errors and C2678 type
-# mismatches between synth targets. mango doesn't use import std; its /MP and
-# /arch:AVX2 remain on mango's own compilation (via PRIVATE/PUBLIC), but PPR
-# consumers get consistent flags from the global add_compile_options instead.
+# mismatches between synth targets. mango doesn't use import std; its /MP,
+# /arch:AVX2, and /Ox remain on mango's own compilation (via PRIVATE/PUBLIC),
+# but PPR consumers get consistent flags from the global add_compile_options
+# instead. /Ox is genex-wrapped ($<$<CONFIG:Release>:/Ox>) in mango's CMakeLists.
 get_target_property(_mango_iface_opts mango INTERFACE_COMPILE_OPTIONS)
 if(_mango_iface_opts)
-    list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX")
+    list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX|/Ox")
     set_target_properties(mango PROPERTIES INTERFACE_COMPILE_OPTIONS "${_mango_iface_opts}")
 endif()
 

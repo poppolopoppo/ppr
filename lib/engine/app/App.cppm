@@ -11,7 +11,9 @@ export import :input.listener;
 export import :input.mouse;
 export import :input.mapping;
 export import :input.player;
+export import :input.replay;
 
+export import :camera;
 export import :service.input;
 export import :service.player;
 export import :service.ui;

@@ -256,3 +256,19 @@ Before running `git push`, the user must confirm these checks pass:
 - **Cross-skill workflow:** browse history with `git-log-fast-navigation`'s `flog`
   alias before deciding to squash. Run the `validation` skill for full-project
   compile verification across all configs after rebasing.
+
+## Orchestrator & OMO Integration
+
+**Contract:** Pre-push analysis. The orchestrator drives it; git queries go to `@explorer`, message/secret validation to `@oracle`/`code-reviewer`. It never runs `git push`.
+
+### Subagent routing
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| `git log origin/main..HEAD`, `--dry-run`, stat | `@explorer` | Isolated shell |
+| Squash-pattern + message validation | `@oracle` / `code-reviewer` | Convention checks |
+| Emit checklist | orchestrator | Aggregation |
+
+### OMO feature wiring
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `git log/diff/push --dry-run` + `rg` secret scan.
+- **Session reuse** — cache `origin/main..HEAD` output; re-scan only new commits after rebase.
+- **`orchestratorPrompt` routing** — trigger on 'push', 'should I push', 'review my commits before pushing'.
