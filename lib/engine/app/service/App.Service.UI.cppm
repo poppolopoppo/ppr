@@ -34,7 +34,4 @@ export namespace pP {
         [[nodiscard]] virtual void *getContext() const noexcept = 0;
     };
 
-    namespace ui {
-        [[nodiscard]] std::unique_ptr<IUIService> createImGuiService();
-    }
 }

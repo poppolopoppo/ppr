@@ -5,7 +5,6 @@ target_sources(EngineApp
         FILE_SET CXX_MODULES FILES
         App.cppm
         App.Application.cppm
-        App.Imgui.cppm
 
         camera/App.Camera.cppm
 
@@ -36,6 +35,8 @@ target_sources(EngineApp
         service/App.Service.Player.cppm
         service/App.Service.UI.cppm
         service/App.Service.Window.cppm
+
+        ui/App.UI.ImGui.cppm
 
         window/App.Window.Handle.cppm
         window/App.Window.Monitor.cppm
@@ -69,6 +70,8 @@ target_sources(EngineApp
         renderer/App.Viewport.cpp
 
         service/App.Service.UI.cpp
+
+        ui/App.UI.ImGui.cpp
 
         App.TemplateInstantiations.cpp
 )

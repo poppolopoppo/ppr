@@ -7,10 +7,6 @@ import engine.app;
 import imgui_internal;
 import std;
 
-// The `imgui` module re-exports ImGui names unqualified; bring them into scope here so the
-// qualified `ImGui::` calls used in the debug demo path resolve.
-using namespace ImGui;
-
 namespace demo {
     using namespace pP;
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
@@ -30,9 +26,9 @@ namespace demo {
         }
 
         std::error_code update() override {
-            // if (time::since(*m_started_at) > std::chrono::seconds(5)) {
-            //     return make_error_code(std::errc::timed_out);
-            // }
+            if (time::since(*m_started_at) > std::chrono::seconds(5)) {
+                return make_error_code(std::errc::timed_out);
+            }
 
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update());
 
