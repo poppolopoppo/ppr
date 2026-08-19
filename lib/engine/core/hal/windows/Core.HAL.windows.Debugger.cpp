@@ -73,17 +73,22 @@ namespace pP::hal {
 
 #if PPR_ENABLE_ASSERTIONS
     namespace {
-        int __cdecl crtReportHook(int reportType, char *message, int *returnValue) {
-            (void)reportType;
+        int __cdecl crtReportHook([[maybe_unused]] int reportType, char *message, int *returnValue) {
             if (returnValue) {
-                *returnValue = 0;
+                *returnValue = 0;  // suppress the default CRT debug-break / dialog
             }
 
             if (message) {
                 outputDebug(message);
             }
 
-            throw std::logic_error(message ? message : "CRT assertion failure");
+            // Break into the debugger if one is attached. If no debugger is
+            // attached this is a no-op and the process continues (or aborts via
+            // the caller's assert logic). No exception is thrown so the failure
+            // cannot be silently swallowed by caller exception handling.
+            breakpointIfDebugging();
+
+            return TRUE;  // we have handled the report: no "Abort/Retry/Ignore" box
         }
 
         void __cdecl invalidParamHandler(
@@ -104,18 +109,24 @@ namespace pP::hal {
             *end = '\0';
 
             outputDebug(buf);
+            breakpointIfDebugging();
+
             throw std::logic_error(buf);
         }
 
         void __cdecl purecallHandler() {
             constexpr const char *msg = "Pure virtual function call";
+
             outputDebug(msg);
+            breakpointIfDebugging();
+
             throw std::logic_error(msg);
         }
 
         [[noreturn]] void terminateHandler() noexcept {
             outputDebug("Terminate called, exiting\n");
             breakpointIfDebugging();
+
             std::_Exit(3);
         }
     }
@@ -123,7 +134,7 @@ namespace pP::hal {
 
     void installDebugAssertHooks() noexcept {
 #if PPR_ENABLE_ASSERTIONS
-        ::_CrtSetReportHook(&crtReportHook);
+        ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
         ::_set_invalid_parameter_handler(&invalidParamHandler);
         ::_set_purecall_handler(&purecallHandler);
         std::set_terminate(&terminateHandler);
