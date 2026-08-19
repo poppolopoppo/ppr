@@ -107,29 +107,36 @@ namespace pP {
             value);
     }
 
+    static void opaqueStruct1D(const InputAxis1D *axis, opaque::StructVisitor &struct_) noexcept {
+        struct_.yield("absolute", axis->m_absolute);
+        struct_.yield("relative", axis->m_relative);
+    }
+
+    static void opaqueStruct2D(const InputAxis2D *axis, opaque::StructVisitor &struct_) noexcept {
+        struct_.yield("absolute", opaqueValue(axis->m_absolute));
+        struct_.yield("relative", opaqueValue(axis->m_relative));
+    }
+
+    static void opaqueStruct3D(const InputAxis3D *axis, opaque::StructVisitor &struct_) noexcept {
+        struct_.yield("absolute", opaqueValue(axis->m_absolute));
+        struct_.yield("relative", opaqueValue(axis->m_relative));
+    }
+
     opaque::Value opaqueValue(const InputValue &value) noexcept {
+
         return std::visit(
             overloaded(
                 [](const InputDigital digital) constexpr noexcept -> opaque::Value {
                     return *digital;
                 },
-                [](const InputAxis1D axis1d) constexpr noexcept -> opaque::Value {
-                    return opaque::Dict{
-                        {"absolute", axis1d.m_absolute},
-                        {"relative", axis1d.m_relative}
-                    };
+                [](const InputAxis1D &axis1d) constexpr noexcept -> opaque::Value {
+                    return opaque::Struct{std23::nontype<&opaqueStruct1D>, &axis1d};
                 },
                 [](const InputAxis2D &axis2d) constexpr noexcept -> opaque::Value {
-                    return opaque::Dict{
-                        {"absolute", opaqueValue(axis2d.m_absolute)},
-                        {"relative", opaqueValue(axis2d.m_relative)}
-                    };
+                    return opaque::Struct{std23::nontype<&opaqueStruct2D>, &axis2d};
                 },
                 [](const InputAxis3D &axis3d) constexpr noexcept -> opaque::Value {
-                    return opaque::Dict{
-                        {"absolute", opaqueValue(axis3d.m_absolute)},
-                        {"relative", opaqueValue(axis3d.m_relative)}
-                    };
+                    return opaque::Struct{std23::nontype<&opaqueStruct3D>, &axis3d};
                 }),
             value);
     }

@@ -49,6 +49,22 @@ export namespace pP {
         using format_context = basic_format_context<char>;
         static_assert(std::output_iterator<format_context::iterator, char>);
 
+        template<std::formattable<char> FormattableT, details::TChar CharT>
+        void formatTo(const FormattableT &formattable, basic_format_context<CharT> &formatter) {
+            std::format_to(formatter.out(), "{}", formattable);
+        }
+
+        // --------------------------------------------------------------
+        // struct builder interface
+        // --------------------------------------------------------------
+
+        struct StructVisitor {
+            virtual void yield(string_literal key, const Value &value) noexcept = 0;
+
+        protected:
+            ~StructVisitor() = default;
+        };
+
         // --------------------------------------------------------------
         // opaque value variants
         // --------------------------------------------------------------
@@ -61,6 +77,7 @@ export namespace pP {
         using Dict = ArrayView<KeyValue>;
         using Delegate = std23::function_ref<Value() noexcept>;
         using Formatter = std23::function_ref<void(format_context &) noexcept>;
+        using Struct = std23::function_ref<void(StructVisitor &) noexcept>;
 
         using TransformView = TransformView<Value>;
         using Transform = std23::function_ref<TransformView() noexcept>;
@@ -88,6 +105,7 @@ export namespace pP {
 
                 Delegate,
                 Formatter,
+                Struct,
                 Transform>;
 
             static_assert(sizeof(ValueVariant) == sizeof(void *) * 3u);
@@ -139,6 +157,15 @@ export namespace pP {
                 : super_t(Formatter{std::forward<FunctorT>(formatter)}) {
             }
 
+            // Allow direct initialization from functors convertible to Struct
+            template<typename FunctorT>
+                requires (!std::is_same_v<std::decay_t<FunctorT>, Struct> &&
+                          requires(FunctorT &&f) { Struct{std::forward<FunctorT>(f)}; })
+            // ReSharper disable once CppNonExplicitConvertingConstructor
+            constexpr Value(FunctorT &&struct_) noexcept
+                : super_t(Struct{std::forward<FunctorT>(struct_)}) {
+            }
+
             // Allow direct initialization from functors convertible to Yield
             template<typename FunctorT>
                 requires (!std::is_same_v<std::decay_t<FunctorT>, Transform> &&
@@ -180,6 +207,18 @@ export namespace pP {
                 return std::get_if<T>(this);
             }
         };
+
+#if 0 // causes ambiguous overloads for primitive types, which are also formattable:
+        template<std::formattable<char> FormattableT>
+        [[nodiscard]] constexpr Value opaqueValue(const FormattableT &formattable) noexcept {
+            return Transform{std23::nontype<&formatTo<FormattableT, char>>, formattable};
+        }
+#else // a safer approach, instead use a free-function factory:
+        template<std::formattable<char> FormattableT>
+        [[nodiscard]] constexpr Value format(const FormattableT &formattable) noexcept {
+            return Transform{std23::nontype<&formatTo<FormattableT, char>>, formattable};
+        }
+#endif
 
         // --------------------------------------------------------------
         // Value are transient, Block is persistent
@@ -325,12 +364,40 @@ export namespace pP {
                                 std::memcpy(m_output.data() + off, sv.data(), sv.size() * sizeof(sv[0]));
                             }
                         }
-                    };
-
-                    format_sink sink{m_arena};
+                    } sink{m_arena};
                     formatter(sink);
 
                     m_target.emplace<String>(sink.m_output.discard());
+                }
+
+                void operator()(const Struct str) const noexcept {
+                    struct struct_counter final : StructVisitor {
+                        std::size_t m_index{0};
+                        void yield(string_literal, const opaque::Value &) noexcept override { m_index++; }
+                    } counter;
+                    str(counter);
+
+                    const auto dst = m_arena.template span<KeyValue>(counter.m_index);
+                    m_target.emplace<Dict>(dst);
+
+                    // ReSharper disable once CppImplicitDefaultConstructorNotAvailable
+                    struct struct_populator final : StructVisitor {
+                        ArenaT &m_arena;
+                        std::span<KeyValue>::iterator m_out;
+
+                        struct_populator(ArenaT &arena, std::span<KeyValue>::iterator out) noexcept
+                            : m_arena(arena), m_out(out) {
+                        }
+
+                        void yield(string_literal key, const opaque::Value &value) noexcept override {
+                            KeyValue &it = *std::construct_at(std::addressof(*m_out++));
+                            it.first = m_arena.dup(key);
+                            Builder{it.second, m_arena}.dup(value);
+                        }
+                    } populator{m_arena, dst.begin()};
+                    str(populator);
+
+                    PPR_ASSERT(dst.end() == populator.m_out);
                 }
 
                 void operator()(const Transform transform) const noexcept {
@@ -476,6 +543,20 @@ export namespace pP {
                         fmt(sink);
                         return alignForward(sink.m_count * sizeof(char), max_align_v);
                     },
+                    [](const Struct struct_) constexpr noexcept -> std::size_t {
+                        struct struct_counter final : StructVisitor {
+                            std::size_t count{0};
+                            std::size_t size_bytes{0};
+
+                            void yield(string_literal key, const opaque::Value &val) noexcept override {
+                                count++;
+                                size_bytes += alignForward(key.size() * sizeof(*key.data()), max_align_v);
+                                size_bytes += sizeOf(val);
+                            }
+                        } counter;
+                        struct_(counter);
+                        return alignForward(counter.count * sizeof(KeyValue), max_align_v) + counter.size_bytes;
+                    },
                     [](const Transform transform) constexpr noexcept -> std::size_t {
                         std::size_t n = 0u;
                         std::size_t size_bytes = 0u;
@@ -611,6 +692,9 @@ export namespace std {
     struct formatter<pP::opaque::Delegate, CharT>;
 
     template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Struct, CharT>;
+
+    template<pP::details::TChar CharT>
     struct formatter<pP::opaque::Transform, CharT>;
 
     template<pP::details::TChar CharT>
@@ -660,18 +744,18 @@ export namespace std {
                     },
                     [&]<pP::details::TChar StringCharT>(const basic_string_view<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
-                                         inner_value);
+                            inner_value);
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
                         requires formattable<ValueT, CharT> {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"),
-                                         inner_value);
+                            inner_value);
                     },
                     [&]<typename UnformattableT>([[maybe_unused]] const UnformattableT &) noexcept {
                         // Fallback for cross-width types
                         return format_to(ctx.out(),
-                                         PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
-                                         typeid(UnformattableT).name());
+                            PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
+                            typeid(UnformattableT).name());
                     }),
                 value);
         }
@@ -688,6 +772,40 @@ export namespace std {
         auto format(const pP::opaque::Delegate &delegate, FormatContextT &ctx) const
             -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}"), delegate());
+        }
+    };
+
+    template<pP::details::TChar CharT>
+    struct formatter<pP::opaque::Struct, CharT> {
+        template<typename FormatParseContextT>
+        static constexpr auto parse(FormatParseContextT &ctx) -> decltype(ctx.begin()) {
+            return ctx.begin();
+        }
+
+        template<typename FormatContextT>
+        auto format(const pP::opaque::Struct &struct_, FormatContextT &ctx) const
+            -> decltype(ctx.out()) {
+            auto out = ctx.out();
+            out = format_to(out, PPR_LITERAL_FOR(CharT, "{{"));
+
+            struct struct_format final : pP::opaque::StructVisitor {
+                decltype(ctx.out()) iterator;
+                bool first{true};
+
+                explicit struct_format(decltype(ctx.out()) it) : iterator(it) {
+                }
+
+                void yield(pP::string_literal key, const pP::opaque::Value &val) noexcept override {
+                    if (!first) {
+                        iterator = format_to(iterator, PPR_LITERAL_FOR(CharT, ", "));
+                    }
+                    first = false;
+                    iterator = format_to(iterator, PPR_LITERAL_FOR(CharT, "{:?}: {:}"), key.view(), val);
+                }
+            } visitor{out};
+            struct_(visitor);
+
+            return format_to(visitor.iterator, PPR_LITERAL_FOR(CharT, "}}"));
         }
     };
 
@@ -722,18 +840,18 @@ export namespace std {
                     },
                     [&]<pP::details::TChar StringCharT>(const pP::RelativeView<StringCharT> &inner_value) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
-                                         std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
+                            std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
                         requires formattable<ValueT, CharT> {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"),
-                                         inner_value);
+                            inner_value);
                     },
                     [&]<typename UnformattableT>([[maybe_unused]] const UnformattableT &) noexcept {
                         // Fallback for cross-width types
                         return format_to(ctx.out(),
-                                         PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
-                                         typeid(UnformattableT).name());
+                            PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
+                            typeid(UnformattableT).name());
                     }),
                 value);
         }
@@ -750,7 +868,7 @@ export namespace std {
         auto format(const pP::opaque::KeyValue &pair, FormatContextT &ctx) const
             -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"),
-                             pair.first.view(), pair.second);
+                pair.first.view(), pair.second);
         }
 
         static constexpr void set_brackets(basic_string_view<CharT>, basic_string_view<CharT>) noexcept {
@@ -771,8 +889,8 @@ export namespace std {
         auto format(const pP::opaque::Block::KeyValue &pair, FormatContextT &ctx) const
             -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"),
-                             std::string_view(pair.first.data(), pair.first.size()),
-                             pair.second);
+                std::string_view(pair.first.data(), pair.first.size()),
+                pair.second);
         }
 
         static constexpr void set_brackets(basic_string_view<CharT>, basic_string_view<CharT>) noexcept {
