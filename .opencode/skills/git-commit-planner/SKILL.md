@@ -10,11 +10,18 @@ description: >
   files that must be committed in dependency order.
 ---
 
+## Contract
+
+Commit planning analysis. The orchestrator drives it; git status/diff/log
+retrieval is delegated to `@explorer` and grouping/dependency-ordering
+judgment to `@oracle`. It **never** edits the git index or runs `git commit`;
+its output is a proposed ordered commit plan with subject lines and bodies.
+
 # Git Commit Planner
 
 Inspect the working tree, group related changes into atomic commits, and output
-an ordered plan each commit entry has a conventional subject and an explanatory
-body.
+an ordered plan where each commit entry has a conventional subject and an
+explanatory body.
 
 ---
 
@@ -41,7 +48,7 @@ Group hunks across files by **what changes together for the same reason**.
 Good partitions for C++ projects:
 
 | Heuristic | Commit boundary |
-|---|---|---|
+|---|---|
 | New/renamed module interface (`*.cppm`, `*.ixx`) | Separate from its implementation |
 | Public API change (header, export declaration) | Own commit; note ABI impact |
 | Small implementation change in one area | Can bundle related TUs in one commit |
@@ -51,10 +58,10 @@ Good partitions for C++ projects:
 | **Adding a source file to CMakeLists.txt** | Go with its feature — same rule as module exports |
 | Infrastructure build change (flag, toolchain, dependency) | Isolated commit after the code it enables |
 | Dependency bump (`CPM.cmake`, `vcpkg.json`) | Own commit |
-| Formatting / clang-format sweep | Always last, never mixed with logic |
-| **Tests for a feature** | Commit with the feature, never separate |
-| **Module export lines** (`Core.cppm` adds `export import :foo;`) | Go with their feature — use `git add -p` to split |
-| **Test registration changes** (`Core.Tests.cppm` adds `_.recurse(foo)`) | Go with their feature — use `git add -p` to split |
+| Tests for a feature | Commit with the feature, never separate |
+| Module export lines (`export import :partition;`) | Go with their feature |
+| Test registration changes (test module `export namespace`) | Go with their feature |
+| Formatting / `clang-format` sweep | Always last, own commit |
 
 **Dependency ordering rule**: if commit B requires a declaration introduced in
 commit A, A must appear first. Apply this rule at **hunk granularity** — if a
@@ -127,7 +134,8 @@ Context stores fail callback, optional filter, and child-run flag.
 Tests can use expect_crash/fork. Non-zero exit on failure.
 ```
 
-Footers (BREAKING CHANGE, Fixes #issue) are still accepted when applicable.
+Footers (BREAKING CHANGE, Fixes #issue, Co-authored-by) are still accepted
+when applicable.
 
 ```
 Fixes #<issue>
@@ -204,19 +212,25 @@ After all commits, add a short **Summary** section:
 - If `git status` shows **merge conflicts** or a detached HEAD, report it and
   stop — do not propose commits until the tree is clean.
 
-## Orchestrator & OMO Integration
+---
 
-**Contract:** Analysis skill. The orchestrator drives it; diff retrieval is delegated to `@explorer` and the grouping/ordering heuristics to `@oracle`. It never edits the index or runs `git commit`.
+## Subagent routing
 
-### Subagent routing
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | `git status`/`diff`/`log` retrieval | `@explorer` | Isolated shell |
-| Apply grouping + dependency ordering | `@oracle` | Judgment on commit boundaries |
+| Grouping + dependency ordering judgment | `@oracle` | Commit-boundary judgment |
 | Emit plan | orchestrator | Aggregation |
 
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` restricted to `git status/diff/log` (custom agent or allow-list).
-- **Background orchestration** — fetch diff in background while orchestrator previews scope.
-- **Session reuse** — reuse `@explorer` for incremental diffs after user tweaks.
-- **`orchestratorPrompt` routing** — trigger on 'commit', 'stage', 'plan my changes', 'how should I split this'.
+## OMO feature wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` restricted to
+  `git status/diff/log` (custom agent or allow-list); `@oracle` gets no
+  shell access, only the diff content to judge.
+- **Background orchestration** — fetch diff in background while orchestrator
+  previews scope; merge-conflict and detached-HEAD detection runs first so the
+  orchestrator can stop early.
+- **Session reuse** — reuse `@explorer` session (same file-glob) for
+  incremental diffs after user tweaks; invalidate once the change set differs.
+- **`orchestratorPrompt` routing** — trigger on 'commit', 'stage',
+  'plan my changes', 'how should I split this', 'write commit messages'.

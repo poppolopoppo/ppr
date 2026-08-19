@@ -12,6 +12,33 @@ description: >
 
 # Memory Allocator Guide
 
+## Contract
+
+This skill is a reference guide for PPR memory allocation. It **does not** edit
+allocator code, apply poison annotations, or modify engine state. Its output is
+a structured guide for allocator selection, composition, and usage patterns.
+The orchestrator consults it to determine which allocator tier is appropriate
+for a given scenario, then delegates implementation to `@fixer` and design
+review to `@oracle`. It never directly edits source files.
+
+## Subagent routing
+
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Identify allocator need (scenario → tier) | `@explorer` | Fast recon of codebase usage patterns |
+| Apply allocator changes / edits | `@fixer` | Bounded implementation of composition/wrappers |
+| Review allocator choice / design | `@oracle` | Trade-off judgment (LIFO vs pooled, thread safety, etc.) |
+
+## OMO feature wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []`; `@fixer` `skills: []`, `mcps: []`; `@oracle` needs `skills: ["simplify", "code-reviewer"]` (explicit grant in `~/.config/opencode/oh-my-opencode-slim.json` or project-local override).
+- **Custom agent** — optionally a `memory-advisor` custom agent (prompt + `orchestratorPrompt`) that answers "which allocator for X" using this skill's tables.
+- **Background orchestration** — fire parallel `@explorer` greps for different scenarios (TLS, large buffer, fixed buffer); reconcile on the Job Board.
+- **Session reuse** — cache lookup results; re-run only when allocator tiers change.
+- **`orchestratorPrompt` routing** — trigger on "choose allocator", "allocator for scratch", "allocator for large buffer", "arena composition".
+
+---
+
 ## Quick Reference — Choosing an Allocator
 
 | Scenario | Recommended Allocator | Key API |
@@ -54,6 +81,7 @@ satisfying C++20 concepts. The hierarchy has five tiers:
 Choose the right base allocator according to these scenarios:
 
 ### GPA — small, general-purpose allocations
+
 - **When**: Single objects, small arrays, temporary buffers, anything that would
   use `malloc`/`new` in regular C++.
 - **Characteristics**: Stateless; delegates to global `operator new`/`delete`.
@@ -62,6 +90,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::GPA::allocateRaw(bytes, alignment)`.
 
 ### OS — large virtual memory allocations
+
 - **When**: Multi-megabyte buffers, scratch space for file I/O, large transient
   data where page-level granularity (typically 4 KiB) is acceptable.
 - **Characteristics**: Stateless; calls `hal::pageAlloc`/`hal::pageFree`.
@@ -70,6 +99,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::OS::allocateRaw(bytes, alignment)`.
 
 ### HugePage — pooled 2 MiB pages for backend use
+
 - **When**: Backend for arenas, pools, and large transient slabs. 2 MiB blocks
   reserved from OS in a 16 GiB virtual reservation.
 - **Characteristics**: Each thread has a TLS `LocalCache` (MRU-2) backed by a
@@ -78,6 +108,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::HugePage::allocateRaw(bytes, alignment)`.
 
 ### SmallPage — pooled small pages for transient work
+
 - **When**: Temporary scratch buffers and transient allocations in hot code.
   32 KiB (64-bit) or 64 KiB (32-bit) blocks.
 - **Characteristics**: TLS `LocalCache` (MRU-2) backed by `HintedPooling<SmallPage, HugePage, ...>`.
@@ -86,6 +117,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::SmallPage::allocateRaw(bytes, alignment)`.
 
 ### Arena<> — persistent batch allocations (LIFO)
+
 - **When**: Long-lived data with infrequent resets; frame allocators; systems
   that allocate many objects then free them all at once (e.g., frame rendering,
   serialization, scene loading).
@@ -98,6 +130,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::Arena arena{initial_capacity};`
 
 ### ScratchPad — thread-local transient arena
+
 - **When**: Short-lived temporary work (string formatting, serialization,
   temporary transformations) within a single function or scope.
 - **Characteristics**: TLS `Arena<SmallPage>` (auto-created on first access).
@@ -107,6 +140,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::ScratchPad::allocateRaw(bytes, alignment)`.
 
 ### Slab / InSituSlab — fixed-buffer LIFO
+
 - **When**: You already have a fixed buffer (stack array, memory-mapped region,
   static storage) and want an arena-style allocator on top of it.
 - **Characteristics**: `Slab` wraps an existing buffer; `InSituSlab<CapacityV>`
@@ -117,6 +151,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::InSituSlab<1024u> slab;`
 
 ### InSitu — single-fixed-buffer one-shot
+
 - **When**: You need at most one allocation from a tiny stack-fixed buffer,
   typically as the first choice in a Fallback/Threshold composite.
 - **Characteristics**: 7A/7F status byte guards against double-use. Only one
@@ -125,6 +160,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::InSitu<64u> insitu;`
 
 ### Pooling — lock-free fixed-size block pool
+
 - **When**: Many threads repeatedly allocate and free identical fixed-size
   blocks (e.g., network packets, message objects, small nodes).
 - **Template params**: `Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV>`.
@@ -137,6 +173,7 @@ Choose the right base allocator according to these scenarios:
 - **Code**: `mem::Pooling<64u, mem::GPA, 256u> pool;`
 
 ### LocalCache — MRU block cache
+
 - **When**: A single thread repeatedly allocates and frees the same fixed-size
   block and wants to avoid hitting the backing allocator.
 - **Template params**: `LocalCache<BlockSizeV, AllocatorT, MaxNumBlocks = 2, AlignmentV>`.
@@ -159,6 +196,7 @@ Choose the right base allocator according to these scenarios:
 ## 3. Allocator Concept Requirements
 
 ### `TAllocator` (5 lines)
+
 The fundamental concept. Every allocator must provide:
 
 ```cpp
@@ -174,6 +212,7 @@ void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment) noe
 ```
 
 ### `TOwningAllocator` (extends TAllocator)
+
 Adds ownership query, enabling `Fallback` to route deallocation correctly:
 
 ```cpp
@@ -182,6 +221,7 @@ Adds ownership query, enabling `Fallback` to route deallocation correctly:
 ```
 
 ### `TResizableAllocator` (extends TAllocator)
+
 Adds in-place resizing for arena-style allocators:
 
 ```cpp
@@ -195,6 +235,7 @@ Note: For `Slab`/`Arena`, resize only works when `ptr` is the **most recent**
 allocation (LIFO top). Otherwise returns false.
 
 ### `TBlockAllocator` (extends TAllocator)
+
 Statically advertises a fixed block size for pool backends:
 
 ```cpp
@@ -205,6 +246,7 @@ Satisfied by `HugePage` (2 MiB), `SmallPage` (32/64 KiB), and `LocalCache`/`Pool
 (their own `BlockSizeV`).
 
 ### `TArenaAllocator` (extends TOwningAllocator + TResizableAllocator)
+
 Arena-style watermark-based allocator:
 
 ```cpp
@@ -221,6 +263,7 @@ void reset() noexcept;
 ```
 
 ### `TSlabAllocator` (extends TArenaAllocator)
+
 Adds direct data access for slab-style allocators, enabling zero-copy iteration
 over allocated blocks:
 
@@ -455,9 +498,8 @@ Wraps a free function `GetAllocatorF()` returning a reference to a singleton
 allocator. Used internally by `HugePage`/`SmallPage` to route through TLS.
 
 ```cpp
-// Pattern: wrap a global pool accessor
-mem::Static<&MyPool::get> pool;
-void *p = pool.allocateRaw(4096u, max_align_v).ptr;
+// Used internally for HugePage's TLS LocalCache:
+// static LocalCache<block_size_v, Static<&getGlobalPool>> g_instance_tls{};
 ```
 
 ---
@@ -614,7 +656,7 @@ distinct byte patterns:
 | `poisonDestroyed(ptr, size)` | `0xDD` | After freeing/destructing memory (before returning from deallocateRaw, after destroy_at). |
 | `annotateContiguousContainer(storage, capacity, old_live, new_live)` | mixed | When a vector-like container's live count changes — poisons the newly-unused or newly-reserved region. |
 
-**Type-safe overloads** accept typed pointers and a count:
+Type-safe overloads accept typed pointers and a count:
 
 ```cpp
 int *arr = ...;
@@ -626,7 +668,7 @@ mem::poisonDestroyed(arr, 10);
 mem::annotateContiguousContainer(storage_ptr, capacity, old_size, new_size);
 ```
 
-**Range overloads** accept contiguous ranges:
+Range overloads accept contiguous ranges:
 
 ```cpp
 std::span<int> span = ...;
@@ -643,10 +685,10 @@ auto it = mem::UnpoisonUninitializedIterator(raw_it);
 std::uninitialized_copy(src.begin(), src.end(), it);
 ```
 
-**Double-ended container annotations** (`annotateDoubleEndedContiguousContainer`) support
+Double-ended container annotations (`annotateDoubleEndedContiguousContainer`) support
 containers like `std::deque` or ring buffers that grow from both ends.
 
-**Empty container helpers** (`annotateEmptyContiguousContainer`, `annotateEmptyDoubleEndedContiguousContainer`)
+Empty container helpers (`annotateEmptyContiguousContainer`, `annotateEmptyDoubleEndedContiguousContainer`)
 conveniently annotate a fully-empty container in two passes.
 
 ### When to call each function (canonical pattern)
@@ -728,7 +770,7 @@ Key operations:
 - `checked_cast<DerivedT>(safe)`: downcast with runtime check (dynamic_cast in
   debug, static_cast in release).
 
-**Important**: safe_object asserts on destruction if `m_safe_ref_count != 0`,
+**Important**: `safe_object` asserts on destruction if `m_safe_ref_count != 0`,
 and asserts on move/copy if the source is still observed. This catches dangling
 pointer bugs at the source of invalidation rather than at use.
 
@@ -937,20 +979,3 @@ but do not trap access — use the ASAN preset for active detection.
     manages a live prefix within a larger buffer (like `std::vector` or
     `Arena`'s slab). Call `annotateContiguousContainer(storage, capacity, old_live, new_live)`
     every time the live region boundary moves.
-
-## Orchestrator & OMO Integration
-
-**Contract:** Reference skill for allocator selection. The orchestrator consults it, then delegates usage-search to `@explorer`, application to `@fixer`, and design review to `@oracle`. It never edits allocator code directly.
-
-### Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Grep real allocator usage (`mem::Arena`, `Fallback<`, …) | `@explorer` | Fast recon |
-| Apply allocator change | `@fixer` | Bounded edit |
-| Review allocator choice | `@oracle` | Trade-off judgment |
-
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []`.
-- **Custom agent** — optionally a `memory-advisor` custom agent (prompt + `orchestratorPrompt`) that answers "which allocator for X" using this skill's tables.
-- **Background orchestration** — fire parallel `@explorer` greps for different scenarios.
-- **`orchestratorPrompt` routing** — trigger on "choose allocator", "allocator for scratch/TLS/large buffer".

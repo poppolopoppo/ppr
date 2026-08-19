@@ -10,10 +10,13 @@ description: >
 
 # Module Architect Guide
 
-Step-by-step reference for the PPR engine's C++20 module system (engine.core
-partitions, top-level libraries, test modules, platform HAL).
+## Contract
 
----
+This skill guides the creation, modification, and maintenance of C++20 module-based code
+in the PPR game engine. It provides step-by-step reference for the engine's C++20 module
+system (engine.core partitions, top-level libraries, test modules, platform HAL). The
+orchestrator consults it, then delegates actual module/CMake creation to `@fixer` and recon
+to `@explorer`. It never authors `.cppm`/`.cpp`/CMake by hand in the main lane.
 
 ## Step 1 — Understand the file naming conventions
 
@@ -504,17 +507,22 @@ and build registration across commits.
 
 ## Orchestrator & OMO Integration
 
-**Contract:** This is a reference/guidance skill. The orchestrator consults it, then delegates actual module/CMake creation to `@fixer` and recon to `@explorer`. It never authors `.cppm`/`.cpp`/CMake by hand in the main lane.
+**Contract:** This skill is the authoritative reference for the engine's C++20
+module system — engine.core partitions, top-level libraries, test modules, and
+platform HAL. The orchestrator consults it, then delegates actual module/CMake
+creation to `@fixer` and recon to `@explorer`. It never authors
+`.cppm`/`.cpp`/CMake by hand in the main lane.
 
 ### Subagent routing
 | Step | Delegate to | Why |
 |------|-------------|-----|
-| Find partition/umbrella/CMake patterns | `@explorer` | Template discovery |
-| Scaffold `.cppm`/`.cpp` + register umbrella + CMake | `@fixer` | Bounded implementation |
-| Compile-check new module | `clion-tools` skill / background build | Fast feedback |
+| Locate existing partition patterns / umbrella layout | `@explorer` | Template discovery |
+| Scaffold a new partition / top-level library / test module | `@fixer` | Bounded impl |
+| Register sources in CMakeLists.txt + umbrella re-export | `@fixer` | Mechanical registration |
+| Compile + run engine tests | background build subagent | Reuse validation lane |
 
 ### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` needs no skills; `@explorer` `skills: []`.
-- **Background orchestration** — compile-check as a background subagent.
-- **Session reuse** — reuse `@explorer` when scaffolding several partitions.
-- **`orchestratorPrompt` routing** — trigger on "add a module partition", "new top-level library", "register test module".
+- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` `skills: []`; restrict module edits to `lib/engine/**` + `cmake/**` via allow-list.
+- **Background orchestration** — run compile-check as a background subagent in parallel with impl; orchestrator waits on the Job Board, not polling.
+- **Session reuse** — reuse a specialist session only when its session key matches `(agent-type, module-<library>-<partition>, lib/engine/<library>/<...>.cppm)`; MRU is a tiebreaker only. Invalidate sessions older than the threshold or whose key no longer matches. Never reuse mutating/debug sessions — prefer fresh for impl; read-only recon sessions (`@explorer`) are safe to reuse.
+- **`orchestratorPrompt` routing** — trigger on 'add a module partition', 'new top-level library', 'register test module', 'add HAL platform source'.

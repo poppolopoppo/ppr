@@ -12,6 +12,37 @@ description: >
 
 # Concurrency Patterns Guide
 
+## Contract
+
+This skill is a reference guide for the three core PPR concurrency
+abstractions — RawChannel (lock-free MPSC ring buffer), IEvent/ISignal/Signal
+(compile-time event multiplexing), and IContext/SharedContext (cancellation
+tree) — along with their thread-safety model, HAL I/O integration, testing
+strategies, and performance-critical design decisions. It **does not** edit
+concurrency code or modify engine state. Its output is a structured guide for
+choosing and composing the right primitive for a given scenario. The
+orchestrator consults it to determine which concurrency primitive is
+appropriate, then delegates usage-search to `@explorer`, implementation to
+`@fixer`, and thread-safety review to `@oracle`. It never directly edits source
+files.
+
+### Subagent Routing
+
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Map `RawChannel`/`IContext`/`select()`/`IoRequest` usage across the codebase | `@explorer` | Fast recon of integration points |
+| Implement or refactor concurrency code | `@fixer` | Bounded edit of a single primitive |
+| Review thread-safety design (ordering, lifetime, lock-free correctness) | `@oracle` | Correctness judgment |
+
+## OMO Feature Wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []` (or limited to `clion_search_symbol`/`clion_search_text`); `@fixer` `skills: []`, `mcps: []`. Optionally per-primitive custom agents (`conc-signal`, `conc-context`) with narrow MCP allow-lists.
+- **Background orchestration** — fire parallel `@explorer` greps for each primitive usage (RawChannel, Signal, IContext, IoRequest) to map integration points before implementation.
+- **Session reuse** — cache query results per session to avoid re-grepping the same primitives; re-run only when concurrency code changes.
+- **`orchestratorPrompt` routing** — trigger on "use RawChannel", "cancel via IContext", "signal multiplexing", "async I/O wait".
+
+---
+
 ## Quick Reference — Choosing a Concurrency Primitive
 
 | Pattern | When to Use | Key Classes | Header/Partition |
@@ -1093,20 +1124,3 @@ void consumer(size_t index) {
   unsubscribe or destroy the `Signal` first.
 - **`std::error_code` values in context cancellation must use
   `std::generic_category()`.** The `CancelContext` asserts this in debug builds.
-
-## Orchestrator & OMO Integration
-
-**Contract:** Reference skill for PPR concurrency primitives. The orchestrator consults it, then delegates usage-search to `@explorer`, implementation to `@fixer`, and thread-safety review to `@oracle`. It never edits concurrency code directly.
-
-### Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Grep `RawChannel`/`IContext`/`select()` usage | `@explorer` | Fast recon |
-| Implement/refactor concurrency code | `@fixer` | Bounded edit |
-| Review thread-safety design | `@oracle` | Correctness judgment |
-
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `clion_search_symbol`/`clion_search_text` (or `skills: []`).
-- **Custom agent** — optionally per-primitive custom agents (`conc-signal`, `conc-context`) with narrow MCP allow-lists.
-- **Session reuse** — cache query results per session to avoid re-grepping.
-- **`orchestratorPrompt` routing** — trigger on "use RawChannel", "cancel via IContext", "signal multiplexing".

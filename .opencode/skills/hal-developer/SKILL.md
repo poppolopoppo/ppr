@@ -1,46 +1,45 @@
 ---
 name: hal-developer
-description: >
-  Activate this skill when implementing, modifying, debugging, or testing the
-  Hardware Abstraction Layer (HAL) of the PPR game engine. The HAL provides a
-  uniform C++ API across Windows, Linux, Darwin (macOS), and a Generic stub
-  platform for page-level memory management, ring buffers, debugging, process
-  spawning, deadline timers, asynchronous I/O (IOCP/io_uring/kqueue), memory-
-  mapped files, directory watching, native string transcoding, and system
-  queries (platform name, user name, directories). It lives in module partition
-  `engine.core:hal`, re-exported via `engine.core`, with per-platform source
-  files under `lib/engine/core/hal/<platform>/`. Agents should use this skill
-  whenever a task touches `Core.HAL.*.cppm`, any `Core.HAL.<platform>.*.cpp`,
-  `cmake/HAL.cmake`, or `lib/engine/core/CMakeLists.txt` HAL source selection.
+description: Authoritative reference for implementing, modifying, debugging, or testing the PPR Hardware Abstraction Layer (HAL) — 10 functional areas across Windows, Linux, Darwin, and the Generic stub, including module structure, API surface, platform-by-platform implementation, stub conventions, testing, and the adding-a-platform checklist.
 ---
 
-# HAL Developer Guide
+# HAL Developer
 
-## Quick Reference — Required API by Area
+The HAL provides a uniform C++ API across Windows, Linux, Darwin (macOS), and a
+Generic stub platform for page-level memory management, ring buffers, debugging,
+process spawning, deadline timers, asynchronous I/O (IOCP / io_uring / kqueue),
+memory-mapped files, directory watching, native string transcoding, and system
+queries (platform name, user name, directories). It lives in module partition
+`engine.core:hal`, re-exported via `engine.core`, with per-platform source files
+under `lib/engine/core/hal/<platform>/`.
 
-| Area | Namespace | Key Functions | Platform Files |
-|------|-----------|---------------|----------------|
-| System | `pP::hal` | `platformName()`, `userName()`, `homeDirectory()`, `executableDirectory()` | `Core.HAL.*.System.cpp` |
-| Memory | `pP::hal` | `pageAlloc()`, `pageFree()`, `pageCommit()`, `pageDecommit()`, `pageProtect()`, `offerToOS()`, `reclaimFromOS()` | `Core.HAL.*.Memory.cpp` |
-| Ring buffer | `pP::hal` | `ringBufferAlloc()`, `ringBufferFree()` | Windows only: `Core.HAL.windows.RingBuffer.cpp` |
-| Debugger | `pP::hal` | `outputDebug()`, `isDebuggerPresent()`, `breakpoint()` | `Core.HAL.*.Debugger.cpp` |
-| Strings | `pP::hal` | `widen()`, `narrow()`, `acquireNativeString()`, `releaseNativeString()` | `Core.HAL.*.Strings.cpp` |
-| Process | `pP::hal::process` | `executablePath()`, `spawnAndWait()`, `terminate()` | `Core.HAL.*.Process.cpp` |
-| Timer | `pP::hal::timer` | `setDeadline()`, `cancelDeadline()` | `Core.HAL.*.Timer.cpp` |
-| I/O | `pP::hal::io` | `submit()`, `poll()`, `wait()` | `Core.HAL.*.Io.cpp` |
-| Mapped files | `pP::hal::io` | `map()`, `unmap()` | `Core.HAL.*.IoMap.cpp` |
-| Dir watching | `pP::hal::io` | `watch()`, `unwatch()` | `Core.HAL.*.IoWatch.cpp` |
-| Filesystem | `pP::hal` | `getKnownDirectory()` | `Core.HAL.*.Filesystem.cpp` |
+Activate this skill whenever a task touches `lib/engine/core/hal/Core.HAL.cppm`, any
+`Core.HAL.<platform>.*.cpp`, `cmake/HAL.cmake`, or the HAL source selection in
+`lib/engine/core/CMakeLists.txt`.
 
-Platform directories: `lib/engine/core/hal/{windows,linux,darwin,generic}/`
+## Contract
 
-Return to the full guide below for detailed per-platform implementation notes.
+This skill is the authoritative reference for all HAL-related work in the PPR
+codebase. It documents the 10 functional areas, 4 platform implementations,
+module structure, API surface, platform detection, source selection, stub
+conventions, and the checklist for adding a new platform. The orchestrator
+consults this skill, then delegates platform implementation to `@fixer`/`@oracle`
+and recon to `@explorer`. It never writes HAL `.cpp` files directly.
 
----
+## Constraints
+
+- **No platform-detection macros in platform code.** Platform selection is
+  build-system-only (via `PPR_HAL_PLATFORM` in `cmake/HAL.cmake`). No platform
+  may use `#ifdef _WIN32`, `#ifdef __linux__`, or other platform-detection
+  macros inside its platform-specific source
+  (`lib/engine/core/hal/<platform>/`). The compiler only builds the selected
+  platform's files, so such macros are unnecessary and must not leak into
+  source.
 
 ## 1. Architecture Overview
 
-The HAL is organised into **10 functional areas**, each implemented across **4 platforms** plus a **generic stub**. All files live under `lib/engine/core/`.
+The HAL is organised into **10 functional areas**, each implemented across **4
+platforms** plus a **generic stub**. All files live under `lib/engine/core/`.
 
 ### File naming convention
 
@@ -65,12 +64,12 @@ Core.HAL.<platform>.<Area>.cpp
 
 ### Platform directories
 
-| Platform | Directory | Identifier (`PPR_HAL_PLATFORM`) |
-|----------|-----------|----------------------------------|
-| Windows | `lib/engine/core/hal/windows/` | `windows` |
-| Linux | `lib/engine/core/hal/linux/` | `linux` |
-| Darwin (macOS) | `lib/engine/core/hal/darwin/` | `darwin` |
-| Generic (stub) | `lib/engine/core/hal/generic/` | `generic` |
+| Platform | Directory | Identifier (`PPR_HAL_PLATFORM`) | Files |
+|----------|-----------|----------------------------------|-------|
+| Windows | `lib/engine/core/hal/windows/` | `windows` | 13 (10 standard + `Random`, `RingBuffer`, `include.hpp`) |
+| Linux | `lib/engine/core/hal/linux/` | `linux` | 10 |
+| Darwin (macOS) | `lib/engine/core/hal/darwin/` | `darwin` | 10 |
+| Generic (stub) | `lib/engine/core/hal/generic/` | `generic` | 10 |
 
 ### Platform detection (`cmake/HAL.cmake`)
 
@@ -88,10 +87,11 @@ endif()
 
 ### Source selection (`lib/engine/core/CMakeLists.txt`)
 
-The 10 standard areas are always compiled via a glob pattern:
+The 10 standard areas are always compiled via a pattern:
 
 ```cmake
 set(HAL_PLATFORM_SOURCES
+    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.include.hpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Filesystem.cpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Io.cpp
@@ -118,14 +118,14 @@ endif()
 
 ### Module interface file
 
-The public API is declared in `lib/engine/core/Core.HAL.cppm` (module partition `engine.core:hal`). It is re-exported from the umbrella module `engine.core`:
+The public API is declared in `lib/engine/core/hal/Core.HAL.cppm` (module
+partition `engine.core:hal`). It is re-exported from the umbrella module
+`engine.core`:
 
 ```cpp
 // Core.cppm
 export import :hal;
 ```
-
----
 
 ## 2. Module Structure
 
@@ -184,6 +184,8 @@ Key points:
 
 ### Windows-specific preamble (`Core.HAL.windows.include.hpp`)
 
+Every Windows HAL `.cpp` file includes this in its global module fragment:
+
 ```cpp
 #pragma once
 
@@ -233,11 +235,10 @@ Key points:
 #include "pP/Macros.h"
 ```
 
----
-
 ## 3. Required API Surface
 
-Below is the **complete** public API that every platform implementation must provide. All declarations are in `namespace pP::hal` unless otherwise noted.
+Below is the **complete** public API that every platform implementation must
+provide. All declarations are in `namespace pP::hal` unless otherwise noted.
 
 ### 3.1 Core system queries
 
@@ -263,8 +264,12 @@ All return a static singleton `std::filesystem::directory_entry` reference:
 ### 3.3 Cache line and page constants
 
 ```cpp
-// Hardware cache line size (64 bytes default, or std::hardware_destructive_interference_size)
-inline constexpr std::size_t cacheline_size_v = 64u;
+// Hardware cache line size (std::hardware_destructive_interference_size, or 64u fallback)
+#if defined(__cpp_lib_hardware_interference_size)
+inline constexpr std::size_t cacheline_size_v = std::hardware_destructive_interference_size;
+#else
+inline constexpr std::size_t cacheline_size_v = 64u; // conservative fallback for older compilers
+#endif
 
 // Page protection flags
 struct PageProtection {
@@ -273,7 +278,7 @@ struct PageProtection {
     bool execute: 1 = false;
 };
 
-// System page size (e.g. 4096 on Linux/Darwin, queried via GetSystemInfo on Windows)
+// System page size (e.g. 4096 on Linux, queried via GetSystemInfo on Windows)
 extern const std::size_t page_size;
 
 // Allocation granularity (same as page_size on POSIX, 64 KiB on Windows)
@@ -310,9 +315,17 @@ void pageOfferToOS(void *ptr, std::size_t size) noexcept(false);
 void pageFree(void *ptr, std::size_t size) noexcept(false);
 ```
 
+**Poisoning rule (all platforms):** `mem::unpoisonUninitialized` is called on
+newly committed/allocated/reclaimed memory. Do **not** poison before
+`pageDecommit`/`pageOfferToOS`/`pageFree` — the region may contain
+already-decommitted pages, so writing poison patterns would fault. The OS-level
+unmap/decommit/offer itself makes the memory inaccessible, catching use-after-free.
+
 ### 3.5 Ring buffer (magic mirrored mapping)
 
-A contiguous virtual buffer that maps the same physical pages twice, so reading past the end wraps around automatically. `buffer_size` must be page-granularity-aligned.
+A contiguous virtual buffer that maps the same physical pages twice, so reading
+past the end wraps around automatically. `buffer_size` must be
+page-granularity-aligned.
 
 ```cpp
 [[nodiscard]] void *ringBufferAlloc(std::size_t buffer_size) noexcept(false);
@@ -338,13 +351,42 @@ void breakpointIfDebugging() noexcept;
 
 // Suppress OS error dialogs (set before fork/child-run tests)
 void disableSystemErrorReporting() noexcept;
+
+// Install CRT/abort hooks that route failures to outputDebug + breakpoint
+void installDebugAssertHooks() noexcept;
 ```
 
-`outputDebugFmt` is defined inline in `Core.HAL.cppm` and calls `outputDebug`. It is a no-op in release builds.
+`outputDebugFmt` is defined inline in `Core.HAL.cppm` and calls `outputDebug`.
+It is a no-op in release builds.
 
-### 3.7 String transcoding
+### 3.7 Thread names (visible to debuggers)
 
-All transcode functions accept a source view and a destination buffer with capacity, and return the number of characters written (not including null terminator). They perform lossy or lossless conversion depending on encoding.
+```cpp
+struct ThreadId {
+    u64 m_value{0u};
+    // operator==, operator<=>, swap
+};
+
+[[nodiscard]] ThreadId currentThreadId() noexcept;
+void setThreadName(std::string_view name) noexcept;
+
+// Buffer-based query; returns chars written. `nullptr, 0` returns the full
+// required size (caller detects truncation). Never allocates.
+[[nodiscard]] std::size_t getThreadName(ThreadId thread_id, char *out_buffer, std::size_t capacity) noexcept;
+
+// Allocating convenience wrapper (capped at 256 bytes)
+[[nodiscard]] inline std::string getThreadName(ThreadId thread_id);
+```
+
+`std::formatter<pP::hal::ThreadId, CharT>` is specialized in `Core.HAL.cppm` so
+`std::format("{}", tid)` renders the thread debug name (falling back to the
+numeric id for unnamed threads).
+
+### 3.8 String transcoding
+
+All transcode functions accept a source view and a destination buffer with
+capacity, and return the number of characters written (not including null
+terminator). They perform lossy or lossless conversion depending on encoding.
 
 ```cpp
 [[nodiscard]] std::size_t transcode(std::string_view ansi, char8_t *p_dst, std::size_t capacity) noexcept;
@@ -362,7 +404,7 @@ template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT =
 [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, AllocatorT &&alloc = {}) noexcept(...);
 ```
 
-### 3.8 Native string helpers (`pP::hal::native`)
+### 3.9 Native string helpers (`pP::hal::native`)
 
 ```cpp
 namespace native {
@@ -393,7 +435,7 @@ namespace native {
 }
 ```
 
-### 3.9 Process management (`pP::hal::process`)
+### 3.10 Process management (`pP::hal::process`)
 
 ```cpp
 namespace process {
@@ -408,7 +450,11 @@ namespace process {
 }
 ```
 
-### 3.10 Deadline timers (`pP::hal::timer`)
+Note: `terminateProcess` is declared in the interface but **not yet defined on
+any platform** — a latent link error if referenced. Implement it when a platform
+needs it.
+
+### 3.11 Deadline timers (`pP::hal::timer`)
 
 ```cpp
 namespace timer {
@@ -424,7 +470,7 @@ namespace timer {
 }
 ```
 
-### 3.11 Asynchronous I/O (`pP::hal::io`)
+### 3.12 Asynchronous I/O (`pP::hal::io`)
 
 #### Types and constants
 
@@ -441,7 +487,7 @@ namespace io {
     inline constexpr std::size_t overlapped_storage_size_v = 64u;
 
     struct OpenFlags {
-        enum : u32 { read = 1u << 0, write = 1u << 1, create = 1u << 2, truncate = 1u << 3; };
+        enum : u32 { read = 1u << 0, write = 1u << 1, create = 1u << 2, truncate = 1u << 3 };
         u32 m_bits{read};
         // operator|, operator|=, operator==
     };
@@ -463,10 +509,11 @@ namespace io {
     };
 
     struct WatchEvent {
-        enum class Action : u8 { added, removed, modified, renamed_old, renamed_new; };
+        enum class Action : u8 { added, removed, modified, renamed_old, renamed_new };
         Action m_action;
         u32    m_name_offset{0u};
     };
+}
 ```
 
 #### Lifecycle
@@ -502,6 +549,9 @@ void wake(IoHandle io) noexcept;
 void cancelIo(FileHandle file, void *overlapped) noexcept;
 ```
 
+Note: `cancelIo` is defined only on Windows. Linux/Darwin/generic declare it in
+the interface but do not define it — a latent link error if referenced.
+
 #### Memory-mapped files
 
 ```cpp
@@ -527,8 +577,6 @@ void closeWatch(WatchHandle watch) noexcept;
 [[nodiscard]] std::size_t parseWatchEvents(std::span<const std::byte> raw, std::span<WatchEvent> out_events, std::span<char> out_names) noexcept;
 ```
 
----
-
 ## 4. Platform-by-Platform Implementation Guide
 
 ### 4.1 Windows
@@ -536,13 +584,13 @@ void closeWatch(WatchHandle watch) noexcept;
 #### Memory (`Core.HAL.windows.Memory.cpp`)
 
 - **`page_size` / `page_granularity`**: Query via `::GetSystemInfo(&sys_info)` → `dwPageSize` / `dwAllocationGranularity` (usually 4 KiB / 64 KiB).
-- **`pageAlloc`**: Use `VirtualAlloc2` (Win10+) or a fallback that calls `VirtualAlloc` in a loop to achieve the requested alignment. Pass `MEM_RESERVE | (commit ? MEM_COMMIT : 0)` with `MEM_64K_PAGES`. Throws `std::bad_alloc` on failure.
-- **`pageCommit`**: `::VirtualAlloc(ptr, size, MEM_COMMIT, prot)`. Throws `std::bad_alloc`.
-- **`pageDecommit`**: `::VirtualFree(ptr, size, MEM_DECOMMIT)`. Poison before decommit. Throws `std::bad_alloc`.
+- **`pageAlloc`**: Use `VirtualAlloc2` (Win10+) or a fallback that calls `VirtualAlloc` in a loop to achieve the requested alignment. Pass `MEM_RESERVE | (commit ? MEM_COMMIT : 0)` with `MEM_64K_PAGES`. Throws `std::bad_alloc` on failure. Unpoison on commit.
+- **`pageCommit`**: `::VirtualAlloc(ptr, size, MEM_COMMIT, prot)`. Throws `std::bad_alloc`. Unpoison.
+- **`pageDecommit`**: `::VirtualFree(ptr, size, MEM_DECOMMIT)`. **No poison** (see §3.4 rule). Throws `std::bad_alloc`.
 - **`pageProtect`**: `::VirtualProtect(ptr, size, prot, &old)`. Throws `std::bad_alloc`.
-- **`pageOfferToOS`**: `::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal)`. Poison before offer. Throws `std::bad_alloc`.
+- **`pageOfferToOS`**: `::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal)`. **No poison**. Throws `std::bad_alloc`.
 - **`pageReclaimFromOS`**: `::ReclaimVirtualMemory(ptr, size)`. Returns `true` on `ERROR_SUCCESS` or `ERROR_BUSY`. Unpoison on success.
-- **`pageFree`**: `::VirtualFree(ptr, 0, MEM_RELEASE)`. Poison before free. Throws `std::bad_alloc`.
+- **`pageFree`**: `::VirtualFree(ptr, 0, MEM_RELEASE)`. **No poison**. Throws `std::bad_alloc`.
 - **Page protection mapping** helper:
 
 ```cpp
@@ -556,8 +604,6 @@ static constexpr DWORD pageProtectionFlags_(PageProtection p) noexcept {
 }
 ```
 
-- **ASAN integration**: Call `mem::unpoisonUninitialized` on newly committed memory; `mem::poisonDestroyed` on memory being decommitted/freed/offered.
-
 #### Ring buffer (`Core.HAL.windows.RingBuffer.cpp`)
 
 The Windows ring buffer uses the **mirrored page mapping** technique:
@@ -570,13 +616,20 @@ The Windows ring buffer uses the **mirrored page mapping** technique:
 
 On free, unmap both views with `UnmapViewOfFile`.
 
+This file also defines two internal helper types in `pP::hal` (not part of the
+public API surface): `Win32LastError` (wraps a `DWORD` error code, `format()` /
+`message()` via `::FormatMessageA`) and `Win32Exception` (extends
+`std::runtime_error` with a `Win32LastError`).
+
 #### Debugger (`Core.HAL.windows.Debugger.cpp`)
 
 - **`outputDebug`**: `::OutputDebugStringA` / `::OutputDebugStringW` (debug builds only; no-op in release).
 - **`isDebuggerPresent`**: `::IsDebuggerPresent()` (debug builds only).
 - **`breakpoint`**: `__debugbreak()` (debug builds only).
 - **`breakpointIfDebugging`**: Test `::IsDebuggerPresent()` then `__debugbreak()`.
-- **`disableSystemErrorReporting`**: `::_set_error_mode(_OUT_TO_STDERR)`, `::_CrtSetReportMode` for all CRT channels, `::SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX)`, `::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE)`.
+- **`disableSystemErrorReporting`**: `::_set_error_mode(_OUT_TO_STDERR)`, `::_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT)`, `::_CrtSetReportMode` for all CRT channels, `::SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX)`, `::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE)`.
+- **`installDebugAssertHooks`**: `::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook)` (suppresses the Abort/Retry/Ignore box, routes to `outputDebug` + `breakpointIfDebugging`), `::_set_invalid_parameter_handler`, `::_set_purecall_handler`, `std::set_terminate(&terminateHandler)` (logs + `std::_Exit(3)`). All guarded by `PPR_ENABLE_ASSERTIONS`.
+- **Thread names**: `currentThreadId` → `::GetCurrentThreadId()`. `setThreadName` → `SetThreadDescription` (dynamically resolved from kernel32), with a legacy `RaiseException(0x406D1388, ...)` fallback when a debugger is attached. `getThreadName` → `GetThreadDescription` (dynamic), `::OpenThread(THREAD_QUERY_LIMITED_INFORMATION)`, transcode wide→UTF-8.
 
 #### Filesystem (`Core.HAL.windows.Filesystem.cpp`)
 
@@ -598,6 +651,7 @@ Headers needed: `<knownfolders.h>`, `<shlobj.h>`.
 - **`closeFile`**: `::CancelIoEx` then `::CloseHandle`.
 
 `OverlappedExt` layout:
+
 ```cpp
 struct OverlappedExt : public OVERLAPPED {
     void *m_user_data{nullptr};
@@ -607,7 +661,7 @@ static_assert(sizeof(OverlappedExt) <= overlapped_storage_size_v);  // 64 bytes
 
 #### I/O Mapped files (`Core.HAL.windows.IoMap.cpp`)
 
-- **`mapFile`**: Open with `::CreateFileW`, query size with `::GetFileSizeEx`, create file mapping with `::CreateFileMappingW`, map view with `::MapViewOfFile` using `FILE_MAP_READ | FILE_MAP_WRITE`. Wrap in `MapHandleData { HANDLE m_mapping, void *m_data, size_t m_size }`.
+- **`mapFile`**: Open with `::CreateFileW`, query size with `::GetFileSizeEx`, create file mapping with `::CreateFileMappingW`, map view with `::MapViewOfFile` using `FILE_MAP_READ | FILE_MAP_WRITE`. Wrap in `MapHandleData { HANDLE m_mapping, void *m_data, size_t m_size }`. Empty files return a valid handle with `m_data == nullptr`, `m_size == 0`.
 - **`unmapFile`**: `::UnmapViewOfFile` then `::CloseHandle` on the mapping.
 - **`mapData` / `mapSize`**: Return the cached pointer/size from `MapHandleData`.
 
@@ -615,7 +669,7 @@ static_assert(sizeof(OverlappedExt) <= overlapped_storage_size_v);  // 64 bytes
 
 - **`openWatch`**: Open directory with `::CreateFileW(FILE_LIST_DIRECTORY, FILE_SHARE_READ|WRITE|DELETE, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)`. Create a manual-reset event with `::CreateEventW`. Start the first read with `::ReadDirectoryChangesW`. Wrap in `WatchHandleData { HANDLE m_dir, HANDLE m_event, byte m_buffer[65536], OVERLAPPED m_overlapped, bool m_pending, bool m_recursive }`.
 - **`startWatch_`**: Reset `m_overlapped`, call `::ReadDirectoryChangesW` with filter `FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE`.
-- **`pollWatch` / `waitWatch`**: `::WaitForSingleObject(m_event, timeout_ms)`. On success, `::GetOverlappedResult` then `::ResetEvent`. Copy up to `buffer.size()` bytes of raw `FILE_NOTIFY_INFORMATION` records into the output buffer. Restart the watch immediately.
+- **`pollWatch` / `waitWatch`**: `::WaitForSingleObject(m_event, timeout_ms)`. On success, `::GetOverlappedResult` then `::ResetEvent`. Copy up to `buffer.size()` bytes of raw `FILE_NOTIFY_INFORMATION` records into the output buffer. Restart the watch immediately. `bytes_returned == 0` → `ec = result_out_of_range`.
 - **`closeWatch`**: `::CancelIoEx`, `::WaitForSingleObject`, close event handle and directory handle.
 - **`parseWatchEvents`**: Walk the `FILE_NOTIFY_INFORMATION` linked list. Map `FILE_ACTION_*` constants to `WatchEvent::Action`. Convert wide filenames to UTF-8 via `::WideCharToMultiByte(CP_UTF8, ...)`. Return the number of events parsed.
 
@@ -636,12 +690,13 @@ Uses the Windows API conversion functions:
 
 - **`platformName`**: Returns `"windows"`.
 - **`userName`**: `::GetUserNameW(buffer, &size)`, convert via `native::ansi`.
+- **`Uuid`**: `::BCryptGenRandom(nullptr, ..., BCRYPT_USE_SYSTEM_PREFERRED_RNG)` (links `bcrypt.lib`).
 
 #### Process (`Core.HAL.windows.Process.cpp`)
 
 - **`currentExecutablePath`**: `::GetModuleFileNameW(nullptr, buffer, MAX_PATH)`.
 - **`spawnAndWait`**: Build command line with quoted arguments, call `::CreateProcessW` with `CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE`, `STARTF_USESHOWWINDOW` with `SW_HIDE`. Wait with `::WaitForSingleObject(hProcess, INFINITE)`. Get exit code with `::GetExitCodeProcess`.
-- **`terminateProcess`**: `::ExitProcess(exit_code)` (not yet implemented; platform provides `[[noreturn]]`).
+- **`terminateProcess`**: Declared in the interface; not yet defined.
 
 #### Timer (`Core.HAL.windows.Timer.cpp`)
 
@@ -650,7 +705,24 @@ Uses the Windows API conversion functions:
 
 #### Random (`Core.HAL.windows.Random.cpp`)
 
-- Free function `pP::randomNumberGenerator()`: Seed `std::mt19937_64` from 8 `uint32_t` values produced by `std::random_device` (which uses `BCryptGenRandom` on Windows via the VS CRT).
+This is a free function in `namespace pP` (not `pP::hal`):
+
+```cpp
+// In Core.HAL.cppm:
+// [[nodiscard]] std::mt19937_64 randomNumberGenerator() noexcept;
+
+// In Core.HAL.windows.Random.cpp:
+std::mt19937_64 randomNumberGenerator() noexcept {
+    std::array<std::uint32_t, 8> seed_data{};
+    std::random_device rd;
+    for (auto &x: seed_data) { x = rd(); }
+    std::seed_seq seq(seed_data.begin(), seed_data.end());
+    return std::mt19937_64(seq);
+}
+```
+
+On MSVC, `std::random_device` is backed by the OS RNG. This file does NOT
+include `Core.HAL.windows.include.hpp`; it only includes `"pP/Macros.h"`.
 
 ### 4.2 Linux
 
@@ -673,7 +745,9 @@ Uses the Windows API conversion functions:
 - **`isDebuggerPresent`**: Returns `false` (no portable Linux API; can be enhanced with `/proc/self/status` TracerPid check).
 - **`breakpoint`**: `::raise(SIGTRAP)` (debug builds only).
 - **`breakpointIfDebugging`**: Check `isDebuggerPresent()` first (currently always false).
-- **`disableSystemErrorReporting`**: Not implemented (no-op needed for Linux; currently missing in source).
+- **`disableSystemErrorReporting`**: No-op (empty body).
+- **`installDebugAssertHooks`**: `std::signal(SIGABRT, ...)` → write "SIGABRT received" to stderr + `::_Exit(3)`. Guarded by `PPR_ENABLE_ASSERTIONS`.
+- **Thread names**: `currentThreadId` → `::syscall(SYS_gettid)`. `setThreadName` → `::prctl(PR_SET_NAME, ...)` (15-char `comm` limit). `getThreadName` → read `/proc/<tid>/comm` (strip trailing newline).
 
 #### Filesystem (`Core.HAL.linux.Filesystem.cpp`)
 
@@ -684,25 +758,25 @@ Uses the Windows API conversion functions:
 
 #### I/O — io_uring (`Core.HAL.linux.Io.cpp`)
 
-**Currently a stub** — all operations throw `std::system_error(operation_not_supported)` or return 0/no-op. The structs `IoHandleData` (with `int m_ring_fd`) and `FileHandleData` (with `int m_fd`) are defined ready for implementation.
+**Currently a stub** — `init`/`openFile` throw `std::system_error(operation_not_supported)`; the rest return 0/no-op. The structs `IoHandleData` (with `int m_ring_fd`) and `FileHandleData` (with `int m_fd`) are defined ready for implementation.
 
 #### I/O Mapped files (`Core.HAL.linux.IoMap.cpp`)
 
-- **`mapFile`**: `::open(path.c_str(), oflags)`, `::fstat(fd, &st)`, `::mmap(nullptr, st.st_size, prot, MAP_SHARED, fd, 0)`. Wrap in `MapHandleData { void *m_data, size_t m_size }`.
+- **`mapFile`**: `::open(path.c_str(), oflags)`, `::fstat(fd, &st)`, `::mmap(nullptr, st.st_size, prot, MAP_SHARED, fd, 0)`. Wrap in `MapHandleData { void *m_data, size_t m_size }`. Empty files return a valid handle with `m_data == nullptr`.
 - **`unmapFile`**: `::munmap(data->m_data, data->m_size)` then `delete`.
 - **`mapData` / `mapSize`**: Return cached values.
 
 #### I/O Directory watching — inotify (`Core.HAL.linux.IoWatch.cpp`)
 
 - **`openWatch`**: `::inotify_init1(IN_CLOEXEC | IN_NONBLOCK)`, `::inotify_add_watch(fd, dir.c_str(), IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_ONLYDIR | IN_EXCL_UNLINK)`. For recursive mode, traverse subdirectories and add watches with relative paths stored in `m_wd_to_relpath`.
-- **`pollWatch`**: `::read(m_inotify_fd, ...)` into a local 16 KiB buffer, then convert each `inotify_event` into a binary output format: `u8 action` + `u32 name_len` + `char name[name_len]`. Recursively add new subdirectory watches on `IN_CREATE | IN_ISDIR`.
+- **`pollWatch`**: `::read(m_inotify_fd, ...)` into a local 16 KiB buffer, then convert each `inotify_event` into a binary output format: `u8 action` + `u32 name_len` + `char name[name_len]`. Recursively add new subdirectory watches on `IN_CREATE | IN_ISDIR`. `IN_Q_OVERFLOW` → `ec = result_out_of_range`.
 - **`waitWatch`**: `::poll(&pfd, 1, -1)` then `pollWatch`.
 - **`closeWatch`**: `::inotify_rm_watch` for each watch descriptor, `::close(m_inotify_fd)`.
 - **`parseWatchEvents`**: Parse the same binary format: read `u8 action`, `u32 name_len`, `char name[name_len]`, populate `WatchEvent` and `out_names`.
 
 #### Strings (`Core.HAL.linux.Strings.cpp`)
 
-All implementated directly (no OS calls):
+All implemented directly (no OS calls):
 
 | From | To | Method |
 |------|----|--------|
@@ -721,8 +795,8 @@ All implementated directly (no OS calls):
 #### Process (`Core.HAL.linux.Process.cpp`)
 
 - **`currentExecutablePath`**: `std::filesystem::read_symlink("/proc/self/exe")`.
-- **`spawnAndWait`**: `::fork()`, child calls `::execvp`, parent calls `::waitpid`. Returns `WEXITSTATUS(status)`.
-- **`terminateProcess`**: `::_exit(exit_code)` (not yet implemented).
+- **`spawnAndWait`**: `::fork()`, child calls `::execvp` (exit 127 on failure), parent calls `::waitpid`. Returns `WEXITSTATUS(status)`.
+- **`terminateProcess`**: Declared in the interface; not yet defined.
 
 #### Timer (`Core.HAL.linux.Timer.cpp`)
 
@@ -734,13 +808,13 @@ All implementated directly (no OS calls):
 #### Memory (`Core.HAL.darwin.Memory.cpp`)
 
 - **`page_size` / `page_granularity`**: `::sysconf(_SC_PAGESIZE)` (typically 16384 on Apple Silicon, 4096 on Intel).
-- **`pageAlloc`**: `::mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANON, -1, 0)`. Throws `std::bad_alloc`. Always commits (the `commit` parameter is ignored on Darwin since `mmap` always maps physical pages lazily).
-- **`pageCommit`**: `::mprotect(ptr, size, prot)`. Throws `std::bad_alloc`.
-- **`pageDecommit`**: `::madvise(ptr, size, MADV_FREE)`. Poison before decommit. Throws `std::bad_alloc`.
+- **`pageAlloc`**: `::mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANON, -1, 0)`. Throws `std::bad_alloc`. Always commits (the `commit` parameter is ignored on Darwin since `mmap` always maps physical pages lazily). Unpoison.
+- **`pageCommit`**: `::mprotect(ptr, size, prot)`. Throws `std::bad_alloc`. Unpoison.
+- **`pageDecommit`**: `::madvise(ptr, size, MADV_FREE)`. **No poison** (see §3.4 rule). Throws `std::bad_alloc`.
 - **`pageProtect`**: `::mprotect(ptr, size, prot)`. Throws `std::bad_alloc`.
-- **`pageOfferToOS`**: `::madvise(ptr, size, MADV_FREE)`. Poison before offer. Throws `std::bad_alloc`.
-- **`pageReclaimFromOS`**: Always returns `true` (unpoisons memory optimistically).
-- **`pageFree`**: `::munmap(ptr, size)`. Poison before free. Throws `std::bad_alloc`.
+- **`pageOfferToOS`**: `::madvise(ptr, size, MADV_FREE)`. **No poison**. Throws `std::bad_alloc`.
+- **`pageReclaimFromOS`**: Unpoisons memory, returns `true`.
+- **`pageFree`**: `::munmap(ptr, size)`. **No poison**. Throws `std::bad_alloc`.
 - **Note**: Darwin does not support custom alignment for `mmap`; `alignment` must equal `page_granularity`.
 
 #### Debugger (`Core.HAL.darwin.Debugger.cpp`)
@@ -750,7 +824,9 @@ All implementated directly (no OS calls):
 - **`isDebuggerPresent`**: `::sysctl` with `CTL_KERN`, `KERN_PROC`, `KERN_PROC_PID`, `getpid()` → check `kp_proc.p_flag & P_TRACED`. Debug builds only.
 - **`breakpoint`**: `__builtin_trap()` (debug builds only).
 - **`breakpointIfDebugging`**: Check `isDebuggerPresent()` first.
-- **`disableSystemErrorReporting`**: Not implemented (no-op needed; currently missing — the source file has a duplicate `breakpointIfDebugging` at line 62 instead).
+- **`disableSystemErrorReporting`**: No-op (empty body).
+- **`installDebugAssertHooks`**: `std::signal(SIGABRT, ...)` → write "SIGABRT received" to stderr + `::_Exit(3)`. Guarded by `PPR_ENABLE_ASSERTIONS`.
+- **Thread names**: `currentThreadId` → `::pthread_threadid_np(nullptr, &tid)`. `setThreadName` → `::pthread_setname_np` (63-char `MAXTHREADNAMESIZE` limit). `getThreadName` → `::task_threads` + `::pthread_from_mach_thread_np` + `::pthread_getname_np` (deprecation warning suppressed via `PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wdeprecated-declarations)`).
 
 #### Filesystem (`Core.HAL.darwin.Filesystem.cpp`)
 
@@ -761,7 +837,7 @@ All implementated directly (no OS calls):
 
 #### I/O — kqueue (`Core.HAL.darwin.Io.cpp`)
 
-**Currently a stub** — all operations throw `std::system_error(operation_not_supported)` or return 0/no-op. The structs `IoHandleData` (with `int m_kq`) and `FileHandleData` (with `int m_fd`) are defined ready for implementation.
+**Currently a stub** — `init`/`openFile` throw `std::system_error(operation_not_supported)`; the rest return 0/no-op. The structs `IoHandleData` (with `int m_kq`) and `FileHandleData` (with `int m_fd`) are defined ready for implementation.
 
 #### I/O Mapped files (`Core.HAL.darwin.IoMap.cpp`)
 
@@ -784,7 +860,7 @@ Identical implementation to Linux — manual UTF-8 encoding/decoding, no OS conv
 
 - **`currentExecutablePath`**: `::_NSGetExecutablePath(nullptr, &buf_size)`, then `::_NSGetExecutablePath(path_buf.data(), &buf_size)`. Requires `<crt_externs.h>`.
 - **`spawnAndWait`**: `::fork()`, child `::execvp`, parent `::waitpid`. Same pattern as Linux.
-- **`terminateProcess`**: Not yet implemented.
+- **`terminateProcess`**: Declared in the interface; not yet defined.
 
 #### Timer (`Core.HAL.darwin.Timer.cpp`)
 
@@ -793,7 +869,9 @@ Identical implementation to Linux — manual UTF-8 encoding/decoding, no OS conv
 
 ### 4.4 Generic (Stub)
 
-The generic platform provides minimal stub implementations that compile everywhere but do not perform real I/O or memory management. It is used when the platform is unknown/unsupported.
+The generic platform provides minimal stub implementations that compile
+everywhere but do not perform real I/O or memory management. It is used when the
+platform is unknown/unsupported.
 
 #### System (`Core.HAL.generic.System.cpp`)
 
@@ -805,7 +883,7 @@ The generic platform provides minimal stub implementations that compile everywhe
 - **`page_size`**: Hardcoded `4096u`.
 - **`page_granularity`**: Hardcoded `{4096u}`.
 - **`pageAlloc`**, **`pageCommit`**: Throw `std::bad_alloc`.
-- **`pageDecommit`**, **`pageProtect`**, **`pageOfferToOS`**, **`pageFree`**: No-ops.
+- **`pageDecommit`**, **`pageProtect`**, **`pageOfferToOS`**, **`pageFree`**: No-ops. The generic platform never actually allocates pages.
 - **`pageReclaimFromOS`**: Returns `false`.
 - There is no `ringBufferAlloc`/`ringBufferFree` (these are Windows-only).
 
@@ -814,7 +892,8 @@ The generic platform provides minimal stub implementations that compile everywhe
 - **`outputDebug`**: No-ops.
 - **`isDebuggerPresent`**: Returns `false`.
 - **`breakpoint`**, **`breakpointIfDebugging`**: No-ops.
-- **`disableSystemErrorReporting`**: Not implemented.
+- **`disableSystemErrorReporting`**, **`installDebugAssertHooks`**: No-ops.
+- **Thread names**: `currentThreadId` returns `ThreadId{0u}`; `setThreadName` no-op; `getThreadName` returns `0u`.
 
 #### Filesystem (`Core.HAL.generic.Filesystem.cpp`)
 
@@ -824,12 +903,12 @@ The generic platform provides minimal stub implementations that compile everywhe
 
 #### I/O (`Core.HAL.generic.Io.cpp`)
 
-- **`init`**: Throws `std::system_error(operation_not_supported)`.
+- **`init`**: Throws `std::system_error(errc::operation_not_supported)`.
 - **`deinit`**, **`closeFile`**: No-ops.
 - **`openFile`**: Throws `operation_not_supported`.
 - **`submit`**, **`poll`**, **`wait`**: Return `0u`.
 - **`wake`**: No-op.
-- **`cancelIo`**: Not implemented.
+- **`cancelIo`**: Not defined (declared in the interface only).
 
 #### I/O Mapped files (`Core.HAL.generic.IoMap.cpp`)
 
@@ -840,7 +919,9 @@ The generic platform provides minimal stub implementations that compile everywhe
 
 #### I/O Directory watching (`Core.HAL.generic.IoWatch.cpp`)
 
-Uses a **polling fallback** — takes a snapshot of directory contents on `openWatch`, then compares with a new snapshot on each `pollWatch` to detect added/removed/modified files.
+Uses a **polling fallback** — takes a snapshot of directory contents on
+`openWatch`, then compares with a new snapshot on each `pollWatch` to detect
+added/removed/modified files.
 
 - **`openWatch`**: Stores directory path, builds initial snapshot via `directory_iterator`/`recursive_directory_iterator`, recording `last_write_time` per file.
 - **`pollWatch`**: Builds a new snapshot, compares with stored snapshot. Writes `(action: u8) + (name_len: u32) + (name: char[])` records into the output buffer.
@@ -870,54 +951,10 @@ Simple per-character conversions — no proper UTF-8 handling, lossy at the byte
 - **`setDeadline`**: Creates a `std::jthread` that sleeps for `ms`, then invokes the callback. Uses `std::stop_token` for cancellation. Wrap in `TimerData { move_only_function, atomic<bool>, std::jthread }`.
 - **`cancelDeadline`**: Sets `m_fired = true`, calls `request_stop()` and `join()` on the thread.
 
----
+## 5. Stub Conventions
 
-## 5. Windows Extras
-
-### Random (`Core.HAL.windows.Random.cpp`)
-
-This is a single free function in `namespace pP` (not `pP::hal`):
-
-```cpp
-// In Core.HAL.cppm:
-[[nodiscard]] std::mt19937_64 randomNumberGenerator() noexcept;
-
-// In Core.HAL.windows.Random.cpp:
-std::mt19937_64 randomNumberGenerator() noexcept {
-    std::array<std::uint32_t, 8> seed_data{};
-    std::random_device rd;
-    for (auto &x: seed_data) { x = rd(); }
-    std::seed_seq seq(seed_data.begin(), seed_data.end());
-    return std::mt19937_64(seq);
-}
-```
-
-On Windows, `std::random_device` is backed by `BCryptGenRandom`. This file does NOT include `Core.HAL.windows.include.hpp`; it only includes `"pP/Macros.h"`.
-
-### Ring Buffer (`Core.HAL.windows.RingBuffer.cpp`)
-
-See Section 4.1 for implementation details. This file also defines two helper types in `pP::hal`:
-
-- `Win32LastError` — wraps a `DWORD` error code, provides `format()` and `message()` methods using `::FormatMessageA`.
-- `Win32Exception` — extends `std::runtime_error` with a `Win32LastError`.
-
-Both are used internally by `ringBufferAlloc`/`ringBufferFree`.
-
-### Include preamble (`Core.HAL.windows.include.hpp`)
-
-Every Windows HAL `.cpp` file includes this in its global module fragment. It:
-
-1. Defines `WIN32_LEAN_AND_MEAN` if not already defined.
-2. Suppresses dozens of Windows API groups (`NOGDICAPMASKS`, `NOATOM`, `NODRAWTEXT`, `NOKERNEL`, `NOMEMMGR`, `NOMETAFILE`, `NOOPENFILE`, `NOSCROLL`, `NOSERVICE`, `NOSOUND`, `NOCOMM`, `NOKANJI`, `NOHELP`, `NOPROFILER`, `NODEFERWINDOWPOS`, `NOMCX`, `NOCRYPT`, `NOTAPE`, `NOIMAGE`, `NOPROXYSTUB`, `NORPC`).
-3. Includes `<Windows.h>`.
-4. Undefines problematic macros: `CreateProcess`, `CreateSemaphore`, `CreateWindow`, `MemoryBarrier`, `MoveFile`, `RegisterClass`, `RemoveDirectory`, `Yield`, `small`, `min`, `max`.
-5. Includes `"pP/Macros.h"`.
-
----
-
-## 6. Stub Conventions
-
-When implementing the generic (stub) platform or stubbing a not-yet-implemented function on a real platform, follow these rules:
+When implementing the generic (stub) platform or stubbing a not-yet-implemented
+function on a real platform, follow these rules:
 
 | Category | Convention |
 |----------|-----------|
@@ -945,38 +982,51 @@ throw std::system_error(
 throw std::runtime_error("<operation> not implemented for <platform> platform");
 ```
 
----
-
-## 7. Testing HAL Implementations
+## 6. Testing HAL Implementations
 
 ### Test structure
 
-Unit tests are in `lib/engine/tests/core/` using the `PPR_UNIT_TEST` macro:
+Unit tests live in `lib/engine/tests/core/` as module partitions, e.g.
+`Core.HAL.Tests.cppm` (`export module engine.tests.core:hal;`) and
+`Core.Io.Tests.cppm` (`export module engine.tests.core:io;`). Test files include
+the test-only header `"pP/UnitTest.h"` and use `PPR_UNIT_TEST` / `PPR_TEST_ASSERT`
+— never `PPR_ASSERT`/`PPR_VERIFY`, which compile to `[[assume]]` in release:
 
 ```cpp
-export module engine.tests.core:io;
+module;
+#include "pP/UnitTest.h"
+
+export module engine.tests.core:hal;
+
 import engine.core;
+import std;
 
 export namespace pP::tests {
-    namespace IoTests {
-        PPR_UNIT_TEST(open_and_close) {
-            // ... test body ...
+    namespace HALTests {
+        PPR_UNIT_TEST(thread_id) {
+            const auto tid = hal::currentThreadId();
+            PPR_TEST_ASSERT(tid == hal::currentThreadId());
+            if (hal::platformName() != "generic") {
+                PPR_TEST_ASSERT(tid.m_value != 0u);
+            }
         };
     }
+
+    PPR_UNIT_TEST(hal) {
+        _.recurse({
+            HALTests::thread_id,
+            HALTests::set_get_name_roundtrip,
+            HALTests::buffer_truncation,
+            HALTests::worker_thread_name,
+        });
+    };
 }
 ```
 
-Tests are registered in `Core.Tests.cppm`:
-```cpp
-export namespace pP::tests {
-    PPR_UNIT_TEST(io) {
-        _.recurse({ IoTests::open_and_close, ... });
-    };
-    PPR_UNIT_TEST(core) {
-        _.recurse({ memory, strings, containers, io, ... });
-    };
-}
-```
+Groups are registered in `Core.Tests.cppm` via `_.recurse({ ... })`. The
+existing `Core.HAL.Tests.cppm` covers: `thread_id`, `set_get_name_roundtrip`,
+`buffer_truncation`, `worker_thread_name` — all guarded by
+`hal::platformName() != "generic"` where the generic stub cannot satisfy them.
 
 ### What to test for each platform
 
@@ -986,9 +1036,9 @@ export namespace pP::tests {
 PPR_UNIT_TEST(page_alloc_free) {
     const std::size_t size = hal::page_size;
     auto [ptr, actual] = hal::pageAlloc(size);
-    PPR_ASSERT(ptr != nullptr);
-    PPR_ASSERT(actual >= size);
-    PPR_ASSERT(reinterpret_cast<std::uintptr_t>(ptr) % hal::page_size == 0u);
+    PPR_TEST_ASSERT(ptr != nullptr);
+    PPR_TEST_ASSERT(actual >= size);
+    PPR_TEST_ASSERT(reinterpret_cast<std::uintptr_t>(ptr) % hal::page_size == 0u);
 
     // Write to every page
     std::memset(ptr, 0xAB, size);
@@ -1002,7 +1052,7 @@ PPR_UNIT_TEST(page_alloc_free) {
 ```cpp
 PPR_UNIT_TEST(page_protect_readonly) {
     auto [ptr, size] = hal::pageAlloc(hal::page_size, true, {.read = true, .write = true});
-    PPR_ASSERT(ptr != nullptr);
+    PPR_TEST_ASSERT(ptr != nullptr);
 
     // Write, then switch to read-only
     static_cast<std::byte *>(ptr)[0] = std::byte{0x42};
@@ -1021,7 +1071,7 @@ PPR_UNIT_TEST(page_protect_readonly) {
 ```cpp
 PPR_UNIT_TEST(page_commit_decommit) {
     auto [ptr, size] = hal::pageAlloc(hal::page_size, false);
-    PPR_ASSERT(ptr != nullptr);
+    PPR_TEST_ASSERT(ptr != nullptr);
 
     hal::pageCommit(ptr, hal::page_size);
     std::memset(ptr, 0xCD, hal::page_size);
@@ -1039,13 +1089,13 @@ PPR_UNIT_TEST(page_commit_decommit) {
 PPR_UNIT_TEST(ring_buffer_wraparound) {
     const std::size_t buf_size = hal::page_size * 4u;
     auto *buf = static_cast<std::byte *>(hal::ringBufferAlloc(buf_size));
-    PPR_ASSERT(buf != nullptr);
+    PPR_TEST_ASSERT(buf != nullptr);
     PPR_DEFER { hal::ringBufferFree(buf, buf_size); };
 
     // Write at offset 0
     buf[0] = std::byte{0xAA};
     // Read at offset + buf_size (should map to same physical page)
-    PPR_ASSERT(buf[buf_size] == std::byte{0xAA});
+    PPR_TEST_ASSERT(buf[buf_size] == std::byte{0xAA});
 };
 ```
 
@@ -1056,7 +1106,7 @@ PPR_UNIT_TEST(debugger_initial_state) {
     // Should not crash, should return a deterministic value
     const bool present = hal::isDebuggerPresent();
     // Typically false when not debugging
-    PPR_ASSERT(present == false || present == true);
+    PPR_TEST_ASSERT(present == false || present == true);
 };
 ```
 
@@ -1079,7 +1129,7 @@ PPR_UNIT_TEST(timer_set_and_cancel) {
         [&fired] { fired = true; });
     hal::timer::cancelDeadline(handle);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    PPR_ASSERT(fired == false);
+    PPR_TEST_ASSERT(fired == false);
 };
 ```
 
@@ -1093,7 +1143,7 @@ PPR_UNIT_TEST(timer_fires) {
         [&fired] { fired = true; });
     PPR_DEFER { hal::timer::cancelDeadline(handle); };
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    PPR_ASSERT(fired == true);
+    PPR_TEST_ASSERT(fired == true);
 };
 ```
 
@@ -1103,11 +1153,11 @@ PPR_UNIT_TEST(timer_fires) {
 PPR_UNIT_TEST(spawn_and_wait) {
     // On Windows:
     int code = hal::process::spawnAndWait("cmd.exe", {"/c", "exit 42"});
-    PPR_ASSERT(code == 42);
+    PPR_TEST_ASSERT(code == 42);
 
     // On Linux/Darwin:
     // int code = hal::process::spawnAndWait("/bin/sh", {"-c", "exit 42"});
-    // PPR_ASSERT(code == 42);
+    // PPR_TEST_ASSERT(code == 42);
 };
 ```
 
@@ -1118,7 +1168,7 @@ PPR_UNIT_TEST(transcode_roundtrip) {
     const std::string_view original = "Hello, HAL!";
     const auto wide = hal::toString<wchar_t>(original);
     const auto back = hal::toString<char>(std::wstring_view(wide));
-    PPR_ASSERT(back == original);
+    PPR_TEST_ASSERT(back == original);
 };
 ```
 
@@ -1127,8 +1177,8 @@ PPR_UNIT_TEST(transcode_roundtrip) {
 ```cpp
 PPR_UNIT_TEST(platform_name_not_empty) {
     const auto name = hal::platformName();
-    PPR_ASSERT(!name.empty());
-    PPR_ASSERT(name == "windows" || name == "linux" || name == "darwin" || name == "generic");
+    PPR_TEST_ASSERT(!name.empty());
+    PPR_TEST_ASSERT(name == "windows" || name == "linux" || name == "darwin" || name == "generic");
 };
 ```
 
@@ -1136,10 +1186,10 @@ PPR_UNIT_TEST(platform_name_not_empty) {
 
 ```cpp
 PPR_UNIT_TEST(directories_not_empty) {
-    PPR_ASSERT(!hal::homeDir().path().empty());
-    PPR_ASSERT(!hal::systemDir().path().empty());
+    PPR_TEST_ASSERT(!hal::homeDir().path().empty());
+    PPR_TEST_ASSERT(!hal::systemDir().path().empty());
     // Local/roaming may be empty on some platforms; check existence instead
-    PPR_ASSERT(std::filesystem::exists(hal::homeDir().path()));
+    PPR_TEST_ASSERT(std::filesystem::exists(hal::homeDir().path()));
 };
 ```
 
@@ -1155,38 +1205,44 @@ PPR_UNIT_TEST(mapped_file_read) {
     }
 
     auto map = hal::io::mapFile(path, {});
-    PPR_ASSERT(map != nullptr);
+    PPR_TEST_ASSERT(map != nullptr);
     PPR_DEFER { hal::io::unmapFile(map); };
 
-    PPR_ASSERT(hal::io::mapSize(map) == 11);
+    PPR_TEST_ASSERT(hal::io::mapSize(map) == 11);
     auto *data = static_cast<const char *>(hal::io::mapData(map));
-    PPR_ASSERT(data != nullptr);
-    PPR_ASSERT(std::string_view(data, 11) == "HAL content");
+    PPR_TEST_ASSERT(data != nullptr);
+    PPR_TEST_ASSERT(std::string_view(data, 11) == "HAL content");
 };
 ```
 
 ### Test execution
 
 ```bash
-# Build and run
-cmake --preset msvc-dev
-cmake --build --preset msvc-dev --target EngineCoreTests
-ctest --preset msvc-dev -R EngineCoreTests
+# Build and run (EngineCoreTests is GLFW-free; EngineAppTests links GLFW)
+cmake --build out/build/msvc-dev --target EngineCoreTests
 
-# Run a specific test
-./build/msvc-dev/bin/EngineCoreTests --run-test core/memory/page_alloc_free
+# Run a specific test (paths use '/' separators)
+out/build/msvc-dev/bin/EngineCoreTests --run-test core/hal/thread_id
+
+# Full suite with shuffle/loop
+out/build/msvc-dev/bin/EngineCoreTests --shuffle --loop 10
 ```
 
----
+The aggregate target `run-engine-tests` runs both `EngineCoreTests` and
+`EngineAppTests`. Fork/crash tests spawn child processes via
+`hal::process::spawnAndWait`; assertions are intercepted by the test framework
+(converted to failures, not terminations).
 
-## 8. Adding a New Platform
+## 7. Adding a New Platform
 
-Follow this checklist to add HAL support for a new platform. Use the source tree and build system in this skill as a reference.
+Follow this checklist to add HAL support for a new platform. Use the source tree
+and build system in this skill as a reference.
 
 ### Step-by-step checklist
 
 1. **Register the platform in `cmake/HAL.cmake`**
    - Add a new `elseif()` branch that sets `PPR_HAL_PLATFORM` to your platform identifier (e.g. `"freebsd"`).
+
    ```cmake
    elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
        set(PPR_HAL_PLATFORM freebsd)
@@ -1199,18 +1255,18 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 
 3. **Create the 10 required implementation files**
    Each file follows the pattern:
-    ```
-    hal/freebsd/Core.HAL.freebsd.Memory.cpp
-    hal/freebsd/Core.HAL.freebsd.Debugger.cpp
-    hal/freebsd/Core.HAL.freebsd.Filesystem.cpp
-    hal/freebsd/Core.HAL.freebsd.Io.cpp
-    hal/freebsd/Core.HAL.freebsd.IoMap.cpp
-    hal/freebsd/Core.HAL.freebsd.IoWatch.cpp
-    hal/freebsd/Core.HAL.freebsd.Process.cpp
-    hal/freebsd/Core.HAL.freebsd.Strings.cpp
-    hal/freebsd/Core.HAL.freebsd.System.cpp
-    hal/freebsd/Core.HAL.freebsd.Timer.cpp
-    ```
+   ```
+   hal/freebsd/Core.HAL.freebsd.Memory.cpp
+   hal/freebsd/Core.HAL.freebsd.Debugger.cpp
+   hal/freebsd/Core.HAL.freebsd.Filesystem.cpp
+   hal/freebsd/Core.HAL.freebsd.Io.cpp
+   hal/freebsd/Core.HAL.freebsd.IoMap.cpp
+   hal/freebsd/Core.HAL.freebsd.IoWatch.cpp
+   hal/freebsd/Core.HAL.freebsd.Process.cpp
+   hal/freebsd/Core.HAL.freebsd.Strings.cpp
+   hal/freebsd/Core.HAL.freebsd.System.cpp
+   hal/freebsd/Core.HAL.freebsd.Timer.cpp
+   ```
 
 4. **For each file, implement the module structure**
    ```cpp
@@ -1243,6 +1299,7 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 
 7. **If extra platform-specific source files are needed** (like Windows `Random.cpp` and `RingBuffer.cpp`):
    - Add them to `lib/engine/core/CMakeLists.txt` inside a guard:
+
    ```cmake
    if(PPR_HAL_PLATFORM STREQUAL "freebsd")
        list(APPEND HAL_PLATFORM_SOURCES
@@ -1254,7 +1311,7 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 8. **Update cmake presets** (optional):
    - Add a new preset pair (`freebsd-dev`, `freebsd-rel`) in `CMakePresets.json` if the platform supports CMake presets.
 
-9. **Add at least one test per area** (see Section 7).
+9. **Add at least one test per area** (see Section 6).
 
 10. **Verify the full API compiles and links**:
     ```bash
@@ -1264,28 +1321,12 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 
 ### Sources of inspiration
 
-- **Windows**: Heavy use of Win32 API (`VirtualAlloc2`, `CreateIoCompletionPort`, `ReadDirectoryChangesW`, `CreateTimerQueueTimer`, `WideCharToMultiByte`). The `Core.HAL.windows.include.hpp` preamble suppresses unused Windows headers.
-- **Linux POSIX + Linux-specific**: `mmap`, `mprotect`, `madvise`, `inotify`, `timer_create`, `io_uring` (stub).
-- **Darwin POSIX + Darwin-specific**: `mmap`, `mprotect`, `madvise`, `kqueue` (stub), `_NSGetExecutablePath`, `sysctl` for debugger detection.
-- **Generic**: Pure standard C++ (`std::jthread`, `directory_iterator`, `std::getenv`). Intended as a fallback and pattern reference.
+- Windows: `VirtualAlloc2`/`MapViewOfFile3` (ring buffer), IOCP (`CreateIoCompletionPort`), `ReadDirectoryChangesW`, `SetThreadDescription`.
+- Linux: `mmap`/`madvise`, inotify, `timer_create`, `prctl(PR_SET_NAME)`, `/proc/self/exe`.
+- Darwin: `mmap`/`madvise`, `_NSGetExecutablePath`, `pthread_setname_np`, `task_threads`.
+- Generic: `std::jthread` timers, polling directory snapshots, `std::filesystem` directory iteration.
 
----
-
-## Constraints
-
-- Every platform **must** implement all functions declared in `Core.HAL.cppm`. Stubs throwing `operation_not_supported` or returning default values are acceptable for I/O and other complex subsystems.
-- No platform may use `#ifdef _WIN32` or other platform-detection macros inside platform-specific code. Platform selection is done exclusively at the build system level (`CMakeLists.txt` + `cmake/HAL.cmake`).
-- The `generic` platform must never throw `std::bad_alloc` from `pageFree`, `pageDecommit`, `pageProtect`, or `pageOfferToOS` — these should be no-ops because the generic platform never actually allocates pages.
-- Debugger functions (`outputDebug`, `breakpoint`, `isDebuggerPresent`) must be no-ops in release builds (guarded by `PPR_ENABLE_DEBUG`).
-- Memory operations must pair `mem::poisonDestroyed` (before release) and `mem::unpoisonUninitialized` (after allocation) for ASAN compatibility.
-- `pageAlloc` must throw `std::bad_alloc` on failure; other memory operations may use `std::bad_alloc` or `std::system_error`.
-- `ringBufferAlloc`/`ringBufferFree` are **Windows-only**; other platforms may leave them unimplemented (they are not in the standard 10-file set for POSIX platforms).
-
-## Orchestrator & OMO Integration
-
-**Contract:** Reference skill for HAL work. The orchestrator consults it, then delegates platform implementation to `@fixer`/`@oracle` and recon to `@explorer`. It never writes HAL `.cpp` files directly.
-
-### Subagent routing
+## Subagent routing
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Locate existing HAL patterns / APIs | `@explorer` | Template discovery |
@@ -1293,8 +1334,9 @@ Follow this checklist to add HAL support for a new platform. Use the source tree
 | Generate `PPR_UNIT_TEST` bodies | `@fixer` | Test scaffolding |
 | Compile + run HAL tests | background build subagent | Reuse validation lane |
 
-### OMO feature wiring
+## OMO feature wiring
 - **Per-agent `skills`/`mcps` allow-lists** — `@fixer` `skills: []`; restrict HAL edits to `lib/engine/core/hal/<platform>/` + `cmake/HAL.cmake` via allow-list.
+- **Background orchestration** — run HAL tests as a background subagent in parallel with impl; orchestrator waits on the Job Board, not polling.
+- **Session reuse** — reuse a specialist session only when its session key matches `(agent-type, hal-<platform>-<area>, lib/engine/core/hal/<platform>/Core.HAL.<platform>.<Area>.cpp)`; MRU is a tiebreaker only. Invalidate sessions older than the threshold or whose key no longer matches. Never reuse mutating/debug sessions — prefer fresh for impl; read-only recon sessions (`@explorer`) are safe to reuse.
 - **Custom agent** — optionally a `hal-impl` custom agent that scaffolds the 10 platform `.cpp` files from this skill's checklist.
-- **Background orchestration** — run HAL tests as a background subagent in parallel with impl.
 - **`orchestratorPrompt` routing** — trigger on 'add HAL platform', 'implement <area> for <platform>', 'HAL test for…'.

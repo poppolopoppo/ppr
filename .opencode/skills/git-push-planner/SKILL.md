@@ -8,7 +8,6 @@ description: >
   Use this skill whenever the user is about to push, says "let me push",
   "should I push", "review my commits before pushing", "clean up my history
   before push", or any variant of preparing to send local commits upstream.
-triggers: push, push commits, send commits, pre-push, before push, clean history, squash commits
 ---
 
 # Git Push Planner
@@ -26,6 +25,31 @@ For interactive history browsing, load the `git-log-fast-navigation` skill —
 its `lg` and `flog` aliases make scanning unpushed history faster than
 `git log`. For full-project compile verification across all build
 configurations, load the `validation` skill after the push plan is finalized.
+
+## Contract
+
+This skill performs pre-push analysis of local unpushed commits. It **does not**
+run `git push`, rewrite history, or modify the working tree. Its output is a
+proposed squash/rebase plan, revised commit messages, and a pre-push validation
+checklist. The orchestrator drives the skill; git queries are delegated to
+`@explorer`, squash-pattern and message/secret validation to
+`@oracle`/`code-reviewer`. It never executes `git push`.
+
+## Subagent routing
+
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| `git log origin/main..HEAD`, `git push --dry-run`, `--stat` retrieval | `@explorer` | Isolated shell; read-only git queries |
+| Squash-pattern detection + commit message validation | `@oracle` / `code-reviewer` | Convention checks against PPR + GitHub rules |
+| Secret scan of unpushed diffs | `@oracle` / `code-reviewer` | `rg`-based credential pattern analysis |
+| Emit cleaned push plan + checklist | orchestrator | Aggregation |
+
+## OMO feature wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `git log/diff/push --dry-run` + `rg` secret scan; `@oracle`/`code-reviewer` gets only read-only git access for message/secret validation.
+- **Background orchestration** — fetch `origin/main..HEAD` log + stat in a background `@explorer` lane while the orchestrator previews push scope; run the secret scan in parallel with message validation.
+- **Session reuse** — cache `origin/main..HEAD` output; re-scan only new commits after a rebase.
+- **`orchestratorPrompt` routing** — trigger on 'push', 'should I push', 'review my commits before pushing', 'clean up my history before push'.
 
 ---
 
@@ -255,20 +279,4 @@ Before running `git push`, the user must confirm these checks pass:
   requires Conventional Commits, note that PPR has explicitly opted out.
 - **Cross-skill workflow:** browse history with `git-log-fast-navigation`'s `flog`
   alias before deciding to squash. Run the `validation` skill for full-project
-  compile verification across all configs after rebasing.
-
-## Orchestrator & OMO Integration
-
-**Contract:** Pre-push analysis. The orchestrator drives it; git queries go to `@explorer`, message/secret validation to `@oracle`/`code-reviewer`. It never runs `git push`.
-
-### Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| `git log origin/main..HEAD`, `--dry-run`, stat | `@explorer` | Isolated shell |
-| Squash-pattern + message validation | `@oracle` / `code-reviewer` | Convention checks |
-| Emit checklist | orchestrator | Aggregation |
-
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `git log/diff/push --dry-run` + `rg` secret scan.
-- **Session reuse** — cache `origin/main..HEAD` output; re-scan only new commits after rebase.
-- **`orchestratorPrompt` routing** — trigger on 'push', 'should I push', 'review my commits before pushing'.
+  compile verification after rebasing.

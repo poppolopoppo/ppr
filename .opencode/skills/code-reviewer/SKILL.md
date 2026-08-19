@@ -7,7 +7,6 @@ description: >
   user says "review my changes", "check my code", "audit my changes",
   "inspect the diff", "analyze the code", "does this follow the conventions",
   or "code review please".
-triggers: review, check, audit, inspect, analyze, code quality, conventions
 ---
 
 # Code Reviewer
@@ -16,9 +15,51 @@ Analyze unstaged and staged changes in tracked files, then produce a
 structured review organized by zone (engine core, game, tests, build)
 across ten dimensions.
 
----
+## Contract
 
-## Step 1 — Gather context
+This skill performs static code review across 10 dimensions of C++ quality
+and engine conventions. It does **not** edit code, auto-fix issues, or
+modify any files. Its output is a validated, reconciled report grouped by
+zone and severity. All findings undergo mandatory per-item validation against
+actual source code before presentation. The skill is triggered by the
+orchestrator on commands such as "review", "check my code", or "audit
+changes". The orchestrator drives the skill; diff retrieval is delegated to
+`@explorer`, dimension reviews and per-finding validation run as background
+`oracle` subagents, and the main lane only aggregates validated results.
+
+## Subagent routing
+
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Diff context retrieval (`git diff HEAD`, `git diff --cached`, `git log`) | `@explorer` | Isolated read-only shell; keeps main lane free |
+| Zone classification of changed files | orchestrator | Cheap; needs the full diff context |
+| Dimension reviews (Step 3) | background `oracle` subagent per dimension | Parallelizable; each reviewer loads this skill |
+| Per-finding validation (Step 4) | background `oracle` subagent per finding | Mandatory parallel fact-check against actual source |
+| Verdict reconciliation + report (Steps 5–6) | orchestrator | Aggregation; only validated findings are presented |
+
+## OMO feature wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — orchestrator has `skills: ["*"]`
+  and `mcps: ["*","!context7"]`; `@oracle` needs `skills: ["code-reviewer",
+  "simplify"]` (explicit grant in `~/.config/opencode/oh-my-opencode-slim.json`
+  or project-local override — `code-reviewer` is not in `oracle`'s default
+  allow-list); `@explorer` stays `skills: []` (read-only recon only, no skill
+  activation).
+- **Background orchestration** — launch the dimension reviews (Step 3) as
+  parallel background `oracle` subagents, then the per-finding validation
+  (Step 4) as one background subagent per finding; reconcile all verdicts on
+  the Background Job Board before the summary is presented.
+- **Session reuse** — reuse one read-only `@explorer` session to cache the
+  diff context; re-run dimension/validation subagents only on newly added or
+  changed files (invalidate a session when its `(agent-type, target area,
+  file-glob)` key no longer matches the current diff).
+- **`orchestratorPrompt` routing** — trigger on "review", "check my code",
+  "audit my changes", "inspect the diff", "analyze the code", "does this
+  follow the conventions", or "code review please".
+
+## Review Process
+
+### Step 1 — Gather context
 
 ```bash
 git diff HEAD                  # all unstaged + staged changes
@@ -31,9 +72,7 @@ Load `AGENTS.md`. Follow any `@include` references found in touched files.
 **Scope**: only files tracked by git. Untracked files, `build/`, and
 vcpkg install paths are excluded automatically.
 
----
-
-## Step 2 — Classify each changed file by zone
+### Step 2 — Classify each changed file by zone
 
 | Zone | Path | Review depth |
 |------|------|-------------|
@@ -44,9 +83,7 @@ vcpkg install paths are excluded automatically.
 | Third-party wrappers | `cmake/external/*.cmake` | Minimal — version pin, no engine patches |
 | Config / docs | `*.md`, `*.json`, `.gitignore` | Skip |
 
----
-
-## Step 3 — Review across all 10 dimensions
+### Step 3 — Review across all 10 dimensions
 
 For each file in the diff, apply the relevant checklists below.
 
@@ -69,8 +106,6 @@ For each file in the diff, apply the relevant checklists below.
 - Prefers `std::size_t` / `std::ptrdiff_t` for sizes and indices, not `int`
 - Uses C++20 concepts for template validation, not `std::enable_if` / SFINAE
 
----
-
 ### Dimension 2 — Template complexity
 
 - Concept definitions are concise — one `requires` clause, not nested
@@ -78,8 +113,6 @@ For each file in the diff, apply the relevant checklists below.
 - `static_assert` with clear messages for constraint violations
 - No `auto` template parameters where a constrained concept would do
 - No recursive template instantiation beyond reasonable depth
-
----
 
 ### Dimension 3 — Memory patterns
 
@@ -98,8 +131,6 @@ For each file in the diff, apply the relevant checklists below.
   - `offsetof` verified where ABI-sensitive layout is assumed
   - Bit-fields checked for platform-dependent layout and storage-unit boundaries
 
----
-
 ### Dimension 4 — Cache behavior
 
 - Hot / cold data separation (frequently accessed fields grouped together)
@@ -113,8 +144,6 @@ For each file in the diff, apply the relevant checklists below.
 - No pointer-chasing in hot paths (linked lists, deep indirection)
 - Branch order favors hot path with `[[likely]]`
 
----
-
 ### Dimension 5 — Threading model
 
 - Shared mutable state protected by atomics or explicit synchronization
@@ -123,8 +152,6 @@ For each file in the diff, apply the relevant checklists below.
 - No data races detectable by thread sanitizer
 - Per-thread caching (`LocalCache`) handles ownership and lifetime correctly
 - Spin loops contain a compiler barrier (`PPR_COMPILER_READWRITE_BARRIER`)
-
----
 
 ### Dimension 6 — Exception safety & noexcept
 
@@ -140,7 +167,7 @@ For each file in the diff, apply the relevant checklists below.
 - `std::nothrow` used with `operator new` in `GPA::allocateRaw`
 - **Exception safety guarantees:** each function's guarantee is deliberate:
   - **No‑throw:** `noexcept` functions provide the no‑throw guarantee
-  - **Strong:** state changes are committed only after all operations succeed (commit‐or‑rollback via RAII or scope guard)
+  - **Strong:** state changes are committed only after all operations succeed (commit‐or‐rollback via RAII or scope guard)
   - **Basic:** no resource leaks on exception; invariants remain valid
   - No functions leave objects in an indeterminate state on exception
 - RAII wrappers used for all resource ownership to prevent leaks during unwinding
@@ -148,8 +175,6 @@ For each file in the diff, apply the relevant checklists below.
 - No throwing in hot paths or non‑critical paths where error codes suffice
 - No throwing in constructors of types allocated in bulk (prefer two‑phase init or factory functions)
 - Code paths that call `std::terminate` are guarded by a clear precondition check
-
----
 
 ### Dimension 7 — Compile-time impact
 
@@ -164,8 +189,6 @@ For each file in the diff, apply the relevant checklists below.
 - `.cppm` files kept minimal (declarations only), definitions in `.cpp`
 - Unity build compatibility considered (`PPR_ANONYMIZE` usage)
 - Avoid pulling large headers into module interfaces
-
----
 
 ### Dimension 8 — Undefined behavior
 
@@ -183,8 +206,6 @@ For each file in the diff, apply the relevant checklists below.
   - Gated by a compiler-specific macro (`#ifdef _MSC_VER`, `#if defined(__clang__)`, etc.)
   - Preceded by a `static_assert` or `PPR_ASSERT` validating the precondition
 
----
-
 ### Dimension 9 — Design decisions
 
 - Every exported symbol has a clear rationale
@@ -200,8 +221,6 @@ For each file in the diff, apply the relevant checklists below.
 - `PPR_FORCE_INLINE` on hot-path functions
 - Macros are forbidden outside `Macros.h`
 
----
-
 ### Dimension 10 — safe_ptr lifetime correctness
 
 - All `safe_ptr` instances pointing to an object must be released before the object is destroyed (all copies set to `nullptr` or go out of scope)
@@ -214,7 +233,7 @@ For each file in the diff, apply the relevant checklists below.
 
 ---
 
-## Step 4 — Validate each finding (mandatory parallel fact-check)
+### Step 4 — Validate each finding (mandatory parallel fact-check)
 
 After the global review pass (Step 3) produces candidate findings, EVERY finding must be
 individually validated against the actual source BEFORE any result is presented to the user.
@@ -240,7 +259,7 @@ reach the user.
 
 ---
 
-## Step 5 — Generate per-zone report
+### Step 5 — Generate per-zone report
 
 Each finding uses this structure:
 
@@ -271,7 +290,7 @@ return {ptr, size};
 
 ---
 
-## Step 6 — Summary table
+### Step 6 — Summary table
 
 ```
 ## Summary
@@ -289,27 +308,11 @@ return {ptr, size};
 
 ## Constraints
 
-- Only files tracked by git are reviewed; `build/` and vcpkg paths excluded
-- Third-party source (outside tracked paths) is never reviewed
-- `cmake/external/*.cmake` checks only version pinning and that no engine code is patched
-- Every finding must cite a specific rule from AGENTS.md or a named C++ best practice
-- Engine code (`lib/`) findings take priority over `game/`
-- For diffs with >10 files, ask user which zones to focus on
-
-## Orchestrator & OMO Integration
-
-**Contract:** Review skill. The orchestrator triggers it and aggregates; the 10 review dimensions are fanned out to parallel subagents (`@oracle` / `code-reviewer` skill), with `@explorer` supplying concrete examples. It never edits code.
-
-### Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Gather diff context | `@explorer` | Isolated git/read |
-| Review dimensions (memory, threads, UB, …) | parallel `@oracle` subagents | Independent lanes |
-| Validate each finding (fact-check) | parallel `@oracle` subagents, one per item | Independent lanes; must finish before presenting |
-| Reconcile validated verdicts + severity rank | orchestrator | Single summary |
-
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — reviewers need `skills: ["code-reviewer"]` or `simplify`; `@explorer` `skills: []`.
-- **Background orchestration** — run the dimension reviews as parallel background subagents; reconcile on the Job Board.
-- **Session reuse** — cache the diff context; re-run only on newly added files.
-- **`orchestratorPrompt` routing** — trigger on "review", "check my code", "audit changes".
+- Review only files tracked by git; exclude `build/`, vcpkg install paths,
+  and `out/` (mirror `.gitignore`).
+- Every finding must cite a specific AGENTS.md rule or named C++ best
+  practice; never present unvalidated findings (Step 4 is mandatory).
+- Never edit code, auto-fix issues, or modify files — the report is the only
+  output.
+- Test files must use `PPR_TEST_ASSERT`; flag any `PPR_ASSERT`/`PPR_VERIFY`
+  inside `PPR_UNIT_TEST` bodies.

@@ -10,7 +10,17 @@ description: >
 # Unit Test Updater
 
 Analyze unstaged/staged changes and produce matching unit tests that
-cover every new or changed function, type, branch, and edge case.
+cover every new or changed function, type, branch, and edge case in
+the pP engine's PPR_UNIT_TEST framework.
+
+## Contract
+
+This skill analyzes unstaged/staged git changes and produces matching
+unit tests that cover every new or changed function, type, branch,
+and edge case in the pP engine's PPR_UNIT_TEST framework. It does
+NOT modify production code. The orchestrator plans coverage and
+delegates all file edits to `@fixer`. It never writes test `.cppm`
+files directly.
 
 ---
 
@@ -23,8 +33,8 @@ git diff HEAD                  # show all changes
 git diff --cached              # staged-only (if user already staged)
 ```
 
-Also load the AGENTS.md for coding conventions, and read the test file(s)
-corresponding to the modified source:
+Also load the AGENTS.md for coding conventions, and read the test
+file(s) corresponding to the modified source:
 
 - Source `lib/engine/core/Core.Foo.cppm` → tests `lib/engine/tests/core/Core.Foo.Tests.cppm`
 - Source `lib/engine/core/Core.Foo.Bar.cppm` → tests `lib/engine/tests/core/Core.Foo.Bar.Tests.cppm`
@@ -34,7 +44,8 @@ corresponding to the modified source:
 
 ## Step 2 — Analyse the diff
 
-For each changed function, type, or constant, classify the nature of the change:
+For each changed function, type, or constant, classify the nature
+of the change:
 
 | Change type | Testing action |
 |---|---|
@@ -63,24 +74,24 @@ For each changed function, type, or constant, classify the nature of the change:
 8. **Top-level registration:** In `Core.Tests.cppm`, add `import :<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
 10. **Code style:** No comments, `constexpr` everywhere, `[[nodiscard]]`, no raw loops, prefer algorithms/ranges
-11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... }` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
-12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... }` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
-13. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... }` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
+11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
+12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... };` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
+13. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... };` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
 
 ### Test coverage checklist for each function under test:
 
-- [ ] Normal/expected inputs (happy path)
-- [ ] Boundary values (empty containers, zero, max, min, null)
-- [ ] Edge cases (single element, full capacity, aliasing)
-- [ ] Error conditions (overflow, invalid state, null pointer)
-- [ ] Constexpr evaluation (mark tests `constexpr` where possible)
-- [ ] `noexcept` guarantee (verify if function is marked noexcept)
-- [ ] State mutation (check before/after for mutating functions)
-- [ ] Iterator validity (where iterators are involved)
-- [ ] Equality/comparison (if types define `==`, `<=>`, `hashValue`)
-- [ ] Relocatability trait (if type should be relocatable)
-- [ ] Guarded/precondition edge cases (inputs that trigger `PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE` — use `UnitTest::expect_fail`)
-- [ ] Crash-expected paths (use-after-free, double-free, ASAN poison reads — use `UnitTest::expect_crash`)
+- Normal/expected inputs (happy path)
+- Boundary values (empty containers, zero, max, min, null)
+- Edge cases (single element, full capacity, aliasing)
+- Error conditions (overflow, invalid state, null pointer)
+- Constexpr evaluation (mark tests `constexpr` where possible)
+- `noexcept` guarantee (verify if function is marked noexcept)
+- State mutation (check before/after for mutating functions)
+- Iterator validity (where iterators are involved)
+- Equality/comparison (if types define `==`, `<=>`, `hashValue`)
+- Relocatability trait (if type should be relocatable)
+- Guarded/precondition edge cases (inputs that trigger `PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE` — use `UnitTest::expect_fail`)
+- Crash-expected paths (use-after-free, double-free, ASAN poison reads — use `UnitTest::expect_crash`)
 
 ### Guarded edge cases
 
@@ -148,7 +159,8 @@ Use the appropriate preset for your platform (`msvc-dev`, `clang-dev`, `gcc-dev`
 
 If any test fails, treat the failure as a bug — do not weaken assertions.
 
-**Expected-fail/crash validation:**
+### Expected-fail/crash validation:
+
 - For `expect_fail` tests: verify they pass (i.e., the assertion fires and the runner flips the result to pass). If an `expect_fail` test returns without throwing, that is a *failure* — the precondition wasn't enforced.
 - For `expect_crash` tests: verify they pass (i.e., the child process exits non-zero). If an `expect_crash` test exits cleanly, that is a *failure* — the crash wasn't triggered.
 - Run all tests together; expected-fail/crash tests should produce green (pass) output, not red (fail).
@@ -163,11 +175,10 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 - **If the diff has no public API changes** (e.g., internal refactor, comment fix), output "No test changes required" and stop.
 - **Large diffs:** Group related changes and ask the user which area to test first.
 
-## Orchestrator & OMO Integration
+---
 
-**Contract:** The orchestrator plans the test coverage and delegates all file edits to `@fixer`. It never writes test `.cppm` files directly.
+## Subagent routing
 
-### Subagent routing
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Locate corresponding test files / naming | `@explorer` | Fast codebase recon |
@@ -176,8 +187,29 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 | Verify build/test of new tests | background build subagent | Reuse validation lane |
 | Convention check | `code-reviewer` skill | AGENTS.md compliance |
 
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` needs no extra skills; `@explorer` needs `skills: []`, `mcps: []`.
-- **Background orchestration** — build+run the new tests as a background subagent, reconciled before reporting.
-- **Session reuse** — reuse the `@explorer` session when scanning multiple changed subsystems.
-- **`orchestratorPrompt` routing** — trigger on "add tests", "update tests for my changes", "test the new code".
+---
+
+## OMO feature wiring
+
+### Per-agent `skills`/`mcps` allow-lists
+
+- `@fixer` needs no extra skills; operates within its bounded implementation mandate.
+- `@explorer` needs `skills: []`, `mcps: []` — fast codebase recon only.
+- Other agents inherit their default allow-lists from OMO-slim configuration.
+
+### Background orchestration
+
+- Build and run the new tests as a background subagent, reconciled before reporting.
+- Use `validation` skill to compile every platform-relevant config and run engine tests.
+- Reconcile results against the orchestrator's coverage plan.
+
+### Session reuse
+
+- Reuse the `@explorer` session when scanning multiple changed subsystems, keyed by `(agent-type, target area, file-glob)`.
+- Invalidate sessions older than a threshold or whose key no longer matches the current task.
+- Read-only recon sessions are safe to reuse; mutating/debug sessions prefer fresh sessions.
+
+### `orchestratorPrompt` routing
+
+- Trigger on "add tests", "update tests for my changes", "test the new code".
+- Orchestrator delegates test-update work to this skill; `@fixer` executes the bounded file edits.

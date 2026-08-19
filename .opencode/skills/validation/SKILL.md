@@ -4,17 +4,55 @@ description: >
   Post-change validation checklist for the PPR engine. Compiles the FULL
   project in every build configuration relevant to the current platform,
   runs the engine test suites, and reviews local modifications against
-  AGENTS.md. Use after any code change, before committing. Builds run in
-  parallel subagents; the code review runs serially.
-triggers: validate, verify changes, after modification, compile all configs,
-  pre-commit check, build and test, post-change validation
+  AGENTS.md. Use this skill whenever the user says "validate", "verify
+  before commit", "run engine tests", or after any code change. Builds
+  run in parallel background subagents; the code review runs serially in
+  the main flow.
 ---
 
-# Post-Change Validation
+# Validation
 
 Run after every modification, before committing.
 
----
+## Contract
+
+This skill performs post-change validation of the PPR engine. It **does not**
+edit any files, auto-fix issues, or modify the working tree. Its output is a
+validated, reconciled report covering build status per preset, test status per
+preset, code review findings by severity, and failure triage. The orchestrator
+drives the skill; configure/prepare runs sequentially in the main flow, build
+and test cycles are delegated to parallel background subagents, and the main
+lane never compiles or runs `ctest` itself. The skill is triggered by the
+orchestrator on commands such as "validate", "verify before commit", "run
+engine tests", or after any code change.
+
+## Subagent routing
+
+| Step | Delegate to | Why |
+|------|-------------|-----|
+| Configure + build each preset | background `task` subagent per preset (general/fixer, shell access) | Heavy, parallelizable; keeps orchestrator lane free |
+| Run `EngineCoreTests` / `EngineAppTests` / `ctest` | same build subagent | Co-located with the build it validates |
+| Triage build/test failures | `@fixer` + `@oracle` | Bounded fixes and architecture calls |
+| Diff review (10 dimensions) | `code-reviewer` skill (or `@oracle`) | Independent review lane |
+
+## OMO feature wiring
+
+- **Per-agent `skills`/`mcps` allow-lists** — orchestrator has `skills: ["*"]`
+  and `mcps: ["*","!context7"]` (has `clion`); build subagents need only
+  shell/`cmake` access — they must NOT rely on CLion MCP tools (may be
+  unavailable); `@oracle` needs `skills: ["simplify", "code-reviewer"]`
+  (explicit grant in `~/.config/opencode/oh-my-opencode-slim.json` or
+  project-local override — `code-reviewer` is not in `oracle`'s default
+  allow-list).
+- **Background orchestration** — launch one build subagent per preset in
+  parallel (same message), reconcile all results on the Background Job Board
+  before the summary is presented; run the code review serially in the main
+  flow after all subagents return.
+- **Session reuse** — reuse one build subagent session across presets to
+  amortize CMake cache warm-up (invalidate when the preset set or target area
+  changes); reuse one read-only session for diff retrieval in Step 2.
+- **`orchestratorPrompt` routing** — trigger on "validate", "verify before
+  commit", "run engine tests", or after any code change.
 
 ## Step 0 — Detect platform & presets
 
@@ -26,8 +64,6 @@ Run in pwsh (Windows) / bash (Unix):
 Skip `clang-cl-*` (no C++20 module support in this repo) and `gcc-*`
 (hidden, no module support). Each preset builds into its own
 `out/build/<preset>` dir → fully independent.
-
----
 
 ## Step 0.5 — Sequential prepare (avoid cache races)
 
@@ -45,8 +81,6 @@ cmake --preset msvc-rel
 This populates the shared `out/cpm_cache` and the per-preset
 `vcpkg_installed` safely. Skip any preset whose `out/build/<preset>` is
 already configured.
-
----
 
 ## Step 1 — Parallel compile + test (subagents)
 
@@ -88,8 +122,6 @@ Subagents must NOT rely on CLion MCP tools (they may be unavailable). Use
 
 Aggregate all subagent results before proceeding.
 
----
-
 ## Step 2 — Code review (serial, AGENTS.md)
 
 After all subagents return, load the `code-reviewer` skill in the MAIN flow
@@ -105,11 +137,10 @@ Classify changed files by zone (`lib/`, `game/`, `*Tests*`, `cmake/`) and
 review across the 10 dimensions: C++ standard usage, template complexity,
 memory patterns, cache behavior, threading model, exception safety/noexcept,
 compile-time/module impact, undefined behavior, design decisions, and
-`safe_ptr` lifetime. Produce a per-zone report with a severity summary.
+`safe_ptr` lifetime. Produce a per-zone report with a severity summary
+(Error / Warning / Suggestion).
 
 Never weaken assertions or tests to silence a finding — fix the root cause.
-
----
 
 ## Step 3 — Aggregate report
 
@@ -119,8 +150,6 @@ Combine everything into one pass/fail summary:
 - Review findings by severity (Error / Warning / Suggestion).
 
 All green → validation complete. Any red → Step 4.
-
----
 
 ## Step 4 — Failure triage
 
@@ -134,8 +163,6 @@ All green → validation complete. Any red → Step 4.
     `out/build/<preset>/EngineCoreTests --run-test <path>`.
 - **Review finding:** Errors and Warnings block the change; Suggestions are
   advisory.
-
----
 
 ## Constraints
 
@@ -154,21 +181,5 @@ All green → validation complete. Any red → Step 4.
 - Subagents use `cmake`/`ctest` only; debugging uses CLion (see `clion-tools`).
 - Code review findings must cite a specific AGENTS.md rule or named C++
   best practice.
-
-## Orchestrator & OMO Integration
-
-**Contract:** This skill runs *with* the orchestrator. The orchestrator plans the validation matrix and delegates every build/test cycle to background subagents — it never compiles or runs `ctest` in the main lane.
-
-### Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Configure + build each preset | background `task` subagent (general/fixer) | Heavy, parallelizable; keeps orchestrator lane free |
-| Run `EngineCoreTests` / `EngineAppTests` / `ctest` | same build subagent | Co-located with the build it validates |
-| Triage build/test failures | `@fixer` + `@oracle` | Bounded fixes and architecture calls |
-| Diff review (10 dimensions) | `code-reviewer` skill (or `@oracle`) | Independent review lane |
-
-### OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — orchestrator needs `skills: ["*"]` (has it) and `mcps: ["*","!context7"]` (has `clion`); build subagents need only `bash`/cmake access.
-- **Background orchestration** — launch one build subagent per preset in parallel; reconcile on the Background Job Board before the summary.
-- **Session reuse** — reuse one build subagent session across presets to amortize CMake cache warm-up.
-- **`orchestratorPrompt` routing** — trigger on "validate", "verify before commit", "run engine tests", or after any code change.
+- The main flow never compiles or runs `ctest` itself — build/test cycles
+  always run in the background subagents.

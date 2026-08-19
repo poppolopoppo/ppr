@@ -1,31 +1,99 @@
 # AGENTS.md: Developer Guide for PPR Game Engine
 
-## Available Skills
-Load these on demand via the `skill` tool when your task matches their domain:
+Agent/skill conventions below follow oh-my-opencode-slim (OMO). If tool
+names or default grants stop matching your installed version, check
+`docs/skills.md` in your OMO install for drift.
 
-| Skill | Trigger Keywords | Coverage |
-|-------|-----------------|----------|
-| `clion-tools` | search, find, debug, breakpoint, build, run, diagnose | CLion MCP tools for code search, debugging, building, and diagnostics — use INSTEAD of grep/glob/bash |
-| `memory-allocator` | allocation, arena, pool, slab, poison | Allocator selection, composition, arena patterns, poison API, STL adapter, safe_ptr |
-| `module-architect` | new module, partition, `.cppm`, test module | Module naming, file structure, umbrella registration, CMake registration, pitfalls |
-| `build-system` | cmake, preset, target, dependency, linker error | Presets, setup_ppr_project, deps (CPM/vcpkg), MSVC workarounds, sanitizers |
-| `hal-developer` | hal, platform, porting, syscall | 10 areas across 4 platforms, syscall mapping, stub conventions, adding a platform |
-| `concurrency-patterns` | channel, signal, event, context, cancellation | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
-| `code-reviewer` | review, check, conventions, code quality | Review against AGENTS.md conventions, C++ best practices, safe_ptr lifetime |
-| `git-commit-planner` | commit, stage, plan, hunk | Hunk-level analysis, cumulative-state rule, atomic commit ordering |
-| `git-push-planner` | push, send commits, pre-push, squash, clean history | Squash planning for unpushed commits, commit message review, pre-push validation checklist |
-| `git-log-fast-navigation` | git log, history, fzf, ripgrep, navigate | Fast log formatting, rg-based commit/diff search, fzf interactive browsing, .gitconfig aliases |
-| `plan-executor` | execute, plan, phase, build | Execute structured refactoring plans from `.opencode/plans/` phase by phase |
-| `unit-test-updater` | test, coverage, PPR_UNIT_TEST | Analyze git diffs and update/add C++ unit tests |
-| `validation` | validate, verify, after change, compile all configs, pre-commit | Post-change checklist: compile the full project in every platform-relevant build config, run engine tests, and review diffs against AGENTS.md (parallel builds, serial review) |
+## Agent Roster (OMO-provided, not custom)
+
+These are the actual OMO agents — don't invent parallel names for them.
+
+| Agent | Role | Default skills | Default MCPs |
+|---|---|---|---|
+| `orchestrator` | Plans, delegates, reconciles background specialists | `["*"]` | `["*", "!context7"]` |
+| `explorer` | Fast codebase recon | `[]` | `[]` |
+| `oracle` | Architecture judgment, hard debugging, code review | `["simplify"]` | `[]` |
+| `council` | Multi-model consensus (`@council <question>`) — manual, high-cost | config-driven | — |
+| `librarian` | External knowledge (web, docs, dependency source) | `[]` | `["websearch","context7","gh_grep"]` |
+| `designer` | UI/UX — not generally relevant to PPR engine-core work | `[]` | `[]` |
+| `fixer` | Bounded implementation | `[]` | `[]` |
+
+Skill assignment is a **permission grant** in `~/.config/opencode/oh-my-opencode-slim.json`
+(or a project-local override) — an agent can only activate a skill it's been
+given. `oracle`'s default only includes `simplify`; the custom PPR skills below
+that route review work to `oracle` (`code-reviewer`) need an explicit grant:
+
+```jsonc
+{
+  "presets": {
+    "ppr": {
+      "orchestrator": { "skills": ["*"] },
+      "oracle": { "skills": ["simplify", "code-reviewer"] },
+      "explorer": { "skills": [] },
+      "fixer": { "skills": [] },
+      "librarian": { "skills": [], "mcps": ["websearch", "context7", "gh_grep"] }
+    }
+  }
+}
+```
+
+## Bundled OMO Skills — use these instead of reinventing them
+
+| Skill | Purpose | Invoke |
+|---|---|---|
+| `codemap` | Hierarchical `codemap.md` repo maps, change-detected | `run codemap` |
+| `clonedeps` | Clone pinned dependency source into `.slim/clonedeps/repos/` for inspection | `clone dependencies` |
+| `deepwork` | Structured multi-phase workflow with mandatory Oracle review gates | `/deepwork <task>` |
+| `worktrees` | Isolated `.slim/worktrees/<slug>/` lanes for risky/parallel work | `work in a worktree` |
+| `simplify` | Behavior-preserving clarity refactor (owned by `oracle`) | ask for simplification, or during review |
+| `reflect` | Turns repeated friction into a reusable skill/agent/config change | `/reflect` |
+| `release-smoke-test` | Packed-artifact release validation | not generally applicable to PPR (npm-package oriented) |
+| `oh-my-opencode-slim` | Configure the plugin itself | ask to tune your setup |
+
+Run `/reflect` periodically, especially after adding a new custom skill — it
+catches recurring workflow friction that's really just a bundled skill
+(`codemap`, `clonedeps`, `@council`, etc.) waiting to be used instead of
+reinvented.
+
+## Custom PPR-Specific Skills
+
+Only these are genuinely PPR-domain-specific (no OMO bundled skill covers
+engine internals). Load on demand via the `skill` tool; grant via
+`skills: [...]` per agent as above. Each `SKILL.md` uses only `name` +
+`description` frontmatter — that's the real OpenCode skill schema; don't add
+a `triggers:` field, it isn't read by anything and just creates a second,
+driftable source of truth alongside `description`.
+
+| Skill | Coverage |
+|-------|----------|
+| `clion-tools` | CLion MCP tools for code search, debugging, building, diagnostics — use INSTEAD of grep/glob/bash |
+| `memory-allocator` | Allocator selection, composition, arena patterns, poison API, STL adapter, safe_ptr |
+| `module-architect` | Module naming, file structure, umbrella registration, CMake registration, pitfalls |
+| `build-system` | Presets, setup_ppr_project, deps (CPM/vcpkg), MSVC workarounds, sanitizers |
+| `hal-developer` | 10 areas across 4 platforms, syscall mapping, stub conventions, adding a platform |
+| `concurrency-patterns` | RawChannel MPSC, IEvent/Signal, IContext tree, thread safety, HAL I/O integration |
+| `code-reviewer` | Review against AGENTS.md conventions, C++ best practices, safe_ptr lifetime — needs `oracle` skill grant (see above) |
+| `git-commit-planner` | Hunk-level analysis, cumulative-state rule, atomic commit ordering |
+| `git-push-planner` | Squash planning, commit-message review, pre-push checklist |
+| `git-log-fast-navigation` | Fast log formatting, rg-based commit/diff search, fzf browsing, .gitconfig aliases |
+| `unit-test-updater` | Analyze diffs, update/add C++ unit tests |
+| `validation` | Post-change checklist: compile every platform-relevant config, run engine tests, review diffs. Complements — doesn't replace — `deepwork`'s per-phase Oracle review gate; use `validation` standalone for a normal change, let `deepwork` invoke its own gate for multi-phase work |
+
+Multi-phase refactoring and platform-porting work is handled by `deepwork`
+(see [Risky / Multi-Phase Work](#risky--multi-phase-work)), not by a
+standalone plan-execution skill — a custom top-level equivalent would just
+duplicate its plan → Oracle-review → phased-execution loop.
 
 ## Available Commands
-Use these custom commands to invoke predefined multi-agent workflows:
 
-| Command | Trigger Keywords | Coverage |
-|---------|-----------------|----------|
-| `/parallel-plan` | plan, design, architecture, proposal | Multi-model parallel planning — 3 independent proposals → 3 cross-reviews → final synthesis. Use for architecture decisions and complex refactoring. |
-| `/review` | review, audit, inspect, check | Parallel code review across 4 dimensions (security/memory, performance/cache, correctness/edge, conventions/style) with correlated summary. |
+| Command | Coverage |
+|---------|----------|
+| `/review` | Parallel code review across 4 dimensions (security/memory, performance/cache, correctness/edge, conventions/style), fanned out to `oracle` subagents, correlated summary. Distinct from `@council`: same model family, different review lenses on the same diff. |
+
+For architecture decisions or complex refactor proposals, use
+`@council <question>` directly rather than a custom multi-proposal command —
+Council already runs N independent models in parallel and synthesizes one
+answer, with real provider diversity a single-model command can't match.
 
 ## Architecture Overview
 
@@ -116,6 +184,66 @@ Use tools in this priority order:
 1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging.
 2. **Internal tools** (read/edit/grep/glob/task) for file and content operations — reading and editing known files, quick text search, subagent delegation.
 3. **PowerShell (pwsh) only** for shell commands on Windows — never mix in other shells (Bash, cmd, Git Bash, etc.); use bash on Unix. `rg` (ripgrep) is an allowed exception for fast content search.
+
+## Recon & Context (delegate to bundled skills first)
+
+- **Repo map**: use `codemap` (`run codemap`) for hierarchical, change-detected
+  `codemap.md` files instead of ad hoc project maps. It already handles
+  incremental re-analysis of only changed folders — don't build a parallel
+  cache for this.
+- **Dependency internals** (Slang-RHI, mango::math, etc.): use `clonedeps`
+  (`clone dependencies`). `orchestrator` asks `@librarian` to resolve the
+  official repo/tag, confirms with you, then clones a pinned ref into
+  `.slim/clonedeps/repos/` (max 3-5 deps, HTTPS + pinned refs only, no
+  scripts run, kept out of git) and records it below.
+- **Search scoping (default-exclude)**: mirror `.gitignore`. Exclude from all
+  searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`, `build/`,
+  `imgui_module_bindings`.
+    - CLion MCP: pass `paths` excluding those dirs.
+    - `rg` fallback: `rg --glob '!out/**' --glob '!**/vcpkg_installed/**' --glob '!**/_deps/**'`.
+    - Once a dependency is cloned via `clonedeps`, read it from
+      `.slim/clonedeps/repos/<name>/` directly rather than scoping into
+      `vcpkg_installed`.
+
+## Cloned Dependency Source
+
+_(maintained by the `clonedeps` skill — empty until first run)_
+
+## Risky / Multi-Phase Work
+
+- **Multi-phase refactors, new HAL platforms, new module libraries**: start
+  with `/deepwork <task>`. It creates a session artifact in
+  `.slim/deepwork/<task>.md`, gets an Oracle review on the draft plan, splits
+  it into phases (each with its own Oracle review), and executes phase by
+  phase with validation between phases. PPR-specific mechanics — the module
+  partition checklist, the CMake registration rule, the platform-file
+  checklist below — are what `@fixer` follows *inside* each `deepwork` phase;
+  they are not a competing top-level workflow.
+- **Isolated lanes for risky or parallel work**: use `worktrees`
+  (`work in a worktree`). Sets up `.slim/worktrees/<slug>/`, tracked in
+  `.slim/worktrees.json`, with pre-flight dirty-tree checks and confirmation
+  gates on every git mutation (`worktree add/remove`, `merge`, `rebase`,
+  `cherry-pick`, `reset --hard`, branch ops). Do the actual implementation
+  there, then hand off to `git-commit-planner`/`git-push-planner` for the
+  atomic-commit and pre-push pass before `worktrees` integrates back.
+- Keep `/review` (4-dimension parallel review) and Oracle's `deepwork`/`validation`
+  gates for high-risk changes (memory, concurrency, build-system, new HAL
+  platform).
+
+### Session reuse (keyed + invalidated)
+- Reuse a specialist session only when its **session key** matches: `(agent-type, target area, file-glob)`. MRU is a tiebreaker only.
+- **Invalidate** sessions older than a threshold or whose key no longer matches the current task.
+- **Never reuse mutating/debug sessions** (breakpoints, watches, state) — prefer fresh for debug; read-only recon sessions are safe to reuse.
+
+### Targeted reads
+- `read` with `offset`/`limit`; never dump whole large files.
+
+### Tool priority (fallback ladder, not exclusive)
+1. CLion MCP tools (`clion_search_symbol`, `clion_search_text`, `clion_get_compiler_info`) — language-aware, respects includes.
+2. Internal `grep`/`glob` with exclusions.
+3. `pwsh` + `rg` with exclusion globs (last resort).
+- First `clion_search_*` after launch may be unindexed — tolerate.
+- Canonical tool catalog lives in `clion-tools` SKILL.md; reference it, do not duplicate tool names here (avoid drift).
 
 ## Build System
 - Load the `clion-tools` skill when starting any task. Follow the Tool Usage priority: CLion MCP tools for code search, building, and debugging; internal tools for file and content operations.
@@ -227,12 +355,6 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 - Workflow: start session → set breakpoint → resume → wait for pause → inspect stack/variables → step or continue.
 - Load the `clion-tools` skill for the full tool reference and examples.
 - Key tools: `clion_xdebug_start_debugger_session`, `clion_xdebug_set_breakpoint`, `clion_xdebug_control_session`, `clion_xdebug_get_stack`, `clion_xdebug_get_frame_values`, `clion_xdebug_evaluate_expression`.
-
-## Recommendations
-- Use Task agents for multi-file exploration (they get fresh context)
-- Batch parallel tool calls when possible
-- Keep file reads targeted (use offset/limit for large files)
-- When hitting blockers like compiler ICE or hard-crash, do not jump to ambitious refactors of the prepared plan: instead you **must** notify the user and ask for validation and to decide of the best direction.
 
 ## Matrix Layout Conventions
 
