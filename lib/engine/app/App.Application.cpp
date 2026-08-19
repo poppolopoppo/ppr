@@ -182,7 +182,6 @@ namespace pP {
 
         if (m_cached_window_service->getWindowShouldClose(*m_main_window)) [[unlikely]] {
             requestApplicationExit();
-            return default_value_v;
         }
 
         const TimePoint now = time::now();
@@ -221,8 +220,8 @@ std::error_code Application::render() {
                 0.0f, 1.0f},
             .scissor = rhi::ScissorRect{
                 0, 0,
-                static_cast<uint32_t>(fb.x),
-                static_cast<uint32_t>(fb.y)},
+                static_cast<u32>(fb.x),
+                static_cast<u32>(fb.y)},
             .draw = scene_draw,
         };
 
@@ -243,8 +242,8 @@ std::error_code Application::render() {
                 0.0f, 1.0f},
             .scissor = rhi::ScissorRect{
                 0, 0,
-                static_cast<uint32_t>(fb.x),
-                static_cast<uint32_t>(fb.y)},
+                static_cast<u32>(fb.x),
+                static_cast<u32>(fb.y)},
             .draw = ui_draw,
         };
 

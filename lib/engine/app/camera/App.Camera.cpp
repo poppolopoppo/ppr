@@ -32,13 +32,13 @@ namespace pP {
     void Camera::setProjection(const float4x4 &projection) noexcept {
         m_projection = projection;
         m_view_projection = m_view * m_projection;
-        m_inverse_view_projection = pP::inverse(m_view_projection);
+        m_inverse_view_projection = inverse(m_view_projection);
         ++m_camera_version;
     }
 
     void Camera::recomputeViewProjection() noexcept {
         m_view_projection = m_view * m_projection;
-        m_inverse_view_projection = pP::inverse(m_view_projection);
+        m_inverse_view_projection = inverse(m_view_projection);
     }
 
     void Camera::setViewportSize(const int2 &size) noexcept {
@@ -109,11 +109,11 @@ namespace pP {
         if (m_camera == nullptr) return;
         const float dts = dtSeconds(dt);
         m_yaw += m_look_delta.x * 0.01f;
-        m_pitch = pP::clamp(m_pitch + m_look_delta.y * 0.01f, -1.5f, 1.5f);
+        m_pitch = clamp(m_pitch + m_look_delta.y * 0.01f, -1.5f, 1.5f);
         m_look_delta = float2{zero_v};
 
         const float3 forward = forwardFromAngles(m_yaw, m_pitch);
-        const float3 right = normalize(pP::cross(forward, m_up));
+        const float3 right = normalize(cross(forward, m_up));
 
         float3 move{0.0f, 0.0f, 0.0f};
         if (m_forward) move += forward;
@@ -125,7 +125,7 @@ namespace pP {
         if (dot2(move) > 0.0f) move = normalize(move);
 
         m_eye += move * m_move_speed * dts;
-        const float4x4 view = pP::lookAt(m_eye, m_eye + forward, m_up);
+        const float4x4 view = lookAt(m_eye, m_eye + forward, m_up);
         m_camera->setView(view);
         m_camera->setPosition(m_eye);
         m_camera->recomputeViewProjection();
@@ -171,7 +171,7 @@ namespace pP {
                     m_look_delta += std::get<InputAxis2D>(msg.m_value).m_relative;
                 } else if (msg.m_value.index() == 1u) {
                     const float wheel = std::get<InputAxis1D>(msg.m_value).m_relative;
-                    m_zoom = pP::clamp(m_zoom * (1.0f + wheel * 0.1f), 0.1f, 10.0f);
+                    m_zoom = clamp(m_zoom * (1.0f + wheel * 0.1f), 0.1f, 10.0f);
                 }
             }
         }
@@ -181,11 +181,11 @@ namespace pP {
         if (m_camera == nullptr) return;
         const float dts = dtSeconds(dt);
         m_yaw += m_look_delta.x * 0.01f;
-        m_pitch = pP::clamp(m_pitch + m_look_delta.y * 0.01f, -1.5f, 1.5f);
+        m_pitch = clamp(m_pitch + m_look_delta.y * 0.01f, -1.5f, 1.5f);
         m_look_delta = float2{zero_v};
 
         const float3 forward = forwardFromAngles(m_yaw, m_pitch);
-        const float3 right = normalize(pP::cross(forward, m_up));
+        const float3 right = normalize(cross(forward, m_up));
 
         float3 move{0.0f, 0.0f, 0.0f};
         if (m_forward) move += forward;
@@ -195,7 +195,7 @@ namespace pP {
         if (dot2(move) > 0.0f) move = normalize(move);
 
         m_eye += move * m_pan_speed * dts;
-        const float4x4 view = pP::lookAt(m_eye, m_eye + forward, m_up);
+        const float4x4 view = lookAt(m_eye, m_eye + forward, m_up);
         m_camera->setView(view);
         m_camera->setPosition(m_eye);
         m_camera->setProjection(rhi::getOrthoMatrix(m_device_type, 10.0f * m_zoom, 10.0f * m_zoom));
