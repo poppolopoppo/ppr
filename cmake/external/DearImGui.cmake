@@ -29,7 +29,13 @@ endif()
 # docking-pinned `imgui` static library above defines). We download only the generated module
 # files (NOT configuring the third-party CMake, which would pull in example backends) and build
 # them ourselves.
-set(_imgui_module_dir "${CMAKE_CURRENT_BINARY_DIR}/imgui_module_bindings")
+#
+# The bindings are downloaded ONCE into a location shared by every CMake build preset
+# (`out/build/imgui_module_bindings`) instead of per-preset `CMAKE_CURRENT_BINARY_DIR`. This keeps
+# a single physical `export module imgui;` declaration on disk, which prevents CLion's C++20 module
+# indexer from reporting "Module 'imgui' is ambiguous" when several build directories coexist.
+set(_imgui_module_dir "${CMAKE_BINARY_DIR}/../imgui_module_bindings")
+file(MAKE_DIRECTORY "${_imgui_module_dir}")
 set(_imgui_module_files imgui.cppm imgui_internal.cppm)
 foreach(_imgui_module_file ${_imgui_module_files})
     set(_imgui_module_src "${_imgui_module_dir}/${_imgui_module_file}")
