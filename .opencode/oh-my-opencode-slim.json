@@ -1,0 +1,650 @@
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  "preset": "opencode-alt",
+  "companion": {
+    "enabled": true,
+    "position": "bottom-right",
+    "size": "medium",
+    "gifPack": "default",
+    "loopStyle": "classic",
+    "speed": 1,
+    "debug": false
+  },
+  "presets": {
+    "opencode": {
+      "orchestrator": {
+        "model": "opencode/laguna-s-2.1-free",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/hy3-free",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "opencode/laguna-s-2.1-free",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "opencode/laguna-s-2.1-free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "opencode-fallback": {
+      "orchestrator": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "low",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "opencode-alt": {
+      "orchestrator": {
+        "model": "opencode/hy3-free",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/hy3-free",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "opencode/hy3-free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "opencode-free": {
+      "orchestrator": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/laguna-s-2.1-free",
+        "variant": "medium",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "opencode/gpt-5-nano",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "variant": "medium",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "opencode/deepseek-v4-flash-free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "opencode-limited": {
+      "orchestrator": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "openrouter/z-ai/glm-5.2:free",
+        "variant": "high",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "openrouter/nvidia/nemotron-nano-12b-v2-vl:free",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "openrouter/poolside/laguna-xs-2.1:free",
+        "variant": "medium",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "openai": {
+      "orchestrator": {
+        "model": "openai/gpt-5.6-terra",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.6-sol",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "low",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "explorer": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "designer": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "medium",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "council": {
+        "model": "openai/gpt-5.6-terra",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "opencode-go": {
+      "orchestrator": {
+        "model": "opencode-go/minimax-m3",
+        "variant": "thinking",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode-go/qwen3.7-max",
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "explorer": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "librarian": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep"
+        ]
+      },
+      "designer": {
+        "model": "opencode-go/kimi-k2.7-code",
+        "skills": [],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion"
+        ]
+      },
+      "observer": {
+        "model": "opencode-go/mimo-v2.5",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode-go/minimax-m3",
+        "variant": "thinking",
+        "skills": [],
+        "mcps": []
+      }
+    }
+  },
+  "council": {
+    "presets": {
+      "opencode": {
+        "a": {
+          "model": "opencode/laguna-s-2.1-free",
+          "variant": "high"
+        },
+        "b": {
+          "model": "opencode/hy3-free",
+          "variant": "high"
+        },
+        "c": {
+          "model": "opencode/nemotron-3.5-lightning-free"
+        }
+      },
+      "opencode-fallback": {
+        "a": {
+          "model": "opencode/deepseek-v4-flash-free",
+          "variant": "high"
+        },
+        "b": {
+          "model": "opencode/nemotron-3-ultra-free"
+        },
+        "c": {
+          "model": "opencode/nemotron-3.5-lightning-free"
+        }
+      },
+      "opencode-alt": {
+        "a": {
+          "model": "opencode/hy3-free",
+          "variant": "high"
+        },
+        "b": {
+          "model": "opencode/nemotron-3.5-lightning-free"
+        },
+        "c": {
+          "model": "opencode/deepseek-v4-flash-free",
+          "variant": "high"
+        }
+      },
+      "opencode-free": {
+        "a": {
+          "model": "opencode/deepseek-v4-flash-free",
+          "variant": "high"
+        },
+        "b": {
+          "model": "opencode/nemotron-3.5-lightning-free",
+          "variant": "medium"
+        },
+        "c": {
+          "model": "opencode/laguna-s-2.1-free",
+          "variant": "medium"
+        }
+      },
+      "opencode-limited": {
+        "a": {
+          "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+          "variant": "high"
+        },
+        "b": {
+          "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+          "variant": "low"
+        },
+        "c": {
+          "model": "openrouter/z-ai/glm-5.2:free",
+          "variant": "high"
+        }
+      },
+      "openai": {
+        "a": {
+          "model": "openai/gpt-5.6-terra",
+          "variant": "high"
+        },
+        "b": {
+          "model": "openai/gpt-5.6-sol",
+          "variant": "high"
+        },
+        "c": {
+          "model": "openai/gpt-5.6-luna",
+          "variant": "low"
+        }
+      },
+      "opencode-go": {
+        "a": {
+          "model": "opencode-go/minimax-m3",
+          "variant": "thinking"
+        },
+        "b": {
+          "model": "opencode-go/qwen3.7-max",
+          "variant": "max"
+        },
+        "c": {
+          "model": "opencode-go/deepseek-v4-flash",
+          "variant": "high"
+        }
+      }
+    },
+    "default_preset": "opencode-alt"
+  }
+}
