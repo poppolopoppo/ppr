@@ -181,7 +181,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 
 ## Tool Usage
 Use tools in this priority order:
-1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging.
+1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging — platform-agnostic (identical on Windows/Linux/macOS), so prefer them over shell commands for search/listing/navigation; no pwsh/bash needed.
 2. **Internal tools** (read/edit/grep/glob/task) for file and content operations — reading and editing known files, quick text search, subagent delegation.
 3. **PowerShell (pwsh) only** for shell commands on Windows — never mix in other shells (Bash, cmd, Git Bash, etc.); use bash on Unix. `rg` (ripgrep) is an allowed exception for fast content search.
 
@@ -239,7 +239,7 @@ _(maintained by the `clonedeps` skill — empty until first run)_
 - `read` with `offset`/`limit`; never dump whole large files.
 
 ### Tool priority (fallback ladder, not exclusive)
-1. CLion MCP tools (`clion_search_symbol`, `clion_search_text`, `clion_get_compiler_info`) — language-aware, respects includes.
+1. CLion MCP tools — `clion_skill_search` (unified file/text/regex/symbol search), `clion_list_directory_tree` (directory listing), `clion_search_symbol`, `clion_get_compiler_info` — language-aware, respects includes, platform-agnostic (no shell needed).
 2. Internal `grep`/`glob` with exclusions.
 3. `pwsh` + `rg` with exclusion globs (last resort).
 - First `clion_search_*` after launch may be unindexed — tolerate.
