@@ -37,6 +37,24 @@ that route review work to `oracle` (`code-reviewer`) need an explicit grant:
 }
 ```
 
+## Preset Hierarchy
+
+The active preset is set by the top-level `"preset"` field in
+`~/.config/opencode/oh-my-opencode-slim.json`. Switch at runtime with `/preset <name>`.
+
+| Preset | Source | Cost | When to use |
+|--------|--------|------|-------------|
+| `ppr-free` | PPR custom (default) | $0 | Normal work — all-free models |
+| `ppr-pro` | PPR custom (opt-in) | $$ | Architecture decisions, multi-phase refactors, high-stakes `@council` |
+| `opencode-zen-free` | OMO curated | $0 | Fallback if `ppr-free` has issues |
+| `opencode-go` | OMO curated | $$ | Fallback if `ppr-pro` has issues |
+| `openai` | OMO curated | $$$ | Fallback if all else fails |
+
+**PPR-specific deviations from OMO defaults:**
+- `oracle` adds `code-reviewer` skill (PPR has extensive code review needs)
+- `fixer` adds 6 PPR skills: `module-architect`, `memory-allocator`, `build-system`, `clion-tools`, `unit-test-updater`, `validation`
+- `ppr-pro` council synth uses `minimax-m3` (different from oracle for diversity)
+
 ## Bundled OMO Skills — use these instead of reinventing them
 
 | Skill | Purpose | Invoke |
@@ -47,7 +65,6 @@ that route review work to `oracle` (`code-reviewer`) need an explicit grant:
 | `worktrees` | Isolated `.slim/worktrees/<slug>/` lanes for risky/parallel work | `work in a worktree` |
 | `simplify` | Behavior-preserving clarity refactor (owned by `oracle`) | ask for simplification, or during review |
 | `reflect` | Turns repeated friction into a reusable skill/agent/config change | `/reflect` |
-| `release-smoke-test` | Packed-artifact release validation | not generally applicable to PPR (npm-package oriented) |
 | `oh-my-opencode-slim` | Configure the plugin itself | ask to tune your setup |
 
 Run `/reflect` periodically, especially after adding a new custom skill — it

@@ -1,13 +1,37 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
-  "model": "opencode/big-pickle",
+  "model": "opencode/deepseek-v4-flash-free",
+  "preset": "opencode-free",
   "agent": {
     "plan": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "opencode/deepseek-v4-flash-free",
+      "description": "Orchestrator: best free reasoning coder (SWE 79%, LiveCodeBench 92%), effort=high. Fallback: nemotron-3-ultra-free (1M ctx)."
     },
     "build": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "opencode/deepseek-v4-flash-free",
+      "description": "Orchestrator build phase: same reasoning backbone as plan."
+    },
+    "oracle": {
+      "model": "opencode/deepseek-v4-flash-free",
+      "description": "Architecture/review: effort=high. Fallback: nemotron-3-ultra-free (1M ctx)."
+    },
+    "librarian": {
+      "model": "opencode/laguna-s-2.1-free",
+      "description": "Docs/research: 256K ctx, effort=medium. Fallback: hy3-free (GPQA 90%)."
+    },
+    "explore": {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "description": "Fast recon: 55tps + 1M ctx, effort=low. Fallback: gpt-5-nano (400K)."
+    },
+    "fixer": {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "maxSteps": 50,
+      "description": "Bounded implementation: fast HumanEval 77% edits, effort=medium. Fallback: big-pickle."
+    },
+    "designer": {
+      "model": "opencode/gpt-5-nano",
+      "description": "UI/UX: no free design specialist; fastest available, effort=low."
     }
   },
   "skills": { "paths": [".opencode/skills"] },
@@ -15,13 +39,15 @@
     "read": { "*": "allow" },
     "edit": { "*": "allow" },
     "bash": { "*": "allow", "rm -rf *": "deny", "sudo *": "deny" },
-    "clion_*": { "*": "allow" }
+    "clion_*": { "*": "allow" },
+    "doom_loop": "allow"
   },
   "mcp": {
     "clion": {
       "type": "remote",
       "url": "http://127.0.0.1:64362/stream",
-      "enabled": true
+      "enabled": true,
+      "timeout": 30000
     }
   }
 }
