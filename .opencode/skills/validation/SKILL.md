@@ -3,11 +3,12 @@ name: validation
 description: >
   Post-change validation checklist for the PPR engine. Compiles the FULL
   project in every build configuration relevant to the current platform,
-  runs the engine test suites, and reviews local modifications against
-  AGENTS.md. Use this skill whenever the user says "validate", "verify
-  before commit", "run engine tests", or after any code change. Builds
-  run in parallel background subagents; the code review runs serially in
-  the main flow.
+  runs the engine test suites, reviews local modifications against AGENTS.md,
+  and gates on CLion IDE inspections (get_file_problems) — zero remaining
+  errors/warnings on changed files. Use this skill whenever the user says
+  "validate", "verify before commit", "run engine tests", or after any code
+  change. Builds run in parallel background subagents; the code review and
+  inspection gate run serially in the main flow.
 ---
 
 # Validation
@@ -17,14 +18,17 @@ Run after every modification, before committing.
 ## Contract
 
 This skill performs post-change validation of the PPR engine. It **does not**
-edit any files, auto-fix issues, or modify the working tree. Its output is a
-validated, reconciled report covering build status per preset, test status per
-preset, code review findings by severity, and failure triage. The orchestrator
-drives the skill; configure/prepare runs sequentially in the main flow, build
-and test cycles are delegated to parallel background subagents, and the main
-lane never compiles or runs `ctest` itself. The skill is triggered by the
-orchestrator on commands such as "validate", "verify before commit", "run
-engine tests", or after any code change.
+edit any files itself, auto-fix issues inline, or modify the working tree.
+Its output is a validated, reconciled report covering build status per preset,
+test status per preset, code review findings by severity, and IDE inspection
+status (errors/warnings on changed files). The orchestrator drives the skill;
+configure/prepare runs sequentially in the main flow, build and test cycles
+are delegated to parallel background subagents, and the main lane never
+compiles or runs `ctest` itself. Remediation of any failure (build, test,
+review, or inspection) happens exclusively through delegated subagents
+(`@fixer` for bounded edits, `@oracle` for false-positive adjudication).
+The skill is triggered by the orchestrator on commands such as "validate",
+"verify before commit", "run engine tests", or after any code change.
 
 ## Subagent routing
 
@@ -32,8 +36,10 @@ engine tests", or after any code change.
 |------|-------------|-----|
 | Configure + build each preset | background `task` subagent per preset (general/fixer, shell access) | Heavy, parallelizable; keeps orchestrator lane free |
 | Run `EngineCoreTests` / `EngineAppTests` / `ctest` | same build subagent | Co-located with the build it validates |
+| IDE inspection gate (Step 1.5) | orchestrator (main flow, `clion` MCP) | Needs CLion MCP; uses `clion_git_status` + `clion_get_file_problems` |
 | Triage build/test failures | `@fixer` + `@oracle` | Bounded fixes and architecture calls |
-| Diff review (10 dimensions) | `code-reviewer` skill (or `@oracle`) | Independent review lane |
+| Triage inspection problems | `@fixer` (fix) + `@oracle` (false-positive adjudication) | Same machinery as other failures |
+| Diff review (11 dimensions) | `code-reviewer` skill (or `@oracle`) | Independent review lane |
 
 ## OMO feature wiring
 
@@ -46,8 +52,8 @@ engine tests", or after any code change.
   allow-list).
 - **Background orchestration** — launch one build subagent per preset in
   parallel (same message), reconcile all results on the Background Job Board
-  before the summary is presented; run the code review serially in the main
-  flow after all subagents return.
+  before the summary is presented; run the code review and inspection gate
+  serially in the main flow after all subagents return.
 - **Session reuse** — reuse one build subagent session across presets to
   amortize CMake cache warm-up (invalidate when the preset set or target area
   changes); reuse one read-only session for diff retrieval in Step 2.
@@ -122,10 +128,47 @@ Subagents must NOT rely on CLion MCP tools (they may be unavailable). Use
 
 Aggregate all subagent results before proceeding.
 
+## Step 1.5 — IDE inspection gate (main flow, CLion MCP)
+
+After builds/tests return and before code review, run an IDE inspection sweep
+on every changed file. This gate catches problems the compiler and tests miss
+(IntelliJ inspections: unused includes, deprecated APIs, module-partition
+naming, etc.).
+
+**Procedure:**
+1. Enumerate changed files. Prefer `clion_git_status(includeUntracked=true,
+   projectPath="E:/Code/ppr")` for project-aware enumeration; fall back to
+   shell `git status --porcelain` + `git diff --name-only HEAD` if CLion is
+   unreachable. Filter to source paths under `lib/`, `game/`, `include/`,
+   `cmake/`; exclude `out/`, `build/`, `_deps/`, `vcpkg_installed/`,
+   `cmake-build-*` (mirror `.gitignore`).
+2. Batch-call `clion_get_file_problems(filePath=<f>, errorsOnly=false,
+   projectPath="E:/Code/ppr")` per file — ~8 concurrent calls per message.
+   See `clion-tools` SKILL.md §6 for the exact signature.
+3. Collect all problems. Errors and warnings both block the gate.
+4. **Resolution loop** (max 3 rounds):
+   - Dispatch `@fixer` per problem/batch to fix.
+   - Re-run `clion_get_file_problems` on touched files only.
+   - **False-positive path (warnings only — errors are never suppressible):**
+     if `@fixer` reports a warning as a false positive, spawn `@oracle` to
+     adjudicate against the actual source. If `@oracle` confirms the false
+     positive, `@fixer` inserts a suppression comment (`//noinspection
+     <InspectionId>` / `// NOLINT`) citing the inspection ID and rationale.
+     If `@oracle` refutes, dispatch a NEW `@fixer` with explicit confirmation
+     that the issue is real.
+   - Suppressed warnings count as resolved but are listed in the report with
+     their justification.
+5. Exit: zero errors AND zero warnings (fixed or oracle-approved-suppressed)
+   → gate green. Leftovers after 3 rounds → blocking ❌ entries in the report.
+
+**Fallback:** if CLion MCP is unreachable, the gate is reported as
+**RED/SKIPPED** in the aggregate report — never silently green. Builds and
+tests are unaffected.
+
 ## Step 2 — Code review (serial, AGENTS.md)
 
-After all subagents return, load the `code-reviewer` skill in the MAIN flow
-and review the local modifications:
+After all subagents return and the inspection gate has resolved, load the
+`code-reviewer` skill in the MAIN flow and review the local modifications:
 
 ```bash
 git diff HEAD
@@ -133,12 +176,18 @@ git diff --cached
 git log --oneline -8
 ```
 
+The `code-reviewer` skill itself uses CLion MCP tools for evidence gathering
+(`clion_search_symbol`, `clion_search_text`, `clion_read_file`,
+`clion_get_file_problems`, etc.) — see that skill for details. Feed the
+inspection-problem list from Step 1.5 into the review so `[IDE]` findings and
+dimension findings reconcile.
+
 Classify changed files by zone (`lib/`, `game/`, `*Tests*`, `cmake/`) and
-review across the 10 dimensions: C++ standard usage, template complexity,
+review across the 11 dimensions: C++ standard usage, template complexity,
 memory patterns, cache behavior, threading model, exception safety/noexcept,
-compile-time/module impact, undefined behavior, design decisions, and
-`safe_ptr` lifetime. Produce a per-zone report with a severity summary
-(Error / Warning / Suggestion).
+compile-time/module impact, undefined behavior, design decisions, `safe_ptr`
+lifetime, and function design (honesty, signature empathy, abstraction levels).
+Produce a per-zone report with a severity summary (Error / Warning / Suggestion).
 
 Never weaken assertions or tests to silence a finding — fix the root cause.
 
@@ -148,6 +197,8 @@ Combine everything into one pass/fail summary:
 - Build status per preset (dev + live + rel).
 - Test status per preset (list any failures).
 - Review findings by severity (Error / Warning / Suggestion).
+- **Inspection status**: N files checked, X fixed, Y suppressed (with
+  rationale), Z open.
 
 All green → validation complete. Any red → Step 4.
 
@@ -156,13 +207,18 @@ All green → validation complete. Any red → Step 4.
 - **Build error:** read the error, fix the source, re-run only the affected
   preset's subagent (no need to rebuild unrelated presets).
 - **Test failure:** debug with CLion MCP tools in the main flow (preferred):
-  - `clion_xdebug_start_debugger_session(configurationName="EngineCoreTests")`
-  - `clion_xdebug_set_breakpoint(filePath=..., line=...)` at the failing test
-  - `clion_xdebug_control_session(action="RESUME")` → inspect → step.
+  - `clion_xdebug_start_debugger_session(configurationName="EngineCoreTests", projectPath="E:/Code/ppr")`
+  - `clion_xdebug_set_breakpoint(filePath=..., line=..., projectPath="E:/Code/ppr")` at the failing test
+  - `clion_xdebug_control_session(action="RESUME", projectPath="E:/Code/ppr")` → inspect → step.
   - Reproduce a single failure via the CLI when CLion is unavailable:
     `out/build/<preset>/EngineCoreTests --run-test <path>`.
 - **Review finding:** Errors and Warnings block the change; Suggestions are
   advisory.
+- **Inspection problem:** delegate fix to `@fixer` (bounded edits via
+  `clion_apply_patch` / `clion_create_new_file`). Warning false-positives
+  adjudicated by `@oracle` (confirmed FP → suppression comment via fixer;
+  refuted → new fixer told the issue is real). Re-run `clion_get_file_problems`
+  on touched files only; iterate ≤3 rounds. Leftovers → blocking ❌.
 
 ## Constraints
 
@@ -183,3 +239,7 @@ All green → validation complete. Any red → Step 4.
   best practice.
 - The main flow never compiles or runs `ctest` itself — build/test cycles
   always run in the background subagents.
+- **Inspection gate:** zero errors AND zero warnings on changed files (fixed
+  or oracle-approved-suppressed). Errors are never suppressible. Max 3
+  resolution rounds. CLion unreachable → gate reported RED/SKIPPED, never
+  silently green.

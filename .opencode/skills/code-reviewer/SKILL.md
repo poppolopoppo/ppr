@@ -3,10 +3,13 @@ name: code-reviewer
 description: >
   Reviews local git modifications against AGENTS.md conventions,
   modern C++ best practices for real-time applications (games/engines),
-  and AI prompt engineering principles. Use this skill whenever the
-  user says "review my changes", "check my code", "audit my changes",
-  "inspect the diff", "analyze the code", "does this follow the conventions",
-  or "code review please".
+  and AI prompt engineering principles. Uses CLion MCP tools for
+  index-backed evidence gathering (search_symbol, search_text, read_file,
+  get_file_problems) and gates completion on zero remaining IDE errors/
+  warnings on changed files (fixed or oracle-approved-suppressed).
+  Use this skill whenever the user says "review my changes", "check my
+  code", "audit my changes", "inspect the diff", "analyze the code",
+  "does this follow the conventions", or "code review please".
 ---
 
 # Code Reviewer
@@ -17,24 +20,33 @@ across ten dimensions.
 
 ## Contract
 
-This skill performs static code review across 10 dimensions of C++ quality
-and engine conventions. It does **not** edit code, auto-fix issues, or
-modify any files. Its output is a validated, reconciled report grouped by
-zone and severity. All findings undergo mandatory per-item validation against
-actual source code before presentation. The skill is triggered by the
-orchestrator on commands such as "review", "check my code", or "audit
-changes". The orchestrator drives the skill; diff retrieval is delegated to
-`@explorer`, dimension reviews and per-finding validation run as background
-`oracle` subagents, and the main lane only aggregates validated results.
+This skill performs static code review across 11 dimensions of C++ quality
+and engine conventions. It does **not** edit code inline, auto-fix issues
+itself, or modify any files. Its output is a validated, reconciled report
+grouped by zone and severity. All findings undergo mandatory per-item
+validation against actual source code before presentation. The skill is
+triggered by the orchestrator on commands such as "review", "check my code",
+or "audit changes". The orchestrator drives the skill; diff retrieval is
+delegated to `@explorer`, dimension reviews and per-finding validation run
+as background `oracle` subagents, and the main lane only aggregates
+validated results. Remediation of any finding (human-found or IDE-found)
+happens exclusively through delegated subagents (`@fixer` for bounded edits,
+`@oracle` for false-positive adjudication); the review is not complete
+until every Error/Warning on changed files is either fixed or
+oracle-approved-suppressed.
 
 ## Subagent routing
 
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Diff context retrieval (`git diff HEAD`, `git diff --cached`, `git log`) | `@explorer` | Isolated read-only shell; keeps main lane free |
+| Changed-file enumeration | `@explorer` | `clion_git_status` + `clion_get_repositories` for project-aware listing |
 | Zone classification of changed files | orchestrator | Cheap; needs the full diff context |
-| Dimension reviews (Step 3) | background `oracle` subagent per dimension | Parallelizable; each reviewer loads this skill |
-| Per-finding validation (Step 4) | background `oracle` subagent per finding | Mandatory parallel fact-check against actual source |
+| Dimension reviews (Step 3) | background `oracle` subagent per dimension | Parallelizable; each reviewer loads this skill and uses CLion MCP for evidence |
+| IDE inspection sweep (Step 3.5) | orchestrator (main flow, `clion` MCP) | `clion_get_file_problems` per changed file; produces `[IDE]`-tagged findings |
+| Per-finding validation (Step 4) | background `oracle` subagent per finding | Mandatory parallel fact-check against actual source; `[IDE]` findings exempt |
+| Fix application | `@fixer` | Bounded edits via `clion_apply_patch` / `clion_create_new_file` |
+| False-positive adjudication | `@oracle` | Confirms or refutes `@fixer` FP claims on warnings |
 | Verdict reconciliation + report (Steps 5–6) | orchestrator | Aggregation; only validated findings are presented |
 
 ## OMO feature wiring
@@ -43,8 +55,9 @@ changes". The orchestrator drives the skill; diff retrieval is delegated to
   and `mcps: ["*","!context7"]`; `@oracle` needs `skills: ["code-reviewer",
   "simplify"]` (explicit grant in `~/.config/opencode/oh-my-opencode-slim.json`
   or project-local override — `code-reviewer` is not in `oracle`'s default
-  allow-list); `@explorer` stays `skills: []` (read-only recon only, no skill
-  activation).
+  allow-list); `@oracle` subagents also benefit from `clion` MCP search tools
+  for evidence gathering; `@explorer` stays `skills: []` (read-only recon
+  only, no skill activation).
 - **Background orchestration** — launch the dimension reviews (Step 3) as
   parallel background `oracle` subagents, then the per-finding validation
   (Step 4) as one background subagent per finding; reconcile all verdicts on
@@ -54,7 +67,7 @@ changes". The orchestrator drives the skill; diff retrieval is delegated to
   changed files (invalidate a session when its `(agent-type, target area,
   file-glob)` key no longer matches the current diff).
 - **`orchestratorPrompt` routing** — trigger on "review", "check my code",
-  "audit my changes", "inspect the diff", "analyze the code", "does this
+  "audit my changes", "inspect my code", "analyze the code", "does this
   follow the conventions", or "code review please".
 
 ## Review Process
@@ -67,6 +80,12 @@ git diff --cached              # staged-only
 git log --oneline -8           # recent history for tone reference
 ```
 
+For project-aware changed-file enumeration, prefer:
+```
+clion_get_repositories(projectPath="E:/Code/ppr")
+clion_git_status(includeUntracked=true, projectPath="E:/Code/ppr")
+```
+
 Load `AGENTS.md`. Follow any `@include` references found in touched files.
 
 **Scope**: only files tracked by git. Untracked files, `build/`, and
@@ -76,16 +95,28 @@ vcpkg install paths are excluded automatically.
 
 | Zone | Path | Review depth |
 |------|------|-------------|
-| Engine code | `lib/*` | Full — all 10 dimensions |
-| Game code | `game/*` | Full — all 10 dimensions |
-| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 3, 8, 9, 10 |
+| Engine code | `lib/*` | Full — all 11 dimensions |
+| Game code | `game/*` | Full — all 11 dimensions |
+| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 3, 8, 9, 10, 11 |
 | Build system | `CMakeLists.txt`, `cmake/*.cmake` | Build correctness only |
 | Third-party wrappers | `cmake/external/*.cmake` | Minimal — version pin, no engine patches |
 | Config / docs | `*.md`, `*.json`, `.gitignore` | Skip |
 
-### Step 3 — Review across all 10 dimensions
+### Step 3 — Review across all 11 dimensions
 
 For each file in the diff, apply the relevant checklists below.
+
+**Evidence tooling:** reviewers cite via CLion MCP index-backed tools rather
+than raw grep/read — this directly attacks the documented wrong-line-number
+and false-positive failure mode. Use:
+- `clion_search_symbol(q=..., projectPath="E:/Code/ppr")` for definitions/usages
+- `clion_search_text(q=..., paths=[...], projectPath="E:/Code/ppr")` for literal evidence (forbidden casts, raw loops, `PPR_ASSERT` misuse in tests)
+- `clion_search_regex(q=..., paths=[...], projectPath="E:/Code/ppr")` for pattern evidence
+- `clion_read_file(file_path=..., offset=..., limit=..., projectPath="E:/Code/ppr")` for targeted reads (matches AGENTS.md targeted-reads rule)
+- `clion_list_directory_tree(directoryPath=..., maxDepth=..., projectPath="E:/Code/ppr")` for module-layout checks (Dimension 7)
+- `clion_get_compiler_info(filePath=..., projectPath="E:/Code/ppr")` for module flags / standard verification (Dimensions 1, 7)
+
+See `clion-tools` SKILL.md §1 for exact signatures.
 
 ---
 
@@ -231,35 +262,111 @@ For each file in the diff, apply the relevant checklists below.
 - Nested function calls that create temporary `safe_ptr` copies are safe as long as the pointed-to object lives until the return of the outermost call
 - `addGamepadPlayer` / `getOrCreateKeyboardPlayer` return `safe_ptr` that must be released before the corresponding `removePlayer` call
 
+### Dimension 11 — Function design (honesty & abstraction)
+
+Per AGENTS.md §Function Design Principles:
+
+- No hidden global/environment access outside the signature (global PRNG,
+  clock reads, static mutable locals, service lookups deep in leaf logic)
+- Dishonesty injected at the lowest possible level — I/O, logging side
+  effects, RNG seeding belong at call sites/top-level callers, not core logic
+- No wallet anti-pattern: functions take the fields they need, not whole
+  aggregates holding them
+- Parameters not over-constrained: `span<T>` / views accepted where only
+  iteration or contiguous access is needed; concrete containers not demanded
+- Ordering/invariant contracts encoded in types where they exist (receipt
+  parameters, invariant wrapper types like `Numeric<T, TagT>`)
+- One abstraction level per function body: no section-labeling comments, no
+  non-trivial raw-loop bodies, no zoom-in/zoom-out within a single function
+- Framework hooks (`Application::initialize/update/render`, `main`, input/
+  window callbacks) stay thin delegators
+- Ad-hoc data structures maintained manually across sibling functions are
+  flagged for encapsulation
+
+---
+
+### Step 3.5 — IDE inspection sweep
+
+After dimension reviews, run a CLion inspection sweep on every changed file.
+This catches problems the dimension checklists miss (unused includes,
+deprecated APIs, module-partition naming, etc.) and feeds the resolution gate.
+
+**Procedure:**
+1. Enumerate changed files (same list as Step 2).
+2. Batch-call `clion_get_file_problems(filePath=<f>, errorsOnly=false,
+   projectPath="E:/Code/ppr")` per file — ~8 concurrent calls per message.
+   See `clion-tools` SKILL.md §6 for the exact signature.
+3. Each returned problem becomes a finding tagged **`[IDE]`** with
+   provenance (inspection ID, severity, file:line). These findings enter
+   Steps 4–6 like any other finding but are **exempt from Step 4's
+   per-finding subagent fact-check** — IDE output is ground truth.
+
 ---
 
 ### Step 4 — Validate each finding (mandatory parallel fact-check)
 
-After the global review pass (Step 3) produces candidate findings, EVERY finding must be
-individually validated against the actual source BEFORE any result is presented to the user.
-This step is mandatory — never skip it and never present unvalidated findings.
+After the global review pass (Step 3) and IDE inspection sweep (Step 3.5)
+produce candidate findings, EVERY non-`[IDE]` finding must be individually
+validated against the actual source BEFORE any result is presented to the
+user. `[IDE]` findings are exempt (IDE = ground truth). This step is
+mandatory — never skip it and never present unvalidated findings.
 
 **Procedure:**
-1. Collect the complete list of candidate findings (all zones, all severities) from Step 3.
-2. Spawn ONE parallel subagent per finding (background, `oracle` type, each loading this
-   `code-reviewer` skill). Each subagent receives only its single finding and is instructed to:
-   - Read the ACTUAL cited source file(s) at the cited location — **never the full diff**.
-     (Reading the whole diff previously caused context exhaustion and wrong line numbers.)
+1. Collect the complete list of candidate findings (all zones, all severities)
+   from Steps 3 and 3.5, excluding `[IDE]`-tagged findings.
+2. Spawn ONE parallel subagent per finding (background, `oracle` type, each
+   loading this `code-reviewer` skill). Each subagent receives only its single
+   finding and is instructed to:
+   - Read the ACTUAL cited source file(s) at the cited location — **never the
+     full diff**. (Reading the whole diff previously caused context exhaustion
+     and wrong line numbers.)
    - Trace the real code path to confirm or refute the claim.
-   - Return `VERDICT: Confirmed | Partially correct | Incorrect | Cannot determine`,
-     with `Evidence` (file:line + key snippet) and an `Assessment` of whether the cited
-     severity is over/under-stated.
-3. Reconcile all verdicts. Drop or downgrade any finding rated `Incorrect`; keep `Partially
-   correct` only with its stated nuance. Present ONLY the validated, reconciled results to the
-   user, grouped by severity, and flag any finding corroborated by ≥2 reviewers as high confidence.
+   - Return `VERDICT: Confirmed | Partially correct | Incorrect | Cannot
+     determine`, with `Evidence` (file:line + key snippet) and an `Assessment`
+     of whether the cited severity is over/under-stated.
+3. Reconcile all verdicts. Drop or downgrade any finding rated `Incorrect`;
+   keep `Partially correct` only with its stated nuance. Present ONLY the
+   validated, reconciled results to the user, grouped by severity, and flag
+   any finding corroborated by ≥2 reviewers as high confidence.
 
-**Why:** The global pass alone produced false positives — including two fabricated ❌ Errors and
-several wrong line numbers. Per-item validation against source catches misreadings before they
-reach the user.
+**Why:** The global pass alone produced false positives — including two
+fabricated ❌ Errors and several wrong line numbers. Per-item validation
+against source catches misreadings before they reach the user.
 
 ---
 
-### Step 5 — Generate per-zone report
+### Step 5 — Resolution gate (delegated, not inline)
+
+Before the final report issues, every Error and Warning finding (human-found
+or `[IDE]`-tagged) must be resolved. The reviewer never edits inline;
+remediation happens exclusively through delegation.
+
+**Loop** (max 3 rounds):
+1. Dispatch `@fixer` per finding/batch to fix (bounded edits via
+   `clion_apply_patch` / `clion_create_new_file`).
+2. Re-run `clion_get_file_problems` on touched files only.
+3. **False-positive path (warnings only — errors are never suppressible):**
+   if `@fixer` reports a warning as a false positive, spawn `@oracle` to
+   adjudicate against the actual source.
+   - `@oracle` confirms false positive → `@fixer` inserts a suppression
+     comment (`//noinspection <InspectionId>` / `// NOLINT`) citing the
+     inspection ID and rationale.
+   - `@oracle` refutes → dispatch a NEW `@fixer` with explicit confirmation
+     that the issue is real.
+4. Suppressed warnings count as resolved but are listed in the report with
+   their justification.
+
+**Exit:** zero errors AND zero warnings (fixed or oracle-approved-suppressed)
+→ gate green. Leftovers after 3 rounds → blocking ❌ entries in the final
+report.
+
+**Suppression-comment policy:** suppression comments are exceptional and
+reconcile with Dimension 9's no-comments rule by requiring oracle
+confirmation + a cited rationale. Errors are never suppressible.
+
+---
+
+### Step 6 — Generate per-zone report
 
 Each finding uses this structure:
 
@@ -290,16 +397,19 @@ return {ptr, size};
 
 ---
 
-### Step 6 — Summary table
+### Step 7 — Summary table
 
 ```
 ## Summary
 
-| Zone | ❌ Error | ⚠️ Warning | 💡 Suggestion |
-|------|---------|-----------|--------------|
-| lib/ | 2 | 5 | 8 |
-| game/ | 0 | 1 | 3 |
-| cmake/ | 0 | 0 | 1 |
+| Zone | ❌ Error | ⚠️ Warning | 💡 Suggestion | IDE (fixed/suppressed/open) |
+|------|---------|-----------|--------------|----------------------------|
+| lib/ | 2 | 5 | 8 | 3 / 1 / 0 |
+| game/ | 0 | 1 | 3 | 0 / 0 / 0 |
+| cmake/ | 0 | 0 | 1 | 0 / 0 / 0 |
+
+**Suppressed (with rationale):**
+- `lib/engine/foo.h:42` — InspectionId `UnusedInclude` — rationale: ...
 
 **Most critical**: Memory leak in lib/Core.Foo.cppm:156 (Error)
 ```
@@ -312,7 +422,10 @@ return {ptr, size};
   and `out/` (mirror `.gitignore`).
 - Every finding must cite a specific AGENTS.md rule or named C++ best
   practice; never present unvalidated findings (Step 4 is mandatory).
-- Never edit code, auto-fix issues, or modify files — the report is the only
-  output.
+- The reviewer never edits code inline; remediation happens exclusively via
+  delegated subagents (`@fixer` for fixes, `@oracle` for FP adjudication).
 - Test files must use `PPR_TEST_ASSERT`; flag any `PPR_ASSERT`/`PPR_VERIFY`
   inside `PPR_UNIT_TEST` bodies.
+- Suppression comments are exceptional, require oracle confirmation, and
+  must cite the inspection ID + rationale. Errors are never suppressible.
+- Resolution gate: max 3 rounds; leftovers are blocking ❌.

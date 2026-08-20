@@ -37,24 +37,6 @@ that route review work to `oracle` (`code-reviewer`) need an explicit grant:
 }
 ```
 
-## Preset Hierarchy
-
-The active preset is set by the top-level `"preset"` field in
-`~/.config/opencode/oh-my-opencode-slim.json`. Switch at runtime with `/preset <name>`.
-
-| Preset | Source | Cost | When to use |
-|--------|--------|------|-------------|
-| `ppr-free` | PPR custom (default) | $0 | Normal work — all-free models |
-| `ppr-pro` | PPR custom (opt-in) | $$ | Architecture decisions, multi-phase refactors, high-stakes `@council` |
-| `opencode-zen-free` | OMO curated | $0 | Fallback if `ppr-free` has issues |
-| `opencode-go` | OMO curated | $$ | Fallback if `ppr-pro` has issues |
-| `openai` | OMO curated | $$$ | Fallback if all else fails |
-
-**PPR-specific deviations from OMO defaults:**
-- `oracle` adds `code-reviewer` skill (PPR has extensive code review needs)
-- `fixer` adds 6 PPR skills: `module-architect`, `memory-allocator`, `build-system`, `clion-tools`, `unit-test-updater`, `validation`
-- `ppr-pro` council synth uses `minimax-m3` (different from oracle for diversity)
-
 ## Bundled OMO Skills — use these instead of reinventing them
 
 | Skill | Purpose | Invoke |
@@ -198,7 +180,7 @@ Do NOT preemptively load all references. Treat loaded content as mandatory instr
 
 ## Tool Usage
 Use tools in this priority order:
-1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging — platform-agnostic (identical on Windows/Linux/macOS), so prefer them over shell commands for search/listing/navigation; no pwsh/bash needed.
+1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging.
 2. **Internal tools** (read/edit/grep/glob/task) for file and content operations — reading and editing known files, quick text search, subagent delegation.
 3. **PowerShell (pwsh) only** for shell commands on Windows — never mix in other shells (Bash, cmd, Git Bash, etc.); use bash on Unix. `rg` (ripgrep) is an allowed exception for fast content search.
 
@@ -256,7 +238,7 @@ _(maintained by the `clonedeps` skill — empty until first run)_
 - `read` with `offset`/`limit`; never dump whole large files.
 
 ### Tool priority (fallback ladder, not exclusive)
-1. CLion MCP tools — `clion_skill_search` (unified file/text/regex/symbol search), `clion_list_directory_tree` (directory listing), `clion_search_symbol`, `clion_get_compiler_info` — language-aware, respects includes, platform-agnostic (no shell needed).
+1. CLion MCP tools (`clion_search_symbol`, `clion_search_text`, `clion_get_compiler_info`) — language-aware, respects includes.
 2. Internal `grep`/`glob` with exclusions.
 3. `pwsh` + `rg` with exclusion globs (last resort).
 - First `clion_search_*` after launch may be unindexed — tolerate.
@@ -303,9 +285,40 @@ _(maintained by the `clonedeps` skill — empty until first run)_
 - Inlining: `PPR_FORCE_INLINE` (hot paths), `PPR_NO_INLINE` (prevent), `PPR_FLATTEN` (recursive).
 - Attributes: `PPR_EMPTY_BASES` (MSVC stateless wrappers), `PPR_LIFETIME_BOUND` (reference lifetime deps).
 - Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), and internal helper macros (stringize, concat, pragma, etc.). Test-only macros (`PPR_UNIT_TEST`, `PPR_TEST_ASSERT`, `PPR_UNIT_TEST_ERRC`) live in `lib/engine/tests/include/pP/UnitTest.h`, not in `Macros.h`. No macros from other sources.
+- Function & API design follows §Function Design Principles below — honest signatures, empathetic parameters, type-encoded contracts, one abstraction level per body.
+
+## Function Design Principles
+
+Normative rules for designing functions and APIs. Enforced by `code-reviewer`
+Dimension 11; refactors and new code follow them too.
+
+### Honesty
+- A function accesses the outside world **only through its signature** — never reads or writes state invisible to callers (clock, global/static mutable state, conjured singletons).
+- Dishonesty is infectious: a caller that invokes a dishonest function is dishonest itself, so honest functions sit at call-tree leaves.
+- Maximize honest functions; **inject dishonesty at the topmost level**. I/O, time, RNG seeding, and service resolution happen near `Application` and service-store layers; core logic receives dependencies as parameters (pass a PRNG in and seed it dishonestly at the call site — never conjure a global generator inside).
+
+### Empathetic signatures
+- Accept the weakest thing you need: `span<T>`/views over concrete containers; individual fields over whole aggregates (no wallet anti-pattern).
+- Use a marshalling parameter struct when many same-typed arguments would otherwise invite transposition errors.
+- Prevent accidental conversions with strong types (`Numeric<T, TagT>`).
+
+### Type-encoded contracts
+- Encode preconditions as wrapper types establishing invariants at construction (normalized-vector style); make conversion back cheap/implicit.
+- Encode ordering contracts as receipt parameters (e.g., pass the lock guard to prove the mutex is held).
+- Specialize idempotent operations on invariant types; do not encode every pre/postcondition in types — know where the line is.
+
+### Golden rule: one abstraction level per body
+- Every line of a function body sits at the same level of abstraction; zooming in means calling another function.
+- Section-labeling comments are the smell → split into brick functions. This is the rationale behind the no-raw-loops rule above.
+- Encapsulate ad-hoc data structures maintained by hand across sibling functions (e.g., a case-insensitive name→asset map) instead of mirroring their invariants manually in each function.
+
+### Thin framework hooks
+- `Application::initialize/update/render`, `main`, input/window listeners delegate immediately into engine code; hooks glue, they don't work.
+
+### Sketch-first workflow
+- Call the function you wish existed at the right abstraction level, then go implement it ("write the functions you want to see in the world").
 
 ## Type Safety
-- `checked_cast<ToT>(v)` — safe narrowing/widening + downcast (dynamic_cast debug, static_cast release).
 - `safe_narrowing<IntT>` — tag type asserting round-trip on implicit conversion.
 - Integer shorthands: `u8/u16/u32/u64/i8/i16/i32/i64` (Core.Types.cppm).
 - Sentinel values: `default_value_v`, `zero_v`, `none_v`, `umax_v`.

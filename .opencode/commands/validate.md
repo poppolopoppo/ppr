@@ -10,7 +10,7 @@ Run the `validation` skill against the current working tree.
 1. Detect the platform and the relevant CMake presets (Windows → msvc-dev/msvc-live/msvc-rel; Unix → clang-dev/clang-rel).
 2. Configure and build the FULL project in each preset using parallel background subagents (one per preset).
 3. Run the engine test suites (`EngineCoreTests`, `EngineAppTests` / `ctest`) for each preset.
-4. Review the local git diff against AGENTS.md conventions across 10 dimensions.
+4. Review the local git diff against AGENTS.md conventions across 11 dimensions.
 5. Produce a single pass/fail summary: build status per preset, test status per preset, and review findings by severity (Error / Warning / Suggestion).
 
 ## Orchestration notes

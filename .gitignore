@@ -607,6 +607,7 @@ http-client.private.env.json
 # opencode planning and runtime artifacts
 .opencode/plans/
 .opencodec/
+.slim/deepwork/
 
 # ImGui runtime state
 imgui.ini

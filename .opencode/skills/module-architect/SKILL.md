@@ -504,6 +504,9 @@ and build registration across commits.
   App test modules use `import engine.app;`.
 - Platform HAL sources follow the `Core.HAL.<platform>.<Area>.cpp` naming and are
   collected via `${HAL_PLATFORM_SOURCES}` in CMake.
+- Exported partition APIs follow AGENTS.md §Function Design Principles — honest
+  signatures (no hidden global/service access inside leaf logic) and minimal
+  parameter requirements (`span`/fields over aggregates).
 
 ## Orchestrator & OMO Integration
 

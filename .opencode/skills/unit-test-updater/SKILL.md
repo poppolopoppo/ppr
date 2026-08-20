@@ -55,6 +55,7 @@ of the change:
 | New overload | Add test for new overload signatures |
 | New enum/constant | Test value, bitwise ops for bitmask enums, `hashValue` |
 | Bug fix | Add a test that reproduces the bug; assert fix |
+| Logic extracted from a dishonest caller into an honest function | Add tests exercising it via injected dependencies (fixed PRNG seed, injected time/context) |
 | Internal/private change | No test needed (test through public API) |
 | Deleted API | Remove/update corresponding test |
 
@@ -92,6 +93,8 @@ of the change:
 - Relocatability trait (if type should be relocatable)
 - Guarded/precondition edge cases (inputs that trigger `PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE` — use `UnitTest::expect_fail`)
 - Crash-expected paths (use-after-free, double-free, ASAN poison reads — use `UnitTest::expect_crash`)
+- Honest-function determinism: test extracted honest functions via injected dependencies — fixed PRNG seed for reproducibility, injected time/context instead of reading clock/globals
+- Framework hooks stay thin delegators: test the delegated engine function, not the hook body
 
 ### Guarded edge cases
 
