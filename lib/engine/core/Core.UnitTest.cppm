@@ -133,6 +133,8 @@ namespace pP {
 
             bool m_is_child_run = false;
 
+            mutable u32 m_num_executed{0u};
+
             void setFilter(std::string_view path) noexcept;
 
             [[nodiscard]] bool hasFilter() const noexcept;
@@ -142,6 +144,10 @@ namespace pP {
             void markAsChildRun() noexcept;
 
             [[nodiscard]] bool filterMatches(const std::string_view path) const noexcept;
+
+            [[nodiscard]] u32 numExecuted() const noexcept {
+                return m_num_executed;
+            }
         };
 
 

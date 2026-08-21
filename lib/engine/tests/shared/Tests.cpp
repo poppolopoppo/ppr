@@ -49,6 +49,7 @@ namespace pP::tests {
                     "Usage: <test> [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--help]\n"
                     "\n"
                     "  --run-test <path>   Run a specific test (or subtree) by path\n"
+                    "                  If the filter matches no tests, the exit code will be non-zero\n"
                     "  --child-run         Mark this process as a child (forked) test runner\n"
                     "  --shuffle [<seed>]  Randomize test execution order (default: on, auto-seed)\n"
                     "  --no-shuffle        Disable test shuffling (declaration order)\n"
@@ -74,6 +75,10 @@ namespace pP::tests {
         hal::disableSystemErrorReporting();
         hal::installDebugAssertHooks();
 
+        if (cli.m_context.hasFilter()) {
+            std::cerr << "[Filter: " << cli.m_context.m_filter_path << "]" << std::endl;
+        }
+
         for (unsigned iter = 0u; iter < cli.m_loops; ++iter) {
             if (iter > 0 && cli.m_context.m_shuffle_seed.has_value()) {
                 std::random_device rng{};
@@ -81,13 +86,19 @@ namespace pP::tests {
             }
             if (cli.m_loops > 1 && cli.m_context.m_shuffle_seed.has_value()) {
                 std::cout << "[Running tests][Loop: " << iter << "/" << cli.m_loops
-                        << "][Shuffle: " << std::hex << std::uppercase
-                        << std::setw(16) << std::setfill('0')
-                        << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]"
-                        << std::endl;
+                            << "][Shuffle: " << std::hex << std::uppercase
+                            << std::setw(16) << std::setfill('0')
+                            << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]"
+                            << std::endl;
             }
             UnitTest::run(cli.m_context, root);
         }
+
+        if (cli.m_context.hasFilter() && cli.m_context.numExecuted() == 0u) {
+            std::cerr << "error: filter '" << cli.m_context.m_filter_path << "' matched no tests" << std::endl;
+            g_tests_failed = true;
+        }
+
         return g_tests_failed ? -1 : 0;
     }
 }

@@ -246,6 +246,10 @@ namespace pP {
 #endif
 
         m_start_time = std::chrono::steady_clock::now();
+
+        if (m_parent != nullptr) {
+            m_context.m_num_executed++;
+        }
     }
 
     void UnitTest::RunImpl::stop() noexcept {
