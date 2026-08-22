@@ -21,11 +21,11 @@ export namespace pP {
 
     struct InputMessage {
         InputKey m_key;
-        InputValue m_value;
+        InputValue m_value{};
 
-        TimeSpan m_delta_time;
-        InputDeviceID m_device_id;
-        EInputMessageEvent m_event;
+        TimeSpan m_delta_time{zero_v};
+        InputDeviceID m_device_id{};
+        EInputMessageEvent m_event{};
 
         constexpr InputMessage(
             InputKey key,

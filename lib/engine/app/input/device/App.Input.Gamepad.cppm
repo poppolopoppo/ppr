@@ -38,6 +38,8 @@ export namespace pP {
 
         void setButtonPressed(EGamepadButton button);
 
+        void setRumble(float left, float right);
+
         void update(TimeSpan dt);
 
         void reset();
@@ -50,9 +52,9 @@ export namespace pP {
     class GamepadDevice : public IInputDevice {
     public:
         GamepadState m_state{};
-        InputDeviceID m_device_id;
+        InputDeviceID m_device_id{};
 
-        explicit GamepadDevice(InputDeviceID device_id, std::size_t controller_index) noexcept;
+        explicit GamepadDevice(const InputDeviceID &device_id, std::size_t controller_index) noexcept;
 
         ~GamepadDevice() noexcept override;
 
