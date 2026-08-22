@@ -113,6 +113,11 @@ export namespace pP::tests {
         ctrl.activate(input, cam);
         ctrl.update(std::chrono::milliseconds{16});
 
+        InputMapping mapping{"FreeCameraTest"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addMapping(SharedInputMapping{&mapping}, 0);
+
         const float3 initial = cam.position();
         const InputMessage msg{
             InputKey::w,
@@ -120,21 +125,22 @@ export namespace pP::tests {
             TimeSpan{},
             InputDeviceID{0u},
             EInputMessageEvent::pressed};
-        if (input.m_listener) {
-            (void)input.m_listener->postKeyEvent(msg);
-        }
+        (void)listener.postKeyEvent(msg);
         ctrl.update(std::chrono::milliseconds{16});
         PPR_TEST_ASSERT(std::isfinite(cam.position().x));
         PPR_TEST_ASSERT(distance(cam.position(), initial) > kEps);
+        // W should move the camera forward (toward the look target). At yaw=0, pitch=0,
+        // forward = (0,0,-1), so W moves the eye in -Z direction.
+        PPR_TEST_ASSERT(cam.position().z < initial.z);
         ctrl.deactivate();
     };
 
     PPR_UNIT_TEST(lookat_canonical) {
         const float4x4 view = lookAt(float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 0.0f, -1.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 expected{
-            float4{-1.0f, 0.0f, 0.0f, 0.0f},
+            float4{ 1.0f, 0.0f, 0.0f, 0.0f},
             float4{ 0.0f, 1.0f, 0.0f, 0.0f},
-            float4{ 0.0f, 0.0f, -1.0f, 0.0f},
+            float4{ 0.0f, 0.0f, 1.0f, 0.0f},
             float4{ 0.0f, 0.0f, 0.0f, 1.0f}};
         PPR_TEST_ASSERT(matEq(view, expected));
     };
@@ -160,7 +166,7 @@ export namespace pP::tests {
         const float d = distance(eye, target);
         PPR_TEST_ASSERT(std::abs(target_view.x) < kEps);
         PPR_TEST_ASSERT(std::abs(target_view.y) < kEps);
-        PPR_TEST_ASSERT(std::abs(target_view.z - d) < kEps);
+        PPR_TEST_ASSERT(std::abs(target_view.z + d) < kEps);
         PPR_TEST_ASSERT(std::abs(target_view.w - 1.0f) < kEps);
     };
 
@@ -212,6 +218,11 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(not matEq(cam.projection(), float4x4{}));
         ctrl.update(std::chrono::milliseconds{16});
 
+        InputMapping mapping{"PanCameraTest"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addMapping(SharedInputMapping{&mapping}, 0);
+
         const float3 initial = cam.position();
         const InputMessage msg{
             InputKey::w,
@@ -219,12 +230,13 @@ export namespace pP::tests {
             TimeSpan{},
             InputDeviceID{0u},
             EInputMessageEvent::pressed};
-        if (input.m_listener) {
-            (void)input.m_listener->postKeyEvent(msg);
-        }
+        (void)listener.postKeyEvent(msg);
         ctrl.update(std::chrono::milliseconds{16});
         PPR_TEST_ASSERT(std::isfinite(cam.position().x));
         PPR_TEST_ASSERT(distance(cam.position(), initial) > kEps);
+        // W should move the camera forward (toward the look target). At yaw=0, pitch=0,
+        // forward = (0,0,-1), so W moves the eye in -Z direction.
+        PPR_TEST_ASSERT(cam.position().z < initial.z);
         ctrl.deactivate();
     };
 
@@ -307,12 +319,75 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(cam.velocity().z - 3.0f) < kEps);
     };
 
+    // Camera cuts are opt-in (teleport/reset only): a cut frame zeroes velocity and
+    // re-baselines history so the teleport delta never leaks into later frames.
+    PPR_UNIT_TEST(camera_cut_velocity) {
+        Camera cam;
+        cam.setPosition(float3{0.0f, 0.0f, 0.0f});
+        cam.update(std::chrono::seconds{1});
+
+        // Normal movement produces velocity.
+        cam.updateModel(CameraModel{float3{1.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false});
+        cam.update(std::chrono::seconds{1});
+        PPR_TEST_ASSERT(std::abs(cam.velocity().x - 1.0f) < kEps);
+
+        // A cut frame zeroes velocity despite the position jump.
+        cam.updateModel(CameraModel{float3{5.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true});
+        cam.update(std::chrono::seconds{1});
+        PPR_TEST_ASSERT(std::abs(cam.velocity().x) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.velocity().y) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.velocity().z) < kEps);
+
+        // Tracking resumes from the post-cut baseline: no teleport spike.
+        cam.updateModel(CameraModel{float3{6.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false});
+        cam.update(std::chrono::seconds{1});
+        PPR_TEST_ASSERT(std::abs(cam.velocity().x - 1.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.velocity().y) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.velocity().z) < kEps);
+    };
+
+    // A singular view-projection must not poison planes/corners/bbox with NaN.
+    PPR_UNIT_TEST(frustum_degenerate_matrix) {
+        Frustum frustum;
+        const float4x4 singular{
+            float4{0.0f, 0.0f, 0.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 0.0f}};
+        frustum.setMatrix(singular, rhi::EProjectionConvention::D3D);
+
+        constexpr EFrustumPlane kPlanes[]{
+            EFrustumPlane::Near, EFrustumPlane::Far,
+            EFrustumPlane::Left, EFrustumPlane::Right,
+            EFrustumPlane::Top, EFrustumPlane::Bottom};
+        PPR_TEST_ASSERT(std::ranges::all_of(kPlanes, [&](const EFrustumPlane p) noexcept {
+            const float4 &pl = frustum.plane(p);
+            return std::isfinite(pl.x) && std::isfinite(pl.y)
+                && std::isfinite(pl.z) && std::isfinite(pl.w);
+        }));
+
+        constexpr EFrustumCorner kCorners[]{
+            EFrustumCorner::NearLeftTop, EFrustumCorner::NearLeftBottom,
+            EFrustumCorner::NearRightBottom, EFrustumCorner::NearRightTop,
+            EFrustumCorner::FarLeftTop, EFrustumCorner::FarLeftBottom,
+            EFrustumCorner::FarRightBottom, EFrustumCorner::FarRightTop};
+        PPR_TEST_ASSERT(std::ranges::all_of(kCorners, [&](const EFrustumCorner c) noexcept {
+            const float3 cr = frustum.corner(c);
+            return std::isfinite(cr.x) && std::isfinite(cr.y) && std::isfinite(cr.z);
+        }));
+
+        PPR_TEST_ASSERT(std::isfinite(frustum.boundingMin().x));
+        PPR_TEST_ASSERT(std::isfinite(frustum.boundingMax().x));
+    };
+
     PPR_UNIT_TEST(app_camera) {
         _.recurse({
             camera_model,
             camera_service_init,
             camera_viewport_size,
             camera_velocity,
+            camera_cut_velocity,
+            frustum_degenerate_matrix,
             camera_service_projection,
             replay_round_trip,
             replay_recording_control,
