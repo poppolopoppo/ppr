@@ -14,6 +14,7 @@ target_sources(EngineAppTests
             App.Shader.Tests.cppm
             App.Viewport.Tests.cppm
             App.PixelReadback.Tests.cppm
+            App.Quaternion.Tests.cppm
     )
 
 setup_ppr_project(EngineAppTests

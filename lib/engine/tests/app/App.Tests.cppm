@@ -14,6 +14,7 @@ import :shader;
 import :viewport;
 import :pixel_readback;
 import :camera;
+import :quaternion;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(app) {
@@ -28,6 +29,7 @@ export namespace pP::tests {
             app_viewport,
             app_pixel_readback,
             app_camera,
+            app_quaternion,
         });
     };
 }
