@@ -26,10 +26,6 @@ namespace demo {
         }
 
         std::error_code update() override {
-            if (time::since(*m_started_at) > std::chrono::seconds(5)) {
-                return make_error_code(std::errc::timed_out);
-            }
-
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update());
 
 #if PPR_ENABLE_DEBUG
