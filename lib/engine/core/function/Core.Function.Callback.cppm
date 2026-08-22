@@ -24,35 +24,45 @@ export namespace pP {
         class [[nodiscard]] Handle final {
             const Callback *m_callback{nullptr};
             SparseKeyId m_event_key{};
+            std::shared_ptr<std::atomic<bool> > m_alive{};
 
         public:
             constexpr Handle() = default;
 
             Handle(const Callback &callback, const SparseKeyId &event_key) noexcept
-                : m_callback(std::addressof(callback)), m_event_key(event_key) {
+                : m_callback(std::addressof(callback)), m_event_key(event_key), m_alive(callback.m_alive) {
             }
 
             Handle(const Handle &) = delete;
+
             Handle &operator=(const Handle &) = delete;
 
             Handle(Handle &&other) noexcept
                 : m_callback(std::exchange(other.m_callback, nullptr)),
-                  m_event_key(std::exchange(other.m_event_key, default_value_v)) {
+                  m_event_key(std::exchange(other.m_event_key, default_value_v)),
+                  m_alive(std::exchange(other.m_alive, nullptr)) {
             }
 
             Handle &operator=(Handle &&other) noexcept {
                 if (this != std::addressof(other)) {
-                    if (m_callback != nullptr) {
+                    if (m_callback != nullptr && m_alive && m_alive->load(std::memory_order_acquire)) {
                         std::ignore = m_callback->remove(m_event_key);
                     }
                     m_callback = std::exchange(other.m_callback, nullptr);
                     m_event_key = std::exchange(other.m_event_key, default_value_v);
+                    m_alive = std::exchange(other.m_alive, nullptr);
                 }
                 return *this;
             }
 
-            ~Handle() {
-                if (m_callback != nullptr) {
+            ~Handle() noexcept {
+                // Single-threaded contract: Handle destruction must not race with
+                // Callback destruction. The shared liveness flag synchronizes the
+                // Callback's release-store with the Handle's acquire-load, but the
+                // Callback object itself is not reference-counted — callers must
+                // guarantee the Callback outlives all Handles, or destroy Handles
+                // before the owning object.
+                if (m_callback != nullptr && m_alive && m_alive->load(std::memory_order_acquire)) {
                     std::ignore = m_callback->remove(m_event_key);
                     m_callback = nullptr;
                 }
@@ -78,6 +88,12 @@ export namespace pP {
 
         explicit Callback(AllocatorT &&alloc) noexcept
             : m_events(std::forward<AllocatorT>(alloc)) {
+        }
+
+        ~Callback() noexcept {
+            if (m_alive) {
+                m_alive->store(false, std::memory_order_release);
+            }
         }
 
         [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
@@ -116,29 +132,41 @@ export namespace pP {
         // The remove() call during operator()() iteration is unsafe (iterator
         // invalidation) and callers must defer removals outside the dispatch loop.
         mutable SparseVectorInplace<Event, AllocatorT> m_events;
+        // Shared liveness flag: the Callback holds one reference and each Handle
+        // holds another. When the Callback is destroyed, it sets the flag to
+        // false; the flag's storage outlives the Callback because Handles still
+        // hold a shared_ptr to it. This prevents Handle::~Handle() from
+        // dereferencing a dangling Callback* when the owning object is destroyed
+        // before the Handle.
+        std::shared_ptr<std::atomic<bool> > m_alive = std::make_shared<std::atomic<bool> >(true);
     };
 
     namespace details {
         template<typename T>
-        struct ForwardAsLValue : std::type_identity<T> {};
+        struct ForwardAsLValue : std::type_identity<T> {
+        };
 
         template<TSafeObject T>
-        struct ForwardAsLValue<T &> : std::type_identity<safe_ptr<T>> {};
+        struct ForwardAsLValue<T &> : std::type_identity<safe_ptr<T> > {
+        };
 
         template<TSafeObject T>
-        struct ForwardAsLValue<T *> : std::type_identity<safe_ptr<T>> {};
+        struct ForwardAsLValue<T *> : std::type_identity<safe_ptr<T> > {
+        };
 
         template<TSafeObject T>
-        struct ForwardAsLValue<const T &> : std::type_identity<safe_ptr<const T>> {};
+        struct ForwardAsLValue<const T &> : std::type_identity<safe_ptr<const T> > {
+        };
 
         template<TSafeObject T>
-        struct ForwardAsLValue<const T *> : std::type_identity<safe_ptr<const T>> {};
+        struct ForwardAsLValue<const T *> : std::type_identity<safe_ptr<const T> > {
+        };
 
         template<typename... ArgsT>
-        struct ForwardAsLValue<std::tuple<ArgsT...>> {
+        struct ForwardAsLValue<std::tuple<ArgsT...> > {
             using type = std::tuple<
                 typename ForwardAsLValue<ArgsT>::type...
-                >;
+            >;
         };
     }
 
