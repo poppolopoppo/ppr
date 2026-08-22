@@ -85,6 +85,7 @@ export namespace pP {
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
         bool m_should_close{false};
+        bool m_focused{true};
 
         // Cold (init/shutdown only)
         ServicesStore m_services{};
@@ -94,7 +95,9 @@ export namespace pP {
         ViewportConfig m_ui_viewport{};
         context::CancelFunc m_cancel{};
         WindowCallback<int2>::Handle m_resize_handle{};
-        std::error_code onWindowResized_(const Window &window, int2 old_size);
+        WindowCallback<bool>::Handle m_focus_handle{};
+        std::error_code onWindowResized_(const Window &window, const int2 &old_size);
+        std::error_code onWindowFocused_(const Window &window [[maybe_unused]], bool focused) noexcept;
         EState m_state{EState::created};
 
         // Cold (init-time)

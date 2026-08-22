@@ -26,7 +26,8 @@ namespace pP {
     Application::Application(const std::string_view name, const std::span<const char *const> argv)
         : m_platform(IPlatform::get()),
           m_arguments(argv.begin(), argv.end()),
-          m_name(name) {
+          m_name(name),
+          m_focused{true} {
         PPR_ASSERT(m_platform != nullptr);
     }
 
@@ -94,7 +95,7 @@ namespace pP {
         std::ignore = m_services.insert(safe_ptr<IInputService>{&m_input_replay});
         m_cached_input_service = m_services.get<IInputService>();
         std::ignore = m_camera_service.initialize(*m_services.get<IInputService>());
-        std::ignore = m_services.insert(safe_ptr<ICameraService>{&m_camera_service});
+        std::ignore = m_scene_services.insert(safe_ptr<ICameraService>{&m_camera_service});
 
         if (auto result = m_cached_window_service->createWindow(WindowModel{
             .m_title = m_name,
@@ -129,6 +130,9 @@ namespace pP {
             m_resize_handle = m_main_window->m_when_resized.add(
                 std23::function_ref{std23::nontype<&Application::onWindowResized_>, this});
 
+            m_focus_handle = m_main_window->m_when_focused.add(
+                std23::function_ref{std23::nontype<&Application::onWindowFocused_>, this});
+
             m_renderer = std::move(renderer);
         }
 
@@ -156,7 +160,7 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Application::onWindowResized_(const Window &window, int2) {
+    std::error_code Application::onWindowResized_(const Window &window, const int2 &) {
         const int2 fb = window.m_framebuffer_size;
         m_camera_service.setViewportSize(fb);
         m_scene_viewport.framebuffer_size = fb;
@@ -173,6 +177,11 @@ namespace pP {
         }
 
         return make_error_code({renderer_err, ui_err});
+    }
+
+    std::error_code Application::onWindowFocused_(const Window &window [[maybe_unused]], bool focused) noexcept {
+        m_focused = focused;
+        return default_value_v;
     }
 
     std::error_code Application::update() {
@@ -210,7 +219,11 @@ std::error_code Application::render() {
         // valid because render() is synchronous and m_renderer outlives the call.
         const auto scene_draw = [this, renderer = m_renderer.get()]
                                 (rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
-            return renderer->drawTriangle(pass, m_camera_service.camera(), viewport, scissor);
+            // Resolve the camera from the scene viewport's store (parent-chain
+            // fallback to root); render nothing if no camera is registered.
+            const safe_ptr<ICameraService> cam_svc = m_scene_services.tryGet<ICameraService>();
+            if (not cam_svc.isValid()) return std::error_code{};
+            return renderer->drawTriangle(pass, cam_svc->camera(), viewport, scissor);
         };
         const ViewportEntry scene_entry{
             .viewport = rhi::Viewport{
@@ -270,7 +283,7 @@ std::error_code Application::render() {
             // Drop service-store refs to member-owned services (m_input_replay,
             // m_camera_service) before those members are destroyed.
             m_services.erase<IInputService>();
-            m_services.erase<ICameraService>();
+            m_scene_services.erase<ICameraService>();
 
             m_ui_service.reset();
             m_renderer.reset();
