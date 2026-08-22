@@ -20,8 +20,8 @@ ConstantBuffer<FrameConstants> g_frame : register(b0);
 VertexOutput vertexMain(VertexInput input) {
     VertexOutput output;
     // mango::math matrices (lookat/perspectiveD3D/ortho) are row-vector convention:
-    // translation lives in row 3 and the perspective w-row is (0,0,b,0) so that
-    // clip.w = view.z. Match that here with mul(row_vector, matrix) instead of
+    // translation lives in row 3 and the perspective w-row is (0,0,-1,0) so that
+    // clip.w = -view.z. Match that here with mul(row_vector, matrix) instead of
     // mul(matrix, column_vector), which would transpose the transform and flip
     // the view-space Z sign (negative W -> clipped geometry).
     output.position = mul(float4(input.position, 1.0), g_frame.m_view_projection);

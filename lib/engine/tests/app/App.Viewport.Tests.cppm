@@ -25,6 +25,29 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(unknown) == rhi::EProjectionConvention::D3D);
         };
 
+        // Unknown device types must produce well-defined (finite) matrices using the
+        // D3D fallback convention — never NaN/Inf garbage.
+        PPR_UNIT_TEST(unknown_device_type_projection_finite) {
+            constexpr float kEps = 1e-4f;
+            constexpr float kPi = 3.14159265358979323846f;
+            constexpr auto unknown = static_cast<rhi::DeviceType>(0x7F);
+
+            const auto perspective = rhi::getPerspectiveMatrix(unknown, kPi / 4.0f, 16.0f / 9.0f, 0.1f, 1000.0f);
+            const auto ortho = rhi::getOrthoMatrix(unknown, 800.0f, 600.0f);
+
+            const auto all_finite = [](const float4x4 &m) noexcept {
+                return std::ranges::all_of(
+                    std::span<const float, 16>(m.data(), 16),
+                    [](const float v) noexcept { return std::isfinite(v); });
+            };
+            PPR_TEST_ASSERT(all_finite(perspective));
+            PPR_TEST_ASSERT(all_finite(ortho));
+
+            // D3D-fallback signatures: perspective w-row z = -1, ortho depth mid = 0.5.
+            PPR_TEST_ASSERT(std::abs(perspective(2, 3) + 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(ortho(2, 2) - 0.5f) < kEps);
+        };
+
         PPR_UNIT_TEST(constexpr_evaluable) {
             static_assert(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Vulkan) == rhi::EProjectionConvention::VK);
         };
@@ -87,10 +110,10 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(std::abs(m(1, 1) - y_scale) < kEps);
             PPR_TEST_ASSERT(m(0, 0) < m(1, 1));
 
-            const float a = 1000.0f / (1000.0f - 0.1f);
+            const float a = 1000.0f / (0.1f - 1000.0f);
             PPR_TEST_ASSERT(std::abs(m(2, 2) - a) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 2) + a * 0.1f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(2, 3) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(3, 2) - a * 0.1f) < kEps);
+            PPR_TEST_ASSERT(std::abs(m(2, 3) + 1.0f) < kEps);
             PPR_TEST_ASSERT(std::abs(m(3, 3)) < kEps);
         };
 
@@ -210,6 +233,7 @@ export namespace pP::tests {
         _.recurse({
             ProjectionConv::device_type_mapping,
             ProjectionConv::unknown_device_type_falls_back_to_d3d,
+            ProjectionConv::unknown_device_type_projection_finite,
             ProjectionConv::constexpr_evaluable,
             OrthoMatrix::d3d_y_down_depth_0_1,
             OrthoMatrix::vk_y_down_depth_minus1_1,
