@@ -192,24 +192,28 @@ export namespace pP::tests {
             return read_channel(pixel(x, y), channel) < 0.4f;
         };
 
-        if (not is_dominant(128u, 106u, 0) || not is_recessive(128u, 106u, 1) || not is_recessive(128u, 106u, 2)) {
-            _.log(("app_pixel_readback: expected RED at (128,106), got r=" + std::to_string(read_channel(pixel(128u, 106u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(128u, 106u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(128u, 106u), 2)))
+        if (not is_dominant(128u, 115u, 0) || not is_recessive(128u, 115u, 1) || not is_recessive(128u, 115u, 2)) {
+            _.log(("app_pixel_readback: expected RED at (128,115), got r=" + std::to_string(read_channel(pixel(128u, 115u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(128u, 115u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(128u, 115u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }
-        if (not is_dominant(106u, 150u, 1) || not is_recessive(106u, 150u, 0) || not is_recessive(106u, 150u, 2)) {
-            _.log(("app_pixel_readback: expected GREEN at (106,150), got r=" + std::to_string(read_channel(pixel(106u, 150u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(106u, 150u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(106u, 150u), 2)))
+        // Sample close enough to the green vertex that the other channels fall below
+        // the recessive threshold even after sRGB encoding of the readback.
+        if (not is_dominant(145u, 147u, 1) || not is_recessive(145u, 147u, 0) || not is_recessive(145u, 147u, 2)) {
+            _.log(("app_pixel_readback: expected GREEN at (145,147), got r=" + std::to_string(read_channel(pixel(145u, 147u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(145u, 147u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(145u, 147u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }
-        if (not is_dominant(150u, 150u, 2) || not is_recessive(150u, 150u, 0) || not is_recessive(150u, 150u, 1)) {
-            _.log(("app_pixel_readback: expected BLUE at (150,150), got r=" + std::to_string(read_channel(pixel(150u, 150u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(150u, 150u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(150u, 150u), 2)))
+        // Mirror of the green sample: close enough to the blue vertex that the other
+        // channels fall below the recessive threshold even after sRGB encoding.
+        if (not is_dominant(111u, 147u, 2) || not is_recessive(111u, 147u, 0) || not is_recessive(111u, 147u, 1)) {
+            _.log(("app_pixel_readback: expected BLUE at (111,147), got r=" + std::to_string(read_channel(pixel(111u, 147u), 0))
+                   + " g=" + std::to_string(read_channel(pixel(111u, 147u), 1))
+                   + " b=" + std::to_string(read_channel(pixel(111u, 147u), 2)))
                 .c_str());
             PPR_TEST_ASSERT(false);
         }
