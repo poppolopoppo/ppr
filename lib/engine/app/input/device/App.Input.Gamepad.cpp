@@ -19,6 +19,12 @@ namespace pP {
         m_buttons.setPressed(button);
     }
 
+    void GamepadState::setRumble(float left, float right) {
+        m_left_rumble = clamp(left, 0.0f, 1.0f);
+        m_right_rumble = clamp(right, 0.0f, 1.0f);
+        // Note: actual hardware write happens in the platform backend (GLFW)
+    }
+
     void GamepadState::update(const TimeSpan dt) {
         m_on_connected = not m_was_connected and m_connected;
         m_on_disconnected = m_was_connected and not m_connected;
@@ -54,7 +60,7 @@ namespace pP {
     // gamepad device
     // ------------------------------------------------------------------
 
-    GamepadDevice::GamepadDevice(const InputDeviceID device_id, const std::size_t controller_index) noexcept
+    GamepadDevice::GamepadDevice(const InputDeviceID &device_id, const std::size_t controller_index) noexcept
         : m_device_id{device_id} {
         m_state.m_controller_index = controller_index;
     }

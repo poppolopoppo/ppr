@@ -8,11 +8,20 @@ import :input.key;
 
 export namespace pP {
     // ------------------------------------------------------------------
+    // IInputActionKeyMappingProvider — self-describe input bindings
+    // ------------------------------------------------------------------
+
+    struct IInputActionKeyMappingProvider {
+        virtual void provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept = 0;
+        virtual ~IInputActionKeyMappingProvider() = default;
+    };
+
+    // ------------------------------------------------------------------
     // input key to action mapping
     // ------------------------------------------------------------------
 
     struct InputActionKeyMapping {
-        SharedInputAction m_action;
+        SharedInputAction m_action{};
         InputKey m_key;
 
         std::optional<InputModifierEvent> m_modifier;

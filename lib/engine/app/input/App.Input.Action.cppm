@@ -51,6 +51,12 @@ export namespace pP {
             EInputValueType value_type,
             EInputActionFlags flags) noexcept;
 
+        void setStarted(InputTriggerEvent callback) noexcept { m_when_started = std::move(callback); }
+
+        void setCompleted(InputTriggerEvent callback) noexcept { m_when_completed = std::move(callback); }
+
+        void setTriggered(InputTriggerEvent callback) noexcept { m_when_triggered = std::move(callback); }
+
         [[nodiscard]] constexpr bool hasConsumeInput() const noexcept {
             return any(m_flags & EInputActionFlags::consume_input);
         }
@@ -79,7 +85,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     struct InputActionEvent {
-        SharedInputAction m_source;
+        SharedInputAction m_source{};
         std::optional<InputValue> m_value{};
 
         TimeSpan m_elapsed_triggered_time{zero_v};
