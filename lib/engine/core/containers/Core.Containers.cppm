@@ -1136,7 +1136,7 @@ export namespace pP {
         }
 
         constexpr ~Stack() noexcept {
-            mem::annotateContiguousContainer(m_storage.data(), N, m_count, 0u);
+            mem::annotateContiguousContainer(m_storage.data(), N, m_count, N);
         }
 
         Stack &operator=(const Stack &other) noexcept {
