@@ -292,6 +292,23 @@ namespace pP {
 
     std::error_code Renderer::render(const std::optional<OverlayCallback> overlay) {
         if (overlay) {
+            // Apply pending resize before building viewport entries
+            if (m_pending_resize.has_value()) {
+                const int2 new_size = m_pending_resize.value();
+                m_framebuffer_size = new_size;
+                rhi::SurfaceConfig surface_config{};
+                surface_config.width = static_cast<u32>(new_size.x);
+                surface_config.height = static_cast<u32>(new_size.y);
+                surface_config.desiredImageCount = 3;
+                surface_config.vsync = true;
+                RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
+                PPR_LOG(Renderer, info, "surface resized (deferred)", {
+                    {"width", new_size.x},
+                    {"height", new_size.y},
+                    });
+                m_pending_resize = std::nullopt;
+            }
+
             const ViewportEntry entry{
                 .viewport = rhi::Viewport{
                     0.0f, 0.0f,

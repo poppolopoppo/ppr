@@ -74,6 +74,7 @@ export namespace pP {
 
         rhi::Format m_surface_format{rhi::Format::Undefined};
 
+        std::optional<int2> m_pending_resize;
         int2 m_framebuffer_size{};
         rhi::DeviceType m_device_type{rhi::DeviceType::Default};
         safe_ptr<IRhiService> m_rhi_service;
