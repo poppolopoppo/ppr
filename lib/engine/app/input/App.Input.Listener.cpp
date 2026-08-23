@@ -157,7 +157,7 @@ namespace pP {
                     PPR_LOG(Input, verbose, "event started", {
                             {"action", event.m_source->m_description.view()},
                             {"delta_time", event.m_elapsed_triggered_time},
-                            {"input_value", opaqueValue(event.m_value)},
+                            {"input_value", event.m_value},
                             });
                     break;
 

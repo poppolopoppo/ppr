@@ -169,9 +169,7 @@ export namespace mango::math {
         // Capture the span by value: it references value.data() (alive for the whole
         // log expression), but the span object itself must outlive the TransformView
         // construction inside the lambda, otherwise the returned TransformView dangles.
-        return [span = std::span<const T, DimV>(value.data(), DimV)]() noexcept -> pP::opaque::TransformView {
-            return pP::opaque::TransformView(span);
-        };
+        return pP::opaqueValue(std::span<const T, DimV>(value.data(), DimV));
     }
 }
 

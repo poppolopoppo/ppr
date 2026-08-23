@@ -50,8 +50,12 @@ export namespace pP {
         static_assert(std::output_iterator<format_context::iterator, char>);
 
         template<std::formattable<char> FormattableT, details::TChar CharT>
-        void formatTo(const FormattableT &formattable, basic_format_context<CharT> &formatter) {
-            std::format_to(formatter.out(), "{}", formattable);
+        void formatTo(const FormattableT &formattable, basic_format_context<CharT> &formatter) noexcept {
+            try {
+                std::format_to(formatter.out(), "{}", formattable);
+            } catch (std::bad_alloc) {
+                PPR_ASSERT(false && "caught a bad allow in formatter");
+            }
         }
 
         // --------------------------------------------------------------
@@ -66,6 +70,12 @@ export namespace pP {
         };
 
         // --------------------------------------------------------------
+        // wrap a span without allocation and with memory safety
+        // --------------------------------------------------------------
+
+        using TransformView = TransformView<Value>;
+
+        // --------------------------------------------------------------
         // opaque value variants
         // --------------------------------------------------------------
 
@@ -78,8 +88,6 @@ export namespace pP {
         using Delegate = std23::function_ref<Value() noexcept>;
         using Formatter = std23::function_ref<void(format_context &) noexcept>;
         using Struct = std23::function_ref<void(StructVisitor &) noexcept>;
-
-        using TransformView = TransformView<Value>;
         using Transform = std23::function_ref<TransformView() noexcept>;
 
         namespace details {
@@ -127,6 +135,13 @@ export namespace pP {
             {
                 { opaqueValue(value) } -> std::same_as<Value>;
             };
+
+            template<typename RandomRangeT>
+            concept TOpaqueRange =
+                    std::ranges::random_access_range<RandomRangeT> &&
+                    std::convertible_to<std::ranges::range_value_t<RandomRangeT>, Value> &&
+                    // avoid promotion of basic_string/_view/_literal
+                    not std::convertible_to<RandomRangeT, ValueVariant>;
         }
 
         // --------------------------------------------------------------
@@ -141,8 +156,8 @@ export namespace pP {
 
             // Allow direct initialization from functors convertible to Delegate
             template<typename FunctorT>
-                requires (!std::is_same_v<std::decay_t<FunctorT>, Delegate> &&
-                          requires(FunctorT &&f) { Delegate{std::forward<FunctorT>(f)}; })
+                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
+                          std::convertible_to<FunctorT, Delegate>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&delegate) noexcept
                 : super_t(Delegate{std::forward<FunctorT>(delegate)}) {
@@ -150,8 +165,8 @@ export namespace pP {
 
             // Allow direct initialization from functors convertible to Formatter
             template<typename FunctorT>
-                requires (!std::is_same_v<std::decay_t<FunctorT>, Formatter> &&
-                          requires(FunctorT &&f) { Formatter{std::forward<FunctorT>(f)}; })
+                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
+                          std::convertible_to<FunctorT, Formatter>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&formatter) noexcept
                 : super_t(Formatter{std::forward<FunctorT>(formatter)}) {
@@ -159,8 +174,8 @@ export namespace pP {
 
             // Allow direct initialization from functors convertible to Struct
             template<typename FunctorT>
-                requires (!std::is_same_v<std::decay_t<FunctorT>, Struct> &&
-                          requires(FunctorT &&f) { Struct{std::forward<FunctorT>(f)}; })
+                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
+                          std::convertible_to<FunctorT, Struct>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&struct_) noexcept
                 : super_t(Struct{std::forward<FunctorT>(struct_)}) {
@@ -168,8 +183,8 @@ export namespace pP {
 
             // Allow direct initialization from functors convertible to Yield
             template<typename FunctorT>
-                requires (!std::is_same_v<std::decay_t<FunctorT>, Transform> &&
-                          requires(FunctorT &&f) { Transform{std::forward<FunctorT>(f)}; })
+                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
+                          std::convertible_to<FunctorT, Transform>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(FunctorT &&transform) noexcept
                 : super_t(Transform{std::forward<FunctorT>(transform)}) {
@@ -178,17 +193,18 @@ export namespace pP {
             // Allow direct promotion from values with an explicit opaqueValue() overload
 #if 0 // workaround MSVC compiler bug with concepts and ADL through module boundaries
             template<details::TOpaque OpaqueT>
-
+                requires not std::convertible_to<OpaqueT, details::ValueVariant>
 
 #else
             template<typename OpaqueT>
-                requires requires(OpaqueT value)
-                {
-                    { opaqueValue(value) } -> std::same_as<Value>;
-                }
+                requires not std::convertible_to<OpaqueT, details::ValueVariant> and
+                         requires(OpaqueT value)
+                         {
+                             { opaqueValue(value) } -> std::same_as<Value>;
+                         }
 #endif
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(OpaqueT value) noexcept
+            constexpr Value(OpaqueT &&value) noexcept
                 : super_t(opaqueValue(std::forward<OpaqueT>(value))) {
             }
 
@@ -208,17 +224,12 @@ export namespace pP {
             }
         };
 
-#if 0 // causes ambiguous overloads for primitive types, which are also formattable:
-        template<std::formattable<char> FormattableT>
-        [[nodiscard]] constexpr Value opaqueValue(const FormattableT &formattable) noexcept {
-            return Transform{std23::nontype<&formatTo<FormattableT, char>>, formattable};
-        }
-#else // a safer approach, instead use a free-function factory:
+
+        // Formattable value is a valid opaque::Value
         template<std::formattable<char> FormattableT>
         [[nodiscard]] constexpr Value format(const FormattableT &formattable) noexcept {
-            return Transform{std23::nontype<&formatTo<FormattableT, char>>, formattable};
+            return Formatter(std23::nontype<&formatTo<FormattableT, char>>, formattable);
         }
-#endif
 
         // --------------------------------------------------------------
         // Value are transient, Block is persistent
@@ -406,7 +417,7 @@ export namespace pP {
                     m_target.emplace<Array>(dst);
 
                     auto output = dst.begin();
-                    for (const opaque::Value &src: arr) {
+                    for (const opaque::Value src: arr) {
                         Value &it = *std::construct_at(std::addressof(*output++));
                         Builder{it, m_arena}.dup(src);
                     }
@@ -560,7 +571,7 @@ export namespace pP {
                     [](const Transform transform) constexpr noexcept -> std::size_t {
                         std::size_t n = 0u;
                         std::size_t size_bytes = 0u;
-                        for (const opaque::Value &it: transform()) {
+                        for (const opaque::Value it: transform()) {
                             n++;
                             size_bytes += sizeOf(it);
                         }
@@ -681,6 +692,36 @@ export namespace pP {
     template<>
     struct details::relocatable<opaque::Block::Dict> : std::true_type {
     };
+
+    // --------------------------------------------------------------
+    // opaqueValue traits
+    // --------------------------------------------------------------
+
+    namespace details {
+        template<std::convertible_to<opaque::Value> ConvertibleT, std::size_t ExtentV>
+            requires (ExtentV != std::dynamic_extent)
+        [[nodiscard]] opaque::TransformView transformArr(const ConvertibleT *const p_data) noexcept {
+            return opaque::TransformView(std::span<const ConvertibleT, ExtentV>(p_data, ExtentV));
+        }
+
+        template<opaque::details::TOpaqueRange OpaqueRangeT>
+        [[nodiscard]] opaque::TransformView transformRange(const OpaqueRangeT *const p_range) noexcept {
+            return opaque::TransformView(*p_range);
+        }
+    }
+
+    // std::span<ConvertibleT> is a valid opaque::Value if ConvertibleT is convertible to opaque::Value
+    template<std::convertible_to<opaque::Value> ConvertibleT, std::size_t ExtentV>
+        requires (ExtentV != std::dynamic_extent)
+    [[nodiscard]] constexpr opaque::Value opaqueValue(const std::span<const ConvertibleT, ExtentV> arr) noexcept {
+        return opaque::Transform(std23::nontype<&details::transformArr<const ConvertibleT, ExtentV>>, arr.data());
+    }
+
+    // RandomRangeT is a valid opaque::Value if std::ranges::range_value_t<RandomRangeT> is convertible to opaque::Value
+    template<opaque::details::TOpaqueRange OpaqueRangeT>
+    [[nodiscard]] constexpr opaque::Value opaqueValue(const OpaqueRangeT &range) noexcept {
+        return opaque::Transform(std23::nontype<&details::transformRange<OpaqueRangeT>>, std::addressof(range));
+    }
 }
 
 // --------------------------------------------------------------

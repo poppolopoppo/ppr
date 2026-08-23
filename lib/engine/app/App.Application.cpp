@@ -72,9 +72,7 @@ namespace pP {
         PPR_LOG(App, info, "starting application", {
             {"name", m_name},
             {"platform", hal::platformName()},
-            {"args", [this]() noexcept -> opaque::TransformView {
-                return opaque::TransformView(m_arguments);
-            }},
+            {"args", opaqueValue(m_arguments)},
         });
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->initialize(*this));

@@ -1074,9 +1074,14 @@ export namespace pP {
         std23::function_ref<T(std::size_t) noexcept> m_transform;
         std::size_t m_size;
 
+        template<std::convertible_to<T> ConvertibleT>
+        [[nodiscard]] static T passThroughSpan_(const ConvertibleT *const p_span, const std::size_t index) noexcept {
+            return p_span[index];
+        }
+
         template<std::ranges::random_access_range RangeT>
             requires std::convertible_to<std::ranges::range_value_t<RangeT>, T>
-        static T transform_(const RangeT *const p_range, const std::size_t index) noexcept {
+        [[nodiscard]] static T passThroughRange_(const RangeT *const p_range, const std::size_t index) noexcept {
             return (*p_range)[index];
         }
 
@@ -1086,10 +1091,16 @@ export namespace pP {
               m_size(size) {
         }
 
+        template<std::convertible_to<T> ConvertibleT, std::size_t ExtentV>
+        explicit TransformView(std::span<const ConvertibleT, ExtentV> span) noexcept
+            : m_transform(std23::nontype<&passThroughSpan_<ConvertibleT>>, span.data()),
+              m_size(span.size()) {
+        }
+
         template<std::ranges::random_access_range RangeT>
             requires std::convertible_to<std::ranges::range_value_t<RangeT>, T>
         explicit TransformView(const RangeT &range) noexcept
-            : m_transform(std23::nontype<&transform_<RangeT>>, &range),
+            : m_transform(std23::nontype<&passThroughRange_<RangeT>>, &range),
               m_size(std::ranges::size(range)) {
         }
 
@@ -1136,7 +1147,7 @@ export namespace pP {
         }
 
         constexpr ~Stack() noexcept {
-            mem::annotateContiguousContainer(m_storage.data(), N, m_count, N);
+            mem::unpoisonUninitialized(m_storage.data(), m_storage.size());
         }
 
         Stack &operator=(const Stack &other) noexcept {
@@ -1278,7 +1289,7 @@ export namespace pP {
         }
 
         constexpr ~RingBuffer() noexcept {
-            mem::poisonDestroyed(m_storage.data(), m_storage.size());
+            mem::unpoisonUninitialized(m_storage.data(), m_storage.size());
         }
 #else
         constexpr RingBuffer() noexcept = default;
