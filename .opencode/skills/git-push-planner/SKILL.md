@@ -28,12 +28,14 @@ configurations, load the `validation` skill after the push plan is finalized.
 
 ## Contract
 
-This skill performs pre-push analysis of local unpushed commits. It **does not**
-run `git push`, rewrite history, or modify the working tree. Its output is a
-proposed squash/rebase plan, revised commit messages, and a pre-push validation
-checklist. The orchestrator drives the skill; git queries are delegated to
-`@explorer`, squash-pattern and message/secret validation to
-`@oracle`/`code-reviewer`. It never executes `git push`.
+Pre-flight push analysis of unpushed commits. The orchestrator drives it;
+git state queries are delegated to `@explorer`, squash-pattern and
+message/secret validation to `@oracle`/`code-reviewer`. The skill never
+rewrites local or remote history. Its output is a proposed squash/rebase
+plan, revised commit messages, a pre-push validation checklist, and a
+machine-readable artifact (`.slim/push-plan.json`) that an executor agent
+can replay. The user retains the final `git push` invocation as the
+irreversible trust boundary.
 
 ## Contract (hard rule)
 
@@ -63,11 +65,9 @@ when the work is genuinely `rg`/regex over a multi-megabyte stream
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Repo + unpushed-commit enumeration | orchestrator (in-context, CLion MCP) | `clion_git_status` + direct `bash` for `git log @{u}..HEAD --oneline` |
-| `git push --dry-run`, `--stat` summary | orchestrator (in-context, direct `bash`) | Tiny-scope, predictable output |
 | Secret-pattern scan (`rg` over `git log -p`) | `@explorer` (background, gated) | Pattern-scan is the only step that genuinely needs `rg` on a stream |
 | Squash-pattern detection + dependency ordering | `@oracle` (background) | Judgment on commit history shape |
-| Commit message format validation | orchestrator (inline) | Mechanical: length, mood, blank line, whitespace — see Step 3 checklist |
-| Emit cleaned push plan + checklist | orchestrator | Aggregation + Job Board reconciliation |
+| Aggregate + emit plan + artifact | orchestrator | Default orchestrator behavior |
 
 ## OMO feature wiring
 
@@ -82,10 +82,14 @@ when the work is genuinely `rg`/regex over a multi-megabyte stream
   Job Board before Step 4.
 - **Session reuse** — between commit-planner and push-planner in the same
   session, the orchestrator's most recent `clion_git_status` call answers
-  the dirty-tree gate (Step 1, lines 82-88). Push-planner does not need a
-  fresh enumeration call if the user committed exactly what commit-planner
+  the dirty-tree gate (Step 1). Push-planner does not need a fresh
+  enumeration call if the user committed exactly what commit-planner
   produced; it only fetches `git log @{u}..HEAD --stat` and verifies the
-  expected commit hash set.
+  expected commit hash set. The `.slim/push-plan.json`
+  `pre_execution_snapshot` provides a machine-readable invalidation check:
+  if a fresh `git log @{u}..HEAD --format='%H %s'` differs from the
+  artifact's `pre_execution_snapshot`, the plan is stale and must be
+  regenerated.
 - **`orchestratorPrompt` routing** — trigger on "review my commits before
   pushing", "should I push", "clean up my history before push", "pre-push
   check", "push planner". Do NOT trigger on standalone "push", "send it",
@@ -247,14 +251,14 @@ git rebase -i <base-hash>
 where `<base-hash>` is the commit just before the first unpushed commit
 (i.e., `origin/main`).
 
-> If the interactive shell does not support full-screen editors, provide a
-> non-interactive alternative:
-> ```bash
-> # Non-interactive squash-and-fixup workflow (for CI or headless)
-> git reset --soft origin/main
-> # (stage selectively if needed)
-> git commit -m "<component>: <subject>" -m "<body>"
-> ```
+> If the interactive shell does not support full-screen editors, use the
+> `execution_mode` from `.slim/push-plan.json`. The single mode is
+> `non-interactive-reset-commit`: `git reset --soft <base_hash>`, then
+> replay each surviving commit in dependency order using `git commit` or
+> `git commit --amend -F .git/COMMIT_EDITMSG` (the latter preserves
+> trailers like `Signed-off-by` and `Co-authored-by`). STASH WORKING TREE
+> FIRST if the tree is dirty — the user's uncommitted changes must be
+> preserved across the rebase or they will be lost in the `git reset --soft`.
 
 #### B. Revised commit messages
 
@@ -290,6 +294,84 @@ Before running `git push`, the user must confirm these checks pass:
 > skill for preset details. For full-project validation across **all** build
 > configs, load the `validation` skill after the squash plan is finalized —
 > it compiles every platform-relevant configuration in parallel.
+
+---
+
+## Step 5 — Emit machine-readable push plan artifact
+
+Write `.slim/push-plan.json` alongside the markdown plan. The artifact is
+the authoritative source for execution; the markdown is the human-readable
+view. The skill never executes any of the rebase/push operations — only
+the executor replays them, after user approval.
+
+### JSON schema
+
+```jsonc
+{
+  "schema_version": 1,
+  "plan_id": "<short-HEAD>-<iso8601>",
+  "pre_execution_snapshot": "<git log @{u}..HEAD --format='%H %s'>",
+  "pre_execution_head": "<git rev-parse HEAD>",
+  "execution": {
+    "mode": "non-interactive-reset-commit"
+  },
+  "squash_plan": [
+    {
+      "index": 1,
+      "action": "pick",            // pick | squash | drop | reword
+      "hash": "11a9e9a",
+      "short_msg": "git-commit-planner: emit .slim/commit-plan.json",
+      "message": null              // null for unchanged; full message for squash/reword
+    }
+  ],
+  "checklist": [
+    { "check": "Build succeeds", "command": "cmake --build --preset msvc-dev", "critical": true },
+    { "check": "Core tests pass", "command": "ctest --preset msvc-dev --output-on-failure", "critical": true },
+    { "check": "Dry-run push succeeds", "command": "git push --dry-run", "critical": true }
+  ]
+}
+```
+
+### Action enum semantics
+
+- **`pick`** — keep the commit as-is. `message` is null.
+- **`squash`** — fold this commit into the previous `pick` or `squash` survivor. `message` contains the combined commit message.
+- **`drop`** — remove this commit from history. `message` is null.
+- **`reword`** — keep this commit but rewrite its message to `message`. `message` contains the new full message.
+
+### Field semantics
+
+- **`pre_execution_snapshot`**: raw `git log @{u}..HEAD --format='%H %s'` at plan time. Executor compares against a fresh invocation before executing; mismatch means plan is stale.
+- **`pre_execution_head`**: `git rev-parse HEAD` at plan time. Executor rollback: `git reset --hard <pre_execution_head>`.
+- **`execution.mode`**: always `"non-interactive-reset-commit"`. Single mode for simplicity.
+- **`squash_plan[].message`**: null for unchanged messages; full proposed message for `squash` (combined) and `reword` (new).
+- **`checklist[]`**: flat array of pre-push checks. No status field — executor runs and reports.
+
+### Executor replay protocol
+
+1. Validate `schema_version === 1`.
+2. Validate at least one entry has `action: "pick"`.
+3. Validate `pre_execution_snapshot` matches fresh `git log @{u}..HEAD --format='%H %s'`. Mismatch → abort + re-plan.
+4. **If working tree is dirty**: `git stash push -u -- <paths>` first. Restore after rebase.
+5. `git reset --soft <base_hash>` (base = last commit on remote).
+6. Replay `squash_plan[]` in order:
+   - `pick`: `git commit -m "<original message>"` (read from `git log -1 --format=%B <hash>`).
+   - `squash`: `git commit --amend -F .git/COMMIT_EDITMSG` with the combined message (preserves trailers).
+   - `drop`: skip — files from this commit are not staged.
+   - `reword`: `git commit --amend -F .git/COMMIT_EDITMSG` with the new message.
+7. Run `checklist[]` commands. On critical failure, print rollback string and abort.
+8. User runs `git push --force-with-lease` (trust boundary).
+
+### Early exit (no-work case)
+
+When the proposed `squash_plan` is an identity (every entry is `action: "pick"` at the same position as the unpushed commit, with `message: null`), the skill emits a brief markdown report ("Nothing to squash — proceed with `git push`") and exits without writing `.slim/push-plan.json`. The executor protocol is skipped; user runs `git push` directly.
+
+### Artifact lifecycle
+
+- Written on every `/push` invocation where unpushed commits exist AND squashing is needed.
+- Invalidated when branch state changes (`pre_execution_snapshot` text comparison).
+- Not committed to git (`.slim/` is gitignored).
+- Overwritten on next `/push` — no accumulation.
 
 ---
 

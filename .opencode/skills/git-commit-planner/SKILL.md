@@ -190,9 +190,7 @@ human-readable view.
 {
   "schema_version": 1,
   "plan_id": "<git rev-parse --short HEAD>-<timestamp-iso8601>",
-  "generated_at": "<ISO 8601 timestamp>",
-  "pre_staging_snapshot": "<git status --porcelain output at plan time>",
-  "pre_staging_hash": "<sha256 of pre_staging_snapshot for drift detection>",
+  "pre_execution_snapshot": "<git status --porcelain output at plan time>",
   "commits": [
     {
       "index": 1,
@@ -216,7 +214,7 @@ human-readable view.
           "cumulative": false
         }
       ],
-      "staging_instructions": {
+      "execution": {
         "mode": "patch-apply",
         "apply_command": "git apply --cached --unidiff-zero <<PATCH\n<concatenated patches from hunk_refs>\nPATCH",
         "fallback_note": "If patch-apply fails, use the save-edit-restore workflow (see Constraints §git-add-p-headless)"
@@ -237,11 +235,11 @@ human-readable view.
 ### Field semantics
 
 - **`plan_id`**: Unique identifier for invalidation. Re-plan if working tree
-  drifts from `pre_staging_snapshot`.
-- **`pre_staging_snapshot`**: Raw `git status --porcelain` at plan time. The
+  drifts from `pre_execution_snapshot`.
+- **`pre_execution_snapshot`**: Raw `git status --porcelain` at plan time. The
   executor must compare this to a fresh `git status --porcelain` before
   staging; mismatch means the plan is stale and must be regenerated.
-- **`pre_staging_hash`**: SHA-256 of `pre_staging_snapshot` for cheap drift
+- **`pre_staging_hash`**: SHA-256 of `pre_execution_snapshot` for cheap drift
   detection without re-reading the full snapshot text.
 - **`hunk_refs[].patch`**: Unified diff text for this hunk, suitable for
   `git apply --cached --unidiff-zero`. Captured from `git diff HEAD -- <file>`
@@ -251,22 +249,22 @@ human-readable view.
   hunks in the same file to already be staged (the cumulative-state rule).
   For most commits this is `false`; it becomes relevant when the executor
   stages commit N after commit N-1 has already been committed.
-- **`staging_instructions.mode`**: One of:
+- **`execution.mode`**: One of:
   - `"patch-apply"` — preferred: patches are applied via `git apply --cached`.
   - `"manual-edit"` — fallback: the file must be manually edited per the
     save-edit-restore workflow. Used when patch context is too fragile
     (e.g., whitespace-only files, binary-adjacent changes).
-- **`staging_instructions.apply_command`**: Ready-to-run shell command for
+- **`execution.apply_command`**: Ready-to-run shell command for
   the `"patch-apply"` mode. For `"manual-edit"`, this is `null` and the
   executor reads the `fallback_note` instead.
-- **`staging_instructions.fallback_note`**: Human-readable instructions for
+- **`execution.fallback_note`**: Human-readable instructions for
   when the primary mode fails or is unavailable.
 
 ### Staging execution protocol
 
 The executor replays commits in order:
 
-1. Validate `pre_staging_hash` matches current `git status --porcelain`.
+1. Validate `pre_execution_snapshot` matches current `git status --porcelain`.
    If mismatch, abort and request re-plan.
 2. For commit N: reset the index to HEAD (`git reset`), then apply the
    cumulative patches for commits 1..N (all `hunk_refs` from earlier
@@ -282,8 +280,8 @@ The executor replays commits in order:
 ### Artifact lifecycle
 
 - Written on every `/commit` invocation.
-- Invalidated when working tree changes (detected via `pre_staging_hash`
-  mismatch).
+- Invalidated when working tree changes (detected via `pre_execution_snapshot`
+  text comparison).
 - Not committed to git (`.slim/` is gitignored).
 - Overwritten on next `/commit` — no accumulation.
 
@@ -384,9 +382,9 @@ when the work is genuinely `rg`/regex over a multi-megabyte stream.
   the active turn's context. On a "tweak and re-plan" follow-up, re-run
   `clion_git_status` to detect new/removed/changed files before deciding
   whether a full plan re-issuance is needed. The `.slim/commit-plan.json`
-  `pre_staging_hash` provides a machine-readable invalidation check: if the
-  hash of a fresh `git status --porcelain` differs from the artifact's
-  `pre_staging_hash`, the plan is stale and must be regenerated.
+  `pre_execution_snapshot` provides a machine-readable invalidation check:
+  if a fresh `git status --porcelain` differs from the artifact's
+  `pre_execution_snapshot`, the plan is stale and must be regenerated.
 - **`orchestratorPrompt` routing** — trigger on "plan my commits", "how
   should I split my changes", "write commit messages", "review my
   uncommitted changes", "help me commit", "atomic commit plan". Do NOT
