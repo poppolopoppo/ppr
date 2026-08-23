@@ -8,7 +8,7 @@ description: >
   get_file_problems) and gates completion on zero remaining IDE errors/
   warnings on changed files (fixed or oracle-approved-suppressed).
   Use this skill whenever the user says "review my changes", "check my
-  code", "audit my changes", "inspect the diff", "analyze the code",
+  code", "audit my changes", "inspect the diff", "analyze the diff",
   "does this follow the conventions", or "code review please".
 ---
 
@@ -16,11 +16,11 @@ description: >
 
 Analyze unstaged and staged changes in tracked files, then produce a
 structured review organized by zone (engine core, game, tests, build)
-across ten dimensions.
+across nine dimensions.
 
 ## Contract
 
-This skill performs static code review across 11 dimensions of C++ quality
+This skill performs static code review across 9 dimensions of C++ quality
 and engine conventions. It does **not** edit code inline, auto-fix issues
 itself, or modify any files. Its output is a validated, reconciled report
 grouped by zone and severity. All findings undergo mandatory per-item
@@ -62,10 +62,15 @@ oracle-approved-suppressed.
   parallel background `oracle` subagents, then the per-finding validation
   (Step 4) as one background subagent per finding; reconcile all verdicts on
   the Background Job Board before the summary is presented.
-- **Session reuse** — reuse one read-only `@explorer` session to cache the
-  diff context; re-run dimension/validation subagents only on newly added or
-  changed files (invalidate a session when its `(agent-type, target area,
-  file-glob)` key no longer matches the current diff).
+- **Session reuse** — the orchestrator SHOULD provide a cached `@explorer`
+  session for diff retrieval. If no cached session exists, delegate a fresh
+  `@explorer` task. Re-run dimension/validation subagents only on newly
+  added or changed files (invalidate a session when its `(agent-type,
+  target area, file-glob)` key no longer matches the current diff).
+- **Large diffs** — for diffs spanning >10 changed files or >3 zones,
+  consider delegating to `/deepwork` for phased remediation. Use `codemap`
+  to understand module boundaries of changed files before launching
+  dimension subagents.
 - **`orchestratorPrompt` routing** — trigger on "review", "check my code",
   "audit my changes", "inspect my code", "analyze the code", "does this
   follow the conventions", or "code review please".
@@ -73,6 +78,10 @@ oracle-approved-suppressed.
 ## Review Process
 
 ### Step 1 — Gather context
+
+Delegate to `@explorer`: run `git diff HEAD`, `git diff --cached`,
+`git log --oneline -8`, and `clion_git_status`/`clion_get_repositories`.
+Receive the combined diff and changed-file list before proceeding.
 
 ```bash
 git diff HEAD                  # all unstaged + staged changes
@@ -95,14 +104,16 @@ vcpkg install paths are excluded automatically.
 
 | Zone | Path | Review depth |
 |------|------|-------------|
-| Engine code | `lib/*` | Full — all 11 dimensions |
-| Game code | `game/*` | Full — all 11 dimensions |
-| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 3, 8, 9, 10, 11 |
+| Engine code | `lib/*` | Full — all 9 dimensions |
+| Game code | `game/*` | Full — all 9 dimensions |
+| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 4, 8, 9 |
 | Build system | `CMakeLists.txt`, `cmake/*.cmake` | Build correctness only |
 | Third-party wrappers | `cmake/external/*.cmake` | Minimal — version pin, no engine patches |
 | Config / docs | `*.md`, `*.json`, `.gitignore` | Skip |
 
-### Step 3 — Review across all 11 dimensions
+---
+
+### Step 3 — Review across all 9 dimensions
 
 For each file in the diff, apply the relevant checklists below.
 
@@ -122,6 +133,10 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 
 ### Dimension 1 — C++ standard usage
 
+See also: AGENTS.md §Coding Standards (allowed macros, attributes,
+`constexpr`/`noexcept`/`[[nodiscard]]` rules), `clion-tools` SKILL.md
+(evidence gathering).
+
 - Uses `import std;` not `#include <...>` in module files
 - Uses `consteval` where compile-time is mandatory (string literals, hash mixing)
 - Uses deducing `this` for const/mutable overloads where appropriate
@@ -137,16 +152,56 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 - Prefers `std::size_t` / `std::ptrdiff_t` for sizes and indices, not `int`
 - Uses C++20 concepts for template validation, not `std::enable_if` / SFINAE
 
-### Dimension 2 — Template complexity
+### Dimension 2 — Source formatting & conventions
 
+See also: AGENTS.md §Source Formatting, `.clang-format` (auto-formatted
+rules).
+
+Check AGENTS.md §Source Formatting for all non-auto-formatted conventions
+(section dividers, function prefix order, pointer/const style, branch
+attributes, member order, comments, boolean negation, conditional
+compilation, module file split). clang-format-enforced rules (indent,
+braces, `*` spacing) are excluded.
+
+Reminder: first divider after namespace has no blank line above;
+subsequent dividers flanked by one blank line each side.
+
+### Dimension 3 — Template complexity & compile-time impact
+
+See also: `module-architect` SKILL.md (module partition naming, file
+structure, CMake registration).
+
+**Template complexity:**
 - Concept definitions are concise — one `requires` clause, not nested
 - Template parameter count ≤ 3 (flag deeply parameterized types)
 - `static_assert` with clear messages for constraint violations
 - No `auto` template parameters where a constrained concept would do
 - No recursive template instantiation beyond reasonable depth
 
-### Dimension 3 — Memory patterns
+**Compile-time impact:**
+- Module partitions minimize what is recompiled on change
+- Module partition names (after `:`) match the source file name suffix
+  (e.g. `:containers` → `Core.Containers.cppm`)
+- Module partition hierarchy mirrors subdirectory layout (e.g.
+  `lib/engine/core/strings/` → `engine.core:strings`)
+- Every `.cppm` with non-trivial definitions has a corresponding `.cpp`
+  implementation file
+- No `export import` of entire partitions where a more selective
+  `export { ... }` would suffice
+- Module partitions imported by parent module only, not by unrelated
+  consumers
+- Template-heavy code isolated in dedicated `.cppm` partitions
+- No unnecessary `import std;` in files that don't use standard types
+- `.cppm` files kept minimal (declarations only), definitions in `.cpp`
+- Unity build compatibility considered (`PPR_ANONYMIZE` usage)
+- Avoid pulling large headers into module interfaces
 
+### Dimension 4 — Memory patterns & safe_ptr lifetime
+
+See also: `memory-allocator` SKILL.md (allocator selection, composition,
+arena patterns, poison API, STL adapter, safe_ptr).
+
+**Memory patterns:**
 - Hot-path code uses pool / arena allocators, not `operator new` per-frame
 - `poisonAllocated` / `poisonDestroyed` called correctly in custom allocators
 - No raw `new` / `delete` outside allocator implementations
@@ -162,7 +217,27 @@ See `clion-tools` SKILL.md §1 for exact signatures.
   - `offsetof` verified where ABI-sensitive layout is assumed
   - Bit-fields checked for platform-dependent layout and storage-unit boundaries
 
-### Dimension 4 — Cache behavior
+**safe_ptr lifetime correctness:**
+- All `safe_ptr` instances pointing to an object must be released before
+  the object is destroyed (all copies set to `nullptr` or go out of scope)
+- `safe_ptr` is NOT a shared ownership pointer — it is a debug-only
+  lifetime checker; treat as `T*` for ownership semantics
+- `safe_ptr` acquired from `unique_ptr::get()` or `safe_ptr` `get()`
+  requires the caller to ensure the source outlives the copy
+- Local variables holding `safe_ptr` to a service-owned object must be
+  non-`const` and nulled before removing the object from the service
+- When storing `safe_ptr` as a class member, document the lifetime
+  contract (who owns the source and how destruction ordering is enforced)
+- Nested function calls that create temporary `safe_ptr` copies are safe
+  as long as the pointed-to object lives until the return of the
+  outermost call
+- `addGamepadPlayer` / `getOrCreateKeyboardPlayer` return `safe_ptr` that
+  must be released before the corresponding `removePlayer` call
+
+### Dimension 5 — Cache behavior
+
+See also: `hal::cacheline_size_v` is defined in the HAL platform headers
+(`lib/engine/core/hal/<platform>/`).
 
 - Hot / cold data separation (frequently accessed fields grouped together)
 - Struct-of-arrays preferred over array-of-structs for container internals
@@ -175,7 +250,10 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 - No pointer-chasing in hot paths (linked lists, deep indirection)
 - Branch order favors hot path with `[[likely]]`
 
-### Dimension 5 — Threading model
+### Dimension 6 — Threading model
+
+See also: `concurrency-patterns` SKILL.md (RawChannel MPSC, IEvent/Signal,
+IContext tree, thread safety, HAL I/O integration).
 
 - Shared mutable state protected by atomics or explicit synchronization
 - `thread_local` variables are POD or have trivial destructors (MSVC module issue)
@@ -184,7 +262,7 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 - Per-thread caching (`LocalCache`) handles ownership and lifetime correctly
 - Spin loops contain a compiler barrier (`PPR_COMPILER_READWRITE_BARRIER`)
 
-### Dimension 6 — Exception safety & noexcept
+### Dimension 7 — Exception safety & noexcept
 
 - All engine core functions marked `noexcept`
 - `noexcept` not used as "documentation" where code could actually throw (must be provably non-throwing)
@@ -207,20 +285,6 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 - No throwing in constructors of types allocated in bulk (prefer two‑phase init or factory functions)
 - Code paths that call `std::terminate` are guarded by a clear precondition check
 
-### Dimension 7 — Compile-time impact
-
-- Module partitions minimize what is recompiled on change
-- Module partition names (after `:`) match the source file name suffix (e.g. `:containers` → `Core.Containers.cppm`)
-- Module partition hierarchy mirrors subdirectory layout (e.g. `lib/engine/core/strings/` → `engine.core:strings`)
-- Every `.cppm` with non-trivial definitions has a corresponding `.cpp` implementation file
-- No `export import` of entire partitions where a more selective `export { ... }` would suffice
-- Module partitions imported by parent module only, not by unrelated consumers
-- Template-heavy code isolated in dedicated `.cppm` partitions
-- No unnecessary `import std;` in files that don't use standard types
-- `.cppm` files kept minimal (declarations only), definitions in `.cpp`
-- Unity build compatibility considered (`PPR_ANONYMIZE` usage)
-- Avoid pulling large headers into module interfaces
-
 ### Dimension 8 — Undefined behavior
 
 - `reinterpret_cast` is forbidden; use `std::bit_cast` for type-punning
@@ -237,8 +301,11 @@ See `clion-tools` SKILL.md §1 for exact signatures.
   - Gated by a compiler-specific macro (`#ifdef _MSC_VER`, `#if defined(__clang__)`, etc.)
   - Preceded by a `static_assert` or `PPR_ASSERT` validating the precondition
 
-### Dimension 9 — Design decisions
+### Dimension 9 — Design decisions & function design
 
+See also: AGENTS.md §Function Design Principles.
+
+**Design decisions:**
 - Every exported symbol has a clear rationale
 - No commented-out code
 - Namespace choice reflects ownership tier (`pP::mem::` vs `pP::details::`)
@@ -252,20 +319,7 @@ See `clion-tools` SKILL.md §1 for exact signatures.
 - `PPR_FORCE_INLINE` on hot-path functions
 - Macros are forbidden outside `Macros.h`
 
-### Dimension 10 — safe_ptr lifetime correctness
-
-- All `safe_ptr` instances pointing to an object must be released before the object is destroyed (all copies set to `nullptr` or go out of scope)
-- `safe_ptr` is NOT a shared ownership pointer — it is a debug-only lifetime checker; treat as `T*` for ownership semantics
-- `safe_ptr` acquired from `unique_ptr::get()` or `safe_ptr` `get()` requires the caller to ensure the source outlives the copy
-- Local variables holding `safe_ptr` to a service-owned object must be non-`const` and nulled before removing the object from the service
-- When storing `safe_ptr` as a class member, document the lifetime contract (who owns the source and how destruction ordering is enforced)
-- Nested function calls that create temporary `safe_ptr` copies are safe as long as the pointed-to object lives until the return of the outermost call
-- `addGamepadPlayer` / `getOrCreateKeyboardPlayer` return `safe_ptr` that must be released before the corresponding `removePlayer` call
-
-### Dimension 11 — Function design (honesty & abstraction)
-
-Per AGENTS.md §Function Design Principles:
-
+**Function design (honesty & abstraction):**
 - No hidden global/environment access outside the signature (global PRNG,
   clock reads, static mutable locals, service lookups deep in leaf logic)
 - Dishonesty injected at the lowest possible level — I/O, logging side
@@ -294,14 +348,13 @@ deprecated APIs, module-partition naming, etc.) and feeds the resolution gate.
 **Procedure:**
 1. Enumerate changed files (same list as Step 2).
 2. Batch-call `clion_get_file_problems(filePath=<f>, errorsOnly=false,
-   projectPath="E:/Code/ppr")` per file — ~8 concurrent calls per message.
+   projectPath="E:/Code/ppr")` per file. Group 4–8 files per batch and
+   adjust based on the orchestrator's per-message tool-call limit.
    See `clion-tools` SKILL.md §6 for the exact signature.
 3. Each returned problem becomes a finding tagged **`[IDE]`** with
    provenance (inspection ID, severity, file:line). These findings enter
    Steps 4–6 like any other finding but are **exempt from Step 4's
    per-finding subagent fact-check** — IDE output is ground truth.
-
----
 
 ### Step 4 — Validate each finding (mandatory parallel fact-check)
 
@@ -360,6 +413,11 @@ remediation happens exclusively through delegation.
 → gate green. Leftovers after 3 rounds → blocking ❌ entries in the final
 report.
 
+**Enforcement:** track round number explicitly. After round 3, stop
+dispatching `@fixer`. Report remaining unresolved errors as blocking ❌ in
+the Step 7 summary. Do not continue the loop. Early-exit: if a round
+produces zero new fixes or suppressions, exit immediately.
+
 **Suppression-comment policy:** suppression comments are exceptional and
 reconcile with Dimension 9's no-comments rule by requiring oracle
 confirmation + a cited rationale. Errors are never suppressible.
@@ -414,18 +472,20 @@ return {ptr, size};
 **Most critical**: Memory leak in lib/Core.Foo.cppm:156 (Error)
 ```
 
----
+**Machine-readable summary** (append after the markdown table for
+downstream agent consumption):
 
-## Constraints
-
-- Review only files tracked by git; exclude `build/`, vcpkg install paths,
-  and `out/` (mirror `.gitignore`).
-- Every finding must cite a specific AGENTS.md rule or named C++ best
-  practice; never present unvalidated findings (Step 4 is mandatory).
-- The reviewer never edits code inline; remediation happens exclusively via
-  delegated subagents (`@fixer` for fixes, `@oracle` for FP adjudication).
-- Test files must use `PPR_TEST_ASSERT`; flag any `PPR_ASSERT`/`PPR_VERIFY`
-  inside `PPR_UNIT_TEST` bodies.
-- Suppression comments are exceptional, require oracle confirmation, and
-  must cite the inspection ID + rationale. Errors are never suppressible.
-- Resolution gate: max 3 rounds; leftovers are blocking ❌.
+```json
+{
+  "zones": [
+    {"zone": "lib/", "errors": 2, "warnings": 5, "suggestions": 8, "ide": {"fixed": 3, "suppressed": 1, "open": 0}},
+    {"zone": "game/", "errors": 0, "warnings": 1, "suggestions": 3, "ide": {"fixed": 0, "suppressed": 0, "open": 0}},
+    {"zone": "cmake/", "errors": 0, "warnings": 0, "suggestions": 1, "ide": {"fixed": 0, "suppressed": 0, "open": 0}}
+  ],
+  "suppressed": [
+    {"file": "lib/engine/foo.h:42", "inspection": "UnusedInclude", "rationale": "..."}
+  ],
+  "gate": "green" | "red",
+  "rounds_used": 1
+}
+```

@@ -413,7 +413,7 @@ clang-format does not enforce module architecture. The repo split:
 ## Function Design Principles
 
 Normative rules for designing functions and APIs. Enforced by `code-reviewer`
-Dimension 11; refactors and new code follow them too.
+Dimension 9; refactors and new code follow them too.
 
 ### Honesty
 - A function accesses the outside world **only through its signature** — never reads or writes state invisible to callers (clock, global/static mutable state, conjured singletons).
