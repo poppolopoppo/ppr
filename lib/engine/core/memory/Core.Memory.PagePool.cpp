@@ -46,14 +46,14 @@ namespace pP::mem {
             }
         }
 
-        m_full_bundle.fill(umax_v);
+        m_full_bundle.fill(max_v);
     }
 
     std::allocation_result<void *> PagePool::reclaimFullBundle_() {
         void *free_page = nullptr;
         for (u32 i = 0u; i < bundle_max_count; i++) {
             const u32 page_index = m_full_bundle[i];
-            m_full_bundle[i] = umax_v;
+            m_full_bundle[i] = max_v;
 
             if (page_index < m_tree_infos.m_desired_size) [[likely]] {
                 if (free_page) [[likely]] {
@@ -132,7 +132,7 @@ namespace pP::mem {
         PPR_ASSERT(alignBackward(m_reserved_space, std::align_val_t{hal::page_size}) == m_reserved_space);
         PPR_ASSERT(m_tree_infos.m_desired_size == num_reserved_pages);
 
-        m_full_bundle.fill(umax_v);
+        m_full_bundle.fill(max_v);
 
         const std::size_t metadata_size_bytes = alignForward(
             m_tree_infos.getAllocationSize(),
@@ -379,7 +379,7 @@ namespace pP::mem {
     constexpr u32 BitmapTree::allocate(const BuildInfos &infos, bool &out_was_empty) noexcept {
         // returns leaf index or UMax if full
         if (isFull()) [[unlikely]] {
-            return umax_v;
+            return max_v;
         }
 
         u32 d = 0u;
@@ -467,7 +467,7 @@ namespace pP::mem {
     constexpr u32 BitmapTree::nextAllocateBit(const BuildInfos &infos) const noexcept {
         // returns leaf index or UMax if full
         if (isFull()) [[unlikely]] {
-            return umax_v;
+            return max_v;
         }
 
         u32 bit = 0u;
@@ -486,7 +486,7 @@ namespace pP::mem {
     constexpr u32 BitmapTree::nextAllocateBit(const BuildInfos &infos, const u32 after) const noexcept {
         // returns leaf index or UMax if full
         if (after >= infos.m_desired_size || isFull()) [[unlikely]] {
-            return umax_v;
+            return max_v;
         }
 
         u32 d = infos.m_tree_depth - 1u;
@@ -531,7 +531,7 @@ namespace pP::mem {
             std::unreachable();
         }
 
-        return umax_v;
+        return max_v;
     }
 
     void UnitTest::bit_tree_mechanics() {

@@ -1046,7 +1046,7 @@ export namespace pP::mem {
             }
 
             // look for the first unused pool index
-            u32 free_pool_index = umax_v;
+            u32 free_pool_index = max_v;
             for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
                 if (m_pools[pool_index] == nullptr) {
                     free_pool_index = pool_index;

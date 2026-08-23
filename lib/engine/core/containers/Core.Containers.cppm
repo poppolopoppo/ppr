@@ -451,7 +451,7 @@ export namespace pP {
                 m_bits &= m_bits - integral_type(1);
                 return front;
             }
-            return umax_v;
+            return max_v;
         }
 
         [[nodiscard]] constexpr u32 popAssumeNotEmpty() noexcept {

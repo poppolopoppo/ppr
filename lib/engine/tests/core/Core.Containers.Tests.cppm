@@ -73,7 +73,7 @@ export namespace pP::tests {
             const u32 first = m.pop();
             PPR_TEST_ASSERT(first == 2u);
             m.set(1);
-            PPR_TEST_ASSERT(m.popAssumeNotEmpty() != umax_v);
+            PPR_TEST_ASSERT(m.popAssumeNotEmpty() != max_v);
         };
 
         PPR_UNIT_TEST(bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst) {

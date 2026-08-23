@@ -1,5 +1,7 @@
 module;
 
+#include <limits>
+
 #include "pP/Macros.h"
 
 export module engine.core:types;
@@ -65,14 +67,16 @@ export namespace pP {
 
     struct DefaultValue final {
         // Constrain both conversion and comparison to default-constructible types.
-        template<typename T> requires std::is_default_constructible_v<T>
+        template<typename T>
+            requires std::is_default_constructible_v<T>
         // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator T() const
             noexcept(std::is_nothrow_default_constructible_v<T>) {
             return T{};
         }
 
-        template<typename T> requires std::is_default_constructible_v<T>
+        template<typename T>
+            requires std::is_default_constructible_v<T>
         [[nodiscard]] friend constexpr bool operator==(DefaultValue, T rhs)
             noexcept(std::is_nothrow_default_constructible_v<T> &&
                      noexcept(T{} == rhs)) {
@@ -82,11 +86,12 @@ export namespace pP {
 
     struct ZeroValue final {
         // Constrain both conversion and comparison to int-constructible types.
-        template<typename T> requires std::is_constructible_v<T, int>
+        template<typename IntT>
+            requires std::is_constructible_v<IntT, int>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator T() const
-            noexcept(std::is_nothrow_constructible_v<T, int>) {
-            return T{0};
+        [[nodiscard]] constexpr operator IntT() const
+            noexcept(std::is_nothrow_constructible_v<IntT, int>) {
+            return IntT{0};
         }
 
         // Constrain both conversion and comparison to int-constructible types.
@@ -96,11 +101,17 @@ export namespace pP {
             return nullptr;
         }
 
-        template<typename T> requires std::is_constructible_v<T, int>
-        [[nodiscard]] friend constexpr bool operator==(ZeroValue, T rhs)
-            noexcept(std::is_nothrow_constructible_v<T, int> &&
-                     noexcept(T{0} == rhs)) {
-            return T{} == rhs;
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator std::nullptr_t() const noexcept {
+            return nullptr;
+        }
+
+        template<typename IntT>
+            requires std::is_constructible_v<IntT, int>
+        [[nodiscard]] friend constexpr bool operator==(ZeroValue, IntT rhs)
+            noexcept(std::is_nothrow_constructible_v<IntT, int> &&
+                     noexcept(IntT{0} == rhs)) {
+            return IntT{} == rhs;
         }
 
         template<typename T>
@@ -110,52 +121,80 @@ export namespace pP {
     };
 
     struct MaxValue final {
-        // Constrain to unsigned integral types only — the ~T(0) trick is
-        // undefined behavior on signed types, so reject them at the constraint level.
-        template<std::integral T>
+        template<std::integral IntT>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator T() const noexcept {
-            return std::numeric_limits<T>::max();
+        [[nodiscard]] constexpr operator IntT() const noexcept {
+            return std::numeric_limits<IntT>::max();
         }
 
-        template<std::integral T>
+        template<std::floating_point FloatT>
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator FloatT() const noexcept {
+            return std::numeric_limits<FloatT>::max();
+        }
+
+        template<typename T> requires std::convertible_to<const MaxValue &, T>
         [[nodiscard]] friend constexpr bool operator==(MaxValue lhs, T rhs) noexcept {
             return T{lhs} == rhs;
         }
 
-        template<std::integral T>
+        template<typename T> requires std::convertible_to<const MaxValue &, T>
         [[nodiscard]] friend constexpr std::strong_ordering operator<=>(MaxValue lhs, T rhs) noexcept {
             return T{lhs} <=> rhs;
         }
     };
 
-    struct Epsilon final {
+    struct MinValue final {
+        template<std::integral IntT>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator float() const noexcept {
-            return 1e-3f;
+        [[nodiscard]] constexpr operator IntT() const noexcept {
+            return std::numeric_limits<IntT>::lowest();
         }
 
+        template<std::floating_point FloatT>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator double() const noexcept {
-            return 1e-6;
+        [[nodiscard]] constexpr operator FloatT() const noexcept {
+            return std::numeric_limits<FloatT>::lowest();
         }
 
-        template<std::floating_point T>
-        [[nodiscard]] friend constexpr bool operator==(Epsilon lhs, T rhs) noexcept {
+        template<typename T> requires std::convertible_to<const MinValue &, T>
+        [[nodiscard]] friend constexpr bool operator==(MinValue lhs, T rhs) noexcept {
             return T{lhs} == rhs;
         }
 
-        template<std::floating_point T>
-        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(Epsilon lhs, T rhs) noexcept {
+        template<typename T> requires std::convertible_to<const MinValue &, T>
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(MinValue lhs, T rhs) noexcept {
             return T{lhs} <=> rhs;
+        }
+    };
+
+    struct Epsilon final {
+        template<std::floating_point FloatT>
+        // ReSharper disable once CppNonExplicitConversionOperator
+        [[nodiscard]] constexpr operator FloatT() const noexcept {
+            return std::numeric_limits<FloatT>::epsilon();
+        }
+
+        template<std::floating_point FloatT>
+        [[nodiscard]] friend constexpr bool operator==(Epsilon lhs, FloatT rhs) noexcept {
+            return FloatT{lhs} == rhs;
+        }
+
+        template<std::floating_point FloatT>
+        [[nodiscard]] friend constexpr auto operator<=>(Epsilon lhs, FloatT rhs) noexcept {
+            return FloatT{lhs} <=> rhs;
         }
     };
 
     inline constexpr DefaultValue default_value_v;
     inline constexpr Epsilon epsilon_v;
     inline constexpr MaxValue none_v;
-    inline constexpr MaxValue umax_v;
+    inline constexpr MaxValue max_v;
+    inline constexpr MinValue min_v;
     inline constexpr ZeroValue zero_v;
+
+    template<typename T> requires std::convertible_to<const Epsilon &, T>
+    constexpr T epsilon_t{epsilon_v};
 
     // ------------------------------------------------------------------
     // strongly-typed numeric types
@@ -191,7 +230,7 @@ export namespace pP {
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr Numeric(const MaxValue) noexcept
             requires std::is_unsigned_v<T>
-            : m_value{std::numeric_limits<T>::max()} {
+            : m_value{max_v} {
         }
 
         [[nodiscard]] constexpr T operator*() const noexcept {

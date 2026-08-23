@@ -88,7 +88,7 @@ namespace pP::mem {
         [[nodiscard]] constexpr u32 allocate(const BuildInfos &infos, bool &out_was_empty) noexcept;
 
         struct AllocRange {
-            u32 m_first_bit{umax_v};
+            u32 m_first_bit{max_v};
             u32 m_bit_count{0u};
         };
 

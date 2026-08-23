@@ -49,12 +49,12 @@ export namespace pP {
             u32 m_slice_first{0u};
             u32 m_slice_last{0u};
 
-            u32 m_index{umax_v}; // umax_v means end()
+            u32 m_index{max_v}; // umax_v means end()
 
             // cold path
             constexpr void initFromIndexFallback_() noexcept {
                 if (!m_vector || m_index >= m_vector->m_size) {
-                    m_index = umax_v;
+                    m_index = max_v;
                     m_slice_ptr = nullptr;
                     m_slice_first = m_slice_last = 0u;
                     return;
@@ -128,8 +128,8 @@ export namespace pP {
             }
 
             [[nodiscard]] PPR_FORCE_INLINE constexpr u32 getIndex() const noexcept {
-                PPR_ASSERT(m_index != umax_v || m_vector);
-                return (m_index == umax_v ? m_vector->m_size : m_index);
+                PPR_ASSERT(m_index != max_v || m_vector);
+                return (m_index == max_v ? m_vector->m_size : m_index);
             }
 
             [[nodiscard]] PPR_FORCE_INLINE constexpr pointer getPointer() const noexcept {
@@ -153,7 +153,7 @@ export namespace pP {
             // increment
             // ------------------------------------------------------------
             constexpr StableVectorIterator &operator++() noexcept {
-                PPR_ASSERT(m_index != umax_v);
+                PPR_ASSERT(m_index != max_v);
                 ++m_index;
                 initFromIndex_();
                 return *this;
@@ -170,7 +170,7 @@ export namespace pP {
             // ------------------------------------------------------------
             constexpr StableVectorIterator &operator--() noexcept {
                 const u32 actual_index = getIndex();
-                m_index = actual_index > 0u ? actual_index - 1u : umax_v;
+                m_index = actual_index > 0u ? actual_index - 1u : max_v;
                 initFromIndex_();
                 return *this;
             }
@@ -530,10 +530,10 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, 0u); }
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, umax_v); }
+        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, max_v); }
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0u); }
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, umax_v); }
+        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, max_v); }
 
         [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
         [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }

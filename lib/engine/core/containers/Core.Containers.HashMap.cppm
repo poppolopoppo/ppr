@@ -110,13 +110,13 @@ export namespace pP {
 
             constexpr void initFromIndex_() noexcept {
                 if (!m_hash_table || m_slot >= m_hash_table->capacity()) [[unlikely]] {
-                    m_slot = umax_v;
+                    m_slot = max_v;
                 }
             }
 
             hashmap_pointer m_hash_table{nullptr};
 
-            u32 m_slot{umax_v}; // umax_v means end()
+            u32 m_slot{max_v}; // umax_v means end()
 #if PPR_ENABLE_DEBUG
             u32 m_revision{0u};
 #endif
@@ -201,7 +201,7 @@ export namespace pP {
 
                 for (;;) {
                     if (++m_slot == m_hash_table->m_capacity_pow2_m1 + 1u) [[unlikely]] {
-                        m_slot = umax_v;
+                        m_slot = max_v;
                         break;
                     }
                     if (m_hash_table->m_metadata[m_slot].m_psl != 0u) [[likely]] {
@@ -227,7 +227,7 @@ export namespace pP {
 
                 for (;;) {
                     if (m_slot-- == 0u) [[unlikely]] {
-                        m_slot = umax_v;
+                        m_slot = max_v;
                         break;
                     }
                     if (m_hash_table->m_metadata[m_slot].m_psl != 0u) [[likely]] {
@@ -419,7 +419,7 @@ export namespace pP {
                 }
             }
 
-            return {umax_v, false};
+            return {max_v, false};
         }
 
         value_type *m_values{nullptr};
@@ -546,7 +546,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr iterator end() noexcept {
-            return iterator(this, umax_v);
+            return iterator(this, max_v);
         }
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept {
@@ -554,7 +554,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr const_iterator end() const noexcept {
-            return const_iterator(this, umax_v);
+            return const_iterator(this, max_v);
         }
 
         [[nodiscard]] constexpr const_iterator cbegin() const noexcept {

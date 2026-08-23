@@ -564,7 +564,7 @@ export namespace pP {
             return end();
         }
 
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, umax_v); }
+        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, max_v); }
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept {
             if (const auto first = stable_vector::begin(); first != stable_vector::end()) {
@@ -573,7 +573,7 @@ export namespace pP {
             return end();
         }
 
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, umax_v); }
+        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, max_v); }
 
         [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
         [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }
