@@ -143,26 +143,28 @@
         "temperature": 0.4,
         "variant": "max",
         "skills": ["simplify", "code-reviewer", "concurrency-patterns", "memory-allocator", "hal-developer"],
-        "mcps": ["clion"]
+        "mcps": ["clion", "codegraph"]
       },
       "explorer": {
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.2,
         "skills": ["git-log-fast-navigation"],
-        "mcps": ["clion"]
+        "mcps": ["clion", "codegraph"]
       },
       "librarian": {
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.2,
         "skills": [],
-        "mcps": ["context7", "gh_grep"]
+        "mcps": ["context7", "gh_grep", "codegraph",
+          "searxng",
+          "crawl4ai"]
       },
       "designer": {
         "model": "opencode/mimo-v2.5-free",
         "temperature": 0.3,
         "variant": "medium",
         "skills": [],
-        "mcps": []
+        "mcps": ["codegraph"]
       },
       "fixer": {
         "model": "opencode/nemotron-3.5-lightning-free",
@@ -179,7 +181,9 @@
           "memory-allocator",
           "hal-developer"
         ],
-        "mcps": ["clion"]
+        "mcps": ["clion", "codegraph",
+          "searxng",
+          "crawl4ai"]
       },
       "observer": {
         "model": "opencode/mimo-v2.5-free",
