@@ -35,21 +35,61 @@ checklist. The orchestrator drives the skill; git queries are delegated to
 `@explorer`, squash-pattern and message/secret validation to
 `@oracle`/`code-reviewer`. It never executes `git push`.
 
+## Contract (hard rule)
+
+This skill does **NOT** perform code review. Code is presumed already-reviewed
+by the time commits are pushed. Validation is limited to:
+- working-tree clean / branch-up-to-date gates
+- commit-message format (subject + body shape only)
+- secret-pattern scan in unpushed diffs
+- pre-push checklist (build, tests, push dry-run)
+
+If the user asks for code review, route to `code-reviewer` instead.
+
+## Tools: prefer CLion MCP for git state queries
+
+CLion MCP (`clion_git_status`, `clion_get_repositories`) is index-backed and
+runs in the orchestrator's main lane — no subagent round-trip, no separate
+model context, no per-call cost beyond a single C++ tool invocation. Prefer
+it over spawning `@explorer` for all read-only git state queries
+(file enumeration, branch state, dirty tree flags, changed-file lists).
+Fall back to direct `bash` (`git rev-parse`, `git log --oneline`,
+`git diff --stat`) for full commit content. Fall back to `@explorer` only
+when the work is genuinely `rg`/regex over a multi-megabyte stream
+(secret scan in unpushed diffs).
+
 ## Subagent routing
 
 | Step | Delegate to | Why |
 |------|-------------|-----|
-| `git log origin/main..HEAD`, `git push --dry-run`, `--stat` retrieval | `@explorer` | Isolated shell; read-only git queries |
-| Squash-pattern detection + commit message validation | `@oracle` / `code-reviewer` | Convention checks against PPR + GitHub rules |
-| Secret scan of unpushed diffs | `@oracle` / `code-reviewer` | `rg`-based credential pattern analysis |
-| Emit cleaned push plan + checklist | orchestrator | Aggregation |
+| Repo + unpushed-commit enumeration | orchestrator (in-context, CLion MCP) | `clion_git_status` + direct `bash` for `git log @{u}..HEAD --oneline` |
+| `git push --dry-run`, `--stat` summary | orchestrator (in-context, direct `bash`) | Tiny-scope, predictable output |
+| Secret-pattern scan (`rg` over `git log -p`) | `@explorer` (background, gated) | Pattern-scan is the only step that genuinely needs `rg` on a stream |
+| Squash-pattern detection + dependency ordering | `@oracle` (background) | Judgment on commit history shape |
+| Commit message format validation | orchestrator (inline) | Mechanical: length, mood, blank line, whitespace — see Step 3 checklist |
+| Emit cleaned push plan + checklist | orchestrator | Aggregation + Job Board reconciliation |
 
 ## OMO feature wiring
 
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` limited to `git log/diff/push --dry-run` + `rg` secret scan; `@oracle`/`code-reviewer` gets only read-only git access for message/secret validation.
-- **Background orchestration** — fetch `origin/main..HEAD` log + stat in a background `@explorer` lane while the orchestrator previews push scope; run the secret scan in parallel with message validation.
-- **Session reuse** — cache `origin/main..HEAD` output; re-scan only new commits after a rebase.
-- **`orchestratorPrompt` routing** — trigger on 'push', 'should I push', 'review my commits before pushing', 'clean up my history before push'.
+- **Per-agent `skills`/`mcps` allow-lists** — no skill grants beyond the
+  query subagents already have. `@oracle` keeps `skills: []`. `@explorer`
+  keeps `skills: []`. No `code-reviewer` grant.
+- **Background orchestration** — launch `@explorer` (secret scan via
+  `git log -p @{u}..HEAD | rg ...`) and `@oracle` (squash-pattern detection)
+  as parallel background tasks; the orchestrator runs commit-message format
+  validation inline (it's mechanical — 7-row table). CLion MCP + direct
+  `bash` happen inline in the orchestrator. Reconcile on the Background
+  Job Board before Step 4.
+- **Session reuse** — between commit-planner and push-planner in the same
+  session, the orchestrator's most recent `clion_git_status` call answers
+  the dirty-tree gate (Step 1, lines 82-88). Push-planner does not need a
+  fresh enumeration call if the user committed exactly what commit-planner
+  produced; it only fetches `git log @{u}..HEAD --stat` and verifies the
+  expected commit hash set.
+- **`orchestratorPrompt` routing** — trigger on "review my commits before
+  pushing", "should I push", "clean up my history before push", "pre-push
+  check", "push planner". Do NOT trigger on standalone "push", "send it",
+  or "deploy" without context about commits/history/review.
 
 ---
 

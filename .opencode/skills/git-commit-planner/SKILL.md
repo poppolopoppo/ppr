@@ -214,23 +214,54 @@ After all commits, add a short **Summary** section:
 
 ---
 
+## Contract (hard rule)
+
+This skill does **NOT** perform code review. Code is presumed already-reviewed
+by the time commits are planned. Validation is limited to:
+- working-tree / merge-state gates
+- hunk-level grouping + dependency ordering
+- commit-message format (subject + body shape only)
+
+If the user asks for code review, route to `code-reviewer` instead.
+
+## Tools: prefer CLion MCP for git state queries
+
+CLion MCP (`clion_git_status`, `clion_get_repositories`) is index-backed and
+runs in the orchestrator's main lane — no subagent round-trip, no separate
+model context, no per-call cost beyond a single C++ tool invocation. Prefer
+it over spawning `@explorer` for all read-only git state queries
+(file enumeration, branch state, dirty tree flags, changed-file lists).
+Fall back to direct `bash` (`git rev-parse`, `git log --oneline`,
+`git diff --stat`) for full commit content. Fall back to `@explorer` only
+when the work is genuinely `rg`/regex over a multi-megabyte stream.
+
 ## Subagent routing
 
 | Step | Delegate to | Why |
 |------|-------------|-----|
-| `git status`/`diff`/`log` retrieval | `@explorer` | Isolated shell |
-| Grouping + dependency ordering judgment | `@oracle` | Commit-boundary judgment |
-| Emit plan | orchestrator | Aggregation |
+| Repo + changed-file enumeration | orchestrator (in-context, CLion MCP) | `clion_get_repositories`, `clion_git_status` — index-backed, no subagent cost |
+| Full `git diff HEAD` content retrieval | orchestrator (in-context, direct `bash`) | Diff content is small enough (C++ projects, 50-400 lines/feature) to read inline |
+| Conflict / detached-HEAD gate | orchestrator (in-context, direct `bash`) | `git status --porcelain --branch` blocks push of broken state |
+| Grouping + dependency ordering judgment | `@oracle` (background) | Commit-boundary judgment |
+| Emit plan | orchestrator | Aggregation + Job Board reconciliation |
 
 ## OMO feature wiring
 
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` restricted to
-  `git status/diff/log` (custom agent or allow-list); `@oracle` gets no
-  shell access, only the diff content to judge.
-- **Background orchestration** — fetch diff in background while orchestrator
-  previews scope; merge-conflict and detached-HEAD detection runs first so the
-  orchestrator can stop early.
-- **Session reuse** — reuse `@explorer` session (same file-glob) for
-  incremental diffs after user tweaks; invalidate once the change set differs.
-- **`orchestratorPrompt` routing** — trigger on 'commit', 'stage',
-  'plan my changes', 'how should I split this', 'write commit messages'.
+- **Per-agent `skills`/`mcps` allow-lists** — no subagent skill grants are
+  needed. `@oracle` keeps `skills: []`. CLion MCP is called from the main
+  lane, not by a subagent.
+- **Background orchestration** — launch `@oracle` (grouping) as a single
+  background task. CLion MCP + direct `bash` happen inline in the orchestrator
+  because they are fast (~1-5s per call) and not context-heavy. Reconcile on
+  the Background Job Board. Only split `@oracle` across subsystem zones if
+  the diff exceeds ~400 lines across 3+ subsystems (one background oracle
+  per zone; reconcile dependency order in main lane).
+- **Session reuse** — the orchestrator's recent CLion MCP calls are kept in
+  the active turn's context. On a "tweak and re-plan" follow-up, re-run
+  `clion_git_status` to detect new/removed/changed files before deciding
+  whether a full plan re-issuance is needed.
+- **`orchestratorPrompt` routing** — trigger on "plan my commits", "how
+  should I split my changes", "write commit messages", "review my
+  uncommitted changes", "help me commit", "atomic commit plan". Do NOT
+  trigger on standalone "commit", "stage", or "save" without context
+  about changes/messages.
