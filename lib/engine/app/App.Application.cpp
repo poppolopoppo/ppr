@@ -5,7 +5,7 @@ module;
 module engine.app;
 
 import :application;
-import :camera;
+import :viewport.camera;
 import :input.replay;
 import :platform;
 import :renderer;
@@ -44,7 +44,9 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(App, initialize());
         PPR_DEFER {
             if (const std::error_code err = shutdown()) {
-                throw std::system_error(err);
+                if (std::uncaught_exceptions() == 0) {
+                    throw std::system_error(err);
+                }
             }
         };
 
@@ -73,7 +75,7 @@ namespace pP {
             {"name", m_name},
             {"platform", hal::platformName()},
             {"args", opaqueValue(m_arguments)},
-        });
+            });
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->initialize(*this));
 
@@ -94,6 +96,7 @@ namespace pP {
         m_cached_input_service = m_services.get<IInputService>();
         std::ignore = m_camera_service.initialize(*m_services.get<IInputService>());
         std::ignore = m_scene_services.insert(safe_ptr<ICameraService>{&m_camera_service});
+        m_cached_camera_service = safe_ptr<ICameraService>{&m_camera_service};
 
         if (auto result = m_cached_window_service->createWindow(WindowModel{
             .m_title = m_name,
@@ -206,66 +209,71 @@ namespace pP {
         return default_value_v;
     }
 
-std::error_code Application::render() {
-    PPR_ASSERT(m_cached_window_service.isValid());
-    PPR_ASSERT(m_main_window.isValid());
+    std::error_code Application::render() {
+        PPR_ASSERT(m_cached_window_service.isValid());
+        PPR_ASSERT(m_main_window.isValid());
 
-    if (m_renderer) [[likely]] {
-        const int2 fb = m_main_window->m_framebuffer_size;
+        if (m_renderer) [[likely]] {
+            const int2 fb = m_main_window->m_framebuffer_size;
 
-        // m_renderer is a std::unique_ptr<Renderer> member; this raw capture is
-        // valid because render() is synchronous and m_renderer outlives the call.
-        const auto scene_draw = [this, renderer = m_renderer.get()]
-                                (rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
-            // Resolve the camera from the scene viewport's store (parent-chain
-            // fallback to root); render nothing if no camera is registered.
-            const safe_ptr<ICameraService> cam_svc = m_scene_services.tryGet<ICameraService>();
-            if (not cam_svc.isValid()) return std::error_code{};
-            return renderer->drawTriangle(pass, cam_svc->camera(), viewport, scissor);
-        };
-        const ViewportEntry scene_entry{
-            .viewport = rhi::Viewport{
-                0.0f, 0.0f,
-                static_cast<float>(fb.x),
-                static_cast<float>(fb.y),
-                0.0f, 1.0f},
-            .scissor = rhi::ScissorRect{
-                0, 0,
-                static_cast<u32>(fb.x),
-                static_cast<u32>(fb.y)},
-            .draw = scene_draw,
-        };
+            // m_renderer is a std::unique_ptr<Renderer> member; this raw capture is
+            // valid because render() is synchronous and m_renderer outlives the call.
+            const auto scene_draw = [this, renderer = m_renderer.get()]
+            (rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
+                // Use the camera service cached during initialize; render nothing
+                // if no camera is registered.
+                const safe_ptr<ICameraService> cam_svc = m_cached_camera_service;
+                if (not cam_svc.isValid())
+                    return std::error_code{};
+                return renderer->drawTriangle(pass, cam_svc->camera(), viewport, scissor);
+            };
+            const ViewportEntry scene_entry{
+                .viewport = rhi::Viewport{
+                    0.0f, 0.0f,
+                    static_cast<float>(fb.x),
+                    static_cast<float>(fb.y),
+                    0.0f, 1.0f
+                },
+                .scissor = rhi::ScissorRect{
+                    0, 0,
+                    static_cast<u32>(fb.x),
+                    static_cast<u32>(fb.y)
+                },
+                .draw = scene_draw,
+            };
 
-        // ui_store is a safe_ptr to m_ui_services (an Application member), used only
-        // within this render() call, so m_ui_services outlives the lambda. Debug
-        // mode ref-counts the capture; release mode is a plain pointer copy.
-        const auto ui_draw = [ui_store = safe_ptr<ServicesStore>(&m_ui_services),
-                              ui_size = float2{static_cast<float>(fb.x), static_cast<float>(fb.y)}]
-                             (rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
-            auto ui = ui_store->get<IUIService>();
-            return ui->renderOverlay(pass, ui_size);
-        };
-        const ViewportEntry ui_entry{
-            .viewport = rhi::Viewport{
-                0.0f, 0.0f,
-                static_cast<float>(fb.x),
-                static_cast<float>(fb.y),
-                0.0f, 1.0f},
-            .scissor = rhi::ScissorRect{
-                0, 0,
-                static_cast<u32>(fb.x),
-                static_cast<u32>(fb.y)},
-            .draw = ui_draw,
-        };
+            // ui_store is a safe_ptr to m_ui_services (an Application member), used only
+            // within this render() call, so m_ui_services outlives the lambda. Debug
+            // mode ref-counts the capture; release mode is a plain pointer copy.
+            const auto ui_draw = [ui_store = safe_ptr<ServicesStore>(&m_ui_services),
+                                  ui_size = float2{static_cast<float>(fb.x), static_cast<float>(fb.y)}]
+            (rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
+                auto ui = ui_store->get<IUIService>();
+                return ui->renderOverlay(pass, ui_size);
+            };
+            const ViewportEntry ui_entry{
+                .viewport = rhi::Viewport{
+                    0.0f, 0.0f,
+                    static_cast<float>(fb.x),
+                    static_cast<float>(fb.y),
+                    0.0f, 1.0f
+                },
+                .scissor = rhi::ScissorRect{
+                    0, 0,
+                    static_cast<u32>(fb.x),
+                    static_cast<u32>(fb.y)
+                },
+                .draw = ui_draw,
+            };
 
-        const ViewportEntry viewports[] = {scene_entry, ui_entry};
-        PPR_RETURN_ERROR_ON_FAIL(App, m_renderer->render(viewports));
-    } else {
-        m_cached_window_service->swapWindowBuffers(*m_main_window);
+            const ViewportEntry viewports[] = {scene_entry, ui_entry};
+            PPR_RETURN_ERROR_ON_FAIL(App, m_renderer->render(viewports));
+        } else {
+            m_cached_window_service->swapWindowBuffers(*m_main_window);
+        }
+
+        return default_value_v;
     }
-
-    return default_value_v;
-}
 
     std::error_code Application::shutdown() noexcept {
         if (m_state >= EState::terminated) [[unlikely]] {

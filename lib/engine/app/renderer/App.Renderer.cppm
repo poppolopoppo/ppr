@@ -1,10 +1,9 @@
 module;
-#include "pP/Macros.h"
 export module engine.app:renderer;
 
 import :service.window;
 import :viewport;
-import :camera;
+import :viewport.camera;
 import engine.math;
 import engine.core;
 import engine.rhi;
@@ -25,7 +24,7 @@ export namespace pP {
 
         [[nodiscard]] rhi::Format getSurfaceFormat() const noexcept;
 
-        [[nodiscard]] std::error_code render(std::optional<OverlayCallback> overlay);
+        [[nodiscard]] std::error_code render(const std::optional<OverlayCallback> &overlay);
 
         [[nodiscard]] std::error_code render(std::span<const ViewportEntry> viewports);
 
@@ -55,7 +54,7 @@ export namespace pP {
         /// resolved from it; must be re-run whenever the pipeline is rebuilt.
         [[nodiscard]] std::error_code resolveFrameCursor_(rhi::IDevice &device);
 
-        [[nodiscard]] std::error_code createSurface_(IWindowService &window_service, const Window &window);
+        [[nodiscard]] std::error_code createSurface_(const IWindowService &window_service, const Window &window);
 
         /// Encodes and submits the viewports into a color target without waiting;
         /// the caller is responsible for synchronization (present or explicit wait).

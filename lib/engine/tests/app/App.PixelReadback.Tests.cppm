@@ -159,7 +159,7 @@ export namespace pP::tests {
         // identity-camera 3-arg overload, which never exercises Camera::viewProjection().
         Camera scene_camera;
         {
-            const float4x4 view = lookAt(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
+            const float4x4 view = makeLookAtMatrix(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
             const float4x4 proj = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, 60.0f * std::numbers::pi_v<float> / 180.0f, 1.0f, 0.1f, 1000.0f);
             scene_camera.setView(view);
             scene_camera.setProjection(proj);

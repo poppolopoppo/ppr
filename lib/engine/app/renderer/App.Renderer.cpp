@@ -2,12 +2,13 @@ module;
 #include "pP/Macros.h"
 #include <slang.h>
 #include <slang-com-ptr.h>
+#include <system_error>
 module engine.app;
 
 import :renderer;
 import :service.window;
 import :window.handle;
-import :camera;
+import :viewport.camera;
 import std;
 import engine.core;
 import engine.math;
@@ -269,7 +270,7 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Renderer::createSurface_(IWindowService &window_service, const Window &window) {
+    std::error_code Renderer::createSurface_(const IWindowService &window_service, const Window &window) {
         void *const native = window_service.getNativeHandle(window);
         if (native == nullptr) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
@@ -290,7 +291,7 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code Renderer::render(const std::optional<OverlayCallback> overlay) {
+    std::error_code Renderer::render(const std::optional<OverlayCallback> &overlay) {
         if (overlay) {
             // Apply pending resize before building viewport entries
             if (m_pending_resize.has_value()) {
@@ -359,7 +360,7 @@ namespace pP {
             frame.m_view = camera.view();
             frame.m_projection = camera.projection();
             frame.m_view_projection = camera.viewProjection();
-            frame.m_inverse_view_projection = camera.inverseViewProjection();
+            frame.m_inverse_view_projection = camera.invertViewProjection();
             frame.m_camera_position = float4{camera.position(), 0.0f};
             frame.m_camera_velocity = float4{camera.velocity(), 0.0f};
             frame.m_viewport_size = float4{camera.viewportSize(), 0.0f, 0.0f};

@@ -53,7 +53,7 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(camera_model) {
         Camera cam;
-        const float4x4 view = lookAt(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 view = makeLookAtMatrix(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 proj = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, 1.0f, 1.0f, 0.1f, 100.0f);
         cam.setView(view);
         cam.setProjection(proj);
@@ -111,7 +111,12 @@ export namespace pP::tests {
         Camera cam;
         FreeCameraController ctrl;
         ctrl.activate(input, cam);
-        ctrl.update(std::chrono::milliseconds{16});
+        // Speed up position convergence so a single frame moves the camera measurably
+        // (the default 0.15 inertia converges at ~1e-12/frame).
+        ctrl.setPositionInertia(2.0f);
+        CameraModel model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        cam.updateModel(model, int2{1920, 1080});
 
         InputMapping mapping{"FreeCameraTest"};
         ctrl.provideInputActionKeyMappings(mapping);
@@ -126,17 +131,18 @@ export namespace pP::tests {
             InputDeviceID{0u},
             EInputMessageEvent::pressed};
         (void)listener.postKeyEvent(msg);
-        ctrl.update(std::chrono::milliseconds{16});
+        model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        cam.updateModel(model, int2{1920, 1080});
         PPR_TEST_ASSERT(std::isfinite(cam.position().x));
         PPR_TEST_ASSERT(distance(cam.position(), initial) > kEps);
-        // W should move the camera forward (toward the look target). At yaw=0, pitch=0,
-        // forward = (0,0,-1), so W moves the eye in -Z direction.
-        PPR_TEST_ASSERT(cam.position().z < initial.z);
+        // W moves the camera forward. At identity rotation, forward = +Z (CameraModel default).
+        PPR_TEST_ASSERT(cam.position().z > initial.z);
         ctrl.deactivate();
     };
 
     PPR_UNIT_TEST(lookat_canonical) {
-        const float4x4 view = lookAt(float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 0.0f, -1.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 view = makeLookAtMatrix(float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 0.0f, -1.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 expected{
             float4{ 1.0f, 0.0f, 0.0f, 0.0f},
             float4{ 0.0f, 1.0f, 0.0f, 0.0f},
@@ -149,7 +155,7 @@ export namespace pP::tests {
         const float3 eye{1.0f, 2.0f, 3.0f};
         const float3 target{4.0f, 5.0f, 6.0f};
         const float3 up{0.0f, 1.0f, 0.0f};
-        const float4x4 view = lookAt(eye, target, up);
+        const float4x4 view = makeLookAtMatrix(eye, target, up);
         const float4 eye_view = float4{eye, 1.0f} * view;
         PPR_TEST_ASSERT(std::abs(eye_view.x) < kEps);
         PPR_TEST_ASSERT(std::abs(eye_view.y) < kEps);
@@ -161,7 +167,7 @@ export namespace pP::tests {
         const float3 eye{0.0f, 0.0f, 5.0f};
         const float3 target{0.0f, 0.0f, 0.0f};
         const float3 up{0.0f, 1.0f, 0.0f};
-        const float4x4 view = lookAt(eye, target, up);
+        const float4x4 view = makeLookAtMatrix(eye, target, up);
         const float4 target_view = float4{target, 1.0f} * view;
         const float d = distance(eye, target);
         PPR_TEST_ASSERT(std::abs(target_view.x) < kEps);
@@ -171,7 +177,7 @@ export namespace pP::tests {
     };
 
     PPR_UNIT_TEST(lookat_orthonormal_bis) {
-        const float4x4 view = lookAt(float3{1.0f, 2.0f, 3.0f}, float3{4.0f, 5.0f, 6.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 view = makeLookAtMatrix(float3{1.0f, 2.0f, 3.0f}, float3{4.0f, 5.0f, 6.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4 x = view[0];
         const float4 y = view[1];
         const float4 z = view[2];
@@ -216,7 +222,8 @@ export namespace pP::tests {
         PanCameraController ctrl;
         ctrl.activate(input, cam);
         PPR_TEST_ASSERT(not matEq(cam.projection(), float4x4{}));
-        ctrl.update(std::chrono::milliseconds{16});
+        CameraModel model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
 
         InputMapping mapping{"PanCameraTest"};
         ctrl.provideInputActionKeyMappings(mapping);
@@ -231,7 +238,8 @@ export namespace pP::tests {
             InputDeviceID{0u},
             EInputMessageEvent::pressed};
         (void)listener.postKeyEvent(msg);
-        ctrl.update(std::chrono::milliseconds{16});
+        model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(std::isfinite(cam.position().x));
         PPR_TEST_ASSERT(distance(cam.position(), initial) > kEps);
         // W should move the camera forward (toward the look target). At yaw=0, pitch=0,
@@ -327,19 +335,19 @@ export namespace pP::tests {
         cam.update(std::chrono::seconds{1});
 
         // Normal movement produces velocity.
-        cam.updateModel(CameraModel{float3{1.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false});
+        cam.updateModel(CameraModel{.position = float3{1.0f, 0.0f, 0.0f}, .cameraCut = false}, int2{1920, 1080});
         cam.update(std::chrono::seconds{1});
         PPR_TEST_ASSERT(std::abs(cam.velocity().x - 1.0f) < kEps);
 
         // A cut frame zeroes velocity despite the position jump.
-        cam.updateModel(CameraModel{float3{5.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true});
+        cam.updateModel(CameraModel{.position = float3{5.0f, 0.0f, 0.0f}, .cameraCut = true}, int2{1920, 1080});
         cam.update(std::chrono::seconds{1});
         PPR_TEST_ASSERT(std::abs(cam.velocity().x) < kEps);
         PPR_TEST_ASSERT(std::abs(cam.velocity().y) < kEps);
         PPR_TEST_ASSERT(std::abs(cam.velocity().z) < kEps);
 
         // Tracking resumes from the post-cut baseline: no teleport spike.
-        cam.updateModel(CameraModel{float3{6.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false});
+        cam.updateModel(CameraModel{.position = float3{6.0f, 0.0f, 0.0f}, .cameraCut = false}, int2{1920, 1080});
         cam.update(std::chrono::seconds{1});
         PPR_TEST_ASSERT(std::abs(cam.velocity().x - 1.0f) < kEps);
         PPR_TEST_ASSERT(std::abs(cam.velocity().y) < kEps);
@@ -380,6 +388,246 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::isfinite(frustum.boundingMax().x));
     };
 
+    PPR_UNIT_TEST(camera_mode_accessors) {
+        Camera cam;
+        PPR_TEST_ASSERT(cam.mode() == ECameraProjection::Perspective);
+        cam.setMode(ECameraProjection::Orthographic);
+        PPR_TEST_ASSERT(cam.mode() == ECameraProjection::Orthographic);
+        cam.setMode(ECameraProjection::Perspective);
+        PPR_TEST_ASSERT(cam.mode() == ECameraProjection::Perspective);
+    };
+
+    PPR_UNIT_TEST(camera_state_accessors) {
+        Camera cam;
+        // Default state: both current and previous are zero-positioned.
+        PPR_TEST_ASSERT(distance(cam.currentState().model.position, float3{zero_v}) < kEps);
+        PPR_TEST_ASSERT(distance(cam.previousState().model.position, float3{zero_v}) < kEps);
+
+        // updateModel applies to currentState; previousState is untouched until update().
+        const CameraModel model{
+            .position = float3{1.0f, 2.0f, 3.0f},
+            .right = float3{1.0f, 0.0f, 0.0f},
+            .up = float3{0.0f, 1.0f, 0.0f},
+            .forward = float3{0.0f, 0.0f, 1.0f},
+            .fov = 1.0f,
+            .zNear = 0.5f,
+            .zFar = 500.0f,
+            .cameraCut = false,
+        };
+        cam.updateModel(model, int2{800, 600});
+        PPR_TEST_ASSERT(distance(cam.currentState().model.position, float3{1.0f, 2.0f, 3.0f}) < kEps);
+        PPR_TEST_ASSERT(distance(cam.previousState().model.position, float3{zero_v}) < kEps);
+        PPR_TEST_ASSERT(cam.viewportSize().x == 800.0f);
+        PPR_TEST_ASSERT(cam.viewportSize().y == 600.0f);
+
+        // update() re-baselines previous to current.
+        cam.update(std::chrono::milliseconds{16});
+        PPR_TEST_ASSERT(distance(cam.previousState().model.position, float3{1.0f, 2.0f, 3.0f}) < kEps);
+    };
+
+    PPR_UNIT_TEST(camera_basis_accessors) {
+        Camera cam;
+        const CameraModel model{
+            .position = float3{0.0f, 0.0f, 5.0f},
+            .right = float3{1.0f, 0.0f, 0.0f},
+            .up = float3{0.0f, 1.0f, 0.0f},
+            .forward = float3{0.0f, 0.0f, -1.0f},
+            .fov = 1.0f,
+            .zNear = 0.1f,
+            .zFar = 100.0f,
+            .cameraCut = false,
+        };
+        cam.updateModel(model, int2{1920, 1080});
+        PPR_TEST_ASSERT(distance(cam.up(), model.up) < kEps);
+        PPR_TEST_ASSERT(distance(cam.forward(), model.forward) < kEps);
+        PPR_TEST_ASSERT(distance(cam.right(), model.right) < kEps);
+        PPR_TEST_ASSERT(distance(cam.position(), model.position) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.zNear() - 0.1f) < kEps);
+        PPR_TEST_ASSERT(std::abs(cam.zFar() - 100.0f) < kEps);
+        // Frustum is derived from the view-projection; must be finite.
+        PPR_TEST_ASSERT(std::isfinite(cam.frustum().boundingMin().x));
+        PPR_TEST_ASSERT(std::isfinite(cam.frustum().boundingMax().x));
+    };
+
+    PPR_UNIT_TEST(camera_inverse_accessors) {
+        Camera cam;
+        const float4x4 view = makeLookAtMatrix(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 proj = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, 1.0f, 1.0f, 0.1f, 100.0f);
+        cam.setView(view);
+        cam.setProjection(proj);
+        PPR_TEST_ASSERT(matEq(cam.invertView(), inverse(view)));
+        PPR_TEST_ASSERT(matEq(cam.invertProjection(), inverse(proj)));
+        PPR_TEST_ASSERT(matEq(cam.invertViewProjection(), inverse(view * proj)));
+        // Legacy alias matches the new accessor.
+        PPR_TEST_ASSERT(matEq(cam.inverseViewProjection(), cam.invertViewProjection()));
+    };
+
+    // The PPE-parity FreeCameraController writes basis vectors from the rotation quaternion:
+    // right/up/forward are the quaternion-transformed local axes. The up must be the transformed
+    // local up (not PPE's world_up - transformed_up formula).
+    PPR_UNIT_TEST(camera_free_look_basis_convention) {
+        StubInputService input;
+        Camera cam;
+        FreeCameraController ctrl;
+        ctrl.activate(input, cam);
+        ctrl.lookAt(float3{0.0f, 0.0f, 5.0f}, 0.5f, 0.25f);
+        CameraModel model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        const Quaternion rotation = ctrl.rotation();
+        PPR_TEST_ASSERT(distance(model.right, quaternionTransform(rotation, float3{1.0f, 0.0f, 0.0f})) < kEps);
+        PPR_TEST_ASSERT(distance(model.up, quaternionTransform(rotation, float3{0.0f, 1.0f, 0.0f})) < kEps);
+        PPR_TEST_ASSERT(distance(model.forward, quaternionTransform(rotation, float3{0.0f, 0.0f, 1.0f})) < kEps);
+        ctrl.deactivate();
+    };
+
+    // A teleport sets m_b_teleported, which skips delta consumption for that frame.
+    PPR_UNIT_TEST(camera_free_look_teleport_skips_delta) {
+        StubInputService input;
+        Camera cam;
+        FreeCameraController ctrl;
+        ctrl.activate(input, cam);
+        const float3 eye{1.0f, 2.0f, 3.0f};
+        ctrl.lookAt(eye, 0.5f, 0.25f, true); // teleport
+        ctrl.translate(float3{10.0f, 0.0f, 0.0f});
+        ctrl.rotate(float2{1.0f, 1.0f});
+        CameraModel model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        // Teleport skips delta consumption: position stays at the teleport eye.
+        PPR_TEST_ASSERT(distance(model.position, eye) < kEps);
+        ctrl.deactivate();
+    };
+
+    // translate()/rotate() accumulate deltas consumed by updateCamera.
+    PPR_UNIT_TEST(camera_free_look_translate_rotate_helpers) {
+        StubInputService input;
+        Camera cam;
+        FreeCameraController ctrl;
+        ctrl.activate(input, cam);
+        CameraModel model = cam.currentState().model;
+
+        // Translate accumulates into the position analog (identity rotation → world delta = local delta).
+        ctrl.translate(float3{1.0f, 2.0f, 3.0f});
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(distance(model.position, float3{1.0f, 2.0f, 3.0f}) < 1e-3f);
+
+        // Rotate accumulates into the rotation analog.
+        ctrl.rotate(float2{0.1f, 0.2f});
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        const Quaternion expected = makeYawPitchRollQuaternion(0.1f, 0.2f, 0.0f);
+        const Quaternion q = ctrl.rotation();
+        PPR_TEST_ASSERT(std::abs(q.x - expected.x) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(q.y - expected.y) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(q.z - expected.z) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(q.w - expected.w) < 1e-3f);
+        ctrl.deactivate();
+    };
+
+    // lookAt(eye, target, up) sets the position and orients the camera toward the target.
+    PPR_UNIT_TEST(camera_free_look_lookAt_target) {
+        StubInputService input;
+        Camera cam;
+        FreeCameraController ctrl;
+        ctrl.activate(input, cam);
+        const float3 eye{0.0f, 0.0f, 5.0f};
+        const float3 target{0.0f, 0.0f, 0.0f};
+        ctrl.lookAt(eye, target, float3{0.0f, 1.0f, 0.0f});
+        PPR_TEST_ASSERT(distance(ctrl.position(), eye) < kEps);
+        // The camera looks toward the target: forward points from eye to target (not away).
+        CameraModel model = cam.currentState().model;
+        ctrl.updateCamera(std::chrono::milliseconds{16}, model);
+        const float3 expected_forward = normalize(target - eye);
+        PPR_TEST_ASSERT(distance(model.forward, expected_forward) < kEps);
+        PPR_TEST_ASSERT(distance(model.position, eye) < kEps);
+        ctrl.deactivate();
+    };
+
+    // lookAt(eye, heading, pitch) sets the position and the yaw-pitch-roll rotation.
+    PPR_UNIT_TEST(camera_free_look_lookAt_heading_pitch) {
+        StubInputService input;
+        Camera cam;
+        FreeCameraController ctrl;
+        ctrl.activate(input, cam);
+        const float3 eye{1.0f, 2.0f, 3.0f};
+        constexpr float kHeading = 0.5f;
+        constexpr float kPitch = 0.25f;
+        ctrl.lookAt(eye, kHeading, kPitch);
+        PPR_TEST_ASSERT(distance(ctrl.position(), eye) < kEps);
+        const Quaternion expected = makeYawPitchRollQuaternion(kHeading, kPitch, 0.0f);
+        const Quaternion q = ctrl.rotation();
+        PPR_TEST_ASSERT(std::abs(q.x - expected.x) < kEps);
+        PPR_TEST_ASSERT(std::abs(q.y - expected.y) < kEps);
+        PPR_TEST_ASSERT(std::abs(q.z - expected.z) < kEps);
+        PPR_TEST_ASSERT(std::abs(q.w - expected.w) < kEps);
+        ctrl.deactivate();
+    };
+
+    // All 31 PPE-parity accessors return the configured values.
+    PPR_UNIT_TEST(camera_free_look_accessors) {
+        FreeCameraController ctrl;
+
+        // Speed accessors.
+        PPR_TEST_ASSERT(std::abs(ctrl.forwardSpeed() - 1.0f) < kEps);
+        ctrl.setForwardSpeed(2.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.forwardSpeed() - 2.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.strafeSpeed() - 1.0f) < kEps);
+        ctrl.setStrafeSpeed(3.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.strafeSpeed() - 3.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.upwardSpeed() - 1.0f) < kEps);
+        ctrl.setUpwardSpeed(4.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.upwardSpeed() - 4.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.headingSpeed() - 10.0f) < kEps);
+        ctrl.setHeadingSpeed(5.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.headingSpeed() - 5.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.pitchSpeed() - 10.0f) < kEps);
+        ctrl.setPitchSpeed(6.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.pitchSpeed() - 6.0f) < kEps);
+
+        // Range accessors.
+        const float2 fov_range = ctrl.fovMinMax();
+        PPR_TEST_ASSERT(std::abs(fov_range.x - std::numbers::pi_v<float> / 15.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(fov_range.y - 5.0f * std::numbers::pi_v<float> / 7.0f) < kEps);
+        ctrl.setFovMinMax(float2{0.1f, 3.0f});
+        PPR_TEST_ASSERT(std::abs(ctrl.fovMinMax().x - 0.1f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.fovMinMax().y - 3.0f) < kEps);
+        const float2 speed_range = ctrl.speedMultiplierMinMax();
+        PPR_TEST_ASSERT(std::abs(speed_range.x - 0.1f) < kEps);
+        PPR_TEST_ASSERT(std::abs(speed_range.y - 50.0f) < kEps);
+        ctrl.setSpeedMultiplierMinMax(float2{0.5f, 10.0f});
+        PPR_TEST_ASSERT(std::abs(ctrl.speedMultiplierMinMax().x - 0.5f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.speedMultiplierMinMax().y - 10.0f) < kEps);
+
+        // Sensitivity accessors.
+        PPR_TEST_ASSERT(std::abs(ctrl.mouseSensitivity().x - 0.05f) < kEps);
+        ctrl.setMouseSensitivity(float2{0.1f, 0.2f});
+        PPR_TEST_ASSERT(std::abs(ctrl.mouseSensitivity().x - 0.1f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.mouseSensitivity().y - 0.2f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.gamepadSensitivity().x - 0.3f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.gamepadSensitivity().y - 0.1f) < kEps);
+        ctrl.setGamepadSensitivity(float2{0.5f, 0.5f});
+        PPR_TEST_ASSERT(std::abs(ctrl.gamepadSensitivity().x - 0.5f) < kEps);
+
+        // Inertia accessors (map to the analog sensitivity).
+        PPR_TEST_ASSERT(std::abs(ctrl.positionInertia() - 0.15f) < kEps);
+        ctrl.setPositionInertia(1.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.positionInertia() - 1.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.rotationInertia() - 0.15f) < kEps);
+        ctrl.setRotationInertia(1.0f);
+        PPR_TEST_ASSERT(std::abs(ctrl.rotationInertia() - 1.0f) < kEps);
+
+        // State accessors.
+        PPR_TEST_ASSERT(distance(ctrl.position(), float3{zero_v}) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.fov() - std::numbers::pi_v<float> / 3.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(ctrl.speedMultiplier() - 1.0f) < kEps);
+        PPR_TEST_ASSERT(!ctrl.isTeleported());
+
+        // Input action accessors.
+        PPR_TEST_ASSERT(&ctrl.fovInput() != nullptr);
+        PPR_TEST_ASSERT(&ctrl.lookInput() != nullptr);
+        PPR_TEST_ASSERT(&ctrl.moveInput() != nullptr);
+        PPR_TEST_ASSERT(&ctrl.rotateInput() != nullptr);
+        PPR_TEST_ASSERT(&ctrl.speedInput() != nullptr);
+    };
+
     PPR_UNIT_TEST(app_camera) {
         _.recurse({
             camera_model,
@@ -401,6 +649,16 @@ export namespace pP::tests {
             lookat_orthonormal_bis,
             math_inverse_identity,
             math_inverse_involution,
+            camera_mode_accessors,
+            camera_state_accessors,
+            camera_basis_accessors,
+            camera_inverse_accessors,
+            camera_free_look_basis_convention,
+            camera_free_look_teleport_skips_delta,
+            camera_free_look_translate_rotate_helpers,
+            camera_free_look_lookAt_target,
+            camera_free_look_lookAt_heading_pitch,
+            camera_free_look_accessors,
         });
     };
 }

@@ -12,19 +12,21 @@ namespace pP {
     // input action event
     // ------------------------------------------------------------------
 
-    template<typename InputValueT>
-        requires std::is_constructible_v<InputValue, InputValueT>
-    [[nodiscard]] std::optional<InputValueT> getActionValue(const InputActionEvent &event) noexcept {
-        if (not event.m_value.has_value()) [[unlikely]] return std::nullopt;
-        return std::visit(
-            overloaded(
-                [](const InputValueT &value) noexcept -> std::optional<InputValueT> {
-                    return value;
-                },
-                [](const auto &) noexcept -> std::optional<InputValueT> {
-                    return std::nullopt;
-                }),
-            *event.m_value);
+    namespace {
+        template<typename InputValueT>
+            requires std::is_constructible_v<InputValue, InputValueT>
+        [[nodiscard]] std::optional<InputValueT> getActionValue(const InputActionEvent &event) noexcept {
+            if (not event.m_value.has_value()) [[unlikely]] return std::nullopt;
+            return std::visit(
+                overloaded(
+                    [](const InputValueT &value) noexcept -> std::optional<InputValueT> {
+                        return value;
+                    },
+                    [](const auto &) noexcept -> std::optional<InputValueT> {
+                        return std::nullopt;
+                    }),
+                *event.m_value);
+        }
     }
 
     std::optional<InputDigital> InputActionEvent::getDigitalValue() const noexcept {
@@ -149,6 +151,11 @@ namespace pP {
 
                     invokeIFP_(key_mapping.m_when_started, event, message);
                     invokeIFP_(event.m_source->m_when_started, event, message);
+
+                    // also fire Triggered on press so single-setTriggered consumers
+                    // see the first frame's modulated value without needing setStarted.
+                    invokeIFP_(key_mapping.m_when_triggered, event, message);
+                    invokeIFP_(event.m_source->m_when_triggered, event, message);
 
                     if (m_action_callback) {
                         m_action_callback(event, message.m_key);

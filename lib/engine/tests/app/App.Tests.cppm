@@ -15,6 +15,9 @@ import :viewport;
 import :pixel_readback;
 import :camera;
 import :quaternion;
+import :input_listener;
+import :filtered_analog;
+import :viewport_client;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(app) {
@@ -30,6 +33,9 @@ export namespace pP::tests {
             app_pixel_readback,
             app_camera,
             app_quaternion,
+            app_input_listener,
+            app_filtered_analog,
+            app_viewport_client,
         });
     };
 }

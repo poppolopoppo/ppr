@@ -6,7 +6,8 @@ target_sources(EngineApp
         App.cppm
         App.Application.cppm
 
-        camera/App.Camera.cppm
+        viewport/App.Viewport.Camera.cppm
+        viewport/App.Viewport.FilteredAnalog.cppm
 
         input/device/App.Input.Gamepad.cppm
         input/device/App.Input.Keyboard.cppm
@@ -29,7 +30,9 @@ target_sources(EngineApp
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
-        renderer/App.Viewport.cppm
+
+        viewport/App.Viewport.cppm
+        viewport/App.ViewportClient.cppm
 
         service/App.Service.Input.cppm
         service/App.Service.Player.cppm
@@ -43,7 +46,8 @@ target_sources(EngineApp
     PRIVATE
         App.Application.cpp
 
-        camera/App.Camera.cpp
+        viewport/App.Viewport.Camera.cpp
+        viewport/App.Viewport.FilteredAnalog.cpp
 
         input/device/App.Input.Gamepad.cpp
         input/device/App.Input.Keyboard.cpp
@@ -67,7 +71,9 @@ target_sources(EngineApp
         window/App.Window.Monitor.cpp
 
         renderer/App.Renderer.cpp
-        renderer/App.Viewport.cpp
+
+        viewport/App.Viewport.cpp
+        viewport/App.ViewportClient.cpp
 
         service/App.Service.UI.cpp
 

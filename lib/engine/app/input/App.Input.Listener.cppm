@@ -43,8 +43,8 @@ export namespace pP {
         using KeyMappingIndex = Numeric<u32, InputKey>;
 
         struct InputBinding {
-            InputMappingIndex m_input_mapping{umax_v};
-            KeyMappingIndex m_key_mapping{umax_v};
+            InputMappingIndex m_input_mapping{max_v};
+            KeyMappingIndex m_key_mapping{max_v};
         };
 
         void rebuildKeybindings_();

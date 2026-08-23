@@ -56,7 +56,7 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(remove_nonexistent_player_returns_false) {
         const safe_ptr<IPlayerService> input = IPlayerService::get();
-        const PlayerId fake_id{umax_v};
+        const PlayerId fake_id{max_v};
         PPR_TEST_ASSERT(input->removePlayer(fake_id) != default_value_v);
     };
 

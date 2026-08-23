@@ -2,7 +2,7 @@ module;
 
 export module engine.app:application;
 
-import :camera;
+import :viewport.camera;
 import :input.replay;
 import :window.handle;
 import :viewport;
@@ -20,6 +20,7 @@ export namespace pP {
     public:
         Application(std::string_view name, std::span<const char * const> argv);
 
+        // ReSharper disable once CppHidingFunction - safe_object dtor is non-virtual; hiding is benign
         virtual ~Application() noexcept;
 
         Application(const Application &) = delete;
@@ -81,6 +82,7 @@ export namespace pP {
         safe_ptr<IInputService> m_cached_input_service{};
         InputReplay m_input_replay{};
         CameraService m_camera_service{};
+        safe_ptr<ICameraService> m_cached_camera_service{};
         SharedWindow m_main_window{};
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
