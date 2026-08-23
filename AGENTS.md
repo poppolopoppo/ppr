@@ -87,7 +87,7 @@ duplicate its plan → Oracle-review → phased-execution loop.
 
 | Command | Coverage |
 |---------|----------|
-| `/review` | Parallel code review across 4 dimensions (security/memory, performance/cache, correctness/edge, conventions/style), fanned out to `oracle` subagents, correlated summary. Distinct from `@council`: same model family, different review lenses on the same diff. |
+| `/review` | Launches the `code-reviewer` skill against the current git diff. The skill handles its own subagent routing (diff retrieval via `@explorer`, 9-dimension reviews via background `oracle` subagents, per-finding validation, resolution gate via `@fixer`/`@oracle`). Distinct from `@council`: same model family, but `@council` runs N independent models in parallel for consensus, while `/review` runs N parallel reviewers on the same diff with correlated findings. |
 
 For architecture decisions or complex refactor proposals, use
 `@council <question>` directly rather than a custom multi-proposal command —
