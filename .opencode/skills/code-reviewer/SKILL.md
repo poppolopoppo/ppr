@@ -42,7 +42,7 @@ oracle-approved-suppressed.
 | Diff context retrieval (`git diff HEAD`, `git diff --cached`, `git log`) | `@explorer` | Isolated read-only shell; keeps main lane free |
 | Changed-file enumeration | `@explorer` | `clion_git_status` + `clion_get_repositories` for project-aware listing |
 | Zone classification of changed files | orchestrator | Cheap; needs the full diff context |
-| Dimension reviews (Step 3) | background `oracle` subagent per dimension | Parallelizable; each reviewer loads this skill and uses CLion MCP for evidence |
+| Dimension reviews (Step 3) | 4 background `oracle` subagents (grouped: Language & Formatting [Dims 1–3], Memory & Cache [Dims 4–5], Concurrency & Safety [Dims 6–8], Correctness & Design [Dim 9]) | Parallelizable; each reviewer loads this skill and runs its assigned checklists; findings tagged by original dimension number |
 | IDE inspection sweep (Step 3.5) | orchestrator (main flow, `clion` MCP) | `clion_get_file_problems` per changed file; produces `[IDE]`-tagged findings |
 | Per-finding validation (Step 4) | background `oracle` subagent per finding | Mandatory parallel fact-check against actual source; `[IDE]` findings exempt |
 | Fix application | `@fixer` | Bounded edits via `clion_apply_patch` / `clion_create_new_file` |
@@ -60,13 +60,18 @@ oracle-approved-suppressed.
   only, no skill activation).
 - **Background orchestration** — launch the dimension reviews (Step 3) as
   parallel background `oracle` subagents, then the per-finding validation
-  (Step 4) as one background subagent per finding; reconcile all verdicts on
-  the Background Job Board before the summary is presented.
+  (Step 4) as one background subagent per batch; reconcile all verdicts on
+  the Background Job Board before the summary is presented. The IDE
+  inspection sweep (Step 3.5) runs **concurrently with Step 3** since it
+  depends only on the changed-file list from Step 1, not on dimension
+  review results — this eliminates one sequential round-trip.
 - **Session reuse** — the orchestrator SHOULD provide a cached `@explorer`
-  session for diff retrieval. If no cached session exists, delegate a fresh
-  `@explorer` task. Re-run dimension/validation subagents only on newly
-  added or changed files (invalidate a session when its `(agent-type,
-  target area, file-glob)` key no longer matches the current diff).
+  session for diff retrieval if one was recently computed (same working
+  tree, same HEAD). **Do NOT reuse dimension reviewer sessions across
+  invocations** — the diff is the primary input and changes between
+  reviews; dimension reviewers must always run fresh. Invalidate an
+  `@explorer` session when its HEAD commit differs from the current diff's
+  HEAD.
 - **Large diffs** — for diffs spanning >10 changed files or >3 zones,
   consider delegating to `/deepwork` for phased remediation. Use `codemap`
   to understand module boundaries of changed files before launching
@@ -81,7 +86,13 @@ oracle-approved-suppressed.
 
 Delegate to `@explorer`: run `git diff HEAD`, `git diff --cached`,
 `git log --oneline -8`, and `clion_git_status`/`clion_get_repositories`.
-Receive the combined diff and changed-file list before proceeding.
+Request that `@explorer` return a **structured envelope** containing:
+(1) the combined diff, (2) the list of changed tracked files, (3) a
+per-zone file grouping using the zone classification rules from Step 2,
+and (4) the recent commit log. The orchestrator validates the zone
+classification and passes each zone's file list directly to the relevant
+dimension reviewers — this eliminates redundant file enumeration across
+the (now 4) dimension reviewers.
 
 ```bash
 git diff HEAD                  # all unstaged + staged changes
@@ -99,6 +110,34 @@ Load `AGENTS.md`. Follow any `@include` references found in touched files.
 
 **Scope**: only files tracked by git. Untracked files, `build/`, and
 vcpkg install paths are excluded automatically.
+
+### Step 1.5 — Small-diff shortcut
+
+Compute `git diff --numstat HEAD` and `git diff --name-only HEAD`. If
+**all** of the following hold:
+
+- total changed lines (additions + deletions) ≤ 50,
+- changed-tracked file count ≤ 2,
+- no changed file is a test (`*Tests*/` or `*Test*.cppm` / `*Test*.cpp`),
+- no changed file is a module umbrella (filename matches `Core.cppm`,
+  `Math.cppm`, `App.Application.cppm`, or any `.cppm` re-exporting
+  multiple `import :…;` lines),
+
+→ **shortcut** mode: skip the relevance-assessment heuristics and launch
+all 4 dimension reviewers unconditionally. Emit the note
+`Small-diff shortcut: <file_count> files, <line_count> total lines — full
+dimension review` in the Step 6 preamble.
+
+Otherwise → proceed to Step 2 (zone classification) and Step 3 (full
+dimension review) as today.
+
+**Why:** For trivial diffs, the cost of computing relevance heuristics
+exceeds the savings. The shortcut is a gate on the *preamble*, not the
+*reviewers* — when it fires, all 4 dimension reviewers still run, so
+review coverage is preserved. Per-dimension skip heuristics are deferred
+until empirical data from 50+ PRs motivates them.
+
+---
 
 ### Step 2 — Classify each changed file by zone
 
@@ -341,8 +380,10 @@ See also: AGENTS.md §Function Design Principles.
 
 ### Step 3.5 — IDE inspection sweep
 
-After dimension reviews, run a CLion inspection sweep on every changed file.
-This catches problems the dimension checklists miss (unused includes,
+Run a CLion inspection sweep on every changed file. This step starts
+**concurrently with Step 3** (dimension reviews) since it depends only on
+the changed-file list from Step 1, not on review results. The sweep
+catches problems the dimension checklists miss (unused includes,
 deprecated APIs, module-partition naming, etc.) and feeds the resolution gate.
 
 **Procedure:**
@@ -367,24 +408,36 @@ mandatory — never skip it and never present unvalidated findings.
 **Procedure:**
 1. Collect the complete list of candidate findings (all zones, all severities)
    from Steps 3 and 3.5, excluding `[IDE]`-tagged findings.
-2. Spawn ONE parallel subagent per finding (background, `oracle` type, each
-   loading this `code-reviewer` skill). Each subagent receives only its single
-   finding and is instructed to:
-   - Read the ACTUAL cited source file(s) at the cited location — **never the
-     full diff**. (Reading the whole diff previously caused context exhaustion
-     and wrong line numbers.)
-   - Trace the real code path to confirm or refute the claim.
-   - Return `VERDICT: Confirmed | Partially correct | Incorrect | Cannot
-     determine`, with `Evidence` (file:line + key snippet) and an `Assessment`
-     of whether the cited severity is over/under-stated.
-3. Reconcile all verdicts. Drop or downgrade any finding rated `Incorrect`;
-   keep `Partially correct` only with its stated nuance. Present ONLY the
-   validated, reconciled results to the user, grouped by severity, and flag
-   any finding corroborated by ≥2 reviewers as high confidence.
+2. **Batch findings** by `(source file, dimension group)`, with a maximum
+   of 5 findings per batch. If a single file has more than 5 findings, split
+   into multiple batches. Each finding in a batch gets a unique ID so the
+   subagent cannot conflate them.
+3. Spawn ONE parallel `oracle` subagent per batch (background, loading this
+   `code-reviewer` skill). Each subagent receives its batch and is instructed
+   to:
+   - Read the ACTUAL cited source file(s) at each finding's cited location —
+     **never the full diff**. (Reading the whole diff previously caused
+     context exhaustion and wrong line numbers.)
+   - Validate each finding independently: trace the real code path, confirm
+     or refute the claim, verify the line number is correct.
+   - Return one verdict per finding ID: `VERDICT: Confirmed | Partially
+     correct | Incorrect | Cannot determine`, with `Evidence` (file:line +
+     key snippet) and `Assessment` of whether the cited severity is
+     over/under-stated.
+4. **Orchestrator reconciliation:** Verify every finding ID from the batch
+   appears in the response. If any ID is missing or returns `Cannot
+   determine`, re-dispatch that finding individually as a single-finding
+   batch. Drop or downgrade findings rated `Incorrect`; keep `Partially
+   correct` only with stated nuance.
+5. Present ONLY validated, reconciled results grouped by severity. Flag
+   findings corroborated by ≥2 reviewers as high confidence.
 
 **Why:** The global pass alone produced false positives — including two
 fabricated ❌ Errors and several wrong line numbers. Per-item validation
-against source catches misreadings before they reach the user.
+against source catches misreadings before they reach the user. Batching
+by `(file, dimension-group)` with a max of 5 findings per subagent cuts
+validation subagent count by ~66% while preserving the safety guarantee
+(every finding is still read against actual source, not the diff).
 
 ---
 
@@ -396,8 +449,15 @@ remediation happens exclusively through delegation.
 
 **Loop** (max 3 rounds):
 1. Dispatch `@fixer` per finding/batch to fix (bounded edits via
-   `clion_apply_patch` / `clion_create_new_file`).
-2. Re-run `clion_get_file_problems` on touched files only.
+   `clion_apply_patch` / `clion_create_new_file`). Batch all findings on
+   the same file into one `@fixer` call (unless they conflict) to reduce
+   subagent launches.
+2. **Re-inspection decision:** If `@fixer` reports that only suppression
+   comments were added (no code changes), skip `clion_get_file_problems`
+   for that file and instead verify the suppression comment format is
+   correct (must cite the inspection ID and provide a rationale). If any
+   code changes were made, re-run `clion_get_file_problems` on touched
+   files only.
 3. **False-positive path (warnings only — errors are never suppressible):**
    if `@fixer` reports a warning as a false positive, spawn `@oracle` to
    adjudicate against the actual source.
@@ -424,7 +484,58 @@ confirmation + a cited rationale. Errors are never suppressible.
 
 ---
 
+### Step 5.5 — Fix Plan Generation
+
+After the resolution gate (Step 5) closes all errors and warnings, produce
+a brief verification plan for each finding that was **fixed** or
+**suppressed**. This step uses the `verification-planning` methodology
+(claim → evidence path → budget → status) to give downstream `@fixer` or
+`deepwork` consumers a concrete, machine-readable plan for confirming the
+fix is correct or re-evaluating the suppression later.
+
+**Scope:** Only `Error` findings that were fixed and `Warning` findings
+that were suppressed require plans. `Suggestion` findings do not require
+plans unless the user explicitly requests them.
+
+**For each fixed `Error` or `Warning`:**
+
+| Field | Content |
+|---|---|
+| **Claim** | What the fix asserts (e.g., "allocateRaw now calls poisonAllocated") |
+| **Evidence path** | How to verify the claim holds (e.g., "Run EngineCoreTests with ASAN; confirm no missing poison annotations in allocation paths") |
+| **Budget** | Minimum work to establish the claim (e.g., "1 test file, compile + run EngineCoreTests") |
+| **Status** | `planned` (default) |
+
+**For each suppressed `Warning`:**
+
+| Field | Content |
+|---|---|
+| **Claim** | Why the suppression is justified |
+| **Evidence path** | How a future reviewer can verify the suppression remains valid |
+| **Re-evaluate** | Condition that would trigger re-evaluation (e.g., "when the surrounding code changes") |
+
+Plans are included in the per-zone report (Step 6) under a "Verification
+Plans" subsection and in the machine-readable JSON under
+`"verification_plans"`. The `code-reviewer` skill does NOT need to load
+the `verification-planning` skill directly — it produces the output
+format that `verification-planning` expects as input. When the user later
+invokes `verification-planning` on a specific finding, the pre-existing
+plan serves as the starting point. This keeps the two skills decoupled.
+
+---
+
 ### Step 6 — Generate per-zone report
+
+Emit the preamble line first:
+
+```
+## Preamble
+
+**Small-diff shortcut:** fired (<file_count> files, <line_count> total lines) — full dimension review.
+**Small-diff shortcut:** not fired.
+```
+
+(Only one of the two lines is emitted per review.)
 
 Each finding uses this structure:
 
@@ -484,6 +595,17 @@ downstream agent consumption):
   ],
   "suppressed": [
     {"file": "lib/engine/foo.h:42", "inspection": "UnusedInclude", "rationale": "..."}
+  ],
+  "verification_plans": [
+    {
+      "id": "vp-001",
+      "finding_ref": "lib/Core.Foo.cppm:42",
+      "type": "fix" | "suppression",
+      "claim": "allocateRaw now calls poisonAllocated after allocation",
+      "evidence_path": "Run EngineCoreTests with ASAN; confirm no missing poison annotations in allocation paths",
+      "budget": "1 test file, compile + run EngineCoreTests",
+      "status": "planned"
+    }
   ],
   "gate": "green" | "red",
   "rounds_used": 1
