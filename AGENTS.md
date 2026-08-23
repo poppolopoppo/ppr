@@ -287,6 +287,129 @@ _(maintained by the `clonedeps` skill — empty until first run)_
 - Allowed macros: only those in `include/pP/Macros.h` — assertions (PPR_ASSERT/VERIFY/ENSURE/ASSUME), PPR_DEFER, inlining control, logging (PPR_LOG), and internal helper macros (stringize, concat, pragma, etc.). Test-only macros (`PPR_UNIT_TEST`, `PPR_TEST_ASSERT`, `PPR_UNIT_TEST_ERRC`) live in `lib/engine/tests/include/pP/UnitTest.h`, not in `Macros.h`. No macros from other sources.
 - Function & API design follows §Function Design Principles below — honest signatures, empathetic parameters, type-encoded contracts, one abstraction level per body.
 
+## Source Formatting
+
+C++ files are auto-formatted by clang-format (`.clang-format` at the repo
+root, LLVM base style, `IndentWidth: 4`, `ColumnLimit: 120`,
+`BreakBeforeBraces: Custom` with all `BraceWrapping.*: false`,
+`AlignOperands: true`, `NamespaceIndentation: All`). Don't hand-format
+what the formatter already covers. This section documents only what is
+**specific to this repository and not enforced by the formatter**.
+
+### Section dividers
+
+Three-line `// ----` block (a `//` line with a long dash run close to
+`ColumnLimit`) separates conceptual regions inside a file. Topic in
+lowercase on the middle line. Indent matches the enclosing scope. The
+first divider after a namespace opening has no blank line above; every
+subsequent divider is flanked by exactly one blank line.
+
+```cpp
+    // ------------------------------------------------------------------
+    // allocator concepts
+    // ------------------------------------------------------------------
+```
+
+### Function declaration prefix order
+
+clang-format does not order C++ attributes or specifiers. The repo order:
+`[[nodiscard]]` / `[[maybe_unused]]` / `PPR_FORCE_INLINE` → `constexpr`
+(when applicable) → return type → name → params → `const` (member fns)
+→ `noexcept`. Trailing-return variants keep the same qualifier positions.
+
+```cpp
+[[nodiscard]] PPR_FORCE_INLINE constexpr bool isValid() const noexcept;
+```
+
+### Pointer / const parameter style
+
+The formatter enforces `type *name` spacing (LLVM default
+`PointerAlignment: Right`). The repo layers two manual decisions on top:
+
+- Place read-only qualifiers **before** the type: `const T`.
+- Place "callee does not reseat" qualifiers **after** the `*`:
+  `T *const name` for writeable fixed binding, or
+  `const T *const name` for read-only fixed binding.
+
+```cpp
+[[nodiscard]] constexpr bool overlap(const void *const storage,
+                                     const std::size_t bytes,
+                                     const void *const ptr) noexcept;
+```
+
+### Branch attributes
+
+`[[likely]]` / `[[unlikely]]` sits between the condition's closing paren
+and the opening brace, on the same line. Mark fast paths / early exits
+`[[likely]]`; rare OOM / unreachable / error early-exit `[[unlikely]]`.
+
+```cpp
+if (m_status == status_used_) [[unlikely]] {
+    return {};
+}
+```
+
+### Member declaration order in classes
+
+clang-format does not order class members. The repo sequence (skip
+sections the type does not have):
+
+1. `static_assert` block
+2. Data members
+3. Static constants / traits (`is_stateless_v`)
+4. Default constructor
+5. Copy/move special members (often `= delete` or with `requires` clauses)
+6. Other constructors
+7. Destructor
+8. Trivial accessors (`isValid`, `data`, `count`, ...)
+9. Mutators (`allocate`, `resize`, `deallocate`, `create`, `destroy`, ...)
+10. Comparison operators at the end (`= default`)
+
+Private members and nested types (`enum EStatus_ { ... }`) sit in the
+private section directly above the data they describe.
+
+### Comments
+
+clang-format does not police comment content. Conventions:
+
+- `///` for invariant-level docstrings on a declaration (e.g. `discard()`).
+- `//` short intent lines above declarations when the signature is not
+  self-explanatory.
+- `//` inside function bodies is fine for algorithm steps, concurrency
+  invariants, and hardware coupling in complex methods (multiple notes
+  in `Core.Memory.Allocator.cppm:1019-1100`; hardware-backend note in
+  `App.Input.Gamepad.cpp:25`).
+
+### Boolean negation
+
+clang-format does not enforce. Use `not` instead of `!` for boolean
+negation (the engine uses `not` exclusively in boolean contexts). The
+compound `and`/`or` keywords are acceptable; existing `&&`/`||` in
+core/memory code is fine — match the file you are editing.
+
+### Conditional compilation
+
+Use `#if PPR_ENABLE_*` over `#ifdef` so values, not just presence, are
+tested. Top-level `#if` at column 0. Nested `#if` may be indented 4
+spaces (the one outlier at `Core.Memory.cpp:90` is leaving a previously
+indented block — prefer column 0 in new code). `#endif // PPR_ENABLE_*`
+is optional; add only when the block is long enough to benefit from a
+close-tag label.
+
+### Module file split (.cppm vs .cpp)
+
+clang-format does not enforce module architecture. The repo split:
+
+- `.cppm` — declarations only; bodies go in the matching `.cpp`.
+- `.cpp` — uses `module <lib>;` (the **umbrella**, never
+  `module <lib>:partition;`) then `import :partition;`, optional
+  `import std;`, then `namespace pP {`.
+- `constexpr` functions stay **inline in the `.cppm`** — no `.cpp`
+  definition is generated for them.
+- `noexcept` **IS** repeated verbatim on `.cpp` definitions matching the
+  `.cppm` declaration (e.g. `GPA::allocateRaw` at `Core.Memory.cpp:16`).
+- `import std;` is added only when std types appear in the file.
+
 ## Function Design Principles
 
 Normative rules for designing functions and APIs. Enforced by `code-reviewer`
