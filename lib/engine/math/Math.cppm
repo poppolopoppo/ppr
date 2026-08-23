@@ -37,23 +37,43 @@ export namespace pP {
     using mango::math::transpose;
     using mango::math::cross;
     using mango::math::clamp;
+    using mango::math::slerp;
+
+    using mango::math::Box;
+    using mango::math::Cone;
+    using mango::math::Frustum;
+    using mango::math::Plane;
+    using mango::math::Quadratic;
+    using mango::math::FastRay;
+    using mango::math::Ray;
+    using mango::math::Rectangle;
+    using mango::math::Sphere;
+    using mango::math::Triangle;
 
     using mango::math::Quaternion;
+
+    namespace math {
+        using mango::math::Intersect;
+        using mango::math::IntersectBarycentric;
+        using mango::math::IntersectBarycentricTwosided;
+        using mango::math::IntersectRange;
+        using mango::math::IntersectSolid;
+    }
 
 // PPR's lookAt(eye, target, up) follows the standard (non-mirrored) convention: the camera is
 // placed at `eye` looking toward `target`, with +X to the right and -Z forward in view space.
 // It is built directly from the basis vectors rather than mango::Matrix4x4::lookat, whose
 // (target, viewer) argument order and mirrored basis make the standard matrix awkward to
 // express. mango's Matrix4x4 is row-major (m[0..3] are rows); the layout below matches it.
-    [[nodiscard]] float4x4 lookAt(const float3 &eye, const float3 &target, const float3 &up) noexcept {
-        const float3 zaxis = normalize(eye - target);
-        const float3 xaxis = normalize(cross(up, zaxis));
-        const float3 yaxis = cross(zaxis, xaxis);
+    [[nodiscard]] float4x4 makeLookAtMatrix(const float3 &eye, const float3 &target, const float3 &up) noexcept {
+        const float3 z_axis = normalize(eye - target);
+        const float3 x_axis = normalize(cross(up, z_axis));
+        const float3 y_axis = cross(z_axis, x_axis);
         return float4x4{
-            float4{xaxis.x, yaxis.x, zaxis.x, 0.0f},
-            float4{xaxis.y, yaxis.y, zaxis.y, 0.0f},
-            float4{xaxis.z, yaxis.z, zaxis.z, 0.0f},
-            float4{-dot(xaxis, eye), -dot(yaxis, eye), -dot(zaxis, eye), 1.0f},
+            float4{x_axis.x, y_axis.x, z_axis.x, 0.0f},
+            float4{x_axis.y, y_axis.y, z_axis.y, 0.0f},
+            float4{x_axis.z, y_axis.z, z_axis.z, 0.0f},
+            float4{-dot(x_axis, eye), -dot(y_axis, eye), -dot(z_axis, eye), 1.0f},
         };
     }
 
@@ -70,10 +90,6 @@ export namespace pP {
         return Quaternion(m);
     }
 
-    [[nodiscard]] float4x4 makeLookAtMatrix(const float3 &eye, const float3 &target, const float3 &up) noexcept {
-        return lookAt(eye, target, up);
-    }
-
     [[nodiscard]] float3 quaternionTransform(const Quaternion &q, const float3 &v) noexcept {
         return mango::math::operator*(v, q);
     }
@@ -88,6 +104,19 @@ export namespace pP {
 
     [[nodiscard]] Quaternion normalizeQuaternion(const Quaternion &q) noexcept {
         return mango::math::normalize(q);
+    }
+
+    // Extracts yaw (around Y) and pitch (around X) from a quaternion built with
+    // makeYawPitchRollQuaternion(yaw, pitch, 0) = qy(yaw) * qx(pitch). Round-trips
+    // with that construction for pitch within (-pi/2, pi/2).
+    [[nodiscard]] float2 quaternionToYawPitch(const Quaternion &q) noexcept {
+        const Quaternion n = normalize(q);
+        const float sinp = 2.0f * (n.w * n.x - n.y * n.z);
+        const float pitch = std::asin(clamp(sinp, -1.0f, 1.0f));
+        const float siny_cosp = 2.0f * (n.x * n.z + n.w * n.y);
+        const float cosy_cosp = 1.0f - 2.0f * (n.x * n.x + n.y * n.y);
+        const float yaw = std::atan2(siny_cosp, cosy_cosp);
+        return float2{yaw, pitch};
     }
 
     using mango::math::operator!=;

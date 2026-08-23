@@ -1,0 +1,416 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Natvis visualizers for mango::math types used in pP::engine.math:
+    · Vector<T,2> / pP::float2 / pP::int2 / pP::uint2
+    · Vector<T,3> / pP::float3 / pP::int3 / pP::uint3
+    · Vector<T,4> (SIMD) / pP::float4 / pP::int4 / pP::uint4
+    · Matrix3x3 / pP::float3x3
+    · Matrix4x4 / pP::float4x4
+    · Quaternion / pP::Quaternion
+
+  Placement options (pick one):
+    Per-project  : add this file to your .vcxproj — it is picked up automatically.
+    User-wide    : copy to %USERPROFILE%\Documents\Visual Studio <ver>\Visualizers\
+    VS-wide      : copy to <VS install>\Common7\Packages\Debugger\Visualizers\
+
+  Tested with MSVC / Visual Studio 2022 v17.x and CLion Jetvis.
+  Enable "Tools → Options → Debugging → Load natvis files from project" if the
+  per-project placement is not loading automatically.
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  SIMD-backed Vector4 storage (for reference)                    │
+  │                                                                 │
+  │  Vector<float,4>  →  simd::f32x4 m  →  __m128 m.data           │
+  │                     →  m.data.m128_f32[0..3] (float[4])        │
+  │  Vector<s32,4>    →  simd::s32x4 m  →  __m128i m.data          │
+  │                     →  m.data.m128i_i32[0..3] (int[4])         │
+  │  Vector<u32,4>    →  simd::u32x4 m  →  __m128i m.data          │
+  │                     →  m.data.m128i_u32[0..3] (uint[4])        │
+  │                                                                 │
+  │  CRITICAL: x/y/z/w on SIMD-backed Vector4 are ScalarAccessor    │
+  │  proxy objects, NOT plain scalars. Do NOT reference x in       │
+  │  Natvis for float4/int4/uint4 — use m.data.m128_*[i] instead.  │
+  │                                                                 │
+  │  Scalar-backed Vector2/Vector3 and Quaternion use plain scalar  │
+  │  union members (x, y, z, w) — these are safe to reference.     │
+  └─────────────────────────────────────────────────────────────────┘
+-->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+    <!-- ================================================================
+         mango::math::Vector<T, 2>  (scalar-backed)
+
+         $T1 = T (element type: float, s32, u32)
+
+         Storage: union { std::array<T, 2> component; struct { T x, y; }; }
+         Access: x, y are plain scalar union members.
+         ================================================================ -->
+    <Type Name="mango::math::Vector&lt;*,2&gt;">
+        <DisplayString>{{ {x}, {y} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Vector<T, 3>  (scalar-backed)
+
+         $T1 = T (element type: float, s32, u32)
+
+         Storage: union { std::array<T, 3> component; struct { T x, y, z; }; }
+         Access: x, y, z are plain scalar union members.
+         ================================================================ -->
+    <Type Name="mango::math::Vector&lt;*,3&gt;">
+        <DisplayString>{{ {x}, {y}, {z} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Vector<float, 4>  (SIMD-backed)
+
+         Storage: union { simd::f32x4 m; ... }
+         simd::f32x4 = hardware_vector<float, 4, __m128>
+         hardware_vector = struct { __m128 data; }
+         __m128 = union { float m128_f32[4]; ... }
+
+         Access: m.data.m128_f32[0..3] (float[4])
+         DO NOT use x/y/z/w — they are ScalarAccessor proxies.
+         ================================================================ -->
+    <Type Name="mango::math::Vector&lt;float,4&gt;">
+        <DisplayString>{{ m.data.m128_f32[0], m.data.m128_f32[1], m.data.m128_f32[2], m.data.m128_f32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128_f32[0]</Item>
+            <Item Name="[y]">m.data.m128_f32[1]</Item>
+            <Item Name="[z]">m.data.m128_f32[2]</Item>
+            <Item Name="[w]">m.data.m128_f32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Vector<s32, 4>  (SIMD-backed)
+
+         Storage: union { simd::s32x4 m; ... }
+         simd::s32x4 = hardware_vector<s32, 4, __m128i>
+         __m128i = union { int m128i_i32[4]; ... }
+
+         Access: m.data.m128i_i32[0..3] (int[4])
+         ================================================================ -->
+    <Type Name="mango::math::Vector&lt;s32,4&gt;">
+        <DisplayString>{{ m.data.m128i_i32[0], m.data.m128i_i32[1], m.data.m128i_i32[2], m.data.m128i_i32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128i_i32[0]</Item>
+            <Item Name="[y]">m.data.m128i_i32[1]</Item>
+            <Item Name="[z]">m.data.m128i_i32[2]</Item>
+            <Item Name="[w]">m.data.m128i_i32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Vector<u32, 4>  (SIMD-backed)
+
+         Storage: union { simd::u32x4 m; ... }
+         simd::u32x4 = hardware_vector<u32, 4, __m128i>
+         __m128i = union { unsigned int m128i_u32[4]; ... }
+
+         Access: m.data.m128i_u32[0..3] (uint[4])
+         ================================================================ -->
+    <Type Name="mango::math::Vector&lt;u32,4&gt;">
+        <DisplayString>{{ m.data.m128i_u32[0], m.data.m128i_u32[1], m.data.m128i_u32[2], m.data.m128i_u32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128i_u32[0]</Item>
+            <Item Name="[y]">m.data.m128i_u32[1]</Item>
+            <Item Name="[z]">m.data.m128i_u32[2]</Item>
+            <Item Name="[w]">m.data.m128i_u32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Matrix<float, 3, 3>  (scalar-backed rows)
+
+         Storage: Vector<float, 3> m[3]  (rows of scalar float3)
+         Row-major: m[y] is row y, m[y][x] is element (y, x).
+         ================================================================ -->
+    <Type Name="mango::math::Matrix&lt;float,3,3&gt;">
+        <DisplayString>{{ {m[0]}, {m[1]}, {m[2]} }}</DisplayString>
+        <Expand>
+            <Item Name="[row 0]">m[0]</Item>
+            <Item Name="[row 1]">m[1]</Item>
+            <Item Name="[row 2]">m[2]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Matrix<float, 4, 4>  (SIMD-backed rows)
+
+         Storage: float32x4 m[4]  (rows of SIMD float4)
+         Row-major: m[y] is row y, m[y][x] is element (y, x).
+
+         For view matrices:
+           m[0] = right vector (X axis)
+           m[1] = up vector (Y axis)
+           m[2] = forward vector (Z axis, negated for view)
+           m[3] = translation (xyz)
+
+         For projection matrices, m[3] is the perspective divide row,
+         NOT translation — the [translation] synthetic is gated on
+         m[3].w == 1.0f to avoid misleading display.
+         ================================================================ -->
+    <Type Name="mango::math::Matrix&lt;float,4,4&gt;">
+        <DisplayString>{{ {m[0]}, {m[1]}, {m[2]}, {m[3]} }}</DisplayString>
+        <Expand>
+            <Item Name="[row 0]">m[0]</Item>
+            <Item Name="[row 1]">m[1]</Item>
+            <Item Name="[row 2]">m[2]</Item>
+            <Item Name="[row 3]">m[3]</Item>
+            <Synthetic Name="[basis x]">
+                <DisplayString>right = {m[0]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[0].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[0].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[0].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[basis y]">
+                <DisplayString>up = {m[1]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[1].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[1].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[1].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[basis z]">
+                <DisplayString>forward = {m[2]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[2].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[2].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[2].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[translation]" Condition="m[3].m.data.m128_f32[3] == 1.0f">
+                <DisplayString>({m[3].m.data.m128_f32[0]}, {m[3].m.data.m128_f32[1]}, {m[3].m.data.m128_f32[2]})</DisplayString>
+                <Expand>
+                    <Item Name="x">m[3].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[3].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[3].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         mango::math::Quaternion  (scalar-backed)
+
+         Storage: union { struct { float x, y, z, w; }; float data[4]; }
+         Access: x, y, z, w are plain scalar union members.
+         ================================================================ -->
+    <Type Name="mango::math::Quaternion">
+        <DisplayString>quat({x}, {y}, {z}, {w})</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <Item Name="[w]">w</Item>
+            <Synthetic Name="[magnitude]">
+                <DisplayString>{__sqrtf(x*x + y*y + z*z + w*w)}</DisplayString>
+            </Synthetic>
+            <Synthetic Name="[normalized]">
+                <DisplayString>(x/mag, y/mag, z/mag, w/mag)</DisplayString>
+                <Expand>
+                    <Item Name="[x/mag]">x / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[y/mag]">y / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[z/mag]">z / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[w/mag]">w / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                </Expand>
+            </Synthetic>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <!-- ================================================================
+         Belt-and-braces pP:: aliases
+
+         These forward to the same visualizers as the canonical mango::math::
+         types above. MSVC natvis tries typedef names first, then canonical
+         typeids, so matching against either should work — but explicit
+         entries here ensure the visualizer applies regardless of which
+         name the debugger resolves.
+         ================================================================ -->
+    <Type Name="pP::float2">
+        <DisplayString>{{ {x}, {y} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::float3">
+        <DisplayString>{{ {x}, {y}, {z} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::float4">
+        <DisplayString>{{ m.data.m128_f32[0], m.data.m128_f32[1], m.data.m128_f32[2], m.data.m128_f32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128_f32[0]</Item>
+            <Item Name="[y]">m.data.m128_f32[1]</Item>
+            <Item Name="[z]">m.data.m128_f32[2]</Item>
+            <Item Name="[w]">m.data.m128_f32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::int2">
+        <DisplayString>{{ {x}, {y} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::int3">
+        <DisplayString>{{ {x}, {y}, {z} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::int4">
+        <DisplayString>{{ m.data.m128i_i32[0], m.data.m128i_i32[1], m.data.m128i_i32[2], m.data.m128i_i32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128i_i32[0]</Item>
+            <Item Name="[y]">m.data.m128i_i32[1]</Item>
+            <Item Name="[z]">m.data.m128i_i32[2]</Item>
+            <Item Name="[w]">m.data.m128i_i32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::uint2">
+        <DisplayString>{{ {x}, {y} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::uint3">
+        <DisplayString>{{ {x}, {y}, {z} }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::uint4">
+        <DisplayString>{{ m.data.m128i_u32[0], m.data.m128i_u32[1], m.data.m128i_u32[2], m.data.m128i_u32[3] }}</DisplayString>
+        <Expand>
+            <Item Name="[x]">m.data.m128i_u32[0]</Item>
+            <Item Name="[y]">m.data.m128i_u32[1]</Item>
+            <Item Name="[z]">m.data.m128i_u32[2]</Item>
+            <Item Name="[w]">m.data.m128i_u32[3]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::float3x3">
+        <DisplayString>{{ {m[0]}, {m[1]}, {m[2]} }}</DisplayString>
+        <Expand>
+            <Item Name="[row 0]">m[0]</Item>
+            <Item Name="[row 1]">m[1]</Item>
+            <Item Name="[row 2]">m[2]</Item>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::float4x4">
+        <DisplayString>{{ {m[0]}, {m[1]}, {m[2]}, {m[3]} }}</DisplayString>
+        <Expand>
+            <Item Name="[row 0]">m[0]</Item>
+            <Item Name="[row 1]">m[1]</Item>
+            <Item Name="[row 2]">m[2]</Item>
+            <Item Name="[row 3]">m[3]</Item>
+            <Synthetic Name="[basis x]">
+                <DisplayString>right = {m[0]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[0].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[0].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[0].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[basis y]">
+                <DisplayString>up = {m[1]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[1].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[1].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[1].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[basis z]">
+                <DisplayString>forward = {m[2]}</DisplayString>
+                <Expand>
+                    <Item Name="x">m[2].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[2].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[2].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <Synthetic Name="[translation]" Condition="m[3].m.data.m128_f32[3] == 1.0f">
+                <DisplayString>({m[3].m.data.m128_f32[0]}, {m[3].m.data.m128_f32[1]}, {m[3].m.data.m128_f32[2]})</DisplayString>
+                <Expand>
+                    <Item Name="x">m[3].m.data.m128_f32[0]</Item>
+                    <Item Name="y">m[3].m.data.m128_f32[1]</Item>
+                    <Item Name="z">m[3].m.data.m128_f32[2]</Item>
+                </Expand>
+            </Synthetic>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+    <Type Name="pP::Quaternion">
+        <DisplayString>quat({x}, {y}, {z}, {w})</DisplayString>
+        <Expand>
+            <Item Name="[x]">x</Item>
+            <Item Name="[y]">y</Item>
+            <Item Name="[z]">z</Item>
+            <Item Name="[w]">w</Item>
+            <Synthetic Name="[magnitude]">
+                <DisplayString>{__sqrtf(x*x + y*y + z*z + w*w)}</DisplayString>
+            </Synthetic>
+            <Synthetic Name="[normalized]">
+                <DisplayString>(x/mag, y/mag, z/mag, w/mag)</DisplayString>
+                <Expand>
+                    <Item Name="[x/mag]">x / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[y/mag]">y / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[z/mag]">z / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                    <Item Name="[w/mag]">w / __sqrtf(x*x + y*y + z*z + w*w)</Item>
+                </Expand>
+            </Synthetic>
+            <HideRawView/>
+        </Expand>
+    </Type>
+
+</AutoVisualizer>
