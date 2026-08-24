@@ -17,6 +17,22 @@
       "url": "http://127.0.0.1:64362/stream",
       "enabled": true,
       "timeout": 30000
+    },
+    "crawl4ai": {
+      "type": "remote",
+      "url": "http://127.0.0.1:11235/mcp/sse",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:CRAWL4AI_API_TOKEN}"
+      }
+    },
+    "searxng": {
+      "type": "local",
+      "command": ["node", ".opencode/node_modules/mcp-searxng/dist/cli.js"],
+      "enabled": true,
+      "environment": {
+        "SEARXNG_URL": "http://127.0.0.1:8080"
+      }
     }
   },
   "presets": {

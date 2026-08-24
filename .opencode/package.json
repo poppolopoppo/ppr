@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.3"
+    "@opencode-ai/plugin": "1.18.3",
+    "mcp-searxng": "1.15.0"
   }
 }

@@ -181,6 +181,11 @@ Imports all five engine modules, constructs `pP::Application(name, argv)`, calls
 When you encounter a file reference (e.g., @rules/general.md), load it on demand.
 Do NOT preemptively load all references. Treat loaded content as mandatory instructions.
 
+## Web Research
+
+- Prefer the `crawl4ai` MCP (`crawl4ai_md` for readable pages, `crawl4ai_crawl` for multi-page retrieval) over the regular `WebFetch` and web-search tools when researching web content.
+- Use `WebFetch` or web search only when Crawl4AI is unavailable, fails, or is unsuitable for the source.
+
 ## Tool Usage
 Use tools in this priority order:
 1. **CLion MCP tools** (`clion-*`) for code search, navigation, build, run, and debugging.
