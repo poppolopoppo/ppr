@@ -1,0 +1,10 @@
+# Generated from PyPI artifact metadata for the Windows Python 3.12 provider.
+--only-binary=:all:
+podman-compose==1.2.0 \
+    --hash=sha256:a78d0e5c83476ff36d4e5019a6e0e984133b4a416344904526ee05332734e32e
+PyYAML==6.0.3 \
+    --hash=sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b \
+    --hash=sha256:64386e5e707d03a7e172c0701abfb7e10f0fb753ee1d773128192742712a98fd \
+    --hash=sha256:96b533f0e99f6579b3d4d4995707cf36df9100d67e0c8303a0c55b27b5f99bc5
+python-dotenv==1.2.3 \
+    --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9

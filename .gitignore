@@ -97,6 +97,9 @@ Testing/
 *.userosscache
 *.sln.docstates
 *.env
+local-services/.env
+local-services/runtime-report.txt
+.venv-podman-compose/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

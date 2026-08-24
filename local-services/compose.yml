@@ -1,0 +1,62 @@
+name: ppr-local-services
+
+services:
+  crawl4ai:
+    image: ${CRAWL4AI_IMAGE:?CRAWL4AI_IMAGE must be a resolved fully-qualified digest reference in .env}
+    restart: unless-stopped
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?CRAWL4AI_API_TOKEN must be set in .env}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+    ports:
+      - "127.0.0.1:11235:11235"
+    volumes:
+      - ./crawl4ai/config.yml:/app/config.yml:ro
+    networks:
+      - crawl4ai-egress
+
+  searxng:
+    image: ${SEARXNG_IMAGE:?SEARXNG_IMAGE must be a resolved fully-qualified digest reference in .env}
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set in .env}
+      SEARXNG_LIMITER: "false"
+      SEARXNG_VALKEY_URL: valkey://valkey:6379/0
+      SEARXNG_BASE_URL: http://127.0.0.1:8080/
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - searxng-cache:/var/cache/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    depends_on:
+      valkey:
+        condition: service_healthy
+    networks:
+      - search-backend
+      - search-egress
+
+  valkey:
+    image: ${VALKEY_IMAGE:?VALKEY_IMAGE must be a resolved fully-qualified digest reference in .env}
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - search-backend
+
+networks:
+  crawl4ai-egress:
+    driver: bridge
+  search-backend:
+    driver: bridge
+    internal: true
+  search-egress:
+    driver: bridge
+
+volumes:
+  searxng-cache:
+  valkey-data:
