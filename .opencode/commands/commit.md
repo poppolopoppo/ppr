@@ -1,10 +1,10 @@
 ---
-description: Plan atomic commits and execute only after explicit verified plan-ID confirmation.
+description: Plan atomic commits, fast-path by default, commit after single yes.
 ---
 
-Delegate `/commit` to the `git-commit-planner` skill. Follow that skill's
-scope gate, routing, message convention, and confirmation-gated execution
-contract; do not add planning or execution rules here.
+Delegate `/commit` to the `git-commit-planner` skill. Fast-path is the
+default: inline split, PPR messages, single `yes`, direct `git commit`.
+Full verified replay applies only over-cap on explicit request.
 
 Forward any optional text after `/commit` unchanged. The skill owns its
 interpretation.
