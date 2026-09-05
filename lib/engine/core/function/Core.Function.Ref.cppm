@@ -754,15 +754,15 @@ export namespace std23 {
             constexpr storage() noexcept = default;
 
             template<class T> requires std::is_object_v<T>
-            constexpr explicit storage(T *p) noexcept : p_(p) {
+            constexpr explicit storage(T *p PPR_LIFETIME_BOUND) noexcept : p_(p) {
             }
 
             template<class T> requires std::is_object_v<T>
-            constexpr explicit storage(T const *p) noexcept : cp_(p) {
+            constexpr explicit storage(T const *p PPR_LIFETIME_BOUND) noexcept : cp_(p) {
             }
 
             template<class T> requires std::is_function_v<T>
-            constexpr explicit storage(T *p) noexcept
+            constexpr explicit storage(T *p PPR_LIFETIME_BOUND) noexcept
                 : fp_(reinterpret_cast<decltype(fp_)>(p)) {
             }
         };
@@ -828,7 +828,7 @@ export namespace std23 {
 
     public:
         template<class F>
-        function_ref(F *f) noexcept
+        function_ref(F *f PPR_LIFETIME_BOUND) noexcept
             requires std::is_function_v<F> and is_invocable_using<F>
             : fptr_(
                   [](storage fn_, _param_t<Args>... args) noexcept(noex) -> R {
@@ -842,7 +842,7 @@ export namespace std23 {
         }
 
         template<class F, class T = std::remove_reference_t<F> >
-        constexpr function_ref(F &&f) noexcept
+        constexpr function_ref(F &&f PPR_LIFETIME_BOUND) noexcept
             requires(not is_convertible_from_specialization<std::remove_cv_t<T> > and
                      not std::is_member_pointer_v<T> and
                      is_invocable_using<cvref<T> >)
@@ -884,7 +884,7 @@ export namespace std23 {
         }
 
         template<auto f, class U, class T = std::remove_reference_t<U> >
-        constexpr function_ref(nontype_t<f>, U &&obj) noexcept
+        constexpr function_ref(nontype_t<f>, U &&obj PPR_LIFETIME_BOUND) noexcept
             requires(not std::is_rvalue_reference_v<U &&> and
                      is_invocable_using<decltype((f)), cvref<T> >)
             : fptr_(
@@ -900,7 +900,7 @@ export namespace std23 {
         }
 
         template<auto f, class T>
-        constexpr function_ref(nontype_t<f>, cv<T> *obj) noexcept
+        constexpr function_ref(nontype_t<f>, cv<T> *obj PPR_LIFETIME_BOUND) noexcept
             requires is_invocable_using<decltype((f)), decltype(obj)>
             : fptr_(
                   [](storage this_, _param_t<Args>... args) noexcept(noex) -> R {

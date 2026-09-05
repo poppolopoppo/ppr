@@ -339,8 +339,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef())));
             }
 
-            m_listener.setPriority(-1000);
-            m_listener.setRawKeyCallback([this](const InputMessage &message) noexcept {
+            m_listener.setRawKeyCallback([this](const TimeSpan, const InputMessage &message) noexcept {
                 ImGuiIO &imgui_io = ImGui::GetIO();
 
                 if (message.m_key.isKeyboard()) {
@@ -359,7 +358,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     }
                 }
             });
-            m_input_service->pushInputListener(safe_ptr<InputListener>(&m_listener));
+            m_input_service->getGlobalInputContext().addInputListener(safe_ptr<InputListener>(&m_listener), -1000);
 
             PPR_LOG(UI, info, "UI service initialized", {
                 {"width", m_framebuffer_size.x},
@@ -384,8 +383,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 std::chrono::duration<double>(dt).count());
 
             if (m_input_service.isValid()) [[likely]] {
-                const KeyboardState &kbd = m_input_service->getKeyboard();
-                const MouseState &mouse = m_input_service->getMouse();
+                const KeyboardDevice &kbd = m_input_service->getKeyboard();
+                const MouseDevice &mouse = m_input_service->getMouse();
 
                 const float2 cursor{
                     mouse.m_cursor_pos.m_raw.m_absolute.x,
@@ -401,24 +400,24 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     io.AddMouseWheelEvent(wheel_x, wheel_y);
                 }
 
-                for (const auto &ch: kbd.m_characters) {
+                for (const auto &ch: kbd.m_character_inputs) {
                     if (ch >= 32 && ch < 0xFFFE) {
                         io.AddInputCharacter(ch);
                     }
                 }
 
                 io.AddKeyEvent(ImGuiMod_Ctrl,
-                    kbd.m_keys.isPressed(EKeyboardKey::left_control) ||
-                    kbd.m_keys.isPressed(EKeyboardKey::right_control));
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_control) ||
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_control));
                 io.AddKeyEvent(ImGuiMod_Shift,
-                    kbd.m_keys.isPressed(EKeyboardKey::left_shift) ||
-                    kbd.m_keys.isPressed(EKeyboardKey::right_shift));
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_shift) ||
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_shift));
                 io.AddKeyEvent(ImGuiMod_Alt,
-                    kbd.m_keys.isPressed(EKeyboardKey::left_alt) ||
-                    kbd.m_keys.isPressed(EKeyboardKey::right_alt));
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_alt) ||
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_alt));
                 io.AddKeyEvent(ImGuiMod_Super,
-                    kbd.m_keys.isPressed(EKeyboardKey::left_super) ||
-                    kbd.m_keys.isPressed(EKeyboardKey::right_super));
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_super) ||
+                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_super));
             }
 
             ImGui::NewFrame();
@@ -562,7 +561,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             m_queue.setNull();
 
             if (m_input_service.isValid()) {
-                std::ignore = m_input_service->popInputListener(m_listener);
+                std::ignore = m_input_service->getGlobalInputContext().removeInputListener(m_listener);
             }
 
             if (m_imgui_context) {

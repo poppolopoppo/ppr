@@ -914,7 +914,7 @@ export namespace pP {
         }
 
         template<std::forward_iterator IteratorT>
-            requires details::is_iterator_of<IteratorT, T>
+            requires details::is_iterator_of_v<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
         append(IteratorT first, IteratorT last)
             noexcept(std::is_nothrow_copy_constructible_v<T>) {
@@ -934,7 +934,7 @@ export namespace pP {
             }
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
         appendAssumeCapacity(IteratorT first, IteratorT last)
             noexcept(std::is_nothrow_copy_constructible_v<T>) {
@@ -979,13 +979,13 @@ export namespace pP {
             insert(index, std::ranges::begin(range), std::ranges::end(range));
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
         constexpr void insert(const const_iterator &where, IteratorT first, IteratorT last) noexcept {
             PPR_ASSERT(where.m_vector == this);
             insert(where.m_index, first, last);
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
         constexpr void insert(const std::size_t index, IteratorT first, IteratorT last) noexcept {
             PPR_ASSERT(index <= m_size);
             if (const std::size_t n = append(first, last); n > 0u) [[likely]] {

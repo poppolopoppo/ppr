@@ -3,132 +3,101 @@ module;
 export module engine.app:platform.glfw.input;
 
 import :input.device;
-import :input.gamepad;
-import :input.keyboard;
 import :input.listener;
-import :input.mouse;
-import :input.player;
-import :player.graph;
-import :service.player;
 
 export namespace pP {
     class GlfwInput final : public IInputService {
+        std::error_code pollInputGamepad_(const InputContext &context, GamepadDevice &gamepad) const;
+
     public:
         // Hot data (game thread)
-        KeyboardDevice m_keyboard{InputDeviceID{0u}};
-        MouseDevice m_mouse{InputDeviceID{1u}};
+        KeyboardDevice m_keyboard{InputDeviceID{"Keyboard"}};
+        MouseDevice m_mouse{InputDeviceID{"MouseJoy"}};
         std::array<GamepadDevice, 4u> m_gamepads{
-            GamepadDevice{InputDeviceID{2u}, 0u},
-            GamepadDevice{InputDeviceID{3u}, 1u},
-            GamepadDevice{InputDeviceID{4u}, 2u},
-            GamepadDevice{InputDeviceID{5u}, 3u},
+            GamepadDevice{InputDeviceID{"GamePad0"}},
+            GamepadDevice{InputDeviceID{"GamePad1"}},
+            GamepadDevice{InputDeviceID{"GamePad2"}},
+            GamepadDevice{InputDeviceID{"GamePad3"}},
         };
 
-        FlatMap<InputDeviceID, SharedInputDevice> m_devices{};
+        InputContext m_global_context{};
 
-        InputListener m_global_listener{};
-        Array<SharedInputListener> m_listeners{};
+        FlatSet<SharedInputContext> m_all_contexts{};
+        FlatMap<InputDeviceID, SharedInputDevice> m_devices_by_id{};
+        FlatMap<InputDeviceID, SharedInputContext> m_context_by_device{};
 
-        PlayerGraph m_graph{};
+        TimePoint m_timestamp{};
+        TimeSpan m_delta_time{};
 
-        // Hot per-frame callbacks (placed near device data for cache locality)
-        UpdateCallback m_when_before_updated{};
-        UpdateCallback m_when_after_updated{};
+        bool m_gamepads_ever_connected: 1 {false};
 
-        // Held key/mouse button state (hot, accessed per-frame)
-        FlatSet<EKeyboardKey> m_held_keys{};
-        FlatSet<EMouseButton> m_held_mouse_buttons{};
-
-        // input feeding (game thread, driven by GLFW callbacks):
-        void onKey(int key, int scancode, int action, int mods) noexcept;
-        void onChar(unsigned int codepoint) noexcept;
-        void onMouseButton(int button, int action, int mods) noexcept;
-        void onCursorPos(double x, double y) noexcept;
-        void onScroll(double x_offset, double y_offset) noexcept;
-
-    private:
-        bool m_gamepads_ever_connected{};
-
-        UnhandledKeyCallback m_when_unhandled_key{};
-
-        std::error_code pollGamepads_() noexcept;
-        void feedGamepad_(GamepadDevice &gamepad, int joystick_id) noexcept;
-        std::error_code routeMessage_(const InputMessage &message) noexcept;
-        [[nodiscard]] EInputListenerResponse dispatchToGlobalListeners_(const InputMessage &message) noexcept;
-        [[nodiscard]] EInputListenerResponse dispatchToPushedListeners_(const InputMessage &message) noexcept;
-
-    public:
         // Callbacks (cold, set at initialization)
-        TriggerCallback m_when_action_started{};
-        TriggerCallback m_when_action_triggered{};
-        TriggerCallback m_when_action_completed{};
-
         DeviceCallback m_when_device_connected{};
         DeviceCallback m_when_device_disconnected{};
 
-        safe_ptr<IPlayerService> m_player_service{};
-
-    public:
         GlfwInput() noexcept = default;
 
         [[nodiscard]] static GlfwInput &get() noexcept;
 
         std::error_code initialize();
+
         std::error_code shutdown();
 
         // ------------------------------------------------------------------
         // IInputService overrides
         // ------------------------------------------------------------------
 
-        [[nodiscard]] const KeyboardState &
+        [[nodiscard]] const KeyboardDevice &
         getKeyboard() const noexcept override;
 
-        [[nodiscard]] const MouseState &
+        [[nodiscard]] const MouseDevice &
         getMouse() const noexcept override;
 
-        [[nodiscard]] const GamepadState &
+        [[nodiscard]] const GamepadDevice &
         getGamepad(int controller_index) const noexcept override;
 
         [[nodiscard]] SharedInputDevice
-        getInputDevice(const InputDeviceID &device_id) const noexcept override;
+        getInputDeviceByID(const InputDeviceID &device_id) const noexcept override;
 
         [[nodiscard]] std::error_code enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept override;
 
-        [[nodiscard]] std::error_code supportedInputKeys(Collector<InputKey> supports_key) const override;
+        [[nodiscard]] std::error_code enumerateInputKeysSupported(Collector<InputKey> supports_key) const override;
 
-        [[nodiscard]] std::error_code postInputMessages(TimeSpan dt) override;
+        // contexts:
+        [[nodiscard]] InputContext &getGlobalInputContext() noexcept override;
 
-        void resetInputState() noexcept override;
+        [[nodiscard]] bool hasInputContext(const InputContext &context) const noexcept override;
 
-        // listeners:
-        [[nodiscard]] bool hasInputListener(const InputListener &listener) const noexcept override;
+        void addInputContext(SharedInputContext context) override;
 
-        void pushInputListener(SharedInputListener listener) override;
+        bool removeInputContext(const InputContext &context) override;
 
-        bool popInputListener(const InputListener &listener) override;
+        void assignInputContextToDevice(InputDeviceID device_id, SharedInputContext context) override;
 
-        // mappings:
-        [[nodiscard]] bool hasGlobalInputMapping(const InputMapping &mapping) const noexcept override;
+        void clearInputContextDeviceAssignments() override;
 
-        void addGlobalInputMapping(SharedInputMapping mapping, int priority) override;
+        [[nodiscard]] std::error_code enumerateInputContexts(Collector<InputContext> each_context) const override;
 
-        bool removeGlobalInputMapping(const InputMapping &mapping) override;
+        [[nodiscard]] std::error_code enumerateInputContextDeviceAssignments(Collector<IInputDevice, InputContext> each_assignment) const override;
+
+        // input events:
+        [[nodiscard]] std::error_code pollInputDevices(TimeSpan dt) override;
+
+        void resetInputDevices() noexcept override;
+
+        void postKeyboardCharacterInput(const InputContext &context, hal::native::char_t codepoint) override;
+
+        void postKeyboardKeyPressed(const InputContext &context, EKeyboardKey key, bool pressed) override;
+
+        void postMouseButtonPressed(const InputContext &context, EMouseButton button, bool pressed) override;
+
+        void postMouseCursorPosition(const InputContext &context, const float2 &absolute_pos) override;
+
+        void postMouseScrollWheel(const InputContext &context, const float2 &delta) override;
 
         // callbacks:
         [[nodiscard]] DeviceCallback::Handle whenDeviceConnected(DeviceCallback::Event on_connected) override;
 
         [[nodiscard]] DeviceCallback::Handle whenDeviceDisconnected(DeviceCallback::Event on_disconnected) override;
-
-        [[nodiscard]] TriggerCallback::Handle whenActionStarted(TriggerCallback::Event on_started) override;
-
-        [[nodiscard]] TriggerCallback::Handle whenActionTriggered(TriggerCallback::Event on_triggered) override;
-
-        [[nodiscard]] TriggerCallback::Handle whenActionCompleted(TriggerCallback::Event on_completed) override;
-
-        [[nodiscard]] UnhandledKeyCallback::Handle whenUnhandledKey(UnhandledKeyCallback::Event on_unhandled_key) override;
-
-        [[nodiscard]] UpdateCallback::Handle whenBeforeUpdated(UpdateCallback::Event on_update) override;
-
-        [[nodiscard]] UpdateCallback::Handle whenAfterUpdated(UpdateCallback::Event on_update) override;
     };
 }

@@ -86,11 +86,11 @@ export namespace pP::tests {
         u32 added_count = 0u;
         u32 removed_count = 0u;
 
-        auto on_added = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_added = [&](const Player &) noexcept -> std::error_code {
             ++added_count;
             return default_value_v;
         };
-        auto on_removed = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_removed = [&](const Player &) noexcept -> std::error_code {
             ++removed_count;
             return default_value_v;
         };

@@ -266,6 +266,17 @@ extern "C" void _ReadWriteBarrier();
         return PPR_ANONYMIZE(_errc);                                        \
     }
 
+#define PPR_LOG_WARNING_ON_FAIL(_CATEGORY, ...)                             \
+    if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
+        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
+        PPR_LOG(_CATEGORY, warning,                                         \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            {"category", PPR_ANONYMIZE(_errc).category().name()},           \
+            {"value", PPR_ANONYMIZE(_errc).value()},                        \
+            {"message", PPR_ANONYMIZE(_errc).message()}                     \
+        });                                                                 \
+    }
+
 #define PPR_RETURN_UNEXPECTED_ON_FAIL(_CATEGORY, ...)                       \
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
         hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \

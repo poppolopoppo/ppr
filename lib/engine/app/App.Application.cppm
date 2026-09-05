@@ -2,10 +2,15 @@ module;
 
 export module engine.app:application;
 
-import :viewport.camera;
-import :input.replay;
-import :window.handle;
-import :viewport;
+import :input.action;
+import :input.listener;
+import :renderer;
+import :renderer.triangle_pass;
+import :scene.camera;
+import :scene.camera.controller;
+import :service.window;
+import :window.viewport;
+
 import engine.core;
 import std;
 
@@ -14,7 +19,6 @@ export namespace pP {
     class IUIService;
     class IPlatform;
     class IWindowService;
-    class Renderer;
 
     class Application : public safe_object {
     public:
@@ -51,7 +55,7 @@ export namespace pP {
 
         [[nodiscard]] std::error_code run();
 
-        using ApplicationCallback = Callback<std::error_code (const Application &app)>;
+        using ApplicationCallback = BroadcastCallback<std::error_code (const Application &app)>;
 
     protected:
         [[nodiscard]] virtual std::error_code initialize();
@@ -74,15 +78,18 @@ export namespace pP {
             terminated,
         };
 
-        // Hot (per-frame): cached service pointers and the camera service, valid
-        // for the application lifetime. m_input_replay is cold (init/teardown
-        // only) but must stay declared before m_camera_service so it outlives it
-        // (members destroy in reverse declaration order).
+        // Hot (per-frame): cached service pointers and owned scene state.
         safe_ptr<IWindowService> m_cached_window_service{};
         safe_ptr<IInputService> m_cached_input_service{};
-        InputReplay m_input_replay{};
-        CameraService m_camera_service{};
-        safe_ptr<ICameraService> m_cached_camera_service{};
+        std::unique_ptr<WindowInputContext> m_window_input{};
+        InputListener m_scene_listener{};
+        InputMapping m_scene_controller_mapping{"CameraController"};
+        Camera m_scene_camera{};
+        CameraModel m_scene_camera_model{};
+        FreeCameraController m_scene_controller{};
+        std::unique_ptr<WindowViewport> m_main_viewport{};
+        Renderer m_renderer{};
+        TrianglePass m_triangle_pass{};
         SharedWindow m_main_window{};
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
@@ -91,20 +98,19 @@ export namespace pP {
 
         // Cold (init/shutdown only)
         ServicesStore m_services{};
-        ServicesStore m_scene_services{safe_ptr<ServicesStore>(&m_services)};
         ServicesStore m_ui_services{safe_ptr<ServicesStore>(&m_services)};
-        ViewportConfig m_scene_viewport{};
-        ViewportConfig m_ui_viewport{};
         context::CancelFunc m_cancel{};
-        WindowCallback<int2>::Handle m_resize_handle{};
-        WindowCallback<bool>::Handle m_focus_handle{};
+        IWindowService::WindowResizedCallback::Handle m_resize_handle{};
+        IWindowService::WindowFocusedCallback::Handle m_focus_handle{};
+
         std::error_code onWindowResized_(const Window &window, const int2 &old_size);
+
         std::error_code onWindowFocused_(const Window &window [[maybe_unused]], bool focused) noexcept;
+
         EState m_state{EState::created};
 
         // Cold (init-time)
         std::unique_ptr<IUIService> m_ui_service;
-        std::unique_ptr<Renderer> m_renderer;
         safe_ptr<IPlatform> m_platform;
         Array<std::string> m_arguments{};
         std::string m_name{};

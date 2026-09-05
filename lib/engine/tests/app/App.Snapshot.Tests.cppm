@@ -20,7 +20,6 @@ export namespace pP::tests {
         const InputMessage message{
             InputKey::from(EKeyboardKey::space).value(),
             InputDigital{true},
-            zero_v,
             InputDeviceID{0u},
             EInputMessageEvent::pressed,
         };

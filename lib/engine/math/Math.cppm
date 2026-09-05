@@ -23,100 +23,298 @@ export namespace pP {
     using float3 = float32x3;
     using float4 = float32x4;
 
+    using double2 = float64x2;
+    using double3 = float64x3;
+    using double4 = float64x4;
+
     using float3x3 = Matrix3x3;
     using float4x4 = Matrix4x4;
 
+    using mango::math::abs;
+    using mango::math::ceil;
+    using mango::math::clamp;
+    using mango::math::cross;
     using mango::math::distance;
     using mango::math::dot;
+    using mango::math::floor;
+    using mango::math::fract;
+    using mango::math::hmax;
+    using mango::math::hmin;
+    using mango::math::inverse;
     using mango::math::length;
     using mango::math::lerp;
+    using mango::math::max;
+    using mango::math::min;
+    using mango::math::mod;
     using mango::math::normalize;
-    using mango::math::sqrt;
+    using mango::math::rcp;
+    using mango::math::refract;
+    using mango::math::reflect;
+    using mango::math::round;
     using mango::math::rsqrt;
-    using mango::math::inverse;
+    using mango::math::sign;
+    using mango::math::smoothstep;
+    using mango::math::sqrt;
+    using mango::math::square;
     using mango::math::transpose;
-    using mango::math::cross;
-    using mango::math::clamp;
+    using mango::math::trunc;
+
+    using mango::math::AngleAxis;
+    using mango::math::EulerAngles;
+    using mango::math::Quaternion;
+
+    using mango::math::conjugate;
     using mango::math::slerp;
+    using mango::math::squad;
 
     using mango::math::Box;
     using mango::math::Cone;
+    using mango::math::FastRay;
     using mango::math::Frustum;
     using mango::math::Plane;
     using mango::math::Quadratic;
-    using mango::math::FastRay;
     using mango::math::Ray;
+    using mango::math::RayFrustum;
     using mango::math::Rectangle;
     using mango::math::Sphere;
     using mango::math::Triangle;
 
-    using mango::math::Quaternion;
-
     namespace math {
+        inline const float3 axis_x{1, 0, 0};
+        inline const float3 axis_y{0, 1, 0};
+        inline const float3 axis_z{0, 0, 1};
+
+        inline const float3 right{axis_x};
+        inline const float3 left{-axis_x};
+
+        inline const float3 up{axis_y};
+        inline const float3 down{-axis_y};
+
+        inline const float3 forward{axis_z};
+        inline const float3 backward{-axis_z};
+
         using mango::math::Intersect;
         using mango::math::IntersectBarycentric;
         using mango::math::IntersectBarycentricTwosided;
         using mango::math::IntersectRange;
         using mango::math::IntersectSolid;
+
+        using mango::math::easeInBack;
+        using mango::math::easeInBounce;
+        using mango::math::easeInCircular;
+        using mango::math::easeInCubic;
+        using mango::math::easeInElastic;
+        using mango::math::easeInExponential;
+        using mango::math::easeInQuadratic;
+        using mango::math::easeInQuartic;
+        using mango::math::easeInSine;
+
+        using mango::math::easeOutBack;
+        using mango::math::easeOutBounce;
+        using mango::math::easeOutCircular;
+        using mango::math::easeOutCubic;
+        using mango::math::easeOutElastic;
+        using mango::math::easeOutExponential;
+        using mango::math::easeOutQuadratic;
+        using mango::math::easeOutQuartic;
+        using mango::math::easeOutSine;
+
+        using mango::math::easeInOutBack;
+        using mango::math::easeInOutBounce;
+        using mango::math::easeInOutCircular;
+        using mango::math::easeInOutCubic;
+        using mango::math::easeInOutElastic;
+        using mango::math::easeInOutExponential;
+        using mango::math::easeInOutQuadratic;
+        using mango::math::easeInOutQuartic;
+        using mango::math::easeInOutSine;
+
+        namespace details {
+            template<typename T>
+            concept TArithmetic = std::is_arithmetic_v<T>;
+
+            template<auto ValueGeneratorV, typename T>
+            concept TValueGenerator = requires
+            {
+                ValueGeneratorV.template operator()<T>();
+            };
+
+            // Accept any callable object as a Non-Type Template Parameter
+            template<auto ValueGeneratorV>
+            struct PolymorphicConstant {
+                // Constrain it to floating point types to match std::numbers
+                template<typename T>
+                    requires TValueGenerator<ValueGeneratorV, T>
+                // ReSharper disable once CppNonExplicitConversionOperator
+                [[nodiscard]] constexpr operator T() const noexcept {
+                    // We use .template operator()<T>() to explicitly call the lambda's template
+                    return ValueGeneratorV.template operator()<T>();
+                }
+
+                template<typename T>
+                    requires TValueGenerator<ValueGeneratorV, T>
+                [[nodiscard]] constexpr bool operator ==(const T value) const noexcept {
+                    return ValueGeneratorV.template operator()<T>() == value;
+                }
+
+                template<typename T>
+                    requires TValueGenerator<ValueGeneratorV, T>
+                [[nodiscard]] constexpr auto operator <=>(const T value) const noexcept {
+                    return ValueGeneratorV.template operator()<T>() <=> value;
+                }
+            };
+
+            template<class>
+            struct InvalidConstantType {
+                static_assert(false, "A program that instantiates a primary template of a mathematical constant "
+                    "variable template is ill-formed. (N4950 [math.constants]/3)");
+            };
+
+            template<typename T, auto>
+            struct Number {
+                static constexpr InvalidConstantType<T> value{};
+            };
+
+            template<typename T, auto ValueGeneratorV>
+                requires TValueGenerator<ValueGeneratorV, T>
+            struct Number<T, ValueGeneratorV> {
+                static constexpr T value{ValueGeneratorV.template operator()<T>()};
+            };
+
+            template<auto ValueGeneratorV>
+            struct Number<void, ValueGeneratorV> {
+                static constexpr PolymorphicConstant<ValueGeneratorV> value{};
+            };
+
+            struct IdentityValue {
+                template<typename IdentityT>
+                    requires requires
+                    {
+                        { IdentityT::identity() } -> std::convertible_to<IdentityT>;
+                    }
+                // ReSharper disable once CppNonExplicitConversionOperator
+                [[nodiscard]] constexpr operator IdentityT() const noexcept {
+                    return IdentityT::identity();
+                }
+            };
+        }
+
+        template<details::TArithmetic T, std::size_t DimV>
+        using Vector = mango::math::Vector<T, DimV>;
+
+        template<details::TArithmetic T, std::size_t WidthV, std::size_t HeightV>
+        using Matrix = mango::math::Matrix<T, WidthV, HeightV>;
+
+        // 128 bit vector masks
+        using mango::math::mask8x16;
+        using mango::math::mask16x8;
+        using mango::math::mask32x4;
+        using mango::math::mask64x2;
+
+        // 256 bit vector masks
+        using mango::math::mask8x32;
+        using mango::math::mask16x16;
+        using mango::math::mask32x8;
+        using mango::math::mask64x4;
+
+        // 512 bit vector masks
+        using mango::math::mask8x64;
+        using mango::math::mask16x32;
+        using mango::math::mask32x16;
+        using mango::math::mask64x8;
+
+        using mango::math::maskToInt;
+
+        using mango::math::add;
+        using mango::math::sub;
+        using mango::math::mul;
+        using mango::math::div;
+
+        using mango::math::all_of;
+        using mango::math::any_of;
+        using mango::math::none_of;
     }
 
-// PPR's lookAt(eye, target, up) follows the standard (non-mirrored) convention: the camera is
-// placed at `eye` looking toward `target`, with +X to the right and -Z forward in view space.
-// It is built directly from the basis vectors rather than mango::Matrix4x4::lookat, whose
-// (target, viewer) argument order and mirrored basis make the standard matrix awkward to
-// express. mango's Matrix4x4 is row-major (m[0..3] are rows); the layout below matches it.
-    [[nodiscard]] float4x4 makeLookAtMatrix(const float3 &eye, const float3 &target, const float3 &up) noexcept {
-        const float3 z_axis = normalize(eye - target);
-        const float3 x_axis = normalize(cross(up, z_axis));
-        const float3 y_axis = cross(z_axis, x_axis);
-        return float4x4{
-            float4{x_axis.x, y_axis.x, z_axis.x, 0.0f},
-            float4{x_axis.y, y_axis.y, z_axis.y, 0.0f},
-            float4{x_axis.z, y_axis.z, z_axis.z, 0.0f},
-            float4{-dot(x_axis, eye), -dot(y_axis, eye), -dot(z_axis, eye), 1.0f},
+#define PPR_POLYMORPHIC_BASIC_NUMBER(_CONCEPT, _NAME, ...) \
+    template<typename ValueT = void> \
+    constexpr auto _NAME = math::details::Number<ValueT, \
+        []<_CONCEPT T>() constexpr noexcept { \
+            return __VA_ARGS__; \
+        }>::value;
+
+#define PPR_POLYMORPHIC_ARITHMETIC(_NAME, ...) \
+    PPR_POLYMORPHIC_BASIC_NUMBER(math::details::TArithmetic, _NAME, __VA_ARGS__)
+#define PPR_POLYMORPHIC_FLOAT(_NAME, ...) \
+    PPR_POLYMORPHIC_BASIC_NUMBER(std::floating_point, _NAME, __VA_ARGS__)
+#define PPR_POLYMORPHIC_STD_NUMBER(_NAME) \
+    PPR_POLYMORPHIC_FLOAT(_NAME, std::numbers::_NAME<T>)
+
+    PPR_POLYMORPHIC_STD_NUMBER(e_v);
+    PPR_POLYMORPHIC_STD_NUMBER(log2e_v);
+    PPR_POLYMORPHIC_STD_NUMBER(log10e_v);
+    PPR_POLYMORPHIC_STD_NUMBER(pi_v);
+    PPR_POLYMORPHIC_STD_NUMBER(inv_pi_v);
+    PPR_POLYMORPHIC_STD_NUMBER(inv_sqrtpi_v);
+    PPR_POLYMORPHIC_STD_NUMBER(ln2_v);
+    PPR_POLYMORPHIC_STD_NUMBER(ln10_v);
+    PPR_POLYMORPHIC_STD_NUMBER(sqrt2_v);
+    PPR_POLYMORPHIC_STD_NUMBER(sqrt3_v);
+    PPR_POLYMORPHIC_STD_NUMBER(inv_sqrt3_v);
+    PPR_POLYMORPHIC_STD_NUMBER(egamma_v);
+    PPR_POLYMORPHIC_STD_NUMBER(phi_v);
+
+    PPR_POLYMORPHIC_FLOAT(pi_over_2_v, pi_v<T> / 2);
+    PPR_POLYMORPHIC_FLOAT(pi_over_3_v, pi_v<T> / 3);
+    PPR_POLYMORPHIC_FLOAT(pi_over_4_v, pi_v<T> / 4);
+
+    // Type-relative zero-detection band: 10x eps for floats (covers float32
+    // normalize() output, 3.58e-7 measured over a 20k-direction sweep), 0 for
+    // ints (== today's static_cast<int>(1e-8), so int asserts keep `> 0`).
+    // Single expression: the macro wraps this in `return ...;`.
+    PPR_POLYMORPHIC_ARITHMETIC(epsilon_v,
+        std::floating_point<T> ? 10 * std::numeric_limits<T>::epsilon() : T{0});
+    PPR_POLYMORPHIC_ARITHMETIC(infinity_v, std::numeric_limits<T>::infinity());
+
+#undef PPR_POLYMORPHIC_STD_NUMBER
+#undef PPR_POLYMORPHIC_FLOAT
+#undef PPR_POLYMORPHIC_ARITHMETIC
+#undef PPR_POLYMORPHIC_BASIC_NUMBER
+
+    constexpr math::details::IdentityValue identity_v;
+
+    [[nodiscard]] constexpr float4x4 makeJitterMatrix(const float2 &jitter) noexcept {
+        float4x4 result{float4x4::identity()};
+        result[3][0] = jitter.x;
+        result[3][1] = jitter.y;
+        return result;
+    }
+
+    [[nodiscard]] Frustum makeZeroToOneFrustum(const float4x4 &viewProjection) noexcept {
+        const float4x4 depth_transform{
+            float4{1.0f, 0.0f, 0.0f, 0.0f},
+            float4{0.0f, 1.0f, 0.0f, 0.0f},
+            float4{0.0f, 0.0f, 2.0f, 0.0f},
+            float4{0.0f, 0.0f, -1.0f, 1.0f},
         };
-    }
-
-    // Quaternion helpers (mango is row-major; rotateXYZ applies X→Y→Z: pitch→x, yaw→y, roll→z).
-    [[nodiscard]] Quaternion makeYawPitchRollQuaternion(float yaw, float pitch, float roll) noexcept {
-        return mango::math::Quaternion::rotateXYZ(pitch, yaw, roll);
-    }
-
-    [[nodiscard]] Quaternion makeQuaternionFromRotationMatrix(const float3x3 &m) noexcept {
-        return Quaternion(m);
-    }
-
-    [[nodiscard]] Quaternion makeQuaternionFromRotationMatrix(const float4x4 &m) noexcept {
-        return Quaternion(m);
+        return Frustum{viewProjection * depth_transform};
     }
 
     [[nodiscard]] float3 quaternionTransform(const Quaternion &q, const float3 &v) noexcept {
         return mango::math::operator*(v, q);
     }
 
-    [[nodiscard]] Quaternion conjugate(const Quaternion &q) noexcept {
-        return mango::math::conjugate(q);
-    }
+    [[nodiscard]] float3 angularVelocity(const float seconds, const Quaternion &from, const Quaternion &to) noexcept {
+        PPR_ASSUME(seconds > 0);
 
-    [[nodiscard]] float quaternionDot(const Quaternion &a, const Quaternion &b) noexcept {
-        return mango::math::dot(a, b);
-    }
+        const Quaternion actual_to{dot(from, to) < 0 ? -to : to};
+        const Quaternion angular_delta = normalize(actual_to * conjugate(from));
 
-    [[nodiscard]] Quaternion normalizeQuaternion(const Quaternion &q) noexcept {
-        return mango::math::normalize(q);
-    }
+        const float3 v(angular_delta.x, angular_delta.y, angular_delta.z);
+        const float sin_half = length(v);
+        const float half_angle = std::atan2(sin_half, angular_delta.w);
+        const float3 axis = sin_half > epsilon_v<> ? v / sin_half : math::axis_z;
 
-    // Extracts yaw (around Y) and pitch (around X) from a quaternion built with
-    // makeYawPitchRollQuaternion(yaw, pitch, 0) = qy(yaw) * qx(pitch). Round-trips
-    // with that construction for pitch within (-pi/2, pi/2).
-    [[nodiscard]] float2 quaternionToYawPitch(const Quaternion &q) noexcept {
-        const Quaternion n = normalize(q);
-        const float sinp = 2.0f * (n.w * n.x - n.y * n.z);
-        const float pitch = std::asin(clamp(sinp, -1.0f, 1.0f));
-        const float siny_cosp = 2.0f * (n.x * n.z + n.w * n.y);
-        const float cosy_cosp = 1.0f - 2.0f * (n.x * n.x + n.y * n.y);
-        const float yaw = std::atan2(siny_cosp, cosy_cosp);
-        return float2{yaw, pitch};
+        return axis * (2.0 * half_angle / seconds);
     }
 
     using mango::math::operator!=;
@@ -142,28 +340,22 @@ export namespace pP {
 
     template<typename T>
         requires requires(T x) { mango::math::dot(x, x); }
-    [[nodiscard]] constexpr auto dot2(T x) noexcept {
+    [[nodiscard]] constexpr auto dot2(const T &x) noexcept {
         return mango::math::dot(x, x);
     }
 
-    template<typename T>
-        requires std::is_arithmetic_v<T>
+    template<math::details::TArithmetic T>
     [[nodiscard]] constexpr auto dot2(T x) noexcept {
         return x * x;
     }
 
-    template<typename T, u32 DimV>
-    [[nodiscard]] constexpr bool operator ==(const Vector<T, DimV> &lhs, const Vector<T, DimV> &rhs) noexcept {
-        if constexpr (requires(const Vector<T, DimV> &v)
-        {
-            { mango::simd::compare_eq(v, v) } -> std::same_as<bool>;
-        }) {
-            return all_of(mango::math::operator==(lhs, rhs));
-        } else {
-            return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> bool {
-                return ((lhs[idx] == rhs[idx]) && ...);
-            });
-        }
+    // checked_cast integration
+    template<std::integral ToT, std::integral FromT, u32 DimV>
+    [[nodiscard]] constexpr Vector<ToT, DimV> checked_cast(const Vector<FromT, DimV> &value) noexcept {
+        return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> Vector<ToT, DimV> {
+            return Vector<ToT, DimV>(
+                checked_cast<ToT>(value[idx])...);
+        });
     }
 
     template<typename ToT, typename FromT, u32 DimV>
@@ -175,13 +367,72 @@ export namespace pP {
         });
     }
 
-    // checked_cast integration
-    template<std::integral ToT, std::integral FromT, u32 DimV>
-    [[nodiscard]] constexpr Vector<ToT, DimV> checked_cast(const Vector<FromT, DimV> &value) noexcept {
-        return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> Vector<ToT, DimV> {
-            return Vector<ToT, DimV>(
-                checked_cast<ToT>(value[idx])...);
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<int, DimV> ceilToInt(const Vector<T, DimV> &value) noexcept {
+        return vector_cast<int>(ceil(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<int, DimV> floorToInt(const Vector<T, DimV> &value) noexcept {
+        return vector_cast<int>(floor(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<int, DimV> roundToInt(const Vector<T, DimV> &value) noexcept {
+        return vector_cast<int>(round(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<int, DimV> truncToInt(const Vector<T, DimV> &value) noexcept {
+        return vector_cast<int>(trunc(value));
+    }
+
+    template<typename T, u32 DimV>
+    [[nodiscard]] constexpr Vector<T, DimV> saturate(const Vector<T, DimV> &value) noexcept {
+        return clamp(value, Vector<T, DimV>(0), Vector<T, DimV>(1));
+    }
+
+    // check if nan
+    template<std::floating_point T>
+    [[nodiscard]] constexpr bool isNan(const T value) noexcept {
+        return std::isnan(value);
+    }
+
+    // check if any component isnan
+    [[nodiscard]] constexpr bool isNan(const Quaternion &quat) noexcept {
+        return isNan(quat.x) or isNan(quat.y) or isNan(quat.z) or isNan(quat.w);
+    }
+
+    // check if any component isnan
+    template<std::floating_point T, std::size_t DimV>
+    [[nodiscard]] constexpr bool isNan(const Vector<T, DimV> &value) noexcept {
+        return pP::static_iota<std::size_t, DimV>([&](auto... idx) constexpr noexcept -> bool {
+            return (isNan(value[idx]) or ...);
         });
+    }
+
+    // check if any column isnan
+    template<std::floating_point T, std::size_t WidthV, std::size_t HeightV>
+    [[nodiscard]] constexpr bool isNan(const Matrix<T, WidthV, HeightV> &value) noexcept {
+        return pP::static_iota<u32, WidthV>([&](auto... idx) constexpr noexcept -> bool {
+            return (isNan(value.template column<idx>()) or ...);
+        });
+    }
+
+    // Single source of truth is epsilon_v above (10x eps for floats, 0 for ints).
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr bool isNormalized(const Vector<T, DimV> &value, const T epsilon = epsilon_v<T>) noexcept {
+        return abs(1 - dot2(value)) < epsilon;
+    }
+
+    [[nodiscard]] constexpr bool isNormalized(const Quaternion &value, const float epsilon = epsilon_v<>) noexcept {
+        return abs(1 - dot2(value)) < epsilon;
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<T, DimV> safeNormalize(const Vector<T, DimV> &value, const Vector<T, DimV> &fallback, const T epsilon = epsilon_v<T>) noexcept {
+        const T norm_sq = dot(value, value);
+        return norm_sq > epsilon ? value / std::sqrt(norm_sq) : fallback;
     }
 }
 
@@ -201,4 +452,3 @@ export namespace mango::math {
         return pP::opaqueValue(std::span<const T, DimV>(value.data(), DimV));
     }
 }
-

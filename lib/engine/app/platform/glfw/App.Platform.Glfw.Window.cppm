@@ -4,13 +4,11 @@ module;
 export module engine.app:platform.glfw.window;
 
 import :service.window;
-import :platform.glfw.input;
 import engine.core;
 
 export namespace pP {
     class GlfwWindow final : public IWindowService {
         [[nodiscard]] std::error_code initializeMonitors_();
-        [[nodiscard]] std::error_code updateWindows_() const;
 
         GlfwWindow() noexcept = default;
 
@@ -31,10 +29,10 @@ export namespace pP {
         Array<std::unique_ptr<Window> > m_windows{};
         Array<std::unique_ptr<Monitor> > m_monitors{};
 
-        safe_ptr<Monitor> m_primary_monitor{};
-        safe_ptr<Window> m_main_window{};
-        safe_ptr<Window> m_focused_window{};
-        safe_ptr<GlfwInput> m_input_service{};
+        safe_ptr<const Monitor> m_primary_monitor{};
+        safe_ptr<const Window> m_main_window{};
+        safe_ptr<const Window> m_focused_window{};
+        safe_ptr<const WindowViewport> m_main_viewport{};
 
         bool m_shutdown{false};
 
@@ -43,8 +41,6 @@ export namespace pP {
         std::error_code initialize();
 
         std::error_code shutdown() noexcept;
-
-        void setInputService(safe_ptr<GlfwInput> input_service) noexcept;
 
         // ------------------------------------------------------------------
         // IWindowService overrides
@@ -77,11 +73,13 @@ export namespace pP {
 
         [[nodiscard]] std::error_code destroyWindow(SharedWindow &&window) override;
 
-        [[nodiscard]] SharedWindow getFocusedWindow() const noexcept override;
+        [[nodiscard]] const SharedWindow &getFocusedWindow() const noexcept override { return m_focused_window; }
+        [[nodiscard]] const SharedWindow &getMainWindow() const noexcept override { return m_main_window; }
+        [[nodiscard]] const SharedWindowViewport &getMainViewport() const noexcept override { return m_main_viewport; }
 
-        [[nodiscard]] SharedWindow getMainWindow() const noexcept override;
+        SharedWindow setMainWindow(SharedWindow window) override;
 
-        void setMainWindow(const Window &window) override;
+        SharedWindowViewport setMainViewport(SharedWindowViewport viewport) override;
 
         [[nodiscard]] SharedMonitor getWindowMonitor(const Window &window) const noexcept override;
 
@@ -94,6 +92,8 @@ export namespace pP {
         [[nodiscard]] bool getWindowShouldClose(const Window &window) const noexcept override;
 
         void setWindowShouldClose(const Window &window, bool value) override;
+
+        void setWindowCursorMode(const Window &window, ECursorMode mode) override;
 
         // window manipulation:
         void moveWindow(const Window &window, const int2 &position) override;
@@ -110,14 +110,16 @@ export namespace pP {
 
         void restoreWindow(const Window &window) override;
 
+        void focusWindow(const Window &window) override;
+
         void swapWindowBuffers(const Window &window) override;
 
-        [[nodiscard]] void *getNativeHandle(const Window &window) const noexcept override;
+        [[nodiscard]] void *getWindowNativeHandle(const Window &window) const noexcept override;
 
         // window clipboard:
         void setWindowClipboardString(const Window &window, const std::string_view &text) override;
 
-        std::string_view getWindowClipboardString(const Window &window) const noexcept override;
+        [[nodiscard]] std::string_view getWindowClipboardString(const Window &window) const noexcept override;
 
         // window callbacks:
         [[nodiscard]] WindowCallback::Handle whenWindowCreated(WindowCallback::Event on_connected) noexcept override;

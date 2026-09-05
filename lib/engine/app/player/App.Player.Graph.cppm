@@ -2,7 +2,7 @@ module;
 #include "pP/Macros.h"
 export module engine.app:player.graph;
 
-import :input.player;
+import :player;
 import :input.device;
 import :service.player;
 import engine.core;

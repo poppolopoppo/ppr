@@ -6,9 +6,9 @@ module;
 module engine.app;
 
 import :platform.glfw.window;
-import :platform.glfw.input;
 import :window.handle;
 import :window.monitor;
+import :window.viewport;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwWindow, info, none);
@@ -110,10 +110,6 @@ namespace pP {
         return default_value_v;
     }
 
-    void GlfwWindow::setInputService(safe_ptr<GlfwInput> input_service) noexcept {
-        m_input_service = std::move(input_service);
-    }
-
     static void glfwMonitorCallback_(GLFWmonitor *p_glfw_monitor, const int status) {
         PPR_ASSERT(p_glfw_monitor != nullptr);
         GlfwWindow &windows = GlfwWindow::get();
@@ -126,14 +122,14 @@ namespace pP {
             }
 
             windows.m_monitors.push_back(std::move(monitor));
-            std::ignore = windows.m_when_monitor_connected(*windows.m_monitors.back());
+            PPR_LOG_WARNING_ON_FAIL(GlfwWindow, windows.m_when_monitor_connected(*windows.m_monitors.back()));
             return;
         }
 
         if (status == GLFW_DISCONNECTED) {
             if (const auto it = glfwAllocation_(windows.m_monitors, MonitorHandle{p_glfw_monitor});
                 windows.m_monitors.end() != it) {
-                std::ignore = windows.m_when_monitor_disconnected(**it);
+                PPR_LOG_WARNING_ON_FAIL(GlfwWindow, windows.m_when_monitor_disconnected(**it));
                 windows.m_monitors.erase(it);
             }
             return;
@@ -171,23 +167,14 @@ namespace pP {
     // GLFW window events
     // ------------------------------------------------------------------
 
-    std::error_code GlfwWindow::updateWindows_() const {
-        for (const auto &p_window : m_windows) {
-            if (const std::error_code err = p_window->update()) [[unlikely]] {
-                return err;
-            }
-        }
-        return default_value_v;
-    }
-
     std::error_code GlfwWindow::pollEvents() {
         ::glfwPollEvents();
-        return updateWindows_();
+        return default_value_v;
     }
 
     std::error_code GlfwWindow::waitEvents() {
         ::glfwWaitEvents();
-        return updateWindows_();
+        return default_value_v;
     }
 
     // ------------------------------------------------------------------
@@ -207,7 +194,7 @@ namespace pP {
         return m_primary_monitor;
     }
 
-    std::error_code GlfwWindow::enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept {
+    std::error_code GlfwWindow::enumerateMonitorVideoModes(const Monitor &monitor, const Collector<VideoMode> each_video_mode) const noexcept {
         int video_modes_count{0};
         const ::GLFWvidmode *const p_video_modes_arr = ::glfwGetVideoModes(glfwHandle_(monitor.m_handle), &video_modes_count);
         PPR_ASSERT(p_video_modes_arr != nullptr || video_modes_count == 0);
@@ -224,7 +211,7 @@ namespace pP {
         return default_value_v;
     }
 
-    void GlfwWindow::setMonitorGamma(const Monitor &monitor, float gamma) noexcept {
+    void GlfwWindow::setMonitorGamma(const Monitor &monitor, const float gamma) noexcept {
         if (monitor.m_handle) {
             ::glfwSetGamma(glfwHandle_(monitor.m_handle), gamma);
         }
@@ -243,7 +230,7 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
-    // GLFW windows
+    // GLFW window
     // ------------------------------------------------------------------
 
     [[nodiscard]] static Window &getWindowFromGlfwHandle_(::GLFWwindow *p_glfw_window) noexcept {
@@ -251,78 +238,233 @@ namespace pP {
         return *static_cast<Window *>(::glfwGetWindowUserPointer(p_glfw_window));
     }
 
-    static void glfwWindowCloseCallback_(::GLFWwindow *p_glfw_window) noexcept {
+    /// -> window state events:
+
+    static void glfwWindowCloseCallback_(::GLFWwindow *p_glfw_window) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_visible = false;
         window.m_when_closed(window);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_closed(window));
+
+        if (g_service.m_focused_window == &window) {
+            g_service.m_focused_window.reset();
+        }
+
+        if (g_service.m_main_window == &window) {
+            g_service.m_main_window.reset();
+        }
     }
 
-    static void glfwWindowFocusCallback_(::GLFWwindow *p_glfw_window, const int focused) noexcept {
+    static void glfwWindowFocusCallback_(::GLFWwindow *p_glfw_window, const int focused) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_focused = focused == GLFW_TRUE;
         window.m_when_focused(window, window.m_focused);
 
-        GlfwWindow &g_instance = GlfwWindow::get();
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_focused(window, window.m_focused));
+
         if (window.m_focused) {
-            g_instance.m_focused_window = safe_ptr(&window);
-        } else if (g_instance.m_focused_window == &window) {
-            g_instance.m_focused_window = nullptr;
+            g_service.m_focused_window = safe_ptr(&window);
+        } else if (g_service.m_focused_window == &window) {
+            g_service.m_focused_window.reset();
         }
     }
 
-    static void glfwWindowIconifyCallback_(::GLFWwindow *p_glfw_window, const int iconified) noexcept {
+    static void glfwWindowIconifyCallback_(::GLFWwindow *p_glfw_window, const int iconified) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_iconified = iconified == GLFW_TRUE;
         window.m_when_iconified(window, window.m_iconified);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_iconified(window, window.m_iconified));
     }
 
-    static void glfwWindowPosCallback_(::GLFWwindow *p_glfw_window, const int position_x, const int position_y) noexcept {
+    /// -> window geometry events:
+
+    static void glfwWindowPosCallback_(::GLFWwindow *p_glfw_window, const int position_x, const int position_y) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         const int2 old_position = window.m_window_position;
         window.m_window_position = int2{position_x, position_y};
         window.m_when_moved(window, old_position);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_moved(window, old_position));
     }
 
-    static void glfwWindowSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) noexcept {
+    static void glfwWindowSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        [[maybe_unused]] const int2 old_size = window.m_window_size;
         window.m_window_size = int2{size_x, size_y};
+
+#if 0 // The framebuffer callback below is the single driver of m_when_resized: see comment bellow
+        window.m_when_resized(window, old_size);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_resized(window, old_size));
+#endif
     }
 
     // The framebuffer callback below is the single driver of m_when_resized: rendering and
     // ImGui are sized from m_framebuffer_size, and CallbackSink stores only the first deferred
     // event per poll cycle, so notifying from both callbacks would drop the framebuffer one.
-    static void glfwFramebufferSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) noexcept {
+    static void glfwFramebufferSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const int2 old_size = window.m_framebuffer_size;
         window.m_framebuffer_size = int2{size_x, size_y};
-        window.m_when_resized(window, window.m_framebuffer_size);
+        window.m_when_resized(window, old_size);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_resized(window, old_size));
     }
 
-    static void glfwWindowContentScaleCallback_(::GLFWwindow *p_glfw_window, const float scale_x, const float scale_y) noexcept {
+    static void glfwWindowContentScaleCallback_(::GLFWwindow *p_glfw_window, const float scale_x, const float scale_y) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         const float2 old_content_scale = window.m_content_scale;
         window.m_content_scale = float2{scale_x, scale_y};
         window.m_when_scaled(window, old_content_scale);
+
+        auto &g_service = GlfwWindow::get();
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_scaled(window, old_content_scale));
     }
 
-    static void glfwKeyCallback_(::GLFWwindow *, const int key, const int scancode, const int action, const int mods) noexcept {
-        GlfwInput::get().onKey(key, scancode, action, mods);
+    /// -> window input events:
+
+    [[nodiscard]] static std::optional<EKeyboardKey> glfwToKeyboardKey_(const int key) noexcept {
+        if (key >= GLFW_KEY_SPACE && key <= 126) {
+            if (key == GLFW_KEY_SPACE) {
+                return EKeyboardKey::space;
+            }
+            if (key >= 'A' && key <= 'Z') {
+                return static_cast<EKeyboardKey>(key + 32);
+            }
+            return static_cast<EKeyboardKey>(key);
+        }
+
+        switch (key) {
+            case GLFW_KEY_ESCAPE: return EKeyboardKey::escape;
+            case GLFW_KEY_ENTER: return EKeyboardKey::enter;
+            case GLFW_KEY_TAB: return EKeyboardKey::tab;
+            case GLFW_KEY_BACKSPACE: return EKeyboardKey::backspace;
+            case GLFW_KEY_INSERT: return EKeyboardKey::insert;
+            case GLFW_KEY_DELETE: return EKeyboardKey::delete_;
+            case GLFW_KEY_RIGHT: return EKeyboardKey::right_arrow;
+            case GLFW_KEY_LEFT: return EKeyboardKey::left_arrow;
+            case GLFW_KEY_DOWN: return EKeyboardKey::down_arrow;
+            case GLFW_KEY_UP: return EKeyboardKey::up_arrow;
+            case GLFW_KEY_PAGE_UP: return EKeyboardKey::page_up;
+            case GLFW_KEY_PAGE_DOWN: return EKeyboardKey::page_down;
+            case GLFW_KEY_HOME: return EKeyboardKey::home;
+            case GLFW_KEY_END: return EKeyboardKey::end;
+            case GLFW_KEY_CAPS_LOCK: return EKeyboardKey::caps_lock;
+            case GLFW_KEY_NUM_LOCK: return EKeyboardKey::num_lock;
+            case GLFW_KEY_SCROLL_LOCK: return EKeyboardKey::scroll_lock;
+            case GLFW_KEY_PAUSE: return EKeyboardKey::pause;
+            case GLFW_KEY_PRINT_SCREEN: return EKeyboardKey::print_screen;
+            case GLFW_KEY_LEFT_SHIFT: return EKeyboardKey::left_shift;
+            case GLFW_KEY_RIGHT_SHIFT: return EKeyboardKey::right_shift;
+            case GLFW_KEY_LEFT_CONTROL: return EKeyboardKey::left_control;
+            case GLFW_KEY_RIGHT_CONTROL: return EKeyboardKey::right_control;
+            case GLFW_KEY_LEFT_ALT: return EKeyboardKey::left_alt;
+            case GLFW_KEY_RIGHT_ALT: return EKeyboardKey::right_alt;
+            case GLFW_KEY_LEFT_SUPER: return EKeyboardKey::left_super;
+            case GLFW_KEY_RIGHT_SUPER: return EKeyboardKey::right_super;
+            case GLFW_KEY_F1: return EKeyboardKey::f1;
+            case GLFW_KEY_F2: return EKeyboardKey::f2;
+            case GLFW_KEY_F3: return EKeyboardKey::f3;
+            case GLFW_KEY_F4: return EKeyboardKey::f4;
+            case GLFW_KEY_F5: return EKeyboardKey::f5;
+            case GLFW_KEY_F6: return EKeyboardKey::f6;
+            case GLFW_KEY_F7: return EKeyboardKey::f7;
+            case GLFW_KEY_F8: return EKeyboardKey::f8;
+            case GLFW_KEY_F9: return EKeyboardKey::f9;
+            case GLFW_KEY_F10: return EKeyboardKey::f10;
+            case GLFW_KEY_F11: return EKeyboardKey::f11;
+            case GLFW_KEY_F12: return EKeyboardKey::f12;
+            default: return std::nullopt;
+        }
     }
 
-    static void glfwCharCallback_(::GLFWwindow *, const unsigned int codepoint) noexcept {
-        GlfwInput::get().onChar(codepoint);
+    static void glfwKeyCallback_(::GLFWwindow *const p_glfw_window, const int glfw_key, [[maybe_unused]] const int scancode, const int action,
+                                 [[maybe_unused]] const int mods) {
+        const std::optional<EKeyboardKey> key = glfwToKeyboardKey_(glfw_key);
+        if (not key.has_value()) {
+            return;
+        }
+
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        switch (action) {
+            case GLFW_PRESS:
+                window.m_when_keyboard_pressed(window, *key, true);
+                break;
+            case GLFW_RELEASE:
+                window.m_when_keyboard_pressed(window, *key, false);
+                break;
+            case GLFW_REPEAT:
+                window.m_when_keyboard_repeated(window, *key);
+                break;
+            default:
+                PPR_ASSERT(false && "unhandled GLFW keyboard action");
+                break;
+        }
     }
 
-    static void glfwMouseButtonCallback_(::GLFWwindow *, const int button, const int action, const int mods) noexcept {
-        GlfwInput::get().onMouseButton(button, action, mods);
+    static void glfwCharCallback_(::GLFWwindow *const p_glfw_window, const unsigned int codepoint) {
+        if (codepoint > 0x10FFFFu || (codepoint >= 0xD800u && codepoint <= 0xDFFFu)) {
+            return;
+        }
+
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        window.m_when_character_input(window, checked_cast<hal::native::char_t>(codepoint));
     }
 
-    static void glfwCursorPosCallback_(::GLFWwindow *, const double x, const double y) noexcept {
-        GlfwInput::get().onCursorPos(x, y);
+    static void glfwCursorEnterCallback_(::GLFWwindow *p_glfw_window, const int entered) {
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        window.m_when_hovered(window, entered);
     }
 
-    static void glfwScrollCallback_(::GLFWwindow *, const double x_offset, const double y_offset) noexcept {
-        GlfwInput::get().onScroll(x_offset, y_offset);
+    static void glfwMouseButtonCallback_(::GLFWwindow *p_glfw_window, const int glfw_button, const int action, [[maybe_unused]] const int mods) {
+        if (glfw_button < 0 || glfw_button > 4) {
+            return;
+        }
+
+        const auto button = static_cast<EMouseButton>(glfw_button);
+
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        switch (action) {
+            case GLFW_PRESS:
+                window.m_when_mouse_clicked(window, button, true);
+                break;
+            case GLFW_RELEASE:
+                window.m_when_mouse_clicked(window, button, false);
+                break;
+            default:
+                PPR_ASSERT(false && "unhandled GLFW mouse action");
+                break;
+        }
     }
+
+    static void glfwCursorPosCallback_(::GLFWwindow *p_glfw_window, const double cursor_x, const double cursor_y) {
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const float2 new_cursor_pos{vector_cast<float>(double2(cursor_x, cursor_y))};
+        window.m_when_mouse_moved(window, new_cursor_pos);
+    }
+
+    static void glfwScrollCallback_(::GLFWwindow *p_glfw_window, const double offset_x, const double offset_y) {
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const float2 add_wheel_delta {vector_cast<float>(double2(offset_x, offset_y))};
+        window.m_when_mouse_scrolled(window, add_wheel_delta);
+    }
+
+    /// -> window drag & drop:
+
+    static void glfwDropCallback_(GLFWwindow *p_glfw_window, const int path_count, const char *paths[]) {
+        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        window.m_when_drag_and_dropped(window, std::span{paths, paths + path_count});
+    }
+
+    /// -> window handling:
 
     std::expected<SharedWindow, std::error_code> GlfwWindow::createWindow(
         WindowModel &&definition,
@@ -376,6 +518,7 @@ namespace pP {
         ::glfwSetWindowCloseCallback(p_glfw_window, &glfwWindowCloseCallback_);
         ::glfwSetWindowFocusCallback(p_glfw_window, &glfwWindowFocusCallback_);
         ::glfwSetWindowIconifyCallback(p_glfw_window, &glfwWindowIconifyCallback_);
+
         ::glfwSetWindowPosCallback(p_glfw_window, &glfwWindowPosCallback_);
         ::glfwSetWindowSizeCallback(p_glfw_window, &glfwWindowSizeCallback_);
         ::glfwSetFramebufferSizeCallback(p_glfw_window, &glfwFramebufferSizeCallback_);
@@ -383,9 +526,13 @@ namespace pP {
 
         ::glfwSetKeyCallback(p_glfw_window, &glfwKeyCallback_);
         ::glfwSetCharCallback(p_glfw_window, &glfwCharCallback_);
+
         ::glfwSetMouseButtonCallback(p_glfw_window, &glfwMouseButtonCallback_);
         ::glfwSetCursorPosCallback(p_glfw_window, &glfwCursorPosCallback_);
+        ::glfwSetCursorEnterCallback(p_glfw_window, &glfwCursorEnterCallback_);
         ::glfwSetScrollCallback(p_glfw_window, &glfwScrollCallback_);
+
+        ::glfwSetDropCallback(p_glfw_window, &glfwDropCallback_);
 
         p_glfw_window = nullptr;
 
@@ -404,19 +551,19 @@ namespace pP {
             });
 
         if (PPR_ENSURE(m_windows.end() != it)) {
-            const bool wasMain = (m_main_window == window);
-            const bool wasFocused = (m_focused_window == window);
+            const bool was_main = (m_main_window == window);
+            const bool was_focused = (m_focused_window == window);
 
             const auto extracted = std::move(*it);
             m_windows.erase(it);
             window = nullptr;
 
             PPR_DEFER {
-                if (wasMain) {
+                if (was_main) {
                     m_main_window = nullptr;
                 }
 
-                if (wasFocused) {
+                if (was_focused) {
                     m_focused_window = nullptr;
                 }
 
@@ -428,19 +575,21 @@ namespace pP {
         return default_value_v;
     }
 
-    [[nodiscard]] SharedWindow GlfwWindow::getFocusedWindow() const noexcept {
-        return m_focused_window;
+    SharedWindow GlfwWindow::setMainWindow(SharedWindow window) {
+        PPR_ASSERT(not window.isValid() or glfwAllocation_(m_windows, *window) != m_windows.end());
+
+        SharedWindow old_main_window{m_main_window};
+        m_main_window = std::move(window);
+        return old_main_window;
     }
 
-    [[nodiscard]] SharedWindow GlfwWindow::getMainWindow() const noexcept {
-        return m_main_window;
-    }
-
-    void GlfwWindow::setMainWindow(const Window &window) {
-        if (const auto it = glfwAllocation_(m_windows, window);
-            m_windows.end() != it) [[likely]] {
-            m_main_window = safe_ptr(it->get());
+    SharedWindowViewport GlfwWindow::setMainViewport(SharedWindowViewport viewport) {
+        SharedWindowViewport old_main_viewport{m_main_viewport};
+        if (viewport.isValid()) {
+            std::ignore = setMainWindow(SharedWindow(&viewport->getWindow()));
         }
+        m_main_viewport = std::move(viewport);
+        return old_main_viewport;
     }
 
     [[nodiscard]] SharedMonitor GlfwWindow::getWindowMonitor(const Window &window) const noexcept {
@@ -474,13 +623,32 @@ namespace pP {
         return ::glfwWindowShouldClose(glfwHandle_(window.m_handle));
     }
 
-    // ------------------------------------------------------------------
-    // GLFW window manipulation
-    // ------------------------------------------------------------------
-
     void GlfwWindow::setWindowShouldClose(const Window &window, const bool value) {
         ::glfwSetWindowShouldClose(glfwHandle_(window.m_handle), value);
     }
+
+    void GlfwWindow::setWindowCursorMode(const Window &window, const ECursorMode mode) {
+        ::GLFWwindow *const p_glfw_window = glfwHandle_(window.m_handle);
+
+        switch (mode) {
+            case ECursorMode::normal:
+                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            break;
+            case ECursorMode::captured:
+                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_CAPTURED);
+                break;
+            case ECursorMode::disabled:
+                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                break;
+            case ECursorMode::hidden:
+                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+                break;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // GLFW window manipulation
+    // ------------------------------------------------------------------
 
     void GlfwWindow::moveWindow(const Window &window, const int2 &position) {
         ::glfwSetWindowPos(glfwHandle_(window.m_handle), position.x, position.y);
@@ -510,11 +678,15 @@ namespace pP {
         ::glfwRestoreWindow(glfwHandle_(window.m_handle));
     }
 
+    void GlfwWindow::focusWindow(const Window &window) {
+        ::glfwFocusWindow(glfwHandle_(window.m_handle));
+    }
+
     void GlfwWindow::swapWindowBuffers(const Window &window) {
         ::glfwSwapBuffers(glfwHandle_(window.m_handle));
     }
 
-    void *GlfwWindow::getNativeHandle(const Window &window) const noexcept {
+    void *GlfwWindow::getWindowNativeHandle(const Window &window) const noexcept {
         return ::glfwGetWin32Window(glfwHandle_(window.m_handle));
     }
 

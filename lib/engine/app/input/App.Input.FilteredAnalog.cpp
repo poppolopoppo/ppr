@@ -2,20 +2,12 @@ module;
 
 module engine.app;
 
-import :viewport.filtered_analog;
+import :input.filtered_analog;
 import engine.core;
 import engine.math;
 import std;
 
 namespace pP {
-    namespace {
-        [[nodiscard]] constexpr float dtSeconds(TimeSpan dt) noexcept {
-            return std::chrono::duration<float>(dt).count();
-        }
-
-        constexpr TimeSpan kMaxDt = std::chrono::milliseconds{150};
-    }
-
     template<typename T>
     FilteredAnalog<T>::FilteredAnalog(T init, float sensitivity) noexcept
         : m_raw{init}, m_sensitivity{sensitivity} {
@@ -51,14 +43,14 @@ namespace pP {
     template<typename T>
     void FilteredAnalog<T>::setRaw(const T &raw) noexcept {
         m_raw = raw;
-        m_delta = T{};
-        m_filtered.reset();
     }
 
     template<typename T>
     void FilteredAnalog<T>::update(TimeSpan dt) noexcept {
-        const TimeSpan clamped = (dt <= TimeSpan::zero() || dt > kMaxDt) ? kMaxDt : dt;
-        const float t = saturate(std::pow(dtSeconds(clamped), 1.0f / std::max(m_sensitivity, epsilon_t<float>)));
+        // Hitch guard: a stalled frame (>150ms) advances the filter as a
+        // single 150ms step instead of snapping to raw.
+        dt = std::min(dt, TimeSpan{std::chrono::milliseconds{150}});
+        const float t = saturate(static_cast<float>(std::pow(time::seconds(dt), 1.0f / std::max(m_sensitivity, epsilon_v<float>))));
         if (m_filtered.has_value()) {
             const T prev = *m_filtered;
             m_filtered = lerp(*m_filtered, m_raw, t);
@@ -83,8 +75,9 @@ namespace pP {
 
     template<>
     void FilteredAnalog<Quaternion>::update(TimeSpan dt) noexcept {
-        const TimeSpan clamped = dt < kMaxDt ? dt : kMaxDt;
-        const float t = saturate(std::pow(dtSeconds(clamped), 1.0f / std::max(m_sensitivity, epsilon_t<float>)));
+        // Hitch guard: see generic update above.
+        dt = std::min(dt, TimeSpan{std::chrono::milliseconds{150}});
+        const float t = saturate(static_cast<float>(std::pow(time::seconds(dt), 1.0f / std::max(m_sensitivity, epsilon_v<float>))));
         if (m_filtered.has_value()) {
             const Quaternion prev = *m_filtered;
             m_filtered = slerp(prev, m_raw, t);
@@ -101,7 +94,7 @@ namespace pP {
         // does not preserve unit length — apply the offset as a rotation and re-normalize,
         // falling back to identity if the combined quaternion collapses to zero length.
         const Quaternion combined = m_raw * offset;
-        m_raw = dot(combined, combined) > epsilon_t<float>
+        m_raw = dot(combined, combined) > epsilon_v<float>
                     ? normalize(combined)
                     : Quaternion{0.0f, 0.0f, 0.0f, 1.0f};
     }

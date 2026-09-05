@@ -99,6 +99,10 @@ export namespace pP {
         return hash::trivial(&numeric.m_value, hash::default_seed_v);
     }
 
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const hal::Uuid &uuid) noexcept {
+        return hash::trivial(&uuid.m_data, hash::default_seed_v);
+    }
+
     namespace hash {
         template<typename T>
         concept THashable = requires(const std::remove_cvref_t<T> &value)

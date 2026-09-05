@@ -2,7 +2,12 @@ module;
 #include "pP/Macros.h"
 module engine.app;
 
-import :input.player;
+import :player;
+import :input.listener;
+import :input.device;
+import :input.key;
+import :input.action;
+import engine.core;
 import std;
 
 namespace pP {
@@ -19,7 +24,7 @@ namespace pP {
     }
 
     void Player::addMapping(SharedInputMapping mapping, int priority) {
-        m_listener.addMapping(std::move(mapping), priority);
+        m_listener.addInputMapping(std::move(mapping), priority);
     }
 
     void Player::clearFrameMessages() noexcept {

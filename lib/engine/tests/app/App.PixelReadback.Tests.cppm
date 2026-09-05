@@ -7,23 +7,12 @@ export module engine.tests.app:pixel_readback;
 import engine.core;
 import engine.math;
 import engine.rhi;
-import engine.shader;
 import engine.app;
-import imgui_internal;
 import std;
-
-// The `imgui` module re-exports ImGui names unqualified; bring them into scope here so the
-// qualified `ImGui::` calls (SetCurrentContext/ShowDemoWindow) and `ImGuiContext` resolve.
-using namespace ImGui;
 
 export namespace pP::tests {
     namespace detail {
         constexpr u32 kTargetSize = 256;
-        // ImGui's demo window spawns at (650, 20) with a 550x680 size (SetNextWindowPos
-        // ImGuiCond_FirstUseEver in imgui_demo.cpp), so the UI readback target must be
-        // large enough to contain it.
-        constexpr u32 kUiWidth = 1280;
-        constexpr u32 kUiHeight = 720;
 
         std::filesystem::path findAssetsDir() {
             auto dir = std::filesystem::current_path();
@@ -31,7 +20,9 @@ export namespace pP::tests {
                 if (std::filesystem::exists(dir / "assets" / "shaders" / "triangle.slang")) {
                     return dir / "assets";
                 }
-                if (not dir.has_parent_path()) {
+                if (not
+                    dir.has_parent_path())
+                {
                     break;
                 }
                 dir = dir.parent_path();
@@ -57,17 +48,42 @@ export namespace pP::tests {
                 return static_cast<float>(px[idx]) / 255.0f;
             };
         }
+
+        CameraSnapshot makeSnapshot(const float3 &eye, const float3 &target, const float aspect) {
+            CameraSnapshot snapshot{};
+            snapshot.m_view = float4x4::lookat(target, eye, float3{0.0f, 1.0f, 0.0f});
+            snapshot.m_projection = rhi::getPerspectiveMatrix(
+                60.0f * std::numbers::pi_v<float> / 180.0f, aspect, 0.1f, 1000.0f);
+            snapshot.m_view_projection = snapshot.m_view * snapshot.m_projection;
+            snapshot.m_invert_view_projection = inverse(snapshot.m_view_projection);
+            snapshot.m_origin = eye;
+            snapshot.m_viewport_size = float2{static_cast<float>(kTargetSize), static_cast<float>(kTargetSize)};
+            snapshot.m_revision = 1;
+            return snapshot;
+        }
+
+        RenderView fullView(const u32 left, const u32 top, const u32 right, const u32 bottom) {
+            RenderView view{};
+            view.m_viewport = rhi::Viewport{
+                static_cast<float>(left), static_cast<float>(top),
+                static_cast<float>(right - left), static_cast<float>(bottom - top), 0.0f, 1.0f
+            };
+            view.m_scissor = rhi::ScissorRect{left, top, right, bottom};
+            return view;
+        }
     }
 
-    PPR_UNIT_TEST(app_pixel_readback) {
+    PPR_UNIT_TEST (app_pixel_readback) {
         using namespace detail;
 
         TestApp app{"PixelReadback", std::span<const char * const>{}};
 
         PPR_TEST_ASSERT(app.boot().value() == 0);
 
-        PPR_DEFER {
-            (void) app.teardown();
+        PPR_DEFER{
+            PPR_TEST_ASSERT(app.teardown().value() == 0);
+
+
         };
 
         const auto rhi_service = app.getServices().get<IRhiService>();
@@ -89,16 +105,39 @@ export namespace pP::tests {
 
         PPR_TEST_ASSERT(!!offscreen_window);
 
-        PPR_DEFER {
+        PPR_DEFER{
             if (offscreen_window) {
                 (void) window_service->destroyWindow(std::move(*offscreen_window));
+
+
             }
         };
 
         Renderer renderer;
-        PPR_TEST_ASSERT(renderer.initialize(*rhi_service, *window_service, **offscreen_window, assets).value() == 0);
+        PPR_TEST_ASSERT(renderer.initialize(*rhi_service).value() == 0);
 
-        const rhi::Format format = renderer.getSurfaceFormat();
+        PPR_DEFER{
+            PPR_TEST_ASSERT(renderer.shutdown().value() == 0);
+
+        };
+
+        TrianglePass triangle;
+        PPR_TEST_ASSERT(triangle.initialize(*rhi_service, assets).value() == 0);
+
+        PPR_DEFER{
+            PPR_TEST_ASSERT(triangle.shutdown().value() == 0);
+
+        };
+
+        // Hidden-window surface lifecycle: create + resolve the format used
+        // for offscreen targets below.
+        const WindowHandle surface_handle = (**offscreen_window).m_handle;
+        PPR_TEST_ASSERT(renderer.createWindowSurface(*window_service, **offscreen_window).value() == 0);
+        rhi::Format format = renderer.getWindowSurfaceFormat(surface_handle);
+        if (format == rhi::Format::Undefined) {
+            format = rhi::Format::RGBA8Unorm;
+        }
+
         rhi::IDevice &device = rhi_service->getDevice();
 
         const auto makeTarget = [&](u32 w, u32 h) -> rhi::ComPtr<rhi::ITexture> {
@@ -140,163 +179,87 @@ export namespace pP::tests {
             return buf;
         };
 
-        const auto full_viewport = rhi::Viewport{
-            0.0f, 0.0f,
-            static_cast<float>(kTargetSize), static_cast<float>(kTargetSize),
-            0.0f, 1.0f
-        };
-        const auto full_scissor = rhi::ScissorRect{
-            0, 0,
-            kTargetSize, kTargetSize
-        };
-
-        // ---- Triangle pass ----
-        auto target = makeTarget(kTargetSize, kTargetSize);
-        PPR_TEST_ASSERT(!!target);
-
-        // Use a real perspective camera (the 4-arg path VideoGameApp actually uses)
-        // so this test faithfully reproduces the production transform instead of the
-        // identity-camera 3-arg overload, which never exercises Camera::viewProjection().
-        Camera scene_camera;
-        {
-            const float4x4 view = makeLookAtMatrix(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
-            const float4x4 proj = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, 60.0f * std::numbers::pi_v<float> / 180.0f, 1.0f, 0.1f, 1000.0f);
-            scene_camera.setView(view);
-            scene_camera.setProjection(proj);
-        }
-
-        const auto scene_draw = [&renderer, &scene_camera](rhi::IRenderPassEncoder &pass, const rhi::Viewport &viewport, const rhi::ScissorRect &scissor) -> std::error_code {
-            return renderer.drawTriangle(pass, scene_camera, viewport, scissor);
-        };
-        const ViewportEntry scene_entry{
-            .viewport = full_viewport,
-            .scissor = full_scissor,
-            .draw = scene_draw,
+        const auto has_primary_color = [&](const std::vector<std::uint8_t> &pixels,
+                                           const u32 left, const u32 top, const u32 right, const u32 bottom) {
+            const auto read = channelReader(format);
+            return std::ranges::any_of(std::views::iota(top, bottom), [&](const u32 y) {
+                return std::ranges::any_of(std::views::iota(left, right), [&](const u32 x) {
+                    const auto *const px = pixels.data() + static_cast<size_t>(y) * kTargetSize * 4u
+                                           + static_cast<size_t>(x) * 4u;
+                    return read(px, 0) > 0.5f;
+                });
+            });
         };
 
-        PPR_TEST_ASSERT(renderer.renderInto(*target, std::span{&scene_entry, 1}).value() == 0);
+        const ColorPassOptions options{};
 
-        auto data = readback(target.get(), kTargetSize, kTargetSize);
-        PPR_TEST_ASSERT(not data.empty());
-        const u32 row_pitch = kTargetSize * 4u;
+        // ---- Clear-only submission (empty span) ----
+        auto clear_target = makeTarget(kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(!!clear_target);
+        PPR_TEST_ASSERT(renderer.submitToTexture(*clear_target, std::span<const DrawSubmission>{}, options).value() == 0);
+        PPR_TEST_ASSERT(renderer.waitForIdle().value() == 0);
+        const auto clear_data = readback(clear_target.get(), kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(not clear_data.empty());
+        PPR_TEST_ASSERT(not has_primary_color(clear_data, 0, 0, kTargetSize, kTargetSize));
 
-        const auto read_channel = channelReader(format);
-        const auto pixel = [&](u32 x, u32 y) -> const std::uint8_t * {
-            return data.data() + static_cast<size_t>(y) * row_pitch + static_cast<size_t>(x) * 4u;
+        // ---- Single triangle submission via TrianglePass ----
+        const CameraSnapshot snapshot = makeSnapshot(float3{0.0f, 0.0f, 5.0f}, float3{0.0f, 0.0f, 0.0f}, 1.0f);
+        const SceneView scene_view{snapshot, fullView(32, 16, 160, 144)};
+        const auto encode_triangle = [&](rhi::IRenderPassEncoder &pass, const DrawContext &ctx) -> std::error_code {
+            return triangle.draw(pass, scene_view, ctx.m_target);
         };
-
-        const auto is_dominant = [&](u32 x, u32 y, int channel) -> bool {
-            return read_channel(pixel(x, y), channel) > 0.5f;
+        const DrawSubmission triangle_submission{
+            .m_view = scene_view.m_render_view,
+            .m_encode_draws = DrawCallback{encode_triangle}
         };
-        const auto is_recessive = [&](u32 x, u32 y, int channel) -> bool {
-            return read_channel(pixel(x, y), channel) < 0.4f;
+        const std::array<DrawSubmission, 1> single{triangle_submission};
+        auto client_target = makeTarget(kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(!!client_target);
+        PPR_TEST_ASSERT(renderer.submitToTexture(*client_target, single, options).value() == 0);
+        PPR_TEST_ASSERT(renderer.waitForIdle().value() == 0);
+        const auto client_data = readback(client_target.get(), kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(not client_data.empty());
+        PPR_TEST_ASSERT(has_primary_color(client_data, 32, 16, 160, 144));
+
+        // ---- Two submissions with disjoint scissors ----
+        const CameraSnapshot second_snapshot = makeSnapshot(float3{0.5f, 0.0f, 5.0f}, float3{0.5f, 0.0f, 0.0f}, 0.5f);
+        const SceneView second_scene{second_snapshot, fullView(128, 0, 256, 256)};
+        const auto encode_second = [&](rhi::IRenderPassEncoder &pass, const DrawContext &ctx) -> std::error_code {
+            return triangle.draw(pass, second_scene, ctx.m_target);
         };
+        const std::array<DrawSubmission, 2> two_submissions{
+            triangle_submission,
+            DrawSubmission{.m_view = second_scene.m_render_view, .m_encode_draws = DrawCallback{encode_second}},
+        };
+        auto two_client_target = makeTarget(kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(!!two_client_target);
+        PPR_TEST_ASSERT(renderer.submitToTexture(*two_client_target, two_submissions, options).value() == 0);
+        PPR_TEST_ASSERT(renderer.waitForIdle().value() == 0);
+        const auto two_client_data = readback(two_client_target.get(), kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(not two_client_data.empty());
+        PPR_TEST_ASSERT(has_primary_color(two_client_data, 32, 16, 160, 144));
+        PPR_TEST_ASSERT(has_primary_color(two_client_data, 128, 0, 256, 256));
 
-        if (not is_dominant(128u, 115u, 0) || not is_recessive(128u, 115u, 1) || not is_recessive(128u, 115u, 2)) {
-            _.log(("app_pixel_readback: expected RED at (128,115), got r=" + std::to_string(read_channel(pixel(128u, 115u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(128u, 115u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(128u, 115u), 2)))
-                .c_str());
-            PPR_TEST_ASSERT(false);
-        }
-        // Sample close enough to the green vertex that the other channels fall below
-        // the recessive threshold even after sRGB encoding of the readback.
-        if (not is_dominant(145u, 147u, 1) || not is_recessive(145u, 147u, 0) || not is_recessive(145u, 147u, 2)) {
-            _.log(("app_pixel_readback: expected GREEN at (145,147), got r=" + std::to_string(read_channel(pixel(145u, 147u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(145u, 147u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(145u, 147u), 2)))
-                .c_str());
-            PPR_TEST_ASSERT(false);
-        }
-        // Mirror of the green sample: close enough to the blue vertex that the other
-        // channels fall below the recessive threshold even after sRGB encoding.
-        if (not is_dominant(111u, 147u, 2) || not is_recessive(111u, 147u, 0) || not is_recessive(111u, 147u, 1)) {
-            _.log(("app_pixel_readback: expected BLUE at (111,147), got r=" + std::to_string(read_channel(pixel(111u, 147u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(111u, 147u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(111u, 147u), 2)))
-                .c_str());
-            PPR_TEST_ASSERT(false);
-        }
-        if (is_dominant(250u, 128u, 0) || is_dominant(250u, 128u, 1) || is_dominant(250u, 128u, 2)) {
-            _.log(("app_pixel_readback: expected background (no primary) at far-right, got r=" + std::to_string(read_channel(pixel(250u, 128u), 0))
-                   + " g=" + std::to_string(read_channel(pixel(250u, 128u), 1))
-                   + " b=" + std::to_string(read_channel(pixel(250u, 128u), 2)))
-                .c_str());
-            PPR_TEST_ASSERT(false);
-        }
+        // ---- Callback-error recovery: failing submit, then clean submit ----
+        u32 failing_calls = 0;
+        const auto encode_failing = [&](rhi::IRenderPassEncoder &, const DrawContext &) -> std::error_code {
+            ++failing_calls;
+            return std::make_error_code(std::errc::invalid_argument);
+        };
+        const std::array<DrawSubmission, 1> failing{
+            DrawSubmission{.m_view = fullView(0, 0, kTargetSize, kTargetSize), .m_encode_draws = DrawCallback{encode_failing}},
+        };
+        auto error_target = makeTarget(kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(!!error_target);
+        PPR_TEST_ASSERT(renderer.submitToTexture(*error_target, failing, options).value() != 0);
+        PPR_TEST_ASSERT(failing_calls == 1);
+        PPR_TEST_ASSERT(renderer.submitToTexture(*error_target, std::span<const DrawSubmission>{}, options).value() == 0);
+        PPR_TEST_ASSERT(renderer.waitForIdle().value() == 0);
+        const auto error_data = readback(error_target.get(), kTargetSize, kTargetSize);
+        PPR_TEST_ASSERT(not error_data.empty());
+        PPR_TEST_ASSERT(not has_primary_color(error_data, 0, 0, kTargetSize, kTargetSize));
 
-        // ---- UI overlay pass (demo window) ----
-        auto ui_svc = ui::createImGuiService();
-        if (ui_svc) {
-            if (auto ec = ui_svc->initialize(*rhi_service, *window_service, *input_service, **offscreen_window, format); not ec) {
-                // The demo window spawns at (650, 20) — outside any 256x256 viewport — so
-                // the UI framebuffer must be sized to contain it. Run two full frames
-                // (newFrame + renderOverlay each, since ImGui requires Render() every
-                // frame, and DeltaTime must be positive after the first frame); the demo
-                // window's first-use layout settles by the second frame, which is the one
-                // read back below.
-                (void) ui_svc->onResize(int2{static_cast<int>(kUiWidth), static_cast<int>(kUiHeight)});
-                const pP::TimeSpan kFrame = std::chrono::milliseconds{16};
-                const float2 ui_size{static_cast<float>(kUiWidth), static_cast<float>(kUiHeight)};
-                const auto spawn_demo_window = [&ui_svc]() {
-                    ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui_svc->getContext()));
-                    static bool g_show_demo_window{true};
-                    ImGui::ShowDemoWindow(&g_show_demo_window);
-                };
-                const auto ui_draw = [&ui_svc, ui_size](rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
-                    return ui_svc->renderOverlay(pass, ui_size);
-                };
-                const ViewportEntry ui_entry{
-                    .viewport = rhi::Viewport{
-                        0.0f, 0.0f,
-                        static_cast<float>(kUiWidth), static_cast<float>(kUiHeight),
-                        0.0f, 1.0f
-                    },
-                    .scissor = rhi::ScissorRect{0, 0, kUiWidth, kUiHeight},
-                    .draw = ui_draw,
-                };
-
-                auto scratch = makeTarget(kUiWidth, kUiHeight);
-                auto ui_target = makeTarget(kUiWidth, kUiHeight);
-                if (scratch && ui_target) {
-                    PPR_TEST_ASSERT(not hasFailed(ui_svc->newFrame(kFrame)));
-                    spawn_demo_window();
-
-                    if (auto rc = renderer.renderInto(*scratch, std::span{&ui_entry, 1}); not rc) {
-                        PPR_TEST_ASSERT(not hasFailed(ui_svc->newFrame(kFrame)));
-                        spawn_demo_window();
-
-                        if (auto rc2 = renderer.renderInto(*ui_target, std::span{&ui_entry, 1}); not rc2) {
-                            auto ui_data = readback(ui_target.get(), kUiWidth, kUiHeight);
-                            PPR_TEST_ASSERT(not ui_data.empty());
-
-                            if (not ui_data.empty()) {
-                                constexpr u32 ui_row = kUiWidth * 4u;
-                                const auto read_ui = channelReader(format);
-
-                                bool found_non_background = false;
-                                for (u32 y = 0; y < kUiHeight && not found_non_background; y += 4u) {
-                                    for (u32 x = 0; x < kUiWidth; x += 4u) {
-                                        const auto *px = ui_data.data() + static_cast<size_t>(y) * ui_row + static_cast<size_t>(x) * 4u;
-                                        const float r = read_ui(px, 0);
-                                        const float g = read_ui(px, 1);
-                                        const float b = read_ui(px, 2);
-                                        if (r > 0.5f || g > 0.5f || b > 0.5f) {
-                                            found_non_background = true;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if (not found_non_background) {
-                                        _.logFmt("app_pixel_readback: UI overlay rendered nothing (expected demo window)");
-                                        PPR_TEST_ASSERT(false);
-                                    }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        PPR_TEST_ASSERT(renderer.destroyWindowSurface(surface_handle).value() == 0);
+        PPR_TEST_ASSERT(renderer.getWindowSurfaceFormat(surface_handle) == rhi::Format::Undefined);
     };
 }

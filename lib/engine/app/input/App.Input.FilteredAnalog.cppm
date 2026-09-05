@@ -1,10 +1,10 @@
 module;
 
-export module engine.app:viewport.filtered_analog;
+export module engine.app:input.filtered_analog;
 
-import std;
 import engine.core;
 import engine.math;
+import std;
 
 export namespace pP {
     // ------------------------------------------------------------------

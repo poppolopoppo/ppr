@@ -3,9 +3,9 @@ module;
 module engine.app;
 
 import :player.graph;
-import :input.keyboard;
-import :input.mouse;
-import :input.gamepad;
+import :player;
+import :input.device;
+import :service.player;
 import engine.core;
 import std;
 
@@ -34,7 +34,7 @@ namespace pP {
     }
 
     Expected<SharedPlayer> PlayerGraph::getOrCreateKeyboardPlayer(
-        const IPlayerService &service, const PlayerId user_id, KeyboardDevice &keyboard, MouseDevice &mouse)
+        const IPlayerService &, const PlayerId user_id, KeyboardDevice &keyboard, MouseDevice &mouse)
     {
         if (const auto it = m_players.find(user_id); it != m_players.end()) [[likely]] {
             PPR_ASSERT(it->second->getIdentity().m_device_id == keyboard.getInputDeviceID());
@@ -56,12 +56,12 @@ namespace pP {
         auto ptr = safe_ptr{player.get()};
         m_players.emplace(user_id, std::move(player));
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(PlayerGraph, m_when_player_added(service, *ptr));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(PlayerGraph, m_when_player_added(*ptr));
         return ptr;
     }
 
     Expected<SharedPlayer> PlayerGraph::addGamepadPlayer(
-        const IPlayerService &service, const PlayerId user_id, GamepadDevice &gamepad)
+        const IPlayerService &, const PlayerId user_id, GamepadDevice &gamepad)
     {
         if (const auto it = m_players.find(user_id); it != m_players.end()) [[likely]] {
             PPR_ASSERT(it->second->getIdentity().m_device_id == gamepad.getInputDeviceID());
@@ -71,7 +71,7 @@ namespace pP {
         auto player = std::make_unique<Player>(PlayerIdentity{
             .m_user_id = user_id,
             .m_device_id = gamepad.getInputDeviceID(),
-            .m_local_index = safe_narrowing(gamepad.getControllerIndex()),
+            .m_local_index = safe_narrowing(*gamepad.m_controller_id),
             .m_kind = EPlayerKind::gamepad,
         });
         player->pushDeviceView(safe_ptr<const IInputDevice>{&gamepad});
@@ -81,13 +81,13 @@ namespace pP {
         auto ptr = safe_ptr{player.get()};
         m_players.emplace(user_id, std::move(player));
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(PlayerGraph, m_when_player_added(service, *ptr));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(PlayerGraph, m_when_player_added(*ptr));
         return ptr;
     }
 
-    std::error_code PlayerGraph::removePlayer(const IPlayerService &service, const PlayerId &id) {
+    std::error_code PlayerGraph::removePlayer(const IPlayerService &, const PlayerId &id) {
         if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {
-            PPR_RETURN_ERROR_ON_FAIL(PlayerGraph, m_when_player_removed(service, *it->second));
+            PPR_RETURN_ERROR_ON_FAIL(PlayerGraph, m_when_player_removed(*it->second));
 
             for (auto dit = m_device_to_player.begin(); dit != m_device_to_player.end(); ) {
                 if (dit->second == id) {

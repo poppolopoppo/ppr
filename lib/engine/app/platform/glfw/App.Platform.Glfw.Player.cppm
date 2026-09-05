@@ -3,6 +3,7 @@ module;
 export module engine.app:platform.glfw.player;
 
 import :service.player;
+import :player.graph;
 import :platform.glfw.input;
 import engine.core;
 import std;
@@ -10,7 +11,8 @@ import std;
 export namespace pP {
     class GlfwPlayer final : public IPlayerService {
         safe_ptr<GlfwInput> m_input;
-        safe_ptr<PlayerGraph> m_graph;
+        // Owned here: the input service no longer hosts the player graph.
+        PlayerGraph m_graph{};
         std::mt19937_64 m_id_generator{};
 
     public:

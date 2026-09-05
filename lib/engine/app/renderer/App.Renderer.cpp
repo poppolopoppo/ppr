@@ -1,434 +1,237 @@
 module;
 #include "pP/Macros.h"
-#include <slang.h>
-#include <slang-com-ptr.h>
-#include <system_error>
 module engine.app;
 
 import :renderer;
+import :renderer.types;
 import :service.window;
 import :window.handle;
-import :viewport.camera;
 import std;
 import engine.core;
 import engine.math;
 import engine.rhi;
-import engine.shader;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(Renderer, info, none)
 
-    namespace {
-        struct DummyVertex {
-            float position[3];
-            float color[3];
-        };
-
-        constexpr DummyVertex kVertices[] = {
-            {{0.0f, 0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-            {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-            {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        };
+    rhi::Format Renderer::getWindowSurfaceFormat(const WindowHandle handle) const noexcept {
+        const auto it = m_surfaces.find(handle);
+        if (it == m_surfaces.end())
+            return rhi::Format::Undefined;
+        return it->second.m_format;
     }
 
-    namespace fs = std::filesystem;
-
-    rhi::Format Renderer::getSurfaceFormat() const noexcept {
-        return m_surface_format;
-    }
-
-    std::error_code Renderer::initialize(
-        IRhiService &rhi_service,
-        IWindowService &window_service,
-        const Window &window,
-        const fs::path &content_dir) {
-        m_framebuffer_size = window.m_framebuffer_size;
-        m_device_type = rhi_service.getDevice().getDeviceType();
+    std::error_code Renderer::initialize(IRhiService &rhi_service) {
         m_rhi_service = safe_ptr{&rhi_service};
 
-        rhi::IDevice &device = rhi_service.getDevice();
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, rhi_service.getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
 
-        // Get graphics queue
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
-
-        // Create surface from native window handle
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, createSurface_(window_service, window));
-
-        // Configure swap chain
-        {
-            rhi::SurfaceConfig surface_config{};
-            surface_config.width = static_cast<u32>(m_framebuffer_size.x);
-            surface_config.height = static_cast<u32>(m_framebuffer_size.y);
-            surface_config.desiredImageCount = 3;
-            surface_config.vsync = true;
-
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
-
-            m_surface_format = m_surface->getInfo().preferredFormat;
-        }
-
-        // Load shaders via IShaderService
-        {
-            const safe_ptr<IShaderService> shader_service = IShaderService::get();
-            PPR_ASSERT(shader_service.isValid());
-
-            PPR_RETURN_ERROR_ON_FAIL(Renderer,
-                shader_service->loadModuleFromFile(
-                    content_dir / TEXT("shaders") / TEXT("triangle.slang"),
-                    "triangle",
-                    m_triangle_shader.writeRef()));
-
-            PPR_ASSERT(m_triangle_shader);
-        }
-
-        // Create shader program
-        {
-            slang::IModule *module = m_triangle_shader.get();
-
-            shader::ComPtr<slang::IEntryPoint> vertex_ep;
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
-
-            shader::ComPtr<slang::IEntryPoint> fragment_ep;
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
-
-            slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
-
-            rhi::ShaderProgramDesc program_desc{};
-            program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-            program_desc.slangGlobalScope = module;
-            program_desc.slangEntryPoints = entry_points;
-            program_desc.slangEntryPointCount = 2u;
-
-            shader::Diagnose diagnostics;
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createShaderProgram(program_desc, m_program.writeRef(), diagnostics.writeRef()));
-        }
-
-        // Create input layout
-        {
-            rhi::InputElementDesc elements[] = {
-                {"POSITION", 0, rhi::Format::RGB32Float, PPR_OFFSETOF(DummyVertex, position), 0},
-                {"COLOR", 0, rhi::Format::RGB32Float, PPR_OFFSETOF(DummyVertex, color), 0},
-            };
-
-            RHI_RETURN_ERROR_ON_FAIL(
-                Renderer,
-                device.createInputLayout(
-                    safe_narrowing(sizeof(DummyVertex)),
-                    elements,
-                    2u,
-                    m_input_layout.writeRef()));
-        }
-
-        // Create vertex buffer
-        {
-            rhi::BufferDesc vb_desc{};
-            vb_desc.size = sizeof(kVertices);
-            vb_desc.usage = rhi::BufferUsage::VertexBuffer;
-            vb_desc.defaultState = rhi::ResourceState::VertexBuffer;
-            vb_desc.memoryType = rhi::MemoryType::DeviceLocal;
-            vb_desc.label = "triangle vertex buffer";
-
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createBuffer(vb_desc, kVertices, m_vertex_buffer.writeRef()));
-        }
-
-        // Create render pipeline
-        {
-            const rhi::SurfaceInfo &surface_info = m_surface->getInfo();
-
-            rhi::ColorTargetDesc color_target{};
-            color_target.format = surface_info.preferredFormat;
-            color_target.enableBlend = false;
-
-            rhi::RenderPipelineDesc pipeline_desc{};
-            pipeline_desc.program = m_program.get();
-            pipeline_desc.inputLayout = m_input_layout.get();
-            pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
-            pipeline_desc.targets = &color_target;
-            pipeline_desc.targetCount = 1;
-            pipeline_desc.label = "triangle pipeline";
-
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef()));
-        }
-
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, resolveFrameCursor_(device));
-
-        PPR_LOG(Renderer, info, "Renderer initialized successfully", {
-            {"width", m_framebuffer_size.x},
-            {"height", m_framebuffer_size.y},
-            });
-
+        PPR_LOG(Renderer, info, "Renderer initialized", {
+            {"has_queue", m_queue != nullptr},
+        });
         return default_value_v;
     }
 
-    std::error_code Renderer::rebuildPipeline_(rhi::IDevice &device) {
-        PPR_LOG(Renderer, info, "shader hot-reloaded, rebuilding pipeline");
+    std::error_code Renderer::createWindowSurface(IWindowService &window_service, const Window &window) {
+        PPR_ASSERT(m_queue);
+        PPR_ASSERT(m_rhi_service.isValid());
 
-        slang::IModule *module = m_triangle_shader.get();
-
-        shader::ComPtr<slang::IEntryPoint> vertex_ep;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
-
-        shader::ComPtr<slang::IEntryPoint> fragment_ep;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, module->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
-
-        slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
-
-        rhi::ShaderProgramDesc program_desc{};
-        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-        program_desc.slangGlobalScope = module;
-        program_desc.slangEntryPoints = entry_points;
-        program_desc.slangEntryPointCount = 2u;
-
-        shader::ComPtr<rhi::IShaderProgram> new_program;
-        {
-            shader::Diagnose diagnostics;
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createShaderProgram(program_desc, new_program.writeRef(), diagnostics.writeRef()));
-        }
-
-        const rhi::SurfaceInfo &surface_info = m_surface->getInfo();
-
-        rhi::ColorTargetDesc color_target{};
-        color_target.format = surface_info.preferredFormat;
-        color_target.enableBlend = false;
-
-        rhi::RenderPipelineDesc pipeline_desc{};
-        pipeline_desc.program = new_program.get();
-        pipeline_desc.inputLayout = m_input_layout.get();
-        pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
-        pipeline_desc.targets = &color_target;
-        pipeline_desc.targetCount = 1;
-        pipeline_desc.label = "triangle pipeline";
-
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef()));
-
-        m_program = std::move(new_program);
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, resolveFrameCursor_(device));
-        return default_value_v;
-    }
-
-    std::error_code Renderer::resolveFrameCursor_(rhi::IDevice &device) {
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, device.createRootShaderObject(m_program.get(), m_root_object.writeRef()));
-
-        // Dereference the ConstantBuffer field so the data lands in the g_frame
-        // sub-object's ordinary data buffer (which is what gets uploaded at draw time),
-        // rather than in the root object's own buffer.
-        rhi::ShaderCursor root_cursor{m_root_object.get()};
-        m_frame_cursor = root_cursor["g_frame"].getDereferenced();
-        PPR_ASSERT(m_frame_cursor.isValid());
-        return default_value_v;
-    }
-
-    std::error_code Renderer::onResize(int2 new_size) {
-        PPR_ASSERT(m_surface);
-        if (new_size.x <= 0 || new_size.y <= 0) {
-            if (m_surface) [[likely]] {
-                RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->unconfigure());
-            }
-            return default_value_v;
-        }
-
-        m_framebuffer_size = new_size;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
-
-        rhi::SurfaceConfig surface_config{};
-        surface_config.width = static_cast<u32>(new_size.x);
-        surface_config.height = static_cast<u32>(new_size.y);
-        surface_config.desiredImageCount = 3;
-        surface_config.vsync = true;
-
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
-
-        PPR_LOG(Renderer, info, "surface resized", {
-            {"width", new_size.x},
-            {"height", new_size.y},
-            });
-
-        return default_value_v;
-    }
-
-    std::error_code Renderer::shutdown() {
-        PPR_LOG(Renderer, info, "Renderer shut down");
-
-        PPR_DEFER {
-            m_pipeline.setNull();
-            m_vertex_buffer.setNull();
-            m_input_layout.setNull();
-            m_program.setNull();
-            m_root_object.setNull();
-            m_surface.setNull();
-            m_queue.setNull();
-        };
-
-        if (m_queue) {
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
-        }
-
-        if (m_surface) {
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->unconfigure());
-        }
-
-        return default_value_v;
-    }
-
-    std::error_code Renderer::createSurface_(const IWindowService &window_service, const Window &window) {
-        void *const native = window_service.getNativeHandle(window);
+        void *const native = window_service.getWindowNativeHandle(window);
         if (native == nullptr) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
-        const auto wh = rhi::WindowHandle::fromHwnd(native);
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_rhi_service->getDevice().createSurface(wh, m_surface.writeRef()));
+        const WindowHandle handle = window.m_handle;
+        if (handle == WindowHandle{}) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        if (const auto it = m_surfaces.find(handle); it != m_surfaces.end()) {
+            // Re-registration: reuse the surface, refresh its configuration.
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, configureSurface_(it->second, window.m_framebuffer_size));
+            return default_value_v;
+        }
+
+        rhi::ComPtr<rhi::ISurface> surface;
+        RHI_RETURN_ERROR_ON_FAIL(
+            Renderer,
+            m_rhi_service->getDevice().createSurface(toRhiWindowHandle_(native), surface.writeRef()));
+
+        SurfaceRecord record{};
+        record.m_surface = std::move(surface);
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, configureSurface_(record, window.m_framebuffer_size));
+
+        const int2 size = record.m_size;
+        m_surfaces.insert_or_assign(handle, std::move(record));
+
+        PPR_LOG(Renderer, info, "window surface created", {
+            {"width", size.x},
+            {"height", size.y},
+        });
+        return default_value_v;
+    }
+
+    std::error_code Renderer::destroyWindowSurface(const WindowHandle handle) {
+        const auto it = m_surfaces.find(handle);
+        if (it == m_surfaces.end()) {
+            // Idempotent: unknown or already destroyed.
+            return default_value_v;
+        }
+
+        SurfaceRecord record = std::move(it->second);
+        m_surfaces.erase(it);
+
+        if (record.m_configured and record.m_surface) {
+            RHI_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->unconfigure());
+        }
+        record.m_surface.setNull();
+        return default_value_v;
+    }
+
+    std::error_code Renderer::resizeWindowSurface(const WindowHandle handle, const int2 size) {
+        const auto it = m_surfaces.find(handle);
+        if (it == m_surfaces.end()) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        if (size.x <= 0 or size.y <= 0) {
+            // Minimized: tear down the swapchain, keep the record.
+            return configureSurface_(it->second, size);
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, waitForIdle());
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, configureSurface_(it->second, size));
+
+        PPR_LOG(Renderer, info, "window surface resized", {
+            {"width", size.x},
+            {"height", size.y},
+        });
+        return default_value_v;
+    }
+
+    std::error_code Renderer::renderAndPresent(
+        const WindowHandle handle,
+        const std::span<const DrawSubmission> draws,
+        const ColorPassOptions &options) {
+        PPR_ASSERT(m_queue);
+
+        const auto it = m_surfaces.find(handle);
+        if (it == m_surfaces.end()) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        SurfaceRecord &record = it->second;
+        if (not record.m_configured) {
+            // Minimized/unconfigured: success no-op.
+            return default_value_v;
+        }
+
+        rhi::ComPtr<rhi::ITexture> image;
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->acquireNextImage(image.writeRef()));
+
+        const rhi::TextureDesc &image_desc = image->getDesc();
+        const int2 extent{static_cast<i32>(image_desc.size.width), static_cast<i32>(image_desc.size.height)};
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer,
+            submitToTarget_(*image, ColorTargetInfo{image_desc.format, extent, image_desc.sampleCount}, draws, options));
+
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->present());
+        return default_value_v;
+    }
+
+    std::error_code Renderer::submitToTexture(
+        rhi::ITexture &target,
+        const std::span<const DrawSubmission> draws,
+        const ColorPassOptions &options) {
+        PPR_ASSERT(m_queue);
+
+        const rhi::TextureDesc &desc = target.getDesc();
+        const int2 extent{static_cast<i32>(desc.size.width), static_cast<i32>(desc.size.height)};
+        return submitToTarget_(target, ColorTargetInfo{desc.format, extent, desc.sampleCount}, draws, options);
+    }
+
+    std::error_code Renderer::waitForIdle() {
+        if (m_queue) {
+            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
+        }
+        return default_value_v;
+    }
+
+    std::error_code Renderer::shutdown() {
+        PPR_LOG(Renderer, info, "Renderer shut down", {
+            {"surfaces", m_surfaces.size()},
+        });
+
+        // Retain-first-error: every teardown step runs, the first failure wins.
+        std::error_code first{};
+        const auto retain = [&](const std::error_code &ec) noexcept {
+            if (hasFailed(ec) and not hasFailed(first)) {
+                first = ec;
+            }
+        };
+
+        retain(waitForIdle());
+
+        // flat_map iterates a pair-of-references proxy: take it by value.
+        for (auto entry: m_surfaces) {
+            SurfaceRecord &record = entry.second;
+            if (record.m_configured and record.m_surface) {
+                retain(rhi::make_error_code(record.m_surface->unconfigure()));
+                record.m_configured = false;
+            }
+            record.m_surface.setNull();
+        }
+        m_surfaces.clear();
+
+        m_queue.setNull();
+        m_rhi_service.reset();
+        return first;
+    }
+
+    std::error_code Renderer::configureSurface_(SurfaceRecord &record, const int2 size) {
+        PPR_ASSERT(record.m_surface);
+
+        if (size.x <= 0 or size.y <= 0) {
+            if (record.m_configured) {
+                RHI_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->unconfigure());
+                record.m_configured = false;
+            }
+            record.m_size = size;
+            return default_value_v;
+        }
 
         rhi::SurfaceConfig surface_config{};
-        surface_config.width = static_cast<u32>(m_framebuffer_size.x);
-        surface_config.height = static_cast<u32>(m_framebuffer_size.y);
+        surface_config.width = static_cast<u32>(size.x);
+        surface_config.height = static_cast<u32>(size.y);
         surface_config.desiredImageCount = 3;
         surface_config.vsync = true;
 
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
+        RHI_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->configure(surface_config));
 
-        m_surface_format = m_surface->getInfo().preferredFormat;
+        record.m_size = size;
+        record.m_format = record.m_surface->getInfo().preferredFormat;
+        record.m_configured = true;
         return default_value_v;
     }
 
-    std::error_code Renderer::render(const std::optional<OverlayCallback> &overlay) {
-        if (overlay) {
-            // Apply pending resize before building viewport entries
-            if (m_pending_resize.has_value()) {
-                const int2 new_size = m_pending_resize.value();
-                m_framebuffer_size = new_size;
-                rhi::SurfaceConfig surface_config{};
-                surface_config.width = static_cast<u32>(new_size.x);
-                surface_config.height = static_cast<u32>(new_size.y);
-                surface_config.desiredImageCount = 3;
-                surface_config.vsync = true;
-                RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->configure(surface_config));
-                PPR_LOG(Renderer, info, "surface resized (deferred)", {
-                    {"width", new_size.x},
-                    {"height", new_size.y},
-                    });
-                m_pending_resize = std::nullopt;
-            }
-
-            const ViewportEntry entry{
-                .viewport = rhi::Viewport{
-                    0.0f, 0.0f,
-                    static_cast<float>(m_framebuffer_size.x),
-                    static_cast<float>(m_framebuffer_size.y),
-                    0.0f, 1.0f
-                },
-                .scissor = rhi::ScissorRect{
-                    0, 0,
-                    static_cast<uint32_t>(m_framebuffer_size.x),
-                    static_cast<uint32_t>(m_framebuffer_size.y)
-                },
-                .draw = [overlay](rhi::IRenderPassEncoder &pass, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
-                    return (*overlay)(pass);
-                }
-            };
-            return render(std::span{&entry, 1});
-        }
-        return render(std::span<const ViewportEntry>{});
-    }
-
-    std::error_code Renderer::drawTriangle(
-        rhi::IRenderPassEncoder &pass,
-        const rhi::Viewport &viewport,
-        const rhi::ScissorRect &scissor) {
-        // Backward-compat overload: an identity camera, cached once instead of rebuilt per frame.
-        // (Mango's float4x4 constructors are not constexpr, so this is a static const default.)
-        static const Camera kIdentityCamera{};
-        return drawTriangle(pass, kIdentityCamera, viewport, scissor);
-    }
-
-    std::error_code Renderer::drawTriangle(
-        rhi::IRenderPassEncoder &pass,
-        const Camera &camera,
-        const rhi::Viewport &viewport,
-        const rhi::ScissorRect &scissor) {
-        PPR_ASSERT(m_pipeline);
-        PPR_ASSERT(m_vertex_buffer);
-        PPR_ASSERT(m_input_layout);
-        PPR_ASSERT(m_root_object);
-        PPR_ASSERT(m_frame_cursor.isValid());
-
-        pass.insertDebugMarker("drawTriangle", rhi::MarkerColor{1, 0, 0});
-
-        pass.bindPipeline(m_pipeline.get(), m_root_object.get());
-        if (m_last_camera != &camera || m_last_camera_version != camera.cameraVersion()) {
-            FrameConstants frame{};
-            frame.m_view = camera.view();
-            frame.m_projection = camera.projection();
-            frame.m_view_projection = camera.viewProjection();
-            frame.m_inverse_view_projection = camera.invertViewProjection();
-            frame.m_camera_position = float4{camera.position(), 0.0f};
-            frame.m_camera_velocity = float4{camera.velocity(), 0.0f};
-            frame.m_viewport_size = float4{camera.viewportSize(), 0.0f, 0.0f};
-
-            RHI_RETURN_ERROR_ON_FAIL(Renderer, m_frame_cursor.setData(&frame, sizeof(FrameConstants)));
-            m_last_camera = &camera;
-            m_last_camera_version = camera.cameraVersion();
-        }
-
-        const rhi::BufferOffsetPair vertex_buffer{m_vertex_buffer.get(), 0};
-        pass.setRenderState({
-            .viewports = {viewport},
-            .viewportCount = 1,
-            .scissorRects = {scissor},
-            .scissorRectCount = 1,
-            .vertexBuffers = {vertex_buffer},
-            .vertexBufferCount = 1,
-        });
-
-        pass.draw({.vertexCount = 3});
-        return default_value_v;
-    }
-
-    std::error_code Renderer::render(const std::span<const ViewportEntry> viewports) {
-        PPR_ASSERT(m_surface);
+    std::error_code Renderer::submitToTarget_(
+        rhi::ITexture &target,
+        const ColorTargetInfo &target_info,
+        const std::span<const DrawSubmission> draws,
+        const ColorPassOptions &options) {
         PPR_ASSERT(m_queue);
 
-#if 0
-        // Hot-reload check: rebuild pipeline if shader was recompiled
-        if (m_triangle_shader.wasReloaded()) {
-            rhi::IDevice &device = IRhiService::get()->getDevice();
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, rebuildPipeline_(device));
-        }
-#endif
-
-        // Acquire next back-buffer image
-        rhi::ComPtr<rhi::ITexture> image;
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->acquireNextImage(image.writeRef()));
-
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, renderInto_(*image, viewports));
-
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_surface->present());
-        return default_value_v;
-    }
-
-    std::error_code Renderer::renderInto(rhi::ITexture &target, std::span<const ViewportEntry> viewports) {
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, renderInto_(target, viewports));
-
-        // Wait so the caller can read back the rendered target
-        RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->waitOnHost());
-        return default_value_v;
-    }
-
-    std::error_code Renderer::renderInto_(rhi::ITexture &target, std::span<const ViewportEntry> viewports) {
-        PPR_ASSERT(m_queue);
-
-        // Create command encoder
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->createCommandEncoder(encoder.writeRef()));
 
-        // Begin render pass
         rhi::RenderPassColorAttachment color_attachment{};
         color_attachment.view = target.getDefaultView();
-        color_attachment.loadOp = rhi::LoadOp::Clear;
-        color_attachment.clearValue[0] = 0.1f;
-        color_attachment.clearValue[1] = 0.1f;
-        color_attachment.clearValue[2] = 0.2f;
-        color_attachment.clearValue[3] = 1.0f;
+        color_attachment.loadOp = options.m_load_op;
+        color_attachment.storeOp = options.m_store_op;
+        color_attachment.clearValue[0] = options.m_clear_color[0];
+        color_attachment.clearValue[1] = options.m_clear_color[1];
+        color_attachment.clearValue[2] = options.m_clear_color[2];
+        color_attachment.clearValue[3] = options.m_clear_color[3];
 
         rhi::RenderPassDesc render_pass_desc{};
         render_pass_desc.colorAttachments = &color_attachment;
@@ -436,25 +239,49 @@ namespace pP {
 
         rhi::IRenderPassEncoder *const pass = encoder->beginRenderPass(render_pass_desc);
         PPR_ASSERT(pass != nullptr);
+        {
+            PPR_DEFER {
+                pass->end();
+            };
 
-        // Render each viewport
-        for (const auto &entry: viewports) {
-            if (entry.pipeline) {
-                pass->bindPipeline(entry.pipeline.get());
-            }
-
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, entry.draw(*pass, entry.viewport, entry.scissor));
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, encodeDraws_(*pass, target_info, draws));
         }
-
-        // End pass and finish encoder
-        pass->end();
 
         rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
         RHI_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(cmd_buffer.writeRef()));
 
-        // Submit (no wait — present() or the renderInto() wrapper synchronizes)
+        // Submit without waiting; present() or an explicit waitForIdle() synchronizes.
         RHI_RETURN_ERROR_ON_FAIL(Renderer, m_queue->submit(cmd_buffer.get()));
-
         return default_value_v;
+    }
+
+    std::error_code Renderer::encodeDraws_(
+        rhi::IRenderPassEncoder &pass,
+        const ColorTargetInfo &target_info,
+        const std::span<const DrawSubmission> draws) {
+        for (const DrawSubmission &submission: draws) {
+            pass.setRenderState({
+                .viewports = {submission.m_view.m_viewport},
+                .viewportCount = 1,
+                .scissorRects = {submission.m_view.m_scissor},
+                .scissorRectCount = 1,
+            });
+
+            const DrawContext context{submission.m_view, target_info};
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, submission.m_encode_draws(pass, context));
+        }
+        return default_value_v;
+    }
+
+    rhi::WindowHandle Renderer::toRhiWindowHandle_(void *const native) noexcept {
+#if defined(_WIN32)
+        // The GLFW backend exposes the Win32 HWND. Other backends need their
+        // own arm here (NSWindow/Xlib); an Undefined handle fails loudly in
+        // createSurface, surfacing as error_code from createWindowSurface.
+        return rhi::WindowHandle::fromHwnd(native);
+#else
+        (void) native;
+        return rhi::WindowHandle{};
+#endif
     }
 }

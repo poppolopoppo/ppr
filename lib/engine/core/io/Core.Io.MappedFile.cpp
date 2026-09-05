@@ -56,11 +56,14 @@ namespace pP {
 
     MappedFile::MappedFile(const hal::io::MapHandle map) noexcept
         : m_map(map) {
+#if PPR_ENABLE_SANITIZER_ADDRESS
+        // Mapped memory is initialized by definition; only unpoison ASAN shadow — flooding real bytes faults read-only views and clobbers content.
         if (m_map != nullptr) {
             mem::unpoisonUninitialized(
                 static_cast<std::byte *>(hal::io::mapData(m_map)),
                 hal::io::mapSize(m_map));
         }
+#endif
     }
 } // namespace pP
 

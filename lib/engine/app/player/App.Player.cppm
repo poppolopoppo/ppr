@@ -1,6 +1,6 @@
 module;
 #include "pP/Macros.h"
-export module engine.app:input.player;
+export module engine.app:player;
 
 import std;
 import engine.core;
@@ -8,7 +8,6 @@ import :input.listener;
 import :input.device;
 import :input.key;
 import :input.action;
-import :input.mapping;
 
 export namespace pP {
     enum class EPlayerKind : u8 {

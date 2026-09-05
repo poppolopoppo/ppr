@@ -694,7 +694,7 @@ export namespace pP {
             return appendAssumeCapacity(std::ranges::begin(range), std::ranges::end(range));
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
         append(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
             if constexpr (std::random_access_iterator<IteratorT>) {
@@ -704,7 +704,7 @@ export namespace pP {
             return appendAssumeCapacity(first, last);
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of<IteratorT, T>
+        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
         [[maybe_unused]] constexpr std::size_t
         appendAssumeCapacity(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
             std::size_t n = 0u;

@@ -14,14 +14,17 @@ export namespace pP {
 
     template<typename T>
         requires std::is_arithmetic_v<T>
-    [[nodiscard]] constexpr T clamp(T value, T vmin, T vmax) noexcept {
+    [[nodiscard]] constexpr T clamp(const T value, const T vmin, const T vmax) noexcept {
         return std::max(std::min(value, vmax), vmin);
     }
 
     template<typename T>
-        requires std::is_arithmetic_v<T>
+        requires requires (const T &x)
+    {
+        { clamp(x, x, x) } -> std::convertible_to<T>;
+    }
     [[nodiscard]] constexpr T saturate(T value) noexcept {
-        return std::max(std::min(value, T(1)), T(0));
+        return clamp(value, T(0), T(1));
     }
 
     // ------------------------------------------------------------------

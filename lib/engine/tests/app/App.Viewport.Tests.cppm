@@ -11,175 +11,52 @@ import std;
 
 export namespace pP::tests {
     namespace ProjectionConv {
-        PPR_UNIT_TEST(device_type_mapping) {
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D11) == rhi::EProjectionConvention::D3D);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::D3D12) == rhi::EProjectionConvention::D3D);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Default) == rhi::EProjectionConvention::D3D);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Vulkan) == rhi::EProjectionConvention::VK);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Metal) == rhi::EProjectionConvention::VK);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(rhi::DeviceType::WGPU) == rhi::EProjectionConvention::VK);
-        };
-
-        PPR_UNIT_TEST(unknown_device_type_falls_back_to_d3d) {
-            const auto unknown = static_cast<rhi::DeviceType>(0x7F);
-            PPR_TEST_ASSERT(rhi::projectionConventionFromDeviceType(unknown) == rhi::EProjectionConvention::D3D);
-        };
-
-        // Unknown device types must produce well-defined (finite) matrices using the
-        // D3D fallback convention — never NaN/Inf garbage.
-        PPR_UNIT_TEST(unknown_device_type_projection_finite) {
-            constexpr float kEps = 1e-4f;
-            constexpr float kPi = 3.14159265358979323846f;
-            constexpr auto unknown = static_cast<rhi::DeviceType>(0x7F);
-
-            const auto perspective = rhi::getPerspectiveMatrix(unknown, kPi / 4.0f, 16.0f / 9.0f, 0.1f, 1000.0f);
-            const auto ortho = rhi::getOrthoMatrix(unknown, 800.0f, 600.0f);
-
-            const auto all_finite = [](const float4x4 &m) noexcept {
-                return std::ranges::all_of(
-                    std::span<const float, 16>(m.data(), 16),
-                    [](const float v) noexcept { return std::isfinite(v); });
-            };
-            PPR_TEST_ASSERT(all_finite(perspective));
-            PPR_TEST_ASSERT(all_finite(ortho));
-
-            // D3D-fallback signatures: perspective w-row z = -1, ortho depth mid = 0.5.
-            PPR_TEST_ASSERT(std::abs(perspective(2, 3) + 1.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(ortho(2, 2) - 0.5f) < kEps);
-        };
-
-        PPR_UNIT_TEST(constexpr_evaluable) {
-            static_assert(rhi::projectionConventionFromDeviceType(rhi::DeviceType::Vulkan) == rhi::EProjectionConvention::VK);
-        };
-    }
-
-    namespace OrthoMatrix {
-        constexpr float kEps = 1e-4f;
-
-        PPR_UNIT_TEST(d3d_y_down_depth_0_1) {
-            const auto m = rhi::getOrthoMatrix(rhi::DeviceType::D3D12, 800.0f, 600.0f);
-
-            PPR_TEST_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
-
-            PPR_TEST_ASSERT(std::abs(m(2, 2) - 0.5f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 2) - 0.5f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
-        };
-
-        PPR_UNIT_TEST(vk_y_down_depth_minus1_1) {
-            const auto m = rhi::getOrthoMatrix(rhi::DeviceType::Vulkan, 800.0f, 600.0f);
-
-            PPR_TEST_ASSERT(std::abs(m(0, 0) - 2.0f / 800.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(1, 1) - (-2.0f / 600.0f)) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 0) + 1.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 1) - 1.0f) < kEps);
-
-            PPR_TEST_ASSERT(std::abs(m(2, 2) + 0.5f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 2)) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 3) - 1.0f) < kEps);
-        };
-
-        PPR_UNIT_TEST(conventions_share_xy_mapping) {
-            const auto d3d = rhi::getOrthoMatrix(rhi::DeviceType::D3D12, 800.0f, 600.0f);
-            const auto vk = rhi::getOrthoMatrix(rhi::DeviceType::Vulkan, 800.0f, 600.0f);
-
-            for (int row = 0; row < 4; ++row) {
-                for (int col = 0; col < 4; ++col) {
-                    const bool depth_mapping = (row == 2 && col >= 2) || (row == 3 && col == 2);
-                    if (depth_mapping) {
-                        continue;
-                    }
-                    PPR_TEST_ASSERT(std::abs(d3d(row, col) - vk(row, col)) < kEps);
-                }
-            }
-        };
-    }
-
-    namespace PerspectiveMatrix {
-        constexpr float kEps = 1e-4f;
-        constexpr float kPi = 3.14159265358979323846f;
-
-        PPR_UNIT_TEST(d3d_depth_range) {
-            constexpr float fov = kPi / 4.0f;
-            const auto m = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
-
-            const float y_scale = 1.0f / std::tan(fov * 0.5f);
-            PPR_TEST_ASSERT(std::abs(m(1, 1) - y_scale) < kEps);
-            PPR_TEST_ASSERT(m(0, 0) < m(1, 1));
-
-            const float a = 1000.0f / (0.1f - 1000.0f);
-            PPR_TEST_ASSERT(std::abs(m(2, 2) - a) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 2) - a * 0.1f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(2, 3) + 1.0f) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 3)) < kEps);
-        };
-
-        PPR_UNIT_TEST(vk_depth_range_y_flip) {
-            constexpr float fov = kPi / 4.0f;
-            const auto m = rhi::getPerspectiveMatrix(rhi::DeviceType::Vulkan, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
-
-            const float y_scale = 1.0f / std::tan(fov * 0.5f);
-            PPR_TEST_ASSERT(std::abs(m(1, 1) + y_scale) < kEps);
-
-            const float c = (1000.0f + 0.1f) / (0.1f - 1000.0f) * 0.5f;
-            const float d = 2.0f * 0.1f * 1000.0f / (0.1f - 1000.0f) * 0.5f;
-            PPR_TEST_ASSERT(std::abs(m(2, 2) - c) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 2) - d) < kEps);
-            PPR_TEST_ASSERT(std::abs(m(3, 3) - d) < kEps);
-        };
-
-        PPR_UNIT_TEST(conventions_share_x_scale) {
-            constexpr float fov = kPi / 4.0f;
-            const auto d3d = rhi::getPerspectiveMatrix(rhi::DeviceType::D3D12, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
-            const auto vk = rhi::getPerspectiveMatrix(rhi::DeviceType::Vulkan, fov, 16.0f / 9.0f, 0.1f, 1000.0f);
-
-            PPR_TEST_ASSERT(std::abs(d3d(0, 0) - vk(0, 0)) < kEps);
+        PPR_UNIT_TEST (all_backends_use_one_projection) {
+            const auto perspective = rhi::getPerspectiveMatrix(0.75f, 16.0f / 9.0f, 0.1f, 1000.0f);
+            const auto ortho = rhi::getOrthoMatrix(800.0f, 600.0f);
+            PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(perspective.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
+            PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(ortho.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
+            PPR_TEST_ASSERT(std::abs(perspective(2, 3) - 1.0f) < 1e-4f);
+            PPR_TEST_ASSERT(std::abs(ortho(0, 0) - 2.0f / 800.0f) < 1e-7f);
+            PPR_TEST_ASSERT(ortho(1, 1) > 0.0f);
+            PPR_TEST_ASSERT(std::abs(ortho(2, 2) - 1.0f) < 1e-6f);
         };
     }
 
     namespace ViewportTypes {
-        static_assert(std::is_copy_constructible_v<ViewportConfig>);
-        static_assert(sizeof(ViewportConfig) == sizeof(int2));
+        PPR_UNIT_TEST (window_viewport_layout_switch_bumps_revision) {
+            Window window{WindowHandle{reinterpret_cast<void *>(1)}, WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
+            WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
+            PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{800, 600}});
+            const auto base_revision = viewport.getViewportRevision();
 
-        PPR_UNIT_TEST(config_plain_data) {
-            ViewportConfig config;
-            PPR_TEST_ASSERT(config.framebuffer_size.x == 0);
-            PPR_TEST_ASSERT(config.framebuffer_size.y == 0);
+            viewport.setLayout(ViewportLayout{ViewportLayout::Centered{int2{400, 300}}});
+            PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{210, 170}, int2{400, 300}});
+            PPR_TEST_ASSERT(viewport.getViewportRevision() != base_revision);
 
-            config.framebuffer_size = int2(1920, 1080);
-            const ViewportConfig copy = config;
-            PPR_TEST_ASSERT(copy.framebuffer_size == config.framebuffer_size);
+            const auto centered_revision = viewport.getViewportRevision();
+            viewport.setLayout(ViewportLayout{ViewportLayout::Centered{int2{400, 300}}});
+            PPR_TEST_ASSERT(viewport.getViewportRevision() == centered_revision);
+            PPR_TEST_ASSERT(not viewport.updateFromWindow());
+            std::ignore = window.release();
         };
 
-        PPR_UNIT_TEST(entry_aggregate_init_and_draw) {
-            int calls = 0;
-            const auto draw = [&calls](rhi::IRenderPassEncoder &, const rhi::Viewport &, const rhi::ScissorRect &) -> std::error_code {
-                ++calls;
-                return default_value_v;
-            };
-            const ViewportEntry entry{
-                .viewport = rhi::Viewport{0.0f, 0.0f, 800.0f, 600.0f, 0.0f, 1.0f},
-                .scissor = rhi::ScissorRect{0, 0, 800, 600},
-                .draw = draw,
-            };
+        PPR_UNIT_TEST (camera_keeps_prior_state_on_zero_viewport) {
+            const Viewport valid{PixelRect{int2{0, 0}, int2{800, 600}}, ViewportLayout{}};
+            const Viewport zero{PixelRect{int2{0, 0}, int2{0, 0}}, ViewportLayout{}};
+            Camera cam;
+            cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, valid);
+            cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, valid);
+            PPR_TEST_ASSERT(cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
+            const auto revision = cam.getRevision();
 
-            PPR_TEST_ASSERT(entry.pipeline.get() == nullptr);
-            PPR_TEST_ASSERT(entry.viewport.extentX == 800.0f);
-            PPR_TEST_ASSERT(entry.scissor.maxX == 800);
-
-            auto *const dummy_pass = static_cast<rhi::IRenderPassEncoder *>(nullptr);
-            const rhi::Viewport vp = entry.viewport;
-            const rhi::ScissorRect sc = entry.scissor;
-            const auto ec = entry.draw(*dummy_pass, vp, sc);
-            PPR_TEST_ASSERT(!ec);
-            PPR_TEST_ASSERT(calls == 1);
+            cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, zero);
+            PPR_TEST_ASSERT(cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
+            PPR_TEST_ASSERT(cam.getRevision() == revision);
         };
     }
 
-    namespace ViewportServices {
+    namespace ServiceStores {
         struct MockSceneService : IService {
             int value{};
         };
@@ -188,7 +65,7 @@ export namespace pP::tests {
             int value{};
         };
 
-        PPR_UNIT_TEST(child_store_shadows_parent) {
+        PPR_UNIT_TEST (child_store_shadows_parent) {
             MockSceneService scene;
             scene.value = 1;
             MockUiService ui;
@@ -211,7 +88,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(not parent.tryGet<MockUiService>().isValid());
         };
 
-        PPR_UNIT_TEST(child_erase_keeps_parent_visible) {
+        PPR_UNIT_TEST (child_erase_keeps_parent_visible) {
             MockSceneService scene;
             scene.value = 7;
             MockUiService ui;
@@ -229,22 +106,207 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(app_viewport) {
+    namespace ViewportGeometry {
+        PPR_UNIT_TEST (layout_variant_covers_all_alternatives) {
+            const PixelRect window{int2{100, 50}, int2{800, 600}};
+
+            const Viewport full{window, ViewportLayout{}};
+            PPR_TEST_ASSERT(full.getClientRect() == window);
+
+            ViewportLayout centered{ViewportLayout::Centered{int2{400, 300}}};
+            PPR_TEST_ASSERT(Viewport{window, centered}.getClientRect() == PixelRect{int2{300, 200}, int2{400, 300}});
+
+            ViewportLayout::WindowRect fixed;
+            fixed.m_origin = int2{120, 70};
+            fixed.m_extent = int2{200, 100};
+            PPR_TEST_ASSERT(Viewport{window, ViewportLayout{fixed}}.getClientRect() == PixelRect{int2{120, 70}, int2{200, 100}});
+
+            ViewportLayout::NormalizedWindowRect normalized;
+            normalized.m_origin = float2{0.25f, 0.25f};
+            normalized.m_extent = float2{0.5f, 0.5f};
+            const PixelRect client = Viewport{window, ViewportLayout{normalized}}.getClientRect();
+            PPR_TEST_ASSERT(client.getWidth() == 400);
+            PPR_TEST_ASSERT(client.getHeight() == 300);
+            PPR_TEST_ASSERT(std::abs(static_cast<float>(client.m_origin.x) - 300.5f) <= 1.0f);
+            PPR_TEST_ASSERT(std::abs(static_cast<float>(client.m_origin.y) - 200.5f) <= 1.0f);
+        };
+
+        PPR_UNIT_TEST (screen_client_transforms_are_inverse) {
+            const PixelRect window{int2{100, 50}, int2{800, 600}};
+            const Viewport full{window, ViewportLayout{}};
+            PPR_TEST_ASSERT(full.getClientRect() == window);
+            const int2 origin_client = full.screenToClient(int2{100, 50});
+            PPR_TEST_ASSERT(origin_client.x == 0 && origin_client.y == 0);
+            const int2 origin_screen = full.clientToScreen(int2{0, 0});
+            PPR_TEST_ASSERT(origin_screen.x == 100 && origin_screen.y == 50);
+            const int2 corner_client = full.screenToClient(int2{900, 650});
+            PPR_TEST_ASSERT(corner_client.x == 800 && corner_client.y == 600);
+
+            ViewportLayout::WindowRect fixed;
+            fixed.m_origin = int2{140, 90};
+            fixed.m_extent = int2{400, 300};
+            const Viewport viewport{window, ViewportLayout{fixed}};
+            const int2 fixed_client = viewport.screenToClient(int2{140, 90});
+            PPR_TEST_ASSERT(fixed_client.x == 0 && fixed_client.y == 0);
+            const int2 fixed_screen = viewport.clientToScreen(int2{0, 0});
+            PPR_TEST_ASSERT(fixed_screen.x == 140 && fixed_screen.y == 90);
+
+            const int2 client{17, 23};
+            const int2 round_client = viewport.screenToClient(viewport.clientToScreen(client));
+            PPR_TEST_ASSERT(round_client.x == client.x && round_client.y == client.y);
+            const int2 screen{200, 150};
+            const int2 round_screen = viewport.clientToScreen(viewport.screenToClient(screen));
+            PPR_TEST_ASSERT(round_screen.x == screen.x && round_screen.y == screen.y);
+        };
+
+        PPR_UNIT_TEST (normalized_client_rect_round_trips) {
+            const PixelRect window{int2{16, 16}, int2{800, 800}};
+            ViewportLayout::NormalizedWindowRect rect;
+            rect.m_origin = float2{0.500625f, 0.500625f};
+            rect.m_extent = float2{0.5f, 0.5f};
+            const Viewport viewport{window, ViewportLayout{rect}};
+            const NormalizedRect back = viewport.getNormalizedClientRect();
+            PPR_TEST_ASSERT(std::abs(back.m_origin.x - rect.m_origin.x) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(back.m_origin.y - rect.m_origin.y) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(back.m_extent.x - rect.m_extent.x) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(back.m_extent.y - rect.m_extent.y) < 1e-5f);
+        };
+
+        PPR_UNIT_TEST (zero_window_propagates_empty_client) {
+            const Viewport empty{PixelRect{int2{100, 50}, int2{0, 0}}, ViewportLayout{}};
+            PPR_TEST_ASSERT(empty.getClientRect().m_extent.x == 0 && empty.getClientRect().m_extent.y == 0);
+
+            ViewportLayout centered{ViewportLayout::Centered{int2{400, 300}}};
+            const Viewport minimized{PixelRect{int2{0, 0}, int2{800, 0}}, centered};
+            PPR_TEST_ASSERT(minimized.getClientRect().m_extent.x == 0 && minimized.getClientRect().m_extent.y == 0);
+
+            const Viewport degenerate = minimized;
+            PPR_TEST_ASSERT(degenerate.getNormalizedClientRect().m_extent.x == 0.0f
+                && degenerate.getNormalizedClientRect().m_extent.y == 0.0f);
+        };
+
+        PPR_UNIT_TEST (window_viewport_tracks_shared_window) {
+            Window window{WindowHandle{reinterpret_cast<void *>(1)}, WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
+            {
+                WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
+                PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{800, 600}});
+                PPR_TEST_ASSERT(not viewport.updateFromWindow());
+
+                window.m_window_size = int2{1024, 768};
+                PPR_TEST_ASSERT(viewport.updateFromWindow());
+                PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{1024, 768}});
+
+                window.m_window_size = int2{0, 0};
+                PPR_TEST_ASSERT(viewport.updateFromWindow());
+                PPR_TEST_ASSERT(viewport.getViewport().getClientRect().m_extent.x == 0
+                    && viewport.getViewport().getClientRect().m_extent.y == 0);
+            }
+            std::ignore = window.release();
+        };
+    }
+
+    namespace RectContains {
+        PPR_UNIT_TEST (point_truth_table_int) {
+            const PixelRect rect{int2{10, 20}, int2{80, 60}};
+            PPR_TEST_ASSERT(rect.contains(int2{10, 20}));
+            PPR_TEST_ASSERT(rect.contains(int2{90, 80}));
+            PPR_TEST_ASSERT(rect.contains(int2{50, 50}));
+            PPR_TEST_ASSERT(rect.contains(int2{90, 20}));
+            PPR_TEST_ASSERT(rect.contains(int2{10, 80}));
+            PPR_TEST_ASSERT(not rect.contains(int2{9, 50}));
+            PPR_TEST_ASSERT(not rect.contains(int2{91, 50}));
+            PPR_TEST_ASSERT(not rect.contains(int2{50, 19}));
+            PPR_TEST_ASSERT(not rect.contains(int2{50, 81}));
+        };
+
+        PPR_UNIT_TEST (point_truth_table_float) {
+            const NormalizedRect rect{float2{0.25f, 0.25f}, float2{0.5f, 0.5f}};
+            PPR_TEST_ASSERT(rect.contains(float2{0.25f, 0.25f}));
+            PPR_TEST_ASSERT(rect.contains(float2{0.75f, 0.75f}));
+            PPR_TEST_ASSERT(rect.contains(float2{0.5f, 0.5f}));
+            PPR_TEST_ASSERT(not rect.contains(float2{0.24f, 0.5f}));
+            PPR_TEST_ASSERT(not rect.contains(float2{0.76f, 0.5f}));
+            PPR_TEST_ASSERT(not rect.contains(float2{0.5f, 0.24f}));
+            PPR_TEST_ASSERT(not rect.contains(float2{0.5f, 0.76f}));
+        };
+
+        PPR_UNIT_TEST (rect_truth_table) {
+            const PixelRect outer{int2{0, 0}, int2{100, 100}};
+            PPR_TEST_ASSERT(outer.contains(outer));
+            const PixelRect inner{int2{10, 10}, int2{20, 20}};
+            PPR_TEST_ASSERT(outer.contains(inner));
+            const PixelRect flush{int2{80, 10}, int2{20, 20}};
+            PPR_TEST_ASSERT(outer.contains(flush));
+            const PixelRect overlap{int2{90, 90}, int2{20, 20}};
+            PPR_TEST_ASSERT(not outer.contains(overlap));
+            const PixelRect disjoint{int2{200, 200}, int2{10, 10}};
+            PPR_TEST_ASSERT(not outer.contains(disjoint));
+        };
+
+        PPR_UNIT_TEST (empty_and_inverted_reject) {
+            const PixelRect empty{int2{5, 5}, int2{0, 0}};
+            PPR_TEST_ASSERT(empty.contains(int2{5, 5}));
+            PPR_TEST_ASSERT(not empty.contains(int2{6, 5}));
+            const PixelRect elsewhere{int2{50, 50}, int2{0, 0}};
+            PPR_TEST_ASSERT(not PixelRect{int2{0, 0}, int2{10, 10}}.contains(elsewhere));
+            const PixelRect inverted{int2{10, 10}, int2{-4, -4}};
+            PPR_TEST_ASSERT(not inverted.contains(int2{8, 8}));
+            PPR_TEST_ASSERT(not inverted.contains(PixelRect{int2{7, 7}, int2{1, 1}}));
+        };
+    }
+
+    namespace RectNormalize {
+        PPR_UNIT_TEST (normalize_maps_corners_and_center) {
+            const PixelRect rect{int2{10, 20}, int2{80, 60}};
+            const float2 origin_uv = rect.normalize(int2{10, 20});
+            PPR_TEST_ASSERT(origin_uv.x == 0.0f && origin_uv.y == 0.0f);
+            const float2 max_uv = rect.normalize(int2{90, 80});
+            PPR_TEST_ASSERT(max_uv.x == 1.0f && max_uv.y == 1.0f);
+            const float2 center_uv = rect.normalize(int2{50, 50});
+            PPR_TEST_ASSERT(center_uv.x == 0.5f && center_uv.y == 0.5f);
+        };
+
+        PPR_UNIT_TEST (normalize_denormalize_round_trip) {
+            const NormalizedRect rect{float2{0.25f, 0.25f}, float2{0.5f, 0.5f}};
+            const float2 point{0.4f, 0.6f};
+            const float2 back = rect.denormalize(rect.normalize(point));
+            PPR_TEST_ASSERT(std::abs(back.x - point.x) < 1e-5f && std::abs(back.y - point.y) < 1e-5f);
+            const float2 clamped = rect.denormalizeClamp(float2{2.0f, -1.0f});
+            PPR_TEST_ASSERT(std::abs(clamped.x - 0.75f) < 1e-5f && std::abs(clamped.y - 0.25f) < 1e-5f);
+        };
+
+        PPR_UNIT_TEST (normalize_zero_extent_fails, UnitTest::expect_crash) {
+            if constexpr (PPR_ENABLE_DEBUG) {
+                const PixelRect empty{int2{5, 5}, int2{0, 0}};
+                std::ignore = empty.normalize(int2{5, 5});
+            }
+        };
+    }
+
+    PPR_UNIT_TEST (app_viewport){
         _.recurse({
-            ProjectionConv::device_type_mapping,
-            ProjectionConv::unknown_device_type_falls_back_to_d3d,
-            ProjectionConv::unknown_device_type_projection_finite,
-            ProjectionConv::constexpr_evaluable,
-            OrthoMatrix::d3d_y_down_depth_0_1,
-            OrthoMatrix::vk_y_down_depth_minus1_1,
-            OrthoMatrix::conventions_share_xy_mapping,
-            PerspectiveMatrix::d3d_depth_range,
-            PerspectiveMatrix::vk_depth_range_y_flip,
-            PerspectiveMatrix::conventions_share_x_scale,
-            ViewportTypes::config_plain_data,
-            ViewportTypes::entry_aggregate_init_and_draw,
-            ViewportServices::child_store_shadows_parent,
-            ViewportServices::child_erase_keeps_parent_visible,
+            ProjectionConv::all_backends_use_one_projection,
+            ViewportTypes::window_viewport_layout_switch_bumps_revision,
+            ViewportTypes::camera_keeps_prior_state_on_zero_viewport,
+            ServiceStores::child_store_shadows_parent,
+            ServiceStores::child_erase_keeps_parent_visible,
+            ViewportGeometry::layout_variant_covers_all_alternatives,
+            ViewportGeometry::screen_client_transforms_are_inverse,
+            ViewportGeometry::normalized_client_rect_round_trips,
+            ViewportGeometry::zero_window_propagates_empty_client,
+            ViewportGeometry::window_viewport_tracks_shared_window,
+            RectContains::point_truth_table_int,
+            RectContains::point_truth_table_float,
+            RectContains::rect_truth_table,
+            RectContains::empty_and_inverted_reject,
+            RectNormalize::normalize_maps_corners_and_center,
+            RectNormalize::normalize_denormalize_round_trip,
         });
+
+        if constexpr (PPR_ENABLE_ASSERTIONS) {
+            _.recurse({
+                RectNormalize::normalize_zero_extent_fails,
+            });
+        }
     };
 }

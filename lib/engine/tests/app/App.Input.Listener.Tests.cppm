@@ -26,20 +26,19 @@ export namespace pP::tests {
               mapping{"TestMapping"},
               listener{},
               m_key{key} {
-            mapping.mapKey(SharedInputAction{&action}, m_key);
-            listener.addMapping(SharedInputMapping{&mapping}, 0);
+            mapping.mapInputKey(SharedInputAction{&action}, m_key);
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
         }
 
-        EInputListenerResponse post(
+        EInputMessageResponse post(
             const EInputMessageEvent event,
             InputValue value = InputValue{InputDigital{true}}) {
             const InputMessage msg{
                 m_key,
                 std::move(value),
-                TimeSpan{},
                 InputDeviceID{0u},
                 event};
-            return listener.postKeyEvent(msg);
+            return listener.postKeyEvent(TimeSpan{}, msg);
         }
     };
 

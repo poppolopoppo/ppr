@@ -6,8 +6,36 @@ import :input.key;
 
 namespace pP {
     // ------------------------------------------------------------------
-    // input value modulate
+    // input value
     // ------------------------------------------------------------------
+
+    InputValue::InputValue(const InputAxis1D &x, const InputAxis1D &y) noexcept
+        : InputValue(InputAxis2D{
+            .m_absolute = float2(x.m_absolute, y.m_absolute),
+            .m_relative = float2(x.m_relative, y.m_relative),
+        }) {
+    }
+
+    InputValue::InputValue(const InputAxis1D &x, const InputAxis1D &y, const InputAxis1D &z) noexcept
+        : InputValue(InputAxis3D{
+            .m_absolute = float3(x.m_absolute, y.m_absolute, z.m_absolute),
+            .m_relative = float3(x.m_relative, y.m_relative, z.m_relative),
+        }) {
+    }
+
+    InputValue::InputValue(const InputAxis1D &x, const InputAxis2D &yz) noexcept
+        : InputValue(InputAxis3D{
+            .m_absolute = float3(x.m_absolute, yz.m_absolute),
+            .m_relative = float3(x.m_relative, yz.m_relative),
+        }) {
+    }
+
+    InputValue::InputValue(const InputAxis2D &xy, const InputAxis1D &z) noexcept
+        : InputValue(InputAxis3D{
+            .m_absolute = float3(xy.m_absolute, z.m_absolute),
+            .m_relative = float3(xy.m_relative, z.m_relative),
+        }) {
+    }
 
     InputValue InputValue::modulate(const float value) const noexcept {
         return std::visit(

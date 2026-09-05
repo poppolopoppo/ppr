@@ -187,52 +187,18 @@ namespace pP::rhi {
     // ------------------------------------------------------------------
 
     [[nodiscard]] float4x4 getOrthoMatrix(
-        const DeviceType type,
         const float width,
         const float height) noexcept {
-        const auto conv = projectionConventionFromDeviceType(type);
-        switch (conv) {
-            case EProjectionConvention::D3D:
-                return float4x4::orthoD3D(0.0f, width, height, 0.0f, -1.0f, 1.0f);
-            case EProjectionConvention::VK:
-                return float4x4::orthoVK(0.0f, width, 0.0f, height, -1.0f, 1.0f);
-            default:
-                return float4x4::orthoD3D(0.0f, width, height, 0.0f, -1.0f, 1.0f);
-        }
+        return float4x4::orthoD3D(0.0f, width, 0.0f, height, 0.0f, 1.0f);
     }
 
     [[nodiscard]] float4x4 getPerspectiveMatrix(
-        const DeviceType type,
         const float fov,
         const float aspect,
         const float near_,
         const float far_) noexcept {
-        const float yfov = fov;
         const float xfov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
-        const auto conv = projectionConventionFromDeviceType(type);
-        switch (conv) {
-            case EProjectionConvention::D3D: {
-                const float w = 1.0f / std::tan(xfov * 0.5f);
-                const float h = 1.0f / std::tan(yfov * 0.5f);
-                const float a = far_ / (near_ - far_);
-                const float b = near_ * far_ / (near_ - far_);
-                return float4x4{
-                    float4{w, 0.0f, 0.0f, 0.0f},
-                    float4{0.0f, h, 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, a, -1.0f},
-                    float4{0.0f, 0.0f, b, 0.0f},
-                };
-            }
-            case EProjectionConvention::VK:
-                return float4x4::perspectiveVK(xfov, yfov, near_, far_);
-            default:
-                return float4x4{
-                    float4{1.0f / std::tan(xfov * 0.5f), 0.0f, 0.0f, 0.0f},
-                    float4{0.0f, 1.0f / std::tan(yfov * 0.5f), 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, far_ / (near_ - far_), -1.0f},
-                    float4{0.0f, 0.0f, near_ * far_ / (near_ - far_), 0.0f},
-                };
-        }
+        return float4x4::perspectiveD3D(xfov, fov, near_, far_);
     }
 
     // ------------------------------------------------------------------
@@ -272,7 +238,7 @@ namespace pP::rhi {
                     .required = true,
                     .coreValidation = true,
                     .GPUAssistedValidation = true
-                    }));
+                }));
             p_instance->enableDebugLayers();
 #endif
 
@@ -305,13 +271,13 @@ namespace pP::rhi {
             if (target_ec) {
                 PPR_LOG(RHI, error, "failed to configure shader compilation target", {
                     {"message", target_ec.message()}
-                    });
+                });
                 return target_ec;
             }
 
             PPR_LOG(RHI, info, "RHI device created successfully", {
                 {"device_type", getDeviceTypeName_(device_type)}
-                });
+            });
             return make_error_code(SLANG_OK);
         }
 

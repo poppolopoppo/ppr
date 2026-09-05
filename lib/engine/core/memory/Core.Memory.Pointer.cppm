@@ -35,13 +35,14 @@ export namespace pP {
 
         // Relocation/copying changes object identity: the new instance starts
         // unobserved, and the source must not be observed at the time of the op.
+        // Deliberately non-noexcept: debug PPR_ASSERT throws; release is stateless.
         safe_object(safe_object &&other);
 
-        safe_object &operator=(safe_object &&other) noexcept;
+        safe_object &operator=(safe_object &&other);
 
         safe_object(const safe_object &other);
 
-        safe_object &operator=(const safe_object &other) noexcept;
+        safe_object &operator=(const safe_object &other);
 
         safe_referencer_key incSafeRef(const void *derived) const noexcept;
 
@@ -64,17 +65,17 @@ export namespace pP {
         }
 
     private:
-        mutable std::atomic<int> m_safe_ref_count{0};
-
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
         struct Referencer {
             const void *m_derived{nullptr};
             std::stacktrace m_callstack{};
         };
 
-        mutable std::mutex m_referencer_barrier{};
-        mutable SparseVectorInplace<Referencer> m_references{};
+        mutable std::shared_mutex m_referencer_barrier{};
+        mutable SparseVector<Referencer> m_references{};
 #endif
+
+        mutable std::atomic<int> m_safe_ref_count{0};
     };
 
     template<typename T>
@@ -92,9 +93,16 @@ export namespace pP {
     public:
         safe_ptr() noexcept = default;
 
-        explicit safe_ptr(T *const ptr) noexcept
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(T *const ptr) noexcept
             : m_ptr(ptr) {
             m_key = incSafeRefIFP(m_ptr);
+        }
+
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        safe_ptr(const std::unique_ptr<std::remove_const_t<T>> &unique_ptr) noexcept
+            requires std::is_const_v<T>
+            : safe_ptr(unique_ptr.get()) {
         }
 
         ~safe_ptr() noexcept {
@@ -115,6 +123,26 @@ export namespace pP {
             return *this;
         }
 
+        safe_ptr(safe_ptr &&other) noexcept
+            : m_ptr(other.m_ptr),
+              m_key(other.m_key) {
+            other.m_ptr = nullptr;
+            other.m_key.reset();
+        }
+
+        safe_ptr &operator=(safe_ptr &&other) noexcept {
+            if (this != &other) [[likely]] {
+                decSafeRefIFP(m_ptr, m_key);
+
+                m_ptr = other.m_ptr;
+                m_key = other.m_key;
+
+                other.m_ptr = nullptr;
+                other.m_key.reset();
+            }
+            return *this;
+        }
+
         template<typename U>
             requires std::convertible_to<U *, T *>
         // ReSharper disable once CppNonExplicitConvertingConstructor
@@ -125,9 +153,7 @@ export namespace pP {
         template<typename U>
             requires std::convertible_to<U *, T *>
         safe_ptr &operator=(const safe_ptr<U> &other) noexcept {
-            if (this != &other) [[likely]] {
-                reset(other.m_ptr);
-            }
+            reset(other.m_ptr);
             return *this;
         }
 
@@ -144,15 +170,13 @@ export namespace pP {
         template<typename U>
             requires std::convertible_to<U *, T *>
         safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
-            if (this != &other) [[likely]] {
-                decSafeRefIFP(m_ptr, m_key);
+            decSafeRefIFP(m_ptr, m_key);
 
-                m_ptr = other.m_ptr;
-                m_key = other.m_key;
+            m_ptr = other.m_ptr;
+            m_key = other.m_key;
 
-                other.m_ptr = nullptr;
-                other.m_key.reset();
-            }
+            other.m_ptr = nullptr;
+            other.m_key.reset();
             return *this;
         }
 
@@ -201,11 +225,11 @@ export namespace pP {
             m_key = incSafeRefIFP(m_ptr);
         }
 
-        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, T *rhs) noexcept {
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, const T *rhs) noexcept {
             return lhs.m_ptr == rhs;
         }
 
-        [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, T *rhs) noexcept {
+        [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, const T *rhs) noexcept {
             return lhs.m_ptr <=> rhs;
         }
 

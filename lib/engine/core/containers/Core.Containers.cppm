@@ -12,7 +12,7 @@ import std;
 export namespace pP {
     namespace details {
         template<std::forward_iterator IteratorT, typename T>
-        inline constexpr bool is_iterator_of = std::is_convertible_v<std::iter_value_t<IteratorT>, T>;
+        inline constexpr bool is_iterator_of_v = std::is_convertible_v<std::iter_value_t<IteratorT>, T>;
 
         template<typename EqualToT, typename LhsT, typename RhsT = LhsT>
         concept TEqualTo = requires(const std::remove_cvref_t<EqualToT> &cmp, const std::remove_cvref_t<LhsT> &lhs, const std::remove_cvref_t<RhsT> &rhs)
@@ -66,15 +66,57 @@ export namespace pP {
     // collector for generic push back container abstraction
     // ------------------------------------------------------------------
 
-    template<typename T>
-    struct Collector : std23::function_ref<std::error_code (const T &push_back)> {
-        using super_t = std23::function_ref<std::error_code (const T &push_back)>;
+    template<typename... ArgsT>
+    struct Collector : std23::function_ref<std::error_code (param_lvref_t<const ArgsT>... push_back)> {
+        using super_t = std23::function_ref<std::error_code (param_lvref_t<const ArgsT>... push_back)>;
         using super_t::super_t;
         using super_t::operator=;
         using super_t::operator();
 
+        using tuple_t = std::tuple<param_lvref_t<const ArgsT>...>;
+
         template<std::input_iterator IteratorT>
-            requires std::convertible_to<typename std::iterator_traits<IteratorT>::reference, const T &>
+            requires std::convertible_to<typename std::iterator_traits<IteratorT>::reference, tuple_t>
+        [[nodiscard]] std::error_code append(const IteratorT first, const IteratorT last) const {
+            for (IteratorT it = first; it != last; ++it) {
+                if (const std::error_code err = std::apply(*this, *it)) [[unlikely]] {
+                    return err;
+                }
+            }
+            return default_value_v;
+        }
+
+        [[nodiscard]] std::error_code append(const std::initializer_list<tuple_t> ilist) const {
+            return append(ilist.begin(), ilist.end());
+        }
+
+        template<std::ranges::input_range RangeT>
+            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, tuple_t>
+        [[nodiscard]] std::error_code append(const RangeT &input_range) const {
+            return append(std::ranges::begin(input_range), std::ranges::end(input_range));
+        }
+
+        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)> > enumerators) const {
+            for (const auto enumerate: enumerators) {
+                if (const std::error_code err = enumerate(*this)) [[unlikely]] {
+                    return err;
+                }
+            }
+            return default_value_v;
+        }
+    };
+
+    template<typename T>
+    struct Collector<T> : std23::function_ref<std::error_code (param_lvref_t<const T> push_back)> {
+        using super_t = std23::function_ref<std::error_code (param_lvref_t<const T> push_back)>;
+        using super_t::super_t;
+        using super_t::operator=;
+        using super_t::operator();
+
+        using clvref_t = param_lvref_t<const T>;
+
+        template<std::input_iterator IteratorT>
+            requires std::convertible_to<typename std::iterator_traits<IteratorT>::reference, clvref_t>
         [[nodiscard]] std::error_code append(const IteratorT first, const IteratorT last) const {
             for (IteratorT it = first; it != last; ++it) {
                 if (const std::error_code err = operator()(*it)) [[unlikely]] {
@@ -84,18 +126,18 @@ export namespace pP {
             return default_value_v;
         }
 
-        [[nodiscard]] std::error_code append(std::initializer_list<T> ilist) const {
+        [[nodiscard]] std::error_code append(const std::initializer_list<T> ilist) const {
             return append(ilist.begin(), ilist.end());
         }
 
         template<std::ranges::input_range RangeT>
-            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, const T &>
+            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, clvref_t>
         [[nodiscard]] std::error_code append(const RangeT &input_range) const {
             return append(std::ranges::begin(input_range), std::ranges::end(input_range));
         }
 
-        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)>> enumerators) const {
-            for (const auto enumerate : enumerators) {
+        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)> > enumerators) const {
+            for (const auto enumerate: enumerators) {
                 if (const std::error_code err = enumerate(*this)) [[unlikely]] {
                     return err;
                 }
@@ -350,6 +392,7 @@ export namespace pP {
 
     template<typename T = std::size_t, u32 N = bit_count_v<T> >
     struct Bitmask {
+        static_assert(N <= bit_count_v<T>);
         using integral_type = unwrap_ref_decay_t<T>;
 
         static constexpr u32 bit_count_v = N;
@@ -733,15 +776,15 @@ export namespace pP {
     template<typename T, typename TagT = std::uintptr_t, std::align_val_t Alignment = alignof_v<T> >
     struct [[nodiscard]] TagPtr {
         static_assert(static_cast<std::uintptr_t>(Alignment) >= 1u,
-                      "Alignment must be at least 1.");
+            "Alignment must be at least 1.");
         static_assert((static_cast<std::uintptr_t>(Alignment) & (static_cast<std::uintptr_t>(Alignment) - 1u)) == 0u,
-                      "Alignment must be a power of two.");
+            "Alignment must be a power of two.");
         static_assert(sizeof(T *) == sizeof(std::uintptr_t),
-                      "sizeof(T*) != sizeof(uintptr_t): pointer tagging is unsafe on this platform.");
+            "sizeof(T*) != sizeof(uintptr_t): pointer tagging is unsafe on this platform.");
         static_assert((std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u) < sizeof(std::uintptr_t),
-                      "Alignment consumes the entire pointer width; no bits remain for the address.");
+            "Alignment consumes the entire pointer width; no bits remain for the address.");
         static_assert(sizeof(TagT) <= sizeof(std::uintptr_t),
-                      "Tag type is too large to fit in the pointer's unused bits.");
+            "Tag type is too large to fit in the pointer's unused bits.");
 
         /// Number of flag bits available in the LSBs of the pointer.
         static constexpr std::size_t extra_bits = std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u; // log2(Alignment)
@@ -755,11 +798,11 @@ export namespace pP {
 
         /// \pre (flags & PTR_MASK) == 0  — flags must fit inside extra_bits.
         /// \pre ptr is aligned to at least Alignment.
-        explicit constexpr TagPtr(T *const ptr PPR_LIFETIME_BOUND, const TagT tag = default_value_v) noexcept {
+        explicit constexpr TagPtr(T *const ptr PPR_LIFETIME_BOUND, const TagT tag = {}) noexcept {
             reset(ptr, tag);
         }
 
-        constexpr void reset(T *const ptr, const TagT tag = default_value_v) noexcept {
+        constexpr void reset(T *const ptr, const TagT tag = {}) noexcept {
             m_packed = std::bit_cast<std::uintptr_t>(ptr) | static_cast<std::uintptr_t>(tag);
             PPR_ASSERT((static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0u
                 && "TagPtr: flag value overflows the available LSBs.");
@@ -1110,6 +1153,11 @@ export namespace pP {
 
         [[nodiscard]] std::size_t size() const noexcept {
             return m_size;
+        }
+
+        [[nodiscard]] T at(const std::size_t index) const noexcept {
+            PPR_ASSERT(index < m_size);
+            return m_transform(index);
         }
 
         [[nodiscard]] T operator[](const std::size_t index) const noexcept {
@@ -1532,8 +1580,8 @@ export namespace pP {
                     // Compute (j - gap) directly in the loop checks to avoid out-of-bounds decrements
                     while (j - first >= gap
                            && std::invoke(comp,
-                                          std::invoke(proj, key),
-                                          std::invoke(proj, *(j - gap)))) {
+                               std::invoke(proj, key),
+                               std::invoke(proj, *(j - gap)))) {
                         *j = std::ranges::iter_move(j - gap);
                         j -= gap;
                     }

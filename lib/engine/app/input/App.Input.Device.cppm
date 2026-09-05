@@ -19,22 +19,29 @@ export namespace pP {
         axis,
     };
 
+    enum class EInputMessageResponse : u8 {
+        // listener do not trigger any mapping
+        unhandled = 0,
+        // listener trigger at least one mapping, but did not consume the input
+        handled,
+        // listener trigger at least one mapping, and input was consumed (message won't be handled by any other listener)
+        consumed,
+    };
+
     struct InputMessage {
         InputKey m_key;
         InputValue m_value{};
 
-        TimeSpan m_delta_time{zero_v};
         InputDeviceID m_device_id{};
         EInputMessageEvent m_event{};
 
         constexpr InputMessage(
             InputKey key,
             InputValue value,
-            const TimeSpan delta_time,
             const InputDeviceID device_id,
             const EInputMessageEvent event) noexcept
             : m_key{std::move(key)}, m_value{std::move(value)},
-              m_delta_time{delta_time}, m_device_id{device_id}, m_event{event} {
+              m_device_id{device_id}, m_event{event} {
         }
 
         constexpr ~InputMessage() noexcept = default;
@@ -76,6 +83,10 @@ export namespace pP {
         }
     };
 
+    template<>
+    struct details::relocatable<InputMessage> : std::true_type {
+    };
+
     // ------------------------------------------------------------------
     // abstract input device
     // ------------------------------------------------------------------
@@ -87,9 +98,9 @@ export namespace pP {
 
         [[nodiscard]] virtual const InputDeviceID &getInputDeviceID() const noexcept = 0;
 
-        [[nodiscard]] virtual std::error_code supportedInputKeys(Collector<InputKey> supports_key) const = 0;
+        [[nodiscard]] virtual std::error_code enumerateSupportedInputKeys(Collector<InputKey> supports_key) const = 0;
 
-        [[nodiscard]] virtual std::error_code postInputMessages(TimeSpan dt, Collector<InputMessage> post_event) = 0;
+        [[nodiscard]] virtual std::error_code pollInputMessages(TimeSpan dt) = 0;
 
         virtual void resetInputState() noexcept = 0;
     };
@@ -103,15 +114,13 @@ export namespace pP {
     template<typename T>
     struct InputAxisState {
         using value_type = T;
-        using const_reference = std::conditional_t<
-            std::is_trivially_copyable_v<T>,
-            const T, const T &>;
+        using const_reference = param_lvref_t<const T>;
         details::input_value<value_type> m_raw{};
         details::input_value<value_type> m_filtered{};
 
         value_type m_next_raw_absolute{zero_v};
 
-        float m_dead_zone{epsilon_v};
+        float m_dead_zone{epsilon_v<float>};
         float m_sensitivity{2.0f};
 
         [[nodiscard]] constexpr const details::input_value<value_type> &
@@ -131,226 +140,168 @@ export namespace pP {
             m_next_raw_absolute = absolute;
         }
 
-        void update(const double elapsed_seconds) noexcept {
-            m_raw.m_relative = m_next_raw_absolute - m_raw.m_absolute;
-            if (dot2(m_raw.m_relative) > dot2(m_dead_zone)) {
-                m_raw.m_absolute = m_next_raw_absolute;
-            } else {
-                m_raw.m_relative = value_type{zero_v};
-            }
+        void update(double elapsed_seconds) noexcept;
 
-            const float blend_rate = saturate(static_cast<float>(
-                std::pow(elapsed_seconds,
-                         1.0 / std::max<float>(m_sensitivity, epsilon_v))));
+        bool postInputMessages(
+            TimeSpan dt,
+            const InputContext &context,
+            InputDeviceID device_id,
+            InputKey input_key,
+            bool enable_filtered_inputs) const noexcept;
 
-            const value_type next_filtered = lerp(
-                m_filtered.m_absolute,
-                m_raw.m_absolute,
-                blend_rate);
+        void reset() noexcept;
 
-            m_filtered.m_relative = next_filtered - m_filtered.m_absolute;
-            m_filtered.m_absolute = next_filtered;
-        }
-
-        void postInputMessages(
-            const InputDeviceID &device_id,
-            const InputKey &input_key,
-            const bool enable_filtered_inputs,
-            const TimeSpan dt,
-            const Collector<InputMessage> post_event) const noexcept {
-            if (const auto &analog_value = get(enable_filtered_inputs);
-                dot2(analog_value.m_relative) > 0) {
-                InputValue input_value(analog_value);
-                PPR_ASSERT(input_value.getType() == input_key.m_value);
-
-                post_event(InputMessage(
-                    input_key, std::move(input_value),
-                    dt, device_id, EInputMessageEvent::axis
-                ));
-            }
-        }
-
-        void reset() noexcept {
-            reset(zero_v);
-        }
-
-        void reset(const_reference init) noexcept {
-            m_raw.m_absolute = init;
-            m_raw.m_relative = value_type{zero_v};
-            m_filtered = m_raw;
-            m_next_raw_absolute = m_raw.m_absolute;
-        }
+        void reset(const_reference init) noexcept;
     };
+
+    extern template struct InputAxisState<float2>;
+    extern template struct InputAxisState<float>;
 
     // ------------------------------------------------------------------
     // digital input state
     // ------------------------------------------------------------------
 
-    template<typename ButtonT, mem::details::TAllocator AllocatorT = mem::GPA>
+    template<typename ButtonT>
         requires std::is_enum_v<ButtonT> or std::is_integral_v<ButtonT>
     class InputDigitalState {
     public:
         using set_type = FlatSet<ButtonT>;
 
-        InputDigitalState() noexcept
-            requires mem::Allocator<AllocatorT>::is_stateless_v
-        = default;
+        set_type m_pressed{};
 
-        explicit InputDigitalState(AllocatorT &alloc) noexcept
-            : m_buttons_queued(stl_allocator(alloc)),
-              m_buttons_down(stl_allocator(alloc)),
-              m_buttons_pressed(stl_allocator(alloc)),
-              m_buttons_up(stl_allocator(alloc)) {
+        InputDigitalState() noexcept = default;
+
+        bool postInputMessages(
+            TimeSpan dt,
+            const InputContext &context,
+            InputDeviceID device_id,
+            ButtonT button, bool pressed);
+
+        void resetInputState() noexcept {
+            m_pressed.clear();
+        }
+    };
+
+    extern template class InputDigitalState<EKeyboardKey>;
+    extern template class InputDigitalState<EGamepadButton>;
+    extern template class InputDigitalState<EMouseButton>;
+
+    // ------------------------------------------------------------------
+    // keyboard device
+    // ------------------------------------------------------------------
+
+    class KeyboardDevice final : public IInputDevice {
+    public:
+        InputDeviceID m_device_id;
+
+        InputDigitalState<EKeyboardKey> m_keys{};
+        Array<hal::native::char_t> m_character_inputs{};
+
+        explicit KeyboardDevice(InputDeviceID device_id) noexcept;
+
+        void postKeyboardCharacterInput(const InputContext &context, hal::native::char_t codepoint);
+
+        void postKeyboardKeyPressed(TimeSpan dt, const InputContext &context, EKeyboardKey key, bool pressed);
+
+        // IInputDevice interface:
+
+        [[nodiscard]] const InputDeviceID &getInputDeviceID() const noexcept override {
+            return m_device_id;
         }
 
-        explicit InputDigitalState(const AllocatorT &alloc) noexcept
-            : m_buttons_queued(stl_allocator(alloc)),
-              m_buttons_down(stl_allocator(alloc)),
-              m_buttons_pressed(stl_allocator(alloc)),
-              m_buttons_up(stl_allocator(alloc)) {
+        [[nodiscard]] std::error_code enumerateSupportedInputKeys(Collector<InputKey> supports_key) const override;
+
+        [[nodiscard]] std::error_code pollInputMessages(TimeSpan dt) override;
+
+        void resetInputState() noexcept override;
+    };
+
+    // ------------------------------------------------------------------
+    // mouse device
+    // ------------------------------------------------------------------
+
+    class MouseDevice : public IInputDevice {
+    public:
+        const InputDeviceID m_device_id;
+
+        InputDigitalState<EMouseButton> m_buttons;
+
+        InputAxisState<float2> m_cursor_pos;
+
+        InputAxisState<float> m_wheel_x;
+        InputAxisState<float> m_wheel_y;
+
+        bool m_has_axis_filtering: 1 {false};
+
+        explicit MouseDevice(InputDeviceID device_id) noexcept;
+
+        void postMouseButtonPressed(TimeSpan dt, const InputContext &context, EMouseButton button, bool pressed);
+
+        void postMouseCursorPosition(TimeSpan dt, const InputContext &context, const float2 &absolute_pos);
+
+        void postMouseScrollWheel(TimeSpan dt, const InputContext &context, const float2 &delta);
+
+        // IInputDevice interface:
+
+        [[nodiscard]] const InputDeviceID &getInputDeviceID() const noexcept override {
+            return m_device_id;
         }
 
-        void setPressed(const ButtonT button) {
-            m_buttons_queued.insert(button);
+        [[nodiscard]] std::error_code enumerateSupportedInputKeys(Collector<InputKey> supports_key) const override;
+
+        [[nodiscard]] std::error_code pollInputMessages(TimeSpan dt) override;
+
+        void resetInputState() noexcept override;
+    };
+
+    // ------------------------------------------------------------------
+    // gamepad device
+    // ------------------------------------------------------------------
+
+    class GamepadDevice : public IInputDevice {
+    public:
+        const InputDeviceID m_device_id;
+        GamepadControllerID m_controller_id{none_v};
+
+        std::string m_friendly_name{};
+
+        InputDigitalState<EGamepadButton> m_buttons;
+
+        InputAxisState<float2> m_left_stick;
+        InputAxisState<float2> m_right_stick;
+
+        InputAxisState<float> m_left_trigger;
+        InputAxisState<float> m_right_trigger;
+
+        InputAxisState<float> m_left_rumble;
+        InputAxisState<float> m_right_rumble;
+
+        bool m_has_axis_filtering: 1 {true};
+        bool m_has_trigger_filtering: 1 {true};
+        bool m_has_rumble_filtering: 1 {true};
+
+        explicit GamepadDevice(InputDeviceID device_id) noexcept;
+
+        [[nodiscard]] bool isConnected() const noexcept {
+            return m_controller_id != none_v;
         }
 
-        [[nodiscard]] const set_type &getDown() const noexcept {
-            return m_buttons_down;
+        void postGamepadAxis1DMoved(TimeSpan dt, const InputContext &context, EGamepadAxis axis, float value);
+
+        void postGamepadAxis2DMoved(TimeSpan dt, const InputContext &context, EGamepadAxis axis, const float2 &value);
+
+        void postGamepadButtonPressed(TimeSpan dt, const InputContext &context, EGamepadButton button, bool pressed);
+
+        // IInputDevice interface:
+
+        [[nodiscard]] const InputDeviceID &getInputDeviceID() const noexcept override {
+            return m_device_id;
         }
 
-        [[nodiscard]] const set_type &getPressed() const noexcept {
-            return m_buttons_pressed;
-        }
+        [[nodiscard]] std::error_code enumerateSupportedInputKeys(Collector<InputKey> supports_key) const override;
 
-        [[nodiscard]] const set_type &getUp() const noexcept {
-            return m_buttons_up;
-        }
+        [[nodiscard]] std::error_code pollInputMessages(TimeSpan dt) override;
 
-        [[nodiscard]] bool anyDown() const noexcept {
-            return not m_buttons_down.empty();
-        }
-
-        [[nodiscard]] bool isDown(const ButtonT button) const noexcept {
-            return m_buttons_down.contains(button);
-        }
-
-        [[nodiscard]] bool areDown(const std::initializer_list<ButtonT> buttons) const noexcept {
-            for (const ButtonT button: buttons) {
-                if (not m_buttons_down.contains(button)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool anyPressed() const noexcept {
-            return not m_buttons_pressed.empty();
-        }
-
-        [[nodiscard]] bool isPressed(const ButtonT button) const noexcept {
-            return m_buttons_pressed.contains(button);
-        }
-
-        [[nodiscard]] bool arePressed(const std::initializer_list<ButtonT> buttons) const noexcept {
-            for (const ButtonT button: buttons) {
-                if (not m_buttons_pressed.contains(button)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool anyUp() const noexcept {
-            return not m_buttons_up.empty();
-        }
-
-        [[nodiscard]] bool isUp(const ButtonT button) const noexcept {
-            return m_buttons_up.contains(button);
-        }
-
-        [[nodiscard]] bool areUp(const std::initializer_list<ButtonT> buttons) const noexcept {
-            for (const ButtonT button: buttons) {
-                if (not m_buttons_up.contains(button)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        bool update() {
-            m_buttons_up.clear();
-            m_buttons_down.clear();
-
-            for (const ButtonT event: m_buttons_queued) {
-                if (not m_buttons_pressed.contains(event)) {
-                    PPR_VERIFY(m_buttons_down.insert(event).second);
-                }
-            }
-
-            for (const ButtonT event: m_buttons_pressed) {
-                if (not m_buttons_queued.contains(event)) {
-                    PPR_VERIFY(m_buttons_up.insert(event).second);
-                }
-            }
-
-            swap(m_buttons_pressed, m_buttons_queued);
-            m_buttons_queued.clear();
-
-            return not(m_buttons_up.empty() && m_buttons_down.empty());
-        }
-
-        std::error_code postInputMessages(
-            const InputDeviceID &device_id,
-            const TimeSpan dt,
-            const Collector<InputMessage> post_event) const noexcept {
-            const auto post_button_event = [&](const ButtonT button, const EInputMessageEvent event) -> std::error_code {
-                if (const std::optional<InputKey> input_key = InputKey::from(button);
-                    input_key.has_value()) {
-                    PPR_ASSERT(EInputValueType::digital == input_key->m_value);
-
-                    if (const std::error_code err = post_event(InputMessage(
-                        input_key.value(),
-                        InputDigital(EInputMessageEvent::released != event),
-                        dt, device_id, event
-                    ))) [[unlikely]] {
-                        return err;
-                    }
-                }
-                return default_value_v;
-            };
-
-            for (const ButtonT button: m_buttons_down) {
-                if (const std::error_code err = post_button_event(button, EInputMessageEvent::pressed)) [[unlikely]] {
-                    return err;
-                }
-            }
-            for (const ButtonT button: m_buttons_pressed) {
-                if (const std::error_code err = post_button_event(button, EInputMessageEvent::repeat)) [[unlikely]] {
-                    return err;
-                }
-            }
-            for (const ButtonT button: m_buttons_up) {
-                if (const std::error_code err = post_button_event(button, EInputMessageEvent::released)) [[unlikely]] {
-                    return err;
-                }
-            }
-
-            return default_value_v;
-        }
-
-        void reset() noexcept {
-            m_buttons_queued.clear();
-
-            m_buttons_down.clear();
-            m_buttons_pressed.clear();
-            m_buttons_up.clear();
-        }
-
-    private:
-        set_type m_buttons_queued{};
-
-        set_type m_buttons_down{};
-        set_type m_buttons_pressed{};
-        set_type m_buttons_up{};
+        void resetInputState() noexcept override;
     };
 }

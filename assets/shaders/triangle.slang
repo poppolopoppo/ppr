@@ -12,7 +12,6 @@ struct FrameConstants {
     float4x4 m_view_projection;
     float4x4 m_inverse_view_projection;
     float4   m_camera_position;
-    float4   m_camera_velocity;
     float4   m_viewport_size;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b0);
@@ -20,10 +19,9 @@ ConstantBuffer<FrameConstants> g_frame : register(b0);
 VertexOutput vertexMain(VertexInput input) {
     VertexOutput output;
     // mango::math matrices (lookat/perspectiveD3D/ortho) are row-vector convention:
-    // translation lives in row 3 and the perspective w-row is (0,0,-1,0) so that
-    // clip.w = -view.z. Match that here with mul(row_vector, matrix) instead of
-    // mul(matrix, column_vector), which would transpose the transform and flip
-    // the view-space Z sign (negative W -> clipped geometry).
+    // translation lives in row 3 and Mango's perspectiveD3D produces positive
+    // clip.w for +Z view-space points. Match that here with mul(row_vector, matrix)
+    // instead of mul(matrix, column_vector), which would transpose the transform.
     output.position = mul(float4(input.position, 1.0), g_frame.m_view_projection);
     output.color = input.color;
     return output;

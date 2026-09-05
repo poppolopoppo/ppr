@@ -7,6 +7,9 @@ import engine.math;
 import std;
 
 export namespace pP {
+    enum class EKeyboardKey : u8;
+    enum class EMouseButton : u8;
+
     class Window;
 
     using SharedWindow = safe_ptr<const Window>;
@@ -30,29 +33,39 @@ export namespace pP {
     };
 
     // ------------------------------------------------------------------
-    // callback to catch window events
+    // actual window instance
     // ------------------------------------------------------------------
 
     template<typename... ArgsT>
-    using WindowCallback = CallbackSink<std::error_code (const Window &window, ArgsT...)>;
-
-    // ------------------------------------------------------------------
-    // actual window instance
-    // ------------------------------------------------------------------
+    using WindowDelegate = Delegate<void(const Window &window, ArgsT...)>;
 
     class Window : public WindowModel, public safe_object {
     public:
         WindowHandle m_handle{};
 
-        int2 m_framebuffer_size{};
         float2 m_content_scale{1.0};
+        int2 m_framebuffer_size{};
+        bool m_hovered{false};
 
-        WindowCallback<> m_when_closed{};
-        WindowCallback<bool> m_when_focused{};
-        WindowCallback<bool> m_when_iconified{};
-        WindowCallback<int2> m_when_moved{};
-        WindowCallback<int2> m_when_resized{};
-        WindowCallback<float2> m_when_scaled{};
+        WindowDelegate<> m_when_closed{};
+
+        WindowDelegate<bool> m_when_focused{};
+        WindowDelegate<bool> m_when_hovered{};
+        WindowDelegate<bool> m_when_iconified{};
+
+        WindowDelegate<const int2 &> m_when_moved{};
+        WindowDelegate<const int2 &> m_when_resized{};
+        WindowDelegate<const float2 &> m_when_scaled{};
+
+        WindowDelegate<hal::native::char_t> m_when_character_input{};
+        WindowDelegate<EKeyboardKey, bool> m_when_keyboard_pressed{};
+        WindowDelegate<EKeyboardKey> m_when_keyboard_repeated{};
+
+        WindowDelegate<EMouseButton, bool> m_when_mouse_clicked{};
+        WindowDelegate<const float2 &> m_when_mouse_moved{};
+        WindowDelegate<const float2 &> m_when_mouse_scrolled{};
+
+        WindowDelegate<std::span<const char *>> m_when_drag_and_dropped{};
 
         Window(WindowHandle handle, WindowModel &&model) noexcept;
 
@@ -69,12 +82,13 @@ export namespace pP {
 #endif
 
         [[nodiscard]] WindowHandle release() noexcept;
-
-        [[nodiscard]] std::error_code update();
     };
 
-    extern template class CallbackSink<std::error_code (const Window &)>;
-    extern template class CallbackSink<std::error_code (const Window &, bool)>;
-    extern template class CallbackSink<std::error_code (const Window &, int2)>;
-    extern template class CallbackSink<std::error_code (const Window &, float2)>;
+    extern template class std23::function_ref<void (const Window &)>;
+    extern template class std23::function_ref<void (const Window &, bool)>;
+    extern template class std23::function_ref<void (const Window &, const float2 &)>;
+    extern template class std23::function_ref<void (const Window &, EKeyboardKey)>;
+    extern template class std23::function_ref<void (const Window &, EKeyboardKey, bool)>;
+    extern template class std23::function_ref<void (const Window &, EMouseButton, bool)>;
+    extern template class std23::function_ref<void (const Window &, hal::native::char_t)>;
 }

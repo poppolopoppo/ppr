@@ -189,7 +189,9 @@ export namespace pP {
         struct Uuid {
             std::array<u32, 4> m_data;
 
-            Uuid() noexcept;
+            [[nodiscard]] static Uuid create() noexcept;
+
+            constexpr Uuid() noexcept = default;
 
             constexpr Uuid(const u32 a, const u32 b, const u32 c, const u32 d) noexcept
                 : m_data{a, b, c, d} {

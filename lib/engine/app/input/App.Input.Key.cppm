@@ -521,7 +521,7 @@ export namespace pP {
 
     namespace details {
         template<typename T>
-        struct input_value {
+        struct input_value final {
             T m_absolute{zero_v};
             T m_relative{zero_v};
         };
@@ -544,7 +544,13 @@ export namespace pP {
         using details::InputValueVariant::InputValueVariant;
         using details::InputValueVariant::operator=;
 
-        constexpr ~InputValue() noexcept = default;
+        InputValue(const InputAxis1D &x, const InputAxis1D &y) noexcept;
+
+        InputValue(const InputAxis1D &x, const InputAxis1D &y, const InputAxis1D &z) noexcept;
+
+        InputValue(const InputAxis1D &x, const InputAxis2D &yz) noexcept;
+
+        InputValue(const InputAxis2D &xy, const InputAxis1D &z) noexcept;
 
         [[nodiscard]] constexpr EInputValueType getType() const noexcept {
             return static_cast<EInputValueType>(index());
@@ -556,8 +562,24 @@ export namespace pP {
 
         [[nodiscard]] InputValue modulate(const float3 &value) const noexcept;
 
+        [[nodiscard]] InputValue modulate(const TimeSpan dt, const float value) const noexcept {
+            return modulate(static_cast<float>(time::seconds(dt)) * value);
+        }
+
+        [[nodiscard]] InputValue modulate(const TimeSpan dt, const float2 &value) const noexcept {
+            return modulate(static_cast<float>(time::seconds(dt)) * value);
+        }
+
+        [[nodiscard]] InputValue modulate(const TimeSpan dt, const float3 &value) const noexcept {
+            return modulate(static_cast<float>(time::seconds(dt)) * value);
+        }
+
         [[nodiscard]] friend hash_t hashValue(const InputValue &value) noexcept;
 
         [[nodiscard]] friend opaque::Value opaqueValue(const InputValue &value) noexcept;
+    };
+
+    template<>
+    struct details::relocatable<InputValue> : std::true_type {
     };
 }

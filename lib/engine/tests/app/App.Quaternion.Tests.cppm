@@ -16,7 +16,7 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(identity) {
             const auto q = pP::Quaternion::identity();
-            PPR_TEST_ASSERT(std::abs(pP::quaternionDot(q, q) - 1.0f) < kEps);
+            PPR_TEST_ASSERT(std::abs(dot(q, q) - 1.0f) < kEps);
 
             const float3 v(1.0f, 2.0f, 3.0f);
             const auto rotated = pP::quaternionTransform(q, v);
@@ -29,14 +29,14 @@ export namespace pP::tests {
             constexpr float kHalfPi = std::numbers::pi_v<float> / 2.0f;
 
             // yaw = +90° about Y: forward (-Z) maps to (-X)
-            const auto yaw_q = pP::makeYawPitchRollQuaternion(kHalfPi, 0.0f, 0.0f);
+            const auto yaw_q = Quaternion::rotateXYZ(0.0f, kHalfPi, 0.0f);
             const auto yawed = pP::quaternionTransform(yaw_q, float3(0.0f, 0.0f, -1.0f));
             PPR_TEST_ASSERT(std::abs(yawed.x - (-1.0f)) < kEps);
             PPR_TEST_ASSERT(std::abs(yawed.y) < kEps);
             PPR_TEST_ASSERT(std::abs(yawed.z) < kEps);
 
             // pitch = +90° about X: forward (-Z) maps to (+Y)
-            const auto pitch_q = pP::makeYawPitchRollQuaternion(0.0f, kHalfPi, 0.0f);
+            const auto pitch_q = pP::Quaternion::rotateXYZ(kHalfPi, 0.0f, 0.0f);
             const auto pitched = pP::quaternionTransform(pitch_q, float3(0.0f, 0.0f, -1.0f));
             PPR_TEST_ASSERT(std::abs(pitched.x) < kEps);
             PPR_TEST_ASSERT(std::abs(pitched.y - 1.0f) < kEps);
@@ -44,8 +44,8 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(matrix_round_trip) {
-            const auto q = pP::makeYawPitchRollQuaternion(0.3f, 0.2f, 0.1f);
-            const auto q2 = pP::makeQuaternionFromRotationMatrix(float3x3(q));
+            const auto q = pP::Quaternion::rotateXYZ(0.3f, 0.2f, 0.1f);
+            const auto q2 = Quaternion(float3x3(q));
 
             const float3 v(1.0f, 2.0f, 3.0f);
             const auto a = pP::quaternionTransform(q, v);
@@ -56,46 +56,10 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(length_preserved) {
-            const auto q = pP::makeYawPitchRollQuaternion(0.5f, -0.25f, 0.125f);
+            const auto q = pP::Quaternion::rotateXYZ(0.5f, -0.25f, 0.125f);
             const float3 v(1.0f, 2.0f, 3.0f);
             const auto rotated = pP::quaternionTransform(q, v);
             PPR_TEST_ASSERT(std::abs(pP::dot2(rotated) - pP::dot2(v)) < kEps);
-        };
-
-        PPR_UNIT_TEST(yaw_pitch_identity) {
-            const auto yp = pP::quaternionToYawPitch(pP::Quaternion{0.0f, 0.0f, 0.0f, 1.0f});
-            PPR_TEST_ASSERT(std::abs(yp.x) < kEps);
-            PPR_TEST_ASSERT(std::abs(yp.y) < kEps);
-        };
-
-        PPR_UNIT_TEST(yaw_pitch_pure_yaw) {
-            constexpr float kYaw = 0.4f;
-            const auto yp = pP::quaternionToYawPitch(pP::makeYawPitchRollQuaternion(kYaw, 0.0f, 0.0f));
-            PPR_TEST_ASSERT(std::abs(yp.x - kYaw) < kEps);
-            PPR_TEST_ASSERT(std::abs(yp.y) < kEps);
-        };
-
-        PPR_UNIT_TEST(yaw_pitch_pure_pitch) {
-            constexpr float kPitch = -0.25f;
-            const auto yp = pP::quaternionToYawPitch(pP::makeYawPitchRollQuaternion(0.0f, kPitch, 0.0f));
-            PPR_TEST_ASSERT(std::abs(yp.x) < kEps);
-            PPR_TEST_ASSERT(std::abs(yp.y - kPitch) < kEps);
-        };
-
-        PPR_UNIT_TEST(yaw_pitch_combined_round_trip) {
-            constexpr float kYaw = 0.5f;
-            constexpr float kPitch = 0.3f;
-            const auto yp = pP::quaternionToYawPitch(pP::makeYawPitchRollQuaternion(kYaw, kPitch, 0.0f));
-            PPR_TEST_ASSERT(std::abs(yp.x - kYaw) < kEps);
-            PPR_TEST_ASSERT(std::abs(yp.y - kPitch) < kEps);
-        };
-
-        PPR_UNIT_TEST(yaw_pitch_negative_round_trip) {
-            constexpr float kYaw = -0.6f;
-            constexpr float kPitch = 0.2f;
-            const auto yp = pP::quaternionToYawPitch(pP::makeYawPitchRollQuaternion(kYaw, kPitch, 0.0f));
-            PPR_TEST_ASSERT(std::abs(yp.x - kYaw) < kEps);
-            PPR_TEST_ASSERT(std::abs(yp.y - kPitch) < kEps);
         };
     }
 
@@ -105,11 +69,6 @@ export namespace pP::tests {
             QuaternionTests::yaw_pitch_roll,
             QuaternionTests::matrix_round_trip,
             QuaternionTests::length_preserved,
-            QuaternionTests::yaw_pitch_identity,
-            QuaternionTests::yaw_pitch_pure_yaw,
-            QuaternionTests::yaw_pitch_pure_pitch,
-            QuaternionTests::yaw_pitch_combined_round_trip,
-            QuaternionTests::yaw_pitch_negative_round_trip,
         });
     };
 }

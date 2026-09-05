@@ -13,11 +13,12 @@ target_sources(EngineAppTests
             App.Player.Graph.Tests.cppm
             App.Shader.Tests.cppm
             App.Viewport.Tests.cppm
+            App.RenderView.Tests.cppm
             App.PixelReadback.Tests.cppm
             App.Quaternion.Tests.cppm
             App.Input.Listener.Tests.cppm
             App.FilteredAnalog.Tests.cppm
-            App.ViewportClient.Tests.cppm
+            App.ZeroVProbe.Tests.cppm
     )
 
 setup_ppr_project(EngineAppTests

@@ -17,7 +17,7 @@ export namespace pP::tests {
 
         InputAction action{"Jump", EInputValueType::digital, EInputActionFlags::none};
         InputMapping mapping{"PlayerControls"};
-        mapping.mapKey(safe_ptr<const InputAction>{&action}, InputKey::from(EKeyboardKey::space).value());
+        mapping.mapInputKey(safe_ptr<const InputAction>{&action}, InputKey::from(EKeyboardKey::space).value());
 
         Player player{id};
         player.addMapping(safe_ptr<const InputMapping>{&mapping}, 0);
@@ -25,13 +25,12 @@ export namespace pP::tests {
         const InputMessage message{
             InputKey::from(EKeyboardKey::space).value(),
             InputDigital{true},
-            zero_v,
             InputDeviceID{0u},
             EInputMessageEvent::pressed,
         };
 
-        const EInputListenerResponse response = player.getListener().postKeyEvent(message);
-        PPR_TEST_ASSERT(response != EInputListenerResponse::unhandled);
+        const EInputMessageResponse response = player.getListener().postKeyEvent(TimeSpan{}, message);
+        PPR_TEST_ASSERT(response != EInputMessageResponse::unhandled);
 
         const std::optional<InputValue> value = player.getActionValue(action);
         PPR_TEST_ASSERT(value.has_value());
@@ -42,14 +41,13 @@ export namespace pP::tests {
         const InputMessage message{
             InputKey::any_key,
             InputDigital{true},
-            zero_v,
             InputDeviceID{0u},
             EInputMessageEvent::pressed,
         };
 
         InputListener listener{};
-        const EInputListenerResponse response = listener.postKeyEvent(message);
-        PPR_TEST_ASSERT(response == EInputListenerResponse::unhandled);
+        const EInputMessageResponse response = listener.postKeyEvent(TimeSpan{}, message);
+        PPR_TEST_ASSERT(response == EInputMessageResponse::unhandled);
     };
 
     PPR_UNIT_TEST(app_dispatch) {

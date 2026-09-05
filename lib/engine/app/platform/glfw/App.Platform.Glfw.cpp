@@ -105,8 +105,6 @@ namespace pP {
         const safe_ptr input_service{&GlfwInput::get()};
         PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, input_service->initialize());
 
-        m_window_service->setInputService(input_service);
-
         ServicesStore &app_services = application.getServices();
         std::ignore = app_services.insert(safe_ptr<IInputService>{input_service});
         std::ignore = app_services.insert(safe_ptr<IWindowService>{m_window_service});
@@ -122,7 +120,6 @@ namespace pP {
 
         PPR_ASSERT(m_window_service.isValid());
         if (m_window_service) [[likely]] {
-            m_window_service->setInputService({});
             m_window_service->shutdown();
             m_window_service = nullptr;
         }

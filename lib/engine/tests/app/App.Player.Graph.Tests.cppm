@@ -33,7 +33,10 @@ namespace pP {
     }
 
     [[nodiscard]] GamepadDevice &getTestGamepad() noexcept {
-        static GamepadDevice g_instance{InputDeviceID{102u}, 0u};
+        static GamepadDevice g_instance{InputDeviceID{102u}};
+        // addGamepadPlayer narrows the controller id into PlayerIdentity:
+        // it must hold a real index, not none_v.
+        g_instance.m_controller_id = GamepadControllerID{0};
         return g_instance;
     }
 
@@ -184,7 +187,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         u32 call_count = 0u;
-        auto on_added = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_added = [&](const Player &) noexcept -> std::error_code {
             ++call_count;
             return default_value_v;
         };
@@ -202,7 +205,7 @@ export namespace pP::tests {
         std::ignore = graph.getOrCreateKeyboardPlayer(service, user_id, getTestKeyboard(), getTestMouse());
 
         u32 call_count = 0u;
-        auto on_removed = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_removed = [&](const Player &) noexcept -> std::error_code {
             ++call_count;
             return default_value_v;
         };
@@ -217,7 +220,7 @@ export namespace pP::tests {
         GraphTestService service{};
 
         u32 added_count = 0u;
-        auto on_added = [&](const IPlayerService &, const Player &) noexcept -> std::error_code {
+        auto on_added = [&](const Player &) noexcept -> std::error_code {
             ++added_count;
             return default_value_v;
         };

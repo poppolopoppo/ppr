@@ -2,44 +2,37 @@ module;
 #include "pP/Macros.h"
 export module engine.app:input.listener;
 
+import :input.key;
+import :service.input;
+import :window.handle;
+
 import engine.core;
-import :input.device;
-import :input.mapping;
+import std;
 
 export namespace pP {
+    class IInputService;
+
+    struct InputMessage;
+    class InputMapping;
+    enum class EInputMessageResponse : u8;
+    using SharedInputMapping = safe_ptr<const InputMapping>;
+
+    struct InputAction;
+    struct InputActionEvent;
+    struct InputActionKeyMapping;
+    using SharedInputAction = safe_ptr<const InputAction>;
+
+    class Window;
+
     // ------------------------------------------------------------------
     // input listener
     // ------------------------------------------------------------------
 
-    enum class EInputListenerResponse : u8 {
-        // listener do not trigger any mapping
-        unhandled = 0,
-        // listener trigger at least one mapping, but did not consume the input
-        handled,
-        // listener trigger at least one mapping, and input was consumed (message won't be handled by any other listener)
-        consumed,
-    };
+    using InputActionCallback = std::move_only_function<void(const InputActionEvent &event, const InputKey &trigger) const noexcept>;
+    using InputRawKeyCallback = std::move_only_function<void(TimeSpan dt, const InputMessage &message)>;
 
-    class InputListener : public safe_object {
-    public:
-        using ActionCallback = std::move_only_function<void(const InputActionEvent &event, const InputKey &trigger) const noexcept>;
-        using RawKeyCallback = std::move_only_function<void(const InputMessage &message)>;
-
-    private:
-        struct MappingAndPriority {
-            SharedInputMapping m_mapping{};
-            int m_priority{0};
-
-            [[nodiscard]] bool operator==(const MappingAndPriority &other) const noexcept;
-
-            [[nodiscard]] bool operator==(const InputMapping &mapping) const noexcept;
-
-            [[nodiscard]] std::strong_ordering operator<=>(const MappingAndPriority &other) const noexcept;
-
-            [[nodiscard]] std::strong_ordering operator<=>(const InputMapping &mapping) const noexcept;
-        };
-
-        using InputMappingIndex = Numeric<u32, MappingAndPriority>;
+    class InputListener final : public safe_object {
+        using InputMappingIndex = Numeric<u32, SharedInputMapping>;
         using KeyMappingIndex = Numeric<u32, InputKey>;
 
         struct InputBinding {
@@ -51,54 +44,111 @@ export namespace pP {
 
         [[nodiscard]] const InputActionKeyMapping &getKeyMapping_(const InputBinding &binding) const noexcept;
 
-        FlatSet<MappingAndPriority> m_mappings;
-        FlatMap<SharedInputAction, InputActionEvent> m_action_events;
-        FlatMultiMap<InputKey, InputBinding> m_keybindings;
+        PrioritySet<SharedInputMapping> m_mappings{};
+        FlatMap<SharedInputAction, InputActionEvent> m_action_events{};
+        FlatMultiMap<InputKey, InputBinding> m_keybindings{};
 
-        int m_priority{0};
-        EInputListenerResponse m_listener_mode{EInputListenerResponse::consumed};
-        ActionCallback m_action_callback{};
-        RawKeyCallback m_raw_key_callback{};
+        InputActionCallback m_action_callback{};
+        InputRawKeyCallback m_raw_key_callback{};
+
+        EInputMessageResponse m_listener_mode;
 
     public:
-        constexpr InputListener() = default;
+        InputListener() noexcept;
 
-        [[nodiscard]] constexpr int getPriority() const noexcept {
-            return m_priority;
-        }
-
-        constexpr void setPriority(const int value) noexcept {
-            m_priority = value;
-        }
-
-        [[nodiscard]] constexpr EInputListenerResponse getInputListenerMode() const noexcept {
+        [[nodiscard]] constexpr EInputMessageResponse getInputListenerMode() const noexcept {
             return m_listener_mode;
         }
 
-        constexpr void setInputListenerMode(const EInputListenerResponse value) noexcept {
+        void setInputListenerMode(const EInputMessageResponse value) noexcept {
             m_listener_mode = value;
         }
 
-        void setActionCallback(ActionCallback callback) noexcept {
+        void setActionCallback(InputActionCallback callback) noexcept {
             m_action_callback = std::move(callback);
         }
 
-        void setRawKeyCallback(RawKeyCallback callback) noexcept {
+        void setRawKeyCallback(InputRawKeyCallback callback) noexcept {
             m_raw_key_callback = std::move(callback);
         }
 
         [[nodiscard]] bool hasInputMapping(const InputMapping &mapping) const noexcept;
 
+        void addInputMapping(SharedInputMapping mapping, int priority);
+
+        bool removeInputMapping(const InputMapping &mapping);
+
+        void clearInputMappings();
+
         [[nodiscard]] bool isKeyHandledByAction(const InputKey &key) const noexcept;
 
         [[nodiscard]] std::optional<InputValue> getActionValue(const InputAction &action) const noexcept;
 
-        void addMapping(SharedInputMapping mapping, int priority);
+        [[nodiscard]] EInputMessageResponse postKeyEvent(TimeSpan dt, const InputMessage &message) noexcept;
+    };
 
-        bool removeMapping(const InputMapping &mapping);
+    using SharedInputListener = safe_ptr<const InputListener>;
 
-        void clearAllMappings();
+    // ------------------------------------------------------------------
+    // input context - route input messages to subscribed listeners
+    // ------------------------------------------------------------------
 
-        [[nodiscard]] EInputListenerResponse postKeyEvent(const InputMessage &message) noexcept;
+    class InputContext final : public safe_object {
+        PrioritySet<safe_ptr<InputListener> > m_listeners{};
+
+        const safe_ptr<InputContext> m_parent{};
+
+    public:
+        explicit InputContext(safe_ptr<InputContext> parent_context = {}) noexcept;
+
+        // NOTE: implicitly-defined copy/move would evaluate safe_ptr's
+        // is_base_of constraints on the still-incomplete InputContext in
+        // release builds (C2139); define them out-of-line where it is complete.
+        // Assignments stay deleted: m_parent is const, as with the implicit ops.
+        InputContext(const InputContext &other);
+        InputContext(InputContext &&other);
+        InputContext &operator=(const InputContext &other) = delete;
+        InputContext &operator=(InputContext &&other) = delete;
+
+        [[nodiscard]] safe_ptr<const InputContext> getParentContext() const noexcept {
+            return safe_ptr<const InputContext>(m_parent.get());
+        }
+
+        // listeners:
+        [[nodiscard]] bool hasInputListener(const InputListener &listener) const noexcept;
+
+        void addInputListener(safe_ptr<InputListener> listener, int priority = 0);
+
+        bool removeInputListener(const InputListener &listener);
+
+        void clearInputListeners();
+
+        // input events:
+        [[nodiscard]] EInputMessageResponse  postKeyEvent(TimeSpan dt, const InputMessage &message) const;
+    };
+
+    using SharedInputContext = safe_ptr<const InputContext>;
+
+    // ------------------------------------------------------------------
+    // window input context - setup an input context for a specific window
+    // ------------------------------------------------------------------
+
+    class WindowInputContext final {
+    public:
+        const safe_ptr<IInputService> m_inputs{};
+        const safe_ptr<Window> m_window{};
+
+        InputContext m_context;
+
+        WindowInputContext(safe_ptr<IInputService> inputs, safe_ptr<Window> window);
+
+        ~WindowInputContext();
+
+    private:
+        void onWindowCharacterInput_(const Window &window, hal::native::char_t codepoint) const;
+        void onKeyboardPressed_(const Window &window, EKeyboardKey key, bool pressed) const;
+        void onMouseClicked_(const Window &window, EMouseButton button, bool clicked) const;
+        void onMouseMoved_(const Window &window, const float2 &client_pos) const;
+        void onMouseScrolled_(const Window &window, const float2 &delta) const;
     };
 }

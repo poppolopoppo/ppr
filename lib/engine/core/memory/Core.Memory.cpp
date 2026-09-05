@@ -117,7 +117,7 @@ namespace pP {
             "Source of move construction is still observed by a safe_ptr!");
     }
 
-    safe_object &safe_object::operator=(safe_object &&other) noexcept {
+    safe_object &safe_object::operator=(safe_object &&other) {
         if (this != &other) {
             PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Target of move assignment is still observed by a safe_ptr!");
@@ -132,7 +132,7 @@ namespace pP {
             "Source of copy construction is still observed by a safe_ptr!");
     }
 
-    safe_object &safe_object::operator=(const safe_object &other) noexcept {
+    safe_object &safe_object::operator=(const safe_object &other) {
         if (this != &other) {
             PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Target of copy assignment is still observed by a safe_ptr!");

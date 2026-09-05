@@ -1,24 +1,17 @@
 add_library(EngineApp)
 
 target_sources(EngineApp
-    PUBLIC
+        PUBLIC
         FILE_SET CXX_MODULES FILES
+
         App.cppm
         App.Application.cppm
 
-        viewport/App.Viewport.Camera.cppm
-        viewport/App.Viewport.FilteredAnalog.cppm
-
-        input/device/App.Input.Gamepad.cppm
-        input/device/App.Input.Keyboard.cppm
-        input/device/App.Input.Mouse.cppm
-
         input/App.Input.Action.cppm
         input/App.Input.Device.cppm
+        input/App.Input.FilteredAnalog.cppm
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
-        input/App.Input.Mapping.cppm
-        input/App.Input.Replay.cppm
 
         platform/glfw/App.Platform.Glfw.cppm
         platform/glfw/App.Platform.Glfw.Input.cppm
@@ -30,9 +23,11 @@ target_sources(EngineApp
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
+        renderer/App.Renderer.Types.cppm
+        renderer/App.Renderer.TrianglePass.cppm
 
-        viewport/App.Viewport.cppm
-        viewport/App.ViewportClient.cppm
+        scene/App.Scene.Camera.cppm
+        scene/App.Scene.Camera.Controller.cppm
 
         service/App.Service.Input.cppm
         service/App.Service.Player.cppm
@@ -43,20 +38,18 @@ target_sources(EngineApp
 
         window/App.Window.Handle.cppm
         window/App.Window.Monitor.cppm
-    PRIVATE
+        window/App.Window.Viewport.cppm
+
+        PRIVATE
+
         App.Application.cpp
+        App.TemplateInstantiations.cpp
 
-        viewport/App.Viewport.Camera.cpp
-        viewport/App.Viewport.FilteredAnalog.cpp
-
-        input/device/App.Input.Gamepad.cpp
-        input/device/App.Input.Keyboard.cpp
-        input/device/App.Input.Mouse.cpp
         input/App.Input.Action.cpp
+        input/App.Input.Device.cpp
+        input/App.Input.FilteredAnalog.cpp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
-        input/App.Input.Mapping.cpp
-        input/App.Input.Replay.cpp
 
         platform/glfw/App.Platform.Glfw.include.hpp
         platform/glfw/App.Platform.Glfw.cpp
@@ -67,19 +60,18 @@ target_sources(EngineApp
         player/App.Player.cpp
         player/App.Player.Graph.cpp
 
-        window/App.Window.Handle.cpp
-        window/App.Window.Monitor.cpp
-
         renderer/App.Renderer.cpp
+        renderer/App.Renderer.Types.cpp
+        renderer/App.Renderer.TrianglePass.cpp
 
-        viewport/App.Viewport.cpp
-        viewport/App.ViewportClient.cpp
-
-        service/App.Service.UI.cpp
+        scene/App.Scene.Camera.cpp
+        scene/App.Scene.Camera.Controller.cpp
 
         ui/App.UI.ImGui.cpp
 
-        App.TemplateInstantiations.cpp
+        window/App.Window.Handle.cpp
+        window/App.Window.Monitor.cpp
+        window/App.Window.Viewport.cpp
 )
 
 setup_ppr_project(EngineApp

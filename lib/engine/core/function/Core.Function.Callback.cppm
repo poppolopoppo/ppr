@@ -11,25 +11,73 @@ import std;
 
 export namespace pP {
     // ------------------------------------------------------------------
+    // function callback with an optional unique subscriber
+    // ------------------------------------------------------------------
+
+    template<details::TFunction FunctionT>
+    class Delegate final {
+    public:
+        using Subscriber = std23::function_ref<FunctionT>;
+        using FunctionTraits = details::FunctionTraits<FunctionT>;
+
+        std::optional<Subscriber> m_subscriber{};
+
+        Delegate() noexcept = default;
+
+        explicit Delegate(Subscriber subscriber) noexcept
+            : m_subscriber(std::move(subscriber)) {
+        }
+
+        std::optional<Subscriber> subscribe(Subscriber new_subscriber) noexcept {
+            return std::exchange(m_subscriber, std::move(new_subscriber));
+        }
+
+        template<auto F, typename T>
+        std::optional<Subscriber> subscribe(T *obj) noexcept {
+            return subscribe(Subscriber{std23::nontype<F>, obj});
+        }
+
+        template<auto F, typename T>
+        std::optional<Subscriber> subscribe(T &&obj) noexcept {
+            return subscribe(Subscriber{std23::nontype<F>, std::forward<T>(obj)});
+        }
+
+        template<typename... ArgsT>
+        FunctionTraits::return_type operator()(ArgsT&&... args) const
+            noexcept(FunctionTraits::is_noexcept_v) {
+            if (m_subscriber.has_value()) {
+                return (*m_subscriber)(std::forward<ArgsT>(args)...);
+            }
+            if constexpr (not std::is_void_v<typename FunctionTraits::return_type>) {
+                return default_value_v;
+            }
+        }
+
+        void reset() {
+            m_subscriber.reset();
+        }
+    };
+
+    // ------------------------------------------------------------------
     // function callback with multiple subscribers
     // ------------------------------------------------------------------
 
     template<
         details::TFunctionReturning<std::error_code> FunctionT,
         mem::details::TAllocator AllocatorT = mem::GPA>
-    class Callback final {
+    class BroadcastCallback final {
     public:
         using Event = std23::function_ref<FunctionT>;
 
         class [[nodiscard]] Handle final {
-            const Callback *m_callback{nullptr};
+            const BroadcastCallback *m_callback{nullptr};
             SparseKeyId m_event_key{};
             std::shared_ptr<std::atomic<bool> > m_alive{};
 
         public:
             constexpr Handle() = default;
 
-            Handle(const Callback &callback, const SparseKeyId &event_key) noexcept
+            Handle(const BroadcastCallback &callback PPR_LIFETIME_BOUND, const SparseKeyId &event_key) noexcept
                 : m_callback(std::addressof(callback)), m_event_key(event_key), m_alive(callback.m_alive) {
             }
 
@@ -78,35 +126,39 @@ export namespace pP {
             }
         };
 
-        Callback() noexcept
+        BroadcastCallback() noexcept
             requires std::is_default_constructible_v<AllocatorT>
         = default;
 
-        explicit Callback(const AllocatorT &alloc) noexcept
-            : m_events(alloc) {
+        explicit BroadcastCallback(const AllocatorT &alloc) noexcept
+            : m_subscribers(alloc) {
         }
 
-        explicit Callback(AllocatorT &&alloc) noexcept
-            : m_events(std::forward<AllocatorT>(alloc)) {
+        explicit BroadcastCallback(AllocatorT &&alloc) noexcept
+            : m_subscribers(std::forward<AllocatorT>(alloc)) {
         }
 
-        ~Callback() noexcept {
+        ~BroadcastCallback() noexcept {
             if (m_alive) {
                 m_alive->store(false, std::memory_order_release);
             }
         }
 
+        [[nodiscard]] bool isEmpty() const noexcept {
+            return m_subscribers.isEmpty();
+        }
+
         [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
-            const SparseKeyId event_key = m_events.add(std::forward<Event>(event));
+            const SparseKeyId event_key = m_subscribers.add(std::forward<Event>(event));
             return Handle(*this, event_key);
         }
 
         [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
-            return m_events.erase(event_key);
+            return m_subscribers.erase(event_key);
         }
 
         void clear() noexcept {
-            m_events.clear();
+            m_subscribers.clear();
         }
 
         template<typename... ArgsT>
@@ -116,7 +168,7 @@ export namespace pP {
             }
         [[nodiscard]] std::error_code operator()(ArgsT &&... args)
             noexcept(noexcept(std::declval<const Event &>()(std::forward<ArgsT>(args)...))) {
-            for (const Event &event: m_events) {
+            for (const Event &event: m_subscribers) {
                 if (const std::error_code err = event(std::forward<ArgsT>(args)...)) [[unlikely]] {
                     return err;
                 }
@@ -131,7 +183,7 @@ export namespace pP {
         // and removing subscribers but not triggering the callback itself.
         // The remove() call during operator()() iteration is unsafe (iterator
         // invalidation) and callers must defer removals outside the dispatch loop.
-        mutable SparseVectorInplace<Event, AllocatorT> m_events;
+        mutable SparseVectorInplace<Event, AllocatorT> m_subscribers{};
         // Shared liveness flag: the Callback holds one reference and each Handle
         // holds another. When the Callback is destroyed, it sets the flag to
         // false; the flag's storage outlives the Callback because Handles still
@@ -181,12 +233,12 @@ export namespace pP {
         using params_type = typename function_traits::params_type;
 #endif
 
-        Callback<FunctionT, AllocatorT> m_callback{};
+        BroadcastCallback<FunctionT, AllocatorT> m_callback{};
         std::optional<params_type> m_deferred_params{};
 
     public:
-        using Event = Callback<FunctionT, AllocatorT>::Event;
-        using Handle = Callback<FunctionT, AllocatorT>::Handle;
+        using Event = BroadcastCallback<FunctionT, AllocatorT>::Event;
+        using Handle = BroadcastCallback<FunctionT, AllocatorT>::Handle;
 
         CallbackSink() noexcept
             requires std::is_default_constructible_v<AllocatorT>
@@ -212,7 +264,7 @@ export namespace pP {
             m_callback.clear();
         }
 
-        [[nodiscard]] std::error_code sink() noexcept(function_traits::is_noexcept) {
+        [[nodiscard]] std::error_code sink() noexcept(function_traits::is_noexcept_v) {
             if (m_deferred_params) {
                 return std::apply(m_callback, std::exchange(m_deferred_params, std::nullopt).value());
             }

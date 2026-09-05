@@ -12,15 +12,16 @@ import :player_service;
 import :player_graph;
 import :shader;
 import :viewport;
+import :render_view;
 import :pixel_readback;
 import :camera;
 import :quaternion;
 import :input_listener;
 import :filtered_analog;
-import :viewport_client;
+import :zerov_probe;
 
 export namespace pP::tests {
-    PPR_UNIT_TEST(app) {
+    PPR_UNIT_TEST (app){
         _.recurse({
             app_devices,
             app_player,
@@ -30,12 +31,14 @@ export namespace pP::tests {
             app_player_graph,
             app_shader,
             app_viewport,
+            app_render_view,
             app_pixel_readback,
             app_camera,
             app_quaternion,
             app_input_listener,
             app_filtered_analog,
-            app_viewport_client,
+            app_zerov_probe,
         });
+
     };
 }

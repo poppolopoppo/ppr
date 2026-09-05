@@ -71,34 +71,11 @@ export namespace pP::rhi {
     using slang_rhi::DeviceLimits;
     using slang_rhi::DeviceType;
 
-    enum class EProjectionConvention {
-        D3D,
-        VK,
-    };
-
-    [[nodiscard]] constexpr EProjectionConvention projectionConventionFromDeviceType(
-        const DeviceType type) noexcept {
-        switch (type) {
-            case DeviceType::D3D11:
-            case DeviceType::D3D12:
-            case DeviceType::Default:
-                return EProjectionConvention::D3D;
-            case DeviceType::Vulkan:
-            case DeviceType::Metal:
-            case DeviceType::WGPU:
-                return EProjectionConvention::VK;
-            default:
-                return EProjectionConvention::D3D;
-        }
-    }
-
     [[nodiscard]] float4x4 getOrthoMatrix(
-        const DeviceType type,
         const float width,
         const float height) noexcept;
 
     [[nodiscard]] float4x4 getPerspectiveMatrix(
-        const DeviceType type,
         const float fov,
         const float aspect,
         const float near_,
