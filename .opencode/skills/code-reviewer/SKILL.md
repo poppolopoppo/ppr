@@ -16,11 +16,11 @@ description: >
 
 Analyze unstaged and staged changes in tracked files, then produce a
 structured review organized by zone (engine core, game, tests, build)
-across nine dimensions.
+across ten dimensions.
 
 ## Contract
 
-This skill performs static code review across 9 dimensions of C++ quality
+This skill performs static code review across 10 dimensions of C++ quality
 and engine conventions. It does **not** edit code inline, auto-fix issues
 itself, or modify any files. Its output is a validated, reconciled report
 grouped by zone and severity. All findings undergo mandatory per-item
@@ -33,7 +33,9 @@ validated results. Remediation of any finding (human-found or IDE-found)
 happens exclusively through delegated subagents (`@fixer` for bounded edits,
 `@oracle` for false-positive adjudication); the review is not complete
 until every Error/Warning on changed files is either fixed or
-oracle-approved-suppressed.
+oracle-approved-suppressed. Reviewers may additionally receive
+orchestrator-derived *named suspects* as verification hints (see the Named
+Suspects Protocol in Step 3) — they are inputs, never findings.
 
 ## Subagent routing
 
@@ -42,7 +44,7 @@ oracle-approved-suppressed.
 | Diff context retrieval (`git diff HEAD`, `git diff --cached`, `git log`) | `@explorer` | Isolated read-only shell; keeps main lane free |
 | Changed-file enumeration | `@explorer` | `clion_git_status` + `clion_get_repositories` for project-aware listing |
 | Zone classification of changed files | orchestrator | Cheap; needs the full diff context |
-| Dimension reviews (Step 3) | 4 background `oracle` subagents (grouped: Language & Formatting [Dims 1–3], Memory & Cache [Dims 4–5], Concurrency & Safety [Dims 6–8], Correctness & Design [Dim 9]) | Parallelizable; each reviewer loads this skill and runs its assigned checklists; findings tagged by original dimension number |
+| Dimension reviews (Step 3) | 4 background `oracle` subagents (grouped: Language & Formatting [Dims 1–3], Memory & Cache [Dims 4–5], Concurrency & Safety [Dims 6–8], Correctness & Design [Dims 9–10]) | Parallelizable; each reviewer loads this skill and runs its assigned checklists; findings tagged by original dimension number |
 | IDE inspection sweep (Step 3.5) | orchestrator (main flow, `clion` MCP) | `clion_get_file_problems` per changed file; produces `[IDE]`-tagged findings |
 | Per-finding validation (Step 4) | background `oracle` subagent per finding | Mandatory parallel fact-check against actual source; `[IDE]` findings exempt |
 | Fix application | `@fixer` | Bounded edits via `clion_apply_patch` / `clion_create_new_file` |
@@ -143,18 +145,33 @@ until empirical data from 50+ PRs motivates them.
 
 | Zone | Path | Review depth |
 |------|------|-------------|
-| Engine code | `lib/*` | Full — all 9 dimensions |
-| Game code | `game/*` | Full — all 9 dimensions |
-| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 4, 8, 9 |
+| Engine code | `lib/*` | Full — all 10 dimensions |
+| Game code | `game/*` | Full — all 10 dimensions |
+| Tests | `*Tests*`, `*test*`, `*Test*` | Subset: 1, 4, 8, 9, 10 |
 | Build system | `CMakeLists.txt`, `cmake/*.cmake` | Build correctness only |
 | Third-party wrappers | `cmake/external/*.cmake` | Minimal — version pin, no engine patches |
 | Config / docs | `*.md`, `*.json`, `.gitignore` | Skip |
 
 ---
 
-### Step 3 — Review across all 9 dimensions
+### Step 3 — Review across all 10 dimensions
 
 For each file in the diff, apply the relevant checklists below.
+
+**Named Suspects Protocol (optional).** During recon (Steps 1–2) the
+orchestrator MAY derive up to 12 named suspects from diff hunks, symbol
+cross-references, and hand analysis of the structured envelope. Suspect
+derivation is an orchestrator responsibility — `@explorer` returns evidence
+only and never produces suspects. Each suspect specifies: id (`S<n>`), target
+dimension(s), `file:symbol` or `file:line`, and a one-line hypothesis.
+Suspects are attached under `SUSPECTS` to the matching reviewer prompt;
+reviewers treat them as hints to verify, returning one verdict per suspect:
+`Confirmed` (file:line + snippet) / `Refuted` (evidence) / `Cannot determine`.
+A Confirmed suspect becomes a finding and follows the normal pipeline —
+Step 4 fact-check still applies (no bypass). Refuted suspects are dropped.
+`Cannot determine`: the orchestrator assigns a finding ID and re-dispatches
+it as a single-finding Step 4 batch. Unverified suspects never appear in the
+report as findings.
 
 **Evidence tooling:** reviewers cite via CLion MCP index-backed tools rather
 than raw grep/read — this directly attacks the documented wrong-line-number
@@ -375,6 +392,28 @@ See also: AGENTS.md §Function Design Principles.
   window callbacks) stay thin delegators
 - Ad-hoc data structures maintained manually across sibling functions are
   flagged for encapsulation
+
+### Dimension 10 — Math & shader conventions
+
+See also: AGENTS.md §Matrix Layout Conventions (authoritative handedness,
+coordinate-system, and projection values, including shader session setup).
+Do not hardcode convention values here; the orchestrator injects the current
+AGENTS.md section text into reviewer prompts at runtime.
+
+- Coordinate/handedness conventions hold at every boundary: world → view →
+  NDC → framebuffer mappings agree with the documented source of truth across
+  host math, GPU uploads, shader evaluation, and readback paths
+- Matrix representation matches the documented storage/interpretation:
+  session-level matrix layout mode, vector–matrix multiply order, translation
+  placement, view–projection composition order, untransposed uploads, no
+  undocumented backend-specific projections or axis flips
+- Host↔shader data contracts: constant-buffer layouts match host structs
+  (`static_assert` on size/alignment), binding slots consistent, GPU upload
+  caches invalidate on any input change (identity/version discipline)
+- Doc↔code consistency: if convention documentation changed in the same
+  diff, validate the *new* doc against the *new* code (circularity risk)
+- Tests: convention assertions pin documented behavior (coordinate
+  directions, depth range, NDC mapping)
 
 ---
 

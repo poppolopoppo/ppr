@@ -611,6 +611,7 @@ http-client.private.env.json
 .opencode/plans/
 .opencodec/
 .slim/
+.slim/deepwork/
 
 # ImGui runtime state
 imgui.ini

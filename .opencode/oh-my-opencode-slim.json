@@ -1,5 +1,6 @@
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  "preset": "openai",
   "companion": {
     "enabled": true,
     "position": "bottom-right",
@@ -8,5 +9,1213 @@
     "loopStyle": "smooth",
     "speed": 1,
     "debug": false
+  },
+  "presets": {
+    "openai": {
+      "orchestrator": {
+        "model": "openai/gpt-5.6-terra",
+        "variant": "medium",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.6-sol",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "librarian": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "low",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "openai/gpt-5.6-luna",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "designer": {
+        "model": "openai/gpt-5.6-terra",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "openai/gpt-5.6-terra",
+        "variant": "medium",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openai/gpt-5.6-sol",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "openai-fast": {
+      "orchestrator": {
+        "model": "openai/gpt-5.6-terra-fast",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.6-sol-fast",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "librarian": {
+        "model": "openai/gpt-5.6-luna-fast",
+        "variant": "low",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "openai/gpt-5.6-luna-fast",
+        "variant": "low",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "designer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "variant": "medium",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openai/gpt-5.6-fast",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "opencode-zen-free": {
+      "orchestrator": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.2,
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/ling-3.0-flash-fin-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.2,
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.2,
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "opencode-go": {
+      "orchestrator": {
+        "model": "opencode/minimax-m3",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/kimi-k2.7-code",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "ppr-free": {
+      "orchestrator": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "temperature": 0.2,
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.2,
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "openrouter-free": {
+      "orchestrator": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "temperature": 0.2,
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3,
+        "variant": "medium",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.2,
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "ppr-pro": {
+      "orchestrator": {
+        "model": "opencode/minimax-m3",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/kimi-k2.7-code",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/minimax-m3",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "ppr-paid": {
+      "orchestrator": {
+        "model": "opencode/minimax-m3",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "designer": {
+        "model": "opencode/kimi-k2.7-code",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/minimax-m3",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "openai-hybrid-fast": {
+      "orchestrator": {
+        "model": "openai/gpt-5.6-terra-fast",
+        "variant": "medium",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.6-sol-fast",
+        "variant": "high",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/gemini-3.7-flash",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "designer": {
+        "model": "opencode/kimi-k2.7-code",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "openai/gpt-5.4-fast",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openai/gpt-5.6-sol-fast",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "opencode-go-power": {
+      "orchestrator": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/minimax-m3",
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/gemini-3.7-flash",
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "designer": {
+        "model": "opencode/kimi-k2.7-code",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/deepseek-v4-flash",
+        "variant": "high",
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/qwen3.6-plus",
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "zen-router-free": {
+      "orchestrator": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "simplify",
+          "code-reviewer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "crawl4ai"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/nemotron-3-ultra-free",
+        "temperature": 0.2,
+        "skills": [
+          "git-log-fast-navigation"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "designer": {
+        "model": "openrouter/z-ai/glm-5.2:free",
+        "temperature": 0.3,
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [
+          "build-system",
+          "clion-tools",
+          "module-architect",
+          "unit-test-updater",
+          "validation",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "crawl4ai"
+        ]
+      },
+      "observer": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.2,
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "temperature": 0.4,
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    }
+  },
+  "council": {
+    "default_preset": "free",
+    "timeout": 180000,
+    "councillor_execution_mode": "parallel",
+    "councillor_retries": 3,
+    "presets": {
+      "diverse": {
+        "alpha": {
+          "model": "opencode/qwen3.6-plus",
+          "variant": "max",
+          "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
+        },
+        "beta": {
+          "model": "opencode/deepseek-v4-flash",
+          "variant": "high",
+          "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
+        },
+        "gamma": {
+          "model": "opencode/kimi-k2.7-code",
+          "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
+        },
+        "delta": {
+          "model": "opencode/mimo-v2.5-free",
+          "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
+        }
+      },
+      "free": {
+        "alpha": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "max",
+          "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
+        },
+        "beta": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "max",
+          "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
+        },
+        "gamma": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "max",
+          "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
+        },
+        "delta": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "max",
+          "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
+        }
+      },
+      "mixed": {
+        "alpha": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "max",
+          "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
+        },
+        "beta": {
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "variant": "high",
+          "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
+        },
+        "gamma": {
+          "model": "opencode/nemotron-3-ultra-free",
+          "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
+        },
+        "delta": {
+          "model": "opencode/mimo-v2.5-free",
+          "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
+        }
+      },
+      "fast": {
+        "alpha": {
+          "model": "opencode/deepseek-v4-flash",
+          "variant": "high"
+        },
+        "beta": {
+          "model": "opencode/kimi-k2.7-code"
+        }
+      }
+    }
   }
 }
