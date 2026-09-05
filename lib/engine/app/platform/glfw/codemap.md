@@ -17,7 +17,7 @@ The `engine.app:platform.glfw` module provides the GLFW implementation of the `I
 2. `Application::initialize()` → `m_platform->initialize(*this)` → GlfwPlatform initializes GLFW, creates `GlfwWindow::get()` (enumerates monitors), creates `GlfwInput::get()`, creates `GlfwPlayer::get()` (ties to GlfwInput), inserts all into `app.getServices()`
 3. Per-frame: `Application::update()` → `m_cached_window_service->pollEvents()` → `glfwPollEvents()` → GLFW callbacks fire → `GlfwInput::onKey/onMouseButton/onCursorPos/onScroll` → update hot state → `postInputMessages(dt)` → routes through player graph → delivers to `InputListener`s
 4. Gamepad hot-plug: `GlfwInput::pollGamepads_()` detects `glfwJoystickPresent()` changes → connects/disconnects gamepad → creates/removes player via `GlfwPlayer`
-5. `Application::render()` → `m_renderer->render(viewports)` → submits multi-viewport frame (scene + UI)
+5. `Application::render()` → `m_renderer.renderAndPresent(handle, submissions)` → submits scene + UI DrawSubmissions and presents
 6. `Application::shutdown()` → `m_platform->shutdown(*this)` → GlfwPlatform shuts down window/input/player, terminates GLFW
 
 ## Integration

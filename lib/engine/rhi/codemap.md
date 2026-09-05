@@ -1,17 +1,35 @@
 # lib/engine/rhi/
 
 ## Responsibility
-engine.rhi wraps Slang-RHI into `namespace pP::rhi`, providing core GPU types (IDevice, IAdapter, IBuffer, ICommandBuffer/Queue, IRenderPipeline, IComputePipeline, IShaderProgram, ITexture, ISurface, IFence, IHeap, IInputLayout), projection convention utilities (`EProjectionConvention`, `projectionConventionFromDeviceType`, `getOrthoMatrix`, `getPerspectiveMatrix`), and an `IRhiService` singleton interface for RHI lifecycle management (initialize/shutdown/getDevice). It translates Slang Result enums to `std::error_code` with a custom error category, and configures shader compilation targets (`SLANG_DXBC`/`SLANG_SPIRV`/`SLANG_METAL`) for the selected device type. The row-major matrix layout is enforced at the Slang session level for maximum portability across D3D, Vulkan, Metal, and OpenGL.
+
+`engine.rhi` wraps Slang-RHI into `namespace pP::rhi`, providing GPU interfaces, resource descriptors, render-pass
+types, surface management, error translation, and the `IRhiService` lifecycle interface.
 
 ## Design
-Core types are Slang-RHI forward-declared aliases (`using slang_rhi::IDevice`, etc.) within `pP::rhi`. `EProjectionConvention` distinguishes D3D-style Z-range (far behind near) from Vulkan-style (far in front of near); `projectionConventionFromDeviceType` maps `DeviceType::D3D11/12/Default` → D3VK and `Vulkan/Metal/WGPU` → VK convention. `getOrthoMatrix` and `getPerspectiveMatrix` are free functions that switch on the convention to produce the correct matrix layout (`orthoD3D`/`orthoVK`, `perspectiveVK` vs manual D3D setup). `IRhiService` is an `IService`-derived singleton with `initialize(device_type, global_session)`, `shutdown`, `getDevice`, and `createRenderPipeline`. `SlangRhiService` implements this interface, creating a Slang global RHI, a device with debug-layer options when enabled, and configuring the `IShaderService` target format. Error categories map Slang codes to `std::errc` equivalents (e.g. `SLANG_E_OUT_OF_MEMORY` → `std::errc::not_enough_memory`).
+
+- Core types include `IDevice`, `IAdapter`, `IBuffer`, `ICommandBuffer`, `ICommandQueue`, `IRenderPipeline`,
+  `IShaderProgram`, `ITexture`, `ISurface`, `IFence`, `IHeap`, and `IInputLayout`.
+- `IRhiService` is an `IService`-derived singleton that initializes the device, exposes it to the application, creates
+  render pipelines, and shuts down the RHI.
+- Projection helpers produce the common engine convention: Mango-native left-handed view space, row-major row-vector
+  matrices, and [0,1] depth. There is no backend-specific camera-projection dispatch.
+- Slang compilation uses the row-major session layout; D3D, Vulkan, Metal, and WGPU consume the same untransposed camera
+  matrices.
 
 ## Flow
-RHI initialization flows: `IRhiService::get()` → `SlangRhiService::initialize(device_type, global_session)` → creates `slang_rhi::getRHI()` → creates device with desc (required features, debug callback) → configures `IShaderService::setTargetFormat` for the compile target → device is stored and exposed via `getDevice()`. Render pipeline creation calls `SlangRhiService::createRenderPipeline(desc, outPipeline)` → `m_device->createRenderPipeline()`. Shader compilation uses `IShaderService` (in `engine.shader`) to load modules from file/source, with the session already configured for row-major matrices. The debug callback (`SlangRhiDebugCallback`) forwards Slang messages to the engine logger. Shutdown nulls the device and calls `slang_rhi::destroyRHI()`.
+
+`IRhiService::get()` → initialize device and shared shader session → create surfaces/pipelines → `Renderer` submits
+`DrawSubmission` spans (`renderAndPresent`/`submitToTexture`) → shutdown releases device and RHI resources.
 
 ## Integration
-Consumers: `engine.shader` uses `IShaderService` (via `IShaderService::get()->setTargetFormat` and `loadModuleFromFile/Source`) and `IGlobalSession`/`ISession` for compilation; `engine.app` uses `IRhiService` for device/lifecycle and `IWindowService`/`IInputService` via the platform layer. Depends on `engine.core` for `safe_ptr`, `IService`, error-code patterns; `engine.math` for projection matrix helpers; Slang-RHI SDK headers (`<slang.h>`, `<slang-rhi.h>`). The `IRhiService` is typically obtained via `pP::rhi::IRhiService::get()` in the application entry point (`game/main.cpp`).
+
+- **Consumers**: `engine.shader` for shader target/session setup and `engine.app` for device lifecycle, surfaces,
+  pipelines, and render submission.
+- **Depends on**: `engine.core`, `engine.math`, Slang-RHI SDK headers, and the platform window layer through application
+  services.
+- **Provides**: RHI interfaces, descriptors, common projection helpers, error categories, and `IRhiService`.
 
 ## Key Files
-- `RHI.cppm` — interface export of `namespace pP::rhi` with type aliases, `EProjectionConvention`, `projectionConventionFromDeviceType`, `getOrthoMatrix`, `getPerspectiveMatrix`, `IRhiService` interface
-- `RHI.cpp` — implementation of `IRhiService` (`SlangRhiService`), error categories, projection matrix free functions, debug callback
+
+- `RHI.cppm` — exported RHI types, descriptors, projection helpers, and service interface.
+- `RHI.cpp` — service implementation, device lifecycle, error translation, and projection helper definitions.

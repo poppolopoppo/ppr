@@ -27,7 +27,7 @@ The `engine.app:ui` module provides the user interface layer built on top of ImG
    - Sets DeltaTime from dt
    - Routes keyboard chars, mouse position, wheel, and modifier keys into ImGui IO
    - Calls `ImGui::NewFrame()`
-3. Per-frame `Application::render()` → `m_renderer->render(viewports)` includes `ui_entry` with `ui_draw` lambda:
+3. Per-frame `Application::render()` → `m_renderer.renderAndPresent(handle, {scene, ui})` with `ui_draws` DrawSubmission as second entry:
    - Calls `m_ui_service->renderOverlay(pass, fb_size)`
    - ImGui::Render() → passes render state → draws indexed primitives with vertex buffers
 4. `Application::shutdown()` → `m_ui_service->shutdown()`:
