@@ -1,404 +1,171 @@
 ---
 name: git-push-planner
 description: >
-  Pre-flight review skill that runs before pushing local unpushed commits.
-  Inspects the commits about to be sent to the remote, identifies redundant or
-  similar commits that should be squashed, validates each commit message against
-  PPR and GitHub conventions, and produces a pre-push validation checklist.
-  Use this skill whenever the user is about to push, says "let me push",
-  "should I push", "review my commits before pushing", "clean up my history
-  before push", or any variant of preparing to send local commits upstream.
+  Pre-flight review skill that inspects local unpushed commits, identifies
+  safe history-cleanup opportunities, validates commit messages, and produces
+  a user-invoked pre-push plan. Use when the user is preparing to push or
+  wants to review, clean up, or validate unpushed history.
 ---
 
 # Git Push Planner
 
-Run this skill whenever local commits are about to be sent to a remote repository.
-It inspects the unpushed commits, proposes a squash plan to clean up redundant or
-duplicate changes, validates commit message quality, and produces a pre-push
-validation checklist grounded in GitHub best practices.
+Run this skill before sending local commits to a remote. It works only on
+already-committed history; `git-commit-planner` separately plans commits from
+uncommitted changes.
 
-This skill is the **push-time counterpart** to `git-commit-planner` (which plans
-how to *create* commits from uncommitted changes). This skill works on
-**already-committed** history.
-
-For interactive history browsing, load the `git-log-fast-navigation` skill —
-its `lg` and `flog` aliases make scanning unpushed history faster than
-`git log`. For full-project compile verification across all build
-configurations, load the `validation` skill after the push plan is finalized.
+For interactive history browsing, load `git-log-fast-navigation`. For full
+project verification after history is finalized, load `validation`.
 
 ## Contract
 
-Pre-flight push analysis of unpushed commits. The orchestrator drives it;
-git state queries are delegated to `@explorer`, squash-pattern and
-message/secret validation to `@oracle`/`code-reviewer`. The skill never
-rewrites local or remote history. Its output is a proposed squash/rebase
-plan, revised commit messages, a pre-push validation checklist, and a
-machine-readable artifact (`.slim/push-plan.json`) that an executor agent
-can replay. The user retains the final `git push` invocation as the
-irreversible trust boundary.
+This is a pre-flight history-analysis skill, not a code-review or commit-plan
+replay workflow. It never runs `git rebase`, `git reset`, `git commit`, or
+`git push`. The user alone invokes any history rewrite and the final push.
 
-## Contract (hard rule)
+The current push plan is written to `.slim/push-plan.json` only when a history
+change is proposed. It records the reviewed unpushed history as its
+`pre_execution_snapshot`; if fresh history differs, the current plan is stale
+and must be regenerated. The artifact describes push-time actions only. It does
+not contain, invoke, or replay `.slim/commit-plan.json` payloads.
 
-This skill does **NOT** perform code review. Code is presumed already-reviewed
-by the time commits are pushed. Validation is limited to:
-- working-tree clean / branch-up-to-date gates
-- commit-message format (subject + body shape only)
-- secret-pattern scan in unpushed diffs
-- pre-push checklist (build, tests, push dry-run)
+Validation is limited to:
 
-If the user asks for code review, route to `code-reviewer` instead.
+- branch, upstream, conflict, and working-tree gates;
+- history cleanup and ordering judgment;
+- commit-message conformance;
+- secret-pattern scanning of unpushed diffs; and
+- a user-facing pre-push checklist.
 
-## Tools: prefer CLion MCP for git state queries
+Route requests for code review to `code-reviewer` instead.
 
-CLion MCP (`clion_git_status`, `clion_get_repositories`) is index-backed and
-runs in the orchestrator's main lane — no subagent round-trip, no separate
-model context, no per-call cost beyond a single C++ tool invocation. Prefer
-it over spawning `@explorer` for all read-only git state queries
-(file enumeration, branch state, dirty tree flags, changed-file lists).
-Fall back to direct `bash` (`git rev-parse`, `git log --oneline`,
-`git diff --stat`) for full commit content. Fall back to `@explorer` only
-when the work is genuinely `rg`/regex over a multi-megabyte stream
-(secret scan in unpushed diffs).
+## Canonical commit-message convention
 
-## Subagent routing
+Validate subjects, bodies, and trailers against the single canonical source:
+[`../git-commit-planner/references/commit-message-convention.md`](../git-commit-planner/references/commit-message-convention.md).
+Do not duplicate or reinterpret that convention here.
 
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Repo + unpushed-commit enumeration | orchestrator (in-context, CLion MCP) | `clion_git_status` + direct `bash` for `git log @{u}..HEAD --oneline` |
-| Secret-pattern scan (`rg` over `git log -p`) | `@explorer` (background, gated) | Pattern-scan is the only step that genuinely needs `rg` on a stream |
-| Squash-pattern detection + dependency ordering | `@oracle` (background) | Judgment on commit history shape |
-| Aggregate + emit plan + artifact | orchestrator | Default orchestrator behavior |
+## Routing
 
-## OMO feature wiring
+| Step | Owner | Responsibility |
+|------|-------|----------------|
+| Repository and unpushed-history enumeration | Orchestrator | CLion Git state plus Git history commands |
+| Secret-pattern scan | `@explorer` background task | Scan unpushed diffs only |
+| Cleanup and dependency-order judgment | `@oracle` background task | Decide whether commits remain independent, squash, drop, or reword |
+| Message validation and current-plan presentation | Orchestrator | Apply the canonical convention and emit the plan |
 
-- **Per-agent `skills`/`mcps` allow-lists** — no skill grants beyond the
-  query subagents already have. `@oracle` keeps `skills: []`. `@explorer`
-  keeps `skills: []`. No `code-reviewer` grant.
-- **Background orchestration** — launch `@explorer` (secret scan via
-  `git log -p @{u}..HEAD | rg ...`) and `@oracle` (squash-pattern detection)
-  as parallel background tasks; the orchestrator runs commit-message format
-  validation inline (it's mechanical — 7-row table). CLion MCP + direct
-  `bash` happen inline in the orchestrator. Reconcile on the Background
-  Job Board before Step 4.
-- **Session reuse** — between commit-planner and push-planner in the same
-  session, the orchestrator's most recent `clion_git_status` call answers
-  the dirty-tree gate (Step 1). Push-planner does not need a fresh
-  enumeration call if the user committed exactly what commit-planner
-  produced; it only fetches `git log @{u}..HEAD --stat` and verifies the
-  expected commit hash set. The `.slim/push-plan.json`
-  `pre_execution_snapshot` provides a machine-readable invalidation check:
-  if a fresh `git log @{u}..HEAD --format='%H %s'` differs from the
-  artifact's `pre_execution_snapshot`, the plan is stale and must be
-  regenerated.
-- **`orchestratorPrompt` routing** — trigger on "review my commits before
-  pushing", "should I push", "clean up my history before push", "pre-push
-  check", "push planner". Do NOT trigger on standalone "push", "send it",
-  or "deploy" without context about commits/history/review.
+## 1. Establish the push range and gates
 
----
+Determine the range of local commits not present on the tracked upstream. Use
+`@{u}..HEAD` when an upstream exists; otherwise compare against the selected
+base branch and identify that this is a first push.
 
-## Step 1 — Identify the commits about to be pushed
-
-Determine which commits exist locally but not yet on the remote counterpart.
-Run all three commands; each surfaces different information:
-
-```bash
-# The unpushed commits (replace <branch> with actual branch name)
-git log --oneline --decorate --graph --cherry-pick origin/main
-# or, if on a feature branch tracking a remote:
+```powershell
+git status --short --branch
 git log --oneline --decorate --graph @{u}..HEAD
-# or, to compare against the default branch:
-git log --oneline --decorate --graph origin/main..HEAD
-```
-
-```bash
-# Confirm what `git push` would do (dry run — safe, no network write)
+git log --stat --oneline @{u}..HEAD
 git push --dry-run
-# If the branch has no upstream yet:
-git push --dry-run --set-upstream origin <branch>
 ```
 
-```bash
-# Stat summary of each unpushed commit (file counts, line deltas)
-git log --stat --oneline origin/main..HEAD
+Stop and report when there are merge conflicts, detached HEAD, no applicable
+commits, or the branch is behind its upstream. A dirty tree does not prevent Git
+from pushing existing commits, but it blocks a proposed history rewrite: the
+user must commit or stash it before invoking any rebase command.
+
+Capture the exact unpushed history in `pre_execution_snapshot` before proposing
+changes. A new `/push` invocation always re-enumerates the range; do not reuse
+a commit planner's scope or snapshot.
+
+## 2. Judge cleanup opportunities
+
+Read the full diff of each commit in the push range and preserve independently
+buildable, reviewable commits whenever possible.
+
+| Pattern | Proposed action |
+|---------|-----------------|
+| Follow-up `fix build`, `typo`, `wip`, or debug commit | Squash into the commit it corrects |
+| Feature followed by its required source/CMake/test registration | Squash when they form one atomic feature |
+| Add, then repeated fixes to the same concern | Squash into the original addition |
+| A commit and its complete revert inside the range | Drop both when no later commit depends on them |
+| Independent dependency bump or broad formatting sweep | Keep separate |
+| Independent concerns in the same subsystem | Keep separate |
+
+When reordering is proposed, foundations must precede consumers. Never propose
+rewriting commits that are already public/shared without warning about
+coordination and a possible force-with-lease push.
+
+## 3. Validate surviving messages and secrets
+
+Validate only commits that survive the proposed cleanup against the canonical
+commit-message convention. Check subject length and shape, body separation and
+line wrapping, trailing whitespace, and required trailers. Do not apply
+Conventional Commit rules.
+
+Scan the full unpushed diff for likely credentials:
+
+```powershell
+git log -p @{u}..HEAD | rg -i '(api[_-]?key|secret|password|token|credential|bearer|private[_-]?key)' -C 1
 ```
 
-If `git status` shows a dirty working tree (uncommitted changes) or staged-but-
-not-committed changes, warn the user: those will **not** be pushed. They must
-either commit or stash them before pushing.
+If a result is an actual credential rather than code or documentation about a
+credential, stop: the user must remove and rotate it before pushing.
 
-If `git log` shows the local branch is **behind** the remote (unpulled commits
-exist upstream), advise the user to pull first (preferably with `--rebase`)
-before proceeding. Do not propose a push plan while behind.
+## 4. Present the user-invoked push plan
 
----
+Present a concise plan containing:
 
-## Step 2 — Analyze commit history for squashing opportunities
+1. the push range and `pre_execution_snapshot` freshness condition;
+2. ordered `pick`, `squash`, `drop`, and `reword` actions, with replacement
+   full messages where needed;
+3. the user command for an interactive rebase when the plan changes history;
+4. a statement that no rewrite is needed when every action is `pick`; and
+5. the pre-push checklist below.
 
-Read the **full diff** of each unpushed commit. Group commits by concern and
-identify candidates for consolidation.
+For a rewrite, provide the base commit immediately before the push range and
+the user-invoked command:
 
-### Squash triggers
-
-| Pattern | Action |
-|---|---|
-| "fix typo" / "fix build" / "oops" / "wip" / "debug" | Squash into the commit it corrects |
-| Multiple commits in the same component that build toward one feature | Squash into a single logical commit |
-| "update CMakeLists.txt" as a separate commit from the feature it adds | Squash into the feature commit |
-| Commit reverts or undoes a previous commit in the same push range | Delete both (they cancel out) |
-| Commit touches only comments/formatting and precedes/follows a logic commit in the same file | Squash into the logic commit |
-| "add X" then "fix X" then "fix X again" | Squash all three into "add X" |
-
-### When NOT to squash
-
-| Pattern | Reason |
-|---|---|
-| Each commit is independently buildable and passes tests | Preserve bisectability |
-| Commit introduces a feature; next commit adds a test for that feature | Tests go *with* the feature, not separate |
-| Commit is a dependency bump (CPM.cmake, vcpkg.json) | Own commit — isolates version changes |
-| Commit is a formatting/clang-format sweep across many files | Isolated commit, never mixed with logic |
-| Two commits touch the same subsystem but are logically independent | Keep separate for review granularity |
-
-### Dependency ordering check
-
-Before squashing, verify the dependency ordering rule (same as `git-commit-planner`):
-if commit B depends on a declaration introduced in commit A, A must appear before B.
-This is rarely violated in already-committed history, but verify it when proposing
-reorderings during rebase.
-
----
-
-## Step 3 — Review each commit message
-
-Validate the commits that will remain **after** the proposed squash plan.
-Cross-reference against PPR's own convention (from `git-commit-planner` skill) and
-GitHub best practices.
-
-### PPR commit message convention (from git-commit-planner)
-
-**Subject line** (≤ 72 characters):
-```
-<component>: <imperative-mood summary>
-```
-- **Component** — exact name as it appears in the codebase: `HAL`, `cmake`, `Core.Memory`,
-  `UnitTest`, `Macros.h`. Title Case for files/classes, lowercase for directories.
-- **Summary** — imperative mood ("add", "fix", "remove"), no capital first letter, no trailing period.
-- **No Conventional Commit type prefixes** (`feat:`, `fix:`, `refactor:`, `chore:`) —
-  the component is the only prefix. (PPR deviates from ConCom here.)
-
-**Body** (optional, wrap at 72 chars, blank line after subject):
-- 1–3 sentences answering: (1) Why? (2) What?
-- Skip boilerplate unless breaking.
-
-### GitHub best-practice validation
-
-For each commit, check these GitHub-recommended rules:
-
-| Rule | Check | Fail signal |
-|---|---|---|
-| **Imperative mood** | "If applied, this commit will _<subject>_" reads naturally | "Fixed" / "Added" / "Changed" |
-| **50-character subject** | Subject is ≤ 72 chars (PPR rule), ideally ≤ 50 for clean `git log --oneline` | Subject over 72 chars |
-| **Blank line after subject** | Body is separated by exactly one blank line | No blank line, or multiple blank lines |
-| **Body wrap at 72** | Each body line ≤ 72 chars | Lines exceeding 72 chars |
-| **No trailing whitespace** | Subject and body have no trailing spaces | `git log --check` would warn |
-| **No secret leakage** | Diff does not contain API keys, passwords, tokens | `rg` scan of diff for key patterns |
-| **Signoff (if required)** | `Signed-off-by:` trailer present if project uses DCO | Missing signoff when project requires it |
-
-> **Note on Conventional Commits:** GitHub's ecosystem tools (CHANGELOG generation,
-> semantically-release, PR auto-labeling) typically expect Conventional Commits
-> (`feat:`, `fix:`, etc.). PPR overrides this with its own `<component>:` convention.
-> This skill validates against **PPR's convention** as primary. If the project ever
-> adopts Conventional Commits, adapt accordingly.
-
-### Secret scanning
-
-Scan all unpushed diffs for common secret patterns:
-```bash
-# Quick scan for obvious secrets in unpushed commits
-git log -p origin/main..HEAD | rg -i '(api[_-]?key|secret|password|token|credential|bearer|private[_-]?key)' -C 1
-```
-If any hits appear in real credentials (not just variable names or code that
-*handles* secrets), flag and abort — do not push.
-
----
-
-## Step 4 — Produce the cleaned push plan
-
-Output the final plan: the exact `git rebase -i` todo list (or squash plan),
-the revised commit messages, and the pre-push validation checklist.
-
-### Output format
-
-#### A. Squash / rebase plan
-
-Present an interactive-rebase todo table. If no squashing is needed, state
-"No changes needed — history is clean."
-
-```markdown
-## Squash / Rebase Plan
-
-| Step | Command | New Commit Message |
-|------|---------|--------------------|
-| 1 | `pick <hash> <short-msg>` | *(unchanged)* |
-| 2 | `squash <hash> <short-msg>` | *(squashed into #1)* |
-| 3 | `pick <hash> <short-msg>` | `<component>: <new subject>` |
-```
-
-**Interactive rebase command to run:**
-```bash
+```powershell
 git rebase -i <base-hash>
 ```
-where `<base-hash>` is the commit just before the first unpushed commit
-(i.e., `origin/main`).
 
-> If the interactive shell does not support full-screen editors, use the
-> `execution_mode` from `.slim/push-plan.json`. The single mode is
-> `non-interactive-reset-commit`: `git reset --soft <base_hash>`, then
-> replay each surviving commit in dependency order using `git commit` or
-> `git commit --amend -F .git/COMMIT_EDITMSG` (the latter preserves
-> trailers like `Signed-off-by` and `Co-authored-by`). STASH WORKING TREE
-> FIRST if the tree is dirty — the user's uncommitted changes must be
-> preserved across the rebase or they will be lost in the `git reset --soft`.
+Do not describe `git reset --soft`, patch application, temporary indexes, or
+any commit-plan replay method as a push-plan action.
 
-#### B. Revised commit messages
+## 5. Emit or refresh the current push plan
 
-For each commit that survives the squash plan, output the full proposed message:
-```
-<component>: <subject>
+When the plan changes history, atomically replace `.slim/push-plan.json`; it is
+the current, user-invoked push plan and is not committed. Include the plan ID,
+the planned base, `pre_execution_snapshot`, the ordered action list, proposed
+messages, and checklist. The snapshot is a freshness guard for the reviewed
+push range, not a replay payload or rollback instruction.
 
-<body>
+Before the user invokes a proposed rebase, they must compare a fresh unpushed
+history enumeration with `pre_execution_snapshot`. If it differs, discard the
+current plan and run `/push` again. If no history change is needed, report that
+result without writing a push-plan artifact.
 
-<footers if any>
-```
+## Pre-push checklist
 
-#### C. Pre-push validation checklist
+| # | Check | User command or confirmation | Critical? |
+|---|-------|------------------------------|-----------|
+| 1 | Tree is clean before a planned rewrite | `git status --short` | Yes for rewrites |
+| 2 | Branch is current with upstream | Fetch, then confirm the intended push range | Yes |
+| 3 | Current plan snapshot still matches | Re-run the range enumeration | Yes for rewrites |
+| 4 | Surviving messages follow the canonical convention | Step 3 review | Yes |
+| 5 | No credentials appear in the push range | Step 3 scan | Yes |
+| 6 | Relevant build and tests pass | Run the applicable validation commands | Yes |
+| 7 | Dry-run succeeds | `git push --dry-run` | Yes |
+| 8 | Branch protections and merge strategy are understood | Confirm repository requirements | Conditional |
 
-Before running `git push`, the user must confirm these checks pass:
+Adapt validation commands to the affected platform and targets. Use the
+`validation` skill when a full project validation pass is required.
 
-| # | Check | Command | Critical? |
-|---|-------|---------|-----------|
-| 1 | Working tree is clean | `git status --short` | Yes — dirty tree blocks push of intended changes |
-| 2 | Local branch is up-to-date with remote | `git fetch && git log --oneline origin/main..HEAD \| wc -l` matches expectation | Yes — behind means need to pull first |
-| 3 | Commit messages pass review | *(from Step 3)* | Yes |
-| 4 | No secrets in diff | *(from Step 3 secret scan)* | Yes — abort if any found |
-| 5 | Build succeeds | `cmake --build --preset msvc-dev --target EngineCore` | Yes |
-| 6 | Core tests pass | `cmake --build --preset msvc-dev --target EngineCoreTests && ctest --preset msvc-dev` | Yes |
-| 7 | App tests pass (if app code changed) | `cmake --build --preset msvc-dev --target EngineAppTests && ctest --preset msvc-dev` | Conditional |
-| 8 | ASAN clean (debug builds) | Run tests with ASAN enabled; watch for heap-use-after-free, leaks | Yes — debug builds have ASAN auto-enabled via PPR_ENABLE_DEVELOPER_MODE |
-| 9 | Dry-run push succeeds | `git push --dry-run` | Yes |
-| 10 | Branch protection rules satisfied | Verify: required status checks, required reviews, signed commits, linear history (if enforced) | Conditional — check repo settings |
-| 11 | Merge strategy confirmed | Squash & merge vs. rebase & merge vs. merge commit — confirm which the repo default is | Conditional |
+## Edge cases
 
-> Adapt check #5–#8 to the appropriate preset for your platform
-> (`msvc-dev`, `clang-cl-dev`, `clang-dev`, `gcc-dev`). See the `build-system`
-> skill for preset details. For full-project validation across **all** build
-> configs, load the `validation` skill after the squash plan is finalized —
-> it compiles every platform-relevant configuration in parallel.
-
----
-
-## Step 5 — Emit machine-readable push plan artifact
-
-Write `.slim/push-plan.json` alongside the markdown plan. The artifact is
-the authoritative source for execution; the markdown is the human-readable
-view. The skill never executes any of the rebase/push operations — only
-the executor replays them, after user approval.
-
-### JSON schema
-
-```jsonc
-{
-  "schema_version": 1,
-  "plan_id": "<short-HEAD>-<iso8601>",
-  "pre_execution_snapshot": "<git log @{u}..HEAD --format='%H %s'>",
-  "pre_execution_head": "<git rev-parse HEAD>",
-  "execution": {
-    "mode": "non-interactive-reset-commit"
-  },
-  "squash_plan": [
-    {
-      "index": 1,
-      "action": "pick",            // pick | squash | drop | reword
-      "hash": "11a9e9a",
-      "short_msg": "git-commit-planner: emit .slim/commit-plan.json",
-      "message": null              // null for unchanged; full message for squash/reword
-    }
-  ],
-  "checklist": [
-    { "check": "Build succeeds", "command": "cmake --build --preset msvc-dev", "critical": true },
-    { "check": "Core tests pass", "command": "ctest --preset msvc-dev --output-on-failure", "critical": true },
-    { "check": "Dry-run push succeeds", "command": "git push --dry-run", "critical": true }
-  ]
-}
-```
-
-### Action enum semantics
-
-- **`pick`** — keep the commit as-is. `message` is null.
-- **`squash`** — fold this commit into the previous `pick` or `squash` survivor. `message` contains the combined commit message.
-- **`drop`** — remove this commit from history. `message` is null.
-- **`reword`** — keep this commit but rewrite its message to `message`. `message` contains the new full message.
-
-### Field semantics
-
-- **`pre_execution_snapshot`**: raw `git log @{u}..HEAD --format='%H %s'` at plan time. Executor compares against a fresh invocation before executing; mismatch means plan is stale.
-- **`pre_execution_head`**: `git rev-parse HEAD` at plan time. Executor rollback: `git reset --hard <pre_execution_head>`.
-- **`execution.mode`**: always `"non-interactive-reset-commit"`. Single mode for simplicity.
-- **`squash_plan[].message`**: null for unchanged messages; full proposed message for `squash` (combined) and `reword` (new).
-- **`checklist[]`**: flat array of pre-push checks. No status field — executor runs and reports.
-
-### Executor replay protocol
-
-1. Validate `schema_version === 1`.
-2. Validate at least one entry has `action: "pick"`.
-3. Validate `pre_execution_snapshot` matches fresh `git log @{u}..HEAD --format='%H %s'`. Mismatch → abort + re-plan.
-4. **If working tree is dirty**: `git stash push -u -- <paths>` first. Restore after rebase.
-5. `git reset --soft <base_hash>` (base = last commit on remote).
-6. Replay `squash_plan[]` in order:
-   - `pick`: `git commit -m "<original message>"` (read from `git log -1 --format=%B <hash>`).
-   - `squash`: `git commit --amend -F .git/COMMIT_EDITMSG` with the combined message (preserves trailers).
-   - `drop`: skip — files from this commit are not staged.
-   - `reword`: `git commit --amend -F .git/COMMIT_EDITMSG` with the new message.
-7. Run `checklist[]` commands. On critical failure, print rollback string and abort.
-8. User runs `git push --force-with-lease` (trust boundary).
-
-### Early exit (no-work case)
-
-When the proposed `squash_plan` is an identity (every entry is `action: "pick"` at the same position as the unpushed commit, with `message: null`), the skill emits a brief markdown report ("Nothing to squash — proceed with `git push`") and exits without writing `.slim/push-plan.json`. The executor protocol is skipped; user runs `git push` directly.
-
-### Artifact lifecycle
-
-- Written on every `/push` invocation where unpushed commits exist AND squashing is needed.
-- Invalidated when branch state changes (`pre_execution_snapshot` text comparison).
-- Not committed to git (`.slim/` is gitignored).
-- Overwritten on next `/push` — no accumulation.
-
----
-
-## Constraints and edge cases
-
-- **Never push if the working tree is dirty.** The user must commit or stash
-  first; uncommitted changes are not transmitted by `git push`.
-- **Never rebase shared/public history.** If the commits about to be pushed have
-  already been pushed (i.e., the branch is publicly shared), warn that rewriting
-  history will require a forced push and coordination with collaborators. Prefer
-  adding new fixup commits over rewriting.
-- **If the branch is behind remote:** advise `git pull --rebase` first, resolve
-  any conflicts, then re-run this skill.
-- **If merge conflicts exist in the working tree:** report and stop — do not
-  propose a push plan until the tree is clean.
-- **If the remote branch does not exist yet** (first push of a new feature branch):
-  set upstream tracking with `git push --set-upstream origin <branch>` and verify
-  that the branch name follows project conventions.
-- **Fork-based workflows:** if the local remote is a fork (not `poppolopoppo/ppr`),
-  note that the push target is the fork, and a PR will be needed to upstream.
-  Remind the user to push to a uniquely-named branch to avoid clobbering.
-- **Large diffs (>600 changed lines):** summarize the squash strategy first and
-  ask the user to confirm before proposing detailed commit message rewrites.
-- **Conventional Commits vs. PPR convention:** PPR uses `<component>:` prefixes,
-  not `feat:`/`fix:`. Do not flag PPR-style subjects as violations of Conventional
-  Commits. If the project configuration (e.g., `release-please` or semantic-release)
-  requires Conventional Commits, note that PPR has explicitly opted out.
-- **Cross-skill workflow:** browse history with `git-log-fast-navigation`'s `flog`
-  alias before deciding to squash. Run the `validation` skill for full-project
-  compile verification after rebasing.
+- For a first push with no upstream, identify the intended remote and branch;
+  the user may invoke `git push --set-upstream origin <branch>` after checks.
+- If the local branch is behind, the user must integrate remote changes before
+  a new push plan is made.
+- If the range is large, summarize the proposed cleanup before detailing
+  message rewrites.
+- For fork workflows, identify that the push target is the fork and that a PR
+  is required to contribute upstream.
