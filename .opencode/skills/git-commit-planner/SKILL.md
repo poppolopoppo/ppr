@@ -9,9 +9,12 @@ description: >
 
 ## Contract
 
-This skill plans only. It never runs `git add`, `git add -p`, `git reset`, or
-`git commit`, and never code-reviews. The user retains the staging and commit
-trust boundary.
+Planning is non-mutating and never runs Git history mutations directly. After a
+fresh plan is built and verified, an agent may execute it only through
+`Invoke-CommitPlan.ps1`, and only after it has presented the current plan ID,
+ordered commits, exact approved paths, full messages, and freshness status and
+received explicit confirmation for that specific plan ID. `/commit`, scope
+selection, and grouping approval are never execution confirmation.
 
 `/commit` has `git diff --cached` semantics: analyze only staged hunks,
 including only the staged hunks of partially staged files. Inputs are literal,
@@ -40,8 +43,9 @@ or build an artifact.
 
 ### 2. Enforce the hard scope gate
 
-Reject every selected candidate with more than 15 paths or a serialized plan
-over 200KB. For an unscoped over-cap request, directory chunking is automatic:
+Reject every selected candidate with more than 15 paths or an estimated raw
+patch size over 204800 bytes. The builder separately enforces a 1 MiB
+serialized artifact cap. For an unscoped over-cap request, directory chunking is automatic:
 
 - Do not invoke `@oracle`.
 - Do not write grouping JSON or build an artifact.
@@ -57,8 +61,9 @@ This is a gate, not a request for confirmation.
 
 For an over-cap request, run `Get-CommitPlanBatches.ps1` and present at most
 eight deterministic directory chunks. Each candidate is bounded to 15 paths and
-`estimated_patch_bytes`; the builder enforces the actual serialized UTF-8 plan
-limit of 204800 bytes before publishing. The user selects one batch; only that
+`estimated_patch_bytes`; 204800 bytes is the raw patch estimate gate, while the
+builder enforces the actual serialized UTF-8 plan limit of 1 MiB before
+publishing. The user selects one batch; only that
 batch goes to Oracle, build, and review. Re-plan or discover again before the
 next batch. Oracle never receives more than 15 paths.
 
@@ -87,7 +92,7 @@ exports, and test registration stay with the feature they enable.
 Present a numbered plan with files, full message blocks, and concise ordering
 notes. Identify unaddressed files and why they are outside the selected scope.
 
-### 5. Build and verify the replay plan
+### 5. Build, verify, and present the replay plan
 
 Write the approved grouping to `.slim/grouping.json`, then build the current
 plan and gate it:
@@ -97,12 +102,18 @@ pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Build-CommitPl
 pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Build-CommitPlan.ps1 -VerifyOnly -PlanJson .slim/commit-plan.json
 ```
 
-The builder emits ordered steps carrying exact reviewed binary patch payloads;
-`add_paths` are audit metadata, never replay content. Staged-only plans capture
+The builder enforces a 1 MiB serialized UTF-8 artifact cap. Its deterministic
+`plan_id` is the SHA-256 of the exact serialized artifact bytes (and is not
+embedded in the artifact). The artifact records HEAD, branch, full-index
+fingerprints, ordered approved/touched paths, modes, messages, and payload
+hashes. Ordered steps carry exact reviewed binary patch payloads; `add_paths`
+are audit metadata, never replay content. Staged-only plans capture
 `git diff --cached --binary`; `all-local` plans capture `git diff --binary HEAD`.
 Both support tracked paths. Staged mode ignores untracked paths; `all-local`
-rejects matching untracked paths explicitly. It records HEAD, full-index, and selected-content
-fingerprints, publishes atomically, and removes only its default grouping input
+rejects matching untracked paths explicitly. It records a complete
+pre-execution snapshot, verifies every decoded payload through a disposable
+index touches only its approved
+paths, publishes atomically, and removes only its default grouping input
 after successful validation.
 
 Normal plans use only `.slim/commit-plan.json`, atomically replaced after
@@ -110,17 +121,24 @@ validation. `-Out` exists solely for isolated tests and does not create a
 current plan. Do not create rerun, timestamped, porcelain, or scope-copy plan
 artifacts.
 
-After review, only the user may replay a fresh plan:
+After verification, present the verified current plan ID, all ordered commits,
+exact approved paths, full messages, and a statement that HEAD, branch,
+full-index, and selected content are fresh. Request explicit confirmation in
+the form: `Execute plan <plan_id>`.
+Only that response authorizes execution; any re-plan or freshness drift needs a
+new presentation and confirmation. Then execute only with:
 
 ```powershell
 pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Invoke-CommitPlan.ps1 -PlanJson .slim/commit-plan.json -DryRun
-pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Invoke-CommitPlan.ps1 -PlanJson .slim/commit-plan.json
+pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Invoke-CommitPlan.ps1 -PlanJson .slim/commit-plan.json -ConfirmedPlanId <plan_id>
 ```
 
-Agents never invoke `Invoke-CommitPlan.ps1`. It verifies fresh HEAD/index and
-scope-local content, then applies stored payloads through a temporary Git index
-so the user's index and unstaged hunks are not replayed. It requires the user
-to type `COMMIT` before any mutation.
+`-DryRun` is always non-mutating. A real replay rejects a missing or mismatched
+`-ConfirmedPlanId`, verifies structure, plan ID, decoded payload scope, and
+fresh HEAD/branch/full-index/selected-content before execution and immediately before mutation. It
+uses a temporary Git index and only stored payloads, stops on the first failure
+without history repair/retry, restores `GIT_INDEX_FILE`, and reports created
+commit hashes and final status. It never amends, pushes, resets, or rebases.
 
 Staged-mode replay never changes the real index. User-approved all-local-mode
 replay reconciles only successfully committed selected paths (including rename
@@ -135,7 +153,7 @@ not reset or restored.
 | Grouping and ordering after the gate | `@oracle` background task |
 | Messages and presentation | Orchestrator |
 | Build and verify | Orchestrator, `Build-CommitPlan.ps1` |
-| Replay after review | User only, `Invoke-CommitPlan.ps1` |
+| Replay after explicit plan-ID confirmation | Agent via `Invoke-CommitPlan.ps1` |
 
 On a re-plan, enumerate again and reapply the scope gate before requesting new
 grouping judgment.

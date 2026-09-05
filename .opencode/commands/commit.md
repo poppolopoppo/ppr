@@ -1,10 +1,10 @@
 ---
-description: Plan atomic commits with the git-commit-planner skill.
+description: Plan atomic commits and execute only after explicit verified plan-ID confirmation.
 ---
 
 Delegate `/commit` to the `git-commit-planner` skill. Follow that skill's
-scope gate, routing, message convention, and no-index-mutation contract; do
-not add planning or execution rules here.
+scope gate, routing, message convention, and confirmation-gated execution
+contract; do not add planning or execution rules here.
 
 Forward any optional text after `/commit` unchanged. The skill owns its
 interpretation.
