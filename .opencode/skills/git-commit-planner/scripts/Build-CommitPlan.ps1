@@ -1,0 +1,40 @@
+#Requires -Version 7
+[CmdletBinding(DefaultParameterSetName = 'Build')]
+param(
+    [Parameter(ParameterSetName = 'Build', Mandatory = $true)][string]$GroupingJson,
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)][switch]$VerifyOnly,
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)][string]$PlanJson,
+    [string]$Out = '.slim/commit-plan.json'
+)
+$ErrorActionPreference = 'Stop'
+$artifactLimitBytes = 1048576
+
+function Get-Sha256([string]$Text) { ([BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '').ToLower() }
+function Wrap-Text([string]$Text) { $out = @(); $line = ''; foreach ($word in ($Text -split '\s+')) { if ($line.Length -eq 0) { $line = $word } elseif ($line.Length + $word.Length + 1 -le 72) { $line += " $word" } else { $out += $line; $line = $word } }; if ($line) { $out += $line }; $out -join "`n" }
+function Test-Message($Step, [int]$Index) { $e = @(); $subject = "$($Step.component): $($Step.subject)"; if ([string]::IsNullOrWhiteSpace($Step.component) -or [string]::IsNullOrWhiteSpace($Step.subject)) { $e += "R$Index`: empty message component or subject" }; if ($subject.Length -gt 72) { $e += "R$Index`: subject exceeds 72 characters" }; if ($Step.subject -match '^(feat|fix|chore|refactor|docs|test|style)(\(.+\))?:' -or $Step.subject -match '\.' -or $Step.subject -cmatch '^[A-Z]') { $e += "R$Index`: invalid subject convention" }; if ([string]::IsNullOrWhiteSpace($Step.body) -or @($Step.body -split "`n" | Where-Object { $_.Length -gt 72 }).Count) { $e += "R$Index`: invalid body" }; if ($Step.message -ne "$($Step.component): $($Step.subject)`n`n$($Step.body)") { $e += "R$Index`: message mismatch" }; $e }
+function Get-IndexFingerprint { (git write-tree).Trim() }
+function Get-Patch([string]$Mode, [string[]]$Paths) { $literalPaths = @($Paths | ForEach-Object { ":(literal)$_" }); if ($Mode -eq 'staged') { $patch = git diff --cached --binary HEAD -- $literalPaths } elseif ($Mode -eq 'all-local') { $patch = git diff --binary HEAD -- $literalPaths } else { throw "unsupported content mode: $Mode" }; $text = ($patch -join "`n") + "`n"; if ([string]::IsNullOrWhiteSpace($text)) { throw "selected $Mode content is empty" }; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($text)) }
+function Get-TouchedPaths([string]$Mode, [string[]]$Paths) { $literalPaths = @($Paths | ForEach-Object { ":(literal)$_" }); $diffArgs = if ($Mode -eq 'staged') { @('diff','--cached','--name-status','--find-renames','HEAD','--') } else { @('diff','--name-status','--find-renames','HEAD','--') }; $lines = & git -c core.quotePath=false @diffArgs $literalPaths; $touched = @($Paths); foreach ($line in $lines) { $parts = $line -split "`t"; if ($parts[0] -match '^[RC]' -and $parts.Count -ge 3) { $touched += $parts[1], $parts[2] } elseif ($parts.Count -ge 2) { $touched += $parts[1] } }; @($touched | Select-Object -Unique) }
+function Get-CanonicalSnapshot($Steps) { @($Steps | ForEach-Object { [ordered]@{ index = $_.index; mode = $_.content_mode; paths = @($_.add_paths); patch_b64 = $_.patch_b64 } }) | ConvertTo-Json -Depth 6 -Compress }
+function Test-Plan($Plan) { $e = @(); if ($Plan.schema_version -ne 3) { $e += "unsupported schema_version $($Plan.schema_version): re-plan with Build-CommitPlan.ps1"; return $e }; if ([string]::IsNullOrWhiteSpace($Plan.head) -or [string]::IsNullOrWhiteSpace($Plan.index_fingerprint)) { $e += 'missing HEAD or full index fingerprint' }; $steps = @($Plan.steps); if (-not $steps.Count) { $e += 'no steps' }; $seen = @{}; for ($i = 0; $i -lt $steps.Count; $i++) { $step = $steps[$i]; $n = $i + 1; if ($step.index -ne $n -or @($step.add_paths).Count -eq 0 -or [string]::IsNullOrWhiteSpace($step.patch_b64)) { $e += "R$n`: invalid ordered replay payload" }; if ("$($step.content_mode)" -notin @('staged', 'all-local')) { $e += "R$n`: unsupported content mode $($step.content_mode)" }; $e += Test-Message $step $n; foreach ($path in @($step.add_paths)) { if ($seen[$path]) { $e += "R$n`: duplicate path $path" } else { $seen[$path] = $true } }; try { [Convert]::FromBase64String($step.patch_b64) | Out-Null } catch { $e += "R$n`: invalid patch payload" } }; $canonical = Get-CanonicalSnapshot $steps; if ($Plan.content_snapshot -ne $canonical -or $Plan.selected_content_fingerprint -ne (Get-Sha256 $canonical)) { $e += 'content snapshot fingerprint mismatch' }; $e }
+if ($VerifyOnly) { $errors = @(Test-Plan (Get-Content $PlanJson -Raw | ConvertFrom-Json -Depth 12)); if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }; Write-Output 'gate: schema-v3 plan OK'; exit 0 }
+
+$grouping = Get-Content $GroupingJson -Raw | ConvertFrom-Json -Depth 12
+$normalizedGrouping = [IO.Path]::GetFullPath($GroupingJson); $normalizedOut = [IO.Path]::GetFullPath($Out); $defaultOut = [IO.Path]::GetFullPath((Join-Path (Get-Location) '.slim/commit-plan.json')); $defaultGrouping = [IO.Path]::GetFullPath((Join-Path (Get-Location) '.slim/grouping.json'))
+if ($normalizedGrouping -eq $normalizedOut) { throw 'GroupingJson and Out must not identify the same file' }
+$porcelain = (git status --porcelain=v1 --branch) -join "`n"; if (git ls-files -u) { throw 'merge conflicts present — clean the tree first' }; if ($porcelain -match '(?m)^## .*no branch') { throw 'detached HEAD — clean the tree first' }
+$head = (git rev-parse HEAD).Trim(); if (-not $head) { throw 'HEAD is required' }
+$remainingBatchCount = 'unknown'
+if ($null -ne $grouping.discovery_selection) { $value = $grouping.discovery_selection.total_batch_count; if ($value -isnot [long] -or $value -lt 1) { throw 'invalid discovery_selection.total_batch_count' }; $remainingBatchCount = $value - 1 }
+$steps = @(); $used = @{}; $index = 0
+foreach ($group in @($grouping.commits)) { $index++; $paths = @($group.files); if (-not $paths.Count) { throw "empty commit group $index" }; $mode = if ($group.content_mode) { "$($group.content_mode)" } else { 'staged' }; foreach ($path in $paths) { if ($used[$path]) { throw "duplicate path across steps: $path" }; $used[$path] = $true }; $body = Wrap-Text "$($group.body)"; $steps += [ordered]@{ index = $index; component = "$($group.component)"; subject = "$($group.subject)"; body = $body; message = "$($group.component): $($group.subject)`n`n$body"; add_paths = $paths; touched_paths = Get-TouchedPaths $mode $paths; content_mode = $mode; patch_b64 = Get-Patch $mode $paths; notes = "$($group.notes)" } }
+$canonical = Get-CanonicalSnapshot $steps
+$plan = [ordered]@{ schema_version = 3; head = $head; index_fingerprint = Get-IndexFingerprint; content_snapshot = $canonical; selected_content_fingerprint = Get-Sha256 $canonical; steps = $steps; summary = [ordered]@{ total_steps = $steps.Count; selected_scope = @($steps.add_paths); selected_mode = @($steps.content_mode | Select-Object -Unique); remaining_batch_count = $remainingBatchCount; remainder_guidance = $(if ($remainingBatchCount -eq 'unknown') { 'Unknown: run batch discovery again before planning another scope.' } else { 'Run batch discovery again before planning another scope.' }); replay = 'isolated temporary index' } }
+$serialized = $plan | ConvertTo-Json -Depth 12
+if ([Text.Encoding]::UTF8.GetByteCount($serialized) -gt $artifactLimitBytes) { throw "serialized plan exceeds $artifactLimitBytes byte artifact gate" }
+$tmp = "$Out.$PID.tmp"; $dir = Split-Path $Out -Parent; if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+[IO.File]::WriteAllText([IO.Path]::GetFullPath($tmp), $serialized, [Text.UTF8Encoding]::new($false))
+$errors = @(Test-Plan ([IO.File]::ReadAllText([IO.Path]::GetFullPath($tmp), [Text.Encoding]::UTF8) | ConvertFrom-Json -Depth 12)); if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; Remove-Item $tmp -Force; exit 1 }
+[IO.File]::Move([IO.Path]::GetFullPath($tmp), [IO.Path]::GetFullPath($Out), $true)
+if ($normalizedOut -eq $defaultOut -and $normalizedGrouping -eq $defaultGrouping) { Remove-Item -LiteralPath $GroupingJson -Force }
+Write-Output "wrote $Out ($($steps.Count) exact patch steps)"
