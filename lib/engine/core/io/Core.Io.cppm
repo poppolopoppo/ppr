@@ -10,15 +10,16 @@ import :hal;
 import std;
 
 export namespace pP {
-
-    class IoPort;
+    namespace io {
+        class IoPort;
+    }
 
     // ------------------------------------------------------------------
     // IoFile — RAII file handle for async I/O (move-only)
     // ------------------------------------------------------------------
 
     class IoFile {
-        hal::io::IoHandle   m_port_handle{nullptr};
+        hal::io::IoHandle m_port_handle{nullptr};
         hal::io::FileHandle m_file{nullptr};
 
     public:
@@ -32,6 +33,7 @@ export namespace pP {
         IoFile &operator=(IoFile &&other) noexcept;
 
         IoFile(const IoFile &) = delete;
+
         IoFile &operator=(const IoFile &) = delete;
 
         ~IoFile() noexcept {
@@ -47,7 +49,7 @@ export namespace pP {
         }
 
     private:
-        friend class IoPort;
+        friend class io::IoPort;
 
         IoFile(hal::io::IoHandle port, hal::io::FileHandle file) noexcept
             : m_port_handle(port), m_file(file) {
@@ -61,13 +63,13 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     class IoRequest final : public IEvent {
-        friend class IoPort;
+        friend class io::IoPort;
 
         static constexpr std::size_t kOverlappedSize = hal::io::overlapped_storage_size_v;
         static_assert(kOverlappedSize >= sizeof(void *));
 
-        PulseEvent      m_completed{};
-        u64             m_bytes{};
+        PulseEvent m_completed{};
+        u64 m_bytes{};
         std::error_code m_error{};
         std::atomic<u8> m_state{0};
         hal::io::FileHandle m_active_file{nullptr};
@@ -79,8 +81,11 @@ export namespace pP {
         IoRequest() noexcept = default;
 
         IoRequest(const IoRequest &) = delete;
+
         IoRequest &operator=(const IoRequest &) = delete;
+
         IoRequest(IoRequest &&) = delete;
+
         IoRequest &operator=(IoRequest &&) = delete;
 
         ~IoRequest() noexcept;
@@ -119,6 +124,12 @@ export namespace pP {
         [[nodiscard]] bool cancel() noexcept;
     };
 
+    template<>
+    struct details::relocatable<IoFile> : std::true_type {
+    };
+}
+
+export namespace pP::io {
     // ------------------------------------------------------------------
     // IoPort — async I/O driver (no background thread, explicit drain)
     // ------------------------------------------------------------------
@@ -128,12 +139,18 @@ export namespace pP {
 
     public:
         IoPort();
+
         ~IoPort() noexcept;
 
         IoPort(const IoPort &) = delete;
+
         IoPort &operator=(const IoPort &) = delete;
-        IoPort(IoPort &&) noexcept = default;
-        IoPort &operator=(IoPort &&) noexcept = default;
+
+        IoPort(IoPort &&other) noexcept
+            : m_handle(std::exchange(other.m_handle, nullptr)) {
+        }
+
+        IoPort &operator=(IoPort &&other) noexcept;
 
         [[nodiscard]] std::expected<IoFile, std::error_code>
         open(const std::filesystem::path &path,
@@ -146,15 +163,9 @@ export namespace pP {
                    std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
         [[nodiscard]] std::size_t pollCompletions() noexcept;
+
         [[nodiscard]] std::size_t waitForCompletions() noexcept;
     };
 
-    template<> struct details::relocatable<IoFile> : std::true_type {};
-
-}
-
-export namespace pP::io {
-
     [[nodiscard]] IoPort createPort();
-
 }
