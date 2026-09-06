@@ -49,8 +49,6 @@ export namespace pP {
 
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
 
-        [[nodiscard]] bool shouldClose() const noexcept { return m_should_close; }
-
         void requestApplicationExit() noexcept;
 
         [[nodiscard]] std::error_code run();
@@ -75,7 +73,6 @@ export namespace pP {
         enum class EState : u8 {
             created,
             initialized,
-            terminated,
         };
 
         // Hot (per-frame): cached service pointers and owned scene state.
@@ -93,7 +90,6 @@ export namespace pP {
         SharedWindow m_main_window{};
         SharedContext m_lifecycle{};
         std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
-        bool m_should_close{false};
         bool m_focused{true};
 
         // Cold (init/shutdown only)
@@ -102,10 +98,13 @@ export namespace pP {
         context::CancelFunc m_cancel{};
         IWindowService::WindowResizedCallback::Handle m_resize_handle{};
         IWindowService::WindowFocusedCallback::Handle m_focus_handle{};
+        IWindowService::WindowCallback::Handle m_close_handle{};
 
         std::error_code onWindowResized_(const Window &window, const int2 &old_size);
 
         std::error_code onWindowFocused_(const Window &window [[maybe_unused]], bool focused) noexcept;
+
+        std::error_code onWindowClosed_(const Window &window [[maybe_unused]]) noexcept;
 
         EState m_state{EState::created};
 

@@ -39,7 +39,9 @@ namespace pP {
     Application::~Application() noexcept = default;
 
     void Application::requestApplicationExit() noexcept {
-        m_should_close = true;
+        if (m_cancel.isValid()) {
+            m_cancel();
+        }
     }
 
     std::error_code Application::run() {
@@ -59,9 +61,19 @@ namespace pP {
         };
 
         try {
-            while (not m_should_close) [[likely]] {
-                PPR_RETURN_ERROR_ON_FAIL(App, update());
-                PPR_RETURN_ERROR_ON_FAIL(App, render());
+            while (not m_lifecycle->error()) [[likely]] {
+                if (const std::error_code err = update()) {
+                    if (err == std::make_error_code(std::errc::operation_canceled)) {
+                        break;
+                    }
+                    PPR_RETURN_ERROR_ON_FAIL(App, err);
+                }
+                if (const std::error_code err = render()) {
+                    if (err == std::make_error_code(std::errc::operation_canceled)) {
+                        break;
+                    }
+                    PPR_RETURN_ERROR_ON_FAIL(App, err);
+                }
             }
         } catch (const std::system_error &e) {
             return e.code();
@@ -77,7 +89,24 @@ namespace pP {
     std::error_code Application::initialize() {
         PPR_ASSERT(m_state == EState::created);
 
-        m_state = EState::terminated;
+        auto [ctx, cancelFn] = context::withCancel(context::background());
+        m_lifecycle = std::move(ctx);
+        m_cancel = std::move(cancelFn);
+
+        // Roll back the lifecycle pair and any window subscriptions on failure
+        // below so a failed initialize() never leaks a live context.
+        PPR_DEFER{
+            if (m_state != EState::initialized) {
+                m_resize_handle = {};
+                m_focus_handle = {};
+                m_close_handle = {};
+                if (m_cancel.isValid()) {
+                    m_cancel();
+                }
+                m_cancel = {};
+                m_lifecycle = {};
+            }
+        };
 
         PPR_LOG(App, info, "starting application", {
             {"name", m_name},
@@ -124,6 +153,9 @@ namespace pP {
         m_focus_handle = m_cached_window_service->whenWindowFocused(
             IWindowService::WindowFocusedCallback::Event{std23::nontype<&Application::onWindowFocused_>, this});
 
+        m_close_handle = m_cached_window_service->whenWindowClosed(
+            IWindowService::WindowCallback::Event{std23::nontype<&Application::onWindowClosed_>, this});
+
         if (auto ui = ui::createImGuiService()) {
             PPR_RETURN_ERROR_ON_FAIL(
                 App,
@@ -144,10 +176,6 @@ namespace pP {
         m_scene_controller.provideInputActionKeyMappings(m_scene_controller_mapping);
         m_scene_listener.addInputMapping(safe_ptr<const InputMapping>{&m_scene_controller_mapping}, 0);
         m_window_input->m_context.addInputListener(safe_ptr<InputListener>{&m_scene_listener}, 0);
-
-        auto [ctx, cancelFn] = context::withCancel(context::background());
-        m_lifecycle = std::move(ctx);
-        m_cancel = std::move(cancelFn);
 
         m_state = EState::initialized;
         return default_value_v;
@@ -171,14 +199,20 @@ namespace pP {
         return default_value_v;
     }
 
+    std::error_code Application::onWindowClosed_(const Window &window [[maybe_unused]]) noexcept {
+        requestApplicationExit();
+        return default_value_v;
+    }
+
     std::error_code Application::update() {
-        PPR_RETURN_ERROR_ON_FAIL(App, m_lifecycle->error());
+        if (const std::error_code lc = m_lifecycle->error()) {
+            return lc;
+        }
+
+        // Pump deadline callbacks so withDeadline/withTimeout contexts can fire.
+        TimerManager::mainTimer().tick();
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_cached_window_service->pollEvents());
-
-        if (m_cached_window_service->getWindowShouldClose(*m_main_window)) [[unlikely]] {
-            requestApplicationExit();
-        }
 
         const TimePoint now = time::now();
         const TimeSpan dt = now - m_last_frame_time;
@@ -250,11 +284,10 @@ namespace pP {
     }
 
     std::error_code Application::shutdown() noexcept {
-        if (m_state >= EState::terminated) [[unlikely]] {
+        if (m_state != EState::initialized) [[unlikely]] {
             return default_value_v;
         }
-        m_state = EState::terminated;
-        m_cancel();
+        m_state = EState::created;
 
         std::error_code shutdown_err{};
         const auto retain_error = [&shutdown_err](const std::error_code err) noexcept {
@@ -263,20 +296,45 @@ namespace pP {
             }
         };
 
+        // shutdown() is noexcept but most teardown callees are not proven
+        // non-throwing: fold any exception into the error accumulator.
+        const auto attempt = [&retain_error](std::invocable auto &&call) noexcept {
+            try {
+                if constexpr (std::is_void_v<std::invoke_result_t<decltype(call)>>) {
+                    std::forward<decltype(call)>(call)();
+                } else {
+                    retain_error(std::forward<decltype(call)>(call)());
+                }
+            } catch (const std::exception &) {
+                retain_error(std::make_error_code(std::errc::io_error));
+            } catch (...) {
+                retain_error(std::make_error_code(std::errc::state_not_recoverable));
+            }
+        };
+
         // Remove callbacks first so no events can reach teardown state.
-        m_resize_handle = {};
-        m_focus_handle = {};
+        attempt([this] { m_resize_handle = {}; });
+        attempt([this] { m_focus_handle = {}; });
+        attempt([this] { m_close_handle = {}; });
+
+        if (m_cancel.isValid()) {
+            m_cancel();
+        }
+        m_cancel = {};
+        m_lifecycle = {};
 
         // Detach scene input before the window and the input service go away.
         if (m_window_input) {
-            m_window_input->m_context.removeInputListener(m_scene_listener);
+            attempt([this] {
+                std::ignore = m_window_input->m_context.removeInputListener(m_scene_listener);
+            });
             m_window_input.reset();
         }
-        m_scene_listener.clearInputMappings();
-        m_scene_controller_mapping.clearInputMappings();
+        attempt([this] { m_scene_listener.clearInputMappings(); });
+        attempt([this] { m_scene_controller_mapping.clearInputMappings(); });
 
         // Stop new submissions, then drain the queue before tearing down passes.
-        retain_error(m_renderer.waitForIdle());
+        attempt([this] { return m_renderer.waitForIdle(); });
 
         if (m_ui_service) {
             m_ui_services.erase<IUIService>();
@@ -284,29 +342,29 @@ namespace pP {
             m_ui_service.reset();
         }
 
-        retain_error(m_triangle_pass.shutdown());
+        attempt([this] { return m_triangle_pass.shutdown(); });
 
         // Surface pairing: every createWindowSurface pairs with one idempotent destroy.
         if (m_main_window.isValid()) [[likely]] {
-            retain_error(m_renderer.destroyWindowSurface(m_main_window->m_handle));
+            attempt([this] { return m_renderer.destroyWindowSurface(m_main_window->m_handle); });
         }
-        retain_error(m_renderer.shutdown());
+        attempt([this] { return m_renderer.shutdown(); });
 
         m_main_viewport.reset();
 
         m_services.erase<IRhiService>();
-        retain_error(IRhiService::get()->shutdown());
+        attempt([] { return IRhiService::get()->shutdown(); });
 
-        retain_error(IShaderService::get()->shutdown());
+        attempt([] { return IShaderService::get()->shutdown(); });
         m_services.erase<IShaderService>();
 
         if (m_main_window.isValid()) [[likely]] {
-            retain_error(m_cached_window_service->destroyWindow(std::move(m_main_window)));
+            attempt([this] { return m_cached_window_service->destroyWindow(std::move(m_main_window)); });
         }
         m_cached_input_service.reset();
         m_cached_window_service.reset();
 
-        retain_error(m_platform->shutdown(*this));
+        attempt([this] { return m_platform->shutdown(*this); });
 
         return shutdown_err;
     }
