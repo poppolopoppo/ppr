@@ -567,10 +567,18 @@ export namespace pP {
         }
 
         [[nodiscard]] InputValue modulate(const TimeSpan dt, const float2 &value) const noexcept {
+            // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cppm:570).
+            // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+            // NOLINTNEXTLINE(clang-diagnostic-error)
             return modulate(static_cast<float>(time::seconds(dt)) * value);
         }
 
         [[nodiscard]] InputValue modulate(const TimeSpan dt, const float3 &value) const noexcept {
+            // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cppm:574).
+            // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+            // NOLINTNEXTLINE(clang-diagnostic-error)
             return modulate(static_cast<float>(time::seconds(dt)) * value);
         }
 

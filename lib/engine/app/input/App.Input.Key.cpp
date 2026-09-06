@@ -54,13 +54,29 @@ namespace pP {
                 },
                 [=](const InputAxis2D &input) constexpr -> InputValue {
                     return InputAxis2D{
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:57).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_absolute = input.m_absolute * value,
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:58).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_relative = input.m_relative * value,
                     };
                 },
                 [=](const InputAxis3D &input) constexpr -> InputValue {
                     return InputAxis3D{
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:63).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_absolute = input.m_absolute * value,
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:64).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_relative = input.m_relative * value,
                     };
                 }),
@@ -78,7 +94,15 @@ namespace pP {
                 },
                 [&](const InputAxis1D input) constexpr -> InputValue {
                     return InputAxis2D{
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:81).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_absolute = input.m_absolute * value,
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:82).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_relative = input.m_relative * value,
                     };
                 },
@@ -108,7 +132,15 @@ namespace pP {
                 },
                 [&](const InputAxis1D input) constexpr -> InputValue {
                     return InputAxis3D{
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:111).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_absolute = input.m_absolute * value,
+                        // FP: mango scalar-vector operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+                        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Key.cpp:112).
+                        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+                        // NOLINTNEXTLINE(clang-diagnostic-error)
                         .m_relative = input.m_relative * value,
                     };
                 },

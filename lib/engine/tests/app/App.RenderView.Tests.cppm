@@ -179,6 +179,10 @@ export namespace pP::tests {
         // assigned explicitly.
         PPR_UNIT_TEST (scene_view_pairs_camera_snapshot_and_render_view) {
             alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> snapshot_storage{};
+            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (RenderView.Tests.cppm:182).
+            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
+            //noinspection ClangdErrorsAndWarnings
             auto &snapshot = *std::start_lifetime_as<CameraSnapshot>(snapshot_storage.data());
             snapshot.m_revision = 7u;
             snapshot.m_viewport_size = float2{800.0f, 600.0f};
@@ -197,6 +201,10 @@ export namespace pP::tests {
         PPR_UNIT_TEST (triangle_upload_maps_camera_position_as_point) {
             // Production mirror: App.Renderer.TrianglePass.cpp:228-239 (uploadFrameConstants_).
             alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> snapshot_storage{};
+            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (RenderView.Tests.cppm:200).
+            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
+            //noinspection ClangdErrorsAndWarnings
             auto &snapshot = *std::start_lifetime_as<CameraSnapshot>(snapshot_storage.data());
             snapshot.m_origin = float3{1.0f, 2.0f, 3.0f};
 
@@ -216,7 +224,15 @@ export namespace pP::tests {
             // stale-reuse the first matrices, so the upload must be unconditional.
             alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> first_storage{};
             alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> second_storage{};
+            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (RenderView.Tests.cppm:219).
+            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
+            //noinspection ClangdErrorsAndWarnings
             auto &first = *std::start_lifetime_as<CameraSnapshot>(first_storage.data());
+            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
+            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (RenderView.Tests.cppm:220).
+            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
+            //noinspection ClangdErrorsAndWarnings
             auto &second = *std::start_lifetime_as<CameraSnapshot>(second_storage.data());
             first.m_revision = 0u;
             second.m_revision = 0u;
