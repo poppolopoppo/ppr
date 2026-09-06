@@ -113,6 +113,7 @@ export namespace pP {
 
         [[nodiscard]] const float2 &getJitter() const noexcept { return m_actual_state.m_jitter; }
 
+        // Non-owning view: caller backing storage must outlive updateModel.
         void setJitterSamples(std::optional<CameraJitterSamples> pixel_offsets) noexcept;
 
         [[nodiscard]] const float4x4 &getJitteredProjection() const noexcept { return m_actual_state.m_jittered_projection; }

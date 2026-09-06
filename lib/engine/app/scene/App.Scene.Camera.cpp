@@ -24,6 +24,9 @@ namespace pP {
     }
 
     void Camera::setJitterSamples(std::optional<CameraJitterSamples> pixel_offsets) noexcept {
+        if (pixel_offsets.has_value() && pixel_offsets->empty()) {
+            pixel_offsets.reset();
+        }
         m_jittered_pixel_offsets = std::move(pixel_offsets);
         m_has_camera_cut_next_frame = true;
     }
@@ -111,7 +114,7 @@ namespace pP {
         PPR_ASSERT(not isNan(m_actual_state.m_invert_view_projection));
 
         float2 pixel_offset{zero_v};
-        if (m_jittered_pixel_offsets.has_value()) {
+        if (m_jittered_pixel_offsets.has_value() && not m_jittered_pixel_offsets->empty()) {
             const std::size_t period_index = m_actual_state.m_revision % m_jittered_pixel_offsets->size();
             pixel_offset = m_jittered_pixel_offsets->at(period_index);
         }
@@ -127,8 +130,18 @@ namespace pP {
         PPR_ASSERT(not isNan(m_actual_state.m_jittered_view_projection));
         PPR_ASSERT(not isNan(m_actual_state.m_invert_jittered_view_projection));
 
-        m_actual_state.m_frustum = Frustum(m_actual_state.m_view_projection);
-        m_actual_state.m_ray_frustum = RayFrustum(m_actual_state.m_view_projection);
+        // Frusta pin the unjittered VP remapped to D3D [0,1] depth. RayFrustum
+        // consumes side planes only, but shares the same corrected matrix so
+        // both paths keep a single depth source (remap mirrors
+        // makeZeroToOneFrustum in Math.cppm).
+        m_actual_state.m_frustum = makeZeroToOneFrustum(m_actual_state.m_view_projection);
+        const float4x4 zero_to_one_vp = m_actual_state.m_view_projection * float4x4{
+                                            float4{1.0f, 0.0f, 0.0f, 0.0f},
+                                            float4{0.0f, 1.0f, 0.0f, 0.0f},
+                                            float4{0.0f, 0.0f, 2.0f, 0.0f},
+                                            float4{0.0f, 0.0f, -1.0f, 1.0f},
+                                        };
+        m_actual_state.m_ray_frustum = RayFrustum(zero_to_one_vp);
 
         // conditionally computes camera velocity, skipped if:
         // * it's the first frame rendered,

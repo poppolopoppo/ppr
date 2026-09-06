@@ -151,7 +151,6 @@ namespace pP {
         m_triangle_shader = shader::SharedModule{};
         m_pipeline_format = rhi::Format::Undefined;
         m_pipeline_sample_count = 1;
-        m_last_revision = std::numeric_limits<std::size_t>::max();
         m_rhi_service.reset();
         return default_value_v;
     }
@@ -227,24 +226,15 @@ namespace pP {
     }
 
     std::error_code TrianglePass::uploadFrameConstants_(const CameraSnapshot &snapshot) {
-        // NOTE: component compare; mango vector == doesn't cover all vector
-        // types on this toolchain.
-        if (m_last_revision == snapshot.m_revision
-            and m_last_viewport_size.x == snapshot.m_viewport_size.x
-            and m_last_viewport_size.y == snapshot.m_viewport_size.y)
-            return default_value_v;
-
         FrameConstants frame{};
         frame.m_view = snapshot.m_view;
         frame.m_projection = snapshot.m_projection;
         frame.m_view_projection = snapshot.m_view_projection;
         frame.m_inverse_view_projection = snapshot.m_invert_view_projection;
-        frame.m_camera_position = float4{snapshot.m_origin, 0.0f};
+        frame.m_camera_position = float4{snapshot.m_origin, 1.0f}; // point promotion (w == 1).
         frame.m_viewport_size = float4{snapshot.m_viewport_size, 0.0f, 0.0f};
 
         RHI_RETURN_ERROR_ON_FAIL(TrianglePass, m_frame_cursor.setData(&frame, sizeof(FrameConstants)));
-        m_last_revision = snapshot.m_revision;
-        m_last_viewport_size = snapshot.m_viewport_size;
         return default_value_v;
     }
 }

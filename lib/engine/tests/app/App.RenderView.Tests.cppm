@@ -194,6 +194,59 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(scene_view.m_render_view.m_scissor.maxX == 800u);
         };
 
+        PPR_UNIT_TEST (triangle_upload_maps_camera_position_as_point) {
+            // Production mirror: App.Renderer.TrianglePass.cpp:228-239 (uploadFrameConstants_).
+            alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> snapshot_storage{};
+            auto &snapshot = *std::start_lifetime_as<CameraSnapshot>(snapshot_storage.data());
+            snapshot.m_origin = float3{1.0f, 2.0f, 3.0f};
+
+            // Mirrors TrianglePass::uploadFrameConstants_: origin uploads as a
+            // point (w == 1), not a direction.
+            TrianglePass::FrameConstants frame{};
+            frame.m_camera_position = float4{snapshot.m_origin, 1.0f};
+            PPR_TEST_ASSERT(frame.m_camera_position.x == 1.0f);
+            PPR_TEST_ASSERT(frame.m_camera_position.y == 2.0f);
+            PPR_TEST_ASSERT(frame.m_camera_position.z == 3.0f);
+            PPR_TEST_ASSERT(frame.m_camera_position.w == 1.0f);
+        };
+
+        PPR_UNIT_TEST (triangle_consecutive_cuts_same_viewport_upload_fresh) {
+            // Consecutive-cut alias: same revision, same viewport size, changed
+            // transforms. Viewport held constant; a revision+viewport skip would
+            // stale-reuse the first matrices, so the upload must be unconditional.
+            alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> first_storage{};
+            alignas(CameraSnapshot) std::array<std::byte, sizeof(CameraSnapshot)> second_storage{};
+            auto &first = *std::start_lifetime_as<CameraSnapshot>(first_storage.data());
+            auto &second = *std::start_lifetime_as<CameraSnapshot>(second_storage.data());
+            first.m_revision = 0u;
+            second.m_revision = 0u;
+            first.m_viewport_size = float2{800.0f, 600.0f};
+            second.m_viewport_size = float2{800.0f, 600.0f};
+            first.m_view = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            second.m_view = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{5, 6, 7, 1}};
+            first.m_view_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            second.m_view_projection = float4x4{float4{2, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{5, 6, 7, 1}};
+
+            // Production mirror: App.Renderer.TrianglePass.cpp:228-239 (uploadFrameConstants_ field mapping).
+            const auto buildFrame = [](const CameraSnapshot &snapshot) {
+                TrianglePass::FrameConstants frame{};
+                frame.m_view = snapshot.m_view;
+                frame.m_projection = snapshot.m_projection;
+                frame.m_view_projection = snapshot.m_view_projection;
+                frame.m_inverse_view_projection = snapshot.m_invert_view_projection;
+                frame.m_camera_position = float4{snapshot.m_origin, 1.0f};
+                frame.m_viewport_size = float4{snapshot.m_viewport_size, 0.0f, 0.0f};
+                return frame;
+            };
+            const auto first_frame = buildFrame(first);
+            const auto second_frame = buildFrame(second);
+            PPR_TEST_ASSERT(first_frame.m_view_projection(0, 0) == 1.0f);
+            PPR_TEST_ASSERT(second_frame.m_view_projection(0, 0) == 2.0f);
+            PPR_TEST_ASSERT(second_frame.m_view_projection(0, 0) != first_frame.m_view_projection(0, 0));
+            PPR_TEST_ASSERT(second_frame.m_view(3, 0) == 5.0f);
+            PPR_TEST_ASSERT(second_frame.m_view(3, 0) != first_frame.m_view(3, 0));
+        };
+
         PPR_UNIT_TEST (triangle_frame_constants_match_hlsl_layout) {
             PPR_TEST_ASSERT(sizeof(TrianglePass::FrameConstants) == 288u);
             const TrianglePass::FrameConstants frame{};
@@ -238,6 +291,8 @@ export namespace pP::tests {
             RenderViewConversion::draw_context_borrows_view_and_target,
             RenderViewConversion::scene_view_pairs_camera_snapshot_and_render_view,
             RenderViewConversion::triangle_frame_constants_match_hlsl_layout,
+            RenderViewConversion::triangle_upload_maps_camera_position_as_point,
+            RenderViewConversion::triangle_consecutive_cuts_same_viewport_upload_fresh,
             RenderViewConversion::perspective_uses_d3d_depth_zero_to_one,
             RenderViewConversion::ortho_uses_d3d_convention_without_y_flip,
         });

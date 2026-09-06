@@ -25,6 +25,7 @@ export namespace pP {
             float4x4 m_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
             float4x4 m_view_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
             float4x4 m_inverse_view_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            // Zero default; uploadFrameConstants_ promotes origin to a point via float4{origin, 1}.
             float4 m_camera_position = float4{0, 0, 0, 0};
             float4 m_viewport_size = float4{0, 0, 0, 0};
         };
@@ -62,8 +63,6 @@ export namespace pP {
 
         rhi::Format m_pipeline_format{rhi::Format::Undefined};
         u32 m_pipeline_sample_count{1};
-        std::size_t m_last_revision{std::numeric_limits<std::size_t>::max()};
-        float2 m_last_viewport_size{zero_v};
         safe_ptr<IRhiService> m_rhi_service;
     };
 }

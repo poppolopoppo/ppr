@@ -160,6 +160,65 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(upper_clip.y / upper_clip.w > 0.0f);
     };
 
+    // Phase 1: Camera-constructed frustum pins the unjittered VP remapped to
+    // D3D [0,1] depth (not adapter isolation only).
+    PPR_UNIT_TEST (camera_frustum_from_update_model) {
+        Camera cam;
+        CameraModel model{};
+        model.m_z_near = 0.1f;
+        model.m_z_far = 100.0f;
+        cam.updateModel(std::chrono::milliseconds{16}, model, testViewport(int2{800, 600}));
+
+        const CameraSnapshot &snap = cam.getSnapshot();
+        const Frustum expected = makeZeroToOneFrustum(snap.m_view_projection);
+        for (std::size_t i = 0; i < 6; ++i) {
+            PPR_TEST_ASSERT(distance(snap.m_frustum.clip[i], expected.clip[i]) < kEps);
+        }
+
+        const Frustum &frustum = cam.getFrustum();
+        PPR_TEST_ASSERT(frustum.isVisible(Box{float3{0.0f, 0.0f, 1.0f}, 0.1f}));
+        PPR_TEST_ASSERT(not frustum.isVisible(Box{float3{0.0f, 0.0f, 0.05f}, 0.01f}));
+        PPR_TEST_ASSERT(not frustum.isVisible(Box{float3{10.0f, 0.0f, 1.0f}, 0.1f}));
+        PPR_TEST_ASSERT(not frustum.isVisible(Box{float3{0.0f, 0.0f, 101.0f}, 0.1f}));
+
+        // Jitter must not move the frustum: it stays pinned to unjittered VP.
+        const float3 ray_origin_before = cam.getRayFrustum().origin;
+        const float3 ray_point_before = cam.getRayFrustum().point[0];
+        std::array<float2, 2> samples{float2{2.0f, 1.0f}, float2{-2.0f, -1.0f}};
+        cam.setJitterSamples(CameraJitterSamples{std::span<const float2>(samples)});
+        cam.updateModel(std::chrono::milliseconds{16}, model, testViewport(int2{800, 600}));
+        const Frustum rejittered = makeZeroToOneFrustum(cam.getSnapshot().m_view_projection);
+        for (std::size_t i = 0; i < 6; ++i) {
+            PPR_TEST_ASSERT(distance(cam.getFrustum().clip[i], rejittered.clip[i]) < kEps);
+        }
+        PPR_TEST_ASSERT(cam.getFrustum().isVisible(Box{float3{0.0f, 0.0f, 1.0f}, 0.1f}));
+        // Ray frustum shares the same unjittered-VP source, so it stays stable under jitter.
+        PPR_TEST_ASSERT(distance(cam.getRayFrustum().origin, ray_origin_before) < kEps);
+        PPR_TEST_ASSERT(distance(cam.getRayFrustum().point[0], ray_point_before) < kEps);
+    };
+
+    // Phase 1: engaged-but-empty jitter behaves as no jitter — no crash
+    // (never revision % 0), cut signaled, jitter phase sane.
+    PPR_UNIT_TEST (camera_empty_jitter) {
+        Camera cam;
+        const Viewport viewport = testViewport(int2{800, 600});
+        cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
+
+        std::array<float2, 2> samples{float2{1.0f, 0.0f}, float2{-1.0f, 0.0f}};
+        cam.setJitterSamples(CameraJitterSamples{std::span<const float2>(samples)});
+        cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
+        PPR_TEST_ASSERT(std::abs(cam.getJitter().x) > kEps);
+
+        cam.setJitterSamples(CameraJitterSamples{std::span<const float2>{}});
+        cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
+
+        const CameraSnapshot &snap = cam.getSnapshot();
+        PPR_TEST_ASSERT(std::abs(snap.m_jitter.x) < kEps);
+        PPR_TEST_ASSERT(std::abs(snap.m_jitter.y) < kEps);
+        PPR_TEST_ASSERT(snap.m_has_camera_cut);
+        PPR_TEST_ASSERT(cam.getRevision() == 0u);
+    };
+
     PPR_UNIT_TEST (camera_mode_accessors) {
         // NOTE: getCameraMode reflects the last committed model; the pending
         // mode lands on the next updateModel.
@@ -517,6 +576,8 @@ export namespace pP::tests {
             camera_viewport_size,
             camera_velocity,
             camera_cut_velocity,
+            camera_frustum_from_update_model,
+            camera_empty_jitter,
             zero_to_one_frustum_near_plane,
             lookat_canonical,
             lookat_eye_to_origin,
