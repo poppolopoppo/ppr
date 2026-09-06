@@ -34,7 +34,7 @@ bool PulseEvent::pollEvent() noexcept {
 }
 
 void PulseEvent::resetEvent() noexcept {
-    m_signal.fetch_and(~signal_bit_v, std::memory_order_release);
+    m_signal.fetch_and(~signal_bit_v, std::memory_order_acq_rel);
 }
 
 void PulseEvent::emitEvent() noexcept {

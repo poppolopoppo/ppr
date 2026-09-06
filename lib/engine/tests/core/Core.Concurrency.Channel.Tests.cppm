@@ -561,6 +561,42 @@ export namespace pP::tests {
             signal.reset(*event);
         };
 
+        PPR_UNIT_TEST(select_reset_rearms_pending_commit) {
+            RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
+            RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
+
+            auto signal = select(chan_a, chan_b);
+
+            auto send_a = chan_a.producerReserve(8, RawChannel::wait_if_full);
+            PPR_TEST_ASSERT(send_a.has_value());
+            chan_a.producerSubmit(*send_a);
+
+            auto first = signal.poll();
+            PPR_TEST_ASSERT(first.has_value());
+            PPR_TEST_ASSERT(first->index() == 0u);
+
+            const auto read_a = chan_a.consumerAcquire(RawChannel::peek_without_blocking);
+            PPR_TEST_ASSERT(read_a.has_value());
+            chan_a.consumerRelease(*read_a);
+
+            auto send_b = chan_a.producerReserve(8, RawChannel::wait_if_full);
+            PPR_TEST_ASSERT(send_b.has_value());
+            chan_a.producerSubmit(*send_b);
+
+            signal.reset(*first);
+
+            auto second = signal.poll();
+            PPR_TEST_ASSERT(second.has_value());
+            PPR_TEST_ASSERT(second->index() == 0u);
+
+            const auto read_b = chan_a.consumerAcquire(RawChannel::peek_without_blocking);
+            PPR_TEST_ASSERT(read_b.has_value());
+            chan_a.consumerRelease(*read_b);
+
+            signal.reset(*second);
+            PPR_TEST_ASSERT(not signal.poll().has_value());
+        };
+
         PPR_UNIT_TEST(select_close) {
             RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
             RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
@@ -1254,6 +1290,7 @@ export namespace pP::tests {
             ChannelRaw::concurrent_close_wakeup,
             ChannelRaw::select_one,
             ChannelRaw::select_multiple,
+            ChannelRaw::select_reset_rearms_pending_commit,
             ChannelRaw::select_close,
             ChannelRaw::select_loop,
             ChannelRaw::select_same_channel_two_messages,

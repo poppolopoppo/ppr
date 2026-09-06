@@ -62,11 +62,15 @@ void RawChannel::unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISi
 }
 
 bool RawChannel::pollEvent() noexcept {
-    return m_on_produced.pollEvent();
+    return m_on_produced.pollEvent()
+        || m_read.load(std::memory_order_acquire) != m_commit.load(std::memory_order_acquire);
 }
 
 void RawChannel::resetEvent() noexcept {
     m_on_produced.resetEvent();
+    if (m_read.load(std::memory_order_acquire) != m_commit.load(std::memory_order_acquire)) {
+        m_on_produced.emitEvent();
+    }
 }
 
 auto RawChannel::flush() noexcept -> std::expected<void, EError> {
