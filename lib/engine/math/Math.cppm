@@ -164,10 +164,10 @@ export namespace pP {
                 }
             };
 
-            template<class>
+            template<class T>
             struct InvalidConstantType {
-                static_assert(false, "A program that instantiates a primary template of a mathematical constant "
-                    "variable template is ill-formed. (N4950 [math.constants]/3)");
+                static_assert(!sizeof(T *),
+                    "A program that instantiates a primary template of a mathematical constant variable template is ill-formed. (N4950 [math.constants]/3)");
             };
 
             template<typename T, auto>
@@ -314,6 +314,10 @@ export namespace pP {
         const float half_angle = std::atan2(sin_half, angular_delta.w);
         const float3 axis = sin_half > epsilon_v<> ? v / sin_half : math::axis_z;
 
+        // FP: mango vector-scalar operator* via `using` + ADL resolves under MSVC 19.52 /WX-clean;
+        // IDE CL-262.9437.136 cannot consume MSVC BMIs (Math.cppm:317).
+        // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
+        // NOLINTNEXTLINE(clang-diagnostic-error)
         return axis * (2.0 * half_angle / seconds);
     }
 
@@ -422,11 +426,11 @@ export namespace pP {
     // Single source of truth is epsilon_v above (10x eps for floats, 0 for ints).
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr bool isNormalized(const Vector<T, DimV> &value, const T epsilon = epsilon_v<T>) noexcept {
-        return abs(1 - dot2(value)) < epsilon;
+        return std::abs(1 - dot2(value)) < epsilon;
     }
 
     [[nodiscard]] constexpr bool isNormalized(const Quaternion &value, const float epsilon = epsilon_v<>) noexcept {
-        return abs(1 - dot2(value)) < epsilon;
+        return std::abs(1 - dot2(value)) < epsilon;
     }
 
     template<std::floating_point T, u32 DimV>
