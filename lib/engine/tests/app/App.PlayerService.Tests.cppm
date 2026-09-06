@@ -109,7 +109,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(removed_count == 1u);
     };
 
-    PPR_UNIT_TEST(app_player_service) {
+    PPR_UNIT_TEST(player_service) {
         _.recurse({
             player_service_keyboard_and_gamepad,
             gamepad_player_creation,

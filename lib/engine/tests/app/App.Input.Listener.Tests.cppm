@@ -117,7 +117,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(modulate_count == 1);
     };
 
-    PPR_UNIT_TEST(app_input_listener) {
+    PPR_UNIT_TEST(input_listener) {
         _.recurse({
             pressed_fires_started_handler,
             pressed_fires_triggered_handler,

@@ -8,7 +8,7 @@ import engine.app;
 import std;
 
 export namespace pP::tests {
-    PPR_UNIT_TEST(snapshot_captures_frame_messages) {
+    PPR_UNIT_TEST(captures_frame_messages) {
         constexpr PlayerIdentity id{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
@@ -30,9 +30,9 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(snapshot.m_messages.size() == 1u);
     };
 
-    PPR_UNIT_TEST(app_snapshot) {
+    PPR_UNIT_TEST(snapshot) {
         _.recurse({
-            snapshot_captures_frame_messages,
+            captures_frame_messages,
         });
     };
 }

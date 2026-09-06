@@ -105,7 +105,7 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(app_filtered_analog) {
+    PPR_UNIT_TEST(filtered_analog) {
         _.recurse({
             FilteredAnalogTests::initial_state,
             FilteredAnalogTests::add_accumulation,

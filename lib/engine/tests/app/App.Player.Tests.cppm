@@ -43,7 +43,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(player.getDeviceViews().size() == 1u);
     };
 
-    PPR_UNIT_TEST(app_player) {
+    PPR_UNIT_TEST(player) {
         _.recurse({
             player_id_ordering,
             player_construction_and_device_views,

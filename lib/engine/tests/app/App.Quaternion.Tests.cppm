@@ -63,7 +63,7 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(app_quaternion) {
+    PPR_UNIT_TEST(quaternion) {
         _.recurse({
             QuaternionTests::identity,
             QuaternionTests::yaw_pitch_roll,

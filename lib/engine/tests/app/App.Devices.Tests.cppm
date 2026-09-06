@@ -164,7 +164,7 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(app_devices) {
+    PPR_UNIT_TEST(devices) {
         _.recurse({
             Keyboard::construct_with_device_id,
             Keyboard::supported_keys_non_empty,

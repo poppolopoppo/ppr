@@ -8,7 +8,7 @@ import engine.app;
 import std;
 
 export namespace pP::tests {
-    PPR_UNIT_TEST(dispatch_player_mapping_to_action) {
+    PPR_UNIT_TEST(player_mapping_to_action) {
         constexpr PlayerIdentity id{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
@@ -50,9 +50,9 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(response == EInputMessageResponse::unhandled);
     };
 
-    PPR_UNIT_TEST(app_dispatch) {
+    PPR_UNIT_TEST(dispatch) {
         _.recurse({
-            dispatch_player_mapping_to_action,
+            player_mapping_to_action,
             is_any_key_returns_unhandled,
         });
     };

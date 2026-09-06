@@ -11,7 +11,7 @@ import std;
 
 export namespace pP::tests {
     namespace ProjectionConv {
-        PPR_UNIT_TEST (all_backends_use_one_projection) {
+        PPR_UNIT_TEST(all_backends_use_one_projection) {
             const auto perspective = rhi::getPerspectiveMatrix(0.75f, 16.0f / 9.0f, 0.1f, 1000.0f);
             const auto ortho = rhi::getOrthoMatrix(800.0f, 600.0f);
             PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(perspective.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
@@ -24,7 +24,7 @@ export namespace pP::tests {
     }
 
     namespace ViewportTypes {
-        PPR_UNIT_TEST (window_viewport_layout_switch_bumps_revision) {
+        PPR_UNIT_TEST(window_viewport_layout_switch_bumps_revision) {
             Window window{WindowHandle{reinterpret_cast<void *>(1)}, WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
             WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
             PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{800, 600}});
@@ -41,7 +41,7 @@ export namespace pP::tests {
             std::ignore = window.release();
         };
 
-        PPR_UNIT_TEST (camera_keeps_prior_state_on_zero_viewport) {
+        PPR_UNIT_TEST(camera_keeps_prior_state_on_zero_viewport) {
             const Viewport valid{PixelRect{int2{0, 0}, int2{800, 600}}, ViewportLayout{}};
             const Viewport zero{PixelRect{int2{0, 0}, int2{0, 0}}, ViewportLayout{}};
             Camera cam;
@@ -65,7 +65,7 @@ export namespace pP::tests {
             int value{};
         };
 
-        PPR_UNIT_TEST (child_store_shadows_parent) {
+        PPR_UNIT_TEST(child_store_shadows_parent) {
             MockSceneService scene;
             scene.value = 1;
             MockUiService ui;
@@ -88,7 +88,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(not parent.tryGet<MockUiService>().isValid());
         };
 
-        PPR_UNIT_TEST (child_erase_keeps_parent_visible) {
+        PPR_UNIT_TEST(child_erase_keeps_parent_visible) {
             MockSceneService scene;
             scene.value = 7;
             MockUiService ui;
@@ -107,7 +107,7 @@ export namespace pP::tests {
     }
 
     namespace ViewportGeometry {
-        PPR_UNIT_TEST (layout_variant_covers_all_alternatives) {
+        PPR_UNIT_TEST(layout_variant_covers_all_alternatives) {
             const PixelRect window{int2{100, 50}, int2{800, 600}};
 
             const Viewport full{window, ViewportLayout{}};
@@ -131,7 +131,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(std::abs(static_cast<float>(client.m_origin.y) - 200.5f) <= 1.0f);
         };
 
-        PPR_UNIT_TEST (screen_client_transforms_are_inverse) {
+        PPR_UNIT_TEST(screen_client_transforms_are_inverse) {
             const PixelRect window{int2{100, 50}, int2{800, 600}};
             const Viewport full{window, ViewportLayout{}};
             PPR_TEST_ASSERT(full.getClientRect() == window);
@@ -159,7 +159,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(round_screen.x == screen.x && round_screen.y == screen.y);
         };
 
-        PPR_UNIT_TEST (normalized_client_rect_round_trips) {
+        PPR_UNIT_TEST(normalized_client_rect_round_trips) {
             const PixelRect window{int2{16, 16}, int2{800, 800}};
             ViewportLayout::NormalizedWindowRect rect;
             rect.m_origin = float2{0.500625f, 0.500625f};
@@ -172,7 +172,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(std::abs(back.m_extent.y - rect.m_extent.y) < 1e-5f);
         };
 
-        PPR_UNIT_TEST (zero_window_propagates_empty_client) {
+        PPR_UNIT_TEST(zero_window_propagates_empty_client) {
             const Viewport empty{PixelRect{int2{100, 50}, int2{0, 0}}, ViewportLayout{}};
             PPR_TEST_ASSERT(empty.getClientRect().m_extent.x == 0 && empty.getClientRect().m_extent.y == 0);
 
@@ -185,7 +185,7 @@ export namespace pP::tests {
                 && degenerate.getNormalizedClientRect().m_extent.y == 0.0f);
         };
 
-        PPR_UNIT_TEST (window_viewport_tracks_shared_window) {
+        PPR_UNIT_TEST(window_viewport_tracks_shared_window) {
             Window window{WindowHandle{reinterpret_cast<void *>(1)}, WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
             {
                 WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
@@ -206,7 +206,7 @@ export namespace pP::tests {
     }
 
     namespace RectContains {
-        PPR_UNIT_TEST (point_truth_table_int) {
+        PPR_UNIT_TEST(point_truth_table_int) {
             const PixelRect rect{int2{10, 20}, int2{80, 60}};
             PPR_TEST_ASSERT(rect.contains(int2{10, 20}));
             PPR_TEST_ASSERT(rect.contains(int2{90, 80}));
@@ -219,7 +219,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(not rect.contains(int2{50, 81}));
         };
 
-        PPR_UNIT_TEST (point_truth_table_float) {
+        PPR_UNIT_TEST(point_truth_table_float) {
             const NormalizedRect rect{float2{0.25f, 0.25f}, float2{0.5f, 0.5f}};
             PPR_TEST_ASSERT(rect.contains(float2{0.25f, 0.25f}));
             PPR_TEST_ASSERT(rect.contains(float2{0.75f, 0.75f}));
@@ -230,7 +230,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(not rect.contains(float2{0.5f, 0.76f}));
         };
 
-        PPR_UNIT_TEST (rect_truth_table) {
+        PPR_UNIT_TEST(rect_truth_table) {
             const PixelRect outer{int2{0, 0}, int2{100, 100}};
             PPR_TEST_ASSERT(outer.contains(outer));
             const PixelRect inner{int2{10, 10}, int2{20, 20}};
@@ -243,7 +243,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(not outer.contains(disjoint));
         };
 
-        PPR_UNIT_TEST (empty_and_inverted_reject) {
+        PPR_UNIT_TEST(empty_and_inverted_reject) {
             const PixelRect empty{int2{5, 5}, int2{0, 0}};
             PPR_TEST_ASSERT(empty.contains(int2{5, 5}));
             PPR_TEST_ASSERT(not empty.contains(int2{6, 5}));
@@ -256,7 +256,7 @@ export namespace pP::tests {
     }
 
     namespace RectNormalize {
-        PPR_UNIT_TEST (normalize_maps_corners_and_center) {
+        PPR_UNIT_TEST(normalize_maps_corners_and_center) {
             const PixelRect rect{int2{10, 20}, int2{80, 60}};
             const float2 origin_uv = rect.normalize(int2{10, 20});
             PPR_TEST_ASSERT(origin_uv.x == 0.0f && origin_uv.y == 0.0f);
@@ -266,7 +266,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(center_uv.x == 0.5f && center_uv.y == 0.5f);
         };
 
-        PPR_UNIT_TEST (normalize_denormalize_round_trip) {
+        PPR_UNIT_TEST(normalize_denormalize_round_trip) {
             const NormalizedRect rect{float2{0.25f, 0.25f}, float2{0.5f, 0.5f}};
             const float2 point{0.4f, 0.6f};
             const float2 back = rect.denormalize(rect.normalize(point));
@@ -275,7 +275,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(std::abs(clamped.x - 0.75f) < 1e-5f && std::abs(clamped.y - 0.25f) < 1e-5f);
         };
 
-        PPR_UNIT_TEST (normalize_zero_extent_fails, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(normalize_zero_extent_fails, UnitTest::expect_crash) {
             if constexpr (PPR_ENABLE_DEBUG) {
                 const PixelRect empty{int2{5, 5}, int2{0, 0}};
                 std::ignore = empty.normalize(int2{5, 5});
@@ -283,7 +283,7 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST (app_viewport){
+    PPR_UNIT_TEST(viewport){
         _.recurse({
             ProjectionConv::all_backends_use_one_projection,
             ViewportTypes::window_viewport_layout_switch_bumps_revision,

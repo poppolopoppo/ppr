@@ -25,7 +25,7 @@ export namespace pP::tests {
         return Viewport{PixelRect{int2{0, 0}, extent}, ViewportLayout{}};
     }
 
-    PPR_UNIT_TEST (camera_model) {
+    PPR_UNIT_TEST(camera_model) {
         Camera cam;
         CameraModel model{};
         model.m_origin = float3{1.0f, 2.0f, 3.0f};
@@ -43,7 +43,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(distance(snap.m_origin, model.m_origin) < kEps);
     };
 
-    PPR_UNIT_TEST (lookat_canonical) {
+    PPR_UNIT_TEST(look_at_canonical) {
         const float4x4 view = float4x4::lookat(float3{0.0f, 0.0f, 1.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 expected{
             float4{1.0f, 0.0f, 0.0f, 0.0f},
@@ -54,7 +54,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(matEq(view, expected));
     };
 
-    PPR_UNIT_TEST (lookat_eye_to_origin) {
+    PPR_UNIT_TEST(look_at_eye_to_origin) {
         const float3 eye{1.0f, 2.0f, 3.0f};
         const float3 target{4.0f, 5.0f, 6.0f};
         const float3 up{0.0f, 1.0f, 0.0f};
@@ -66,7 +66,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(eye_view.w - 1.0f) < kEps);
     };
 
-    PPR_UNIT_TEST (lookat_target_distance) {
+    PPR_UNIT_TEST(look_at_target_distance) {
         const float3 eye{0.0f, 0.0f, -5.0f};
         const float3 target{0.0f, 0.0f, 0.0f};
         const float3 up{0.0f, 1.0f, 0.0f};
@@ -79,7 +79,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(target_view.w - 1.0f) < kEps);
     };
 
-    PPR_UNIT_TEST (lookat_orthonormal_bis) {
+    PPR_UNIT_TEST(look_at_orthonormal_bis) {
         const float4x4 view = float4x4::lookat(float3{4.0f, 5.0f, 6.0f}, float3{1.0f, 2.0f, 3.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4 x = view[0];
         const float4 y = view[1];
@@ -92,7 +92,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(dot(y, z)) < kEps);
     };
 
-    PPR_UNIT_TEST (camera_viewport_size) {
+    PPR_UNIT_TEST(viewport_size) {
         Camera cam;
         cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, testViewport(int2{1920, 1080}));
         PPR_TEST_ASSERT(cam.getSnapshot().m_viewport_size.x == 1920.0f);
@@ -100,7 +100,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(cam.getSnapshot().m_aspect_ratio - 1920.0f / 1080.0f) < kEps);
     };
 
-    PPR_UNIT_TEST (camera_velocity) {
+    PPR_UNIT_TEST(velocity) {
         Camera cam;
         const Viewport viewport = testViewport(int2{800, 600});
         cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
@@ -115,7 +115,7 @@ export namespace pP::tests {
 
     // Camera cuts are opt-in (teleport/reset only): a cut frame zeroes velocity and
     // re-baselines history so the teleport delta never leaks into later frames.
-    PPR_UNIT_TEST (camera_cut_velocity) {
+    PPR_UNIT_TEST(cut_velocity) {
         Camera cam;
         const Viewport viewport = testViewport(int2{800, 600});
         cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
@@ -142,7 +142,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(cam.getCameraVelocity().z) < kEps);
     };
 
-    PPR_UNIT_TEST (zero_to_one_frustum_near_plane) {
+    PPR_UNIT_TEST(zero_to_one_frustum_near_plane) {
         const float4x4 projection = rhi::getPerspectiveMatrix(1.0f, 1.0f, 0.1f, 100.0f);
         const Frustum frustum = makeZeroToOneFrustum(projection);
         PPR_TEST_ASSERT(frustum.isVisible(Box{float3{0.0f, 0.0f, 1.0f}, 0.1f}));
@@ -162,7 +162,7 @@ export namespace pP::tests {
 
     // Phase 1: Camera-constructed frustum pins the unjittered VP remapped to
     // D3D [0,1] depth (not adapter isolation only).
-    PPR_UNIT_TEST (camera_frustum_from_update_model) {
+    PPR_UNIT_TEST(frustum_from_update_model) {
         Camera cam;
         CameraModel model{};
         model.m_z_near = 0.1f;
@@ -199,7 +199,7 @@ export namespace pP::tests {
 
     // Phase 1: engaged-but-empty jitter behaves as no jitter — no crash
     // (never revision % 0), cut signaled, jitter phase sane.
-    PPR_UNIT_TEST (camera_empty_jitter) {
+    PPR_UNIT_TEST(empty_jitter) {
         Camera cam;
         const Viewport viewport = testViewport(int2{800, 600});
         cam.updateModel(std::chrono::seconds{1}, CameraModel{}, viewport);
@@ -219,7 +219,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(cam.getRevision() == 0u);
     };
 
-    PPR_UNIT_TEST (camera_mode_accessors) {
+    PPR_UNIT_TEST(mode_accessors) {
         // NOTE: getCameraMode reflects the last committed model; the pending
         // mode lands on the next updateModel.
         Camera cam;
@@ -233,7 +233,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(cam.getCameraMode() == ECameraProjection::perspective);
     };
 
-    PPR_UNIT_TEST (camera_state_accessors) {
+    PPR_UNIT_TEST(state_accessors) {
         Camera cam;
         const Viewport viewport = testViewport(int2{800, 600});
         // Default state: zero-positioned with no previous snapshot yet.
@@ -257,7 +257,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(distance(cam.getPreviousSnapshot()->m_origin, float3{1.0f, 2.0f, 3.0f}) < kEps);
     };
 
-    PPR_UNIT_TEST (camera_basis_accessors) {
+    PPR_UNIT_TEST(basis_accessors) {
         Camera cam;
         CameraModel model{};
         // NOTE: normalize — rotateXYZ's raw output is not guaranteed unit
@@ -273,7 +273,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(std::abs(cam.getFarZ() - model.m_z_far) < kEps);
     };
 
-    PPR_UNIT_TEST (camera_inverse_accessors) {
+    PPR_UNIT_TEST(inverse_accessors) {
         Camera cam;
         CameraModel model{};
         model.m_origin = float3{0.0f, 0.0f, 5.0f};
@@ -285,7 +285,7 @@ export namespace pP::tests {
     };
 
     // W flies forward (+Z): a single 250ms press moves a quarter unit.
-    PPR_UNIT_TEST (free_camera_translate_moves_origin) {
+    PPR_UNIT_TEST(free_camera_translate_moves_origin) {
         FreeCameraController ctrl;
         InputMapping mapping{"FreeCameraMove"};
         ctrl.provideInputActionKeyMappings(mapping);
@@ -302,7 +302,7 @@ export namespace pP::tests {
     };
 
     // lookAt(eye, target, up) positions the camera and faces the target.
-    PPR_UNIT_TEST (free_camera_lookAt_target) {
+    PPR_UNIT_TEST(free_camera_look_at_target) {
         FreeCameraController ctrl;
         const float3 eye{0.0f, 0.0f, -5.0f};
         const float3 target{0.0f, 0.0f, 0.0f};
@@ -319,7 +319,7 @@ export namespace pP::tests {
     };
 
     // lookAt(eye, heading, pitch) applies the exact yaw-pitch rotation.
-    PPR_UNIT_TEST (free_camera_lookAt_heading_pitch) {
+    PPR_UNIT_TEST(free_camera_look_at_heading_pitch) {
         FreeCameraController ctrl;
         const float3 eye{1.0f, 2.0f, 3.0f};
         ctrl.lookAt(eye, 0.5f, 0.25f, true);
@@ -331,7 +331,7 @@ export namespace pP::tests {
     };
 
     // A teleport skips delta consumption for that frame.
-    PPR_UNIT_TEST (free_camera_teleport_skips_delta) {
+    PPR_UNIT_TEST(free_camera_teleport_skips_delta) {
         FreeCameraController ctrl;
         InputMapping mapping{"FreeCameraTeleport"};
         ctrl.provideInputActionKeyMappings(mapping);
@@ -349,7 +349,7 @@ export namespace pP::tests {
     };
 
     // Pointer motion rotates only while the look button is held (RMB).
-    PPR_UNIT_TEST (free_camera_mouse_look_gate) {
+    PPR_UNIT_TEST(free_camera_mouse_look_gate) {
         FreeCameraController ctrl;
         ctrl.setRotationInertia(2.0f);
         ctrl.lookAt(float3{0.0f, 0.0f, -5.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f}, true);
@@ -386,7 +386,7 @@ export namespace pP::tests {
     // Q/E oppose: Q yaws one way, E yaws the other, with equal magnitude.
     // Pins the -float2(1,0)/+float2(1,0) rotation wiring (both keys fed the
     // same +speed before, so Q and E rotated identically).
-    PPR_UNIT_TEST (free_camera_qe_oppose) {
+    PPR_UNIT_TEST(free_camera_qe_oppose) {
         const auto yawForward = [](const InputKey key) {
             FreeCameraController ctrl;
             InputMapping mapping{"FreeCameraQEOppose"};
@@ -417,7 +417,7 @@ export namespace pP::tests {
     // pure-pitch input pitches (moves Y, not X). Pins the
     // rotateXYZ(pitch, heading, roll) argument order: swapped arguments
     // would turn E-key input into pitch and pointer-Y input into yaw.
-    PPR_UNIT_TEST (free_camera_heading_pitch_wiring) {
+    PPR_UNIT_TEST(free_camera_heading_pitch_wiring) {
         const auto driveKey = [](const InputKey key) {
             FreeCameraController ctrl;
             InputMapping mapping{"FreeCameraHeadingWiring"};
@@ -459,7 +459,7 @@ export namespace pP::tests {
     };
 
     // Real controller accessors return the configured values.
-    PPR_UNIT_TEST (free_camera_accessors) {
+    PPR_UNIT_TEST(free_camera_accessors) {
         FreeCameraController ctrl;
         PPR_TEST_ASSERT(distance(ctrl.getPosition(), float3{zero_v}) < kEps);
         PPR_TEST_ASSERT(std::abs(ctrl.getFov() - std::numbers::pi_v<float> / 3.0f) < kEps);
@@ -479,7 +479,7 @@ export namespace pP::tests {
     };
 
     // Pan maps WASD to plane axes (W/S vertical, A/D horizontal) and Q/E to depth.
-    PPR_UNIT_TEST (pan_camera_key_directions) {
+    PPR_UNIT_TEST(pan_camera_key_directions) {
         const auto displacement = [](const InputKey key) {
             PanCameraController ctrl;
             InputMapping mapping{"PanCameraDirections"};
@@ -524,7 +524,7 @@ export namespace pP::tests {
     };
 
     // Orbit keeps target/radius: lookAt fixes both, setOrbitRadius re-seats the eye.
-    PPR_UNIT_TEST (orbit_camera_lookAt_and_radius) {
+    PPR_UNIT_TEST(orbit_camera_look_at_and_radius) {
         OrbitCameraController ctrl;
         const float3 eye{4.0f, 3.0f, -2.0f};
         const float3 target{-1.0f, 1.0f, 5.0f};
@@ -543,7 +543,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(model.m_has_camera_cut);
     };
 
-    PPR_UNIT_TEST (math_inverse_identity) {
+    PPR_UNIT_TEST(math_inverse_identity) {
         const float4x4 identity{
             float4{1.0f, 0.0f, 0.0f, 0.0f},
             float4{0.0f, 1.0f, 0.0f, 0.0f},
@@ -560,7 +560,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(matEq(inverse(scale) * scale, identity));
     };
 
-    PPR_UNIT_TEST (math_inverse_involution) {
+    PPR_UNIT_TEST(math_inverse_involution) {
         const float4x4 m{
             float4{1.0f, 2.0f, 3.0f, 0.0f},
             float4{0.0f, 1.0f, 4.0f, 0.0f},
@@ -570,28 +570,28 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(matEq(inverse(inverse(m)), m));
     };
 
-    PPR_UNIT_TEST (app_camera){
+    PPR_UNIT_TEST(camera){
         _.recurse({
             camera_model,
-            camera_viewport_size,
-            camera_velocity,
-            camera_cut_velocity,
-            camera_frustum_from_update_model,
-            camera_empty_jitter,
+            viewport_size,
+            velocity,
+            cut_velocity,
+            frustum_from_update_model,
+            empty_jitter,
             zero_to_one_frustum_near_plane,
-            lookat_canonical,
-            lookat_eye_to_origin,
-            lookat_target_distance,
-            lookat_orthonormal_bis,
+            look_at_canonical,
+            look_at_eye_to_origin,
+            look_at_target_distance,
+            look_at_orthonormal_bis,
             math_inverse_identity,
             math_inverse_involution,
-            camera_mode_accessors,
-            camera_state_accessors,
-            camera_basis_accessors,
-            camera_inverse_accessors,
+            mode_accessors,
+            state_accessors,
+            basis_accessors,
+            inverse_accessors,
             free_camera_translate_moves_origin,
-            free_camera_lookAt_target,
-            free_camera_lookAt_heading_pitch,
+            free_camera_look_at_target,
+            free_camera_look_at_heading_pitch,
             free_camera_teleport_skips_delta,
             free_camera_mouse_look_gate,
             free_camera_qe_oppose,
@@ -599,7 +599,7 @@ export namespace pP::tests {
             free_camera_accessors,
             pan_camera_key_directions,
             pan_camera_parallel_plane,
-            orbit_camera_lookAt_and_radius,
+            orbit_camera_look_at_and_radius,
         });
 
     };

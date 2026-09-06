@@ -47,7 +47,7 @@ namespace pP {
 }
 
 export namespace pP::tests {
-    PPR_UNIT_TEST(player_graph_empty_initially) {
+    PPR_UNIT_TEST(empty_initially) {
         const PlayerGraph graph{};
         u32 count = 0u;
         graph.enumeratePlayers([&](const SharedPlayer &) noexcept -> std::error_code {
@@ -57,7 +57,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(count == 0u);
     };
 
-    PPR_UNIT_TEST(player_graph_add_keyboard_player) {
+    PPR_UNIT_TEST(add_keyboard_player) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -71,7 +71,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(player->getIdentity().m_device_id == InputDeviceID{100u});
     };
 
-    PPR_UNIT_TEST(player_graph_get_player_by_id) {
+    PPR_UNIT_TEST(get_player_by_id) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -82,13 +82,13 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(retrieved.get() != nullptr);
     };
 
-    PPR_UNIT_TEST(player_graph_get_nonexistent_player_returns_null) {
+    PPR_UNIT_TEST(get_nonexistent_player_returns_null) {
         const PlayerGraph graph{};
         SharedPlayer retrieved = graph.getPlayer(PlayerId{999u});
         PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
-    PPR_UNIT_TEST(player_graph_find_player_for_device) {
+    PPR_UNIT_TEST(find_player_for_device) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -104,13 +104,13 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(*found == user_id);
     };
 
-    PPR_UNIT_TEST(player_graph_find_nonexistent_device_returns_nullopt) {
+    PPR_UNIT_TEST(find_nonexistent_device_returns_nullopt) {
         const PlayerGraph graph{};
         auto found = graph.findPlayerForDevice(InputDeviceID{999u});
         PPR_TEST_ASSERT(!found.has_value());
     };
 
-    PPR_UNIT_TEST(player_graph_enumerate_players) {
+    PPR_UNIT_TEST(enumerate_players) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -131,7 +131,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(has_gamepad);
     };
 
-    PPR_UNIT_TEST(player_graph_remove_player) {
+    PPR_UNIT_TEST(remove_player) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -145,14 +145,14 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
-    PPR_UNIT_TEST(player_graph_remove_nonexistent_player_fails) {
+    PPR_UNIT_TEST(remove_nonexistent_player_fails) {
         PlayerGraph graph{};
         GraphTestService service{};
         auto err = graph.removePlayer(service, PlayerId{999u});
         PPR_TEST_ASSERT(err != default_value_v);
     };
 
-    PPR_UNIT_TEST(player_graph_clear_removes_all_players) {
+    PPR_UNIT_TEST(clear_removes_all_players) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -169,7 +169,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(count == 0u);
     };
 
-    PPR_UNIT_TEST(player_graph_get_or_create_keyboard_is_idempotent) {
+    PPR_UNIT_TEST(graph_get_or_create_keyboard_is_idempotent) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -182,7 +182,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(first->get() == second->get());
     };
 
-    PPR_UNIT_TEST(player_graph_when_player_added_callback) {
+    PPR_UNIT_TEST(when_player_added_callback) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -197,7 +197,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(call_count == 1u);
     };
 
-    PPR_UNIT_TEST(player_graph_when_player_removed_callback) {
+    PPR_UNIT_TEST(when_player_removed_callback) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -215,7 +215,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(call_count == 1u);
     };
 
-    PPR_UNIT_TEST(player_graph_clear_also_clears_callbacks) {
+    PPR_UNIT_TEST(clear_also_clears_callbacks) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -233,22 +233,22 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(added_count == 0u);
     };
 
-    PPR_UNIT_TEST(app_player_graph) {
+    PPR_UNIT_TEST(player_graph) {
         _.recurse({
-            player_graph_empty_initially,
-            player_graph_add_keyboard_player,
-            player_graph_get_player_by_id,
-            player_graph_get_nonexistent_player_returns_null,
-            player_graph_find_player_for_device,
-            player_graph_find_nonexistent_device_returns_nullopt,
-            player_graph_enumerate_players,
-            player_graph_remove_player,
-            player_graph_remove_nonexistent_player_fails,
-            player_graph_clear_removes_all_players,
-            player_graph_get_or_create_keyboard_is_idempotent,
-            player_graph_when_player_added_callback,
-            player_graph_when_player_removed_callback,
-            player_graph_clear_also_clears_callbacks,
+            empty_initially,
+            add_keyboard_player,
+            get_player_by_id,
+            get_nonexistent_player_returns_null,
+            find_player_for_device,
+            find_nonexistent_device_returns_nullopt,
+            enumerate_players,
+            remove_player,
+            remove_nonexistent_player_fails,
+            clear_removes_all_players,
+            graph_get_or_create_keyboard_is_idempotent,
+            when_player_added_callback,
+            when_player_removed_callback,
+            clear_also_clears_callbacks,
         });
     };
 }

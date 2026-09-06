@@ -318,7 +318,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     // ------------------------------------------------------------------
     // Parent aggregator
     // ------------------------------------------------------------------
-    PPR_UNIT_TEST(app_shader) {
+    PPR_UNIT_TEST(shader) {
         _.recurse({
             ShaderErrC::errc_enum_values,
             ShaderErrC::errc_category_name,

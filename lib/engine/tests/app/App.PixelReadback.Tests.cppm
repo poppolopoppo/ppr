@@ -73,7 +73,7 @@ export namespace pP::tests {
         }
     }
 
-    PPR_UNIT_TEST (app_pixel_readback) {
+    PPR_UNIT_TEST(pixel_readback) {
         using namespace detail;
 
         TestApp app{"PixelReadback", std::span<const char * const>{}};
@@ -154,7 +154,7 @@ export namespace pP::tests {
             tex_desc.defaultState = rhi::ResourceState::RenderTarget;
             tex_desc.label = "pixel readback target";
             if (const auto rc = pP::rhi::result(device.createTexture(tex_desc, nullptr, tex.writeRef())); rc) {
-                _.logFmt("skipping app_pixel_readback: offscreen texture creation failed");
+                _.logFmt("skipping pixel_readback: offscreen texture creation failed");
                 return nullptr;
             }
             return tex;
@@ -173,7 +173,7 @@ export namespace pP::tests {
 
             std::vector<std::uint8_t> buf(layout.sizeInBytes);
             if (const auto rc = pP::rhi::result(device.readTexture(tex, 0, 0, layout, buf.data())); rc) {
-                _.logFmt("skipping app_pixel_readback: texture readback failed");
+                _.logFmt("skipping pixel_readback: texture readback failed");
                 return {};
             }
             return buf;
