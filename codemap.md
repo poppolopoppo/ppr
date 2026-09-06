@@ -2,8 +2,9 @@
 
 ## Project Responsibility
 
-A high-performance, real-time C++23 game engine built on C++20 modules. PPR provides a layered foundation (core → math →
-shader → rhi → app) with a service-locator architecture, a tiered allocator hierarchy, lock-free concurrency primitives,
+A high-performance, real-time C++23 game engine built on C++20 modules. PPR provides a flat fan-out foundation
+(engine.app → engine.core/engine.math/engine.shader/engine.rhi; engine.rhi imports engine.shader;
+engine.shader → engine.core; engine.math → engine.core) with a service-locator architecture, a tiered allocator hierarchy, lock-free concurrency primitives,
 a platform HAL (Windows/Linux/Darwin/Generic), Slang-based shader compilation, and a Slang-RHI GPU abstraction. The
 `game/` demo hosts the `Application` run loop.
 
@@ -18,15 +19,17 @@ a platform HAL (Windows/Linux/Darwin/Generic), Slang-based shader compilation, a
 
 ## Architecture Overview
 
-Module dependency chain (entry → foundation):
+Module dependencies (flat fan-out, per CMake):
 
 ```
-game/main.cpp → engine.app → engine.rhi → engine.shader → engine.math → engine.core
-                                  ↘ engine.core (HAL, memory, containers, concurrency, IO)
+game/main.cpp → engine.app → engine.core / engine.math / engine.shader / engine.rhi
+                 engine.rhi → engine.core / engine.math / engine.shader
+                 engine.shader → engine.core
+                 engine.math → engine.core
 ```
 
 - **Service Locator**: `IService` → compile-time `typeUid<T>()` → `ServicesStore` with parent-chain fallback →
-  `ServiceInjector`. Per-viewport child stores (`m_scene_services`, `m_ui_services`) chain to the root.
+  `ServiceInjector`. Per-viewport child store (`m_ui_services`) chains to the root.
 - **Allocator Composition**: `TAllocator` → `TOwningAllocator` → `TBlockAllocator` → `TArenaAllocator`; concrete
   allocators composed via `InSitu`, `Fallback`, `Threshold`, `Pooling`, `LocalCache`, `HintedPooling`; wrapped by
   `Allocator<A>`, `PMR`, `STL<A>`.
@@ -57,13 +60,12 @@ game/main.cpp → engine.app → engine.rhi → engine.shader → engine.math �
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: Application lifecycle, re-exports all app submodules.                           | [View Map](lib/engine/app/codemap.md)               |
-| `lib/engine/app/camera/`        | Camera abstractions.                                                                                  | [View Map](lib/engine/app/camera/codemap.md)        |
-| `lib/engine/app/input/`         | IInputService, InputMapping, InputAction, modifier/trigger events.                                    | [View Map](lib/engine/app/input/codemap.md)         |
-| `lib/engine/app/input/device/`  | Keyboard/mouse/gamepad device state layer.                                                            | [View Map](lib/engine/app/input/device/codemap.md)  |
+| `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer (10 flat files).                      | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform abstraction interface.                                                                      | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
 | `lib/engine/app/renderer/`      | Generic Renderer (surfaces/queue/submission) + TrianglePass scene feature.                       | [View Map](lib/engine/app/renderer/codemap.md)      |
+| `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | App-level service registration/lifecycle.                                                             | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService).                                                             | [View Map](lib/engine/app/ui/codemap.md)            |
 | `lib/engine/app/window/`        | IWindowService: monitor enumeration, window lifecycle.                                                | [View Map](lib/engine/app/window/codemap.md)        |

@@ -25,6 +25,11 @@ include `context7`, `gh_grep`, `codegraph`, `searxng`, and `crawl4ai`. Generic `
 configured workflow. `oracle`'s default only includes `simplify`; the custom PPR skills below that route review work to
 `oracle` (`code-reviewer`) need an explicit grant.
 
+Caveat: the table above is simplified — `explorer` also carries `git-log-fast-navigation` plus CLion/codegraph
+access, `oracle` carries 5 skills (`simplify`, `code-reviewer`, `concurrency-patterns`, `memory-allocator`,
+`hal-developer`), and skill/MCP grants are per-preset blocks in `.opencode/oh-my-opencode-slim.json`, not one
+global roster.
+
 ## Bundled OMO Skills — use these instead of reinventing them
 
 | Skill                 | Purpose                                                                     | Invoke                                   |
@@ -83,13 +88,13 @@ in parallel and synthesizes one answer, with real provider diversity a single-mo
 
 ## Architecture Overview
 
-Module dependency chain (entry point):
+Module dependency chain (entry point). `engine.app` depends on `engine.core`/`engine.math`/`engine.rhi`;
+`engine.rhi` imports `engine.shader`:
 
 ```
 game/main.cpp → engine.app → engine.core  (foundation)
                             → engine.math  (vector math)
-                            → engine.shader (shader compilation)
-                            → engine.rhi   (GPU)
+                            → engine.rhi   (GPU, imports engine.shader)
 ```
 
 ### engine.core — Foundation Library (`lib/engine/core/`)
@@ -97,21 +102,25 @@ game/main.cpp → engine.app → engine.core  (foundation)
 31 module partitions providing all fundamental abstractions:
 
 - **Types & Safety** (`Core.Types.cppm`): `u8`-`u64`/`i8`-`i64` shorthands, sentinel values (`default_value_v`,
-  `zero_v`, `none_v`, `umax_v`), `Numeric<T,TagT>` strong wrapper, `hash_t`, `relocatable<T>` trait
-- **Containers** (5 partitions): `Stack<T,N>`, `RingBuffer<T,N>`, `SparseVector<T>`, `StableVector<T>`, `HashMap<K,V>`/
-  `HashSet<K>`, `FlatMap<K,V>`, `Bitmask<T,N>`, `ArrayView`, `RelativeView`, `TransformView`, `RelPtr`, `TagPtr`
-- **Memory** (6 partitions): Allocator concepts (`TAllocator`, `TOwningAllocator`, `TBlockAllocator`, `TArenaAllocator`,
-  `TSlabAllocator`), `GPA` (operator new), `OS` (page alloc), `PMR` (polymorphic dispatch), `HugePage` (2 MiB pools),
-  `SmallPage` (32/64 KiB pools), `Arena`/`ScopedArena`/`ScratchPad` (TLS), `PagePool`/`LocalCache`/`HintedPooling`,
-  composite allocators (`InSitu`, `Fallback`, `Threshold`, `Pooling`, `Static`), `Allocation<T,A>`, `Allocator<A>`,
+  `zero_v`, `none_v`, `max_v`, `min_v`), `Numeric<T,TagT>` strong wrapper, `hash_t`, `relocatable<T>` trait
+- **Containers**: `Stack<T,N>`, `RingBuffer<T,N>`, `SparseVector<T>`, `StableVector<T>`, `HashMap<K,V>`,
+  `FlatSet<K>` (ordered), `FlatMap<K,V>` (`using FlatMap = std::flat_map`), `Bitmask<T,N>`, `ArrayView`,
+  `RelativeView`, `TransformView`, `RelPtr`, `TagPtr`
+- **Memory**: Allocator concepts (`TAllocator`, `TOwningAllocator`, `TResizableAllocator`, `TBlockAllocator`,
+  `TArenaAllocator`, `TSlabAllocator`), `GPA` (operator new), `OS` (page alloc), `PMR` (polymorphic dispatch),
+  `HugePage` (2 MiB pools), `SmallPage` (32/64 KiB pools), `extern template Arena` / `ScratchPad` (TLS),
+  `PagePool`/`LocalCache`/`HintedPooling`, composite pieces (`InSituSlab`, `InSituFallback`/`InSituThreshold`
+  aliases, `Fallback`, `Threshold`, `Pooling`, `HintedPooling`), `Allocation<T,A>`, `Allocator<A>`,
   `STL<A>` adapter, poison/ASAN annotations
 - **Concurrency** (3 partitions): `RawChannel` (lock-free MPSC), `IEvent`/`ISignal`/`Signal<Events...>` (compile-time
   event multiplexing), `IContext`/`SharedContext` (Go-style cancellation tree)
-- **HAL** (`Core.HAL.cppm`): Platform abstraction over `pP::hal` — page memory, ring buffer, async I/O, file watching,
-  process spawning, debugger, deadline timers, native string transcoding. Implemented per-platform in
+- **HAL** (`Core.HAL.cppm`): Platform abstraction over `pP::hal` — `page*` memory, `ringBuffer*` buffer,
+  async I/O, file watching, process spawning, debugger, deadline timers, native string transcoding. Implemented
+  per-platform in
   `lib/engine/core/hal/<platform>/` (windows, linux, darwin, generic — Windows has 13 files, Linux/Darwin/Generic have
   10 each)
-- **IO** (3 partitions): `hal::io` submit/poll/wait async I/O, memory-mapped files, directory watching
+- **IO** (3 partitions): `IoFile`/`IoRequest`/`IoPort` wrappers over `hal::io` (submit/poll/wait async I/O,
+  memory-mapped files, directory watching)
 - **Services** (`Core.Service.cppm`): `IService` base with compile-time `typeUid<T>()` hash key, `ServicesStore`
   (thread-safe `FlatMap` with parent-chain fallback), `ServiceInjector` for implicit DI
 - **Other**: `Logger`, `TimerManager`, `UnitTest` framework, `Callback<T>` with RAII Handle, `function_ref`, `Opaque`
@@ -123,7 +132,8 @@ Wraps `mango::math` into `namespace pP`:
 
 - Type aliases: `float2/3/4`, `int2/3/4`, `uint2/3/4`, `float3x3`, `float4x4`
 - Functions: `dot`, `dot2`, `lerp`, `normalize`, `distance`, `vector_cast`, `checked_cast` for vectors
-- Matrix ops: `translate`, `scale`, `rotate`, `lookAt`, `inverse`, `affineInverse`, `adjoint`, `oblique`
+- Matrix ops: `inverse` re-exported; other transforms come from callers (no `translate`/`scale`/`rotate`/`lookat`/
+  `affineInverse`/`adjoint`/`oblique` in `Math.cppm`)
 - Integration: `hashValue()` for hashing, `opaqueValue()` for serialization
 
 ### engine.rhi — GPU Abstraction (`lib/engine/rhi/RHI.cppm` + `RHI.cpp`)
@@ -137,43 +147,38 @@ Wraps Slang-RHI into `namespace pP::rhi`:
   row-vector matrices with [0,1] depth shared by all renderers
 - `IRhiService` interface — singleton service pattern wrapping `rhi::IRHI` and `rhi::IDevice` lifecycle;
   `createRenderPipeline()` virtual for pipeline creation from a render pass
-- Implementation note: `App.Viewport.cppm`/`App.Viewport.cpp` is a partition pair — the `.cppm` holds declarations, the
-  `.cpp` uses `module engine.app; import :viewport;` (never `module engine.app:viewport;`)
 
 ### engine.shader — Shader Compilation (`lib/engine/shader/Shader.cppm` + `Shader.cpp`)
 
-Provides Slang shader compilation with hot-reload and background compilation:
+Provides Slang shader compilation:
 
-- `IShaderService` interface — singleton service pattern wrapping `slang::Session` and `slang::Registry` lifecycle
-- `ModuleHandle` — RAII wrapper for compiled shader modules
-- File watching and hot-reload support via `hal::io`
-- Background compile thread for async shader compilation
-- Imported by `engine.rhi` (for `IShaderProgram` creation) and `engine.app` (for pipeline rebuild on reload)
+- `IShaderService` interface — singleton service pattern wrapping `IGlobalSession`/`ISession` lifecycle
+- `ModuleHandle` — RAII wrapper (`SharedModule`) for compiled shader modules
+- File loading via `io::mapFile` (no file-watch hot-reload, no background compile thread)
+- Imported by `engine.rhi` (for `IShaderProgram` creation); `game/main.cpp` imports core/math/rhi/app only
 
-### engine.app — Application Layer (`lib/engine/app/`, 24 partitions)
+### engine.app — Application Layer (`lib/engine/app/`, 27 `.cppm`: umbrella + 26 partitions)
 
 - **Application** (`App.Application.cppm`): Main loop class with virtual `initialize()`/`update()`/`render()`/
-  `terminate()`, service store, per-frame timing, exit code management, directory resolution
-  (install/config/content/working)
-- **Input** (8 partitions): `IInputService` — keyboard/mouse/gamepad device states, listener stack (`pushInputListener`/
-  `popInputListener`), action/mapping system (`InputMapping` binds keys to `InputAction` with `InputModifierEvent`/
-  `InputTriggerEvent` callbacks), device enumeration
-- **Window** (2 partitions): `IWindowService` — monitor enumeration, window creation/destruction/resize/move, event
-  callbacks (`whenWindowResized`, `whenWindowFocused`, etc.)
+  `shutdown()`, service store, per-frame timing, directory resolution (install/config/content/working;
+  `m_configDir` getter-only, no exit-code member), child `m_ui_services` store chained to the root store —
+  services registered there are visible only to their viewport, with parent-chain fallback
+- **Input** (5 partitions: action/device/filtered_analog/key/listener): `IInputService` — keyboard/mouse/gamepad
+  device states, listener set (`addInputListener`/`removeInputListener`), action/mapping system (`InputMapping`
+  binds keys to `InputAction` with `InputModifierEvent`/`InputTriggerEvent` callbacks), device enumeration
+- **Window** (3 partitions: handle/monitor/viewport): `IWindowService` — monitor enumeration, window
+  creation/destruction/resize/move, event callbacks (`whenWindowResized`, `whenWindowFocused`, etc.)
 - **Player** (2 partitions): `IPlayerService` — player identity management, graph-based state machine (`Player::Graph`),
   keyboard/gamepad player binding
-- **Viewport** (1 partition, `renderer/App.Viewport.cppm`): multi-viewport render abstractions — `ViewportConfig` (plain
-  data, `int2 framebuffer_size`), `ViewportEntry` (per-frame bundle: render pipeline + viewport + scissor +
-  `function_ref` draw callback; NOT default-constructible — use designated aggregate init, and hoist draw lambdas into
-  named variables: `function_ref` does not own its target), `EProjectionConvention`/`projectionConventionFromDeviceType`
-  (D3D vs VK conventions), backend-aware projection helpers. Per-viewport isolation: `Application` keeps child
-  `ServicesStore`s (e.g. `m_scene_services`/`m_ui_services`) chained to the root store — services registered there are
-  visible only to their viewport, with parent-chain fallback
+- **Viewport** (`window/App.Window.Viewport.cppm` → `:window.viewport`: `BasicRect`/`ViewportLayout`/`Viewport`/
+  `WindowViewport`; `renderer/App.Renderer.Types.cppm`: `DrawSubmission`/`RenderView`): per-viewport render
+  abstractions with per-entry scissor.
+  Implementation note: `Viewport.cpp` uses `module engine.app; import :window.viewport;` (never
+  `module engine.app:window.viewport;`)
 - **Platform**: GLFW backend (`platform/glfw/`, 9 files) implementing `IPlatform`, `IInputService`, `IPlayerService`,
   `IWindowService`
-- **Renderer** (`App.Renderer.cppm`): `Renderer` class — `initialize(IRhiService, IWindowService, Window)` sets up
-  pipeline, `render(span<const ViewportEntry>)` submits multi-viewport frames (viewport/scissor binding per entry via
-  `RenderState`), backward-compat `render(optional<OverlayCallback>)` wrapper, `onResize()` handles surface resize
+- **Renderer** (`App.Renderer.cppm`): `Renderer` class — `initialize(IRhiService&)` sets up the pipeline;
+  `renderAndPresent`/`submitToTexture` submit frames, per-entry scissor applied in `encodeDraws_` (`App.Renderer.cpp`)
 
 ### Key Design Patterns
 
@@ -181,7 +186,7 @@ Provides Slang shader compilation with hot-reload and background compilation:
   `ServiceInjector` for implicit dependency injection. Safe via `safe_ptr<T>` (debug: ref-counted lifetime check,
   release: raw pointer).
 - **Allocator Composition**: Concepts tiered from `TAllocator` up to `TSlabAllocator`. Concrete allocators composed via
-  `InSitu<T,N>` (inline storage), `Fallback<A,B>` (try A, then B), `Threshold<N,A,B>` (small→A, large→B), `Pooling<N,A>`
+  `InSituSlab` (inline storage), `Fallback<A,B>` (try A, then B), `Threshold<N,A,B>` (small→A, large→B), `Pooling<N,A>`
   (pool from A), `LocalCache<N,A,C>` (TLS cache over pool), `HintedPooling`. Wrap with `Allocator<A>` (type erasure),
   `PMR` (vtable dispatch), `STL<A>` (std:: adapter).
 - **Event Multiplexing**: `IEvent` base → `Signal<Events...>` with compile-time composition and
@@ -196,7 +201,8 @@ Provides Slang shader compilation with hot-reload and background compilation:
 Two separate test executables:
 
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; tests memory, containers, concurrency, IO, strings, utility,
-  opaque, services, enums
+  opaque, enums (`Core.Service.Tests.cppm` exists as a `:service` module but is not wired into `Core.Tests.cppm`
+  — no `:service` import/recurse)
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests
 
 Shared in `lib/engine/tests/shared/` as static lib `engine.tests` providing `parseCli()` and `runSuite()` to avoid
@@ -208,7 +214,7 @@ grouping, fork/crash support, and `--run-test --shuffle --loop` CLI. Test code i
 
 ### Entry Point (`game/main.cpp`)
 
-Imports all five engine modules, constructs `pP::Application(name, argv)`, calls `app.run()`. The application resolves
+Imports core/math/rhi/app engine modules (engine.shader arrives via engine.rhi), constructs `pP::Application(name, argv)`, calls `app.run()`. The application resolves
 install/config/content/working directories, discovers and initializes registered services (input, window, player, RHI,
 shader), then runs the per-frame update/render loop until exit.
 
@@ -321,13 +327,15 @@ _(maintained by the `clonedeps` skill — empty until first run)_
   `out/build/msvc-dev` CMake File API replies before configuring or reconstructing metadata from CMake sources.
 - CMake 4.3+, C++23, modules enabled, experimental `import std`.
 - Presets: `msvc-dev` (recommended), `msvc-live` (Debug Edit&Continue, no ASAN), `msvc-rel`, `clang-cl-dev`,
-  `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules).
+  `clang-cl-rel`, `clang-dev`, `clang-rel`, `gcc-dev`/`gcc-rel` (hidden, no modules). These 9 are the curated
+  set — extra presets exist (`default`, `developer`, `vcpkg`, `windows`/`unix-like-default`).
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see
   cmake/Compilers.cmake).
 - Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
 - CMake target == C++ module name (dotted): `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.app`,
   `engine.tests`, `engine.tests.core`, `engine.tests.app`. Exceptions: `app.game` (module-less game executable),
-  `run-engine-tests` (hyphenated aggregate, kept), external imported targets (`rapidhash`/`stb`/`mango`/`glfw`/`slang`),
+  `run-engine-tests` (hyphenated aggregate, kept), external imported targets (`rapidhash`/`stb`/`mango`/`glfw`/
+  `slang-rhi`/`slang`),
   `imgui` module binding over `imgui.base` static (root-scope `CXX_MODULE_STD OFF` workaround preserved in
   `cmake/external/DearImGui.cmake`).
 - Two separate test executables: `engine.tests.core` (core, GLFW-free) and `engine.tests.app` (links glfw). Aggregate target
@@ -544,7 +552,7 @@ Dimension 9; refactors and new code follow them too.
 
 - `safe_narrowing<IntT>` — tag type asserting round-trip on implicit conversion.
 - Integer shorthands: `u8/u16/u32/u64/i8/i16/i32/i64` (Core.Types.cppm).
-- Sentinel values: `default_value_v`, `zero_v`, `none_v`, `umax_v`.
+- Sentinel values: `default_value_v`, `zero_v`, `none_v`, `max_v`, `min_v`.
 - `Numeric<T, TagT>` — strongly-typed numeric wrapper.
 - `hash_t` — type-safe hash value (struct with m_value, comparison, hashValue).
 - `pP::details::relocatable<T>` — mark types supporting memcpy.
@@ -568,20 +576,18 @@ Platform code in `lib/engine/core/hal/<platform>/`. Supported: windows, linux, d
 
 - `pP::hal`: pageAlloc/Free/Commit/Decommit/Protect/OfferToOS/ReclaimFromOS, ringBufferAlloc/Free, outputDebug,
   isDebuggerPresent, breakpoint.
-- Sub-namespaces: `process` (executablePath, spawnAndWait, terminate), `timer` (setDeadline, cancelDeadline), `io`
+- Sub-namespaces: `process` (executablePath, spawnAndWait), `timer` (setDeadline, cancelDeadline), `io`
   (async I/O, file watches), `native` (string transcoding).
 - See `Core.HAL.cppm` for full API surface.
 
 ## Memory & Allocators
 
-- Concepts: `TAllocator`, `TOwningAllocator`, `TResizableAllocator`, `TBlockAllocator`, `TArenaAllocator` (in
-  Core.Memory.Allocator.cppm).
+- Concepts: `TAllocator`, `TOwningAllocator`, `TResizableAllocator`, `TBlockAllocator`, `TArenaAllocator`,
+  `TSlabAllocator` (in Core.Memory.Allocator.cppm).
 - Hierarchy: GPA (operator new) → OS (pageAlloc) → PagePool/BitmapTree → HugePage (2 MiB) / SmallPage (32/64 KiB) →
-  Arena (persistent) / ScratchPad (TLS transient).
-- Slab/Arena: Slab, InSituSlab, Arena<AllocatorT = HugePage>, ScopedArena (RAII watermark), ScratchPad (TLS
-  Arena<SmallPage>).
-- Composite: InSitu, Fallback, Threshold, Pooling, LocalCache, HintedPooling, Static, Allocation<T>, Allocator<>,
-  AllocatorTraits, STL<>, Inplace.
+  `extern template Arena` / ScratchPad (TLS transient).
+- Slab/Arena: InSituSlab, `InSituFallback`/`InSituThreshold` aliases, ScratchPad (TLS Arena<SmallPage>).
+- Composite: Fallback, Threshold, Pooling, LocalCache, HintedPooling, Allocation<T,A>, Allocator<A>, STL<A>.
 - Poison: `poisonReserved`, `unpoisonUninitialized`, `poisonDestroyed`, `annotateContiguousContainer` (+ typed
   overloads). Uses `__asan_*` when ASAN enabled, debug patterns (0xAA/0xCC/0xDD) otherwise, no-op in release.
 - For MSVC with `msvc-dev` preset, ASAN is auto-enabled via PPR_ENABLE_DEVELOPER_MODE.
@@ -591,8 +597,8 @@ Platform code in `lib/engine/core/hal/<platform>/`. Supported: windows, linux, d
 
 All types in `namespace pP`. See corresponding `.cppm` files:
 
-- **Containers:** Stack<T,N>, RingBuffer<T,N> (bounded, trivial T); SparseVector<T>, StableVector<T>, HashMap<K,V>
-  /HashSet<K>, FlatMap<K,V>, Bitmask<T,N>, SetBitsRange.
+- **Containers:** Stack<T,N>, RingBuffer<T,N> (bounded, trivial T); SparseVector<T>, StableVector<T>, HashMap<K,V>,
+  FlatSet<K> (ordered), FlatMap<K,V> (`using FlatMap = std::flat_map`), Bitmask<T,N>, SetBitsRange.
 - **Pointers/views:** RelPtr (relative offset), TagPtr (flagged), ArrayView, RelativeView (half-size), safe_ptr,
   IndexIterator.
 - **Strings:** string_literal, static_string<N>, char helpers (toLower, etc.), lazy transforms (caseFold, stringEscape,
@@ -622,13 +628,15 @@ All types in `namespace pP`. See corresponding `.cppm` files:
   expect_fail).
 - Group: `_.recurse({TestA, TestB, ...})` — supports conditional inclusion via `if constexpr (PPR_ENABLE_DEBUG)`.
 - Module pattern: `export module engine.tests.core:memory;` with `export namespace pP::tests { ... }`.
-- CLI: `engine.tests.core` / `engine.tests.app` `[--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]` — test
-  paths use `/` separators (e.g. `--run-test core/hal/thread_id`).
-- Fork tests spawn child process via `hal::process::spawnAndWait`. Assertions intercepted by test framework (converted
+- CLI: `engine.tests.core` / `engine.tests.app` `[--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]` — shuffle
+  on by default; test paths and `Id`s use `/` separators (e.g. `--run-test core/hal/thread_id`), matched via
+  `filterMatches`.
+- Fork tests re-spawn via `hal::process::spawnAndWait` with `--child-run --run-test <path>`. Assertions intercepted by test framework (converted
   to failures, not terminations).
-- Run programmatically: `pP::UnitTest::run(context, pP::tests::core);`.
-- Optional error-code bodies: `PPR_UNIT_TEST_ERRC(name) { PPR_TEST_ASSERT_ERRC(cond); return {}; }` — the ec-reporting
-  `run()` path (set `UnitTest::Context::m_fail_with` for message output).
+- Run programmatically: static `pP::UnitTest::run(Context, UnitTest)` with roots `pP::tests::core` / `pP::tests::app`.
+- Optional error-code bodies: the ec-reporting `run()` overload takes `test_func_ec_t` functions returning an error
+  code (no `PPR_TEST_ASSERT_ERRC` macro exists); `UnitTest::Context::m_fail_with` is the generic `Context` failure
+  handler for message output.
 - See `lib/engine/tests/` for existing examples.
 
 ## Debugging with CLion

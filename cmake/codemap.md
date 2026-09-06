@@ -23,7 +23,7 @@ Top-level CMake configuration — root CMakeLists.txt, CMakePresets.json, and vc
 - Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, `VCPkg`, `HAL`, `Compilers`, `Sanitizers`, `StaticAnalyzers`, `Cache`, `Dependencies`
 - `setup_ppr_project(target ... INTERNAL_PUBLIC_DEPS ...)` helper in `Compilers.cmake` links engine targets and applies CXX_MODULE_STD
 - Engine modules re-exported via umbrella `import` in each library's umbrella `.cppm`
-- Viewport-scoped service stores (`m_scene_services`, `m_ui_services`) chained via `ServicesStore` parent-chain fallback
+- Viewport-scoped service store (`m_ui_services`) chained via `ServicesStore` parent-chain fallback
 
 ## Key Files
 - `CMakeLists.txt` — root configuration, options, option guards, module setup

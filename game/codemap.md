@@ -16,9 +16,9 @@ Application entry point for the PPR engine demo. Hosts the top-level `main()` th
 4. `game/CMakeLists.txt` builds `app.game` via `setup_ppr_project` and copies `assets/shaders` POST_BUILD.
 
 ## Integration
-- Imports `engine.core`, `engine.math`, `engine.rhi`, `engine.app`, `imgui_internal`, `std`.
+- Imports `engine.core`, `engine.math`, `engine.rhi`, `engine.app` (4 modules — NO `engine.shader` import in main.cpp), plus `imgui_internal`, `std`.
 - Consumed by: the run configuration / `app.game` executable.
-- Depends on: all five engine modules and the DearImGui module bindings.
+- Depends on: link-time all five engine modules (core/app/math/shader/rhi per game/CMakeLists.txt) but imports only four (no shader); plus the DearImGui module bindings.
 
 ## Key Files
 - `main.cpp` — entry point, `TurboLarbin` Application subclass, `main()`.
