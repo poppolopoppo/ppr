@@ -36,6 +36,7 @@ export namespace pP {
 
         struct CancelFunc {
             std::weak_ptr<CancelContext> m_context{};
+            [[nodiscard]] bool isValid() const noexcept;
             void operator()() const noexcept;
         };
 

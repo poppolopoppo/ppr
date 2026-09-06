@@ -358,6 +358,10 @@ namespace pP::context {
         return withDeadlineCause(std::move(parent), timer.now() + delay, std::make_error_code(std::errc::timed_out), timer);
     }
 
+    bool CancelFunc::isValid() const noexcept {
+        return not m_context.expired();
+    }
+
     void CancelFunc::operator()() const noexcept {
         if (const std::shared_ptr<CancelContext> ctx = m_context.lock()) [[likely]] {
             ctx->cancel();
