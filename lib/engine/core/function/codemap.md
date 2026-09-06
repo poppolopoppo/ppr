@@ -2,52 +2,69 @@
 
 ## Responsibility
 
-The function partition provides foundational functional utilities: `function_ref` (non-owning function reference),
-`overloaded` visitor pattern for variant-like types, and utility aliases for common function signatures. These are
-designed for zero-overhead abstraction, compatibility with C++23 `std::function_ref`, and use throughout the engine for
-callbacks, event handlers, and draw commands.
+The function partition provides the engine's callable primitives: `std23::function_ref` (non-owning type-erased
+function reference, custom C++20 implementation waiting on C++26) plus the subscriber machinery built on it —
+`Delegate` (single optional subscriber), `BroadcastCallback` (multi-subscriber, `SparseVector`-backed), and
+`CallbackSink` (deferred-dispatch wrapper with `safe_ptr` argument forwarding). These are designed for zero-overhead
+abstraction (no heap allocation, no virtual dispatch on call) and are used throughout the engine for callbacks, event
+handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
 
 ## Design
 
-- **function_ref**: Non-owning reference to a callable with a specific signature. Stores a pointer to the target
-  callable and the target object (for member functions). `constexpr` constructible from lambdas, function pointers, and
-  bind expressions. `operator()` invokes the target via direct call (no virtual dispatch, no heap allocation).
-  `target()` returns `void*` to the callable, `target_type()` returns `type_info`. Debug mode asserts the target is
-  valid (non-null). No small-buffer optimization — must outlive the `function_ref`.
-- **overloaded**: Variadic template that creates a callable object dispatching to the correct overload based on the
-  argument type. Used with `std::visit` or `function_ref` to handle variant-like types. `operator()` selected via
-  `if constexpr` on the argument type index. Provides a default overload if no match (via `std::nullptr_t`).
-- **function type aliases**: `VoidFn` (`void()`), `BoolFn` (`bool()`), `StepFn` (`void(float delta)`), `DrawFn`
-  (`void(RenderState)`). Used as defaults for `function_ref` parameters in API surfaces.
-- **Compatibility**: Designed to be ABI-compatible with `std::function_ref` (C++23); if C++23 is available,
-  `function_ref` may alias `std::function_ref`, otherwise provides a custom implementation with the same interface.
+- **function_ref** (`std23::function_ref`, in `:function.ref`): non-owning reference to a callable with a specific
+  signature. A `callable_object` trait layer normalizes free functions, member-function pointers (const/noexcept
+  variants), and functor `operator()` into one signature/dispatch shape; `static_function_t`/`nontype<F>` wrap
+  compile-time-known targets, and `function_ptr` storage holds the erased callable plus its dispatch pointer.
+  `constexpr`-constructible from lambdas, function pointers, and nontype wrappers; `operator()` invokes via direct
+  dispatch (no heap allocation). Convertible across compatible signatures; comparable for equality.
+- **Delegate** (in `:function.callback`): single-subscriber callback holding `std::optional<function_ref<F>>`.
+  `subscribe()` exchanges and returns the previous subscriber; nullary `operator()` returns `default_value_v` for
+  non-void signatures when empty; `reset()` clears.
+- **BroadcastCallback** (in `:function.callback`): multi-subscriber callback for `std::error_code`-returning
+  signatures (`TFunctionReturning<std::error_code>`), default allocator `mem::GPA`. Subscribers live in a mutable
+  `SparseVectorInplace<Event, AllocatorT>` so `add()`/`remove()` are `const` (subscription through a const reference)
+  while `clear()`/`operator()` stay non-const; dispatch short-circuits on the first error. `Handle` is a move-only
+  RAII token holding the callback pointer, `SparseKeyId`, and a shared atomic liveness flag — destroying the handle
+  unsubscribes, and destroying the callback flips the flag so late handle destruction never dangles. Removing during
+  dispatch invalidates iteration and must be deferred by callers.
+- **CallbackSink** (in `:function.callback`): deferred-dispatch wrapper over `BroadcastCallback` — `operator()(args… )`
+  latches the first argument set into `m_deferred_params`, `sink()` applies it to all subscribers and clears.
+  `ForwardAsLValue` rewrites `safe_object`-derived (`TSafeObject`) arguments to `safe_ptr` so callbacks observe
+  liveness (currently gated off by the `pP::Window` forward-declaration breakage, falling back to plain params).
+- **FunctionTraits** (`details::FunctionTraits`/`TFunction`/`TFunctionReturning`): compile-time signature
+  introspection (return type, params tuple, noexcept) constraining `Delegate`/`BroadcastCallback`/`CallbackSink`.
 
 ## Flow
 
-- **Input event handling**: Gamepad/button callbacks store `function_ref<void(GamepadEvent)>`; the main loop calls each
-  registered ref if set.
-- **Draw command submission**: `Application` builds stack `DrawSubmission`s (named lambdas + borrowed `DrawCallback`);
+- **Single-handler slots**: `Delegate<F>` fields store at most one callback (e.g. an optional override); subscribe
+  exchanges, invoke no-ops to `default_value_v` when empty.
+- **Multi-handler events**: producers call `add(event)` to get a `Handle`; consumers keep the handle alive for the
+  subscription lifetime and drop it to unsubscribe. `operator()(args…)` fans out in key order until the first
+  `std::error_code` failure.
+- **Deferred dispatch**: `CallbackSink` latches event args during an unsafe phase (e.g. inside a dispatch loop where
+  removal is forbidden) and `sink()` replays them later from a safe point.
+- **Draw command submission**: `Application` builds stack `DrawSubmission`s (named lambdas + borrowed draw callbacks);
   the renderer invokes those callbacks per submission via `renderAndPresent`/`submitToTexture`, retaining nothing.
-- **Signal handler composition**: `Signal<Events...>` consumers use `overloaded` to handle multiple event types in a
+- **Signal handler composition**: `Signal<Events...>` consumers combine handlers over `function_ref` targets in a
   single `select()`-filtered loop.
-- **Callback system**: `Callback<T>` (defined in Core.Function.cppm or separate partition) uses `function_ref`
-  internally for multi-subscriber notification; `pushInputListener`/`popInputListener` manage listener stack with
-  `function_ref` targets.
 
 ## Integration
 
+- **containers**: subscriber storage is `SparseVectorInplace<Event>` keyed by `SparseKeyId`; `Collector` is itself a
+  `function_ref`-derived push-back sink.
+- **memory**: `BroadcastCallback`/`CallbackSink` allocate subscriber storage via `AllocatorT` (default `mem::GPA`);
+  `CallbackSink` forwards `safe_object` arguments as `safe_ptr` for lifetime-checked callbacks.
 - **engine.app**: `Renderer::renderAndPresent`/`submitToTexture` take `span<const DrawSubmission>`; each submission
   pairs a `RenderView` with a borrowed draw callback.
-- **input system**: `IInputService` listener stack uses `function_ref` to store per-listener callback lambdas;
+- **input system**: `IInputService` listener stack stores per-listener callback lambdas as `function_ref` targets;
   `whenKeyPressed`, `whenMouseMoved` etc. accept `function_ref`.
-- **engine.shader**: Hot-reload background compile callback uses `function_ref<void(ModuleHandle)>` for progress
-  reporting.
-- **engine.tests.core**: Tests `function_ref` (construct from lambda/function pointer, `target()` validity, `operator()`
-  invocation, debug assert on null), `overloaded` (visit variant, default overload, type dispatch), and function type
-  aliases as `function_ref` template arguments.
+- **engine.tests.core**: Tests `function_ref` (construct from lambda/function pointer/member function/nontype,
+  invocation, equality, cross-signature conversion), `Delegate` (subscribe-exchange/reset/empty-call default), and
+  `BroadcastCallback`/`CallbackSink` (add/remove via `Handle`, error short-circuit, deferred `sink()` replay).
 
 ## Key Files
 
-- `Core.Function.cppm` — `pP::function_ref<TArgs...>`, `pP::overloaded<Ts...>`, function type aliases (`VoidFn`,
-  `BoolFn`, `StepFn`, `DrawFn`)
-
+- `Core.Function.Ref.cppm` — `pP::std23::function_ref`, `callable_object` traits, `static_function_t`,
+  `nontype<F>`, `TCallable`, `FunctionTraits`
+- `Core.Function.Callback.cppm` — `pP::Delegate<F>`, `pP::BroadcastCallback<F, A>`,
+  `pP::CallbackSink<F, A>` (+ `details::ForwardAsLValue`)

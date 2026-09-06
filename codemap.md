@@ -50,13 +50,13 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/core/containers/`   | Stack/RingBuffer, Sparse/StableVector, HashMap/HashSet/FlatMap, Bitmask, views, RelPtr/TagPtr.        | [View Map](lib/engine/core/containers/codemap.md)   |
 | `lib/engine/core/concurrency/`  | RawChannel (lock-free MPSC), Signal/select, IContext cancellation tree.                               | [View Map](lib/engine/core/concurrency/codemap.md)  |
 | `lib/engine/core/io/`           | IoPort async I/O, MappedFile, DirectoryWatcher, IoEvent/IoResult.                                     | [View Map](lib/engine/core/io/codemap.md)           |
-| `lib/engine/core/function/`     | function_ref, overloaded visitor, function type aliases.                                              | [View Map](lib/engine/core/function/codemap.md)     |
+| `lib/engine/core/function/`     | std23::function_ref, Delegate/BroadcastCallback + Handle dispatch.                                    | [View Map](lib/engine/core/function/codemap.md)     |
 | `lib/engine/core/hal/`          | HAL umbrella: page memory, ring buffer, I/O, process, timers, native transcoding.                     | [View Map](lib/engine/core/hal/codemap.md)          |
 | `lib/engine/core/hal/windows/`  | Win32 HAL: VirtualAlloc2, IOCP, ReadDirectoryChangesW, CreateProcessW.                                | [View Map](lib/engine/core/hal/windows/codemap.md)  |
 | `lib/engine/core/hal/linux/`    | POSIX HAL: mmap/mprotect, inotify, fork+execvp, timer_create.                                         | [View Map](lib/engine/core/hal/linux/codemap.md)    |
 | `lib/engine/core/hal/darwin/`   | XNU HAL: mmap/MAP_ANON, fork+execvp, Mach sysctl debugger.                                            | [View Map](lib/engine/core/hal/darwin/codemap.md)   |
 | `lib/engine/core/hal/generic/`  | Stub HAL: throw/no-op fallback for any platform.                                                      | [View Map](lib/engine/core/hal/generic/codemap.md)  |
-| `lib/engine/math/`              | Wraps mango::math into `namespace pP` (vectors, matrices, lookAt, hashValue).                         | [View Map](lib/engine/math/codemap.md)              |
+| `lib/engine/math/`              | Single-module mango::math re-export into `namespace pP` + math:: utilities.                           | [View Map](lib/engine/math/codemap.md)              |
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: Application lifecycle, re-exports all app submodules.                           | [View Map](lib/engine/app/codemap.md)               |
@@ -68,14 +68,19 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | App-level service registration/lifecycle.                                                             | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService).                                                             | [View Map](lib/engine/app/ui/codemap.md)            |
-| `lib/engine/app/window/`        | IWindowService: monitor enumeration, window lifecycle.                                                | [View Map](lib/engine/app/window/codemap.md)        |
+| `lib/engine/app/window/`        | IWindowService lifecycle + Viewport geometry (moved from renderer).                                   | [View Map](lib/engine/app/window/codemap.md)        |
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: SlangRHI, DearImGui, GLFW).                                     | [View Map](cmake/external/codemap.md)               |
 | `game/`                         | Entry point (main.cpp) + app.game CMake target.                                                   | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Public header `Macros.h` (assertions, logging, attributes).                                           | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime assets (Slang shaders).                                                                       | [View Map](assets/codemap.md)                       |
-| `assets/shaders/`               | Slang shader sources (triangle.slang, hot-reloadable).                                                | [View Map](assets/shaders/codemap.md)               |
+| `assets/shaders/`               | Slang shader sources (triangle.slang; synchronous load, no hot-reload).                               | [View Map](assets/shaders/codemap.md)               |
+
+> Removed locations (do not look here): `lib/engine/app/camera/` → moved to `lib/engine/app/scene/`;
+> `lib/engine/app/input/device/` → consolidated into the unified `:input.device` partition; renderer `App.Viewport`
+> → moved to `:window.viewport`; `App.Input.Mapping`/`App.Input.Replay` partitions deleted (mapping merged into
+> `:input.action`).
 
 ## Test Infrastructure
 

@@ -1,26 +1,27 @@
 # lib/engine/core/io/
 
 ## Responsibility
-The IO partition provides async I/O primitives, file watching, and memory-mapped file support built on top of the HAL `hal::io` layer. It enables non-blocking file operations, directory monitoring, and mapped memory access for shader data and asset loading — all integrated with the engine's allocator hierarchy and event multiplexing system.
+Engine-level async file IO, memory-mapped files, and directory watching on top of `hal::io`. No background threads — the caller drives completion via explicit `poll`/`wait` drains — with every completion and file change exposed as an `IEvent` so it composes with `Signal`/`select`.
 
 ## Design
-- **IoPort**: Async I/O driver with no background thread — explicit drain. `open(path, flags)` returns an RAII `IoFile` (move-only); `read(IoRequest&, file, buffer, offset)` / `write(...)` submit operations; `pollCompletions()` / `waitForCompletions()` drain completed operations. Internally uses `hal::io::submit()` / `poll()` / `wait()`.
-- **IoRequest**: Per-operation async I/O event (`IEvent`, move-disallowed) with `bytesTransferred()`, `error()`, `isPending()`, `cancel()`; completion signaled via `PulseEvent`.
-- **MappedFile**: RAII move-only memory-mapped file via `pP::io::mapFile(path, flags)` (wraps `hal::io::mapFile`); exposes `c_str()`, `span()`, `size()`. Used by `engine.shader` for shader source loading.
-- **DirectoryWatcher**: Monitors a directory (optionally recursive) for file changes. Wraps `hal::io::openWatch`/`pollWatch`/`parseWatchEvents` (ReadDirectoryChangesW on Windows, inotify on Linux/Darwin). It is an `IEvent` (PulseEvent-backed); `poll()`/`wait()` drain raw platform events into `FileChange` records (`WatchEvent::Action` + filename), exposed via `changes()`.
-- **FileChange**: `{ hal::io::WatchEvent::Action, std::string_view filename }` — actions are `added` / `removed` / `modified` / `renamed_old` / `renamed_new`. Consumers observe via `Signal`/`select` on the watcher's `IEvent` interface.
+- **IoFile** (`Core.Io.cppm/.cpp`, `namespace pP`): move-only RAII `{IoHandle port, FileHandle file}` pair. Nulling-`exchange` move assign/ctor plus null-guarded `close_()` prevent double-close of the raw HAL handle.
+- **IoRequest** (`Core.Io.cppm/.cpp`, `final : IEvent`, move-disallowed): per-operation event with embedded `m_overlapped_storage` (`overlapped_storage_size_v` = 64, ≥ Windows `OverlappedExt`), 3-state `m_state` (0 idle / 1 pending / 2 complete), `PulseEvent m_completed`, byte count + `error_code`. `complete_()` CAS(1→2) then emits; `resetEvent()` returns to idle; `cancel()` aborts via `hal::io::cancelIo`; destructor auto-cancels pending ops and verifies quiescence. Delegates `subscribe/unsubscribe/poll/reset` to the inner pulse; `bytesTransferred()`/`error()` assert completed state.
+- **IoPort** (`export namespace pP::io`, moved there so the exported `createPort()` factory returns an exported type): owns `hal::io::init()` handle, teardown-guarded destructor, nulling-`exchange` moves. `open()` returns `expected<IoFile, error_code>` (maps `system_error`/`invalid_argument`/`bad_alloc`); `read`/`write(req, file, span, offset)` assert the request is idle, bind `m_active_file`, point the HAL entry at the embedded overlapped storage, mark pending, reset the pulse, then `submit`; `pollCompletions()`/`waitForCompletions()` drain up to 64 completions per call into `IoRequest::complete_`.
+- **MappedFile** (`Core.Io.MappedFile.cppm/.cpp`, `namespace pP` + `pP::io::mapFile`): move-only RAII over `hal::io::MapHandle` with nulling moves; `c_str()`, const + mutable `span()`, `size()` (null → empty); `relocatable<MappedFile>`; ASAN-aware unpoison on map (no flooding of read-only views). `io::mapFile(path, flags)` returns `expected<MappedFile, error_code>`.
+- **DirectoryWatcher** (`Core.Io.FileWatcher.cppm/.cpp`, `final : IEvent`, move-deleted): `PulseEvent m_changed` + fixed inline buffers (256 `WatchEvent`s, 16 KiB names, 64 KiB raw). `poll(ec)`/`wait(ec)` pull raw bytes via `hal::io::pollWatch`/`waitWatch`, normalize with `parseWatchEvents` into cached `FileChange{Action, filename}` records (`added`/`removed`/`modified`/`renamed_old`/`renamed_new`); `changes()`, `hadOverflow()`, `hadError()`, `isOpen()`, `root()` report health.
 
 ## Flow
-- **Shader compilation hot-reload**: `IShaderService::loadModuleFromFile` maps the source via `pP::io::mapFile`, wraps it in a `MappedFileBlob`, and compiles through `ISession::loadModuleFromSource`. File changes are detected via `DirectoryWatcher` (HAL watch) and trigger recompilation.
-- **Async file read**: `IoPort::open()` → `read(IoRequest&, ...)` → next drain cycle `pollCompletions()` returns completed requests with bytes transferred / error code.
-- **Directory monitoring**: `DirectoryWatcher::poll()` drains events into the `FileChange` cache; `changes()` returns the accumulated span; `hadOverflow()`/`hadError()` report watch health.
+- **Async read/write**: `IoPort port = createPort(); auto f = port.open(path).value(); IoRequest req; port.read(req, f, buf, off); … port.pollCompletions(); co_await select(req)` → `req.bytesTransferred()`/`req.error()`; reuse requires the drain to complete the request first.
+- **Mapped load**: `auto m = io::mapFile(shaderPath).value(); session->loadModuleFromSource(m.c_str(), m.size())` — zero-copy source view, unmapped on scope exit.
+- **Watch**: `DirectoryWatcher w(dir, recursive); w.poll(ec); for (auto &c : w.changes()) { … }` or block in `select(w)` alongside channels/requests; overflow surfaces via `hadOverflow()` rather than silent loss.
 
 ## Integration
-- **engine.shader**: Hot-reload uses `pP::io::mapFile` (`MappedFile`) to read shader source; `DirectoryWatcher` monitors shader directories for changes.
-- **engine.core concurrency**: `IoRequest` and `DirectoryWatcher` are `IEvent`s — completions and file changes are observed via `Signal`/`select`.
-- **engine.tests.core**: Tests `MappedFile` (map/unmap, span access), `DirectoryWatcher` (start/stop, event delivery, select filtering), and `IoPort` (open/read/write, submit/poll/wait cycle, error handling).
+- **hal::io**: `init`/`deinit`, `openFile`/`closeFile`, `submit`/`poll`/`wait`/`wake`/`cancelIo`, `mapFile`/`unmapFile`/`mapData`/`mapSize`, `openWatch`/`closeWatch`/`pollWatch`/`waitWatch`/`parseWatchEvents`; `SubmitEntry::{m_user_data → IoRequest*, m_overlapped → embedded storage}` and `CompletionEntry` bridge the layers.
+- **concurrency**: `IoRequest`/`DirectoryWatcher` are `IEvent`s — completions and file changes are observed via `Signal`/`select` next to `RawChannel` and contexts.
+- **engine.shader**: shader sources mapped via `io::mapFile`; shader directories watched via `DirectoryWatcher` for hot-reload triggers.
+- **engine.tests.core**: `IoPort` open/read/write/submit/poll/wait cycles, error paths, `Port::move_semantics` (no double-close) coverage; `MappedFile` map/span/size; watcher start/stop/event-delivery/`select` filtering suites.
 
 ## Key Files
-- `Core.Io.cppm` / `.cpp` — `pP::IoPort`, `pP::IoFile`, `pP::IoRequest`, `pP::io::createPort()`
-- `Core.Io.MappedFile.cppm` / `.cpp` — `pP::MappedFile`, `pP::io::mapFile()`
-- `Core.Io.FileWatcher.cppm` / `.cpp` — `pP::DirectoryWatcher`, `pP::FileChange`
+- `Core.Io.cppm` / `.cpp` — `IoFile`, `IoRequest`, `pP::io::IoPort`, `createPort()`
+- `Core.Io.MappedFile.cppm` / `.cpp` — `MappedFile`, `io::mapFile()`
+- `Core.Io.FileWatcher.cppm` / `.cpp` — `DirectoryWatcher`, `FileChange`

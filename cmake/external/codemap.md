@@ -1,41 +1,50 @@
 # cmake/external/
 
 ## Responsibility
-External dependency CMake configuration — CPM source-based packages, vcpkg manifest mode, and generated module bindings for third-party libraries used by the PPR engine.
+
+External dependency CMake configuration — CPM source packages, vcpkg manifest mode, and the generated C++20
+module bindings for third-party libraries consumed by the engine.
 
 ## Design
-- **CPM packages** (`cmake/Dependencies.cmake`): Fetches dependencies from GitHub using CPMAddPackage. Current packages:
-  - `GLFW` — window/input library, `find_package(glfw3 REQUIRED CONFIG)`, CXX_MODULE_STD OFF
-  - `Mango` — image processing library, requires `CMAKE_PREFIX_PATH` for vcpkg-installed deps, AVX/AVX2/SSE2 enabled, OpenGL/Vulkan/Examples disabled
-  - `rapidhash` — very fast hash functions, interface imported target
-  - `SlangRHI` — shader language RHI abstraction, SLANG_RHI_FETCH_SLANG ON, unity build ON, CXX_MODULE_STD OFF (workaround for root-scope std module link leak)
-  - `STB` — header-only public domain libraries, interface imported target
-- **DearImGui** (`cmake/external/DearImGui.cmake`): Uses CPM to download `imgui` v1.92.9b-docking from GitHub. Generates C++20 module bindings (`imgui.cppm`, `imgui_internal.cppm`) from the `stripe2933/imgui-module` repo at v1.92.9b. The generated modules are cached at `CMAKE_BINARY_DIR/../imgui_module_bindings` shared across presets. `imgui` target has `CXX_MODULE_STD OFF` to avoid the CMake 4.4 root-scope std module synthetic target link leak (LNK2001).
-- **vcpkg integration** (`cmake/VCPkg.cmake`): If `VCPKG_ROOT` environment variable is set, uses vcpkg toolchain file. Dependencies (fmt, zlib, libdeflate, zstd, lcms, simdjson, glfw3, vulkan-headers) are resolved via vcpkg manifest mode from `vcpkg.json`. Without vcpkg, CPM fetches from source.
-- **CMake 4.4 workaround**: DearImGui explicitly sets `CXX_MODULE_STD OFF` on `imgui` because it is defined at root scope (via `include()`d cmake file), where CMake's synthetic `std` module target (`@cmake_cxx_std.lib`) is referenced on link lines as a bare `@`-prefixed name — the leading `@` is MSVC response-file syntax, so the linker drops it and every link fails with LNK2001 unresolved externals for std module implicit inline definitions.
+
+- **CPM packages** (`cmake/Dependencies.cmake` + per-lib files): GLFW (`find_package(glfw3)`, SYSTEM includes),
+  Mango (vcpkg prefix path, AVX/AVX2/SSE2, no examples/OpenGL/Vulkan), rapidhash (interface target), SlangRHI
+  (`SLANG_RHI_FETCH_SLANG ON`, unity build, D3D11/Optix/CUDA off), STB (interface target) — each with
+  `CXX_MODULE_STD OFF` where the root-scope synth-target workaround applies.
+- **DearImGui** (`DearImGui.cmake`, `imgui` v1.92.9b-docking via CPM): split into `imgui.base` (static lib over
+  `imgui*.cpp`, SYSTEM includes, `CXX_MODULE_STD OFF`) and `imgui` (module lib over downloaded
+  `imgui.cppm`/`imgui_internal.cppm` "Combined Module" bindings from `stripe2933/imgui-module` v1.92.9b —
+  `using`-re-export of `imgui.h`, full `ImGuiContext` for `ErrorCallback`, `IMGUI_HAS_DOCK`-guarded docking
+  symbols). Bindings download once (TLS_VERIFY, fatal on failure) into the preset-shared
+  `${CMAKE_BINARY_DIR}/../imgui_module_bindings` so a single physical `export module imgui;` exists — multiple
+  per-preset copies make CLion report "Module 'imgui' is ambiguous".
+- **CMake 4.4 workaround**: both `imgui.base` and `imgui` pin `CXX_MODULE_STD OFF` (root-scope `include()`d
+  targets reference the synthetic `@cmake_cxx_std.lib` as a bare `@`-name on link lines; MSVC parses the
+  leading `@` as response-file syntax and every link fails with LNK2001 on std-module inline definitions).
+  Re-test on newer CMake — see AGENTS.md "CMake Version Tracking".
+- **vcpkg** (`cmake/VCPkg.cmake` + `vcpkg.json`): when `VCPKG_ROOT` is set (or the `vcpkg` preset toolchain),
+  manifest-mode deps (fmt, zlib, libdeflate, zstd, lcms, simdjson, glfw3, vulkan-headers, …) resolve from
+  `VCPKG_INSTALLED_DIR` on `CMAKE_PREFIX_PATH`; otherwise CPM fetches from GitHub.
 
 ## Flow
-1. User configures with or without `VCPKG_ROOT`
-2. If vcpkg: `vcpkg` preset sets toolchain file, triplet, and adds `VCPKG_INSTALLED_DIR` to `CMAKE_PREFIX_PATH`
-3. If no vcpkg: `CMakeLists.txt` includes `cmake/Dependencies.cmake` which uses CPMAddPackage to fetch from GitHub
-4. Generated module bindings for DearImGui are downloaded once and cached
-5. Each package has `CXX_MODULE_STD OFF` set to prevent the root-scope `@cmake_cxx_std.lib` synthetic-target link leak (LNK2001)
-6. Engine targets use `setup_ppr_project()` which applies `CXX_MODULE_STD ON` selectively
+
+1. Configure with/without `VCPKG_ROOT` → toolchain + triplet selection.
+2. CPM fetches sources (or vcpkg supplies installed trees); ImGui module bindings download once into the shared
+  dir.
+3. `imgui.base` builds static; `imgui` builds the two module units and links `imgui.base` PUBLIC.
+4. Engine targets link via `setup_ppr_project` (`engine.app` links `imgui.base` private + `imgui` PUBLIC).
 
 ## Integration
-- Root `CMakeLists.txt` includes `cmake/Dependencies.cmake` after `include(VCPkg.cmake)`
-- `setup_ppr_project(target INTERNAL_PUBLIC_DEPS engine.core engine.app engine.math engine.shader engine.rhi)` links engine modules
-- Engine RHI target links `slang-rhi` which transitively provides Slang session/registry
-- DearImGui `imgui` provides C++20 module bindings consumed via `import imgui;` in engine code
-- vcpkg-managed deps are linked via `target_link_libraries`; CPM-managed deps provide imported targets
+
+- Root `CMakeLists.txt` includes `VCPkg` then `Dependencies`; `engine.rhi` consumes `slang-rhi`/`slang`,
+  `engine.math`/`engine.app` consume `mango`, `engine.app` consumes `glfw` + `imgui`, `engine.core` consumes
+  `rapidhash`.
+- Engine code writes `import imgui;` (never `#include <imgui.h>`) — resolved through the PUBLIC `imgui` link.
 
 ## Key Files
-- `cmake/Dependencies.cmake` — CPM packages: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui
-- `cmake/external/SlangRHI.cmake` — Slang-RHI CPM, unity build, CXX_MODULE_STD OFF, D3D11/Optix/CUDA disabled
-- `cmake/external/DearImGui.cmake` — CPM imgui v1.92.9b-docking, generated module bindings download and caching
-- `cmake/external/GLFW.cmake` — find_package(glfw3), SYSTEM includes, CXX_MODULE_STD OFF
-- `cmake/external/Mango.cmake` — CPM mango with vcpkg prefix path, AVX/AVX2/SSE2, no examples/opengl/vulkan
-- `cmake/external/rapidhash.cmake` — CPM rapidhash, interface imported target
-- `cmake/external/STB.cmake` — CPM stb, interface imported target
-- `vcpkg.json` — vcpkg manifest: fmt, zlib, libdeflate, zstd, lcms, glfw, and more
-- `CMakePresets.json` — `vcpkg` preset injects toolchain; `windows-default` sets `VCPKG_TARGET_TRIPLET` x64-windows
+
+- `cmake/Dependencies.cmake` — package list (GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).
+- `DearImGui.cmake` — `imgui.base` static + `imgui` module, shared bindings cache, `CXX_MODULE_STD OFF`.
+- `SlangRHI.cmake` — Slang-RHI CPM, unity build, `CXX_MODULE_STD OFF`.
+- `GLFW.cmake` / `Mango.cmake` / `rapidhash.cmake` / `STB.cmake` — per-dependency fetch/link settings.
+- `vcpkg.json` — manifest (fmt, zlib, libdeflate, zstd, lcms, glfw, …).

@@ -1,33 +1,45 @@
 # cmake/compiler/
 
 ## Responsibility
-Compiler-specific CMake configuration for MSVC, clang-cl, Clang, and GCC toolchains. Applies platform-specific flags, warning suppression, sanitizer support, and C++20 module workarounds for the PPR engine.
+
+Compiler-specific CMake configuration for MSVC, clang-cl, Clang, and GCC. Applies toolchain flags, warning
+sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target consistency rules for the engine.
 
 ## Design
-- **MSVC** (`cmake/compiler/MSVC.cmake`): The default and primary toolchain. Applies `/bigobj` for large module interface TUs (critical for consistent `@cmake_cxx_std.lib` synthetic targets). Enables `/utf-8`, `/EHsc`, `/Zc:__cplusplus`. Provides `PPR_PROJECT_WARNINGS_CXX` with baseline `/W4` and targeted suppressions (`/wd4201`, `/w14242`, etc.). Handles `PPR_ENABLE_SANITIZER_ADDRESS` via `/D_ANNOTATE_STL`. Release perf flags (`/arch:AVX2`, `/Gw`) are gated behind `PPR_RELEASE_PERF_FLAGS`. Edit & Continue (`/ZI`) is supported only in the `msvc-live` preset with Ninja.
-- **Clang** (`cmake/compiler/Clang.cmake`): Uses `-stdlib=libc++` for libc++ module support. Applies comprehensive warning flags (`-Wall`, `-Wextra`, `-Wshadow`, etc.). When `PPR_WARNINGS_AS_ERRORS` is set, adds `-Werror`. GCC configuration (`cmake/compiler/GCC.cmake`) extends Clang warnings with `-Wmisleading-indentation`, `-Wduplicated-cond`, etc.
-- **clang-cl** (`cmake/compiler/Clang.cmake` is included via Compilers.cmake when `CMAKE_CXX_COMPILER_ID MATCHES ".*Clang"`): Same flags as Clang but targeted for MSVC compatibility mode; used via the `clang-cl-dev`/`clang-cl-rel` presets which set `CMAKE_C_COMPILER:clang-cl` and `CMAKE_CXX_COMPILER:clang-cl`.
-- **GCC** (`cmake/compiler/GCC.cmake`): Includes Clang.cmake base, adds GCC-specific warnings. Marked `**DO NOT WORK WITH MODULES**` in presets due to lack of module support.
+
+- **MSVC** (`MSVC.cmake`, primary toolchain): bootstraps the vcpkg toolchain from `VCPKG_ROOT` when no
+  toolchain is preset; debug info is per-object Embedded (`/Z7`, ccache-friendly, no PDB contention) except
+  under `PPR_EDIT_AND_CONTINUE` where Debug switches to `/ZI`; `/EHsc` (required by `import std`), `/utf-8`
+  and `/bigobj` applied globally via genex `add_compile_options`.
+- **Module-synth consistency**: `/bigobj` stays global (per-target use forks `@cmake_cxx_std` synth targets →
+  "Disagreement of the location of the 'std' module"); release `/arch:AVX2` + `/Gw` sit behind
+  `PPR_RELEASE_PERF_FLAGS` (default ON) as separate Release-only genex elements — one combined string is quoted
+  as a single argv token and `cl` rejects it (D9002); the same flags must reach module synth targets so BMI
+  location matching holds. `/Zc:__cplusplus` fixes the `__cplusplus` macro value.
+- **Warnings** (`PPR_PROJECT_WARNINGS_CXX`): `/permissive-`, `/W4` baseline, targeted `/wd…`/`/w1…` suppressions
+  (incl. `/wd5050` for `_UTF8`-in-command-line vs module-command-line mismatches on `import std`); `/WX` appended
+  under `PPR_WARNINGS_AS_ERRORS`; `/D_ANNOTATE_STL` under `PPR_ENABLE_SANITIZER_ADDRESS`.
+- **Clang** (`Clang.cmake`): `-stdlib=libc++`, `-Wall/-Wextra` family, `-Werror` under `PPR_WARNINGS_AS_ERRORS`;
+  **clang-cl** reuses it in MSVC-compat mode (`clang-cl-dev`/`clang-cl-rel` presets). **GCC** (`GCC.cmake`)
+  extends Clang warnings — presets stay hidden: **no C++ modules support**.
 
 ## Flow
-1. `Compilers.cmake` detects `CMAKE_CXX_COMPILER_ID` and includes the matching compiler config
-2. Global `add_compile_options` genex expressions apply flags per-compiler+config
-3. Warning suppression (`/wd...` / `-w...`) targets known false positives with module code
-4. Sanitizer support is enabled via `cmake/Sanitizers.cmake` which dispatches per compiler
-5. `setup_ppr_project()` in `Compilers.cmake` sets `CXX_MODULE_STD ON`, `cxx_std_23` compile features
+
+1. `Compilers.cmake` detects `CMAKE_CXX_COMPILER_ID`, includes the matching file.
+2. Global genex `add_compile_options` apply per-compiler/config flags to every target including synth targets.
+3. `setup_ppr_project()` layers `cxx_std_23` / `CXX_MODULE_STD ON` / warning sets / link edges per target.
 
 ## Integration
-- Included from root `CMakeLists.txt` via `include(Compilers)`
-- Flags propagate to all sub-targets via `target_compile_options` / `add_compile_options`
-- `PPR_PROJECT_WARNINGS_CXX` is defined per-compiler (`MSVC.cmake`/`Clang.cmake`/`GCC.cmake`) and applied to targets by `Compilers.cmake::setup_ppr_project()`
-- `CXX_MODULE_STD ON` is set globally in `Compilers.cmake::setup_ppr_project()`
-- MSVC `/bigobj` is applied globally to prevent divergent `@cmake_cxx_std.lib` synth targets
-- DearImGui `imgui` has `CXX_MODULE_STD OFF` to avoid root-scope `@cmake_cxx_std.lib` LNK2001 issues
+
+- Included from root `CMakeLists.txt` via `include(Compilers)`; flags propagate via `add_compile_options`.
+- Preset side: `msvc-live` sets `PPR_EDIT_AND_CONTINUE=ON` (→ `/ZI` path); `PPR_RELEASE_PERF_FLAGS=OFF` there.
+- Workaround refs: root-scope `@cmake_cxx_std.lib` LNK2001 (see `cmake/external/` + AGENTS.md "CMake Version
+  Tracking") is why `imgui`/`imgui.base` pin `CXX_MODULE_STD OFF`.
 
 ## Key Files
-- `cmake/compiler/MSVC.cmake` — /bigobj, /utf-8, /EHsc, /Zc:__cplusplus, PPR_PROJECT_WARNINGS_CXX, /arch:AVX2 /Gw genex
-- `cmake/compiler/Clang.cmake` — -stdlib=libc++, -Wall -Wextra long list, -Werror when enabled
-- `cmake/compiler/GCC.cmake` — Extends Clang warnings with GCC-specific options
-- `cmake/Compilers.cmake` — Dispatcher: MSVC/Clang/GCC inclusion, calls setup_ppr_project
-- `CMakeLists.txt` — `include(Compilers)`, `CMAKE_CXX_STANDARD 23`, `CMAKE_CXX_MODULE_STD ON`
-- `CMakePresets.json` — msvc-dev (cl + PPR_ENABLE_DEVELOPER_MODE ON), msvc-rel, clang-cl-dev/clang-cl-rel, msvc-live (Ninja + /ZI + no sanitizers)
+
+- `MSVC.cmake` — vcpkg bootstrap, `/Z7` vs `/ZI`, `/EHsc`, `/utf-8`, `/bigobj`, `/arch:AVX2` + `/Gw`,
+  `/Zc:__cplusplus`, `PPR_PROJECT_WARNINGS_CXX`, ASAN/`/WX` tails.
+- `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate (also serves clang-cl).
+- `GCC.cmake` — Clang base + GCC-specific warnings (modules unsupported).
+- `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project()`.

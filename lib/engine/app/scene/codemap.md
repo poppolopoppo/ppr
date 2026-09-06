@@ -4,6 +4,7 @@
 
 The `engine.app:scene.camera` module provides the camera home for the app layer: `Camera` (pose + projection state)
 plus its controller, feeding `CameraSnapshot` into the renderer scene layer (`SceneView` in `:renderer.types`).
+Moved here from `lib/engine/app/camera/` (`App.Camera.cpp/.cppm` deleted); the old location no longer exists.
 
 ## Design
 

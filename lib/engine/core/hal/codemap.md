@@ -1,37 +1,36 @@
 # lib/engine/core/hal/
 
 ## Responsibility
-The HAL (Hardware Abstraction Layer) partition provides platform-independent primitives for page-level memory management, ring buffer operations, output debugging, debugger detection, and breakpoint insertion. It is the lowest-level foundation in `engine.core`, with platform-specific implementations in `lib/engine/core/hal/windows/`, `lib/engine/core/hal/linux/`, `lib/engine/core/hal/darwin/`, and `lib/engine/core/hal/generic/` (stub). The selected platform is determined by `PPR_HAL_PLATFORM` CMake variable (windows/linux/darwin/generic). All APIs are designed for zero-overhead in release, debug safety in development builds, and integration with the engine's allocator and IO subsystems.
+Lowest-level platform abstraction (`export module engine.core:hal`) plus shared foundation helpers. `namespace hal` exposes page memory, magic ring buffers, native-string transcoding, debugger hooks, thread identity/naming, process spawn, deadline timers, well-known directories, and the full async-IO surface that `Core.Io` wraps. Platform backends live in `hal/<windows|linux|darwin|generic>/`, selected by `PPR_HAL_PLATFORM`.
 
 ## Design
-- **page memory**: `pageAlloc(size, commit, PageProtection, alignment)` / `pageFree(ptr, size)` — allocate/free a page-aligned region. `pageCommit` / `pageDecommit` — commit/decommit physical memory. `pageProtect` — change read/write/execute protection. `pageOfferToOS` / `pageReclaimFromOS` — give back / reacquire memory from the OS.
-- **ring buffer**: `ringBufferAlloc(buffer_size)` / `ringBufferFree(ring_buffer, buffer_size)` — a "magic" ring buffer backed by contiguous pages that map the same memory twice, so wrap-around is free (no copy). Used by `RawChannel` for inter-thread message passing.
-- **outputDebug**: `outputDebug(msg)` — writes a string to the debugger output pane (OutputDebugString on Windows, stderr on Linux/Darwin). Used for assert messages and runtime diagnostics.
-- **isDebuggerPresent**: `isDebuggerPresent()` — returns true if a debugger is attached. `breakpoint()` / `breakpointIfDebugging()` — software breakpoint (`int 3`).
-- **process**: `process::currentExecutablePath()` — full path of the running executable. `process::spawnAndWait(executable, args)` — spawn a child process and wait for termination, returning exit code. `process::terminateProcess(exit_code)` — terminate the current process.
-- **timer**: `timer::setDeadline(ms, callback)` / `timer::cancelDeadline(handle)` — one-shot deadline timers (used for test timeout enforcement).
-- **threads**: `ThreadId` struct, `currentThreadId()`, `setThreadName()` / `getThreadName()` — platform-native thread identifiers and debugger-visible names.
-- **native string transcoding**: `transcode(...)` overloads plus `native::ansi` / `native::utf8` / `native::from` helpers convert between ANSI, UTF-8, and the platform-native `wchar_t`/`char` string type.
-- **file-system dirs**: `homeDir()`, `systemDir()`, `appDataLocalDir()`, `appDataRoamingDir()` — well-known OS directories.
-- **async I/O**: `io::init/deinit`, `io::openFile/closeFile`, `io::submit/poll/wait`, `io::mapFile/unmapFile/mapData/mapSize`, `io::openWatch/closeWatch/pollWatch/waitWatch/parseWatchEvents` — the platform async I/O surface (see `Core.Io` partition for the engine-level wrapper).
+- **Foundation prelude** (in `pP` scope of `Core.HAL.cppm`): `simd_128_t`, `hash::mix`/`combine` (mx3/xmxmx 64-bit, best-xmxmx 32-bit, Boost `combine`), `overloaded` visitor, `Deferred`/`defer` scope guard, `randomNumberGenerator()` (hardware-seeded `mt19937_64`).
+- **Identity/dirs**: `platformName()`, cached `userName()`, `Uuid` (`m_data[4]` + `create()`), `homeDir`/`systemDir`/`appDataLocalDir`/`appDataRoamingDir` as `directory_entry` refs.
+- **Page memory**: `pageAlloc(size, commit, PageProtection{read,write,execute}, alignment)` → `allocation_result`, `pageCommit`/`pageDecommit`/`pageProtect`/`pageOfferToOS`/`pageReclaimFromOS`/`pageFree`; `page_size`/`page_granularity` externs, `cacheline_size_v` (hardware constant or 64 fallback). Backs `mem::OS`.
+- **Ring buffer**: `ringBufferAlloc`/`ringBufferFree` — dual-mapped contiguous window so wrap-around needs no copy. Backs `RawChannel`.
+- **Strings**: `transcode` overloads (ansi↔wide↔utf8, `nullptr,0` = size query) + `toString` two-step helper; `native::{string,char_t,is_wchar_v,ansi,utf8,from,format}` adapts to the platform `path::string_type`.
+- **Debugger**: `outputDebug` (ansi + native), `isDebuggerPresent`, `breakpoint`/`breakpointIfDebugging`, `disableSystemErrorReporting`, `installDebugAssertHooks`; `outputDebugFmt` compiles out in release.
+- **Threads**: `ThreadId{m_value}` with ordering/swap, `currentThreadId`, `setThreadName`, buffer-based `getThreadName` (returns required size, truncates at 256 in the string overload), `std::formatter<ThreadId>` rendering the debug name or numeric id.
+- **Process/timers**: `process::{currentExecutablePath, spawnAndWait(exe, args), terminateProcess}`; `timer::{DeadlineHandle, setDeadline(ms, move_only_callback), cancelDeadline}` for test timeouts and context deadlines.
+- **Async IO** (`hal::io`): `IoHandle`/`FileHandle`/`MapHandle`/`WatchHandle` opaques; `Opcode{read,write}`; `OpenFlags` bitmask (`read/write/create/truncate`); `SubmitEntry{m_file,m_buffer,m_buffer_size,m_file_offset,m_opcode,m_user_data → IoRequest*,m_overlapped}`; `CompletionEntry{m_user_data,m_bytes_transferred,m_error}`; `overlapped_storage_size_v` = 64 floor for the Windows extension. Lifecycle `init`/`deinit`; files `openFile`/`closeFile`; drain `submit`/`poll`/`wait` + `wake`/`cancelIo`; maps `mapFile`/`unmapFile`/`mapData`/`mapSize`; watches `openWatch`/`closeWatch`/`pollWatch` (non-blocking, `result_out_of_range` on overflow)/`waitWatch`/`parseWatchEvents` (raw bytes → `WatchEvent{Action,m_name_offset}` + concatenated filenames).
 
 ## Flow
-- **Application startup**: `pP::Application` calls `hal::disableSystemErrorReporting()` and `hal::installDebugAssertHooks()`, resolves the content directory from `hal::process::currentExecutablePath()`, and logs `hal::platformName()`. The `mem::OS` page allocator is backed by `hal::pageAlloc`/`pageFree`.
-- **Assert flow**: `PPR_ASSERT(expr)` evaluates `expr`; if false, `outputDebug("Assertion failed: ...")` is called, `breakpoint()` is hit, and the debug assert callback fires. In release builds, `PPR_ASSUME(expr)` acts as `[[assume(expr)]]` / `__built_assume`.
-- **Message passing**: `RawChannel` allocates its double-mapped buffer via `hal::ringBufferAlloc`; producers/consumers communicate through it without copies on wrap-around.
-- **Shader hot-reload**: `engine.shader` maps shader source files via `hal::io::mapFile` and watches them through the IO partition's `FileWatcher`.
-- **Thread debugging**: `setThreadName`/`getThreadName` expose debugger-visible thread names; `ThreadId` values are formattable via `std::format`.
+- **Boot**: `Application` disables error dialogs, installs assert hooks, resolves content dir from `currentExecutablePath()`, logs `platformName()`; `mem::OS` pages come from `pageAlloc`/`pageFree`.
+- **Assert**: `PPR_ASSERT` → `outputDebug` + `breakpoint` + policy hook in debug; `[[assume]]` in release.
+- **Messaging**: `RawChannel` ctor sizes via `page_granularity`, storage from `ringBufferAlloc`; producers/consumers rendezvous without wrap copies.
+- **File IO**: `Core.Io` submits `SubmitEntry` batches → backend completes (IOCP / io_uring-equivalent / kqueue / stub) → `CompletionEntry` batch drained into `IoRequest::complete_`.
+- **Watch**: backend fills raw buffer (`ReadDirectoryChangesW` / inotify / FSEvents / stub) → `parseWatchEvents` normalizes to `WatchEvent` + names → `DirectoryWatcher` caches `FileChange`s.
 
 ## Integration
-- **engine.core memory**: `mem::OS` page allocator delegates to `hal::pageAlloc`/`pageCommit`/`pageFree`; `RawChannel` uses `hal::ringBufferAlloc`.
-- **engine.core IO**: `Core.Io` partition wraps `hal::io::submit/poll/wait`, `hal::io::mapFile`, and `hal::io::openWatch` into `IoPort`/`MappedFile`/`FileWatcher`.
-- **engine.app**: `Application` startup uses `hal::disableSystemErrorReporting`, `hal::installDebugAssertHooks`, `hal::platformName`, `hal::process::currentExecutablePath`; GLFW input feeds `hal::native::char_t` characters into the keyboard state.
-- **engine.shader**: Hot-reload reads shader source via `io::mapFile` (HAL-backed).
-- **engine.tests.core**: Tests `pageAlloc`/`pageFree`, `ringBufferAlloc`/`ringBufferFree`, `outputDebug`, `isDebuggerPresent`, `breakpoint`, `process::spawnAndWait`, `timer::setDeadline`/`cancelDeadline`, and native string transcoding.
+- **memory**: `mem::OS` → `pageAlloc`/`pageCommit`/`pageFree`; poison/ASAN annotations wrap mapped and paged memory.
+- **concurrency**: `RawChannel` → `ringBufferAlloc`; channel/context/event wakeups ride `PulseEvent`/`Signal`.
+- **Core.Io**: thin RAII/event wrapper over `hal::io` (see `io/codemap.md`); `IoRequest` embeds the overlapped storage whose minimum the HAL declares.
+- **engine.app / engine.shader**: startup/debug/thread-naming/process APIs; shader loading via `mapFile`, hot-reload via watches.
+- **engine.tests.core**: page/ring-buffer round-trips, debugger/output probes, `spawnAndWait`, deadline timers, transcoding, IO submit/poll/wait and watch suites.
 
 ## Key Files
-- `Core.HAL.cppm` — `pP::hal` namespace: page memory, ring buffer, outputDebug, isDebuggerPresent, breakpoint, process, timer, threads, native transcoding, async I/O, well-known dirs
-- `hal/windows/` — Win32 implementation, 13 files (`Core.HAL.windows.<Area>.cpp` + `Core.HAL.windows.include.hpp`): Memory, RingBuffer, Io, IoMap, IoWatch, Process, Timer, Strings, Debugger, Filesystem, System, Random
-- `hal/linux/` — POSIX implementation, 10 files (`Core.HAL.linux.<Area>.cpp`): mmap/mprotect, inotify, fork+execvp, timer_create
-- `hal/darwin/` — XNU implementation, 10 files (`Core.HAL.darwin.<Area>.cpp`)
-- `hal/generic/` — stub implementation, 10 files (`Core.HAL.generic.<Area>.cpp`): no-op/throw fallbacks
+- `Core.HAL.cppm` — full `hal` interface + foundation prelude (`simd`, `hash::mix`, `overloaded`, `Deferred`, RNG)
+- `hal/windows/` — Win32 backend, 12 files (see `hal/windows/codemap.md`)
+- `hal/linux/` — POSIX backend, 10 files (mmap/mprotect, inotify, fork+execvp, timer_create)
+- `hal/darwin/` — XNU backend, 10 files
+- `hal/generic/` — stub backend, 10 files (no-op/throw fallbacks)

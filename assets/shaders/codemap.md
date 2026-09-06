@@ -1,19 +1,36 @@
 # assets/shaders/
 
 ## Responsibility
-Slang shader sources for the PPR engine demo. Each `.slang` file is compiled at startup by `engine.shader` (`IShaderService::loadModuleFromFile`) and linked into GPU pipelines by `engine.rhi`. The `Renderer` keeps pipeline-rebuild machinery (`rebuildPipeline_`) for hot-reload, but it is not yet wired to a file watcher (the per-frame `wasReloaded()` check is disabled).
+
+Slang shader sources for the demo scene pass. Sole file `triangle.slang` draws the per-vertex-colored triangle,
+transformed by the frame's view-projection matrix supplied by the engine's `TrianglePass` constant buffer.
 
 ## Design
-- **Row-vector / row-major convention**: matrices are row-major (set at the Slang session level in `engine.shader`). Vertex transforms use `mul(float4(position, 1.0), g_frame.m_view_projection)` — the row-vector form — NOT `mul(matrix, vector)`, which would transpose the transform and flip view-space Z (negative W → clipped geometry). This matches `mango::math` / `engine.math` conventions.
-- **Frame constants**: a `ConstantBuffer<FrameConstants>` (register b0) carries `m_view`, `m_projection`, `m_view_projection`, `m_inverse_view_projection`, camera position/velocity, and viewport size.
-- **Entry points**: marked with `[shader("vertex")]` / `[shader("fragment")]`; HLSL semantics (`POSITION`, `COLOR`, `SV_Position`, `SV_Target`).
+
+- `FrameConstants` (`register(b0)`): `m_view`, `m_projection`, `m_view_projection`, `m_inverse_view_projection`,
+  plus `m_camera_position` and `m_viewport_size` (both `float4`). No lighting/material/time fields — minimal debug
+  triangle only.
+- Row-vector / row-major convention (matches `mango::math` + Slang session default): vertex does
+  `mul(float4(input.position, 1.0), g_frame.m_view_projection)` — NOT `mul(matrix, vector)`, which would transpose
+  the transform and flip view-space Z (negative W → clipped). The in-file comment documents this explicitly.
+- Entry points `[shader("vertex")] vertexMain` (POSITION/COLOR → SV_Position/COLOR passthrough) and
+  `[shader("fragment")] fragmentMain` (color → `float4(color, 1.0)` to SV_Target). No UI shader here — ImGui's is
+  embedded in `App.UI.ImGui.cpp`.
+- Only `.slang` file in the repo; deployed as `<exe-dir>/shaders/triangle.slang`.
 
 ## Flow
-`IShaderService::loadModuleFromFile(path, name, out)` → `io::mapFile` reads source → wrapped in a `MappedFileBlob` → `ISession::loadModuleFromSource` compiles → module owned by the session until `shutdown()`. `Renderer::rebuildPipeline_()` can rebuild the shader program and pipeline on reload, but no file watch currently triggers it.
+
+`Renderer`/`TrianglePass::initialize` → `IShaderService::loadModuleFromFile(<exe>/shaders/triangle.slang)` →
+`io::mapFile` → `MappedFileBlob` → `ISession::loadModuleFromSource` → entry points linked into the triangle render
+pipeline; per-frame `FrameConstants` uploaded, vertex shader applies `m_view_projection`.
 
 ## Integration
-- Consumed by: `engine.shader` (compilation), `engine.rhi` (pipeline creation), `game` demo.
-- Depends on: Slang compiler, `engine.math` matrix layout conventions.
+
+- **Consumers**: `engine.shader` (compile), `engine.rhi` + `TrianglePass` (pipeline + constants), `game` demo.
+- **Depends on**: Slang compiler; `engine.math` matrix-layout/handedness conventions (row-major, row-vector,
+  left-handed +Z forward, [0,1] depth).
+- **Provides**: `triangle.slang` source only.
 
 ## Key Files
-- `triangle.slang` — minimal vertex/fragment pair: passes per-vertex color through, applies `m_view_projection` in row-vector form.
+
+- `triangle.slang` — vertex/fragment pair with `FrameConstants` and documented row-vector `mul` order.

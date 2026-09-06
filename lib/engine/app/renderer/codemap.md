@@ -21,6 +21,9 @@ submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`T
   pipeline on target format/sample mismatch and uploads snapshot-fed frame constants (no velocity field; viewport size
   from `SceneView::m_render_view`, never mutable `Camera`).
 - **shutdown()** — retain-first-error teardown: wait, unconfigure all surfaces, release queue/service refs.
+- **Moves**: viewport geometry moved out to `engine.app:window.viewport` (`App.Viewport.cpp/.cppm` deleted;
+  `makeRenderView` in `:renderer.types` now takes `const Viewport &`); camera state moved out to
+  `engine.app:scene.camera` (`lib/engine/app/camera/` deleted, `TrianglePass` consumes only `CameraSnapshot`).
 
 ## Flow
 

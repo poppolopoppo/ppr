@@ -1,47 +1,44 @@
 # lib/engine/core/
 
 ## Responsibility
-The root `engine.core` module serves as the umbrella foundation library for the PPR game engine, re-exporting all lower-level partitions and providing the central import point for the five main engine modules (engine.math, engine.rhi, engine.shader, engine.app). It consolidates C++20 module declarations, foundational types, memory management, containers, concurrency primitives, IO abstractions, and service locator infrastructure into a single coherent namespace `pP`.
+Umbrella foundation library (`engine.core`) re-exporting ~30 partitions into a single `pP` namespace: integer/sentinel types, hashing, utility, enums, strings, opaque type-erasure, service locator, logger, timers, unit-test framework, function wrappers, memory allocators, containers, concurrency primitives, HAL platform abstraction, and async IO. Single import point (`import engine.core;`) for engine.math/rhi/shader/app and both test executables.
 
 ## Design
-- **Module hierarchy**: Core.cppm exports `import :partition` for each sub-library, using `export import` so downstream modules gain transitive access. The umbrella re-export pattern ensures that `import engine.core` brings in all dependencies automatically.
-- **Strong type safety**: Integer shorthands (`u8`–`u64`, `i8`–`i64`), sentinel values (`default_value_v`, `zero_v`, `none_v`, `umax_v`), and strongly-typed `Numeric<T,TagT>` wrappers prevent implicit conversion errors.
-- **Relocatable types**: `relocatable<T>` trait (defined in Core.Containers.cppm) marks types safe for `memcpy`; used by `TagPtr`, `ArrayView`, `Stack`, and container elements. `RelPtr`/`RelativeView` are deliberately **not** relocatable (self-relative offsets must be conserved by moving).
-- **Service locator**: `IService`/`ServicesStore`/`ServiceInjector` compile-time keyed via `typeUid<T>()` hash, with parent-chain fallback for hierarchical service scoping (e.g. the UI child store `m_ui_services`).
-- **Opaque type erasure**: `opaque::Value` (variant), `opaque::Block` (persistent byte buffer with arena allocation), `opaque::Unique` (RAII owning handle) provide type-erased data storage for serialization and reflection.
-- **Memory hierarchy**: GPA (stateless wrapper over global `operator new`) → OS page allocator (`hal::pageAlloc`) → PagePool (bitmap tree) → HugePage (2 MiB) / SmallPage (32/64 KiB) pools → Arena (persistent) / ScratchPad (TLS transient) → composite allocators (InSitu, Fallback, Threshold, Pooling, LocalCache, HintedPooling).
-- **Lock-free MPSC**: `RawChannel` provides a lock-free multi-producer single-consumer ring buffer for thread-safe message passing, used by concurrency and IO subsystems.
-- **Compile-time event multiplexing**: `Signal<Events...>` with `select(events...)` Go-style helper enables range-for iteration over signaled events.
-- **Cancellation tree**: `IContext`/`SharedContext` implements Go-style context propagation with deadline support, cancellation, and value propagation.
+- **Umbrella re-export**: `Core.cppm` lists every partition via `export import :partition;` (assert, containers ×5, concurrency ×3, enums, function ×2, hal, hashing, io ×3, logger, memory ×6, opaque, service, strings, timer, types, unit_test, utility). Downstream modules gain transitive access automatically.
+- **Strong types**: `Core.Types.cppm` — `u8`–`u64`/`i8`–`i64` shorthands plus `_u8`…`_i64` literals, impostor sentinels (`default_value_v`, `zero_v`, `none_v`/`max_v`, `min_v`, `Epsilon`), `Numeric<T,TagT>` wrapper with tag-encoded contracts, `FunctionTraits`/`TFunction` helpers. `relocatable<T>` trait lives in `details` (containers partition).
+- **Hashing**: `Core.Hashing.cppm` — `hash_t` with pass-through `hashValue`, rapidhash-backed `memory`/`small`/`trivial`, `mix`/`combine`, `ptr`, per-type `hashValue` (enums, integrals, floats, `Numeric`, `Uuid`, contiguous ranges), `THashable`/`DefaultHash`, range combiners (`sizedRange`/`unorderedRange`/`contiguousRange`/`anyRange`), consteval FNV-1a, `Memoizer<T>` hash cache. (The `mix`/`combine` used here are declared in `:hal`.)
+- **HAL partition doubles as misc foundation**: `hal/Core.HAL.cppm` holds `simd_128_t`, `hash::mix`/`combine`, `overloaded` visitor, `Deferred`/`defer`, `randomNumberGenerator()` alongside `namespace hal` (page memory, magic ring buffer, transcoding, debugger, thread IDs/names, process, deadline timers, async IO, well-known dirs).
+- **Service locator**: `Core.Service.cppm` — `IService` base keyed by compile-time `typeUid<T>()`, thread-safe `ServicesStore` with parent-chain fallback (root store + UI child store), `ServiceInjector` implicit DI. Lifetime checked by `safe_ptr<T>` (ref-counted assert in debug, raw pointer in release).
+- **Opaque**: `Core.Opaque.cppm` — `opaque::Value` variant, `opaque::Block` persistent arena buffer (+ `Block::Builder`), `opaque::Unique` RAII handle, `opaque::Dict`, struct-visitor/format-context helpers.
+- **Testing**: `Core.UnitTest.cppm` — `UnitTest` tree (`Context`, `Id` with `/`-joined paths, `EFlags` none/expect_fail/fork/expect_crash, fork-via-`spawnAndWait` child runs); test macros (`PPR_UNIT_TEST`, `PPR_TEST_ASSERT`) live in test-only `lib/engine/tests/include/pP/UnitTest.h`.
+- **Build**: `CMakeLists.txt` registers every `.cppm` in `FILE_SET CXX_MODULES` plus per-partition `.cpp` and `${HAL_PLATFORM_SOURCES}` (11 shared HAL areas + windows-only `Random`/`RingBuffer`); links `rapidhash` privately via `setup_ppr_project`.
 
 ## Flow
-- **Application entry** (`game/main.cpp`) imports `engine.core` and constructs `pP::Application`, which resolves directories, discovers registered services (input, window, player, RHI, shader), and enters the per-frame update/render loop.
-- **Service registration**: Modules register services via `ServicesStore::insert<T>()`; the `ServiceInjector` retrieves them implicitly. The UI child store chains to the root with parent fallback.
-- **Memory allocation**: Code requests memory through the allocator hierarchy (`mem::GPA`, `mem::OS`, `mem::HugePage`, `mem::SmallPage`, `mem::Arena`). Arena/ScopedArena supports O(1) checkpoint/restore for scope-bound allocations.
-- **Concurrency**: Threads communicate via `RawChannel` (lock-free MPSC). Event signals (`PulseEvent`, `BroadcastEvent`, `Signal<Events...>`) enable wait-free notification. Contexts (`IContext`) support cancellation trees with deadline timers.
-- **IO operations**: `IoPort` submits async read/write requests against caller-provided `IoRequest` events; `pollCompletions()` / `waitForCompletions()` drain completed operations. `DirectoryWatcher` monitors filesystem changes via `hal::io::openWatch`/`pollWatch`. Memory-mapped files via `MappedFile`.
-- **Logging**: `Log::log()` emits entries through a writer policy; the `Log::Handler` singleton drains them on a background worker thread (`std::jthread`).
+- **Startup**: `game/main.cpp` imports core/math/rhi/app, constructs `Application`, which calls `hal::disableSystemErrorReporting`/`installDebugAssertHooks`, resolves dirs from `process::currentExecutablePath()`, registers services (input, window, player, RHI, shader), then runs the update/render loop with a `SharedContext` lifecycle.
+- **Allocation**: callers go through `mem::GPA` → `mem::OS` (`hal::pageAlloc`) → `PagePool` bitmap → `HugePage`/`SmallPage` pools → `Arena`/`ScratchPad` (TLS), composed via `InSitu`/`Fallback`/`Threshold`/`Pooling`/`LocalCache`/`HintedPooling`, erased via `Allocator<A>`/`PMR` or adapted via `STL<A>`.
+- **Messaging/events**: producers `producerReserve` → placement-new → `producerSubmit`; consumers `consumerAcquire`/`consumerRelease`; `Signal`/`select` multiplexes `IEvent`s (`RawChannel`, `IoRequest`, `DirectoryWatcher`, contexts); cancellation propagates down the `IContext` tree.
+- **IO**: `IoPort::open` → `read`/`write(IoRequest&, …)` → `pollCompletions`/`waitForCompletions` drain (64-entry batches); `mapFile` for shader/asset bytes; `DirectoryWatcher::poll`/`wait` → `changes()`.
+- **Diagnostics**: `PPR_ASSERT/VERIFY/ENSURE` throw or `[[assume]]` per config; `Log::Handler` drains entries on a `std::jthread`; `hal::outputDebugFmt` is debug-only.
 
 ## Integration
-- **engine.math**: Uses `pP::float2/3/4`, `matrix` ops, and `hashValue()` from Core.Hashing.
-- **engine.rhi**: Uses `pP::rhi::*` types, projection helpers, and `IShaderService` from engine.shader; depends on Core.HAL for platform abstraction.
-- **engine.shader**: Uses `IShaderService` for Slang session lifecycle and hot-reload; integrates with Core.Opaque for shader data serialization.
-- **engine.app**: Constructs `pP::Application`, resolves directories, initializes services (input, window, player, RHI, shader), and drives the per-frame loop. `Application` keeps a UI child `ServicesStore` (`m_ui_services`) chained to the root.
-- **engine.tests.core**: GLFW-free test suite for memory, containers, concurrency, IO, strings, utility, opaque, services, and enums.
-- **engine.tests.app**: GLFW-linked test suite for platform-dependent tests.
+- **engine.math**: vector/matrix aliases and ops; `hashValue()`/`opaqueValue()` hooks from core.
+- **engine.rhi / engine.shader**: RHI wraps Slang-RHI behind `IRhiService`; shader compiles via `IShaderService` reading sources through `io::mapFile` (HAL `mapFile` + `MappedFileBlob`).
+- **engine.app**: owns `Application`, service stores, input/window/player/viewport/renderer layers; consumes HAL (platform selection via `PPR_HAL_PLATFORM`), concurrency, IO, timers.
+- **engine.tests.core** (GLFW-free): memory, containers, concurrency, IO, strings, utility, opaque, enums, service suite wired into the core group.
+- **engine.tests.app** (links GLFW): platform-dependent suites sharing `engine.tests` static lib (`parseCli`/`runSuite`).
 
 ## Key Files
-- `Core.cppm` — umbrella module re-exporting all partitions
-- `Core.Types.cppm` — integer types, sentinel values, `Numeric<T,TagT>`, `FunctionTraits`
-- `Core.Utility.cppm` — math helpers (`clamp`, `saturate`, `align*`), `bit_count_v`, `Expected`, `hasFailed`, `static_iota`
-- `Core.Assert.cppm` — assertion machinery (`Assertion::onFailure`, failure policy)
-- `Core.Service.cppm` — `IService`, `ServicesStore`, `ServiceInjector`, compile-time `typeUid<T>()`
-- `hal/Core.HAL.cppm` — HAL namespace with page memory, ring buffer, async I/O, file watching, process spawning, timers, thread IDs
-- `Core.Logger.cppm` — asynchronous logger with `Log::Entry`, `Emitter`, `Handler`, severity levels
-- `Core.Timer.cppm` — `TimePoint`/`TimeSpan`, `ITimerClock`, `TimerManager` with scheduling
-- `Core.UnitTest.cppm` — `UnitTest` framework with `Context` (filter/fork/loop); test macros (`PPR_UNIT_TEST`) live in `lib/engine/tests/include/pP/UnitTest.h`
-- `function/Core.Function.Callback.cppm` — multi-subscriber `Callback<T>` with RAII `Handle`
-- `Core.Opaque.cppm` — `opaque::Value`, `opaque::Block` (+ `Block::Builder`), `opaque::Unique`, `opaqueValue()`
-- `Core.Strings.cppm` / `Core.Hashing.cppm` — string utilities (lazy transforms) and rapidhash-based `hash_t` functions
-- `function/Core.Function.Ref.cppm` — `std23::function_ref` (non-owning callable reference)
-- `Core.Enums.cppm` — enum flag utilities (`enumOrd`, `enumCombine`, `enumContains`, bitwise operators)
+- `Core.cppm` — umbrella re-export list
+- `Core.Types.cppm` — integers, literals, sentinels, `Numeric`, `FunctionTraits`
+- `Core.Utility.cppm` — `clamp`/`saturate`, `align*`/`divideRoundUp`, `alignof_v`, `bit_count_v`, `Expected`, `static_iota`
+- `Core.Hashing.cppm` — `hash_t`, rapidhash wrappers, range hashes, FNV-1a, `Memoizer`
+- `Core.Opaque.cppm` — `opaque::Value`/`Block`/`Unique`/`Dict`, builder, visitors
+- `Core.Service.cppm` — `IService`, `ServicesStore`, `ServiceInjector`, `typeUid<T>()`
+- `Core.Assert.cppm` — assertion machinery and failure policy
+- `Core.Logger.cppm` / `Core.Timer.cppm` — async logger, `TimePoint`/`TimeSpan`, `TimerManager`
+- `Core.UnitTest.cppm` — `UnitTest` framework (macros in tests include dir)
+- `Core.Strings.cppm` / `Core.Enums.cppm` — lazy string transforms, enum flag utilities
+- `function/` — `Callback<T>` multi-subscriber, `std23::function_ref`
+- `hal/Core.HAL.cppm` — `hal` interface + shared foundation helpers
+- `concurrency/` / `io/` / `memory/` / `containers/` — see subfolder codemaps
+- `CMakeLists.txt` — module file sets, HAL platform sources, `rapidhash` dep

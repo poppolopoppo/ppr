@@ -1,27 +1,33 @@
 # lib/engine/core/hal/windows
 
 ## Responsibility
-The Windows HAL wraps Win32 API surface to provide core OS abstractions: page-based memory management via VirtualAlloc2/VirtualFree, IOCP-driven asynchronous I/O, directory watching via ReadDirectoryChangesW, process creation/spawning, high-resolution timers, debugger integration (OutputDebugString, IsDebuggerPresent, CRT hooks), UTF-8/ASCII/Wide char transcoding, and memory-mapped file support. It is the primary platform-specific implementation behind the pP::hal interface defined in Core.HAL.cppm.
+Win32 backend for `pP::hal`: page memory, dual-view ring buffers, IOCP async IO, mapped files, `ReadDirectoryChangesW` watching, process spawn, timer-queue deadlines, debugger/CRT hooks, thread naming, `MultiByte` transcoding, known-folder resolution, UUID/RNG. Primary platform implementation linked when `PPR_HAL_PLATFORM=windows`.
 
 ## Design
-Each functional area is partitioned into its own `Core.HAL.windows.<Area>.cpp` file, all including `Core.HAL.windows.include.hpp` for platform typedefs; individual files link `mincore.lib`/`bcrypt.lib` via `#pragma comment(lib, ...)`. Namespaces mirror the Core.HAL.cppm structure: `pP::hal`, `pP::hal::io`, `pP::hal::process`, `pP::hal::timer`. Types use Win32 handles (`HANDLE`, `HMODULE`) with RAII-style cleanup via `::CloseHandle`. Page protection flags map `PageProtection::read/write/execute` to `PAGE_*` constants. The ring buffer uses `CreateFileMapping` + `MapViewOfFile3` with `MEM_RESERVE_PLACEHOLDER` for lock-free dual-view access.
+- **Layout**: 12 files — shared `Core.HAL.windows.include.hpp` (Win32 typedefs, `#pragma comment(lib, mincore/bcrypt)`) + per-area `Core.HAL.windows.<Area>.cpp` in `pP::hal` / `pP::hal::io` / `pP::hal::process` / `pP::hal::timer` namespaces, mirroring `Core.HAL.cppm`. `Memory` maps `PageProtection` to `PAGE_*`; `RingBuffer` builds the magic window with `CreateFileMapping` + `MapViewOfFile3` over `MEM_RESERVE_PLACEHOLDER`s; `Io` drives IOCP (`init` = completion port, `submit` = overlapped `ReadFile`/`WriteFile`, `poll`/`wait` = `GetQueuedCompletionStatusEx`, plus `wake`/`cancelIo`); `IoMap` wraps file-mapping objects; `IoWatch` issues overlapped `ReadDirectoryChangesW` on `CreateFileW(BACKUP_SEMANTICS|OVERLAPPED)` handles.
+- **System** (`Core.HAL.windows.System.cpp`): `platformName()` → `"windows"`; `userName()` → cached `GetUserNameW` result transcoded via `native::ansi` (`"unknown_user"` fallback); `Uuid::create()` → `BCryptGenRandom(BCRYPT_USE_SYSTEM_PREFERRED_RNG)` over `m_data` with `safe_narrowing` size and `PPR_VERIFY` on status.
+- **Process/Timer/Debugger/Strings/Filesystem/Random**: `CreateProcessW` + `GetModuleFileNameW`; `CreateTimerQueueTimer` one-shots; `OutputDebugStringA/W`, `IsDebuggerPresent`, `__debugbreak`, CRT report hooks, debugger-visible thread names; `MultiByteToWideChar`/`WideCharToMultiByte` (`CP_ACP`/`CP_UTF8`); known folders via environment/shell resolution; `Random` seeds `mt19937_64` from `random_device` (separate from the BCrypt UUID path).
 
 ## Flow
-A typical call flows: `pP::hal::pageAlloc(size, commit, protection)` → `alignedVirtualAlloc_` → `VirtualAlloc2` (or fallback `VirtualAlloc` with alignment placeholders) → `pageProtectionFlags_` translates `PageProtection` to `DWORD` flags → on success, `mem::unpoisonUninitialized` annotates the region; `pageProtect` calls `VirtualProtect`; `pageFree` calls `VirtualFree(MemRelease)`; `ringBufferAlloc` creates a file mapping and maps two views at offset `buffer_size` apart; IOCP init creates a completion port, `submit` posts `ReadFile`/`WriteFile` with `FILE_FLAG_OVERLAPPED`, `poll`/`wait` call `GetQueuedCompletionStatusEx`; `openWatch` calls `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED` then `ReadDirectoryChangesW`; process spawning uses `CreateProcessW`; timer uses `CreateTimerQueueTimer`; debugger calls `OutputDebugStringA/W`; transcoding uses `MultiByteToWideChar`/`WideCharToMultiByte` with `CP_ACP` or `CP_UTF8`.
+- **Alloc**: `pageAlloc` → `alignedVirtualAlloc_` (`VirtualAlloc2`, placeholder fallback) → flag translation → ASAN `unpoisonUninitialized`; `pageProtect` → `VirtualProtect`; `pageFree` → `VirtualFree(MEM_RELEASE)`; `ringBufferAlloc` maps two adjacent views `buffer_size` apart.
+- **IO**: `Io::init` → port; `openFile` → `CreateFileW(OVERLAPPED)`; `submit(SubmitEntry)` posts overlapped ops with the caller's embedded storage; `poll`/`wait` harvest `CompletionEntry`s; `cancelIo` aborts by overlapped pointer; `wake` unblocks waiters.
+- **Watch/map**: `openWatch` → handle + first `ReadDirectoryChangesW`; `pollWatch`/`waitWatch` return raw bytes, `parseWatchEvents` splits `FILE_NOTIFY_INFORMATION` into `WatchEvent` + names; `mapFile` → mapping object, `mapData`/`mapSize` expose the view, `unmapFile` releases.
+- **Identity**: `Uuid::create` draws 16 BCrypt random bytes per call; `userName` resolves once into a function-static `std::string`.
 
 ## Integration
-Consumed by `engine.core` via the `Core.HAL.cppm` umbrella export `export namespace hal { ... }`. The platform is selected at CMake configure time via `PPR_HAL_PLATFORM` (set to `windows`), which causes CMake to link the appropriate `Core.HAL.<platform>` module. All other engine modules import `engine.core:hal` to use `pP::hal::pageAlloc`, `pP::hal::ringBufferAlloc`, `pP::hal::io::init`, etc. The runtime selects the correct implementation at link time; only the chosen platform's object files are included in the build.
+- Consumed only through `engine.core:hal` (`pP::hal::pageAlloc`, `ringBufferAlloc`, `io::init/submit/poll/…`); CMake selects this backend at configure time and links only its objects. Other engines (`memory`, `concurrency`, `io`, `app`, `shader`) never touch Win32 directly. Non-Windows builds substitute the linux/darwin/generic backends behind the identical interface.
 
 ## Key Files
-- `Core.HAL.windows.Memory.cpp` — page-based allocation via VirtualAlloc2, page protection, decommit, offer/reclaim
-- `Core.HAL.windows.RingBuffer.cpp` — contiguous ring buffer via CreateFileMapping + MapViewOfFile3 placeholders
-- `Core.HAL.windows.Io.cpp` — IOCP (I/O Completion Ports) async file submit/poll/wait
-- `Core.HAL.windows.Filesystem.cpp` — known folder paths, environment-variable-based directory resolution
-- `Core.HAL.windows.Process.cpp` — CreateProcessW, GetModuleFileNameW, spawnAndWait
-- `Core.HAL.windows.Timer.cpp` — CreateTimerQueueTimer for deadline timers
-- `Core.HAL.windows.Debugger.cpp` — OutputDebugString, IsDebuggerPresent, __debugbreak, CRT report hooks, thread naming
-- `Core.HAL.windows.Strings.cpp` — MultiByteToWideChar, WideCharToMultiByte, UTF-8 transcoding
-- `Core.HAL.windows.IoWatch.cpp` — ReadDirectoryChangesW for directory watching with OVERLAPPED
-- `Core.HAL.windows.System.cpp` — BCryptGenRandom, platformName, userName, UUID v4
-- `Core.HAL.windows.IoMap.cpp` — CreateFileMapping + MapViewOfFile for memory-mapped files
-- `Core.HAL.windows.Random.cpp` — std::mt19937_64 seeded by random_device
+- `Core.HAL.windows.include.hpp` — shared Win32 typedefs and lib pragmas
+- `Core.HAL.windows.Memory.cpp` — VirtualAlloc2 pages, protect/decommit/offer/reclaim
+- `Core.HAL.windows.RingBuffer.cpp` — dual-view magic ring buffer (windows-only)
+- `Core.HAL.windows.Io.cpp` — IOCP submit/poll/wait/wake/cancelIo
+- `Core.HAL.windows.IoMap.cpp` — file-mapping backed `mapFile` family
+- `Core.HAL.windows.IoWatch.cpp` — overlapped `ReadDirectoryChangesW` watches
+- `Core.HAL.windows.System.cpp` — `platformName`, cached `userName`, BCrypt `Uuid::create`
+- `Core.HAL.windows.Random.cpp` — `random_device`-seeded `mt19937_64` (windows-only)
+- `Core.HAL.windows.Process.cpp` — `CreateProcessW` spawn, executable path
+- `Core.HAL.windows.Timer.cpp` — timer-queue deadline timers
+- `Core.HAL.windows.Debugger.cpp` — OutputDebugString, debugger check, CRT hooks, thread names
+- `Core.HAL.windows.Strings.cpp` — `MultiByte`/`WideChar` transcoding
+- `Core.HAL.windows.Filesystem.cpp` — known-folder resolution

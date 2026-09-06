@@ -1,26 +1,37 @@
 # game/
 
 ## Responsibility
-Application entry point for the PPR engine demo. Hosts the top-level `main()` that constructs the engine `Application` subclass and drives the run loop, plus the CMake target (`app.game`) that links the engine modules and copies shader assets post-build.
+
+Demo executable (`app.game`): the thin `TurboLarbin : pP::Application` subclass plus `main()` that constructs it
+(`"ppr"`, argv span) and returns `app.run().value()` as the exit code. All engine behavior lives in `engine.app`;
+game code only adds lifecycle-hook overrides and a debug-only ImGui demo window.
 
 ## Design
-- `main.cpp` defines `demo::TurboLarbin`, a subclass of `pP::Application`, overriding the lifecycle hooks `initialize()` / `update()` / `shutdown()` (each returning `std::error_code`).
-- Uses `PPR_DEFINE_LOG_CATEGORY(Demo, info, none)` for a scoped logging category and `PPR_RETURN_ERROR_ON_FAIL` for error-propagation guards.
-- `update()` conditionally shows an ImGui demo window in debug builds via `getUiServices().get<IUIService>()`.
-- `main()` builds the app with `demo::TurboLarbin app("ppr", std::span(&argv[0], argc))` and returns `app.run().value()` as the process exit code.
+
+- `main.cpp` — `TurboLarbin` overrides `initialize` (base init + record start time), `update` (base update, then in
+  `PPR_ENABLE_DEBUG` fetches `IUIService` from `getUiServices()`, sets the ImGui current context, shows
+  `ShowDemoWindow`), `shutdown` (reset timer, base shutdown). `PPR_DEFINE_LOG_CATEGORY(Demo, …)` + error-code
+  propagation via `PPR_RETURN_ERROR_ON_FAIL`.
+- `CMakeLists.txt` — `add_executable(app.game main.cpp)` + `setup_ppr_project(... engine.core/app/math/shader/rhi)`;
+  two POST_BUILD steps: (1) copy `$<TARGET_RUNTIME_DLLS:app.game>` (transitive Windows DLLs, e.g. Slang) next to the
+  exe — replaces any hardcoded DLL list; (2) copy `assets/shaders` → `<exe-dir>/shaders`.
+- Imports only four engine modules (`engine.core/math/rhi/app`) + `imgui_internal` + `std` — `engine.shader` arrives
+  transitively via `engine.app`/`engine.rhi`, not via a direct import in `main.cpp`.
 
 ## Flow
-1. `main()` → constructs `TurboLarbin` → `app.run()` enters the engine loop.
-2. Engine resolves install/config/content/working directories and discovers registered services (input, window, player, RHI, shader).
-3. `run()` calls `initialize()` once, then loops `update()` (user hook) → `render()` per frame until exit is requested, then `shutdown()` (via `PPR_DEFER`).
-4. `game/CMakeLists.txt` builds `app.game` via `setup_ppr_project` and copies `assets/shaders` POST_BUILD.
+
+1. `main()` → `TurboLarbin("ppr", argv)` → `run()` (dirs, platform/services, window, renderer, camera, UI).
+2. Loop: engine `update()` + game `update()` override (demo window) → engine `render()` per frame until cancel/exit.
+3. POST_BUILD assets (DLLs + `shaders/`) must land next to the exe or startup file loads fail.
 
 ## Integration
-- Imports `engine.core`, `engine.math`, `engine.rhi`, `engine.app` (4 modules — NO `engine.shader` import in main.cpp), plus `imgui_internal`, `std`.
-- Consumed by: the run configuration / `app.game` executable.
-- Depends on: link-time all five engine modules (core/app/math/shader/rhi per game/CMakeLists.txt) but imports only four (no shader); plus the DearImGui module bindings.
+
+- **Consumers**: run configuration / built `app.game` binary.
+- **Depends on**: link-time all five engine libs (core/app/math/shader/rhi) but imports four; DearImGui module
+  bindings; runtime `shaders/` asset dir + copied DLLs.
+- **Provides**: process entry point only — no library, no reusable namespace.
 
 ## Key Files
-- `main.cpp` — entry point, `TurboLarbin` Application subclass, `main()`.
-- `CMakeLists.txt` — `app.game` target, `setup_ppr_project`, shader asset copy.
 
+- `main.cpp` — `TurboLarbin` subclass + `main()`.
+- `CMakeLists.txt` — `app.game` target, DLL + shader POST_BUILD copies.

@@ -2,34 +2,44 @@
 
 ## Responsibility
 
-`engine.rhi` wraps Slang-RHI into `namespace pP::rhi`, providing GPU interfaces, resource descriptors, render-pass
-types, surface management, error translation, and the `IRhiService` lifecycle interface.
+`engine.rhi` wraps Slang-RHI into `namespace pP::rhi`: GPU interface/descriptor aliases, Slang-`Result` error
+mapping, common projection helpers, and the `IRhiService` device-lifecycle singleton (`engine.rhi` is a single
+module — `RHI.cppm` interface + `RHI.cpp` implementation).
 
 ## Design
 
-- Core types include `IDevice`, `IAdapter`, `IBuffer`, `ICommandBuffer`, `ICommandQueue`, `IRenderPipeline`,
-  `IShaderProgram`, `ITexture`, `ISurface`, `IFence`, `IHeap`, and `IInputLayout`.
-- `IRhiService` is an `IService`-derived singleton that initializes the device, exposes it to the application, creates
-  render pipelines, and shuts down the RHI.
-- Projection helpers produce the common engine convention: Mango-native left-handed view space, row-major row-vector
-  matrices, and [0,1] depth. There is no backend-specific camera-projection dispatch.
-- Slang compilation uses the row-major session layout; D3D, Vulkan, Metal, and WGPU consume the same untransposed camera
-  matrices.
+- Thin `using slang_rhi::X` aliases (`namespace slang_rhi { using namespace rhi; }`): devices, adapters,
+  buffers, command buffers/encoders/queues, compute/render pipelines and pass encoders, shaders, textures and
+  views, surfaces, fences, heaps, samplers, input layouts, `ShaderCursor`, `WindowHandle`, plus all descriptor
+  structs (`BufferDesc`, `DeviceDesc`, `RenderPipelineDesc`, `ShaderProgramDesc`, `SurfaceConfig`, …).
+- Errors: `using errc = shader::errc`; `error_category()`/`make_error_code(Result|errc)` over a `SlangRhiErrorCategory`
+  (`slang-rhi`, `std::errc` conditions for invalid-arg/OOM/not-found/timeout/not-implemented/buffer-too-small);
+  `pP::hasFailed(rhi::Result)` (`SLANG_FAILED`) as the ADL target for `PPR_RETURN_*_ON_FAIL`.
+- Projection helpers encode the engine-wide convention (Mango-native left-handed view space, row-major
+  row-vector `mul(float4, matrix)`, [0,1] depth, no per-backend dispatch): `getOrthoMatrix` →
+  `float4x4::orthoD3D(0,w,0,h,0,1)`; `getPerspectiveMatrix` derives horizontal FOV then `perspectiveD3D`.
+- `IRhiService : IService` (`pP::`): `initialize(DeviceType, IGlobalSession*)`, `shutdown()`, `getInstance()`,
+  `getDevice()`, `createRenderPipeline()`. `SlangRhiService` (`RHI.cpp`): debug-layer + validation in debug
+  builds, debug callback → `PPR_LOG(RHI, …)` with source tag, required features `{Surface, Rasterization}`,
+  `DeviceDesc` wired to the shader service's global session, then `setTargetFormat(toSlangCompileTarget_(…))`
+  (`DXBC` for D3D, `SPIRV` for Vulkan/WGPU, `METAL`, host-callable for CPU, CUDA object code).
 
 ## Flow
 
-`IRhiService::get()` → initialize device and shared shader session → create surfaces/pipelines → `Renderer` submits
-`DrawSubmission` spans (`renderAndPresent`/`submitToTexture`) → shutdown releases device and RHI resources.
+`IShaderService::initialize()` → `IRhiService::get()->initialize(deviceType, globalSession)` (creates device,
+configures shader target) → surfaces/pipelines (`createRenderPipeline` forwards to `IDevice`) →
+`Renderer` submits frames → `shutdown()` releases device and destroys the RHI instance.
 
 ## Integration
 
-- **Consumers**: `engine.shader` for shader target/session setup and `engine.app` for device lifecycle, surfaces,
-  pipelines, and render submission.
-- **Depends on**: `engine.core`, `engine.math`, Slang-RHI SDK headers, and the platform window layer through application
-  services.
-- **Provides**: RHI interfaces, descriptors, common projection helpers, error categories, and `IRhiService`.
+- Depends on: `engine.core` + `engine.math` + `engine.shader` (all public — types, matrices, `errc`/session),
+  `slang-rhi` + `slang` (public system deps).
+- Consumed by: `engine.app` (renderer, surfaces, pipeline creation), `game` (via `engine.app`).
+- Build: `RHI.cppm` in `FILE_SET CXX_MODULES`, `RHI.cpp` private;
+  `setup_ppr_project(engine.rhi INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader
+  EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang)`.
 
 ## Key Files
 
-- `RHI.cppm` — exported RHI types, descriptors, projection helpers, and service interface.
-- `RHI.cpp` — service implementation, device lifecycle, error translation, and projection helper definitions.
+- `RHI.cppm` — aliases, projection declarations, error API, `hasFailed`, `IRhiService`.
+- `RHI.cpp` — error category, debug callback, `toSlangCompileTarget_`, projections, `SlangRhiService`.

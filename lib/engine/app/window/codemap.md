@@ -14,6 +14,13 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 - `getNativeHandle(window)` → `glfwGetWin32Window()` for RHI surface creation.
 - `setWindowMonitor(window, monitor, position, size)` → `glfwSetWindowMonitor()`.
 - `pollEvents()` → `glfwPollEvents()`, `waitEvents()` → `glfwWaitEvents()`.
+- **Viewport geometry** (`engine.app:window.viewport`, moved here from the deleted renderer `App.Viewport.cpp/.cppm`):
+  `BasicRect<T>` (origin/extent rect with `fromAabb`/`fromSize`, normalize/denormalize, `contains`), `PixelRect` (screen
+  pixels) / `NormalizedRect` (window-space UV), `ViewportLayout` policy variant
+  (`FullWindow`/`Centered`/`WindowRect`/`NormalizedWindowRect` with `clientRect(window_rect)`), immutable `Viewport`
+  (window + client rects, screen/window/client transforms, client normalize helpers), and `WindowViewport`
+  (window-bound viewport with `ViewportRevision`, `setLayout`, owner-driven `updateFromWindow()` after event polling —
+  holds no window subscription).
 
 ## Flow
 1. `Application` constructor → `IPlatform::get()` → `GlfwPlatform` → `GlfwWindow::get()` (creates singleton GLFW window manager)
@@ -22,11 +29,12 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 4. Window resize: GLFW framebuffer callback fires → updates `Window::m_framebuffer_size` → `m_when_resized(window, old_size)` → `Application::onWindowResized_()` → `m_renderer.resizeWindowSurface(handle, framebuffer_size)` (+ `m_ui_service->onResize`) → reconfigures surface
 5. Window close: GLFW `window_close_callback` fires → `Window::m_visible = false` → `m_when_closed(window)` → `Application::requestApplicationExit()` sets `m_should_close = true`
 6. `Application::shutdown()` → `m_platform->shutdown(*this)` → `GlfwWindow::shutdown()` → destroys all GLFW windows, clears monitor callbacks, `glfwTerminate()`
+7. Viewport clients: construct `Viewport(window, layout)` or `WindowViewport(window, layout)` → after each `pollEvents()` call `updateFromWindow()` → pass the resulting `Viewport` to `Camera::updateModel` and `makeRenderView(viewport, target_extent)` for submission scissoring
 
 ## Integration
-- **Consumers**: `Application` (primary — retrieves `m_cached_window_service` via `getServices().get<IWindowService>()`, handles `onWindowResized_`, polls events, checks `getWindowShouldClose`), `RHI` (via `m_renderer.createWindowSurface()` which calls `window_service.getNativeHandle()`), `ImGuiService` (routes events via input service), `GlfwPlatform` (primary implementer)
+- **Consumers**: `Application` (primary — retrieves `m_cached_window_service` via `getServices().get<IWindowService>()`, handles `onWindowResized_`, polls events, checks `getWindowShouldClose`), `RHI` (via `m_renderer.createWindowSurface()` which calls `window_service.getNativeHandle()`), `ImGuiService` (routes events via input service), `GlfwPlatform` (primary implementer), `engine.app:renderer.types` (`makeRenderView` consumes `Viewport`), `engine.app:scene.camera` (`Camera::updateModel` consumes `Viewport`)
 - **Depends on**: `engine.core` (IService, typeUid, safe_ptr, hash_t, Numeric), `engine.math` (int2, float2), `std` (string_view, error_code), `engine.app:service.window` (IWindowService interface), `engine.app:platform.glfw` (GlfwWindow implementation)
-- **Provides**: `engine.app:window` module namespace with `IWindowService`, `Window`, `WindowModel`, `WindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `errc` error codes (via `IService` integration)
+- **Provides**: `engine.app:window` module namespace with `IWindowService`, `Window`, `WindowModel`, `WindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `errc` error codes (via `IService` integration), plus `engine.app:window.viewport` (`BasicRect`/`PixelRect`/`NormalizedRect`, `ViewportLayout`, `Viewport`, `WindowViewport` — moved here from the deleted renderer `App.Viewport.cpp/.cppm`)
 - **Used by**: `Application` (m_cached_window_service, m_main_window, onWindowResized_, getWorkingDir/ContentDir resolution via platform), `GlfwPlatform::initialize()` (creates initial window, inserts into services), `Renderer::createWindowSurface()` (gets native handle for RHI surface), `GlfwInput` (routes key/mouse events via GLFW callbacks)
 
 ## Key Files
@@ -38,3 +46,5 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 - `App.Platform.Glfw.Window.cpp` — GlfwWindow method implementations (createWindow, destroyWindow, pollEvents/waitEvents, all callbacks, manipulation, monitor, clipboard, native handle)
 - `App.Window.Monitor.cppm` — Monitor/VideoMode type declarations
 - `App.Window.Monitor.cpp` — Monitor method implementations
+- `App.Window.Viewport.cppm` — `BasicRect`/`PixelRect`/`NormalizedRect`, `ViewportLayout`, `Viewport`, `WindowViewport` declarations (moved from renderer `App.Viewport`)
+- `App.Window.Viewport.cpp` — `BasicRect` aspect ratio, `ViewportLayout::clientRect`, `Viewport` transforms, `WindowViewport::updateFromWindow` implementations

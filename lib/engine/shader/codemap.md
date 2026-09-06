@@ -1,17 +1,45 @@
 # lib/engine/shader/
 
 ## Responsibility
-engine.shader wraps Slang shader compilation into `namespace pP::shader`, providing `IShaderService` singleton interface for session lifecycle, shader module loading (from file and source), hot-reload support via file watching, and a `SharedModule` RAII class for borrowed module views. It integrates with `engine.rhi` (via `IShaderService::setTargetFormat` configuring the RHI's compile target) and `engine.app` (for pipeline rebuild on shader reload). Row-major matrix layout (`SLANG_MATRIX_LAYOUT_ROW_MAJOR`) is set at session creation for portability across D3D, Vulkan, Metal, and OpenGL.
+
+`engine.shader` wraps Slang compilation into `namespace pP::shader`: the `errc`/error-category vocabulary shared
+with `engine.rhi`, the `IShaderService` session-lifecycle singleton, synchronous module loading from file or
+source string, and the `SharedModule` borrowed-view handle. Single module — `Shader.cppm` + `Shader.cpp`.
+Row-major matrix layout is fixed at session creation for cross-API portability.
 
 ## Design
-`IShaderService` is an `IService`-derived singleton with `initialize()`, `shutdown()`, `setTargetFormat(SlangCompileTarget)`, `getGlobalSession()`, `loadModuleFromFile(path, name, out_module)`, and `loadModuleFromSource(name, path, source, out_module)`. `SharedModule` is an exported RAII class holding a `slang::IModule*` borrowed from the session — the session owns the module's lifetime until `shutdown()`, and callers must not release it to avoid double-free. `ShaderService` implements `IShaderService`: `initialize()` creates a `IGlobalSession` and an `ISession` with `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`; `setTargetFormat` re-creates the session if no modules have been loaded yet. `loadModuleFromFile` uses `hal::io::mapFile` to read the shader source, wraps it in a `MappedFileBlob` (ref-counted `IBlob`), and passes it to `ISession::loadModuleFromSourceString`. `loadModuleFromSource` calls `ISession::loadModuleFromSourceString` directly. A `bool m_modules_loaded` flag prevents changing the target format after modules are loaded. Error codes (`errc` enum) wrap `Slang::Result` values and provide `std::error_category` mappings.
+
+- `errc` mirrors `Slang::Result` values with `std::is_error_code_enum` + `error_category()`/`make_error_code`/
+  `result()`; `SlangErrorCategory` maps invalid-arg/OOM/not-found/timeout/not-implemented/buffer-too-small to
+  `std::errc` conditions. `Diagnose` is an RAII `IBlob` holder that logs diagnostics via `PPR_LOG_RAW` on scope
+  exit; `diagnoseIfNeeded` no-ops on null blobs.
+- `SharedModule` is a non-owning `slang::IModule*` view (session owns lifetime until `shutdown()`; callers must
+  not release — `writeRef()` exists so load functions can fill it in).
+- `IShaderService : IService` (`pP::`): `initialize()`, `shutdown()`, `setTargetFormat(SlangCompileTarget)`
+  (pre-load only — post-load calls return `invalid_arg`; recreates the session), `getGlobalSession()`,
+  `loadModuleFromFile(path, name, out)` (via `io::mapFile` + ref-counted `MappedFileBlob : IBlob`), 
+  `loadModuleFromSource(name, path, source, out)` (via `loadModuleFromSourceString`). Both set
+  `m_modules_loaded = true` on success. `initialize()`/`setTargetFormat()` build the session with
+  `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`.
+- No hot-reload, no file watching, no background compile thread — loading is synchronous; diagnostics flow
+  through `Diagnose` → `PPR_LOG`.
 
 ## Flow
-Shader compilation lifecycle: `IShaderService::get()` → `initialize()` → creates global session + compilation session with row-major matrix layout → `setTargetFormat(target_format)` → `loadModuleFromFile` or `loadModuleFromSource` → `ISession::loadModule` → module stored in session (owned until `shutdown()`). Hot-reload: file watching via `hal::io` monitors shader source files; on change, `loadModuleFromFile`/`loadModuleFromSource` is called to recompile asynchronously via the background compile thread; the `m_modules_loaded` flag ensures no format switch mid-compilation. Diagnostics are captured in a `Diagnose` object and logged via `PPR_LOG`. The `IShaderService::get()` singleton is obtained in `engine.rhi::SlangRhiService::initialize()` to configure the compile target before device creation.
+
+`IShaderService::get()->initialize()` (global session + row-major session) → `engine.rhi` calls
+`setTargetFormat(toSlangCompileTarget_(deviceType))` before device creation → `loadModuleFromFile/Source`
+compiles into the session (owned until `shutdown()`) → `shutdown()` drops session then global session.
 
 ## Integration
-Consumers: `engine.rhi` calls `IShaderService::get()->setTargetFormat(...)` and `->loadModuleFromFile/Source` during RHI init and pipeline creation; `engine.app` uses `IShaderService` for hot-reload and pipeline rebuild when shaders change. Depends on `engine.core` for `safe_ptr`, `IService`, `PPR_LOG` macros; `engine.math` for `hashValue`/`opaqueValue` integration if needed. Slang dependencies: `<slang.h>`, `<slang-com-ptr.h>`, `<slang-com-helper.h>`. The `MappedFileBlob` class enables mmapped shader file reading with ref-counted lifetime. Module loading is the primary entry point for shader compilation; the background thread handles async recompilation while the main thread continues rendering with previously compiled modules.
+
+- Depends on: `engine.core` (public — `IService`, `safe_ptr`, `io::mapFile`, `MappedFile`, logging,
+  `safe_narrowing`), `slang` (private system dep).
+- Consumed by: `engine.rhi` (session handle in, target format + module loads), `engine.app` transitively.
+  `rhi::errc` is an alias of `shader::errc` — one shared Slang error vocabulary.
+- Build: `Shader.cppm` in `FILE_SET CXX_MODULES`, `Shader.cpp` private;
+  `setup_ppr_project(engine.shader INTERNAL_PUBLIC_DEPS engine.core EXTERNAL_SYSTEM_PRIVATE_DEPS slang)`.
 
 ## Key Files
-- `Shader.cppm` — interface export of `namespace pP::shader` with `IShaderService` interface, `SharedModule` class, `errc` enum, error category, `is_error_code_enum` specialization
-- `Shader.cpp` — implementation of `IShaderService` (`ShaderService`), `MappedFileBlob`, `SlangErrorCategory`, `errc`-to-`std::error_code` conversions, `diagnoseIfNeeded`
+
+- `Shader.cppm` — `errc`, error API, Slang aliases, `Diagnose`, `SharedModule`, `IShaderService`.
+- `Shader.cpp` — `SlangErrorCategory`, `MappedFileBlob`, `ShaderService`, log category.

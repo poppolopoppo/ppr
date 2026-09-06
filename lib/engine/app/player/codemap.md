@@ -1,37 +1,34 @@
 # lib/engine/app/player
 
 ## Responsibility
-The `engine.app:player` module provides the player service and graph-based state machine that maps input devices to player identities. It enables multiple players (keyboard, mouse, multiple gamepads) to coexist, each with their own input bindings and action mappings. The player graph tracks device-to-player mappings, handles hot-plugging of gamepads, and provides callbacks when players are added or removed.
+The `engine.app:player` module provides the player service and graph-based state machine that maps input devices to player identities. It enables multiple players (unified keyboard+mouse, multiple gamepads) to coexist, each with its own input listener and key-to-action bindings. The player graph tracks device-to-player mappings and provides callbacks when players are added or removed.
 
 ## Design
 - **IPlayerService** interface (in `engine.app:service.player`) — provides `getPlayer()`, `enumeratePlayers()`, `getOrCreateKeyboardPlayer()`, `addGamepadPlayer()`, `removePlayer()`, and `whenPlayerAdded/Removed` callbacks
-- **PlayerIdentity** — holds `PlayerId` (Numeric<u64, class Player>), `InputDeviceID`, `local_index`, and `EPlayerKind` (keyboard/gamepad). Used for device-to-player mapping.
-- **Player** class (in `engine.app:input.player`) — holds `PlayerIdentity`, `InputListener` (per-player keybindings), `StableVectorInplace<SharedInputDevice>` for device views, and `StableVector<InputFrameSnapshot>` for accumulated messages. Methods: `pushDeviceView()`, `getActionValue()`, `addMapping()`, `clearFrameMessages()`, `pushFrameMessage()`, `sample()`.
-- **PlayerGraph** (in `engine.app:player.graph`) — `FlatMap<PlayerId, unique_ptr<Player>>` for player storage; `FlatMap<InputDeviceID, PlayerId>` for device→player reverse mapping. Methods: `getPlayer()`, `enumeratePlayers()`, `findPlayerForDevice()`, `getOrCreateKeyboardPlayer()`, `addGamepadPlayer()`, `removePlayer()`, `whenPlayerAdded/Removed`, `clear()`.
-- Player IDs are generated via `std::mt19937_64` random number generator (in `GlfwPlayer`).
-- `EPlayerKind` distinguishes keyboard (`0`) from gamepad (`1`) players.
-- `getOrCreateKeyboardPlayer()` checks if a player already exists for the keyboard device; if not, generates a new `PlayerId` and creates one via `PlayerGraph::getOrCreateKeyboardPlayer()`.
-- `addGamepadPlayer()` similar pattern for gamepads, also stores controller index in player identity.
-- Callbacks `whenPlayerAdded`/`whenPlayerRemoved` are `Callback<std::error_code(const IPlayerService&, const Player&)>` — consumers register these to be notified of player lifecycle events.
+- **PlayerIdentity** — holds `PlayerId` (`Numeric<u64, Player>`), `InputDeviceID`, `m_local_index`, and `EPlayerKind` (`keyboard`/`gamepad`); three-way comparison orders by kind, then local index, then user id
+- **Player** class (in `engine.app:player`) — holds `PlayerIdentity`, an `InputListener` (per-player keybindings), `StableVectorInplace<SharedInputDevice>` device views, and a `StableVector<InputMessage>` frame-message buffer. Methods: `pushDeviceView()`, `getActionValue()`, `addMapping()`, `clearFrameMessages()`, `pushFrameMessage()`, `sample()` (→ `InputFrameSnapshot` with identity + message copy)
+- **PlayerGraph** (in `engine.app:player.graph`) — `FlatMap<PlayerId, unique_ptr<Player>>` player storage plus `FlatMap<InputDeviceID, PlayerId>` device→player reverse map; `IPlayerService::PlayerCallback` add/remove notifiers. Methods return `Expected<SharedPlayer>` (creation) or `std::error_code` (removal)
+- Keyboard players bind **both** keyboard and mouse: `getOrCreateKeyboardPlayer(service, user_id, KeyboardDevice&, MouseDevice&)` pushes both device views into the one player; gamepad players bind a single device via `addGamepadPlayer(service, user_id, GamepadDevice&)`
+- PlayerIds are minted by the backend (`GlfwPlayer`) and passed in; the graph itself performs no RNG
+- Callbacks `whenPlayerAdded`/`whenPlayerRemoved` are `Callback<std::error_code(const IPlayerService&, const Player&)>` — consumers register these to be notified of player lifecycle events
 
 ## Flow
-1. Application startup: `GlfwPlatform::initialize()` creates `GlfwPlayer::get()`, which creates an initial keyboard player for the default keyboard device
-2. Gamepad hot-plug: `GlfwInput::pollGamepads_()` detects new joystick → calls `GlfwPlayer::addGamepadPlayer(controller_index)` → `PlayerGraph::addGamepadPlayer()` → creates new `Player` with gamepad device, stores device→player mapping, fires `whenPlayerAdded` callback
-3. Player removal: `GlfwInput::pollGamepads_()` detects joystick removal → `GlfwPlayer::removePlayer(id)` → `PlayerGraph::removePlayer()` → erases player and device mappings, fires `whenPlayerRemoved` callback
-4. Per-frame input: `Application::update()` → `m_cached_input_service->postInputMessages(dt)` → routes through `GlfwInput` → `routeMessage_()` → looks up player via `m_graph.findPlayerForDevice(device_id)` → delivers to that player's `InputListener`
-5. Per-action value: `Player::getActionValue(action)` → `m_listener.getActionValue(action)` → resolves the action value from the per-player keybindings
+1. Application startup: `GlfwPlatform::initialize()` creates `GlfwPlayer::get()`, which lazily creates the keyboard(+mouse) player for the default devices on first access
+2. Gamepad hot-plug: `GlfwInput` detects a new joystick → calls into `GlfwPlayer::addGamepadPlayer(controller_index)` → `PlayerGraph::addGamepadPlayer()` → creates a new `Player` bound to that `GamepadDevice`, stores the device→player mapping, fires the `whenPlayerAdded` callback
+3. Gamepad removal: joystick loss → `GlfwPlayer::removePlayer(id)` → `PlayerGraph::removePlayer()` → erases the player and its device mappings, fires the `whenPlayerRemoved` callback
+4. Per-frame input: `Application::update()` → input poll → messages route through the `InputContext` tree → each player's `InputListener` resolves its own keybindings into per-action values
+5. Per-action value: `Player::getActionValue(action)` → `m_listener.getActionValue(action)` → resolves the action value from the per-player mappings
 6. Player enumeration: `IPlayerService::enumeratePlayers()` → `GlfwPlayer::enumeratePlayers()` → `PlayerGraph::enumeratePlayers()`
 
 ## Integration
-- **Consumers**: `GlfwInput` (uses `m_player_service` to add/remove players), `ImGuiService` (may register per-player keybindings), gameplay systems that query `IPlayerService::getPlayer()` or `IPlayerService::whenPlayerAdded`
-- **Depends on**: `engine.core` (safe_ptr, safe_object, IService), `engine.math`, `std` (mt19937_64, function_ref), `engine.app:input.player` (Player, PlayerIdentity, PlayerGraph), `engine.app:player.graph` (PlayerGraph), `engine.app:input.device` (KeyboardDevice, MouseDevice, GamepadDevice), `engine.app:input.listener` (InputListener), `engine.app:input.mapping` (InputMapping)
-- **Provides**: `engine.app:input.player` module namespace with `Player`, `PlayerIdentity`, `InputFrameSnapshot`, `SharedPlayer`; `engine.app:player.graph` module namespace with `PlayerGraph`; `engine.app:service.player` module namespace with `IPlayerService`
-- **Used by**: `GlfwPlayer` (primary consumer), `Application` (via `m_cached_player_service` or services store), gameplay code that needs per-player action values
+- **Consumers**: `GlfwInput` (device connect/disconnect drives player add/remove), gameplay systems that query `IPlayerService::getPlayer()` or subscribe via `whenPlayerAdded/Removed`
+- **Depends on**: `engine.core` (safe_ptr, safe_object, IService, FlatMap, Collector/Expected), `std` (error_code, function_ref), `engine.app:input.device` (unified `KeyboardDevice`/`MouseDevice`/`GamepadDevice`, `InputMessage`, `SharedInputDevice` — no `device/` sub-partition remains), `engine.app:input.listener` (`InputListener`, `SharedInputMapping`), `engine.app:input.action` (`InputAction`, `InputMapping` — mapping types live here since `App.Input.Mapping` was removed), `engine.app:input.key`
+- **Provides**: `engine.app:player` module namespace with `Player`, `PlayerIdentity`, `InputFrameSnapshot`, `SharedPlayer`; `engine.app:player.graph` module namespace with `PlayerGraph`; `engine.app:service.player` module namespace with `IPlayerService`
+- **Used by**: `GlfwPlayer` (primary consumer, owns the graph), `Application` (via services store), gameplay code that needs per-player action values
 
 ## Key Files
-- `App.Player.cppm` — `EPlayerKind`, `PlayerIdentity`, `InputFrameSnapshot`, `Player` class declaration, `SharedPlayer` typedef
+- `App.Player.cppm` — `EPlayerKind`, `PlayerId`, `PlayerIdentity`, `InputFrameSnapshot`, `Player` class declaration, `SharedPlayer` typedef
 - `App.Player.cpp` — Player method implementations (constructor, pushDeviceView, getActionValue, addMapping, clearFrameMessages, pushFrameMessage, sample)
-- `App.Player.Graph.cppm` — `PlayerGraph` class declaration (FlatMap<PlayerId, unique_ptr<Player>>, FlatMap<InputDeviceID, PlayerId>)
+- `App.Player.Graph.cppm` — `PlayerGraph` class declaration (player map, device→player map, add/remove callbacks)
 - `App.Player.Graph.cpp` — PlayerGraph method implementations (getPlayer, enumeratePlayers, findPlayerForDevice, getOrCreateKeyboardPlayer, addGamepadPlayer, removePlayer, whenPlayerAdded/Removed, clear)
-- `App.Player.Graph.cppm` also re-exports `IPlayerService`-related types
 - `App.Service.Player.cppm` — `IPlayerService` interface declaration (getPlayer, enumeratePlayers, getOrCreateKeyboardPlayer, addGamepadPlayer, removePlayer, whenPlayerAdded/Removed, PlayerCallback)
