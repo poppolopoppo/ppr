@@ -6,7 +6,7 @@ import std;
 import engine.core;
 
 export namespace pP::tests {
-    namespace FlatMap {
+    namespace Flat_map {
         PPR_UNIT_TEST(empty) {
             pP::FlatMap<int, int> m;
             PPR_TEST_ASSERT(m.empty());
@@ -220,30 +220,30 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(flatMap) {
+    PPR_UNIT_TEST(flat_map) {
         _.recurse({
-            FlatMap::empty,
-            FlatMap::single_insert,
-            FlatMap::find,
-            FlatMap::duplicate,
-            FlatMap::erase,
-            FlatMap::clear,
-            FlatMap::iteration_sorted,
-            FlatMap::lower_bound,
-            FlatMap::upper_bound,
-            FlatMap::contains,
-            FlatMap::at,
-            FlatMap::operator_sq,
-            FlatMap::const_find,
-            FlatMap::const_at,
-            FlatMap::const_contains,
-            FlatMap::copy,
-            FlatMap::move,
-            FlatMap::growth,
-            FlatMap::range_insert,
-            FlatMap::range_insert_duplicate,
-            FlatMap::range_insert_empty,
-            FlatMap::initializer_list,
+            Flat_map::empty,
+            Flat_map::single_insert,
+            Flat_map::find,
+            Flat_map::duplicate,
+            Flat_map::erase,
+            Flat_map::clear,
+            Flat_map::iteration_sorted,
+            Flat_map::lower_bound,
+            Flat_map::upper_bound,
+            Flat_map::contains,
+            Flat_map::at,
+            Flat_map::operator_sq,
+            Flat_map::const_find,
+            Flat_map::const_at,
+            Flat_map::const_contains,
+            Flat_map::copy,
+            Flat_map::move,
+            Flat_map::growth,
+            Flat_map::range_insert,
+            Flat_map::range_insert_duplicate,
+            Flat_map::range_insert_empty,
+            Flat_map::initializer_list,
         });
     };
 }

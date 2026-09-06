@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace HashMap {
+    namespace Hash_map {
         PPR_UNIT_TEST(eviction) {
             pP::HashMap<int, int> m;
             m.insert({0, 0});
@@ -108,21 +108,21 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(hashMap) {
+    PPR_UNIT_TEST(hash_map) {
         _.recurse({
-            HashMap::eviction,
-            HashMap::const_find,
-            HashMap::begin_empty_allocated,
-            HashMap::erase,
-            HashMap::move,
-            HashMap::duplicate_size,
-            HashMap::find_empty,
-            HashMap::find_after_eviction,
-            HashMap::unordered_equality,
-            HashMap::unordered_hash_value,
+            Hash_map::eviction,
+            Hash_map::const_find,
+            Hash_map::begin_empty_allocated,
+            Hash_map::erase,
+            Hash_map::move,
+            Hash_map::duplicate_size,
+            Hash_map::find_empty,
+            Hash_map::find_after_eviction,
+            Hash_map::unordered_equality,
+            Hash_map::unordered_hash_value,
         });
         if constexpr (PPR_ENABLE_DEBUG) {
-            _.recurse(HashMap::stale_iterator_after_reserve_crashes);
+            _.recurse(Hash_map::stale_iterator_after_reserve_crashes);
         }
     };
 }

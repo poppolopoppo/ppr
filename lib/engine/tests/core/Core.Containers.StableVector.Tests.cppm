@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace StableVector {
+    namespace Stable_vector {
         PPR_UNIT_TEST(growth_and_indexing) {
             pP::StableVector<int> vec;
 
@@ -106,13 +106,13 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(stableVector) {
+    PPR_UNIT_TEST(stable_vector) {
         _.recurse({
-            StableVector::growth_and_indexing,
-            StableVector::iterator_navigation,
-            StableVector::lifetime_management,
-            StableVector::modifiers,
-            StableVector::memory_compaction,
+            Stable_vector::growth_and_indexing,
+            Stable_vector::iterator_navigation,
+            Stable_vector::lifetime_management,
+            Stable_vector::modifiers,
+            Stable_vector::memory_compaction,
         });
     };
 }

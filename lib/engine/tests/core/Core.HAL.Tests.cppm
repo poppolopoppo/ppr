@@ -7,7 +7,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace HALTests {
+    namespace Hal {
         PPR_UNIT_TEST(thread_id) {
             const auto tid = hal::currentThreadId();
             PPR_TEST_ASSERT(tid == hal::currentThreadId());
@@ -89,10 +89,10 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(hal) {
         _.recurse({
-            HALTests::thread_id,
-            HALTests::set_get_name_roundtrip,
-            HALTests::buffer_truncation,
-            HALTests::worker_thread_name,
+            Hal::thread_id,
+            Hal::set_get_name_roundtrip,
+            Hal::buffer_truncation,
+            Hal::worker_thread_name,
         });
     };
 }

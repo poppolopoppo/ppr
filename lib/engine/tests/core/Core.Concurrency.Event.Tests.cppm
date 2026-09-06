@@ -6,7 +6,7 @@ import std;
 
 export namespace pP::tests {
 
-    namespace Events {
+    namespace Event {
         class DummySignal final : public ISignal {
         public:
             std::size_t m_expected_tag{0u};
@@ -277,11 +277,11 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(event) {
         _.recurse({
-            Events::never_event,
-            Events::pulse_event,
-            Events::broadcast_event,
-            Events::signal_single,
-            Events::signal_multi,
+            Event::never_event,
+            Event::pulse_event,
+            Event::broadcast_event,
+            Event::signal_single,
+            Event::signal_multi,
         });
     };
 }

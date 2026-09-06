@@ -5,7 +5,7 @@ import std;
 import engine.core;
 
 export namespace pP::tests {
-    namespace SparseVector {
+    namespace Sparse_vector {
         PPR_UNIT_TEST(allocation_and_free_list) {
             pP::SparseVector<int> vec;
             vec.reserveAssumeEmpty(8u);
@@ -114,14 +114,14 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(sparseVector) {
+    PPR_UNIT_TEST(sparse_vector) {
         _.recurse({
-            SparseVector::allocation_and_free_list,
-            SparseVector::jump_counting_logic,
-            SparseVector::key_validation,
-            SparseVector::copy_and_move,
-            SparseVector::iteration_boundary,
-            SparseVector::memory_stability,
+            Sparse_vector::allocation_and_free_list,
+            Sparse_vector::jump_counting_logic,
+            Sparse_vector::key_validation,
+            Sparse_vector::copy_and_move,
+            Sparse_vector::iteration_boundary,
+            Sparse_vector::memory_stability,
         });
     };
 }

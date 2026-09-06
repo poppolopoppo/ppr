@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace Containers {
+    namespace Container {
         PPR_UNIT_TEST(traits_relocatable_fundamentals) {
             PPR_TEST_ASSERT(details::relocatable<int>::value);
             PPR_TEST_ASSERT(details::relocatable<float>::value);
@@ -76,7 +76,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(m.popAssumeNotEmpty() != max_v);
         };
 
-        PPR_UNIT_TEST(bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst) {
+        PPR_UNIT_TEST(bitmask_byte_swap_and_invert_and_set_first_last_unset_first) {
             Bitmask<std::uint32_t> m;
             m.set(0);
             auto swapped = m.byteSwap();
@@ -280,65 +280,65 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(relocatable) {
         _.recurse({
-            Containers::traits_relocatable_fundamentals,
-            Containers::traits_relocatable_user_type_negative,
-            Containers::traits_relocatable_specialized_types,
+            Container::traits_relocatable_fundamentals,
+            Container::traits_relocatable_user_type_negative,
+            Container::traits_relocatable_specialized_types,
         });
     };
 
     PPR_UNIT_TEST(bitmask) {
         _.recurse({
-            Containers::bitmask_basic_set_reset_test,
-            Containers::bitmask_rotate_and_pop_tests,
-            Containers::bitmask_range_and_flip_test,
-            Containers::bitmask_byteSwap_and_invert_and_setFirstLastUnsetFirst,
-            Containers::bitmask_ref_mutation_visibility,
-            Containers::bitmask_ref_compound_ops,
+            Container::bitmask_basic_set_reset_test,
+            Container::bitmask_rotate_and_pop_tests,
+            Container::bitmask_range_and_flip_test,
+            Container::bitmask_byte_swap_and_invert_and_set_first_last_unset_first,
+            Container::bitmask_ref_mutation_visibility,
+            Container::bitmask_ref_compound_ops,
         });
     };
 
     PPR_UNIT_TEST(pointers) {
         _.recurse({
-            Containers::relptr_null_and_valid,
-            Containers::relptr_copy_assign_and_comparisons,
-            Containers::tagptr_basic_tag_and_data,
-            Containers::tagptr_bits_reinterpret_and_mutation,
+            Container::relptr_null_and_valid,
+            Container::relptr_copy_assign_and_comparisons,
+            Container::tagptr_basic_tag_and_data,
+            Container::tagptr_bits_reinterpret_and_mutation,
         });
     };
 
     PPR_UNIT_TEST(iterators) {
         _.recurse({
-            Containers::indexiterator_arithmetic_and_distance,
-            Containers::indexiterator_const_conversion_and_cross_compare,
+            Container::indexiterator_arithmetic_and_distance,
+            Container::indexiterator_const_conversion_and_cross_compare,
         });
     };
 
     PPR_UNIT_TEST(stack) {
         _.recurse({
-            Containers::stack_push_pop_and_iterator,
-            Containers::stack_overflow_and_clear,
+            Container::stack_push_pop_and_iterator,
+            Container::stack_overflow_and_clear,
         });
     };
 
     PPR_UNIT_TEST(ring_buffer) {
         _.recurse({
-            Containers::ringbuffer_push_pop_wrap,
-            Containers::ringbuffer_pop_empty_resets_positions,
+            Container::ringbuffer_push_pop_wrap,
+            Container::ringbuffer_pop_empty_resets_positions,
         });
     };
 
     PPR_UNIT_TEST(sort) {
         _.recurse({
-            Containers::shellsort_empty_and_single,
-            Containers::shellsort_projection_and_comparator,
+            Container::shellsort_empty_and_single,
+            Container::shellsort_projection_and_comparator,
         });
     };
 
     PPR_UNIT_TEST(hash) {
         _.recurse({
-            Containers::hash_mix_64_and_32,
-            Containers::hash_sized_and_unordered_range_and_ptr_combine,
-            Containers::additional_hash_and_pointer_checks,
+            Container::hash_mix_64_and_32,
+            Container::hash_sized_and_unordered_range_and_ptr_combine,
+            Container::additional_hash_and_pointer_checks,
         });
     };
 }

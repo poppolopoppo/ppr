@@ -5,9 +5,9 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace IoTests {
+    namespace Io {
         namespace File {
-            PPR_UNIT_TEST (open_and_close) {
+            PPR_UNIT_TEST(open_and_close) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_open.bin";
                 PPR_DEFER{
                     std::error_code ec;
@@ -28,7 +28,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(not file.isValid());
             };
 
-            PPR_UNIT_TEST (move_semantics) {
+            PPR_UNIT_TEST(move_semantics) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_move.bin";
                 PPR_DEFER{
                     std::error_code ec;
@@ -51,12 +51,12 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(file2.isValid());
             };
 
-            PPR_UNIT_TEST (default_constructed_invalid) {
+            PPR_UNIT_TEST(default_constructed_invalid) {
                 IoFile file;
                 PPR_TEST_ASSERT(not file.isValid());
             };
 
-            PPR_UNIT_TEST (double_close_safe) {
+            PPR_UNIT_TEST(double_close_safe) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_dclose.bin";
                 PPR_DEFER{
                     std::error_code ec;
@@ -80,7 +80,7 @@ export namespace pP::tests {
         }
 
         namespace Mapped {
-            PPR_UNIT_TEST (read_content) {
+            PPR_UNIT_TEST(read_content) {
                 constexpr std::string_view kContent = "Hello, MappedFile!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap.bin";
                 PPR_DEFER{
@@ -104,7 +104,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(std::memcmp(sp.data(), kContent.data(), kContent.size()) == 0);
             };
 
-            PPR_UNIT_TEST (empty_file) {
+            PPR_UNIT_TEST(empty_file) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_empty.bin";
                 PPR_DEFER{
                     std::error_code ec;
@@ -123,7 +123,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(mapped.span().empty());
             };
 
-            PPR_UNIT_TEST (move_semantics) {
+            PPR_UNIT_TEST(move_semantics) {
                 constexpr std::string_view kContent = "move";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap_move.bin";
                 PPR_DEFER{
@@ -147,14 +147,14 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(mapped2.size() == kContent.size());
             };
 
-            PPR_UNIT_TEST (default_constructed_invalid) {
+            PPR_UNIT_TEST(default_constructed_invalid) {
                 MappedFile mapped;
                 PPR_TEST_ASSERT(not mapped.isValid());
                 PPR_TEST_ASSERT(mapped.size() == 0u);
                 PPR_TEST_ASSERT(mapped.span().empty());
             };
 
-            PPR_UNIT_TEST (write_content) {
+            PPR_UNIT_TEST(write_content) {
                 constexpr std::string_view kInitial = "Hello, World!";
                 constexpr std::string_view kWrite = "MappedWrite";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap_write.bin";
@@ -190,7 +190,7 @@ export namespace pP::tests {
         }
 
         namespace Request {
-            PPR_UNIT_TEST (default_state) {
+            PPR_UNIT_TEST(default_state) {
                 auto port = io::createPort();
                 IoRequest req;
                 PPR_TEST_ASSERT(not req.isPending());
@@ -198,7 +198,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(not req.cancel());
             };
 
-            PPR_UNIT_TEST (i_event_interface) {
+            PPR_UNIT_TEST(i_event_interface) {
                 auto port = io::createPort();
                 IoRequest req;
 
@@ -208,7 +208,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(not signal.poll().has_value());
             };
 
-            PPR_UNIT_TEST (read_completes) {
+            PPR_UNIT_TEST(read_completes) {
                 constexpr std::string_view kContent = "AsyncRead!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_read.bin";
                 PPR_DEFER{
@@ -243,13 +243,13 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(std::memcmp(buf.data(), kContent.data(), kContent.size()) == 0);
             };
 
-            PPR_UNIT_TEST (poll_idle_returns_zero) {
+            PPR_UNIT_TEST(poll_idle_returns_zero) {
                 auto port = io::createPort();
                 const std::size_t n = port.pollCompletions();
                 PPR_TEST_ASSERT(n == 0u);
             };
 
-            PPR_UNIT_TEST (reset_and_reuse) {
+            PPR_UNIT_TEST(reset_and_reuse) {
                 constexpr std::string_view kContent = "Reuse!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_reuse.bin";
                 PPR_DEFER{
@@ -288,7 +288,7 @@ export namespace pP::tests {
                 }
             };
 
-            PPR_UNIT_TEST (select_with_timer) {
+            PPR_UNIT_TEST(select_with_timer) {
                 constexpr std::string_view kContent = "TimerRead!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_timer.bin";
                 PPR_DEFER{
@@ -320,7 +320,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
             };
 
-            PPR_UNIT_TEST (cancel_inflight) {
+            PPR_UNIT_TEST(cancel_inflight) {
                 constexpr std::string_view kContent = "CancelIo!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_inflight.bin";
                 PPR_DEFER{
@@ -354,7 +354,7 @@ export namespace pP::tests {
                 }
             };
 
-            PPR_UNIT_TEST (cancel_idempotent) {
+            PPR_UNIT_TEST(cancel_idempotent) {
                 constexpr std::string_view kContent = "Idempotent!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_idem.bin";
                 PPR_DEFER{
@@ -384,7 +384,7 @@ export namespace pP::tests {
                 (void) port.pollCompletions();
             };
 
-            PPR_UNIT_TEST (cancel_i_event) {
+            PPR_UNIT_TEST(cancel_i_event) {
                 auto port = io::createPort();
                 IoRequest req;
 
@@ -401,7 +401,7 @@ export namespace pP::tests {
                 PPR_TEST_ASSERT(not signal2.poll().has_value());
             };
 
-            PPR_UNIT_TEST (cancel_then_destroy) {
+            PPR_UNIT_TEST(cancel_then_destroy) {
                 constexpr std::string_view kContent = "Destroy!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_destroy.bin";
                 PPR_DEFER{
@@ -430,7 +430,7 @@ export namespace pP::tests {
         }
 
         namespace Port {
-            PPR_UNIT_TEST (move_semantics) {
+            PPR_UNIT_TEST(move_semantics) {
                 static_assert(not
                 std::is_copy_constructible_v<io::IoPort>);
                 static_assert(not
@@ -447,7 +447,7 @@ export namespace pP::tests {
             };
         }
 
-        PPR_UNIT_TEST (file){
+        PPR_UNIT_TEST(file){
             _.recurse({
                 File::open_and_close,
                 File::move_semantics,
@@ -457,7 +457,7 @@ export namespace pP::tests {
 
         };
 
-        PPR_UNIT_TEST (mapped){
+        PPR_UNIT_TEST(mapped){
             _.recurse({
                 Mapped::read_content,
                 Mapped::empty_file,
@@ -468,7 +468,7 @@ export namespace pP::tests {
 
         };
 
-        PPR_UNIT_TEST (request){
+        PPR_UNIT_TEST(request){
             _.recurse({
                 Request::default_state,
                 Request::i_event_interface,
@@ -484,7 +484,7 @@ export namespace pP::tests {
 
         };
 
-        PPR_UNIT_TEST (port){
+        PPR_UNIT_TEST(port){
             _.recurse({
                 Port::move_semantics,
             });
@@ -492,12 +492,12 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST (io){
+    PPR_UNIT_TEST(io){
         _.recurse({
-            IoTests::file,
-            IoTests::mapped,
-            IoTests::request,
-            IoTests::port,
+            Io::file,
+            Io::mapped,
+            Io::request,
+            Io::port,
         });
 
     };

@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace ChannelRaw {
+    namespace Raw_channel {
         PPR_UNIT_TEST(construction_and_state) {
             const RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
 
@@ -946,7 +946,7 @@ export namespace pP::tests {
         };
     }
 
-    namespace ChannelTyped {
+    namespace Typed_channel {
         namespace details {
             struct MoveOnlyType {
                 int value{};
@@ -1268,63 +1268,63 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(raw_channel) {
         _.recurse({
-            ChannelRaw::construction_and_state,
-            ChannelRaw::single_threaded_send_receive,
-            ChannelRaw::multiple_messages_sequence,
-            ChannelRaw::ring_buffer_wrap_around,
-            ChannelRaw::backpressure_drop_if_full,
-            ChannelRaw::backpressure_yield_if_full,
-            ChannelRaw::backpressure_wait_if_full,
-            ChannelRaw::discard_record,
-            ChannelRaw::flush_roundtrip,
-            ChannelRaw::peek_without_blocking_empty,
-            ChannelRaw::peek_without_blocking_with_data,
-            ChannelRaw::close_idempotent,
-            ChannelRaw::close_record_consumed,
-            ChannelRaw::record_header_accessors,
-            ChannelRaw::zero_size_record,
-            ChannelRaw::consumer_blocks_until_data,
-            ChannelRaw::concurrent_spsc,
-            ChannelRaw::concurrent_mpsc,
-            ChannelRaw::concurrent_mpmc,
-            ChannelRaw::concurrent_close_wakeup,
-            ChannelRaw::select_one,
-            ChannelRaw::select_multiple,
-            ChannelRaw::select_reset_rearms_pending_commit,
-            ChannelRaw::select_close,
-            ChannelRaw::select_loop,
-            ChannelRaw::select_same_channel_two_messages,
-            ChannelRaw::select_notify_before_subscribe,
-            ChannelRaw::select_all_channels_ready,
-            ChannelRaw::select_all_closed_range_for,
-            ChannelRaw::select_three_channels_mixed,
-            ChannelRaw::select_close_wakes_waiting_thread,
-            ChannelRaw::select_concurrent_wakeup_and_drain,
-            ChannelRaw::select_multiple_channels_concurrent,
+            Raw_channel::construction_and_state,
+            Raw_channel::single_threaded_send_receive,
+            Raw_channel::multiple_messages_sequence,
+            Raw_channel::ring_buffer_wrap_around,
+            Raw_channel::backpressure_drop_if_full,
+            Raw_channel::backpressure_yield_if_full,
+            Raw_channel::backpressure_wait_if_full,
+            Raw_channel::discard_record,
+            Raw_channel::flush_roundtrip,
+            Raw_channel::peek_without_blocking_empty,
+            Raw_channel::peek_without_blocking_with_data,
+            Raw_channel::close_idempotent,
+            Raw_channel::close_record_consumed,
+            Raw_channel::record_header_accessors,
+            Raw_channel::zero_size_record,
+            Raw_channel::consumer_blocks_until_data,
+            Raw_channel::concurrent_spsc,
+            Raw_channel::concurrent_mpsc,
+            Raw_channel::concurrent_mpmc,
+            Raw_channel::concurrent_close_wakeup,
+            Raw_channel::select_one,
+            Raw_channel::select_multiple,
+            Raw_channel::select_reset_rearms_pending_commit,
+            Raw_channel::select_close,
+            Raw_channel::select_loop,
+            Raw_channel::select_same_channel_two_messages,
+            Raw_channel::select_notify_before_subscribe,
+            Raw_channel::select_all_channels_ready,
+            Raw_channel::select_all_closed_range_for,
+            Raw_channel::select_three_channels_mixed,
+            Raw_channel::select_close_wakes_waiting_thread,
+            Raw_channel::select_concurrent_wakeup_and_drain,
+            Raw_channel::select_multiple_channels_concurrent,
         });
     };
 
     PPR_UNIT_TEST(typed_channel) {
         _.recurse({
-            ChannelTyped::send_and_receive_int,
-            ChannelTyped::emplace_construction,
-            ChannelTyped::peek_non_blocking,
-            ChannelTyped::send_receive_string,
-            ChannelTyped::operator_stream_send,
-            ChannelTyped::operator_stream_receive,
-            ChannelTyped::in_place_construction,
-            ChannelTyped::close_propagation,
-            ChannelTyped::backpressure_drop,
-            ChannelTyped::destructor_called_on_consume,
-            ChannelTyped::concurrent_channel,
-            ChannelTyped::operator_receive_on_closed,
-            ChannelTyped::operator_receive_empty,
-            ChannelTyped::shared_ptr_construction,
-            ChannelTyped::flush,
-            ChannelTyped::auto_close_in_destructor,
-            ChannelTyped::channel_destructor_drains_non_trivial,
-            ChannelTyped::range_iteration_blocking,
-            ChannelTyped::range_iteration_non_blocking,
+            Typed_channel::send_and_receive_int,
+            Typed_channel::emplace_construction,
+            Typed_channel::peek_non_blocking,
+            Typed_channel::send_receive_string,
+            Typed_channel::operator_stream_send,
+            Typed_channel::operator_stream_receive,
+            Typed_channel::in_place_construction,
+            Typed_channel::close_propagation,
+            Typed_channel::backpressure_drop,
+            Typed_channel::destructor_called_on_consume,
+            Typed_channel::concurrent_channel,
+            Typed_channel::operator_receive_on_closed,
+            Typed_channel::operator_receive_empty,
+            Typed_channel::shared_ptr_construction,
+            Typed_channel::flush,
+            Typed_channel::auto_close_in_destructor,
+            Typed_channel::channel_destructor_drains_non_trivial,
+            Typed_channel::range_iteration_blocking,
+            Typed_channel::range_iteration_non_blocking,
         });
     };
 

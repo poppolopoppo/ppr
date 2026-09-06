@@ -9,7 +9,7 @@ import std;
 
 export namespace pP::tests {
 
-    namespace FileWatcherTests {
+    namespace File_watcher {
 
         struct TempDir {
             std::filesystem::path path;
@@ -160,12 +160,12 @@ export namespace pP::tests {
     }
 
     PPR_UNIT_TEST(file_watcher) {
-        _.recurse(FileWatcherTests::create_file);
-        _.recurse(FileWatcherTests::modify_file);
-        _.recurse(FileWatcherTests::delete_file);
-        _.recurse(FileWatcherTests::poll_idempotent_no_changes);
-        _.recurse(FileWatcherTests::changes_cached_until_next_poll);
-        _.recurse(FileWatcherTests::i_event_interface);
-        _.recurse(FileWatcherTests::multiple_files);
+        _.recurse(File_watcher::create_file);
+        _.recurse(File_watcher::modify_file);
+        _.recurse(File_watcher::delete_file);
+        _.recurse(File_watcher::poll_idempotent_no_changes);
+        _.recurse(File_watcher::changes_cached_until_next_poll);
+        _.recurse(File_watcher::i_event_interface);
+        _.recurse(File_watcher::multiple_files);
     };
 }

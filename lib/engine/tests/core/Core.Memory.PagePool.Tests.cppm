@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace PagePool {
+    namespace Page_pool {
         PPR_UNIT_TEST(bit_tree_mechanics) {
             mem::UnitTest::bit_tree_mechanics();
         };
@@ -66,12 +66,12 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(pagePool) {
+    PPR_UNIT_TEST(page_pool) {
         _.recurse({
-            PagePool::bit_tree_mechanics,
-            PagePool::bundle_flow,
-            PagePool::shrink_mechanics,
-            PagePool::allocate_deallocate_cycle,
+            Page_pool::bit_tree_mechanics,
+            Page_pool::bundle_flow,
+            Page_pool::shrink_mechanics,
+            Page_pool::allocate_deallocate_cycle,
         });
     };
 }

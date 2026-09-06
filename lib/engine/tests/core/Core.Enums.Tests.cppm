@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace Enums {
+    namespace Enum {
         enum class Color : u32 {
             none = 0u,
             red = 0xFF0000u,
@@ -83,13 +83,13 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(enums) {
         _.recurse({
-            Enums::ord,
-            Enums::flags_any,
-            Enums::flags_and,
-            Enums::flags_or,
-            Enums::flags_xor,
-            Enums::flags_mixed_operations,
-            Enums::open_flags_or,
+            Enum::ord,
+            Enum::flags_any,
+            Enum::flags_and,
+            Enum::flags_or,
+            Enum::flags_xor,
+            Enum::flags_mixed_operations,
+            Enum::open_flags_or,
         });
     };
 }

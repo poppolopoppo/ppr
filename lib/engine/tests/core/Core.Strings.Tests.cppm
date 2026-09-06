@@ -5,8 +5,8 @@ import engine.core;
 import std;
 
 export namespace pP::tests {
-    namespace Strings {
-        namespace Helpers {
+    namespace String {
+        namespace Helper {
             PPR_UNIT_TEST(char_helpers) {
                 PPR_TEST_ASSERT(toLower('A') == 'a');
                 PPR_TEST_ASSERT(toLower('z') == 'z');
@@ -62,9 +62,9 @@ export namespace pP::tests {
 
         PPR_UNIT_TEST(helpers) {
             _.recurse({
-                Helpers::char_helpers,
-                Helpers::escape_functions,
-                Helpers::case_fold_char,
+                Helper::char_helpers,
+                Helper::escape_functions,
+                Helper::case_fold_char,
             });
         };
 
@@ -375,11 +375,11 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(strings) {
         _.recurse({
-            Strings::helpers,
-            Strings::literal,
-            Strings::static_string,
-            Strings::range,
-            Strings::lazy,
+            String::helpers,
+            String::literal,
+            String::static_string,
+            String::range,
+            String::lazy,
         });
     };
 }
