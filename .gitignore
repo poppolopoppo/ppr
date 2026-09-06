@@ -1,4 +1,6 @@
 # Prerequisites
+.slim/deepwork/
+
 *.d
 
 # Compiled Object files

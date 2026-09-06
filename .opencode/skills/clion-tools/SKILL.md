@@ -410,7 +410,9 @@ default false — set true to filter to errors only), `timeout` (optional),
 
 Returns a list of problems with severity, description, and location (1-based
 line/column). Use this as the inspection gate after edits: zero errors and
-zero warnings on changed files is the pass criterion.
+zero warnings on changed files is the pass criterion. Exception: Gate 0 allowlist
+errors suppressed-in-IDE but proxy-visible do not fail the gate — verify by
+5-part comment presence + IDE-side visual check.
 
 ### Inspect compiler configuration
 ```
@@ -421,6 +423,52 @@ clion_get_compiler_info(filePath="lib/engine/core/Core.Memory.cppm", projectPath
 ```
 clion_get_diagnostic_info(includeToolchains=true, includeBuildSystemWorkspaces=true, projectPath="E:/Code/ppr")
 ```
+
+### 6.1 Diagnostic workflow (focus, triage, confirm)
+
+1. **Focus the file first:** open it with `clion_open_file_in_editor`, then query
+   `clion_get_file_problems` (open-before-query keeps results anchored to the
+   active editor model).
+2. **Triage by severity:** fix Errors first, then Warnings; treat Suggestions as
+   optional unless they clarify a real defect. Re-query with `errorsOnly=true`
+   to isolate build-breaking findings.
+3. **Confirm through the hierarchy before editing:** `clion_get_file_problems` →
+   `clion_get_compiler_info` (flags, language standard, includes for the file's
+   target) → `clion_get_diagnostic_info` (toolchain / workspace state) → MSVC
+   `/WX` build as ground truth. CLion findings that do not reproduce in the
+   `/WX` build are advisory — do not churn code for them.
+4. **Gate:** zero errors and zero warnings on changed files remains the pass
+   criterion (see above); advisory-only Suggestions never block it. Exception:
+   Gate 0 allowlist errors suppressed-in-IDE but proxy-visible do not fail the
+   gate — verify by 5-part comment presence + IDE-side visual check.
+
+### 6.2 Known module/BMI false-positive patterns
+
+- `std::start_lifetime_as` / implicit-lifetime findings in custom containers and
+  channel headers — analyzer lags the MSVC STL model; confirm via `/WX` build.
+- Scalar-vector `operator*` / `operator*=` resolution through `using
+  mango::math::operator*;` re-exports — unverified overload-set complaints are
+  typically index staleness, not real ambiguity.
+- Stale-index ghosts after partition renames or BMI rebuilds — re-open the file
+  and re-query; if the finding vanishes or never appears in the `/WX` build,
+  close it as stale without editing.
+
+### 6.3 Narrow suppression recipe
+
+Prefer the smallest scope that silences only the confirmed false positive
+(single line > single file > directory; never a global rule). Record every
+suppression with this justification template:
+
+1. Location (file:line + inspection ID)
+2. Confirm trail (`compiler_info` / `diagnostic_info` / `/WX` result)
+3. Why it is a false positive (pattern from §6.2 or new, with evidence)
+4. Scope chosen and why nothing narrower works
+5. Expiry / re-check condition (e.g. re-verify after toolchain or BMI refresh;
+   orchestrator-owned periodic check, e.g. on CLion or MSVC toolchain update)
+
+Persist IDE-side suppressions in the tracked `.idea` inspection profile so they
+are reviewable in diffs; document ad-hoc `// NOLINT` / `// noinspection` notes
+with the same 5-part justification inline.
 
 ## 7. VCS
 

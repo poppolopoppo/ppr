@@ -641,11 +641,12 @@ All types in `namespace pP`. See corresponding `.cppm` files:
 
 ## Debugging with CLion
 
-- ALWAYS use CLion xdebug MCP tools for debugging. Never use printf/logging when the debugger is available.
-- Workflow: start session → set breakpoint → resume → wait for pause → inspect stack/variables → step or continue.
-- Load the `clion-tools` skill for the full tool reference and examples.
-- Key tools: `clion_xdebug_start_debugger_session`, `clion_xdebug_set_breakpoint`, `clion_xdebug_control_session`,
-  `clion_xdebug_get_stack`, `clion_xdebug_get_frame_values`, `clion_xdebug_evaluate_expression`.
+- Prefer the debugger over printf/logging whenever the debugger is available.
+- MSVC `/WX` build is ground truth; CLion inspections are advisory only.
+- Goal is portable C++23; known module/BMI gaps in CLion analysis are acknowledged, not fixed by code churn.
+- Research-first: confirm a diagnostic before editing; never fix an advisory-only finding blindly.
+- Suppressions must be narrow with recorded justification; broad or unexplained silencing is not accepted.
+- Load the `clion-tools` skill for the diagnostics procedure (focus, triage, confirm, suppress).
 
 ## Matrix Layout Conventions
 
