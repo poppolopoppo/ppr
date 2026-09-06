@@ -23,11 +23,12 @@ import :event;
 import :context;
 import :io;
 import :io.file_watcher;
+import :service;
 
 export namespace pP::tests {
     PPR_UNIT_TEST(memory) {
         _.recurse({
-            pagePool,
+            page_pool,
             arena,
             slab,
             allocator,
@@ -46,10 +47,10 @@ export namespace pP::tests {
             iterators,
             stack,
             ring_buffer,
-            stableVector,
-            sparseVector,
-            flatMap,
-            hashMap,
+            stable_vector,
+            sparse_vector,
+            flat_map,
+            hash_map,
         });
     };
 
@@ -67,6 +68,7 @@ export namespace pP::tests {
             file_watcher,
             hal,
             utility,
+            service,
         });
     };
 }

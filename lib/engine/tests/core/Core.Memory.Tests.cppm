@@ -224,7 +224,7 @@ export namespace pP::tests {
             mem::GPA::deallocateRaw(overaligned.ptr, overaligned.count, std::align_val_t{64u});
         };
 
-        PPR_UNIT_TEST(insitu_one_shot_and_reuse) {
+        PPR_UNIT_TEST(in_situ_one_shot_and_reuse) {
             mem::InSitu<64u> insitu{};
 
             const auto first = insitu.allocateRaw(24u, max_align_v);
@@ -241,7 +241,7 @@ export namespace pP::tests {
             insitu.deallocateRaw(third.ptr, third.count, max_align_v);
         };
 
-        PPR_UNIT_TEST(insitu_embedded_destroy_roundtrip) {
+        PPR_UNIT_TEST(in_situ_embedded_destroy_roundtrip) {
             struct Enclosing {
                 mem::InSitu<64u> buffer{};
                 int m_value{42};
@@ -519,7 +519,7 @@ export namespace pP::tests {
         _.recurse({
             Allocator::overlap_boundaries,
             Allocator::gpa_alignment_paths,
-            Allocator::insitu_one_shot_and_reuse,
+            Allocator::in_situ_one_shot_and_reuse,
             Allocator::fallback_prefers_primary_then_secondary,
             Allocator::threshold_routes_and_resizes_within_bucket,
             Allocator::allocator_wrapper_forwards_and_force_ref,
@@ -529,7 +529,7 @@ export namespace pP::tests {
             Allocator::allocation_raii_and_relocate,
             Allocator::allocation_create_destroy_non_trivial,
             Allocator::allocation_index_operator,
-            Allocator::insitu_embedded_destroy_roundtrip,
+            Allocator::in_situ_embedded_destroy_roundtrip,
         });
     };
 
@@ -597,14 +597,14 @@ export namespace pP::tests {
             details::access_after_poison(alloc);
         };
 
-        PPR_UNIT_TEST(insitu_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(in_situ_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
             mem::InSitu<128u> buffer{};
             const auto [ptr, count] = buffer.allocateRaw(64u, max_align_v);
             buffer.deallocateRaw(ptr, count, max_align_v);
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stablevector_asan_on_erase, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(stable_vector_asan_on_erase, UnitTest::expect_crash) {
             StableVector<int> sv;
             sv.pushBack(42);
             int *ptr = &sv[0];
@@ -612,7 +612,7 @@ export namespace pP::tests {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stablevector_asan_multi_slice, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(stable_vector_asan_multi_slice, UnitTest::expect_crash) {
             StableVector<int> sv;
             for (std::size_t i = 0; i < 100; ++i) {
                 sv.pushBack(static_cast<int>(i));
@@ -622,7 +622,7 @@ export namespace pP::tests {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stablevector_asan_on_clear, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(stable_vector_asan_on_clear, UnitTest::expect_crash) {
             StableVector<int> sv;
             sv.pushBack(42);
             int *ptr = &sv[0];
@@ -630,7 +630,7 @@ export namespace pP::tests {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(hashmap_asan_on_clear, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(hash_map_asan_on_clear, UnitTest::expect_crash) {
             HashMap<int, int> hm;
             hm.insert({1, 10});
             auto it = hm.find(1);
@@ -640,7 +640,7 @@ export namespace pP::tests {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(sparsevector_asan_on_erase, UnitTest::expect_crash) {
+        PPR_UNIT_TEST(sparse_vector_asan_on_erase, UnitTest::expect_crash) {
             SparseVector<int> sv;
             const auto key = sv.add(42);
             int *ptr = &sv[key];
@@ -789,12 +789,12 @@ export namespace pP::tests {
                 Poisoning::os_poison_on_free_triggers_asan,
                 Poisoning::pooling_poison_on_free_triggers_asan,
                 Poisoning::arena_poison_on_dealloc_triggers_asan,
-                Poisoning::insitu_poison_on_dealloc_triggers_asan,
-                Poisoning::stablevector_asan_on_erase,
-                Poisoning::stablevector_asan_multi_slice,
-                Poisoning::stablevector_asan_on_clear,
-                Poisoning::hashmap_asan_on_clear,
-                Poisoning::sparsevector_asan_on_erase,
+                Poisoning::in_situ_poison_on_dealloc_triggers_asan,
+                Poisoning::stable_vector_asan_on_erase,
+                Poisoning::stable_vector_asan_multi_slice,
+                Poisoning::stable_vector_asan_on_clear,
+                Poisoning::hash_map_asan_on_clear,
+                Poisoning::sparse_vector_asan_on_erase,
                 Poisoning::arena_asan_on_restore,
                 Poisoning::arena_cross_slab_restore_triggers_asan,
                 Poisoning::pooling_pool_level_poison,

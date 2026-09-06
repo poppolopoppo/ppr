@@ -70,7 +70,7 @@ export namespace pP::tests {
         });
     };
 
-    namespace ServiceLocatorTests {
+    namespace Service_locator {
         struct MockServiceA : IService {
             int value{};
         };
@@ -195,19 +195,26 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(serviceLocator) {
+    PPR_UNIT_TEST(service_locator) {
         _.recurse({
-            ServiceLocatorTests::empty,
-            ServiceLocatorTests::insert_and_try_get,
-            ServiceLocatorTests::insert_and_get,
-            ServiceLocatorTests::erase,
-            ServiceLocatorTests::erase_nonexistent,
-            ServiceLocatorTests::reset,
-            ServiceLocatorTests::duplicate_insert,
-            ServiceLocatorTests::multi_type_routing,
-            ServiceLocatorTests::parent_fallback,
-            ServiceLocatorTests::child_override,
-            ServiceLocatorTests::child_erase_does_not_affect_parent,
+            Service_locator::empty,
+            Service_locator::insert_and_try_get,
+            Service_locator::insert_and_get,
+            Service_locator::erase,
+            Service_locator::erase_nonexistent,
+            Service_locator::reset,
+            Service_locator::duplicate_insert,
+            Service_locator::multi_type_routing,
+            Service_locator::parent_fallback,
+            Service_locator::child_override,
+            Service_locator::child_erase_does_not_affect_parent,
+        });
+    };
+
+    PPR_UNIT_TEST(service) {
+        _.recurse({
+            type_uid,
+            service_locator,
         });
     };
 }
