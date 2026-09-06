@@ -17,6 +17,9 @@ target_sources(engine.tests.app
             App.PixelReadback.Tests.cppm
             App.Quaternion.Tests.cppm
             App.Input.Listener.Tests.cppm
+            App.WindowInput.Tests.cppm
+            App.ImGuiRouting.Tests.cppm
+            App.ImguiDpi.Tests.cppm
             App.FilteredAnalog.Tests.cppm
             App.ZeroVProbe.Tests.cppm
     )

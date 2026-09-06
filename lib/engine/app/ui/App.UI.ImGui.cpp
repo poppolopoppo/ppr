@@ -190,6 +190,23 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 default: return -1;
             }
         }
+
+        [[nodiscard]] float2 framebufferScaleFor(const int2 logical, const int2 framebuffer) noexcept {
+            float2 scale{1.0f};
+            if (logical.x > 0) {
+                scale.x = static_cast<float>(framebuffer.x) / static_cast<float>(logical.x);
+            }
+            if (logical.y > 0) {
+                scale.y = static_cast<float>(framebuffer.y) / static_cast<float>(logical.y);
+            }
+            if (not (scale.x > 0.0f)) {
+                scale.x = 1.0f;
+            }
+            if (not (scale.y > 0.0f)) {
+                scale.y = 1.0f;
+            }
+            return scale;
+        }
     }
 
     class ImGuiService final : public IUIService {
@@ -207,10 +224,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             IWindowService &window_service,
             IInputService &input_service,
             const Window &main_window,
-            const rhi::Format swapchain_format) override {
+            const rhi::Format swapchain_format,
+            InputContext &window_input_context) override {
             m_window_service = safe_ptr(&window_service);
             m_input_service = safe_ptr(&input_service);
             m_main_window = safe_ptr(&main_window);
+            m_window_input_context = safe_ptr(&window_input_context);
             m_device = &rhi.getDevice();
             m_swapchain_format = swapchain_format;
 
@@ -245,6 +264,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             RHI_RETURN_ERROR_ON_FAIL(UI, m_device->getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
 
             m_framebuffer_size = main_window.m_framebuffer_size;
+            m_window_size = main_window.m_window_size;
+            m_framebuffer_scale = framebufferScaleFor(m_window_size, m_framebuffer_size);
 
             {
                 const safe_ptr<IShaderService> shader_service = IShaderService::get();
@@ -358,7 +379,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     }
                 }
             });
-            m_input_service->getGlobalInputContext().addInputListener(safe_ptr<InputListener>(&m_listener), -1000);
+            // Window-context binding: ImGui observes raw keys before the scene
+            // listener on the same context (priority -1000 vs scene 0). The
+            // listener carries no mappings so mapped keys still return unhandled.
+            window_input_context.addInputListener(safe_ptr<InputListener>(&m_listener), -1000);
 
             PPR_LOG(UI, info, "UI service initialized", {
                 {"width", m_framebuffer_size.x},
@@ -376,9 +400,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGuiIO &io = ImGui::GetIO();
 
             io.DisplaySize = ImVec2(
-                static_cast<float>(m_framebuffer_size.x),
-                static_cast<float>(m_framebuffer_size.y));
-            io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+                static_cast<float>(m_window_size.x),
+                static_cast<float>(m_window_size.y));
+            io.DisplayFramebufferScale = ImVec2(m_framebuffer_scale.x, m_framebuffer_scale.y);
             io.DeltaTime = static_cast<float>(
                 std::chrono::duration<double>(dt).count());
 
@@ -560,8 +584,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             m_queue.setNull();
 
-            if (m_input_service.isValid()) {
-                std::ignore = m_input_service->getGlobalInputContext().removeInputListener(m_listener);
+            // Remove from the same window context registered in initialize().
+            if (m_window_input_context.isValid()) {
+                std::ignore = m_window_input_context->removeInputListener(m_listener);
+                m_window_input_context.reset();
             }
 
             if (m_imgui_context) {
@@ -583,6 +609,16 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             m_framebuffer_size = new_size;
+            if (m_main_window.isValid()) {
+                const Window &window = *m_main_window;
+                if (window.m_window_size.x > 0 && window.m_window_size.y > 0) {
+                    m_window_size = window.m_window_size;
+                }
+                if (window.m_framebuffer_size.x > 0 && window.m_framebuffer_size.y > 0) {
+                    m_framebuffer_size = window.m_framebuffer_size;
+                }
+            }
+            m_framebuffer_scale = framebufferScaleFor(m_window_size, m_framebuffer_size);
             PPR_LOG(UI, info, "UI surface resize", {
                 {"width", new_size.x},
                 {"height", new_size.y},
@@ -608,6 +644,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
         rhi::ComPtr<rhi::ITextureView> m_fontTextureView;
         rhi::ComPtr<rhi::ISampler> m_font_sampler;
         int2 m_framebuffer_size{};
+        int2 m_window_size{};
+        float2 m_framebuffer_scale{1.0f};
         u32 m_current_frame{0};
         FrameResources m_frame_resources[kFrameCount]{};
         InputListener m_listener{};
@@ -615,6 +653,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
         safe_ptr<IInputService> m_input_service;
         safe_ptr<IWindowService> m_window_service;
         safe_ptr<const Window> m_main_window;
+        safe_ptr<InputContext> m_window_input_context;
 
         [[nodiscard]] std::error_code createFontTexture_() {
             ImGuiIO &io = ImGui::GetIO();

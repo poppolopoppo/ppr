@@ -156,12 +156,20 @@ namespace pP {
         m_close_handle = m_cached_window_service->whenWindowClosed(
             IWindowService::WindowCallback::Event{std23::nontype<&Application::onWindowClosed_>, this});
 
+        // Per-window input routing: window delegates -> input context -> listeners.
+        // Build the window context before UI init so ImGui binds to the same
+        // context as the scene; priorities then order them (ImGui -1000 first).
+        // WindowInputContext needs mutable delegate access while the window outlives the context (reset in shutdown).
+        m_window_input = std::make_unique<WindowInputContext>(
+            m_cached_input_service, safe_ptr<Window>{const_cast<Window *>(m_main_window.get())});
+
         if (auto ui = ui::createImGuiService()) {
             PPR_RETURN_ERROR_ON_FAIL(
                 App,
                 ui->initialize(*rhi_service, *m_cached_window_service,
                     *m_cached_input_service, *m_main_window,
-                    m_renderer.getWindowSurfaceFormat(m_main_window->m_handle)));
+                    m_renderer.getWindowSurfaceFormat(m_main_window->m_handle),
+                    m_window_input->m_context));
 
             std::ignore = m_ui_services.insert(safe_ptr{ui.get()});
             m_ui_service = std::move(ui);
@@ -169,10 +177,8 @@ namespace pP {
 
         m_main_viewport = std::make_unique<WindowViewport>(m_main_window, ViewportLayout{});
 
-        // Per-window input routing: window delegates -> input context -> scene listener -> controller actions.
-        // WindowInputContext needs mutable delegate access while the window outlives the context (reset in shutdown).
-        m_window_input = std::make_unique<WindowInputContext>(
-            m_cached_input_service, safe_ptr<Window>{const_cast<Window *>(m_main_window.get())});
+        // Scene listener joins after ImGui so ImGui (-1000) precedes scene (0)
+        // on the same window context.
         m_scene_controller.provideInputActionKeyMappings(m_scene_controller_mapping);
         m_scene_listener.addInputMapping(safe_ptr<const InputMapping>{&m_scene_controller_mapping}, 0);
         m_window_input->m_context.addInputListener(safe_ptr<InputListener>{&m_scene_listener}, 0);
@@ -212,13 +218,18 @@ namespace pP {
         // Pump deadline callbacks so withDeadline/withTimeout contexts can fire.
         TimerManager::mainTimer().tick();
 
-        PPR_RETURN_ERROR_ON_FAIL(App, m_cached_window_service->pollEvents());
-
         const TimePoint now = time::now();
         const TimeSpan dt = now - m_last_frame_time;
         m_last_frame_time = now;
 
+        // Clear transient input state BEFORE window-event dispatch appends this
+        // frame's characters, so newFrame() below still observes them. Safe to
+        // run first: device polling is event-pump independent (gamepads poll
+        // via glfwGetGamepadState, keyboard/mouse polls only reset transient
+        // state), and dispatch below then uses this frame's delta time.
         PPR_RETURN_ERROR_ON_FAIL(App, m_cached_input_service->pollInputDevices(dt));
+
+        PPR_RETURN_ERROR_ON_FAIL(App, m_cached_window_service->pollEvents());
 
         if (m_main_viewport) [[likely]] {
             m_main_viewport->updateFromWindow();
@@ -324,11 +335,12 @@ namespace pP {
         m_lifecycle = {};
 
         // Detach scene input before the window and the input service go away.
+        // Removal is reverse of init: scene (added last) first, then ImGui
+        // inside UI shutdown below, then the window context itself.
         if (m_window_input) {
             attempt([this] {
                 std::ignore = m_window_input->m_context.removeInputListener(m_scene_listener);
             });
-            m_window_input.reset();
         }
         attempt([this] { m_scene_listener.clearInputMappings(); });
         attempt([this] { m_scene_controller_mapping.clearInputMappings(); });
@@ -341,6 +353,10 @@ namespace pP {
             retain_error(m_ui_service->shutdown());
             m_ui_service.reset();
         }
+
+        // Window context outlives both listeners (scene removed first, ImGui
+        // removed in UI shutdown above); safe to destroy now.
+        m_window_input.reset();
 
         attempt([this] { return m_triangle_pass.shutdown(); });
 

@@ -18,6 +18,9 @@ import :camera;
 import :quaternion;
 import :input_listener;
 import :filtered_analog;
+import :window_input;
+import :imgui_routing;
+import :imgui_dpi;
 import :zerov_probe;
 
 export namespace pP::tests {
@@ -37,6 +40,9 @@ export namespace pP::tests {
             quaternion,
             input_listener,
             filtered_analog,
+            window_input,
+            imgui_routing,
+            imgui_dpi,
             zerov_probe,
         });
 

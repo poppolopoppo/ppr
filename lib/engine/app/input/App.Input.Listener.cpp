@@ -358,8 +358,9 @@ namespace pP {
 
     void WindowInputContext::onMouseMoved_(const Window &window, const float2 &client_pos) const {
         PPR_ASSERT(m_window.get() == &window);
-        const float2 absolute_pos = client_pos + vector_cast<float>(m_window->m_window_position);
-        m_inputs->postMouseCursorPosition(m_context, absolute_pos);
+        // GLFW cursor positions are already client-area relative and downstream
+        // consumers (e.g. ImGui mouse input) expect client space: forward as-is.
+        m_inputs->postMouseCursorPosition(m_context, client_pos);
     }
 
     void WindowInputContext::onMouseScrolled_([[maybe_unused]] const Window &window, const float2 &delta) const {

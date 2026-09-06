@@ -10,6 +10,7 @@ import std;
 export namespace pP {
     class IInputService;
     class IWindowService;
+    class InputContext;
     class Window;
 
     class IUIService : public virtual IService {
@@ -19,7 +20,8 @@ export namespace pP {
             IWindowService &window_service,
             IInputService &input_service,
             const Window &main_window,
-            rhi::Format swapchain_format) = 0;
+            rhi::Format swapchain_format,
+            InputContext &window_input_context) = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() noexcept = 0;
 
