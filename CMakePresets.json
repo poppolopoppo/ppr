@@ -45,7 +45,7 @@
         "rhs": "Windows"
       },
       "environment": {
-        "VS_SEGMENT_HEAP_ALLOWLIST": "VideoGameApp;EngineTests;"
+        "VS_SEGMENT_HEAP_ALLOWLIST": "app.game;engine.tests.core;engine.tests.app;"
       },
       "cacheVariables": {
         "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",

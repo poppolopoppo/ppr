@@ -195,11 +195,11 @@ Provides Slang shader compilation with hot-reload and background compilation:
 
 Two separate test executables:
 
-- `EngineCoreTests` (`lib/engine/tests/core/`) — GLFW-free; tests memory, containers, concurrency, IO, strings, utility,
+- `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; tests memory, containers, concurrency, IO, strings, utility,
   opaque, services, enums
-- `EngineAppTests` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests
+- `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests
 
-Shared in `lib/engine/tests/shared/` as static lib `EngineTestsShared` providing `parseCli()` and `runSuite()` to avoid
+Shared in `lib/engine/tests/shared/` as static lib `engine.tests` providing `parseCli()` and `runSuite()` to avoid
 duplication. Tests use `PPR_UNIT_TEST(name)` macros compiled as `inline constexpr` variables with `UnitTest` tree
 grouping, fork/crash support, and `--run-test --shuffle --loop` CLI. Test code includes the test-only header
 `"pP/UnitTest.h"` (from `lib/engine/tests/include/`, registered per test target) which provides `PPR_UNIT_TEST`,
@@ -325,10 +325,15 @@ _(maintained by the `clonedeps` skill — empty until first run)_
 - Use `setup_ppr_project(Target INTERNAL_PUBLIC_DEPS ... EXTERNAL_SYSTEM_PRIVATE_DEPS ...)` for every target (see
   cmake/Compilers.cmake).
 - Commit rule: new source file + its CMakeLists.txt registration go in the same commit.
-- Two separate test executables: `EngineCoreTests` (core, GLFW-free) and `EngineAppTests` (links glfw). Aggregate target
-  `run-engine-tests` runs both. Build via `cmake --build out/build/msvc-dev --target EngineCoreTests` (or
-  `EngineAppTests`). Run via `run-engine-tests` run configuration in CLion.
-- Shared test infrastructure in `lib/engine/tests/shared/` (static lib `EngineTestsShared`) provides `parseCli()` and
+- CMake target == C++ module name (dotted): `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.app`,
+  `engine.tests`, `engine.tests.core`, `engine.tests.app`. Exceptions: `app.game` (module-less game executable),
+  `run-engine-tests` (hyphenated aggregate, kept), external imported targets (`rapidhash`/`stb`/`mango`/`glfw`/`slang`),
+  `imgui` module binding over `imgui.base` static (root-scope `CXX_MODULE_STD OFF` workaround preserved in
+  `cmake/external/DearImGui.cmake`).
+- Two separate test executables: `engine.tests.core` (core, GLFW-free) and `engine.tests.app` (links glfw). Aggregate target
+  `run-engine-tests` runs both. Build via `cmake --build out/build/msvc-dev --target engine.tests.core` (or
+  `engine.tests.app`). Run via `run-engine-tests` run configuration in CLion.
+- Shared test infrastructure in `lib/engine/tests/shared/` (static lib `engine.tests`) provides `parseCli()` and
   `runSuite()` to avoid duplication between test executables.
 
 ## C++20 Modules
@@ -617,7 +622,7 @@ All types in `namespace pP`. See corresponding `.cppm` files:
   expect_fail).
 - Group: `_.recurse({TestA, TestB, ...})` — supports conditional inclusion via `if constexpr (PPR_ENABLE_DEBUG)`.
 - Module pattern: `export module engine.tests.core:memory;` with `export namespace pP::tests { ... }`.
-- CLI: `EngineTests [--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]` — test
+- CLI: `engine.tests.core` / `engine.tests.app` `[--run-test <path>] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--child-run] [--help]` — test
   paths use `/` separators (e.g. `--run-test core/hal/thread_id`).
 - Fork tests spawn child process via `hal::process::spawnAndWait`. Assertions intercepted by test framework (converted
   to failures, not terminations).
@@ -681,7 +686,7 @@ host-to-shader boundary if sizes differ.
   response-file syntax, so the linker drops it and every link fails with
   `LNK2001: unresolved external symbol std::_General_precision_tables_2<...>::_Max_P` (or similar std-module
   implicit-inline definitions). Fix: set `CXX_MODULE_STD OFF` on such targets (see `cmake/external/DearImGui.cmake`,
-  where `ImGuiModule` triggered this via LNK2001 on `_Max_P`). When adopting a newer CMake, test whether root-scope
+  where `imgui` triggered this via LNK2001 on `_Max_P`). When adopting a newer CMake, test whether root-scope
   module targets still produce a bare `@`-prefixed std lib reference.
 
 ## Repository Map
@@ -695,3 +700,4 @@ Before working on any task, read `codemap.md` to understand:
 - Data flow and integration points between modules
 
 For deep work on a specific folder, also read that folder's `codemap.md`.
+

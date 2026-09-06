@@ -1,4 +1,4 @@
-add_library(EngineCore)
+add_library(engine.core)
 
 set(HAL_PLATFORM_SOURCES
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.include.hpp
@@ -21,7 +21,7 @@ if(PPR_HAL_PLATFORM STREQUAL "windows")
     )
 endif()
 
-target_sources(EngineCore
+target_sources(engine.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Core.Assert.cppm
@@ -78,6 +78,6 @@ target_sources(EngineCore
         ${HAL_PLATFORM_SOURCES}
 )
 
-setup_ppr_project(EngineCore
+setup_ppr_project(engine.core
     EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash
 )

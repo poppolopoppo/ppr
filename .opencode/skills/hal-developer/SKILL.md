@@ -1218,18 +1218,18 @@ PPR_UNIT_TEST(mapped_file_read) {
 ### Test execution
 
 ```bash
-# Build and run (EngineCoreTests is GLFW-free; EngineAppTests links GLFW)
-cmake --build out/build/msvc-dev --target EngineCoreTests
+# Build and run (engine.tests.core is GLFW-free; engine.tests.app links GLFW)
+cmake --build out/build/msvc-dev --target engine.tests.core
 
 # Run a specific test (paths use '/' separators)
-out/build/msvc-dev/bin/EngineCoreTests --run-test core/hal/thread_id
+out/build/msvc-dev/bin/engine.tests.core --run-test core/hal/thread_id
 
 # Full suite with shuffle/loop
-out/build/msvc-dev/bin/EngineCoreTests --shuffle --loop 10
+out/build/msvc-dev/bin/engine.tests.core --shuffle --loop 10
 ```
 
-The aggregate target `run-engine-tests` runs both `EngineCoreTests` and
-`EngineAppTests`. Fork/crash tests spawn child processes via
+The aggregate target `run-engine-tests` runs both `engine.tests.core` and
+`engine.tests.app`. Fork/crash tests spawn child processes via
 `hal::process::spawnAndWait`; assertions are intercepted by the test framework
 (converted to failures, not terminations).
 
@@ -1316,7 +1316,7 @@ and build system in this skill as a reference.
 10. **Verify the full API compiles and links**:
     ```bash
     cmake --preset freebsd-dev
-    cmake --build --preset freebsd-dev --target EngineCore
+    cmake --build --preset freebsd-dev --target engine.core
     ```
 
 ### Sources of inspiration

@@ -1,7 +1,7 @@
 # game/
 
 ## Responsibility
-Application entry point for the PPR engine demo. Hosts the top-level `main()` that constructs the engine `Application` subclass and drives the run loop, plus the CMake target (`VideoGameApp`) that links the engine modules and copies shader assets post-build.
+Application entry point for the PPR engine demo. Hosts the top-level `main()` that constructs the engine `Application` subclass and drives the run loop, plus the CMake target (`app.game`) that links the engine modules and copies shader assets post-build.
 
 ## Design
 - `main.cpp` defines `demo::TurboLarbin`, a subclass of `pP::Application`, overriding the lifecycle hooks `initialize()` / `update()` / `shutdown()` (each returning `std::error_code`).
@@ -13,13 +13,14 @@ Application entry point for the PPR engine demo. Hosts the top-level `main()` th
 1. `main()` → constructs `TurboLarbin` → `app.run()` enters the engine loop.
 2. Engine resolves install/config/content/working directories and discovers registered services (input, window, player, RHI, shader).
 3. `run()` calls `initialize()` once, then loops `update()` (user hook) → `render()` per frame until exit is requested, then `shutdown()` (via `PPR_DEFER`).
-4. `game/CMakeLists.txt` builds `VideoGameApp` via `setup_ppr_project` and copies `assets/shaders` POST_BUILD.
+4. `game/CMakeLists.txt` builds `app.game` via `setup_ppr_project` and copies `assets/shaders` POST_BUILD.
 
 ## Integration
 - Imports `engine.core`, `engine.math`, `engine.rhi`, `engine.app`, `imgui_internal`, `std`.
-- Consumed by: the run configuration / `VideoGameApp` executable.
+- Consumed by: the run configuration / `app.game` executable.
 - Depends on: all five engine modules and the DearImGui module bindings.
 
 ## Key Files
 - `main.cpp` — entry point, `TurboLarbin` Application subclass, `main()`.
-- `CMakeLists.txt` — `VideoGameApp` target, `setup_ppr_project`, shader asset copy.
+- `CMakeLists.txt` — `app.game` target, `setup_ppr_project`, shader asset copy.
+

@@ -70,17 +70,17 @@ game/main.cpp → engine.app → engine.rhi → engine.shader → engine.math �
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: SlangRHI, DearImGui, GLFW).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Entry point (main.cpp) + VideoGameApp CMake target.                                                   | [View Map](game/codemap.md)                         |
+| `game/`                         | Entry point (main.cpp) + app.game CMake target.                                                   | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Public header `Macros.h` (assertions, logging, attributes).                                           | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime assets (Slang shaders).                                                                       | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources (triangle.slang, hot-reloadable).                                                | [View Map](assets/shaders/codemap.md)               |
 
 ## Test Infrastructure
 
-- `EngineCoreTests` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
+- `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
   services, enums.
-- `EngineAppTests` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests.
-- Shared infra in `lib/engine/tests/shared/` (`EngineTestsShared`: `parseCli()`, `runSuite()`).
+- `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests.
+- Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (NOT `include/pP/Macros.h`).
 
 ## Conventions
@@ -89,3 +89,4 @@ game/main.cpp → engine.app → engine.rhi → engine.shader → engine.math �
   `export import :partition;`.
 - `constexpr`/`[[nodiscard]]`/`noexcept` by default; no raw loops; comments only for non-obvious code.
 - Commit rule: new source + its CMakeLists.txt registration in the same commit.
+

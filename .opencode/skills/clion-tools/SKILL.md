@@ -124,8 +124,8 @@ MCP tools as a substitute for planning. The skill itself executes nothing; every
   bounded edits during fix application, plus `clion_apply_patch`,
   `clion_create_new_file`, `clion_reformat_file` for post-edit validation.
 - **Background orchestration** — run configurations execute as background
-  subagents with appropriate timeouts. `EngineTests` configuration: 120s
-  timeout default; `EngineAppTests` may require longer for GLFW-dependent
+  subagents with appropriate timeouts. `engine.tests.core` configuration: 120s
+  timeout default; `engine.tests.app` may require longer for GLFW-dependent
   builds. The orchestrator queues build/test operations and surfaces results
   without blocking the main workflow.
 - **Session reuse** — cache run-configuration names across prompts to avoid
@@ -134,7 +134,7 @@ MCP tools as a substitute for planning. The skill itself executes nothing; every
   (breakpoints, variable states) is transient — reset between independent
   debugging contexts.
 - **`orchestratorPrompt` routing** — trigger on "search the codebase",
-  "build", "debug", "run EngineTests". The orchestrator matches the user
+  "build", "debug", "run engine.tests.core". The orchestrator matches the user
   intent to the appropriate CLion tool category and delegates accordingly.
 
 ## 1. Code Search & Navigation
@@ -267,13 +267,13 @@ they support dynamic launch overrides.
 
 ### Execute a run configuration
 ```
-clion_execute_run_configuration(configurationName="EngineTests", timeout=120000, waitForExit=true, projectPath="E:/Code/ppr")
+clion_execute_run_configuration(configurationName="engine.tests.core", timeout=120000, waitForExit=true, projectPath="E:/Code/ppr")
 ```
 
 ### Execute with overrides (one-time)
 ```
 clion_execute_run_configuration(
-  configurationName="EngineTests",
+  configurationName="engine.tests.core",
   programArguments="--run-test core.memory",
   envs={"MY_VAR": "value"},
   timeout=60000,
@@ -290,12 +290,12 @@ clion_execute_run_configuration(filePath="lib/engine/tests/core/Core.Memory.Test
 
 ### Run terminal commands
 ```
-clion_execute_terminal_command(command="cmake --build --preset msvc-dev --target EngineCoreTests", projectPath="E:/Code/ppr")
+clion_execute_terminal_command(command="cmake --build --preset msvc-dev --target engine.tests.core", projectPath="E:/Code/ppr")
 ```
 
 **When to prefer CLion over bash:**
 - Building a target → use `clion_execute_run_configuration` with a run config, or `clion_execute_terminal_command`
-- Running tests → `clion_execute_run_configuration(configurationName="EngineTests", projectPath="E:/Code/ppr")`
+- Running tests → `clion_execute_run_configuration(configurationName="engine.tests.core", projectPath="E:/Code/ppr")`
 - Checking build results → `clion_execute_run_configuration` returns output + exit code
 
 ## 5. Debugging
@@ -308,7 +308,7 @@ auto-detect the project.**
 
 ### Start a debug session
 ```
-clion_xdebug_start_debugger_session(configurationName="EngineTests", projectPath="E:/Code/ppr")
+clion_xdebug_start_debugger_session(configurationName="engine.tests.core", projectPath="E:/Code/ppr")
 ```
 Or from a code location:
 ```
@@ -390,7 +390,7 @@ clion_xdebug_run_to_line(filePath="lib/engine/core/Core.Memory.cppm", line=150, 
 ```
 
 ### Typical debug workflow
-1. `clion_xdebug_start_debugger_session(configurationName="EngineTests", projectPath="E:/Code/ppr")`
+1. `clion_xdebug_start_debugger_session(configurationName="engine.tests.core", projectPath="E:/Code/ppr")`
 2. `clion_xdebug_set_breakpoint(filePath="...", line=N, projectPath="E:/Code/ppr")`
 3. `clion_xdebug_control_session(action="RESUME", projectPath="E:/Code/ppr")` → `clion_xdebug_control_session(action="WAIT_FOR_PAUSE", projectPath="E:/Code/ppr")`
 4. Inspect: `clion_xdebug_get_stack(projectPath="E:/Code/ppr")`, `clion_xdebug_get_frame_values(depth=2, projectPath="E:/Code/ppr")`
@@ -459,3 +459,4 @@ clion_open_file_in_editor(filePath="lib/engine/core/Core.Memory.cppm", projectPa
 - **Dynamic dispatch:** Use `clion_execute_tool` when a tool you need is not directly exposed in your function list. Unknown tool names dump the full registry — use as a drift detector.
 - **Batch:** When multiple independent CLion calls are needed, batch them in parallel (e.g. `clion_search_symbol` + `clion_get_run_configurations` in the same message).
 - **projectPath:** ALWAYS pass `projectPath="E:/Code/ppr"` in every `clion_*` call except `clion_get_all_open_file_paths`, `clion_xdebug_get_debugger_status`, and `clion_xdebug_list_breakpoints` (which auto-detect).
+

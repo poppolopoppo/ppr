@@ -18,7 +18,7 @@ The IO partition provides async I/O primitives, file watching, and memory-mapped
 ## Integration
 - **engine.shader**: Hot-reload uses `pP::io::mapFile` (`MappedFile`) to read shader source; `DirectoryWatcher` monitors shader directories for changes.
 - **engine.core concurrency**: `IoRequest` and `DirectoryWatcher` are `IEvent`s — completions and file changes are observed via `Signal`/`select`.
-- **EngineCoreTests**: Tests `MappedFile` (map/unmap, span access), `DirectoryWatcher` (start/stop, event delivery, select filtering), and `IoPort` (open/read/write, submit/poll/wait cycle, error handling).
+- **engine.tests.core**: Tests `MappedFile` (map/unmap, span access), `DirectoryWatcher` (start/stop, event delivery, select filtering), and `IoPort` (open/read/write, submit/poll/wait cycle, error handling).
 
 ## Key Files
 - `Core.Io.cppm` / `.cpp` — `pP::IoPort`, `pP::IoFile`, `pP::IoRequest`, `pP::io::createPort()`

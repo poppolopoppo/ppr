@@ -27,7 +27,7 @@ The HAL (Hardware Abstraction Layer) partition provides platform-independent pri
 - **engine.core IO**: `Core.Io` partition wraps `hal::io::submit/poll/wait`, `hal::io::mapFile`, and `hal::io::openWatch` into `IoPort`/`MappedFile`/`FileWatcher`.
 - **engine.app**: `Application` startup uses `hal::disableSystemErrorReporting`, `hal::installDebugAssertHooks`, `hal::platformName`, `hal::process::currentExecutablePath`; GLFW input feeds `hal::native::char_t` characters into the keyboard state.
 - **engine.shader**: Hot-reload reads shader source via `io::mapFile` (HAL-backed).
-- **EngineCoreTests**: Tests `pageAlloc`/`pageFree`, `ringBufferAlloc`/`ringBufferFree`, `outputDebug`, `isDebuggerPresent`, `breakpoint`, `process::spawnAndWait`, `timer::setDeadline`/`cancelDeadline`, and native string transcoding.
+- **engine.tests.core**: Tests `pageAlloc`/`pageFree`, `ringBufferAlloc`/`ringBufferFree`, `outputDebug`, `isDebuggerPresent`, `breakpoint`, `process::spawnAndWait`, `timer::setDeadline`/`cancelDeadline`, and native string transcoding.
 
 ## Key Files
 - `Core.HAL.cppm` — `pP::hal` namespace: page memory, ring buffer, outputDebug, isDebuggerPresent, breakpoint, process, timer, threads, native transcoding, async I/O, well-known dirs

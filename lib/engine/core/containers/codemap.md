@@ -24,7 +24,7 @@ The containers partition provides PPR's core data structures: bounded trivial-ty
 - **engine.math**: `ArrayView<float>` / `ArrayView<float2/3/4>` passed to math functions; `VectorCast` between views and math types.
 - **engine.rhi**: Resource heaps and descriptor heaps use `SparseVector<Resource>` for loose resource tracking; `Bitmask<ResourceFlag, 64>` for feature flag bits.
 - **engine.app**: ECS-like component arrays use `StableVector<Component>` for stable handles; `HashMap<TypeID,ComponentType>` for component type registry; `Stack<System, N>` for system pipeline ordering.
-- **EngineCoreTests**: Tests `Stack`, `RingBuffer`, `SparseVector`, `StableVector`, `HashMap`, `HashSet`, `FlatMap`, `Bitmask`, `ArrayView`, `RelPtr`, `TagPtr`, and `IndexIterator` with unit tests for insert/erase/lookup, stability, and view semantics.
+- **engine.tests.core**: Tests `Stack`, `RingBuffer`, `SparseVector`, `StableVector`, `HashMap`, `HashSet`, `FlatMap`, `Bitmask`, `ArrayView`, `RelPtr`, `TagPtr`, and `IndexIterator` with unit tests for insert/erase/lookup, stability, and view semantics.
 
 ## Key Files
 - `Core.Containers.cppm` — umbrella partition: `relocatable<T>` trait, `Collector`, `IndexIterator`, `SetBitsRange`, `Bitmask<T,N>`, `RelPtr`, `TagPtr`, `ArrayView`, `RelativeView`, `TransformView`, `Stack<T,N>`, `RingBuffer<T,N>`

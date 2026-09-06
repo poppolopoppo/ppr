@@ -42,7 +42,7 @@ callbacks, event handlers, and draw commands.
   `whenKeyPressed`, `whenMouseMoved` etc. accept `function_ref`.
 - **engine.shader**: Hot-reload background compile callback uses `function_ref<void(ModuleHandle)>` for progress
   reporting.
-- **EngineCoreTests**: Tests `function_ref` (construct from lambda/function pointer, `target()` validity, `operator()`
+- **engine.tests.core**: Tests `function_ref` (construct from lambda/function pointer, `target()` validity, `operator()`
   invocation, debug assert on null), `overloaded` (visit variant, default overload, type dispatch), and function type
   aliases as `function_ref` template arguments.
 
@@ -50,3 +50,4 @@ callbacks, event handlers, and draw commands.
 
 - `Core.Function.cppm` — `pP::function_ref<TArgs...>`, `pP::overloaded<Ts...>`, function type aliases (`VoidFn`,
   `BoolFn`, `StepFn`, `DrawFn`)
+

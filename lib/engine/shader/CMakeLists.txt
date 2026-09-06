@@ -1,6 +1,6 @@
-add_library(EngineShader)
+add_library(engine.shader)
 
-target_sources(EngineShader
+target_sources(engine.shader
   PUBLIC
     FILE_SET CXX_MODULES FILES
       Shader.cppm
@@ -8,7 +8,7 @@ target_sources(EngineShader
       Shader.cpp
 )
 
-setup_ppr_project(EngineShader
-  INTERNAL_PUBLIC_DEPS EngineCore
+setup_ppr_project(engine.shader
+  INTERNAL_PUBLIC_DEPS engine.core
   EXTERNAL_SYSTEM_PRIVATE_DEPS slang
 )

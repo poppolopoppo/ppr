@@ -178,10 +178,10 @@ auto handle = sparse.add(42.0f);
 
 Two separate test executables are provided:
 
-- **`EngineCoreTests`** — GLFW-free; tests memory, containers, concurrency, IO, strings, services
-- **`EngineAppTests`** — Links GLFW; tests platform-dependent features
+- **`engine.tests.core`** — GLFW-free; tests memory, containers, concurrency, IO, strings, services
+- **`engine.tests.app`** — Links GLFW; tests platform-dependent features
 
-They share a common test infrastructure library (`EngineTestsShared`) in `lib/engine/tests/shared/`.
+They share a common test infrastructure library (`engine.tests`) in `lib/engine/tests/shared/`.
 
 ### Via CTest
 
@@ -192,8 +192,8 @@ ctest --preset msvc-dev
 ### Direct Execution
 
 ```bash
-out/build/msvc-dev/EngineCoreTests --shuffle
-out/build/msvc-dev/EngineAppTests --run-test App.Player
+out/build/msvc-dev/engine.tests.core --shuffle
+out/build/msvc-dev/engine.tests.app --run-test App.Player
 ```
 
 ### Options
@@ -223,3 +223,4 @@ Contributions are welcome! Please ensure:
 - Code follows the project's coding standards
 - New features include unit tests
 - CMake builds cleanly with `PPR_ENABLE_DEVELOPER_MODE=ON`
+

@@ -22,7 +22,7 @@ Compiler-specific CMake configuration for MSVC, clang-cl, Clang, and GCC toolcha
 - `PPR_PROJECT_WARNINGS_CXX` is defined per-compiler (`MSVC.cmake`/`Clang.cmake`/`GCC.cmake`) and applied to targets by `Compilers.cmake::setup_ppr_project()`
 - `CXX_MODULE_STD ON` is set globally in `Compilers.cmake::setup_ppr_project()`
 - MSVC `/bigobj` is applied globally to prevent divergent `@cmake_cxx_std.lib` synth targets
-- DearImGui `ImGuiModule` has `CXX_MODULE_STD OFF` to avoid root-scope `@cmake_cxx_std.lib` LNK2001 issues
+- DearImGui `imgui` has `CXX_MODULE_STD OFF` to avoid root-scope `@cmake_cxx_std.lib` LNK2001 issues
 
 ## Key Files
 - `cmake/compiler/MSVC.cmake` — /bigobj, /utf-8, /EHsc, /Zc:__cplusplus, PPR_PROJECT_WARNINGS_CXX, /arch:AVX2 /Gw genex

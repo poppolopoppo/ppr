@@ -16,8 +16,8 @@ Top-level CMake configuration — root CMakeLists.txt, CMakePresets.json, and vc
 3. Compiler module (`Compilers.cmake`) applies toolchain-specific flags and warning settings
 4. Sanitizers module enables ASAN/TSan/MSAN based on `PPR_ENABLE_SANITIZER_*` options
 5. Dependencies are fetched: vcpkg (if `VCPKG_ROOT` set) or CPM from GitHub
-6. Engine libs (`EngineCore`, `EngineMath`, `EngineRHI`, `EngineShader`, `EngineApp`) built as C++20 modules
-7. `game/CMakeLists.txt` builds `VideoGameApp` with `setup_ppr_project`, copies shader assets POST_BUILD
+6. Engine libs (`engine.core`, `engine.math`, `engine.rhi`, `engine.shader`, `engine.app`) built as C++20 modules
+7. `game/CMakeLists.txt` builds `app.game` with `setup_ppr_project`, copies shader assets POST_BUILD
 
 ## Integration
 - Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, `VCPkg`, `HAL`, `Compilers`, `Sanitizers`, `StaticAnalyzers`, `Cache`, `Dependencies`

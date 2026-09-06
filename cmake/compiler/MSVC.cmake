@@ -27,7 +27,7 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
 # /bigobj is needed for large module interface TUs. Applying it globally (rather
-# than as a per-target PRIVATE option on EngineCoreTests/EngineAppTests) keeps all
+# than as a per-target PRIVATE option on engine.tests.core/engine.tests.app) keeps all
 # @cmake_cxx_std synth targets consistent — per-target /bigobj creates a divergent
 # synth that triggers "Disagreement of the location of the 'std' module" errors.
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")

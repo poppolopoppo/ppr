@@ -17,7 +17,7 @@ The concurrency partition provides PPR's core thread-safe primitives: lock-free 
 ## Integration
 - **engine.core IO**: `IoRequest` and `DirectoryWatcher` are `IEvent`s backed by `PulseEvent` — async completions and file changes are observed via `Signal`/`select`.
 - **engine.app**: `Application` holds a `SharedContext` lifecycle context (`m_lifecycle`) used to cancel engine subsystems on shutdown.
-- **EngineCoreTests**: Tests `RawChannel` (send/receive, full/empty, MPSC safety), `Signal` (select, range-for iteration, compile-time filtering), and `IContext` (createChild, requestCancel, deadline propagation, value carrying).
+- **engine.tests.core**: Tests `RawChannel` (send/receive, full/empty, MPSC safety), `Signal` (select, range-for iteration, compile-time filtering), and `IContext` (createChild, requestCancel, deadline propagation, value carrying).
 
 ## Key Files
 - `Core.Concurrency.Channel.cppm` / `.cpp` — `pP::RawChannel` lock-free MPSC buffer, `Channel<T>` typed wrapper, `ChannelWriter<T>`

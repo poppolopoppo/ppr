@@ -1,6 +1,6 @@
-add_library(EngineApp)
+add_library(engine.app)
 
-target_sources(EngineApp
+target_sources(engine.app
         PUBLIC
         FILE_SET CXX_MODULES FILES
 
@@ -74,11 +74,11 @@ target_sources(EngineApp
         window/App.Window.Viewport.cpp
 )
 
-setup_ppr_project(EngineApp
-        INTERNAL_PUBLIC_DEPS EngineCore EngineMath EngineShader EngineRHI
+setup_ppr_project(engine.app
+        INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader engine.rhi
         EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango
-        EXTERNAL_SYSTEM_PUBLIC_DEPS imgui
+        EXTERNAL_SYSTEM_PUBLIC_DEPS imgui.base
 )
 
 # `import imgui;` (C++20 binding for Dear ImGui) must be resolvable from every engine.app importer.
-target_link_libraries(EngineApp PUBLIC ImGuiModule)
+target_link_libraries(engine.app PUBLIC imgui)

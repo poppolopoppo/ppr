@@ -154,7 +154,7 @@ listed in the library's `CMakeLists.txt`.
 File: `lib/engine/core/CMakeLists.txt`
 
 ```
-target_sources(EngineCore
+target_sources(engine.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Core.Assert.cppm
@@ -171,6 +171,10 @@ target_sources(EngineCore
 ```
 
 Rules:
+- **Target naming**: CMake target == C++ module name (dotted, e.g. `target_sources(engine.core ...)`).
+  Exceptions: `app.game` (module-less game executable), `run-engine-tests` (hyphenated aggregate, kept),
+  external imported targets (`rapidhash`/`stb`/`mango`/`glfw`/`slang`), `imgui` module binding over `imgui.base`
+  static (root-scope `CXX_MODULE_STD OFF` workaround preserved in `cmake/external/DearImGui.cmake`).
 - **PUBLIC** `FILE_SET CXX_MODULES FILES` lists all `.cppm` files (interfaces).
   The umbrella `Core.cppm` must appear in this list.
 - **PRIVATE** lists all `.cpp` implementation files.
@@ -189,9 +193,9 @@ A top-level library (like `engine.math`, `engine.rhi`, `engine.app`) has its own
 Minimal `CMakeLists.txt`:
 
 ```cmake
-add_library(EngineNewLib)
+add_library(engine.newlib)
 
-target_sources(EngineNewLib
+target_sources(engine.newlib
     PUBLIC
         FILE_SET CXX_MODULES FILES
             NewLib.cppm
@@ -199,8 +203,8 @@ target_sources(EngineNewLib
         NewLib.impl.cpp
 )
 
-setup_ppr_project(EngineNewLib
-    INTERNAL_PUBLIC_DEPS EngineCore          # for import engine.core;
+setup_ppr_project(engine.newlib
+    INTERNAL_PUBLIC_DEPS engine.core          # for import engine.core;
     EXTERNAL_SYSTEM_PRIVATE_DEPS some_ext_lib
 )
 ```
@@ -213,7 +217,7 @@ Arguments to `setup_ppr_project`:
 The library's `.cppm` file declares the module:
 ```
 module;
-export module engine.new_lib;
+export module engine.newlib;
 import engine.core;
 import std;
 
@@ -272,7 +276,7 @@ import :memory.arena;
 
 **Register in CMake**: `lib/engine/tests/core/CMakeLists.txt`:
 ```
-target_sources(EngineCoreTests
+target_sources(engine.tests.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Core.Memory.Arena.Tests.cppm
@@ -280,7 +284,7 @@ target_sources(EngineCoreTests
 )
 ```
 
-The core test executable links `EngineCore` + `EngineTestsShared` via `setup_ppr_project`.
+The core test executable links `engine.core` + `engine.tests` via `setup_ppr_project`.
 
 ### App Test Module (`engine.tests.app`)
 
@@ -298,7 +302,7 @@ import :player;
 
 **Register in CMake**: `lib/engine/tests/app/CMakeLists.txt`:
 ```
-target_sources(EngineAppTests
+target_sources(engine.tests.app
     PUBLIC
         FILE_SET CXX_MODULES FILES
             App.Player.Tests.cppm
@@ -306,7 +310,7 @@ target_sources(EngineAppTests
 )
 ```
 
-The app test executable links `EngineApp` + `EngineTestsShared` + GLFW.
+The app test executable links `engine.app` + `engine.tests` + GLFW.
 
 ### Shared Infrastructure (`engine.tests`)
 
@@ -354,7 +358,7 @@ int main(const int argc, char *argv[]) {
 | `import :partition;` | From within the same library, importing a sibling partition | `Core.Assert.cppm` imports `:function_ref` |
 | `import engine.core;` | From a different library or executable, importing the entire core module | `App.cppm`, `Application.cpp`, test files |
 | `import engine.core;` then `import :partition;` | **Never** mix full module and partition imports in the same file — use one or the other | — |
-| `import engine.math;` | From a library that depends on engine.math | Any file in a target with `INTERNAL_PUBLIC_DEPS EngineMath` |
+| `import engine.math;` | From a library that depends on engine.math | Any file in a target with `INTERNAL_PUBLIC_DEPS engine.math` |
 
 Rules:
 - Partition imports (`:name`) are only valid from within the same parent module.

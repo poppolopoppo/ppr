@@ -30,7 +30,7 @@ The memory partition of `engine.core` defines the entire allocator hierarchy and
 - **engine.rhi**: GPU resource uploads go through `mem::GPA`; upload heaps and command list buffers are arena-allocated per-frame.
 - **engine.shader**: Compiled shader bytecode and hot-reload data use `mem::Arena` for persistent storage; scratch buffers use `mem::ScratchPad`.
 - **engine.app**: `Application` constructor creates the global GPA; viewport-specific allocators may be derived from it via `Fallback` or `Threshold`.
-- **EngineCoreTests**: Tests memory allocation, arena checkpoint/restore, poison behavior, GPA round-trip, PMR interop, and slab allocator bucket correctness.
+- **engine.tests.core**: Tests memory allocation, arena checkpoint/restore, poison behavior, GPA round-trip, PMR interop, and slab allocator bucket correctness.
 
 ## Key Files
 - `Core.Memory.cppm` — umbrella; `mem::GPA` (operator new), `mem::OS` (page alloc), `mem::PMR` (vtable dispatch), `mem::HugePage` (2 MiB blocks), `mem::SmallPage` (32/64 KiB blocks)

@@ -18,7 +18,7 @@ function Invoke-GitBytes([string[]]$Arguments) {
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $start; [void]$process.Start()
     $stderrTask = $process.StandardError.ReadToEndAsync(); $output = [IO.MemoryStream]::new(); $process.StandardOutput.BaseStream.CopyTo($output); $process.WaitForExit(); $error = $stderrTask.GetAwaiter().GetResult()
     if ($process.ExitCode -ne 0) { throw "git $($Arguments -join ' ') failed: $error" }
-    $output.ToArray()
+    Write-Output -NoEnumerate $output.ToArray() # -NoEnumerate keeps empty output as empty byte[] instead of $null
 }
 function Invoke-Git([string[]]$Arguments) { [Text.Encoding]::UTF8.GetString((Invoke-GitBytes $Arguments)) }
 function New-OrdinalPathSet { Write-Output -NoEnumerate ([Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)) }

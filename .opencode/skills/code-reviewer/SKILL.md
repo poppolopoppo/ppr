@@ -541,8 +541,8 @@ plans unless the user explicitly requests them.
 | Field | Content |
 |---|---|
 | **Claim** | What the fix asserts (e.g., "allocateRaw now calls poisonAllocated") |
-| **Evidence path** | How to verify the claim holds (e.g., "Run EngineCoreTests with ASAN; confirm no missing poison annotations in allocation paths") |
-| **Budget** | Minimum work to establish the claim (e.g., "1 test file, compile + run EngineCoreTests") |
+| **Evidence path** | How to verify the claim holds (e.g., "Run engine.tests.core with ASAN; confirm no missing poison annotations in allocation paths") |
+| **Budget** | Minimum work to establish the claim (e.g., "1 test file, compile + run engine.tests.core") |
 | **Status** | `planned` (default) |
 
 **For each suppressed `Warning`:**
@@ -641,8 +641,8 @@ downstream agent consumption):
       "finding_ref": "lib/Core.Foo.cppm:42",
       "type": "fix" | "suppression",
       "claim": "allocateRaw now calls poisonAllocated after allocation",
-      "evidence_path": "Run EngineCoreTests with ASAN; confirm no missing poison annotations in allocation paths",
-      "budget": "1 test file, compile + run EngineCoreTests",
+      "evidence_path": "Run engine.tests.core with ASAN; confirm no missing poison annotations in allocation paths",
+      "budget": "1 test file, compile + run engine.tests.core",
       "status": "planned"
     }
   ],
@@ -650,3 +650,4 @@ downstream agent consumption):
   "rounds_used": 1
 }
 ```
+

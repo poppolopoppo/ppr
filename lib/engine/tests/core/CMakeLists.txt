@@ -1,6 +1,6 @@
-add_executable(EngineCoreTests main.cpp)
+add_executable(engine.tests.core main.cpp)
 
-target_sources(EngineCoreTests
+target_sources(engine.tests.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Core.Opaque.Tests.cppm
@@ -25,25 +25,25 @@ target_sources(EngineCoreTests
             Core.Tests.cppm
 )
 
-setup_ppr_project(EngineCoreTests
-  INTERNAL_PUBLIC_DEPS EngineCore EngineShader EngineRHI EngineTestsShared
+setup_ppr_project(engine.tests.core
+  INTERNAL_PUBLIC_DEPS engine.core engine.shader engine.rhi engine.tests
 )
 
-target_include_directories(EngineCoreTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
+target_include_directories(engine.tests.core PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
 
 # MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
 if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     # When using C++23 modules with /MT, the compiler generates C++ mangled references
     # to __tlregdtor (for thread_local destructors), but libcmt.lib provides it as C linkage.
     # This provides the C++ mangled version that delegates to the C version.
-    message(AUTHOR_WARNING "EngineCoreTests: enable temporary workaround for thread_local linker issue with modules and ASAN")
-    #    target_sources(EngineCore PRIVATE
+    message(AUTHOR_WARNING "engine.tests.core: enable temporary workaround for thread_local linker issue with modules and ASAN")
+    #    target_sources(engine.core PRIVATE
     #        ${PPR_HAL_PLATFORM}/MSVC.tlregdtor.cpp
     #    )
-    target_link_options(EngineCoreTests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
+    target_link_options(engine.tests.core PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-add_test(NAME EngineCoreUnitTests COMMAND EngineCoreTests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 set_tests_properties(EngineCoreUnitTests
     PROPERTIES

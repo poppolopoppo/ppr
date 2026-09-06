@@ -1,6 +1,6 @@
-add_library(EngineRHI)
+add_library(engine.rhi)
 
-target_sources(EngineRHI
+target_sources(engine.rhi
   PUBLIC
     FILE_SET CXX_MODULES FILES
       RHI.cppm
@@ -8,7 +8,7 @@ target_sources(EngineRHI
       RHI.cpp
 )
 
-setup_ppr_project(EngineRHI
-  INTERNAL_PUBLIC_DEPS EngineCore EngineMath EngineShader
+setup_ppr_project(engine.rhi
+  INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader
   EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang
 )

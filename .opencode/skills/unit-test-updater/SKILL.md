@@ -148,13 +148,13 @@ Build and run the test executable to confirm all tests pass.
 Prefer CLion MCP tools (see `clion-tools` skill and AGENTS.md §Debugging):
 
 ```
-clion_execute_run_configuration(configurationName="EngineCoreTests", programArguments="--shuffle")
+clion_execute_run_configuration(configurationName="engine.tests.core", programArguments="--shuffle")
 ```
 
 If CLion is unavailable, use CMake presets directly:
 
 ```powershell
-cmake --build --preset msvc-dev --target EngineCoreTests
+cmake --build --preset msvc-dev --target engine.tests.core
 ctest --preset msvc-dev
 ```
 
@@ -216,3 +216,4 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 
 - Trigger on "add tests", "update tests for my changes", "test the new code".
 - Orchestrator delegates test-update work to this skill; `@fixer` executes the bounded file edits.
+

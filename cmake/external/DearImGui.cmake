@@ -8,7 +8,7 @@ CPMAddPackage(
 
 if(imgui_ADDED)
     # Create a static library from ImGui's core source files
-    add_library(imgui STATIC
+    add_library(imgui.base STATIC
         "${imgui_SOURCE_DIR}/imgui.cpp"
         "${imgui_SOURCE_DIR}/imgui_demo.cpp"
         "${imgui_SOURCE_DIR}/imgui_draw.cpp"
@@ -16,8 +16,8 @@ if(imgui_ADDED)
         "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
     )
 
-    target_include_directories(imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
-    set_target_properties(imgui PROPERTIES CXX_MODULE_STD OFF)
+    target_include_directories(imgui.base SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
+    set_target_properties(imgui.base PROPERTIES CXX_MODULE_STD OFF)
 endif()
 
 # C++20 module bindings for Dear ImGui (MIT, https://github.com/stripe2933/imgui-module).
@@ -26,7 +26,7 @@ endif()
 # (implicitly exporting `imgui`) provides the full `ImGuiContext` definition the engine needs to
 # access `ImGuiContext::ErrorCallback`. Both are the "Combined Module" form (v1.92.9b), supporting
 # the master and docking branches (docking-only symbols are guarded by IMGUI_HAS_DOCK, which the
-# docking-pinned `imgui` static library above defines). We download only the generated module
+# docking-pinned `imgui.base` static library above defines). We download only the generated module
 # files (NOT configuring the third-party CMake, which would pull in example backends) and build
 # them ourselves.
 #
@@ -53,14 +53,14 @@ foreach(_imgui_module_file ${_imgui_module_files})
     endif()
 endforeach()
 
-add_library(ImGuiModule)
-target_sources(ImGuiModule
+add_library(imgui)
+target_sources(imgui
     PUBLIC
         FILE_SET CXX_MODULES FILES
         "${_imgui_module_dir}/imgui.cppm"
         "${_imgui_module_dir}/imgui_internal.cppm"
 )
-target_link_libraries(ImGuiModule PUBLIC imgui)
+target_link_libraries(imgui PUBLIC imgui.base)
 # CXX_MODULE_STD OFF: CMake 4.4 root-scope std-module synthetic-target link workaround
 # (`@cmake_cxx_std.lib` LNK2001) — see AGENTS.md "CMake Version Tracking"; re-test on newer CMake.
-set_target_properties(ImGuiModule PROPERTIES CXX_MODULE_STD OFF)
+set_target_properties(imgui PROPERTIES CXX_MODULE_STD OFF)

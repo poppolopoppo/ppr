@@ -27,7 +27,7 @@ types and RHI to input, window, player, UI, and camera subsystems. This module i
 
 ## Integration
 
-- **Consumers**: `game/main.cpp`, test targets (`EngineCoreTests`, `EngineAppTests`)
+- **Consumers**: `game/main.cpp`, test targets (`engine.tests.core`, `engine.tests.app`)
 - **Depends on**: `engine.core`, `engine.math`, `engine.rhi`, `engine.shader` (lower-level engine modules)
 - **Provides**: All `engine.app:*` module namespaces for downstream use
 
@@ -37,3 +37,4 @@ types and RHI to input, window, player, UI, and camera subsystems. This module i
 - `App.Application.cppm` — interface for `pP::Application` class (main loop, service store, directory resolution)
 - `App.Application.cpp` — implementation of application lifecycle (initialize/update/render/terminate)
 - `App.TemplateInstantiations.cpp` — compiler-generated template instantiations
+

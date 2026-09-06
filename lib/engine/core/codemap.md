@@ -27,8 +27,8 @@ The root `engine.core` module serves as the umbrella foundation library for the 
 - **engine.rhi**: Uses `pP::rhi::*` types, projection helpers, and `IShaderService` from engine.shader; depends on Core.HAL for platform abstraction.
 - **engine.shader**: Uses `IShaderService` for Slang session lifecycle and hot-reload; integrates with Core.Opaque for shader data serialization.
 - **engine.app**: Constructs `pP::Application`, resolves directories, initializes services (input, window, player, RHI, shader), and drives the per-frame loop. `Application` keeps a UI child `ServicesStore` (`m_ui_services`) chained to the root.
-- **EngineCoreTests**: GLFW-free test suite for memory, containers, concurrency, IO, strings, utility, opaque, services, and enums.
-- **EngineAppTests**: GLFW-linked test suite for platform-dependent tests.
+- **engine.tests.core**: GLFW-free test suite for memory, containers, concurrency, IO, strings, utility, opaque, services, and enums.
+- **engine.tests.app**: GLFW-linked test suite for platform-dependent tests.
 
 ## Key Files
 - `Core.cppm` — umbrella module re-exporting all partitions

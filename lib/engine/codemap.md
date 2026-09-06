@@ -26,7 +26,7 @@ resolves directories → discovers services (input, window, player, RHI, shader)
 
 ## Integration
 
-- Consumed by: `game/main.cpp`, test targets (`EngineCoreTests`, `EngineAppTests`).
+- Consumed by: `game/main.cpp`, test targets (`engine.tests.core`, `engine.tests.app`).
 - Depends on: third-party libraries (Slang, Slang-RHI, mango::math, GLFW, DearImGui, rapidhash, STB) via
   `cmake/external/`.
 
@@ -39,3 +39,4 @@ resolves directories → discovers services (input, window, player, RHI, shader)
 - `rhi/` — GPU abstraction wrapping Slang-RHI. See [rhi/codemap.md](rhi/codemap.md).
 - `app/` — application layer (Application, input, window, player, renderer, UI, platform).
   See [app/codemap.md](app/codemap.md).
+

@@ -10,7 +10,7 @@ function Get-Sha256Bytes([byte[]]$Bytes) { ([BitConverter]::ToString([Security.C
 function Invoke-GitBytes([string[]]$Arguments) {
     $start = [Diagnostics.ProcessStartInfo]::new('git'); $start.UseShellExecute = $false; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }; $process = [Diagnostics.Process]::new(); $process.StartInfo = $start; [void]$process.Start(); $stderrTask = $process.StandardError.ReadToEndAsync(); $output = [IO.MemoryStream]::new(); $process.StandardOutput.BaseStream.CopyTo($output); $process.WaitForExit(); $error = $stderrTask.GetAwaiter().GetResult()
-    if ($process.ExitCode -ne 0) { throw "git $($Arguments -join ' ') failed: $error" }; $output.ToArray()
+    if ($process.ExitCode -ne 0) { throw "git $($Arguments -join ' ') failed: $error" }; Write-Output -NoEnumerate $output.ToArray() # -NoEnumerate keeps empty output as empty byte[] instead of $null
 }
 function Invoke-Git([string[]]$Arguments) { [Text.Encoding]::UTF8.GetString((Invoke-GitBytes $Arguments)) }
 function Get-PreExecutionSnapshot { [ordered]@{ head = (Invoke-Git @('rev-parse', 'HEAD')).Trim(); branch = (Invoke-Git @('symbolic-ref', '--quiet', '--short', 'HEAD')).Trim(); index_fingerprint = Get-Sha256Bytes (Invoke-GitBytes @('ls-files', '-s', '-z')) } }

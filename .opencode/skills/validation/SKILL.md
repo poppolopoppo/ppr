@@ -35,7 +35,7 @@ The skill is triggered by the orchestrator on commands such as "validate",
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Configure + build each preset | background `task` subagent per preset (general/fixer, shell access) | Heavy, parallelizable; keeps orchestrator lane free |
-| Run `EngineCoreTests` / `EngineAppTests` / `ctest` | same build subagent | Co-located with the build it validates |
+| Run `engine.tests.core` / `engine.tests.app` / `ctest` | same build subagent | Co-located with the build it validates |
 | IDE inspection gate (Step 1.5) | orchestrator (main flow, `clion` MCP) | Needs CLion MCP; uses `clion_git_status` + `clion_get_file_problems` |
 | Triage build/test failures | `@fixer` + `@oracle` | Bounded fixes and architecture calls |
 | Triage inspection problems | `@fixer` (fix) + `@oracle` (false-positive adjudication) | Same machinery as other failures |
@@ -106,14 +106,14 @@ Per-subagent instructions:
 1. Run from the repository root; `VCPKG_ROOT` is inherited from the environment
    (auto-detected by `cmake/compiler/MSVC.cmake`).
 2. Build the FULL project (no target filter → all targets, including
-   `VideoGameApp` and `run-engine-tests`):
+   `app.game` and `run-engine-tests`):
    ```powershell
    cmake --build out/build/<preset>
    ```
 3. Run the suites directly, randomized:
    ```powershell
-   out/build/<preset>/EngineCoreTests --shuffle
-   out/build/<preset>/EngineAppTests  --shuffle
+   out/build/<preset>/engine.tests.core --shuffle
+   out/build/<preset>/engine.tests.app  --shuffle
    ```
    Fallback (no `testPresets` exist in this repo, so `ctest --preset` must NOT
    be used):
@@ -207,11 +207,11 @@ All green → validation complete. Any red → Step 4.
 - **Build error:** read the error, fix the source, re-run only the affected
   preset's subagent (no need to rebuild unrelated presets).
 - **Test failure:** debug with CLion MCP tools in the main flow (preferred):
-  - `clion_xdebug_start_debugger_session(configurationName="EngineCoreTests", projectPath="E:/Code/ppr")`
+  - `clion_xdebug_start_debugger_session(configurationName="engine.tests.core", projectPath="E:/Code/ppr")`
   - `clion_xdebug_set_breakpoint(filePath=..., line=..., projectPath="E:/Code/ppr")` at the failing test
   - `clion_xdebug_control_session(action="RESUME", projectPath="E:/Code/ppr")` → inspect → step.
   - Reproduce a single failure via the CLI when CLion is unavailable:
-    `out/build/<preset>/EngineCoreTests --run-test <path>`.
+    `out/build/<preset>/engine.tests.core --run-test <path>`.
 - **Review finding:** Errors and Warnings block the change; Suggestions are
   advisory.
 - **Inspection problem:** delegate fix to `@fixer` (bounded edits via
@@ -230,7 +230,7 @@ All green → validation complete. Any red → Step 4.
 - `msvc-live` is a full uncached rebuild per cycle (no ccache; `/ZI` Debug
   codegen differs from `msvc-dev`), so budget for a full-build wait — run it
   in the parallel build batch, never serially after the other presets.
-- Build the FULL project per preset, including `VideoGameApp` — tests alone do
+- Build the FULL project per preset, including `app.game` — tests alone do
   not prove the whole configuration compiles.
 - `ctest --preset` is invalid here (no `testPresets` in CMakePresets.json);
   run executables directly or use `ctest --test-dir`.
@@ -243,3 +243,4 @@ All green → validation complete. Any red → Step 4.
   or oracle-approved-suppressed). Errors are never suppressible. Max 3
   resolution rounds. CLion unreachable → gate reported RED/SKIPPED, never
   silently green.
+
