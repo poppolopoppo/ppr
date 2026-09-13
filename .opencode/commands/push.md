@@ -1,41 +1,15 @@
 ---
-description: Run the git-push-planner skill — pre-flight review of unpushed commits, squash plan, commit-message validation, and pre-push checklist.
+description: Run git-push-planner to inspect unpushed commits and prepare a safe pre-push plan.
 ---
 
-Launch the `git-push-planner` skill against the current branch's unpushed commits.
+Load `git-push-planner` for the current branch's unpushed commits.
 
-{user's optional scope: specific commits, branches, or focus areas follow the command}
+{user's optional scope: commits, base branch, or focus area}
 
-The skill handles its own subagent routing (git state via CLion MCP / direct
-`bash`, secret-pattern scan via background `@explorer`, squash-pattern
-detection via background `@oracle`, commit-message format validation inline).
-Do not reimplement the workflow inline — load the skill and follow its
-Steps 1–4.
+Follow the skill's workflow; do not recreate it inline. It inspects history,
+checks commit messages and secrets, and writes a proposed plan. It does **not**
+run `git push`, `git rebase`, `git reset`, `git cherry-pick`, or
+`git commit --amend`, and this command must not promise a reset/replay executor.
+The user retains the final push decision and any history mutation boundary.
 
-## What this does
-
-Load the `git-push-planner` skill. Follow its Steps 1–5.
-
-## Orchestration notes
-
-- The skill produces an agent-executable squash/rebase plan in
-  `.slim/push-plan.json` but **never** runs `git push`, `git rebase`,
-  `git reset`, `git cherry-pick`, or `git commit --amend`. An executor
-  agent (or the user) replays the squash plan via `git reset --soft` +
-  cherry-pick/re-commit workflow; the user retains the final
-  `git push --force-with-lease` call as the irreversible trust boundary.
-- The executor MUST stash dirty working-tree state before `git reset --soft`
-  if the working tree is dirty — failing to do so loses the user's
-  uncommitted changes.
-- For interactive history browsing before deciding to squash, load the
-  `git-log-fast-navigation` skill (`flog` alias). For full-project compile
-  verification after the squash plan is finalized, load the `validation`
-  skill.
-
-## Sample usage
-
-```
-/push                                            # review all unpushed commits
-/push origin/main                                # review commits ahead of origin/main
-/push focus on the recent CMakeLists.txt commits # steer the squash analysis
-```
+Use `validation` separately when post-change build/test evidence is needed.
