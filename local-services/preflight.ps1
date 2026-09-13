@@ -27,10 +27,15 @@ foreach ($name in @('CRAWL4AI_IMAGE', 'SEARXNG_IMAGE', 'VALKEY_IMAGE', 'CRAWL4AI
     Require-Value $name
 }
 
-$digestPattern = '^(docker\.io|ghcr\.io)/[^\s:@/]+(?:/[^\s:@/]+)*:[^\s@]+@sha256:[0-9a-f]{64}$'
+# Legacy: this preflight served the compose stack and is not invoked by install.ps1/launch.ps1 (see README.md).
+# Floating-tag policy is canonical: :latest passes; unpinned references warn only.
+$digestPattern = '^(docker\.io|ghcr\.io)/[^\s:@/]+(?:/[^\s:@/]+)*:[^\s@]+(?:@sha256:[0-9a-f]{64})?$'
 foreach ($name in @('CRAWL4AI_IMAGE', 'SEARXNG_IMAGE', 'VALKEY_IMAGE')) {
-    if ($values[$name] -notmatch $digestPattern -or $values[$name] -match '(?i):latest@') {
-        throw "$name must be a fully-qualified registry reference with a sha256 digest."
+    if ($values[$name] -notmatch $digestPattern) {
+        throw "$name must be a fully-qualified registry reference."
+    }
+    if ($values[$name] -notmatch '@sha256:[0-9a-f]{64}$') {
+        Write-Warning "$name is not digest-pinned (floating tag accepted per policy)."
     }
 }
 
@@ -45,4 +50,4 @@ if ($values['CRAWL4AI_API_TOKEN'] -eq $values['SECRET_KEY'] -or
     throw 'Crawl4AI token, JWT secret, and SearXNG secret must be distinct.'
 }
 
-Write-Output 'Preflight passed: required values are present, image references are immutable, and secret policy checks passed.'
+Write-Output 'Preflight passed: required values are present, image references are valid (floating tags accepted per policy), and secret policy checks passed.'

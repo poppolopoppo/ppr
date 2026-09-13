@@ -10,8 +10,12 @@ $machineName = 'podman-machine-default'
 $connectionName = 'podman-machine-default'
 $crawl4aiConfig = Join-Path $PSScriptRoot 'crawl4ai\config.yml'
 $searxngSettings = Join-Path $PSScriptRoot 'searxng\settings.yml'
-$crawl4aiImage = 'docker.io/unclecode/crawl4ai:0.9.2'
+# Floating tags are intentional per user policy for crawl4ai/searxng: images track :latest, no digest pins.
+# Headroom is the Phase 1 exception: pinned to the tested 0.37.x tag (no floating :latest).
+$crawl4aiImage = 'docker.io/unclecode/crawl4ai:latest'
 $searxngImage = 'ghcr.io/searxng/searxng:latest'
+# Empty HEADROOM_IMAGE falls back to the pinned 0.37.x tag (Phase 1 posture, not :latest).
+$headroomImage = if (-not [string]::IsNullOrWhiteSpace($env:HEADROOM_IMAGE)) { $env:HEADROOM_IMAGE } else { 'ghcr.io/headroomlabs-ai/headroom:0.37.0' }
 $secretNames = @('CRAWL4AI_API_TOKEN', 'SECRET_KEY', 'SEARXNG_SECRET')
 
 $results = [System.Collections.Generic.List[string]]::new()
@@ -177,6 +181,69 @@ function Start-Crawl4AI([hashtable] $secrets) {
     Record 'crawl4ai_started' 'passed'
 }
 
+function Start-Headroom {
+    $containerName = 'headroom'
+    $exists = "$(Invoke-Podman @('ps', '-a', '--filter', "name=^$containerName$", '--format', '{{.Names}}') 2>$null)".Trim()
+    if ($exists) {
+        Invoke-Podman @('rm', '-f', $containerName) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to remove the existing Headroom container." }
+    }
+    # Keyless by default: no -e SECRET args. Provider keys stay on the host opencode
+    # process; the HTTP transport preserves the client Authorization header.
+    # Phase 1 posture (non-secret only): cache mode + coding profile, auto
+    # Kompress backend, Zen upstream hosts allowlisted. Values come from the
+    # host environment with the pinned defaults below; never from secrets.
+    # No workspace mount: pass-through proxy needs no host filesystem access.
+    $headroomMode = if (-not [string]::IsNullOrWhiteSpace($env:HEADROOM_MODE)) { $env:HEADROOM_MODE } else { 'cache' }
+    $headroomSavingsProfile = if (-not [string]::IsNullOrWhiteSpace($env:HEADROOM_SAVINGS_PROFILE)) { $env:HEADROOM_SAVINGS_PROFILE } else { 'coding' }
+    $headroomKompressBackend = if (-not [string]::IsNullOrWhiteSpace($env:HEADROOM_KOMPRESS_BACKEND)) { $env:HEADROOM_KOMPRESS_BACKEND } else { 'auto' }
+    $headroomUpstreamHosts = if (-not [string]::IsNullOrWhiteSpace($env:HEADROOM_UPSTREAM_ALLOWED_HOSTS)) { $env:HEADROOM_UPSTREAM_ALLOWED_HOSTS } else { 'opencode.ai' }
+    Invoke-Podman @(
+        'run', '-d',
+        '--name', $containerName,
+        '--restart', 'unless-stopped',
+        '-p', '127.0.0.1:8787:8787',
+        '-e', "HEADROOM_MODE=$headroomMode",
+        '-e', "HEADROOM_SAVINGS_PROFILE=$headroomSavingsProfile",
+        '-e', "HEADROOM_KOMPRESS_BACKEND=$headroomKompressBackend",
+        '-e', "HEADROOM_UPSTREAM_ALLOWED_HOSTS=$headroomUpstreamHosts",
+        '-v', 'headroom-state:/home/nonroot/.headroom',
+        $headroomImage
+    )
+    if ($LASTEXITCODE -ne 0) { throw "Failed to start Headroom container." }
+    Record 'headroom_started' 'passed'
+}
+
+function Start-HeadroomMcp {
+    $containerName = 'headroom-mcp'
+    $exists = "$(Invoke-Podman @('ps', '-a', '--filter', "name=^$containerName$", '--format', '{{.Names}}') 2>$null)".Trim()
+    if ($exists) {
+        Invoke-Podman @('rm', '-f', $containerName) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to remove the existing Headroom MCP container." }
+    }
+    # Stateless MCP bridge: --entrypoint override to `mcp serve` (flags confirmed
+    # via `mcp serve --help`: --transport http --host 127.0.0.1 --port 8788
+    # --path /mcp --proxy-url http://127.0.0.1:8787). No volume, no secrets.
+    # Proxy-URL uses container-name DNS (headroom:8787); 127.0.0.1 would be this
+    # container's own loopback, not the headroom container.
+    Invoke-Podman @(
+        'run', '-d',
+        '--name', $containerName,
+        '--restart', 'unless-stopped',
+        '-p', '127.0.0.1:8788:8788',
+        '--entrypoint', 'headroom',
+        $headroomImage,
+        'mcp', 'serve',
+        '--transport', 'http',
+        '--host', '0.0.0.0',
+        '--port', '8788',
+        '--path', '/mcp',
+        '--proxy-url', 'http://headroom:8787'
+    )
+    if ($LASTEXITCODE -ne 0) { throw "Failed to start Headroom MCP container." }
+    Record 'headroom_mcp_started' 'passed'
+}
+
 function Verify-SearXNG {
     $deadline = (Get-Date).AddMinutes(2)
     $search = $null
@@ -225,6 +292,91 @@ function Verify-Crawl4AI([hashtable] $secrets) {
     Record 'crawl4ai_sse' 'passed'
 }
 
+function Verify-Headroom {
+    # Keyless reality: the proxy gates /v1/* behind auth (401 without a token),
+    # so the primary gate is the unauthenticated readiness surface.
+    $deadline = (Get-Date).AddMinutes(2)
+    $ready = 0
+    $health = 0
+    do {
+        $ready = Request-Status 'http://127.0.0.1:8787/readyz' $null
+        $health = Request-Status 'http://127.0.0.1:8787/health' $null
+        if (($ready -ne 200 -or $health -ne 200) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+    } while (($ready -ne 200 -or $health -ne 200) -and (Get-Date) -lt $deadline)
+    if ($ready -ne 200 -or $health -ne 200) {
+        throw 'Headroom readiness check failed.'
+    }
+    Record 'headroom_ready' 'passed'
+
+    # The keyless proxy must expose the models route and enforce authentication.
+    $models = Request-Status 'http://127.0.0.1:8787/v1/models' $null
+    if ($models -ne 401) {
+        throw "Headroom models endpoint check failed; expected HTTP 401 without credentials, received $models."
+    }
+    Record 'headroom_models' 'keyless_auth_enforced_401'
+}
+
+function Invoke-McpPost([string] $uri, [string] $sessionId, [string] $body) {
+    $client = $null
+    $response = $null
+    try {
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds(15)
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $uri)
+        $request.Headers.Accept.ParseAdd('application/json, text/event-stream')
+        if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+            $request.Headers.Add('Mcp-Session-Id', $sessionId)
+        }
+        $request.Content = [System.Net.Http.StringContent]::new($body, [System.Text.Encoding]::UTF8, 'application/json')
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $session = ''
+        try {
+            $session = [string](@($response.Headers.GetValues('Mcp-Session-Id'))[0])
+        } catch {
+            $session = ''
+        }
+        return @{ Status = [int]$response.StatusCode; Body = [string]$content; Session = [string]$session }
+    } finally {
+        if ($null -ne $response) { $response.Dispose() }
+        if ($null -ne $client) { $client.Dispose() }
+    }
+}
+
+function Verify-HeadroomMcp {
+    # Streamable HTTP: initialize POST to /mcp (exact --path) establishes the
+    # session (Mcp-Session-Id response header); tools/list must then expose the
+    # headroom compress/retrieve/stats tools.
+    $mcpUri = 'http://127.0.0.1:8788/mcp'
+    $deadline = (Get-Date).AddMinutes(2)
+    $sessionId = ''
+    do {
+        try {
+            $init = Invoke-McpPost $mcpUri '' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"launch-check","version":"1.0"}}}'
+            if ($init.Status -eq 200 -and $init.Body -match '"result"' -and -not [string]::IsNullOrWhiteSpace($init.Session)) {
+                $sessionId = $init.Session
+            }
+        } catch {
+            $sessionId = ''
+        }
+        if ([string]::IsNullOrWhiteSpace($sessionId) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+    } while ([string]::IsNullOrWhiteSpace($sessionId) -and (Get-Date) -lt $deadline)
+    if ([string]::IsNullOrWhiteSpace($sessionId)) {
+        throw 'Headroom MCP initialize check failed.'
+    }
+    Record 'headroom_mcp_initialize' 'session_established'
+
+    try {
+        Invoke-McpPost $mcpUri $sessionId '{"jsonrpc":"2.0","method":"notifications/initialized"}' | Out-Null
+    } catch {
+    }
+    $tools = Invoke-McpPost $mcpUri $sessionId '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    if ($tools.Status -ne 200 -or $tools.Body -notmatch 'headroom_compress' -or $tools.Body -notmatch 'headroom_retrieve' -or $tools.Body -notmatch 'headroom_stats') {
+        throw 'Headroom MCP tools/list check failed.'
+    }
+    Record 'headroom_mcp_tools' 'compress_retrieve_stats_present'
+}
+
 function Request-Status([string] $uri, [string] $token, [string] $method = 'Get', [string] $body = '') {
     try {
         $headers = @{}
@@ -257,8 +409,8 @@ function Request-SseStatus([string] $uri, [string] $token) {
 }
 
 function Assert-HostPorts {
-    $mappings = @(Invoke-Podman @('port', 'searxng'); Invoke-Podman @('port', 'crawl4ai')) -join ' '
-    if ($mappings -notmatch '127\.0\.0\.1:8080' -or $mappings -notmatch '127\.0\.0\.1:11235') {
+    $mappings = @(Invoke-Podman @('port', 'searxng'); Invoke-Podman @('port', 'crawl4ai'); Invoke-Podman @('port', 'headroom'); Invoke-Podman @('port', 'headroom-mcp')) -join ' '
+    if ($mappings -notmatch '127\.0\.0\.1:8080' -or $mappings -notmatch '127\.0\.0\.1:11235' -or $mappings -notmatch '127\.0\.0\.1:8787' -or $mappings -notmatch '127\.0\.0\.1:8788') {
         throw 'Port mapping policy check failed.'
     }
     Record 'port_mappings' 'loopback_only'
@@ -282,12 +434,21 @@ Record 'crawl4ai_token' 'reused_or_generated_without_output'
 
 Start-SearXNG $secrets
 Start-Crawl4AI $secrets
+Start-Headroom
+Start-HeadroomMcp
 
 Start-Sleep -Seconds 5
 
-Verify-SearXNG
-Verify-Crawl4AI $secrets
-Assert-HostPorts
+try {
+    Verify-SearXNG
+    Verify-Crawl4AI $secrets
+    Verify-Headroom
+    Verify-HeadroomMcp
+    Assert-HostPorts
+} catch {
+    $results | Set-Content -LiteralPath $reportPath -Encoding utf8
+    throw
+}
 
 [Environment]::SetEnvironmentVariable('CRAWL4AI_API_TOKEN', $secrets['CRAWL4AI_API_TOKEN'], 'User')
 Record 'opencode_user_environment' 'token_persisted_after_validation_without_output'
