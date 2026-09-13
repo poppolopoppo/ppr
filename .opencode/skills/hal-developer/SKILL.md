@@ -34,7 +34,27 @@ and recon to `@explorer`. It never writes HAL `.cpp` files directly.
   macros inside its platform-specific source
   (`lib/engine/core/hal/<platform>/`). The compiler only builds the selected
   platform's files, so such macros are unnecessary and must not leak into
-  source.
+   source.
+- **Use value-based PPR feature conditions.** For engine configuration, write
+  `#if PPR_ENABLE_ASSERTIONS` / `#if PPR_ENABLE_DEBUG`, never presence checks.
+  Platform identity remains a CMake source-selection concern, not a C++
+  preprocessor branch.
+
+## Mandatory pre-implementation / review checklist
+
+- Identify each OS handle, mapping, callback context, and owning wrapper; state who closes/cancels it and when observers become invalid.
+- Treat documented throwing acquisition APIs as existing compatibility surface,
+  not the preferred contract for new APIs. New no-value lifecycle or operational
+  actions use `std::error_code`; new value-producing recoverable operations use
+  `std::expected<T, std::error_code>` or the established equivalent. Preserve
+  polling/count boundary semantics and no-throw cleanup.
+- Define shutdown ordering: first detach or disable callbacks, listeners, and
+  submissions and prevent new work; then cancel, wake, drain, or join in-flight
+  work; then close/free native resources. Best-effort shutdown attempts
+  independent cleanup and returns the first `std::error_code` rather than
+  hiding it behind later cleanup.
+- Ensure callbacks cannot race teardown: use explicit cancellation/detachment and do not invoke user callbacks while internal locks are held.
+- Test the public behavior contract, including unsupported-platform stubs and failure cleanup. Register new module/test sources in CMake; defer shared conventions to `AGENTS.md`, `module-architect`, and `code-reviewer`.
 
 ## 1. Architecture Overview
 
@@ -189,6 +209,12 @@ Every Windows HAL `.cpp` file includes this in its global module fragment:
 ```cpp
 #pragma once
 
+#include "pP/Macros.h"
+
+#if not PPR_ENABLE_DEBUG
+#   define NOPROFILER
+#endif
+
 #ifndef WIN32_LEAN_AND_MEAN
 #   define WIN32_LEAN_AND_MEAN
 #endif
@@ -206,9 +232,6 @@ Every Windows HAL `.cpp` file includes this in its global module fragment:
 #define NOCOMM
 #define NOKANJI
 #define NOHELP
-#ifdef NDEBUG
-#   define NOPROFILER
-#endif
 #define NODEFERWINDOWPOS
 #define NOMCX
 #define NOCRYPT
@@ -232,7 +255,6 @@ Every Windows HAL `.cpp` file includes this in its global module fragment:
 #undef min
 #undef max
 
-#include "pP/Macros.h"
 ```
 
 ## 3. Required API Surface
@@ -1326,17 +1348,9 @@ and build system in this skill as a reference.
 - Darwin: `mmap`/`madvise`, `_NSGetExecutablePath`, `pthread_setname_np`, `task_threads`.
 - Generic: `std::jthread` timers, polling directory snapshots, `std::filesystem` directory iteration.
 
-## Subagent routing
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Locate existing HAL patterns / APIs | `@explorer` | Template discovery |
-| Implement a new platform / area | `@fixer` + `@oracle` | Bounded impl + architecture |
-| Generate `PPR_UNIT_TEST` bodies | `@fixer` | Test scaffolding |
-| Compile + run HAL tests | background build subagent | Reuse validation lane |
+## Execution handoff
 
-## OMO feature wiring
-- **Per-agent `skills`/`mcps` allow-lists** — `@fixer` `skills: []`; restrict HAL edits to `lib/engine/core/hal/<platform>/` + `cmake/HAL.cmake` via allow-list.
-- **Background orchestration** — run HAL tests as a background subagent in parallel with impl; orchestrator waits on the Job Board, not polling.
-- **Session reuse** — reuse a specialist session only when its session key matches `(agent-type, hal-<platform>-<area>, lib/engine/core/hal/<platform>/Core.HAL.<platform>.<Area>.cpp)`; MRU is a tiebreaker only. Invalidate sessions older than the threshold or whose key no longer matches. Never reuse mutating/debug sessions — prefer fresh for impl; read-only recon sessions (`@explorer`) are safe to reuse.
-- **Custom agent** — optionally a `hal-impl` custom agent that scaffolds the 10 platform `.cpp` files from this skill's checklist.
-- **`orchestratorPrompt` routing** — trigger on 'add HAL platform', 'implement <area> for <platform>', 'HAL test for…'.
+This skill defines HAL implementation and test procedure only. The active OMO
+preset is the sole authority for actor selection, permissions, tool access,
+parallel work, and session reuse. Apply the procedure only through the active
+configuration; this document grants or routes none of them.
