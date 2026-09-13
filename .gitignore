@@ -45,6 +45,8 @@
 build/
 Build/
 build-*/
+!.opencode/skills/build-system/
+!.opencode/skills/build-system/SKILL.md
 
 # CMake generated files
 .cmake/

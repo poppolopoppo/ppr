@@ -10,7 +10,7 @@ A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](http
 - **Custom Memory Management** - GPA (General Purpose Allocator), Arena, PagePool, BitmapTree, and Slab allocators
 - **Type-Safe Containers** - `StableVector`, `SparseVector`, `HashMap`, `HashSet`, `Stack`, `RingBuffer`
 - **Platform Abstraction Layer** - Unified HAL for filesystem, memory, async I/O, and OS interactions
-- **Shader Compilation** - Slang shader compilation with hot-reload and background compilation
+- **Shader Compilation** - Slang shader compilation
 - **Dear ImGui Integration** - UI service with listener-based input dispatch
 - **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST`, fork/crash support, CTest integration
 - **Assertions System** - Tiered assertions (`PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE`)
@@ -18,7 +18,8 @@ A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](http
 
 ## Project Structure
 
-> **Note**: For the canonical and most up-to-date architecture overview, module descriptions, and partition counts, see [AGENTS.md](AGENTS.md) → "Architecture Overview." The structure below is a high-level summary.
+For a navigable repository map, see [codemap.md](codemap.md). Contributors
+should follow the engineering contract in [AGENTS.md](AGENTS.md).
 
 ```
 ppr/
@@ -32,7 +33,7 @@ ppr/
 │   │   ├── hal/       #   Platform abstraction (windows, linux, darwin, generic)
 │   │   └── function/  #   Function wrappers (Callback, function_ref)
 │   ├── math/          # Math module (wraps mango::math)
-│   ├── shader/        # Shader compilation and hot-reload
+│   ├── shader/        # Shader compilation
 │   ├── rhi/           # Rendering hardware interface (wraps slang-rhi)
 │   ├── app/           # Application layer with GLFW + ImGui
 │   └── tests/         # Unit tests (core, app, shared)
@@ -44,7 +45,9 @@ ppr/
 ## Prerequisites
 
 - **CMake** 4.3 or later
-- **C++23 compliant compiler** (MSVC 17.8+, GCC 14+, Clang 18+)
+- **C++23 compiler**: MSVC 17.8+ or Clang 18+ for supported PPR module-build
+  presets. GCC 14+ may meet the language prerequisite, but the hidden `gcc-*`
+  presets are non-module and are not supported validation paths.
 - **Vulkan SDK** (for Vulkan backend)
 - **Git** with submodules support
 
@@ -62,7 +65,9 @@ cmake --preset msvc-dev
 cmake --build out/build/msvc-dev
 ```
 
-Available presets: `msvc-dev` (default Windows), `msvc-rel`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`.
+Common presets are `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-dev`,
+`clang-cl-rel`, `clang-dev`, and `clang-rel`. The hidden `gcc-*` presets do not
+support C++ modules.
 
 ### Developer Mode
 
@@ -116,23 +121,6 @@ Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://
 
 ## Usage
 
-### Basic Application
-
-```cpp
-import engine.core;
-import engine.math;
-import engine.shader;
-import engine.rhi;
-import engine.app;
-import std;
-
-int main(int argc, char* argv[]) {
-    pP::Application app("MyGame", std::span{argv, argc});
-    std::error_code err = app.run();
-    return err.value();
-}
-```
-
 ### Using Math Module
 
 ```cpp
@@ -160,19 +148,9 @@ auto handle = sparse.add(42.0f);
 |--------|-------------|
 | `engine.core` | Core exports (assert, arena, containers, enums, hal, hash_map, memory, strings) |
 | `engine.math` | Math types and functions (float2-4, float3x3, float4x4, Quaternion, easing) |
-| `engine.shader` | Shader compilation, hot-reload, IShaderService |
+| `engine.shader` | Shader compilation and `IShaderService` |
 | `engine.rhi` | Rendering interface (device, buffers, shaders, command buffers) |
 | `engine.app` | Application framework (window, input, lifecycle, UI) |
-
-## Coding Standards
-
-- **No raw loops** - Prefer algorithms and ranges
-- **`constexpr` everywhere** - Compile-time evaluation when possible
-- **`[[nodiscard]]`** - Mark functions returning important values
-- **`PPR_FORCE_INLINE`** - Hot-path optimization
-- **`noexcept`** - Mark non-throwing functions
-- **Comments** - Only for genuinely surprising or non-obvious code that cannot be clarified through naming or structure alone
-- **Macros** - Only from `include/pP/Macros.h` (assertions, logging, inlining, unit tests)
 
 ## Testing
 
@@ -186,7 +164,7 @@ They share a common test infrastructure library (`engine.tests`) in `lib/engine/
 ### Via CTest
 
 ```bash
-ctest --preset msvc-dev
+ctest --test-dir out/build/msvc-dev --output-on-failure
 ```
 
 ### Direct Execution
@@ -209,7 +187,7 @@ out/build/msvc-dev/engine.tests.app --run-test App.Player
 
 ```cpp
 PPR_UNIT_TEST(my_test) {
-    PPR_ASSERT(condition);
+    PPR_TEST_ASSERT(condition);
 };
 ```
 
@@ -220,7 +198,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! Please ensure:
-- Code follows the project's coding standards
+- Code follows [AGENTS.md](AGENTS.md)
 - New features include unit tests
 - CMake builds cleanly with `PPR_ENABLE_DEVELOPER_MODE=ON`
 
