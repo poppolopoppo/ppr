@@ -1,4 +1,4 @@
-# Complete /app/config.yml for the Crawl4AI 0.9.2 service image.
+# Complete /app/config.yml for the Crawl4AI service image (floating :latest tag).
 app:
   host: 0.0.0.0
   port: 11235
