@@ -26,20 +26,25 @@ appropriate, then delegates usage-search to `@explorer`, implementation to
 `@fixer`, and thread-safety review to `@oracle`. It never directly edits source
 files.
 
-### Subagent Routing
+## Mandatory pre-implementation / review checklist
 
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Map `RawChannel`/`IContext`/`select()`/`IoRequest` usage across the codebase | `@explorer` | Fast recon of integration points |
-| Implement or refactor concurrency code | `@fixer` | Bounded edit of a single primitive |
-| Review thread-safety design (ordering, lifetime, lock-free correctness) | `@oracle` | Correctness judgment |
+- Assign ownership and lifetime for every channel, event, context, request, worker, and callback capture; stable-address in-flight objects outlive completion or cancellation acknowledgement.
+- Specify boundary outcomes (`full`, `empty`, `closed`, cancellation, timeout, and OS error) and the caller's drain/retry/propagation rule.
+- Inject a clock, deadline source, or tick input into time-dependent logic and tests; do not make a worker, timeout policy, or test depend on an implicit wall clock.
+- Write the shutdown sequence: first detach or disable callbacks,
+  subscriptions, and submissions and prevent new work; then cancel, wake,
+  drain, or join in-flight channels, I/O, and workers; then release storage and
+  other resources, preserving the first cleanup error.
+- Document each cross-thread publication with its release/acquire (or stronger) pairing; preserve the established ordering unless a proof and tests justify a change.
+- Never invoke an externally controlled callback while holding an internal lock. Define unsubscribe/detach ownership and test cancellation-versus-notify, close-versus-send, and destruction races.
+- Add behavior-contract tests and register new module/test sources in CMake. Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
 
-## OMO Feature Wiring
+## Execution handoff
 
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []` (or limited to `clion_search_symbol`/`clion_search_text`); `@fixer` `skills: []`, `mcps: []`. Optionally per-primitive custom agents (`conc-signal`, `conc-context`) with narrow MCP allow-lists.
-- **Background orchestration** — fire parallel `@explorer` greps for each primitive usage (RawChannel, Signal, IContext, IoRequest) to map integration points before implementation.
-- **Session reuse** — cache query results per session to avoid re-grepping the same primitives; re-run only when concurrency code changes.
-- **`orchestratorPrompt` routing** — trigger on "use RawChannel", "cancel via IContext", "signal multiplexing", "async I/O wait".
+This skill defines concurrency and teardown procedure only. The active OMO
+preset is the sole authority for actor selection, permissions, tool access,
+parallel work, and session reuse. Apply the procedure only through the active
+configuration; this document grants or routes none of them.
 
 ---
 
@@ -490,22 +495,28 @@ auto val = ctx->value("user_id");
 ### 3.6 WithDeadline and WithTimeout
 
 ```cpp
-// Cancel at a specific time
-auto deadline = TimerManager::mainTimer().now() + std::chrono::seconds(30);
-auto ctx = context::withDeadline(parent, deadline);
+// Inject the timer used for scheduling and clock reads.
+TimerExplicitClock clock{};
+TimerManager timer{clock};
+
+// Cancel at a specific time.
+auto deadline = timer.now() + std::chrono::seconds(30);
+auto ctx = context::withDeadline(parent, deadline, timer);
 // ctx->pollEvent() == true when deadline passes
 
 // Cancel after a duration
-auto ctx = context::withTimeout(parent, std::chrono::milliseconds(150));
+auto ctx = context::withTimeout(parent, std::chrono::milliseconds(150), timer);
 
 // Custom error code on deadline
-auto ctx = context::withDeadlineCause(parent, deadline, my_error_code);
+auto ctx = context::withDeadlineCause(parent, deadline, my_error_code, timer);
 
 // Custom error code on timeout
-auto ctx = context::withTimeoutCause(parent, delay, my_error_code);
+auto ctx = context::withTimeoutCause(parent, delay, my_error_code, timer);
 ```
 
-- `withDeadline` and `withTimeout` accept an optional `TimerManager &timer` parameter (defaults to `TimerManager::mainTimer()`).
+- Pass an injected `TimerManager &timer` to `withDeadline` and `withTimeout`.
+  The default `TimerManager::mainTimer()` overload is legacy convenience only,
+  not the preferred contract for new code or tests.
 - `withDeadline` and `withTimeout` both derive from `CancelContext`.
 - They schedule a timer callback via `TimerManager::schedule()`.
 - The timer uses a `weak_ptr` to the deadline context, so it is safe if the
@@ -726,7 +737,7 @@ export namespace pP::tests {
     namespace MyFeature {
         PPR_UNIT_TEST(test_name) {
             // test body
-            PPR_ASSERT(condition);
+            PPR_TEST_ASSERT(condition);
         };
     }
 
@@ -746,13 +757,13 @@ PPR_UNIT_TEST(single_threaded_send_receive) {
     RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
 
     auto hdr = chan.producerReserve(sizeof(int));
-    PPR_ASSERT(hdr.has_value());
+    PPR_TEST_ASSERT(hdr.has_value());
     *static_cast<int *>(hdr->data()) = 42;
     chan.producerSubmit(*hdr);
 
     auto read = chan.consumerAcquire(RawChannel::peek_without_blocking);
-    PPR_ASSERT(read.has_value());
-    PPR_ASSERT(*static_cast<int *>(read->data()) == 42);
+    PPR_TEST_ASSERT(read.has_value());
+    PPR_TEST_ASSERT(*static_cast<int *>(read->data()) == 42);
     chan.consumerRelease(*read);
 };
 ```
@@ -769,7 +780,7 @@ more (the second batch wraps in the virtual-memory ring):
 std::jthread producer([&chan] {
     for (int i = 0; i < num_messages; ++i) {
         auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
-        PPR_ASSERT(hdr.has_value());
+        PPR_TEST_ASSERT(hdr.has_value());
         *static_cast<int *>(hdr->data()) = i;
         chan.producerSubmit(*hdr);
     }
@@ -777,8 +788,8 @@ std::jthread producer([&chan] {
 
 for (int i = 0; i < num_messages; ++i) {
     auto hdr = chan.consumerAcquire();
-    PPR_ASSERT(hdr.has_value());
-    PPR_ASSERT(*static_cast<int *>(hdr->data()) == i);
+    PPR_TEST_ASSERT(hdr.has_value());
+    PPR_TEST_ASSERT(*static_cast<int *>(hdr->data()) == i);
     chan.consumerRelease(*hdr);
 }
 ```
@@ -817,11 +828,11 @@ then consumer sees `error_closed`:
 **PulseEvent**:
 ```cpp
 PulseEvent event;
-PPR_ASSERT(!event.pollEvent());
+    PPR_TEST_ASSERT(not event.pollEvent());
 event.emitEvent();
-PPR_ASSERT(event.pollEvent());
+    PPR_TEST_ASSERT(event.pollEvent());
 event.resetEvent();
-PPR_ASSERT(!event.pollEvent());
+    PPR_TEST_ASSERT(not event.pollEvent());
 ```
 
 **Subscribe-then-emit** — the `subscribeEvent` path that detects already-fired
@@ -832,7 +843,7 @@ event.emitEvent();
 // Subscribe after emit — subscriber is notified immediately
 auto signal = select(event);
 auto result = signal.poll();
-PPR_ASSERT(result.has_value());
+    PPR_TEST_ASSERT(result.has_value());
 ```
 
 **Signal multi-event** — verify correct `variant` index:
@@ -841,7 +852,7 @@ PulseEvent a, b;
 auto signal = select(a, b);
 a.emitEvent();
 auto result = signal.poll();
-PPR_ASSERT(result->index() == 0u);   // a is index 0
+    PPR_TEST_ASSERT(result->index() == 0u);   // a is index 0
 signal.reset(*result);
 ```
 
@@ -853,8 +864,8 @@ auto [parent, cancel_parent] = context::withCancel(context::background());
 auto [child, cancel_child] = context::withCancel(parent);
 
 cancel_parent();
-PPR_ASSERT(child->pollEvent());                      // propagates down
-PPR_ASSERT(!parent->pollEvent());                    // child cancel does not affect parent
+    PPR_TEST_ASSERT(child->pollEvent());                      // propagates down
+    PPR_TEST_ASSERT(not parent->pollEvent());                // child cancel does not affect parent
 ```
 
 **WithoutCancel**:
@@ -862,17 +873,22 @@ PPR_ASSERT(!parent->pollEvent());                    // child cancel does not af
 auto [parent, cancel_parent] = context::withCancel(context::background());
 auto child = context::withoutCancel(parent);
 cancel_parent();
-PPR_ASSERT(!child->pollEvent());                     // severed
-PPR_ASSERT(!child->error());
+    PPR_TEST_ASSERT(not child->pollEvent());                 // severed
+    PPR_TEST_ASSERT(not child->error());
 ```
 
-**Timeout** — requires ticking the timer:
+**Timeout** — tick an injected timer deterministically:
 ```cpp
-auto ctx = context::withTimeout(context::background(), std::chrono::milliseconds(150));
-while (not ctx->pollEvent()) {
-    std::this_thread::yield();
-    TimerManager::mainTimer().tick();
-}
+TimerExplicitClock clock{};
+clock.reset(TimePoint{});
+TimerManager timer{clock};
+timer.tick();
+
+auto ctx = context::withTimeout(
+    context::background(), std::chrono::milliseconds(150), timer);
+clock.tick(TimePoint{} + std::chrono::milliseconds(150));
+timer.tick();
+PPR_TEST_ASSERT(ctx->pollEvent());
 ```
 
 ### 6.5 Testing I/O Integration
@@ -889,8 +905,8 @@ port.pollCompletions();
 
 auto signal = select(req);
 auto result = signal.poll();
-PPR_ASSERT(result.has_value());
-PPR_ASSERT(req.bytesTransferred() == kContent.size());
+    PPR_TEST_ASSERT(result.has_value());
+    PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
 ```
 
 **select() with timer**:
@@ -898,7 +914,7 @@ PPR_ASSERT(req.bytesTransferred() == kContent.size());
 PulseEvent timer;
 auto signal = select(req, timer);
 auto result = signal.poll();
-PPR_ASSERT(result->index() == 0u);   // I/O completed, not timer
+    PPR_TEST_ASSERT(result->index() == 0u);   // I/O completed, not timer
 ```
 
 **Cancel in-flight**:
@@ -907,7 +923,7 @@ port.read(req, file, buf, 0u);
 bool was = req.cancel();
 port.pollCompletions();
 if (was) {
-    PPR_ASSERT(!req.pollEvent());    // cancelled, no completion
+        PPR_TEST_ASSERT(not req.pollEvent());    // cancelled, no completion
 }
 ```
 
@@ -1065,7 +1081,9 @@ hal::io::wake(port_handle);  // wake the I/O thread
 
 ```cpp
 auto [ctx, cancel] = context::withCancel(context::background());
-auto deadline = context::withTimeout(ctx, std::chrono::seconds(5));
+TimerExplicitClock clock{};
+TimerManager timer{clock};
+auto deadline = context::withTimeout(ctx, std::chrono::seconds(5), timer);
 
 auto result = do_work_with_timeout(deadline);
 if (deadline->pollEvent()) {
