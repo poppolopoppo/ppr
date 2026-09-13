@@ -21,21 +21,20 @@ The orchestrator consults it to determine which allocator tier is appropriate
 for a given scenario, then delegates implementation to `@fixer` and design
 review to `@oracle`. It never directly edits source files.
 
-## Subagent routing
+## Mandatory pre-implementation / review checklist
 
-| Step | Delegate to | Why |
-|------|-------------|-----|
-| Identify allocator need (scenario → tier) | `@explorer` | Fast recon of codebase usage patterns |
-| Apply allocator changes / edits | `@fixer` | Bounded implementation of composition/wrappers |
-| Review allocator choice / design | `@oracle` | Trade-off judgment (LIFO vs pooled, thread safety, etc.) |
+- Name the allocation owner, every non-owning observer, and the exact teardown point; an arena reset/restore never destroys objects.
+- State boundary failure semantics: `{nullptr, 0}` for fallible `noexcept` allocation, the documented `Slab` exception, and no-throw deallocation.
+- Prove shutdown order: stop users, destroy live objects, release observers, then reset/free backing storage; no callback may retain storage past this point.
+- For `safe_ptr`, retain a real owner (`unique_ptr`, value member, service, or allocation handle); it is only an observer and becomes raw-pointer-equivalent in release, so debug assertions are not a lifetime mechanism.
+- Add behavior-contract tests for success, OOM/overflow where exposed, LIFO/watermark boundaries, and teardown. Register any new module/test source in its CMake target. Defer global style and review policy to `AGENTS.md`, `module-architect`, and `code-reviewer`.
 
-## OMO feature wiring
+## Execution handoff
 
-- **Per-agent `skills`/`mcps` allow-lists** — `@explorer` `skills: []`, `mcps: []`; `@fixer` `skills: []`, `mcps: []`; `@oracle` needs `skills: ["simplify", "code-reviewer"]` (explicit grant in `~/.config/opencode/oh-my-opencode-slim.json` or project-local override).
-- **Custom agent** — optionally a `memory-advisor` custom agent (prompt + `orchestratorPrompt`) that answers "which allocator for X" using this skill's tables.
-- **Background orchestration** — fire parallel `@explorer` greps for different scenarios (TLS, large buffer, fixed buffer); reconcile on the Job Board.
-- **Session reuse** — cache lookup results; re-run only when allocator tiers change.
-- **`orchestratorPrompt` routing** — trigger on "choose allocator", "allocator for scratch", "allocator for large buffer", "arena composition".
+This skill defines allocator-selection and lifecycle procedure only. The active
+OMO preset is the sole authority for actor selection, permissions, tool access,
+parallel work, and session reuse. Apply the procedure only through the active
+configuration; this document grants or routes none of them.
 
 ---
 
@@ -441,7 +440,7 @@ mem::LocalCache<64u, mem::GPA, 4u> cache;
 void *a = cache.allocateRaw(64u, max_align_v).ptr; // from GPA
 cache.deallocateRaw(a, 64u, max_align_v);          // cached in MRU ring
 void *b = cache.allocateRaw(64u, max_align_v).ptr; // returns a — fast path
-PPR_ASSERT(a == b);
+    // In a test, use PPR_TEST_ASSERT(a == b); production code must not rely on an assertion for correctness.
 ```
 
 Constraints:
@@ -728,8 +727,9 @@ conveniently annotate a fully-empty container in two passes.
 ## 10. safe_ptr Usage
 
 `safe_ptr<T>` provides debug-mode lifetime checking for objects that inherit
-from `safe_object`. In debug builds, it maintains a reference count on the
-pointee and asserts on destruction/move/copy that no dangling references exist.
+from `safe_object`. It is non-owning: a separately owned object must outlive all
+observers. In debug builds, it maintains a reference count on the pointee and
+asserts on destruction/move/copy that no dangling references exist.
 
 ```cpp
 class MyNode : public pP::safe_object {
@@ -740,7 +740,8 @@ public:
 };
 
 void example() {
-    pP::safe_ptr<MyNode> ptr(new MyNode(42));
+    auto owner = std::make_unique<MyNode>(42);
+    pP::safe_ptr<MyNode> ptr(owner.get());
     pP::safe_ptr<MyNode> copy = ptr; // increments ref count
 
     // Access
@@ -753,11 +754,14 @@ void example() {
     // Upcast
     pP::safe_ptr<safe_object> base = std::move(ptr).upcast<safe_object>();
     // ptr is now null after the move+upcast
+    copy = nullptr;
+    base = nullptr; // observers detach before `owner` destroys MyNode
 }
 ```
 
-In release builds (`!PPR_ENABLE_DEBUG`), `safe_ptr<T>` becomes a simple
-typedef to `T*` and `safe_object` is an empty base — zero overhead.
+In release builds (`not PPR_ENABLE_DEBUG`), `safe_ptr<T>` has raw-pointer
+semantics and `safe_object` is an empty base — zero overhead. Lifetime must
+therefore be guaranteed by the owner in every build configuration.
 
 Key operations:
 - Construction from raw pointer (`safe_ptr<T>(ptr)`) increments ref count.
@@ -830,7 +834,7 @@ mem::PMR pmr(alloc); // unwraps to materialize()
 
 // PMR objects wrapping the same allocator type compare equal
 mem::PMR a(mem::GPA{}), b(mem::GPA{});
-PPR_ASSERT(a == b);
+// In a unit test, verify equality with PPR_TEST_ASSERT(a == b).
 ```
 
 ---
@@ -931,18 +935,15 @@ but do not trap access — use the ASAN preset for active detection.
 
 ## 17. Constraints and Best Practices
 
-1. **No raw loops**: Use `AllocatorTraits` typed methods instead of raw
-   `allocateRaw`/`deallocateRaw` calls whenever possible.
-
-2. **RAII over manual**: Prefer `Allocation<T, AllocatorT>` or
+1. **RAII over manual**: Prefer `Allocation<T, AllocatorT>` or
    `ScopedArena` over manual allocate/deallocate pairs.
 
-3. **LIFO discipline**: Arena allocators (`Slab`, `Arena`, `ScratchPad`) are
+2. **LIFO discipline**: Arena allocators (`Slab`, `Arena`, `ScratchPad`) are
    LIFO only. resize/deallocate only works for the most recent allocation.
    Use `watermark()`/`restore()` for batch free; do not rely on per-object
    deallocation.
 
-4. **Thread safety**:
+3. **Thread safety**:
    - `GPA`, `OS`: Thread-safe (delegate to global heap/OS).
    - `HugePage`, `SmallPage`: Thread-safe (TLS + global pool with locks).
    - `Arena`, `Slab`, `InSituSlab`: **Not thread-safe** — single-threaded use only.
@@ -950,12 +951,12 @@ but do not trap access — use the ASAN preset for active detection.
    - `LocalCache`: **Not thread-safe** — thread-local use only.
    - `ScratchPad`: Thread-safe (each thread has its own TLS arena).
 
-5. **Poison all paths**: Every `allocateRaw` should `unpoisonUninitialized`
+4. **Poison all paths**: Every `allocateRaw` should `unpoisonUninitialized`
    the returned block. Every `deallocateRaw` should `poisonDestroyed` it.
    Every reserve/reset should `poisonReserved` the freed region. The built-in
    allocators already follow this; follow the same pattern in custom allocators.
 
-6. **Stateless vs stateful**:
+5. **Stateless vs stateful**:
    - Stateless allocators (`GPA`, `OS`, `HugePage`, `SmallPage`, `ScratchPad`,
      `InSitu`, `LocalCache`, `Pooling`) are empty and can be default-constructed
      anywhere. They are `use_inplace_v = true`.
@@ -963,19 +964,19 @@ but do not trap access — use the ASAN preset for active detection.
      constructed explicitly and passed by reference. Wrap in `Allocator<>` to
      get reference semantics.
 
-7. **Block size alignment**: When using `Pooling` or `LocalCache`, the
+6. **Block size alignment**: When using `Pooling` or `LocalCache`, the
    alignment must not exceed block size. The assertion `alignForward(alignment, block_size_v) == block_size_v`
    is enforced.
 
-8. **No exceptions in deallocate**: All `deallocateRaw` implementations are
+7. **No exceptions in deallocate**: All `deallocateRaw` implementations are
    `noexcept`. `allocateRaw` should be `noexcept` and signal failure by
    returning `{nullptr, 0}` — except for `Slab` which throws `std::bad_alloc`.
 
-9. **`checked_cast` can be used for `std::size_t` → `u32` conversions** in
+8. **`checked_cast` can be used for `std::size_t` → `u32` conversions** in
    arena offsets and block counts. The `safe_narrowing` tag type asserts
    round-trip fidelity.
 
-10. **Contiguous container annotation** is required for any container that
+9. **Contiguous container annotation** is required for any container that
     manages a live prefix within a larger buffer (like `std::vector` or
     `Arena`'s slab). Call `annotateContiguousContainer(storage, capacity, old_live, new_live)`
     every time the live region boundary moves.
