@@ -253,8 +253,15 @@ Parameters: `files` (required, array of project-relative paths), `startLine`
 (optional, 1-based inclusive), `endLine` (optional, 1-based inclusive),
 `projectPath` (required).
 
-Use after edits to normalize formatting; applies IDE formatting rules (the
-project's `.clang-format` / IDE settings).
+### Required C++ edit lifecycle
+1. Complete all functional writes.
+2. Invoke `clion_reformat_file` exactly on every touched C++ file.
+3. Perform only read-only verification and diff inspection.
+
+If a post-format write is necessary, repeat the reformat step before final
+inspection. Do not issue text edits after the final reformat. The active project
+CLion C/C++ Code Style is the formatting authority; `.clang-format` is only a
+tracked reference and configuration file.
 
 ## 4. Building & Running
 
@@ -499,10 +506,10 @@ clion_open_file_in_editor(filePath="lib/engine/core/Core.Memory.cppm", projectPa
 ## Guidelines
 
 - **Search:** Always use `clion_search_symbol` for finding types/functions. Use `clion_search_text` for content search. Use `clion_search_file` for file discovery.
-- **Build:** Always use CLion run configurations instead of raw `cmake --build` bash commands when possible. After edits, validate with `clion_get_file_problems` on the touched files and reformat with `clion_reformat_file`.
+- **Build:** Always use CLion run configurations instead of raw `cmake --build` bash commands when possible. After edits, validate touched files with `clion_get_file_problems` during the required C++ edit lifecycle.
 - **Debug:** ALWAYS use `clion_xdebug_*` tools for debugging. Never use printf/logging for debugging when the debugger is available.
 - **Diagnose:** Use `clion_get_file_problems` to check for errors before and after edits.
-- **Edit:** Use `clion_apply_patch` for structured multi-file edits; `clion_create_new_file` for new files; `clion_reformat_file` (batch + line-range) for formatting.
+- **Edit:** Use `clion_apply_patch` for structured multi-file edits and `clion_create_new_file` for new files. Follow the required C++ edit lifecycle above; use `clion_reformat_file` in batch for all touched C++ files.
 - **VCS:** Use `clion_git_status` for precise changed-file enumeration; `clion_get_repositories` for multi-root detection.
 - **Dynamic dispatch:** Use `clion_execute_tool` when a tool you need is not directly exposed in your function list. Unknown tool names dump the full registry — use as a drift detector.
 - **Batch:** When multiple independent CLion calls are needed, batch them in parallel (e.g. `clion_search_symbol` + `clion_get_run_configurations` in the same message).
