@@ -27,6 +27,7 @@
         "model": "openai/gpt-5.6-sol",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -48,13 +49,15 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "explorer": {
         "model": "openai/gpt-5.6-luna",
         "variant": "low",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -93,7 +96,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -130,6 +134,7 @@
         "model": "openai/gpt-5.6-sol-fast",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -151,13 +156,15 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "explorer": {
         "model": "openai/gpt-5.6-luna-fast",
         "variant": "low",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -196,7 +203,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -235,6 +243,7 @@
         "temperature": 0.4,
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -251,6 +260,7 @@
         "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.2,
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -340,6 +350,7 @@
         "model": "opencode/qwen3.6-plus",
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -356,6 +367,7 @@
         "model": "opencode/deepseek-v4-flash",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -372,7 +384,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "designer": {
@@ -404,7 +417,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -441,6 +455,7 @@
         "temperature": 0.4,
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -457,6 +472,7 @@
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.2,
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -473,7 +489,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "designer": {
@@ -507,7 +524,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -547,6 +565,7 @@
         "temperature": 0.4,
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -563,6 +582,7 @@
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.2,
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -579,7 +599,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "designer": {
@@ -613,7 +634,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -652,6 +674,7 @@
         "model": "opencode/qwen3.6-plus",
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -668,6 +691,7 @@
         "model": "opencode/deepseek-v4-flash",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -684,7 +708,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "designer": {
@@ -716,7 +741,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -752,6 +778,7 @@
         "model": "opencode/qwen3.6-plus",
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -768,6 +795,7 @@
         "model": "opencode/deepseek-v4-flash",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -784,7 +812,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "designer": {
@@ -816,7 +845,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -852,6 +882,7 @@
         "model": "openai/gpt-5.6-sol-fast",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -872,13 +903,15 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "explorer": {
         "model": "opencode/deepseek-v4-flash",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -914,7 +947,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -950,6 +984,7 @@
         "model": "opencode/minimax-m3",
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -970,13 +1005,15 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "explorer": {
         "model": "opencode/deepseek-v4-flash",
         "variant": "high",
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -1013,7 +1050,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {
@@ -1050,6 +1088,7 @@
         "temperature": 0.4,
         "variant": "max",
         "skills": [
+          "clion-tools",
           "simplify",
           "code-reviewer",
           "concurrency-patterns",
@@ -1071,13 +1110,15 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "explorer": {
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.2,
         "skills": [
+          "clion-tools",
           "git-log-fast-navigation"
         ],
         "mcps": [
@@ -1115,7 +1156,8 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "headroom"
         ]
       },
       "observer": {

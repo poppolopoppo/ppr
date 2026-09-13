@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@opencode-ai/plugin": "1.18.18",
+    "headroom-opencode": "0.37.0",
     "mcp-searxng": "1.15.0"
   }
 }
