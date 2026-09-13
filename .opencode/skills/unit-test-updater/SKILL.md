@@ -2,25 +2,40 @@
 name: unit-test-updater
 description: >
   Analyzes local git modifications and updates or adds C++ unit tests
-  to reflect API changes. Designed for the pP engine's PPR_UNIT_TEST
+  for changed observable behavior. Designed for the pP engine's PPR_UNIT_TEST
   framework. Use this skill whenever the user says "update tests",
-  "add tests for my changes", "get 100% coverage", or "test the new code".
+  "add tests for my changes", or "test the new code".
 ---
 
 # Unit Test Updater
 
-Analyze unstaged/staged changes and produce matching unit tests that
-cover every new or changed function, type, branch, and edge case in
-the pP engine's PPR_UNIT_TEST framework.
+Analyze unstaged/staged changes and produce matching unit tests for each changed
+observable behavior contract in the pP engine's `PPR_UNIT_TEST` framework.
 
 ## Contract
 
-This skill analyzes unstaged/staged git changes and produces matching
-unit tests that cover every new or changed function, type, branch,
-and edge case in the pP engine's PPR_UNIT_TEST framework. It does
+This skill analyzes unstaged/staged git changes and produces matching unit tests
+for changed observable behavior contracts in the pP engine's
+`PPR_UNIT_TEST` framework. It does
 NOT modify production code. The orchestrator plans coverage and
 delegates all file edits to `@fixer`. It never writes test `.cppm`
 files directly.
+
+## Mandatory pre-implementation / review checklist
+
+- Define the changed observable behavior contract first: inputs, boundary/error
+  result, state change, ownership transfer, and post-shutdown behavior.
+- Test public or otherwise observable boundaries, not private representation or
+  call sequencing. Cover internal regressions through their public boundary.
+  Drive time-dependent behavior with an injected clock/tick rather than sleeps
+  or the wall clock.
+- Keep test fixtures explicit about lifetime: use values, RAII handles, engine allocators, or owning smart pointers; detach observers/callbacks before their owner is destroyed.
+- For asynchronous code, test cancellation, callback detachment, and shutdown
+  ordering: detach or disable callbacks/listeners/submissions and prevent new
+  work; cancel, wake, drain, or join; then release resources while preserving
+  the first cleanup error. Avoid timing-dependent assumptions.
+- Use `PPR_TEST_ASSERT` for test assertions in every build configuration; do not use raw `new`/`delete` where engine allocator or lifetime rules apply.
+- Follow the test module convention (`engine.tests.core:<partition>` or `engine.tests.app:<partition>`), umbrella registration, and matching CMake source registration. Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
 
 ---
 
@@ -44,20 +59,14 @@ file(s) corresponding to the modified source:
 
 ## Step 2 — Analyse the diff
 
-For each changed function, type, or constant, classify the nature
-of the change:
+For each changed observable behavior, classify the required test action:
 
 | Change type | Testing action |
 |---|---|
-| New public function | Add a `PPR_UNIT_TEST` block exercising all paths |
-| New type/class | Add a namespace + `PPR_UNIT_TEST` per key operation |
-| Modified signature | Update existing test to match; cover new parameters |
-| New overload | Add test for new overload signatures |
-| New enum/constant | Test value, bitwise ops for bitmask enums, `hashValue` |
-| Bug fix | Add a test that reproduces the bug; assert fix |
-| Logic extracted from a dishonest caller into an honest function | Add tests exercising it via injected dependencies (fixed PRNG seed, injected time/context) |
-| Internal/private change | No test needed (test through public API) |
-| Deleted API | Remove/update corresponding test |
+| Changed observable behavior | Add or update a focused test at the public boundary |
+| Bug fix | Add a public-boundary regression test that reproduces the prior behavior and asserts the fix |
+| Internal/private change | Test only when it changes observable behavior; exercise it through the public boundary |
+| Deleted API | Remove or update tests for the affected public contract |
 
 ---
 
@@ -74,48 +83,45 @@ of the change:
 7. **Parent tests:** `PPR_UNIT_TEST(subsystem) { _.recurse(Group::sub_test); };`
 8. **Top-level registration:** In `Core.Tests.cppm`, add `import :<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
-10. **Code style:** No comments, `constexpr` everywhere, `[[nodiscard]]`, no raw loops, prefer algorithms/ranges
+10. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
 12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... };` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
 13. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... };` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
 
-### Test coverage checklist for each function under test:
+### Behavioral test selection
 
-- Normal/expected inputs (happy path)
-- Boundary values (empty containers, zero, max, min, null)
-- Edge cases (single element, full capacity, aliasing)
-- Error conditions (overflow, invalid state, null pointer)
-- Constexpr evaluation (mark tests `constexpr` where possible)
-- `noexcept` guarantee (verify if function is marked noexcept)
-- State mutation (check before/after for mutating functions)
-- Iterator validity (where iterators are involved)
-- Equality/comparison (if types define `==`, `<=>`, `hashValue`)
-- Relocatability trait (if type should be relocatable)
-- Guarded/precondition edge cases (inputs that trigger `PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE` — use `UnitTest::expect_fail`)
-- Crash-expected paths (use-after-free, double-free, ASAN poison reads — use `UnitTest::expect_crash`)
-- Honest-function determinism: test extracted honest functions via injected dependencies — fixed PRNG seed for reproducibility, injected time/context instead of reading clock/globals
-- Framework hooks stay thin delegators: test the delegated engine function, not the hook body
+- Select normal, boundary, error, lifecycle, and teardown cases that prove the
+  changed contract; do not prescribe tests per function, type, branch, or
+  incidental implementation detail.
+- Use `expect_fail` only for active precondition guards and `expect_crash` only
+  for process-level failures. Do not turn assertion behavior into a release
+  runtime contract.
 
 ### Guarded edge cases
 
-Every function has preconditions guarded by `PPR_ASSERT`, `PPR_VERIFY`, or `PPR_ENSURE`. These must be tested too:
+Test only observable preconditions. Engine `PPR_ASSERT`/`PPR_VERIFY` may become
+assumptions in release, so an `expect_fail` case for such a guard must be
+configuration-scoped; do not represent it as a portable runtime error contract.
 
 ```cpp
-// Precondition assertion — expected to throw, test passes on assertion
+// Debug/profile guard — expected to throw only where that guard is active.
 PPR_UNIT_TEST(null_parameter_triggers_assertion, UnitTest::expect_fail) {
     some_function(nullptr);  // triggers PPR_ASSERT(arg != nullptr)
 };
 
 // Memory safety violation — expected to crash the process
 PPR_UNIT_TEST(use_after_free_triggers_asan, UnitTest::expect_crash) {
-    auto *p = new int{42};
-    delete p;
+    int *p{};
+    {
+        mem::Allocation<int, mem::GPA> allocation;
+        p = allocation.create(42);
+    }
     volatile auto x = *p;  // ASAN use-after-free
 };
 ```
 
 Rules:
-- Use `expect_fail` for **precondition guards** — the test body throws via `PPR_ASSERT`/`PPR_VERIFY`/`PPR_ENSURE`, the runner catches the exception and records a pass.
+- Use `expect_fail` for **active precondition guards** — the test body throws via the guard, the runner catches the exception and records a pass. Do not use it to claim a release runtime error contract for `PPR_ASSERT`/`PPR_VERIFY`.
 - Use `expect_crash` for **process-level failures** — the test spawns in a child process; a non-zero exit (crash) is a pass, a clean exit is a failure.
 - Guarded-edge-case tests live alongside the happy-path tests in the same test file and parent group.
 
@@ -155,10 +161,11 @@ If CLion is unavailable, use CMake presets directly:
 
 ```powershell
 cmake --build --preset msvc-dev --target engine.tests.core
-ctest --preset msvc-dev
+ctest --test-dir out/build/msvc-dev --output-on-failure
 ```
 
-Use the appropriate preset for your platform (`msvc-dev`, `clang-dev`, `gcc-dev`).
+Use `msvc-dev` or `clang-dev` as applicable; do not use a `gcc-*` preset for
+module-build verification.
 
 If any test fails, treat the failure as a bug — do not weaken assertions.
 
@@ -180,7 +187,7 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 
 ---
 
-## Subagent routing
+## Coordination
 
 | Step | Delegate to | Why |
 |------|-------------|-----|
@@ -192,28 +199,9 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 
 ---
 
-## OMO feature wiring
+## Execution handoff
 
-### Per-agent `skills`/`mcps` allow-lists
-
-- `@fixer` needs no extra skills; operates within its bounded implementation mandate.
-- `@explorer` needs `skills: []`, `mcps: []` — fast codebase recon only.
-- Other agents inherit their default allow-lists from OMO-slim configuration.
-
-### Background orchestration
-
-- Build and run the new tests as a background subagent, reconciled before reporting.
-- Use `validation` skill to compile every platform-relevant config and run engine tests.
-- Reconcile results against the orchestrator's coverage plan.
-
-### Session reuse
-
-- Reuse the `@explorer` session when scanning multiple changed subsystems, keyed by `(agent-type, target area, file-glob)`.
-- Invalidate sessions older than a threshold or whose key no longer matches the current task.
-- Read-only recon sessions are safe to reuse; mutating/debug sessions prefer fresh sessions.
-
-### `orchestratorPrompt` routing
-
-- Trigger on "add tests", "update tests for my changes", "test the new code".
-- Orchestrator delegates test-update work to this skill; `@fixer` executes the bounded file edits.
-
+This skill defines test-analysis and test-update procedure only. The active OMO
+preset is the sole authority for actor selection, permissions, tool access,
+parallel work, validation execution, and session reuse. Apply the procedure only
+through the active configuration; this document grants or routes none of them.
