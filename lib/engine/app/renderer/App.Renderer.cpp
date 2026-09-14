@@ -26,9 +26,7 @@ namespace pP {
         [[nodiscard]] std::error_code inspectAttachment_(
             rhi::ITextureView *const view,
             AttachmentInfo *const out_info) noexcept {
-            if (view == nullptr
-                or out_info == nullptr)
-            [[unlikely]] {
+            if (view == nullptr or out_info == nullptr) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -51,10 +49,7 @@ namespace pP {
                         ? texture_desc.format
                         : view_desc.format;
 
-            if (format == rhi::Format::Undefined
-                or
-            texture_desc.sampleCount == 0u)
-            [[unlikely]] {
+            if (format == rhi::Format::Undefined or texture_desc.sampleCount == 0u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -72,12 +67,9 @@ namespace pP {
         [[nodiscard]] std::error_code validateMatchingAttachment_(
             const AttachmentInfo &reference,
             const AttachmentInfo &candidate) noexcept {
-            if (reference.m_extent.x != candidate.m_extent.x
-                or
-            reference.m_extent.y != candidate.m_extent.y
-            or
-            reference.m_sample_count != candidate.m_sample_count)
-            [[unlikely]] {
+            if (reference.m_extent.x != candidate.m_extent.x or
+                reference.m_extent.y != candidate.m_extent.y or
+                reference.m_sample_count != candidate.m_sample_count) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             return default_value_v;
@@ -110,7 +102,7 @@ namespace pP {
     std::error_code Renderer::shutdown() {
         PPR_LOG(Renderer, info, "Renderer shut down", {
             {"surfaces", m_surfaces.size()},
-        });
+            });
 
         std::error_code first_err{};
         PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->waitOnHost());
@@ -118,10 +110,7 @@ namespace pP {
         // flat_map iterates a pair-of-references proxy: take it by value.
         for (auto entry: m_surfaces) {
             SurfaceRecord &record = entry.second;
-            if (record.m_configured
-                and
-            record.m_surface)
-            {
+            if (record.m_configured and record.m_surface) {
                 PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, record.m_surface->unconfigure());
                 record.m_configured = false;
             }
@@ -148,16 +137,12 @@ namespace pP {
         if (not m_graphics_queue or not m_rhi_service) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (render_pass.colorAttachmentCount != 0u
-            and
-        render_pass.colorAttachments == nullptr)
-        {
+        if (render_pass.colorAttachmentCount != 0u and
+            render_pass.colorAttachments == nullptr) {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        if (render_pass.colorAttachmentCount == 0u
-            and
-        render_pass.depthStencilAttachment == nullptr)
-        {
+        if (render_pass.colorAttachmentCount == 0u and
+            render_pass.depthStencilAttachment == nullptr) {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
@@ -166,9 +151,7 @@ namespace pP {
 
         std::optional<AttachmentInfo> reference_attachment;
         const auto validate_attachment = [&](const AttachmentInfo &attachment) -> std::error_code {
-            if (not
-                reference_attachment.has_value())
-            {
+            if (not reference_attachment.has_value()) {
                 reference_attachment = attachment;
                 return default_value_v;
             }
@@ -187,16 +170,11 @@ namespace pP {
                 AttachmentInfo resolve_info{};
                 PPR_RETURN_ERROR_ON_FAIL(Renderer, inspectAttachment_(attachment.resolveTarget, &resolve_info));
 
-                if (attachment_info.m_sample_count <= 1u
-                    or
-                resolve_info.m_sample_count != 1u
-                or
-                resolve_info.m_extent.x != attachment_info.m_extent.x
-                or
-                resolve_info.m_extent.y != attachment_info.m_extent.y
-                or
-                resolve_info.m_format != attachment_info.m_format)
-                [[unlikely]] {
+                if (attachment_info.m_sample_count <= 1u or
+                    resolve_info.m_sample_count != 1u or
+                    resolve_info.m_extent.x != attachment_info.m_extent.x or
+                    resolve_info.m_extent.y != attachment_info.m_extent.y or
+                    resolve_info.m_format != attachment_info.m_format) [[unlikely]] {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
             }
@@ -207,13 +185,12 @@ namespace pP {
             AttachmentInfo depth_stencil_info{};
             PPR_RETURN_ERROR_ON_FAIL(Renderer, inspectAttachment_(
                 render_pass.depthStencilAttachment->view, &depth_stencil_info));
+
             PPR_RETURN_ERROR_ON_FAIL(Renderer, validate_attachment(depth_stencil_info));
             depth_stencil_format = depth_stencil_info.m_format;
         }
 
-        if (not
-            reference_attachment.has_value())
-        [[unlikely]] {
+        if (not reference_attachment.has_value()) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
@@ -235,7 +212,7 @@ namespace pP {
 
         // Pass scope: end() must precede finish().
         {
-            PPR_DEFER{
+            PPR_DEFER {
                 pass->popDebugGroup();
                 pass->end();
             };
@@ -267,7 +244,7 @@ namespace pP {
                     .m_viewport = viewport,
                     .m_scissor = scissor,
                     .m_target_extent = reference_attachment->m_extent,
-                }));
+                    }));
             }
         }
 
@@ -296,13 +273,10 @@ namespace pP {
         const Window &window,
         const std::initializer_list<DrawSubmission> draws,
         const SurfaceRenderPass &surface_pass) {
-        if (not m_graphics_queue or not m_rhi_service.isValid())
-        [[unlikely]] {
+        if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not
-            window.m_handle)
-        [[unlikely]] {
+        if (not window.m_handle) [[unlikely]] {
             return std::make_error_code(std::errc::no_such_device_or_address);
         }
 
@@ -310,17 +284,15 @@ namespace pP {
         if (const auto it = m_surfaces.find(window.m_handle); it == m_surfaces.end()) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Renderer, createWindowSurface_(window, &record));
         } else {
-            if (it->second.m_extent.x != window.m_framebuffer_size.x
-                or
-            it->second.m_extent.y != window.m_framebuffer_size.y)
-            [[unlikely]] {
+            if (it->second.m_extent.x != window.m_framebuffer_size.x or
+                it->second.m_extent.y != window.m_framebuffer_size.y) [[unlikely]] {
                 PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(it->second, window.m_framebuffer_size));
             }
             record = std::addressof(it->second);
         }
 
         if (not PPR_ENSURE(record->m_configured)) {
-            return default_value_v;
+            return make_error_code(std::errc::resource_unavailable_try_again);
         }
 
         rhi::ComPtr<rhi::ITexture> image;
@@ -354,22 +326,17 @@ namespace pP {
     }
 
     std::error_code Renderer::destroyWindowSurface(const Window &window) {
-        if (not
-            window.m_handle)
-        [[unlikely]] {
+        if (not window.m_handle) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
         return destroyWindowSurface_(window.m_handle);
     }
 
     std::error_code Renderer::createWindowSurface_(const Window &window, SurfaceRecord **out_record) {
-        if (out_record == nullptr
-            or
-            not m_rhi_service.isValid()
-        or
-        window.m_native == nullptr
-        or
-        window.m_handle == nullptr)
+        if (out_record == nullptr or
+            not m_rhi_service.isValid() or
+            window.m_native == nullptr or
+            window.m_handle == nullptr)
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -391,21 +358,19 @@ namespace pP {
         PPR_LOG(Renderer, info, "window surface created", {
             {"width", it->second.m_extent.x},
             {"height", it->second.m_extent.y},
-        });
+            });
         return default_value_v;
     }
 
     std::error_code Renderer::resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent) {
         PPR_ASSERT(record.m_surface);
 
-        if (new_extent.x <= 0
-            or
-        new_extent.y <= 0)
-        {
+        if (new_extent.x <= 0 or new_extent.y <= 0) {
             if (record.m_configured) {
                 PPR_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->unconfigure());
                 record.m_configured = false;
             }
+
             record.m_extent = new_extent;
             return default_value_v;
         }
@@ -430,27 +395,25 @@ namespace pP {
             {"format", rhi::getFormatInfo(record.m_surface->getInfo().preferredFormat).name},
             {"width", record.m_extent.x},
             {"height", record.m_extent.y},
-        });
+            });
         return default_value_v;
     }
 
     std::error_code Renderer::destroyWindowSurface_(const WindowHandle window_handle) {
         const auto it = m_surfaces.find(window_handle);
         if (it == m_surfaces.end()) {
-            return default_value_v;
+            return std::make_error_code(std::errc::invalid_argument);
         }
 
         SurfaceRecord record = std::move(it->second);
         m_surfaces.erase(it);
 
         std::error_code first_error{};
-        if (record.m_configured
-            and
-        record.m_surface)
-        {
+        if (record.m_configured and record.m_surface) {
             PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_error, record.m_surface->unconfigure());
             record.m_configured = false;
         }
+
         record.m_surface.setNull();
         return first_error;
     }
