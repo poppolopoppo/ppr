@@ -318,25 +318,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 const float2 &content_scale = viewport.getWindow().m_content_scale;
                 io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
 
-#if 0 // TODO: useless?
-                if (m_input_service.isValid()) [[likely]] {
-                    const KeyboardDevice &kbd = m_input_service->getKeyboard();
-
-                    io.AddKeyEvent(ImGuiMod_Ctrl,
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_control) ||
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_control));
-                    io.AddKeyEvent(ImGuiMod_Shift,
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_shift) ||
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_shift));
-                    io.AddKeyEvent(ImGuiMod_Alt,
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_alt) ||
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_alt));
-                    io.AddKeyEvent(ImGuiMod_Super,
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_super) ||
-                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_super));
-                }
-#endif
-
                 ++m_frame_revision;
                 ImGui::NewFrame();
                 return default_value_v;
@@ -675,6 +656,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         EInputMessageResponse ImGuiService::onInputCharacter_(const hal::native::char_t codepoint) noexcept {
+            // Ctrl+key produces a control character (e.g. Ctrl+A -> 0x01), not text.
+            if (ImGui::GetIO().KeyCtrl) {
+                return EInputMessageResponse::unhandled;
+            }
             if (ImGuiIO &io = ImGui::GetIO(); io.WantTextInput) {
                 char8_t utf8_input[8]{};
                 const std::size_t utf8_len = hal::native::utf8(
@@ -695,7 +680,31 @@ float4 fragmentMain(PsInput input) : SV_Target {
             std::visit(overloaded(
                 [&](const EKeyboardKey keyboard_key) noexcept {
                     if (const ImGuiKey imgui_key = keyboardKeyToImGuiKey(keyboard_key); imgui_key != ImGuiKey_None) {
-                        ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
+                        const bool is_key_down = event.getDigitalValue();
+
+                        ImGuiIO &io = ImGui::GetIO();
+                        io .AddKeyEvent(imgui_key, is_key_down);
+
+                        // handle modifier keys:
+                        switch (keyboard_key) {
+                            case EKeyboardKey::left_control:
+                            case EKeyboardKey::right_control:
+                                io.AddKeyEvent(ImGuiMod_Ctrl, is_key_down);
+                                break;
+                            case EKeyboardKey::left_shift:
+                            case EKeyboardKey::right_shift:
+                                io.AddKeyEvent(ImGuiMod_Shift, is_key_down);
+                                break;
+                            case EKeyboardKey::left_alt:
+                            case EKeyboardKey::right_alt:
+                                io.AddKeyEvent(ImGuiMod_Alt, is_key_down);
+                                break;
+                            case EKeyboardKey::left_super:
+                            case EKeyboardKey::right_super:
+                                io.AddKeyEvent(ImGuiMod_Super, is_key_down);
+                                break;
+                            default: break;
+                        }
                     }
                 },
                 [&](const EGamepadButton gamepad_button) noexcept {
@@ -721,7 +730,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
         void ImGuiService::onInputMouseWheel_(const InputActionEvent &event, const InputKey &) noexcept {
             const float2 wheel_delta = event.getAxis2DValue().m_absolute;
-            ImGui::GetIO().AddMousePosEvent(wheel_delta.x, wheel_delta.y);
+            ImGui::GetIO().AddMouseWheelEvent(wheel_delta.x, wheel_delta.y);
         }
 
         void ImGuiService::onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept {
