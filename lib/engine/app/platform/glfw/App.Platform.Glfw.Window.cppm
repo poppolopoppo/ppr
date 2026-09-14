@@ -7,6 +7,9 @@ import :service.window;
 import engine.core;
 
 export namespace pP {
+    class Application;
+    using SharedApplication = safe_ptr<const Application>;
+
     class GlfwWindow final : public IWindowService {
         [[nodiscard]] std::error_code initializeMonitors_();
 
@@ -32,7 +35,9 @@ export namespace pP {
         safe_ptr<const Window> m_focused_window{};
         safe_ptr<const WindowViewport> m_main_viewport{};
 
-        std::error_code initialize();
+        SharedApplication m_application{};
+
+        std::error_code initialize(const Application &app);
 
         std::error_code shutdown();
 

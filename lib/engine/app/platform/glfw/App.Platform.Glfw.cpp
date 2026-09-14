@@ -125,7 +125,7 @@ namespace pP {
 
         if (not domain.m_is_headless) {
             m_window_service = std::make_unique<GlfwWindow>();
-            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_window_service->initialize());
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_window_service->initialize(app));
             app_services.insert_or_assign<IWindowService>(m_window_service.get());
         }
 

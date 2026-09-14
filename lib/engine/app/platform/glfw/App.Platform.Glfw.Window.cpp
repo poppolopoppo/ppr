@@ -80,10 +80,12 @@ namespace pP {
 
     static safe_ptr<GlfwWindow> g_glfw_window{};
 
-    std::error_code GlfwWindow::initialize() {
+    std::error_code GlfwWindow::initialize(const Application &app) {
         g_glfw_window.reset(this);
 
         PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, initializeMonitors_());
+
+        m_application.reset(std::addressof(app));
         return default_value_v;
     }
 
@@ -100,6 +102,7 @@ namespace pP {
 
         ::glfwSetMonitorCallback(nullptr);
 
+        m_application.reset();
         g_glfw_window.reset();
 
         std::error_code first_err{};
@@ -275,6 +278,11 @@ namespace pP {
 
         if (service.m_main_window == &window) {
             service.m_main_window.reset();
+
+            // closing the main window also closes the application:
+            if (service.m_application.isValid()) {
+                service.m_application->requestExit(default_value_v);
+            }
         }
     }
 
@@ -489,6 +497,19 @@ namespace pP {
 
     /// -> window handling:
 
+    static void *glfwGetNativeWindowHandle(GLFWwindow *p_glfw_window) {
+        if (p_glfw_window != nullptr) [[likely]] {
+#ifdef _WIN32
+            return ::glfwGetWin32Window(p_glfw_window);
+#elif defined(__APPLE__)
+            return (void*)::glfwGetCocoaWindow(p_glfw_window);
+#else
+            return nullptr;
+#endif
+        }
+        return nullptr;
+    }
+
     std::error_code GlfwWindow::createWindow(
         WindowModel &&definition,
         safe_ptr<Window> *window_write_ref) {
@@ -547,7 +568,7 @@ namespace pP {
 
         ::glfwSetDropCallback(p_glfw_window.get(), &glfwDropCallback_);
 
-        const NativeWindowHandle native_handle{::glfwGetWin32Window(p_glfw_window.get())};
+        const NativeWindowHandle native_handle{glfwGetNativeWindowHandle(p_glfw_window.get())};
 
         auto window = std::make_unique<Window>(
             WindowHandle{p_glfw_window.release()},
@@ -607,6 +628,11 @@ namespace pP {
 
         SharedWindow old_main_window{m_main_window};
         m_main_window = std::move(window);
+
+        if (m_main_window.isValid()) {
+
+        }
+
         return old_main_window;
     }
 
@@ -705,7 +731,7 @@ namespace pP {
     }
 
     void *GlfwWindow::getWindowNativeHandle(const Window &window) const noexcept {
-        return ::glfwGetWin32Window(glfwHandle_(window.m_handle));
+        return glfwGetNativeWindowHandle(glfwHandle_(window.m_handle));
     }
 
     // ------------------------------------------------------------------
