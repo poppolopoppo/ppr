@@ -19,11 +19,11 @@ namespace pP {
                 case debug:
                     return PPR_LITERAL_FOR(CharT, "👾");
                 case verbose:
-                    return PPR_LITERAL_FOR(CharT, "👁️");
+                    return PPR_LITERAL_FOR(CharT, "🗣️️");
                 case info:
-                    return PPR_LITERAL_FOR(CharT, "ℹ️");
+                    return PPR_LITERAL_FOR(CharT, "🔹");
                 case emphasis:
-                    return PPR_LITERAL_FOR(CharT, "👉");
+                    return PPR_LITERAL_FOR(CharT, "🟢");
                 case warning:
                     return PPR_LITERAL_FOR(CharT, "⚠️");
                 case error:
@@ -188,7 +188,7 @@ namespace pP {
             entry.m_site.m_category.m_name.view(),
             entry.m_message, entry.m_params);
 
-        if (entry.m_site.m_verbosity >= ELevel::warning) {
+        if (entry.m_site.m_verbosity >= ELevel::error) {
             std::println(std::cout, "    \u2514\u2500 {}({}): {}",
                 entry.m_site.m_location.file_name(),
                 entry.m_site.m_location.line(),
@@ -196,7 +196,7 @@ namespace pP {
         }
 
         if (entry.m_site.m_verbosity > ELevel::verbose or
-            (entry.m_site.m_category.m_flags & Category::immediate)) {
+            entry.m_site.m_category.m_flags & Category::immediate) {
             std::cout.flush();
         }
 #endif
@@ -229,11 +229,11 @@ namespace pP {
 
     bool Log::Emitter::shouldBreakDebugger() const noexcept {
         if (m_verbosity >= ELevel::warning &&
-            (m_category.m_flags & Category::break_on_warning)) [[unlikely]] {
+            m_category.m_flags & Category::break_on_warning) [[unlikely]] {
             return true;
         }
         if (m_verbosity >= ELevel::error &&
-            (m_category.m_flags & Category::break_on_error)) [[unlikely]] {
+            m_category.m_flags & Category::break_on_error) [[unlikely]] {
             return true;
         }
         return false;
