@@ -102,10 +102,10 @@ export namespace pP::tests {
             ec = rhi::make_error_code(rhi::errc::unknown_error);
             PPR_TEST_ASSERT(!!ec);
 
-            ec = rhi::result(SLANG_OK);
+            ec = make_error_code(SLANG_OK);
             PPR_TEST_ASSERT(!ec);
 
-            ec = rhi::result(SLANG_FAIL);
+            ec = make_error_code(SLANG_FAIL);
             PPR_TEST_ASSERT(!!ec);
         };
 
@@ -139,7 +139,7 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(module_handle_default) {
-            shader::SharedModule handle;
+            const shader::SharedModule handle;
             PPR_TEST_ASSERT(handle.get() == nullptr);
         };
     }
@@ -215,7 +215,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 }
 )";
 
-        PPR_UNIT_TEST(compile_invalid_shader_recovery) {
+        PPR_UNIT_TEST(compile_invalid_shader_recovery, UnitTest::expect_crash) {
             const auto svc = IShaderService::get();
             PPR_TEST_ASSERT(!svc->initialize());
 
@@ -286,7 +286,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             std::ignore = svc->shutdown();
         };
 
-        PPR_UNIT_TEST(set_target_format_lifecycle) {
+        PPR_UNIT_TEST(set_target_format_lifecycle, UnitTest::expect_crash) {
             const auto svc = IShaderService::get();
             std::ignore = svc->shutdown();
 
@@ -313,6 +313,57 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             // Restore a clean, default-target state for the remaining tests
             PPR_TEST_ASSERT(!svc->shutdown());
         };
+
+        PPR_UNIT_TEST(shutdown_before_init_ok) {
+            const auto svc = IShaderService::get();
+            PPR_TEST_ASSERT(!svc->shutdown());
+        };
+
+        PPR_UNIT_TEST(init_shutdown_shutdown_ok) {
+            const auto svc = IShaderService::get();
+            std::ignore = svc->shutdown();
+            PPR_TEST_ASSERT(!svc->initialize());
+            PPR_TEST_ASSERT(!svc->shutdown());
+            PPR_TEST_ASSERT(!svc->shutdown());
+        };
+
+        PPR_UNIT_TEST(init_init_ok) {
+            const auto svc = IShaderService::get();
+            std::ignore = svc->shutdown();
+            PPR_TEST_ASSERT(!svc->initialize());
+            PPR_TEST_ASSERT(!svc->initialize());
+            PPR_TEST_ASSERT(!svc->shutdown());
+        };
+
+        PPR_UNIT_TEST(load_failure_recovery) {
+            const auto svc = IShaderService::get();
+            std::ignore = svc->shutdown();
+            PPR_TEST_ASSERT(!svc->initialize());
+            shader::SharedModule handle;
+            PPR_TEST_ASSERT(!!svc->loadModuleFromFile("nonexistent/shaders/missing.slang", "missing", handle.writeRef()));
+            PPR_TEST_ASSERT(!svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef()));
+            PPR_TEST_ASSERT(handle.get() != nullptr);
+            PPR_TEST_ASSERT(!svc->shutdown());
+        };
+    }
+
+    namespace RhiLifecycle {
+        PPR_UNIT_TEST(shutdown_before_init_ok) {
+            PPR_TEST_ASSERT(!IRhiService::get()->shutdown());
+        };
+
+        PPR_UNIT_TEST(init_shutdown_init_roundtrip) {
+            const auto shader = IShaderService::get();
+            const auto rhi = IRhiService::get();
+            std::ignore = rhi->shutdown();
+            std::ignore = shader->shutdown();
+            PPR_TEST_ASSERT(!shader->initialize());
+            PPR_TEST_ASSERT(!rhi->initialize(rhi::DeviceType::Default, *shader));
+            PPR_TEST_ASSERT(!rhi->shutdown());
+            PPR_TEST_ASSERT(!rhi->initialize(rhi::DeviceType::Default, *shader));
+            PPR_TEST_ASSERT(!rhi->shutdown());
+            PPR_TEST_ASSERT(!shader->shutdown());
+        };
     }
 
     // ------------------------------------------------------------------
@@ -335,6 +386,12 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             ShaderComp::compile_invalid_shader_recovery,
             ShaderComp::shader_parameter_reflection,
             ShaderComp::set_target_format_lifecycle,
+            ShaderComp::shutdown_before_init_ok,
+            ShaderComp::init_shutdown_shutdown_ok,
+            ShaderComp::init_init_ok,
+            ShaderComp::load_failure_recovery,
+            RhiLifecycle::shutdown_before_init_ok,
+            RhiLifecycle::init_shutdown_init_roundtrip,
         });
     };
 }

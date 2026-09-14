@@ -21,8 +21,8 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
   `loadModuleFromSource(name, path, source, out)` (via `loadModuleFromSourceString`). Both set
   `m_modules_loaded = true` on success. `initialize()`/`setTargetFormat()` build the session with
   `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`.
-- No hot-reload, no file watching, no background compile thread — loading is synchronous; diagnostics flow
-  through `Diagnose` → `PPR_LOG`.
+- Loading is synchronous, with no file watching or background compile thread;
+  diagnostics flow through `Diagnose` → `PPR_LOG`.
 
 ## Flow
 

@@ -72,7 +72,7 @@ export namespace pP::shader {
     /// Borrowed view of a module compiled by (and owned by) the active session.
     /// The session keeps each module alive until `IShaderService::shutdown()`; callers
     /// must not release it — releasing a session-owned module double-frees it at shutdown.
-    export class SharedModule {
+    class SharedModule {
     public:
         SharedModule() noexcept = default;
 
@@ -100,6 +100,18 @@ export namespace pP::shader {
     private:
         slang::IModule *m_module = nullptr;
     };
+}
+
+export namespace Slang {
+    // ------------------------------------------------------------------
+    // hasFailed() for rhi::Result — ADL target from pP namespace
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] constexpr bool hasFailed(const Result status) noexcept {
+        return SLANG_FAILED(status);
+    }
+
+    using pP::shader::make_error_code;
 }
 
 export namespace pP {

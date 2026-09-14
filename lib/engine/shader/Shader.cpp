@@ -14,7 +14,7 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(Shader, info, none)
 
     namespace shader {
-        class SlangErrorCategory : public std::error_category {
+        class SlangErrorCategory final : public std::error_category {
         public:
             [[nodiscard]] const char *name() const noexcept override { return "slang"; }
 
@@ -147,12 +147,17 @@ namespace pP {
             // ------------------------------------------------------------------
 
             std::error_code initialize() override {
-                if (m_global_session) {
-                    PPR_LOG(Shader, warning, "Shader service already initialized");
-                    return errc::ok;
+                if (m_global_session or m_session) {
+                    if (m_global_session and m_session) {
+                        PPR_LOG(Shader, warning, "Shader service already initialized");
+                        return errc::ok;
+                    }
+                    PPR_LOG(Shader, error, "Shader service in inconsistent state — expected both sessions or neither");
+                    return errc::internal_fail;
                 }
 
-                PPR_RETURN_ERROR_ON_FAIL(Shader, createGlobalSession(m_global_session.writeRef()));
+                ComPtr<IGlobalSession> global_session{};
+                PPR_RETURN_ERROR_ON_FAIL(Shader, createGlobalSession(global_session.writeRef()));
 
                 // Create a compilation session for the active backend's target format
                 // Set row-major matrix layout for maximum portability across APIs (D3D, Vulkan, OpenGL, Metal)
@@ -165,11 +170,15 @@ namespace pP {
                 session_desc.targets = &target_desc;
                 session_desc.targetCount = 1;
 
-                PPR_RETURN_ERROR_ON_FAIL(Shader, m_global_session->createSession(session_desc, m_session.writeRef()));
+                ComPtr<ISession> session{};
+                PPR_RETURN_ERROR_ON_FAIL(Shader, global_session->createSession(session_desc, session.writeRef()));
+
+                m_global_session = std::move(global_session);
+                m_session = std::move(session);
 
                 PPR_LOG(Shader, info, "Shader service initialized", {
                     {"target", static_cast<int>(m_target_format)}
-                });
+                    });
                 return errc::ok;
             }
 
@@ -183,7 +192,7 @@ namespace pP {
                     return errc::invalid_arg;
                 }
                 if (target_format == m_target_format) {
-                    return errc::ok;
+                    return default_value_v;
                 }
 
                 m_target_format = target_format;
@@ -203,27 +212,24 @@ namespace pP {
 
                 PPR_LOG(Shader, info, "shader target format set", {
                     {"target", static_cast<int>(m_target_format)}
-                });
-                return errc::ok;
+                    });
+                return default_value_v;
             }
 
             std::error_code shutdown() override {
-                if (not m_global_session) {
-                    return errc::uninitialized;
-                }
-
                 if (m_modules_loaded) {
                     PPR_LOG(Shader, warning, "shutting down with loaded modules — modules are owned by the session and will be destroyed with it");
                 }
+
                 m_modules_loaded = false;
                 m_session.setNull();
                 m_global_session.setNull();
 
                 PPR_LOG(Shader, info, "Shader service shutdown");
-                return errc::ok;
+                return default_value_v;
             }
 
-            IGlobalSession *getGlobalSession() const noexcept override {
+            [[nodiscard]] IGlobalSession *getGlobalSession() const noexcept override {
                 return m_global_session.get();
             }
 
@@ -246,11 +252,11 @@ namespace pP {
                     source_blob,
                     diagnostics.writeRef());
 
-                if (not *out_module) {
+                if (not*out_module) {
                     PPR_LOG(Shader, error, "failed to compile shader module from file", {
                         {"name", module_name},
                         {"path", path_string}
-                    });
+                        });
                     return make_error_code(errc::invalid_arg);
                 }
 
@@ -270,11 +276,11 @@ namespace pP {
                     source.data(),
                     diagnostics.writeRef());
 
-                if (not *out_module) {
+                if (not*out_module) {
                     PPR_LOG(Shader, error, "failed to compile shader module from source", {
                         {"name", module_name},
                         {"path", path}
-                    });
+                        });
                     return make_error_code(errc::invalid_arg);
                 }
 
