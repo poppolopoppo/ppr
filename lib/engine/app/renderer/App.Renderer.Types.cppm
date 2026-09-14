@@ -41,6 +41,7 @@ export namespace pP {
         rhi::IRenderPassEncoder &m_pass;
         const RenderPipelineKey &m_render_pipeline_key;
         rhi::Viewport m_viewport{};
+        rhi::ScissorRect m_scissor{};
         int2 m_target_extent{};
     };
 
