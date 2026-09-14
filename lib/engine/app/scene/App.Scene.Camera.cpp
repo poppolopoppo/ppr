@@ -73,7 +73,7 @@ namespace pP {
             m_actual_state.m_revision = 0;
         }
 
-        m_actual_state.m_viewport_size = vector_cast<float>(client_rect.m_extent);
+        m_actual_state.m_viewport_size = toFloat(client_rect.m_extent);
         m_actual_state.m_aspect_ratio = client_rect.getAspectRatio();
 
         m_actual_state.m_right = quaternionTransform(new_model.m_basis, math::axis_x);
@@ -161,5 +161,11 @@ namespace pP {
 
         PPR_ASSERT(not isNan(m_angular_velocity));
         PPR_ASSERT(not isNan(m_translational_velocity));
+    }
+
+    void Camera::updateModel(const TimeSpan dt, ICameraController &controller, const Viewport &viewport) noexcept {
+        CameraModel new_model = m_actual_state;
+        controller.updateCameraModel(dt, new_model);
+        updateModel(dt, new_model, viewport);
     }
 }

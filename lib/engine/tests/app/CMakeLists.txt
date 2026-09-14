@@ -15,6 +15,7 @@ target_sources(engine.tests.app
             App.Viewport.Tests.cppm
             App.RenderView.Tests.cppm
             App.PixelReadback.Tests.cppm
+            App.Lifecycle.Tests.cppm
             App.Quaternion.Tests.cppm
             App.Input.Listener.Tests.cppm
             App.WindowInput.Tests.cppm

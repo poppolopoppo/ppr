@@ -15,10 +15,11 @@ export namespace pP::tests {
             InputContext context{};
 
             Capture() noexcept {
-                listener.setRawKeyCallback([this](const TimeSpan, const InputMessage &message) {
+                listener.setRawKeyCallback([this](const TimeSpan, const InputMessage &message) -> EInputMessageResponse {
                     messages.push_back(message);
+                    return EInputMessageResponse::handled;
                 });
-                context.addInputListener(safe_ptr<InputListener>{&listener}, 0);
+                context.addInputListener(safe_ptr{&listener}, 0);
             }
         };
     }

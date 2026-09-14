@@ -1,3 +1,4 @@
+import std;
 import engine.tests;
 import engine.tests.app;
 

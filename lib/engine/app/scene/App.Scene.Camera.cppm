@@ -7,6 +7,8 @@ import engine.math;
 import std;
 
 export namespace pP {
+    class ICameraController;
+
     enum class ECameraProjection : bool {
         orthographic = false,
         perspective,
@@ -124,8 +126,9 @@ export namespace pP {
             m_has_camera_cut_next_frame = true;
         }
 
-        // Degenerate viewport (extent <= 0) keeps prior state with stale velocities.
         void updateModel(TimeSpan dt, const CameraModel &new_model, const Viewport &viewport) noexcept;
+
+        void updateModel(TimeSpan dt, ICameraController &controller, const Viewport &viewport) noexcept;
 
     private:
         CameraSnapshot m_actual_state{};

@@ -19,6 +19,7 @@ export namespace pP::tests {
         int raw_count = 0;
         imgui_listener.setRawKeyCallback([&](const TimeSpan, const InputMessage &) noexcept {
             ++raw_count;
+            return EInputMessageResponse::unhandled;
         });
 
         InputAction scene_action{"SceneMove", EInputValueType::digital, EInputActionFlags::none};
@@ -39,7 +40,8 @@ export namespace pP::tests {
             InputKey::w,
             InputValue{InputDigital{true}},
             InputDeviceID{0u},
-            EInputMessageEvent::pressed};
+            EInputMessageEvent::pressed
+        };
         const EInputMessageResponse response = window_context.postKeyEvent(TimeSpan{}, msg);
 
         PPR_TEST_ASSERT(raw_count == 1);

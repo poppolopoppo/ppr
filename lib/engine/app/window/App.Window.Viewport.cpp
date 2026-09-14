@@ -49,11 +49,23 @@ namespace pP {
                 return client_rect;
             },
             [&](const NormalizedWindowRect &normalized_rect) noexcept -> PixelRect {
-                const float2 window_origin = vector_cast<float>(window_rect.m_origin) + 0.5f;
-                const float2 window_extent = vector_cast<float>(window_rect.m_extent);
+                const float2 window_origin{
+                    static_cast<float>(window_rect.m_origin.x) + 0.5f,
+                    static_cast<float>(window_rect.m_origin.y) + 0.5f
+                };
+                const float2 window_extent{
+                    static_cast<float>(window_rect.m_extent.x),
+                    static_cast<float>(window_rect.m_extent.y)
+                };
                 return {
-                    roundToInt(window_origin + window_extent * normalized_rect.m_origin),
-                    roundToInt(window_extent * normalized_rect.m_extent)
+                    int2{
+                        static_cast<int>(std::round(window_origin.x + window_extent.x * normalized_rect.m_origin.x)),
+                        static_cast<int>(std::round(window_origin.y + window_extent.y * normalized_rect.m_origin.y))
+                    },
+                    int2{
+                        static_cast<int>(std::round(window_extent.x * normalized_rect.m_extent.x)),
+                        static_cast<int>(std::round(window_extent.y * normalized_rect.m_extent.y))
+                    }
                 };
             }
         ), m_variant);
@@ -91,10 +103,22 @@ namespace pP {
         // Pixel-center convention, mirrored with clientRect(): the forward map
         // lerps from window_origin + 0.5f over raw extents, so the inverse
         // subtracts the same biased origin and divides by the same raw extents.
-        const float2 window_origin = vector_cast<float>(m_window_rect.m_origin) + 0.5f;
-        const float2 window_extent = vector_cast<float>(m_window_rect.m_extent);
-        const float2 client_origin = vector_cast<float>(m_client_rect.m_origin);
-        const float2 client_extent = vector_cast<float>(m_client_rect.m_extent);
+        const float2 window_origin{
+            static_cast<float>(m_window_rect.m_origin.x) + 0.5f,
+            static_cast<float>(m_window_rect.m_origin.y) + 0.5f
+        };
+        const float2 window_extent{
+            static_cast<float>(m_window_rect.m_extent.x),
+            static_cast<float>(m_window_rect.m_extent.y)
+        };
+        const float2 client_origin{
+            static_cast<float>(m_client_rect.m_origin.x),
+            static_cast<float>(m_client_rect.m_origin.y)
+        };
+        const float2 client_extent{
+            static_cast<float>(m_client_rect.m_extent.x),
+            static_cast<float>(m_client_rect.m_extent.y)
+        };
         return {
             (client_origin - window_origin) / window_extent,
             client_extent / window_extent
@@ -146,8 +170,6 @@ namespace pP {
 
         updateFromWindow();
     }
-
-    WindowViewport::~WindowViewport() noexcept = default;
 
     void WindowViewport::setLayout(ViewportLayout layout) noexcept {
         m_layout = std::move(layout);

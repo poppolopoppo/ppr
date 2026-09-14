@@ -10,16 +10,27 @@ import std;
 namespace pP {
     struct GraphTestService : IPlayerService {
         SharedPlayer getPlayer(const PlayerId &) const noexcept override { return {}; }
-        void enumeratePlayers(Collector<SharedPlayer>) const noexcept override {}
+
+        void enumeratePlayers(Collector<SharedPlayer>) const noexcept override {
+        }
+
         Expected<SharedPlayer> getOrCreateKeyboardPlayer() override {
             return std::unexpected{make_error_code(std::errc::not_supported)};
         }
+
         Expected<SharedPlayer> addGamepadPlayer(u32) override {
             return std::unexpected{make_error_code(std::errc::not_supported)};
         }
+
         std::error_code removePlayer(const PlayerId &) override { return default_value_v; }
-        PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event) override { return {}; }
-        PlayerCallback::Handle whenPlayerRemoved(PlayerCallback::Event) override { return {}; }
+
+        PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event) override {
+            return {};
+        }
+
+        PlayerCallback::Handle whenPlayerRemoved(PlayerCallback::Event) override {
+            return {};
+        }
     };
 
     [[nodiscard]] KeyboardDevice &getTestKeyboard() noexcept {
@@ -47,7 +58,7 @@ namespace pP {
 }
 
 export namespace pP::tests {
-    PPR_UNIT_TEST(empty_initially) {
+    PPR_UNIT_TEST (empty_initially) {
         const PlayerGraph graph{};
         u32 count = 0u;
         graph.enumeratePlayers([&](const SharedPlayer &) noexcept -> std::error_code {
@@ -57,7 +68,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(count == 0u);
     };
 
-    PPR_UNIT_TEST(add_keyboard_player) {
+    PPR_UNIT_TEST (add_keyboard_player) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -71,7 +82,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(player->getIdentity().m_device_id == InputDeviceID{100u});
     };
 
-    PPR_UNIT_TEST(get_player_by_id) {
+    PPR_UNIT_TEST (get_player_by_id) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -82,13 +93,13 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(retrieved.get() != nullptr);
     };
 
-    PPR_UNIT_TEST(get_nonexistent_player_returns_null) {
+    PPR_UNIT_TEST (get_nonexistent_player_returns_null) {
         const PlayerGraph graph{};
         SharedPlayer retrieved = graph.getPlayer(PlayerId{999u});
         PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
-    PPR_UNIT_TEST(find_player_for_device) {
+    PPR_UNIT_TEST (find_player_for_device) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -104,26 +115,28 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(*found == user_id);
     };
 
-    PPR_UNIT_TEST(find_nonexistent_device_returns_nullopt) {
+    PPR_UNIT_TEST (find_nonexistent_device_returns_nullopt) {
         const PlayerGraph graph{};
         auto found = graph.findPlayerForDevice(InputDeviceID{999u});
         PPR_TEST_ASSERT(!found.has_value());
     };
 
-    PPR_UNIT_TEST(enumerate_players) {
+    PPR_UNIT_TEST (enumerate_players) {
         PlayerGraph graph{};
         GraphTestService service{};
 
         std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{1u}, getTestKeyboard(), getTestMouse());
-            std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, getTestGamepad());
+        std::ignore = graph.addGamepadPlayer(service, PlayerId{2u}, getTestGamepad());
 
         u32 count = 0u;
         bool has_keyboard = false;
         bool has_gamepad = false;
         graph.enumeratePlayers([&](const SharedPlayer &p) noexcept -> std::error_code {
             ++count;
-            if (p->getIdentity().m_kind == EPlayerKind::keyboard) has_keyboard = true;
-            if (p->getIdentity().m_kind == EPlayerKind::gamepad) has_gamepad = true;
+            if (p->getIdentity().m_kind == EPlayerKind::keyboard)
+                has_keyboard = true;
+            if (p->getIdentity().m_kind == EPlayerKind::gamepad)
+                has_gamepad = true;
             return default_value_v;
         });
         PPR_TEST_ASSERT(count == 2u);
@@ -131,7 +144,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(has_gamepad);
     };
 
-    PPR_UNIT_TEST(remove_player) {
+    PPR_UNIT_TEST (remove_player) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -145,14 +158,14 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(retrieved.get() == nullptr);
     };
 
-    PPR_UNIT_TEST(remove_nonexistent_player_fails) {
+    PPR_UNIT_TEST (remove_nonexistent_player_fails) {
         PlayerGraph graph{};
         GraphTestService service{};
         auto err = graph.removePlayer(service, PlayerId{999u});
         PPR_TEST_ASSERT(err != default_value_v);
     };
 
-    PPR_UNIT_TEST(clear_removes_all_players) {
+    PPR_UNIT_TEST (clear_removes_all_players) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -169,7 +182,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(count == 0u);
     };
 
-    PPR_UNIT_TEST(graph_get_or_create_keyboard_is_idempotent) {
+    PPR_UNIT_TEST (graph_get_or_create_keyboard_is_idempotent) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -182,7 +195,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(first->get() == second->get());
     };
 
-    PPR_UNIT_TEST(when_player_added_callback) {
+    PPR_UNIT_TEST (when_player_added_callback) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -191,13 +204,13 @@ export namespace pP::tests {
             ++call_count;
             return default_value_v;
         };
-        auto added_handle = graph.whenPlayerAdded(on_added);
+        const auto added_handle = graph.whenPlayerAdded(on_added);
 
         std::ignore = graph.getOrCreateKeyboardPlayer(service, PlayerId{42u}, getTestKeyboard(), getTestMouse());
         PPR_TEST_ASSERT(call_count == 1u);
     };
 
-    PPR_UNIT_TEST(when_player_removed_callback) {
+    PPR_UNIT_TEST (when_player_removed_callback) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -209,13 +222,13 @@ export namespace pP::tests {
             ++call_count;
             return default_value_v;
         };
-        auto removed_handle = graph.whenPlayerRemoved(on_removed);
+        const auto removed_handle = graph.whenPlayerRemoved(on_removed);
 
         std::ignore = graph.removePlayer(service, user_id);
         PPR_TEST_ASSERT(call_count == 1u);
     };
 
-    PPR_UNIT_TEST(clear_also_clears_callbacks) {
+    PPR_UNIT_TEST (clear_also_clears_callbacks) {
         PlayerGraph graph{};
         GraphTestService service{};
 
@@ -233,7 +246,7 @@ export namespace pP::tests {
         PPR_TEST_ASSERT(added_count == 0u);
     };
 
-    PPR_UNIT_TEST(player_graph) {
+    PPR_UNIT_TEST (player_graph){
         _.recurse({
             empty_initially,
             add_keyboard_player,
@@ -250,5 +263,8 @@ export namespace pP::tests {
             when_player_removed_callback,
             clear_also_clears_callbacks,
         });
+
+
+
     };
 }

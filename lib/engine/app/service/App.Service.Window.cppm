@@ -48,10 +48,9 @@ export namespace pP {
         [[nodiscard]] virtual MonitorCallback::Handle whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept = 0;
 
         // windows:
-        [[nodiscard]] virtual Expected<SharedWindow> createWindow( // NOLINT(*-default-arguments)
+        [[nodiscard]] virtual std::error_code createWindow(
             WindowModel &&definition,
-            const SharedMonitor &fullscreen = {},
-            const SharedWindow &share_resources_with = {}) = 0;
+            safe_ptr<Window> *window_write_ref) = 0;
 
         [[nodiscard]] virtual std::error_code destroyWindow(SharedWindow &&window) = 0;
 
@@ -59,11 +58,7 @@ export namespace pP {
 
         [[nodiscard]] virtual const SharedWindow &getMainWindow() const noexcept = 0;
 
-        [[nodiscard]] virtual const SharedWindowViewport &getMainViewport() const noexcept = 0;
-
         virtual SharedWindow setMainWindow(SharedWindow window) = 0;
-
-        virtual SharedWindowViewport setMainViewport(SharedWindowViewport viewport) = 0;
 
         [[nodiscard]] virtual SharedMonitor getWindowMonitor(const Window &window) const noexcept = 0;
 

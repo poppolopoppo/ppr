@@ -1,18 +1,26 @@
 # Repository Atlas: PPR Game Engine
 
+This is a navigation aid, not the engineering contract. Source and CMake files
+are authoritative; refresh this map when paths, public module boundaries, or
+entry points change. For durable architecture and coding policy, see
+[AGENTS.md](AGENTS.md). Generated and dependency trees (`out/`, `_deps/`,
+`vcpkg_installed/`, `cmake-build-*/`, `build/`, and
+`imgui_module_bindings/`) are intentionally out of scope.
+
 ## Project Responsibility
 
-A high-performance, real-time C++23 game engine built on C++20 modules. PPR provides a flat fan-out foundation
-(engine.app → engine.core/engine.math/engine.shader/engine.rhi; engine.rhi imports engine.shader;
-engine.shader → engine.core; engine.math → engine.core) with a service-locator architecture, a tiered allocator hierarchy, lock-free concurrency primitives,
-a platform HAL (Windows/Linux/Darwin/Generic), Slang-based shader compilation, and a Slang-RHI GPU abstraction. The
-`game/` demo hosts the `Application` run loop.
+A high-performance, real-time C++23 game engine built on C++20 modules. PPR
+provides a flat fan-out foundation, a tiered allocator hierarchy, lock-free
+concurrency primitives, a platform HAL (Windows/Linux/Darwin/Generic),
+Slang-based shader compilation, and a Slang-RHI GPU abstraction. The `game/`
+demo hosts the `Application` run loop.
 
 ## System Entry Points
 
 - `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : pP::Application` and calls `app.run()`.
-- `CMakeLists.txt` + `CMakePresets.json` — Build configuration (presets: `msvc-dev`, `msvc-live`, `msvc-rel`,
-  `clang-cl-*`, `clang-*`, `gcc-*`, `developer`, `vcpkg`, `default`).
+- `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
+  include `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-*`, and `clang-*`;
+  `gcc-*` presets are hidden and do not support modules.
 - `include/pP/Macros.h` — The single public header; engine-wide macros (assertions, logging, attributes, error
   handling).
 - `vcpkg.json` — Dependency manifest (vcpkg or CPM fallback).
@@ -37,9 +45,14 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   `IContext`/`SharedContext` (Go-style cancellation tree).
 - **Matrix Convention**: Mango-native left-handed view space (+Z forward, +Y up), row-major storage, row-vector
   `mul(float4, matrix)`, and common [0,1] depth. Set at the Slang session level (`SLANG_MATRIX_LAYOUT_ROW_MAJOR`).
-- **Viewport Model**: `WindowViewport` is geometry glue (window → client rect); `makeRenderView`
-  converts to target-local `RenderView`; `SceneView` pairs it with a `CameraSnapshot`; `Renderer`
-  consumes immediate `DrawSubmission` spans (`DrawCallback` + view) via `renderAndPresent`/`submitToTexture`.
+- **Application and rendering map**: `ApplicationDomain` describes an app's
+  required runtime services and is immutable after construction. Client/editor
+  code owns scene, player, camera,
+  viewport, and UI state. `WindowViewport` supplies window geometry;
+  `makeRenderView` creates a target-local `RenderView`; `SceneView` pairs it
+  with a `CameraSnapshot`. `Renderer` consumes `DrawSubmission` spans through
+  `renderAndPresent` or `submitToTexture`, while passes own scene-specific draw
+  resources and encoding.
 
 ## Directory Map (Aggregated)
 
@@ -64,7 +77,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/app/platform/`      | IPlatform abstraction interface.                                                                      | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
-| `lib/engine/app/renderer/`      | Generic Renderer (surfaces/queue/submission) + TrianglePass scene feature.                       | [View Map](lib/engine/app/renderer/codemap.md)      |
+| `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) and content-owning passes such as TrianglePass. | [View Map](lib/engine/app/renderer/codemap.md)      |
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | App-level service registration/lifecycle.                                                             | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService).                                                             | [View Map](lib/engine/app/ui/codemap.md)            |
@@ -75,7 +88,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `game/`                         | Entry point (main.cpp) + app.game CMake target.                                                   | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Public header `Macros.h` (assertions, logging, attributes).                                           | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime assets (Slang shaders).                                                                       | [View Map](assets/codemap.md)                       |
-| `assets/shaders/`               | Slang shader sources (triangle.slang; synchronous load, no hot-reload).                               | [View Map](assets/shaders/codemap.md)               |
+| `assets/shaders/`               | Slang shader sources (including `triangle.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
 
 > Removed locations (do not look here): `lib/engine/app/camera/` → moved to `lib/engine/app/scene/`;
 > `lib/engine/app/input/device/` → consolidated into the unified `:input.device` partition; renderer `App.Viewport`
@@ -90,10 +103,8 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 - Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (NOT `include/pP/Macros.h`).
 
-## Conventions
+## Map maintenance
 
-- C++20 modules: `.cppm` = interface (exports), `.cpp` = implementation; partitions `engine.core:partition`; umbrella
-  `export import :partition;`.
-- `constexpr`/`[[nodiscard]]`/`noexcept` by default; no raw loops; comments only for non-obvious code.
-- Commit rule: new source + its CMakeLists.txt registration in the same commit.
+Keep this document focused on finding code. Update links and summaries with
+their corresponding source changes; put durable rules in `AGENTS.md` instead.
 

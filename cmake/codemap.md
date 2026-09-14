@@ -8,7 +8,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Design
 
-- **Root `CMakeLists.txt`**: C++23, `CMAKE_CXX_SCAN_FOR_MODULES ON` / `CMAKE_CXX_MODULE_STD ON`, project `PPR`;
+- **Root `CMakeLists.txt`**: C++23, `CMAKE_CXX_SCAN_FOR_MODULES ON`, project `PPR`;
   prevents in-source builds, validates `PPR_ENABLE_*` combinations, enforces preset constraints
   (`PPR_EDIT_AND_CONTINUE` requires Ninja + MSVC + Debug).
 - **`CMakePresets.json`** (single-config Ninja throughout — avoids the CMake 4.4 multi-config genex leak into
@@ -19,7 +19,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
   hidden `gcc-dev`/`gcc-rel` (**no modules**).
 - **`setup_ppr_project(target INTERNAL_PUBLIC_DEPS … EXTERNAL_SYSTEM_PRIVATE_DEPS … …)`**
-  (`cmake/Compilers.cmake`): the single helper every target uses — applies `cxx_std_23`/`CXX_MODULE_STD`,
+  (`cmake/Compilers.cmake`): the single helper every PPR target uses — applies target-local
+  `cxx_std_23`/`CXX_MODULE_STD` opt-in,
   warning sets, and link edges. `app.game` links all five engine modules; `engine.app` additionally links
   `imgui` PUBLIC so `import imgui;` resolves from importers.
 - **Runtime/shader delivery** (`game/CMakeLists.txt`): `POST_BUILD` copies `$<TARGET_RUNTIME_DLLS:app.game>`
@@ -38,8 +39,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `StaticAnalyzers`, `Cache`, `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
-- Engine targets re-export via umbrella `import`s; `CXX_MODULE_STD` stays ON except for the documented
-  root-scope workarounds (`imgui`, `imgui.base`).
+- PPR targets opt in to `CXX_MODULE_STD` through `setup_ppr_project()`; external exceptions set it OFF locally.
 
 ## Key Files
 

@@ -10,10 +10,14 @@ export namespace pP {
     enum class EKeyboardKey : u8;
     enum class EMouseButton : u8;
 
+    class Monitor;
     class Window;
 
+    using SharedMonitor = safe_ptr<const Monitor>;
     using SharedWindow = safe_ptr<const Window>;
     using WindowHandle = Numeric<void *, Window>;
+
+    using NativeWindowHandle = Numeric<void *, WindowHandle>;
 
     // ------------------------------------------------------------------
     // window properties definition
@@ -22,14 +26,17 @@ export namespace pP {
     struct WindowModel {
         std::string m_title{};
 
+        SharedMonitor m_fullscreen_monitor{};
+        SharedWindow m_share_resources_with{};
+
         int2 m_window_position{};
         int2 m_window_size{};
 
-        bool m_decorated{true};
-        bool m_focused{true};
-        bool m_iconified{false};
-        bool m_resizable{true};
-        bool m_visible{true};
+        bool m_decorated: 1 {true};
+        bool m_focused: 1 {true};
+        bool m_iconified: 1 {false};
+        bool m_resizable: 1 {true};
+        bool m_visible: 1 {true};
     };
 
     // ------------------------------------------------------------------
@@ -41,7 +48,10 @@ export namespace pP {
 
     class Window : public WindowModel, public safe_object {
     public:
+        /// opaque window handle from platform abstraction
         WindowHandle m_handle{};
+        /// native window handle from operating system
+        NativeWindowHandle m_native{};
 
         float2 m_content_scale{1.0};
         int2 m_framebuffer_size{};
@@ -65,9 +75,9 @@ export namespace pP {
         WindowDelegate<const float2 &> m_when_mouse_moved{};
         WindowDelegate<const float2 &> m_when_mouse_scrolled{};
 
-        WindowDelegate<std::span<const char *>> m_when_drag_and_dropped{};
+        WindowDelegate<std::span<const char *> > m_when_drag_and_dropped{};
 
-        Window(WindowHandle handle, WindowModel &&model) noexcept;
+        Window(WindowHandle handle, NativeWindowHandle native, WindowModel &&model) noexcept;
 
         Window(const Window &) = delete;
 

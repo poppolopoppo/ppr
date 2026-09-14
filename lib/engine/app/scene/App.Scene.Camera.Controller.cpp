@@ -15,11 +15,11 @@ namespace pP {
     // ------------------------------------------------------------------
 
     details::BasicCameraController::BasicCameraController() // NOLINT(*-use-equals-default)
-        : m_translate_action{std::make_unique<InputAction>("CameraMove", EInputValueType::axis_3d, EInputActionFlags::none)},
-          m_rotate_action{std::make_unique<InputAction>("CameraRotate", EInputValueType::axis_2d, EInputActionFlags::none)},
-          m_speed_action{std::make_unique<InputAction>("CameraSpeed", EInputValueType::axis_1d, EInputActionFlags::none)},
-          m_fov_action{std::make_unique<InputAction>("CameraFov", EInputValueType::axis_1d, EInputActionFlags::none)},
-          m_look_action{std::make_unique<InputAction>("CameraLook", EInputValueType::digital, EInputActionFlags::none)} {
+        : m_translate_action{std::make_unique<InputAction>("CameraMove", EInputValueType::axis_3d)},
+          m_rotate_action{std::make_unique<InputAction>("CameraRotate", EInputValueType::axis_2d)},
+          m_speed_action{std::make_unique<InputAction>("CameraSpeed", EInputValueType::axis_1d)},
+          m_fov_action{std::make_unique<InputAction>("CameraFov", EInputValueType::axis_1d)},
+          m_look_action{std::make_unique<InputAction>("CameraLook", EInputValueType::digital)} {
         m_translate_action->setTriggered([self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &) noexcept {
             self->translateCamera_(event.getAxis3DValue().m_absolute);
         });

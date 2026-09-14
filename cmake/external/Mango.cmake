@@ -21,7 +21,7 @@ CPMAddPackage(
     #GITHUB_REPOSITORY t0rakka/mango
     #GIT_TAG main
         GITHUB_REPOSITORY poppolopoppo/mango
-        GIT_TAG v0.2-pre-release
+        GIT_TAG 358026169e216d145e9b64301b614ae834f15716
     CMAKE_ARGS
         "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
         "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
@@ -38,21 +38,25 @@ CPMAddPackage(
         "BUILD_SHARED_LIBS OFF"
 )
 
-set_target_properties(mango PROPERTIES CXX_MODULE_STD OFF)
-
-# Remove /MP, /arch:AVX*, and /Ox from mango's INTERFACE_COMPILE_OPTIONS so they
-# don't propagate to PPR targets. These per-target flags cause CMake to create
-# separate @cmake_cxx_std synth targets with different flags, triggering
+# Remove /MP, /arch:AVX*, and /Ox from Mango targets' INTERFACE_COMPILE_OPTIONS
+# so they don't propagate to PPR targets. These per-target flags cause CMake to
+# create separate @cmake_cxx_std synth targets with different flags, triggering
 # "Disagreement of the location of the 'std' module" errors and C2678 type
-# mismatches between synth targets. mango doesn't use import std; its /MP,
-# /arch:AVX2, and /Ox remain on mango's own compilation (via PRIVATE/PUBLIC),
-# but PPR consumers get consistent flags from the global add_compile_options
-# instead. /Ox is genex-wrapped ($<$<CONFIG:Release>:/Ox>) in mango's CMakeLists.
-get_target_property(_mango_iface_opts mango INTERFACE_COMPILE_OPTIONS)
-if(_mango_iface_opts)
-    list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX|/Ox")
-    set_target_properties(mango PROPERTIES INTERFACE_COMPILE_OPTIONS "${_mango_iface_opts}")
-endif()
+# mismatches between synth targets. /Ox is genex-wrapped
+# ($<$<CONFIG:Release>:/Ox>) in mango's CMakeLists. CXX_MODULE_STD OFF
+# explicitly normalizes Mango's non-module targets and prevents them from
+# providing or conflicting through CMake standard-library-module paths.
+foreach(mango_target IN ITEMS mango mango-core mango-image mango-import3d mango-window mango-opengl mango-vulkan)
+    if(TARGET ${mango_target})
+        set_target_properties(${mango_target} PROPERTIES CXX_MODULE_STD OFF)
+
+        get_target_property(_mango_iface_opts ${mango_target} INTERFACE_COMPILE_OPTIONS)
+        if(_mango_iface_opts)
+            list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX|/Ox")
+            set_target_properties(${mango_target} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_mango_iface_opts}")
+        endif()
+    endif()
+endforeach()
 
 # Mark mango includes as SYSTEM to suppress warnings from external headers
 get_target_property(mango_inc mango INTERFACE_INCLUDE_DIRECTORIES)

@@ -9,9 +9,10 @@ namespace pP {
     // window handle
     // ------------------------------------------------------------------
 
-    Window::Window(const WindowHandle handle, WindowModel &&model) noexcept
-        : WindowModel(std::move(model)), m_handle{handle} {
-        PPR_ASSERT(nullptr != m_handle && "invalid handle");
+    Window::Window(const WindowHandle handle, NativeWindowHandle native, WindowModel &&model) noexcept
+        : WindowModel(std::move(model)), m_handle{handle}, m_native(native) {
+        PPR_ASSERT(nullptr != m_handle && "invalid window handle");
+        PPR_ASSERT(nullptr != m_native && "invalid native handle");
     }
 
     Window::Window(Window &&other) noexcept

@@ -1,4 +1,6 @@
 module;
+#include <utility>
+
 #include "pP/Macros.h"
 export module engine.app:window.viewport;
 
@@ -91,8 +93,14 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr float2 normalize(const vector_type &pos) const noexcept {
-            const float2 delta = vector_cast<float>(pos - m_origin);
-            const float2 extent = vector_cast<float>(m_extent);
+            const float2 delta{
+                static_cast<float>(pos.x - m_origin.x),
+                static_cast<float>(pos.y - m_origin.y)
+            };
+            const float2 extent{
+                static_cast<float>(m_extent.x),
+                static_cast<float>(m_extent.y)
+            };
 #if PPR_ENABLE_ASSERTIONS
             PPR_ASSERT(dot2(extent) > epsilon_v<float>);
 #endif
@@ -104,7 +112,10 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr vector_type denormalize(const float2 &uv) const noexcept {
-            return vector_cast<T>(uv * vector_cast<float>(m_extent)) + m_origin;
+            return vector_type{
+                static_cast<T>(uv.x * static_cast<float>(m_extent.x)) + m_origin.x,
+                static_cast<T>(uv.y * static_cast<float>(m_extent.y)) + m_origin.y
+            };
         }
 
         [[nodiscard]] constexpr vector_type denormalizeClamp(const float2 &uv) const noexcept {
@@ -145,12 +156,13 @@ export namespace pP {
 
         constexpr ViewportLayout() noexcept = default;
 
-        explicit constexpr ViewportLayout(decltype(m_variant) variant) noexcept
-            : m_variant(std::move(variant)) {
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr ViewportLayout(const decltype(m_variant) &variant) noexcept
+            : m_variant(variant) {
         }
 
-        ViewportLayout &operator =(decltype(m_variant) variant) noexcept {
-            m_variant = std::move(variant);
+        ViewportLayout &operator =(const decltype(m_variant) &variant) noexcept {
+            m_variant = variant;
             return *this;
         }
 
@@ -167,8 +179,8 @@ export namespace pP {
 
         Viewport() noexcept = default;
 
-        Viewport(const PixelRect &window_rect, const PixelRect &client_rect) noexcept
-            : m_window_rect(window_rect), m_client_rect(client_rect) {
+        Viewport(PixelRect window_rect, PixelRect client_rect) noexcept
+            : m_window_rect(std::move(window_rect)), m_client_rect(std::move(client_rect)) {
         }
 
         explicit Viewport(const Window &window, const ViewportLayout &layout = {}) noexcept;
@@ -213,7 +225,8 @@ export namespace pP {
         }
 
         [[nodiscard]] bool operator==(const Viewport &other) const noexcept {
-            return m_window_rect == other.m_window_rect and m_client_rect == other.m_client_rect;
+            return m_window_rect == other.m_window_rect
+            and m_client_rect == other.m_client_rect;
         }
     };
 
@@ -226,8 +239,6 @@ export namespace pP {
         using ViewportRevision = Numeric<u32, WindowViewport>;
 
         WindowViewport(SharedWindow window, ViewportLayout layout) noexcept;
-
-        ~WindowViewport() noexcept;
 
         [[nodiscard]] const Window &getWindow() const noexcept { return *m_window; }
         [[nodiscard]] const ViewportLayout &getLayout() const noexcept { return m_layout; }

@@ -39,7 +39,7 @@ export namespace pP::tests {
 
     PPR_UNIT_TEST(is_any_key_returns_unhandled) {
         const InputMessage message{
-            InputKey::any_key,
+            InputKey::any_digital,
             InputDigital{true},
             InputDeviceID{0u},
             EInputMessageEvent::pressed,

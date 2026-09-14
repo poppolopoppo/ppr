@@ -126,10 +126,12 @@ export namespace pP::tests {
             }
         };
 
-        PPR_UNIT_TEST(mouse_keeps_client_space_with_nonzero_window_origin) {
+        PPR_UNIT_TEST (mouse_keeps_client_space_with_nonzero_window_origin) {
             FakeInputService inputs{};
-            Window window{WindowHandle{reinterpret_cast<void *>(1)},
-                WindowModel{.m_window_position = int2{400, 300}, .m_window_size = int2{800, 600}}};
+            Window window{
+                WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
+                WindowModel{.m_window_position = int2{400, 300}, .m_window_size = int2{800, 600}}
+            };
             {
                 WindowInputContext routed{safe_ptr<IInputService>{&inputs}, safe_ptr<Window>{&window}};
                 const float2 client{10.0f, 20.0f};
@@ -143,7 +145,7 @@ export namespace pP::tests {
             std::ignore = window.release();
         };
 
-        PPR_UNIT_TEST(char_posted_after_poll_clear_survives_to_consumer) {
+        PPR_UNIT_TEST (char_posted_after_poll_clear_survives_to_consumer) {
             KeyboardDevice device{InputDeviceID{0u}};
             InputContext context{};
 
@@ -158,7 +160,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(device.m_character_inputs.empty());
         };
 
-        PPR_UNIT_TEST(reset_clears_pending_characters) {
+        PPR_UNIT_TEST (reset_clears_pending_characters) {
             KeyboardDevice device{InputDeviceID{0u}};
             InputContext context{};
 
@@ -170,11 +172,12 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(window_input) {
+    PPR_UNIT_TEST (window_input){
         _.recurse({
             WindowInput::mouse_keeps_client_space_with_nonzero_window_origin,
             WindowInput::char_posted_after_poll_clear_survives_to_consumer,
             WindowInput::reset_clears_pending_characters,
         });
+
     };
 }
