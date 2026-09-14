@@ -1,18 +1,18 @@
 # PPR Game Engine
 
-A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](https://github.com/shader-slang/slang-rhi) for cross-platform rendering and [Mango](https://github.com/t0rak/mango) for math and image processing.
+A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](https://github.com/shader-slang/slang-rhi) for cross-platform rendering and [Mango](https://github.com/t0rak/mango) for math.
 
 ## Features
 
 - **C++23 Modules** - Clean module-based architecture with `.cppm` interface files
 - **Cross-Platform Rendering** - Hardware abstraction via Slang-RHI supporting Vulkan, DirectX 12, and more
-- **Advanced Math Library** - Full vector/matrix/quaternion math with easing functions and spline interpolation
-- **Custom Memory Management** - GPA (General Purpose Allocator), Arena, PagePool, BitmapTree, and Slab allocators
+- **Advanced Math Library** - Vector, matrix, and quaternion math
+- **Custom Memory Management** - Tiered allocators (Arena/ScopedArena/ScratchPad, Pooling/LocalCache, Fallback/Threshold/InSitu) with PMR/STL wrappers
 - **Type-Safe Containers** - `StableVector`, `SparseVector`, `HashMap`, `HashSet`, `Stack`, `RingBuffer`
 - **Platform Abstraction Layer** - Unified HAL for filesystem, memory, async I/O, and OS interactions
 - **Shader Compilation** - Slang shader compilation
 - **Dear ImGui Integration** - UI service with listener-based input dispatch
-- **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST`, fork/crash support, CTest integration
+- **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST` and CTest integration
 - **Assertions System** - Tiered assertions (`PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE`)
 - **error_code Lifecycle** - Consistent error propagation across all services and APIs
 
@@ -35,7 +35,16 @@ ppr/
 │   ├── math/          # Math module (wraps mango::math)
 │   ├── shader/        # Shader compilation
 │   ├── rhi/           # Rendering hardware interface (wraps slang-rhi)
-│   ├── app/           # Application layer with GLFW + ImGui
+│   ├── app/           # Application layer (slim Application + ApplicationEditor)
+│   │   ├── input/     #   Input actions, keys, listeners, devices
+│   │   ├── platform/  #   IPlatform interface
+│   │   │   └── glfw/  #     GLFW backend
+│   │   ├── player/    #   Player identity store + state graph
+│   │   ├── renderer/  #   Content-free Renderer + TrianglePass (Types header-only)
+│   │   ├── scene/     #   Camera + controller
+│   │   ├── service/   #   Service contracts (client/input/player/ui/window)
+│   │   ├── ui/        #   ImGui overlay service
+│   │   └── window/    #   Window service + viewport geometry
 │   └── tests/         # Unit tests (core, app, shared)
 ├── game/              # Game application entry point
 ├── cmake/             # CMake modules and toolchain files
@@ -74,12 +83,6 @@ support C++ modules.
 Enable additional checks and sanitizers:
 
 ```bash
-cmake --preset developer
-```
-
-Or manually:
-
-```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPPR_ENABLE_DEVELOPER_MODE=ON
 cmake --build build
 ```
@@ -101,7 +104,7 @@ cmake --build build
 
 ## Dependencies
 
-Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake):
+Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) (see `vcpkg.json` for the manifest and `cmake/external/` for resolution):
 
 ### Vcpkg Packages
 - `fmt` - Formatting library
@@ -110,16 +113,17 @@ Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://
 - `simdjson` - Fast JSON parsing
 - `glfw3` - Windowing and input
 - `vulkan-headers` - Vulkan API headers
-- `slang` - Shader compiler (fetched automatically via slang-rhi)
 
 ### CPM Packages
 - `slang-rhi` - Rendering hardware interface
-- `mango` - Math and image library
+- `mango` - Math library
 - `rapidhash` - Fast hashing
 - `stb` - Image loading (stb_image)
-- `imgui` - Dear ImGui UI library (v1.91.8-docking)
+- `imgui` - Dear ImGui UI library
 
 ## Usage
+
+Snippets below are illustrative; the module codemaps own the API contracts.
 
 ### Using Math Module
 
@@ -146,11 +150,11 @@ auto handle = sparse.add(42.0f);
 
 | Module | Description |
 |--------|-------------|
-| `engine.core` | Core exports (assert, arena, containers, enums, hal, hash_map, memory, strings) |
+| `engine.core` | Core foundation (types, memory, containers, concurrency, IO, services, opaque, HAL, function) |
 | `engine.math` | Math types and functions (float2-4, float3x3, float4x4, Quaternion, easing) |
 | `engine.shader` | Shader compilation and `IShaderService` |
 | `engine.rhi` | Rendering interface (device, buffers, shaders, command buffers) |
-| `engine.app` | Application framework (window, input, lifecycle, UI) |
+| `engine.app` | Application framework (slim lifecycle + editor client, services, renderer, UI) |
 
 ## Testing
 
@@ -176,12 +180,7 @@ out/build/msvc-dev/engine.tests.app --run-test App.Player
 
 ### Options
 
-```
---run-test <path>    Run specific test (e.g., Core.Memory)
---shuffle [<seed>]   Randomize test order
---loop <N>           Repeat N times
---help               Show all options
-```
+Full flag list lives with the shared test infrastructure (`lib/engine/tests/shared/`, `parseCli()`).
 
 ### Defining Tests
 
