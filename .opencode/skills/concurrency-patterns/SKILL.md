@@ -730,20 +730,24 @@ for (auto &event : select(req, shutdown_event)) {
 ### 6.1 Unit Test Structure
 
 Tests use `PPR_UNIT_TEST(name)` macros and are organized in nested namespaces
-with `_.recurse({...})` for hierarchical test registration:
+with `_.recurse({...})` for hierarchical test registration (for test file
+layout — private group `.cpp` files, `detail::` leaves, `extern const` groups —
+see `unit-test-updater`):
 
 ```cpp
-export namespace pP::tests {
+namespace pP::tests::detail {
     namespace MyFeature {
         PPR_UNIT_TEST(test_name) {
             // test body
             PPR_TEST_ASSERT(condition);
         };
     }
+}
 
-    PPR_UNIT_TEST(my_feature) {
+namespace pP::tests {
+    extern const UnitTest my_feature = UnitTest::Named("my_feature") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            MyFeature::test_name,
+            detail::MyFeature::test_name,
         });
     };
 }

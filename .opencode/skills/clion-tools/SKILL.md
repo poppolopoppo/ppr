@@ -291,8 +291,8 @@ clion_execute_run_configuration(
 
 ### Run from code location
 ```
-clion_get_run_configurations(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm", projectPath="E:/Code/ppr")
-clion_execute_run_configuration(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm", line=42, projectPath="E:/Code/ppr")
+clion_get_run_configurations(filePath="lib/engine/tests/core/Core.Allocator.Tests.cpp", projectPath="E:/Code/ppr")
+clion_execute_run_configuration(filePath="lib/engine/tests/core/Core.Allocator.Tests.cpp", line=42, projectPath="E:/Code/ppr")
 ```
 
 ### Run terminal commands
@@ -319,7 +319,7 @@ clion_xdebug_start_debugger_session(configurationName="engine.tests.core", proje
 ```
 Or from a code location:
 ```
-clion_xdebug_start_debugger_session(filePath="lib/engine/tests/core/Core.Memory.Tests.cppm", line=42, projectPath="E:/Code/ppr")
+clion_xdebug_start_debugger_session(filePath="lib/engine/tests/core/Core.Allocator.Tests.cpp", line=42, projectPath="E:/Code/ppr")
 ```
 
 ### Set breakpoints

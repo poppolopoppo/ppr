@@ -1008,9 +1008,9 @@ throw std::runtime_error("<operation> not implemented for <platform> platform");
 
 ### Test structure
 
-Unit tests live in `lib/engine/tests/core/` as module partitions, e.g.
-`Core.HAL.Tests.cppm` (`export module engine.tests.core:hal;`) and
-`Core.Io.Tests.cppm` (`export module engine.tests.core:io;`). Test files include
+Unit tests live in `lib/engine/tests/core/` as thematic private groups, e.g.
+`Core.HAL.Tests.cpp` (`module engine.tests.core;` impl unit) and the `hal` /
+`io` groups. Test files include
 the test-only header `"pP/UnitTest.h"` and use `PPR_UNIT_TEST` / `PPR_TEST_ASSERT`
 — never `PPR_ASSERT`/`PPR_VERIFY`, which compile to `[[assume]]` in release:
 
@@ -1018,13 +1018,13 @@ the test-only header `"pP/UnitTest.h"` and use `PPR_UNIT_TEST` / `PPR_TEST_ASSER
 module;
 #include "pP/UnitTest.h"
 
-export module engine.tests.core:hal;
+module engine.tests.core;
 
 import engine.core;
 import std;
 
-export namespace pP::tests {
-    namespace HALTests {
+namespace pP::tests::detail {
+    namespace Hal {
         PPR_UNIT_TEST(thread_id) {
             const auto tid = hal::currentThreadId();
             PPR_TEST_ASSERT(tid == hal::currentThreadId());
@@ -1033,20 +1033,24 @@ export namespace pP::tests {
             }
         };
     }
+}
 
-    PPR_UNIT_TEST(hal) {
+namespace pP::tests {
+    extern const UnitTest hal = UnitTest::Named("hal") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            HALTests::thread_id,
-            HALTests::set_get_name_roundtrip,
-            HALTests::buffer_truncation,
-            HALTests::worker_thread_name,
+            detail::Hal::thread_id,
+            detail::Hal::set_get_name_roundtrip,
+            detail::Hal::buffer_truncation,
+            detail::Hal::worker_thread_name,
         });
     };
 }
 ```
 
-Groups are registered in `Core.Tests.cppm` via `_.recurse({ ... })`. The
-existing `Core.HAL.Tests.cppm` covers: `thread_id`, `set_get_name_roundtrip`,
+Groups are forward-declared with `extern` and recursed in fixed order in
+`Core.Tests.cpp` (the umbrella `Core.Tests.cppm` exports only
+`extern const UnitTest core`). The
+existing `hal` group covers: `thread_id`, `set_get_name_roundtrip`,
 `buffer_truncation`, `worker_thread_name` — all guarded by
 `hal::platformName() != "generic"` where the generic stub cannot satisfy them.
 

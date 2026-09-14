@@ -16,10 +16,10 @@ observable behavior contract in the pP engine's `PPR_UNIT_TEST` framework.
 
 This skill analyzes unstaged/staged git changes and produces matching unit tests
 for changed observable behavior contracts in the pP engine's
-`PPR_UNIT_TEST` framework. It does
+ `PPR_UNIT_TEST` framework. It does
 NOT modify production code. The orchestrator plans coverage and
-delegates all file edits to `@fixer`. It never writes test `.cppm`
-files directly.
+delegates all file edits to `@fixer`. It never writes test files
+directly.
 
 ## Mandatory pre-implementation / review checklist
 
@@ -35,7 +35,10 @@ files directly.
   work; cancel, wake, drain, or join; then release resources while preserving
   the first cleanup error. Avoid timing-dependent assumptions.
 - Use `PPR_TEST_ASSERT` for test assertions in every build configuration; do not use raw `new`/`delete` where engine allocator or lifetime rules apply.
-- Follow the test module convention (`engine.tests.core:<partition>` or `engine.tests.app:<partition>`), umbrella registration, and matching CMake source registration. Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
+- Follow the test group convention (thematic private `.cpp` group files in
+  `lib/engine/tests/core/` or `lib/engine/tests/app/`, never new `.cppm`
+  partitions), umbrella registration, and matching CMake source registration.
+  Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
 
 ---
 
@@ -49,11 +52,20 @@ git diff --cached              # staged-only (if user already staged)
 ```
 
 Also load the AGENTS.md for coding conventions, and read the test
-file(s) corresponding to the modified source:
+group file(s) corresponding to the modified source:
 
-- Source `lib/engine/core/Core.Foo.cppm` → tests `lib/engine/tests/core/Core.Foo.Tests.cppm`
-- Source `lib/engine/core/Core.Foo.Bar.cppm` → tests `lib/engine/tests/core/Core.Foo.Bar.Tests.cppm`
-- If no test file exists, note that one must be created.
+- Source `lib/engine/core/Core.Foo.cppm` → leaves in the matching group file,
+  e.g. `lib/engine/tests/core/Core.Allocator.Tests.cpp` (allocator group)
+- Source `lib/engine/app/...` → leaves in the matching group file,
+  e.g. `lib/engine/tests/app/App.Player.Tests.cpp` (player group)
+- Test layout: each suite keeps ONE exported root (`core` / `app`) and a set of
+  thematic private group `.cpp` files (`module engine.tests.<suite>;` impl units,
+  `namespace detail` leaves, one top-level `extern const UnitTest <group>` per
+  file; sub-groups live with their parent; `memory`/`containers` assembled in
+  `Core.Tests.cpp`). A new leaf joins its thematic file; a
+  new file only for a new thematic area.
+  If no group file covers the area, note that a new group file must be created
+  (PRIVATE SOURCES + 1 `extern` forward-declare + 1 recurse entry).
 
 ---
 
@@ -74,14 +86,18 @@ For each changed observable behavior, classify the required test action:
 
 ### Framework rules (from AGENTS.md):
 
-1. **File:** `lib/engine/tests/core/Core.<Subsystem>.Tests.cppm`
-2. **Module declaration:** `export module engine.tests.core:<subsystem>;`
-3. **Includes:** `module;` + `#include "pP/UnitTest.h"` (test-only header — do NOT include `"pP/Macros.h"`) then `export module ...;` + `import engine.core;` + `import std;`
-4. **Namespace:** All tests in `namespace pP::tests`
-5. **Nested grouping:** Use inner namespaces for sub-grouping
-6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };`
-7. **Parent tests:** `PPR_UNIT_TEST(subsystem) { _.recurse(Group::sub_test); };`
-8. **Top-level registration:** In `Core.Tests.cppm`, add `import :<subsystem>;` and call `_.recurse(mySubsystem);` inside the appropriate parent
+1. **File:** the existing thematic group file, e.g.
+   `lib/engine/tests/core/Core.Allocator.Tests.cpp` (never a new `.cppm`
+   partition — per-test partitions were collapsed; do not create
+   `export module engine.tests.<suite>:<part>`).
+2. **Module declaration:** `module engine.tests.core;` (plain impl unit, no
+   `export`, no partition name).
+3. **Includes:** `module;` + `#include "pP/UnitTest.h"` (always) then `module engine.tests.core;` + `import engine.core;` (`engine.app` for app tests) + `import std;`. Add `"pP/Macros.h"` or third-party headers to the global fragment only when the test body needs them (e.g. `App.Camera.Tests.cpp` includes both `Macros.h` and `UnitTest.h`; `App.Render.Tests.cpp` includes `slang.h`)
+4. **Namespace:** Leaves in `namespace pP::tests::detail`; group/root nodes in `namespace pP::tests`
+5. **Nested grouping:** Use inner namespaces under `detail` for sub-grouping
+6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`)
+7. **Parent tests:** one top-level `extern const` per file: `extern const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` — always spell `extern const`; sub-groups live with their parent
+8. **Top-level registration:** In the suite root `.cpp` (`Core.Tests.cpp` / `App.Tests.cpp`), forward-declare the group (`extern const UnitTest <group>;`) and add it to the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET)
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
 10. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
@@ -129,21 +145,31 @@ Rules:
 
 ## Step 4 — Register the new tests
 
-### In the test partition file:
+### In the group file:
 
-Ensure every leaf test is aggregated via its parent:
+Ensure every leaf test is aggregated via its group node:
 
 ```cpp
-PPR_UNIT_TEST(subsystem) {
-    _.recurse(Group::test_a);
-    _.recurse(Group::test_b);
+extern const UnitTest subsystem = UnitTest::Named("subsystem") / [](UnitTest::IRun &_) -> void {
+    _.recurse({
+        detail::Group::test_a,
+        detail::Group::test_b,
+    });
 };
 ```
 
-### In `lib/engine/tests/core/Core.Tests.cppm`:
+New leaf in an existing group file = edit that file only. New thematic
+group = new `.cpp` (CMake PRIVATE SOURCES) + 1 `extern` forward-declare +
+1 recurse entry in the suite root `.cpp`. Singleton leaves sitting directly
+under the root are re-exposed via copy — `extern const <leaf> = detail::<leaf>;`
+— never wrap one in a `Named` group (that would add a tree level and change its
+path); see `module-architect` for the alias rule.
 
-1. Add `import :<subsystem>;` at the top
-2. Add `_.recurse(<subsystem>);` inside the appropriate parent test (e.g., `containers`, `memory`, `strings`)
+### In the suite root (e.g. `lib/engine/tests/core/Core.Tests.cpp`):
+
+1. Forward-declare the group: `extern const UnitTest <subsystem>;`
+2. Add `<subsystem>` to the root `_.recurse({...})` in fixed order (test
+   paths `core/<...>` / `app/<...>` derive from these names — keep them stable)
 
 ---
 

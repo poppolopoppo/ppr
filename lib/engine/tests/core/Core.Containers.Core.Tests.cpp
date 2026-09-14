@@ -1,0 +1,342 @@
+module;
+#include "pP/UnitTest.h"
+
+module engine.tests.core;
+
+import engine.core;
+import std;
+
+namespace pP::tests::detail {
+    namespace Container {
+        PPR_UNIT_TEST (traits_relocatable_fundamentals) {
+            PPR_TEST_ASSERT(details::relocatable<int>::value);
+            PPR_TEST_ASSERT(details::relocatable<float>::value);
+            PPR_TEST_ASSERT(details::relocatable<double>::value);
+            PPR_TEST_ASSERT(details::relocatable<void *>::value);
+            PPR_TEST_ASSERT(details::relocatable<int *>::value);
+            PPR_TEST_ASSERT(details::relocatable<int[10]>::value);
+        };
+
+        PPR_UNIT_TEST (traits_relocatable_user_type_negative) {
+            struct NonRelocatable {
+                NonRelocatable() = default;
+
+                NonRelocatable(const NonRelocatable &) {
+                }
+            };
+
+            struct TriviallyCopyableNonPrimitive {
+                int a;
+                float b;
+            };
+
+            PPR_TEST_ASSERT(!details::relocatable<NonRelocatable>::value);
+            PPR_TEST_ASSERT(!details::relocatable<TriviallyCopyableNonPrimitive>::value);
+        };
+
+        PPR_UNIT_TEST (traits_relocatable_specialized_types) {
+            PPR_TEST_ASSERT(details::is_relocatable_v<Bitmask<std::uint64_t> >);
+            PPR_TEST_ASSERT(details::is_relocatable_v<Stack<float, 15> >);
+            PPR_TEST_ASSERT(details::is_relocatable_v<RingBuffer<int, 8> >);
+        };
+
+        PPR_UNIT_TEST (bitmask_basic_set_reset_test) {
+            Bitmask<> m;
+            PPR_TEST_ASSERT(m.none());
+            m.set(0);
+            PPR_TEST_ASSERT(m.test(0));
+            m.reset(0);
+            PPR_TEST_ASSERT(!m.test(0));
+        };
+
+        PPR_UNIT_TEST (bitmask_range_and_flip_test) {
+            Bitmask<> m;
+            m.setRange(4, 4);
+            PPR_TEST_ASSERT(m.countOnes() == 4u);
+            m.unsetRange(4, 4);
+            PPR_TEST_ASSERT(m.none());
+            m.flip(7);
+            PPR_TEST_ASSERT(m.test(7));
+            m.flip(7);
+            PPR_TEST_ASSERT(!m.test(7));
+        };
+
+        PPR_UNIT_TEST (bitmask_rotate_and_pop_tests) {
+            Bitmask<std::uint32_t> m32;
+            m32.set(0);
+            m32.rotateLeft(1);
+            PPR_TEST_ASSERT(m32.test(1));
+            m32.rotateRight(1);
+            PPR_TEST_ASSERT(m32.test(0));
+
+            Bitmask<> m;
+            m.unsetAll();
+            m.set(2);
+            m.set(5);
+            const u32 first = m.pop();
+            PPR_TEST_ASSERT(first == 2u);
+            m.set(1);
+            PPR_TEST_ASSERT(m.popAssumeNotEmpty() != max_v);
+        };
+
+        PPR_UNIT_TEST (bitmask_byte_swap_and_invert_and_set_first_last_unset_first) {
+            Bitmask<std::uint32_t> m;
+            m.set(0);
+            auto swapped = m.byteSwap();
+            PPR_TEST_ASSERT(std::is_same_v<decltype(swapped), Bitmask<std::uint32_t> >);
+
+            auto inv = m.invert();
+            PPR_TEST_ASSERT(inv.any());
+
+            auto first3 = Bitmask<std::uint32_t>::setFirstN(3);
+            PPR_TEST_ASSERT(first3.countOnes() == 3u);
+            auto last2 = Bitmask<std::uint32_t>::setLastN(2);
+            PPR_TEST_ASSERT(last2.countOnes() == 2u);
+            auto unsetFirst1 = Bitmask<std::uint32_t>::unsetFirstN(1);
+            PPR_TEST_ASSERT(unsetFirst1.countOnes() == 31u);
+        };
+
+        PPR_UNIT_TEST (bitmask_ref_mutation_visibility) {
+            std::uint64_t storage = 0;
+            BitmaskRef<std::uint64_t> ref(storage);
+            ref.set(0);
+            PPR_TEST_ASSERT((storage & 1ULL) != 0ULL);
+            ref.unsetAll();
+            PPR_TEST_ASSERT(storage == 0ULL);
+        };
+
+        PPR_UNIT_TEST (bitmask_ref_compound_ops) {
+            std::uint64_t storage = 0;
+            BitmaskRef<std::uint64_t> a(storage), b(storage);
+            a.set(3);
+            b.set(5);
+            a |= b;
+            PPR_TEST_ASSERT(a.test(3) && a.test(5));
+            a -= b;
+            PPR_TEST_ASSERT(!a.test(5));
+            a ^= b;
+            PPR_TEST_ASSERT((a.cref() & b.cref()) == 0u);
+        };
+
+        PPR_UNIT_TEST (relptr_null_and_valid) {
+            RelPtr<int> p(nullptr);
+            PPR_TEST_ASSERT(!p);
+            int x = 42;
+            RelPtr q(&x);
+            PPR_TEST_ASSERT(q.isValid());
+            PPR_TEST_ASSERT(*q == 42);
+        };
+
+        PPR_UNIT_TEST (relptr_copy_assign_and_comparisons) {
+            int x = 7;
+            RelPtr a(&x);
+            RelPtr<int> b = a;
+            PPR_TEST_ASSERT(b.isValid());
+            RelPtr<int> c;
+            c = a;
+            PPR_TEST_ASSERT(c.getData() == a.getData());
+            PPR_TEST_ASSERT(a == b);
+            PPR_TEST_ASSERT((a <=> b) == std::strong_ordering::equal);
+            PPR_TEST_ASSERT(a == &x);
+        };
+
+        PPR_UNIT_TEST (tagptr_basic_tag_and_data) {
+            alignas(16) int x = 7;
+            TagPtr<int, std::uintptr_t, static_cast<std::align_val_t>(16)> t(&x, 3u);
+            PPR_TEST_ASSERT(t.getData() == &x);
+            PPR_TEST_ASSERT(t.getTag() == 3u);
+            PPR_TEST_ASSERT(t.hasTag(static_cast<std::uintptr_t>(3u)));
+        };
+
+        PPR_UNIT_TEST (tagptr_bits_reinterpret_and_mutation) {
+            alignas(16) int x = 9;
+            TagPtr<int, std::uintptr_t, static_cast<std::align_val_t>(16)> t(&x, 1u);
+            auto bits = t.getBits();
+            PPR_TEST_ASSERT(bits.any() == (t.getTag() != 0));
+            PPR_TEST_ASSERT(t.getReinterpret<int>() == &x);
+            t.setTag(0u);
+            PPR_TEST_ASSERT(t.getTag() == 0u);
+            t.setData(&x);
+            PPR_TEST_ASSERT(t.getData() == &x);
+
+            TagPtr<int, std::uintptr_t, static_cast<std::align_val_t>(16)> t2(&x, 2u);
+            swap(t, t2);
+            PPR_TEST_ASSERT(t.getTag() == 2u && t2.getTag() == 0u);
+        };
+
+        PPR_UNIT_TEST (indexiterator_arithmetic_and_distance) {
+            std::array arr = {1, 2, 3, 4};
+            IndexIterator<std::array<int, 4>, int> it(arr, 0);
+            auto it2 = it + 2;
+            PPR_TEST_ASSERT((it2 - it) == 2);
+            ++it;
+            PPR_TEST_ASSERT(*it == 2);
+        };
+
+        PPR_UNIT_TEST (indexiterator_const_conversion_and_cross_compare) {
+            std::array arr = {5, 6};
+            IndexIterator<std::array<int, 2>, int> it(arr, 0);
+            IndexIterator<std::add_const_t<std::array<int, 2> >, std::add_const_t<int> > cit = it;
+            PPR_TEST_ASSERT(*cit == 5);
+            PPR_TEST_ASSERT(it == cit);
+        };
+
+        PPR_UNIT_TEST (stack_push_pop_and_iterator) {
+            Stack<int, 4> s;
+            PPR_TEST_ASSERT(s.isEmpty());
+            PPR_TEST_ASSERT(s.push(10));
+            PPR_TEST_ASSERT(s.push(20));
+            PPR_TEST_ASSERT(s.size() == 2u);
+            PPR_TEST_ASSERT(s.pop().value() == 20);
+            int sum = 0;
+            for (int v: s)
+                sum += v;
+            PPR_TEST_ASSERT(sum == 10);
+        };
+
+        PPR_UNIT_TEST (stack_overflow_and_clear) {
+            Stack<int, 2> s;
+            PPR_TEST_ASSERT(s.push(1));
+            PPR_TEST_ASSERT(s.push(2));
+            PPR_TEST_ASSERT(!s.push(3));
+            s.clear();
+            PPR_TEST_ASSERT(s.isEmpty());
+        };
+
+        PPR_UNIT_TEST (ringbuffer_push_pop_wrap) {
+            RingBuffer<int, 4> rb;
+            PPR_TEST_ASSERT(rb.pushBack(1));
+            PPR_TEST_ASSERT(rb.pushBack(2));
+            PPR_TEST_ASSERT(rb.pushBack(3));
+            PPR_TEST_ASSERT(rb.pushBack(4));
+            PPR_TEST_ASSERT(not rb.pushBack(5));
+            PPR_TEST_ASSERT(rb.popFront().value() == 1);
+            PPR_TEST_ASSERT(rb.pushBack(5));
+            PPR_TEST_ASSERT(rb[0] == 2 && rb[3] == 5);
+        };
+
+        PPR_UNIT_TEST (ringbuffer_pop_empty_resets_positions) {
+            RingBuffer<int, 2> rb;
+            PPR_TEST_ASSERT(!rb.popFront().has_value());
+            PPR_TEST_ASSERT(!rb.popBack().has_value());
+        };
+
+        PPR_UNIT_TEST (shellsort_empty_and_single) {
+            std::vector<int> empty;
+            sort::inplaceShell(empty);
+            std::vector single = {42};
+            sort::inplaceShell(single);
+            PPR_TEST_ASSERT(single[0] == 42);
+        };
+
+        PPR_UNIT_TEST (shellsort_projection_and_comparator) {
+            struct Item {
+                int id;
+                int key;
+            };
+            std::vector<Item> v = {{1, 10}, {2, 5}, {3, 7}};
+            sort::inplaceShell(v, std::ranges::less{}, &Item::key);
+            PPR_TEST_ASSERT(v[0].id == 2);
+            std::vector desc = {3, 1, 2};
+            sort::inplaceShell(desc, std::ranges::greater{});
+            PPR_TEST_ASSERT(std::ranges::is_sorted(desc, std::ranges::greater{}));
+        };
+
+        PPR_UNIT_TEST (hash_mix_64_and_32) {
+            const u64 x64 = 0x1234567890abcdefull;
+            const u64 m64 = hash::mix(x64);
+            PPR_TEST_ASSERT(m64 != x64);
+            const u32 x32 = 0xdeadbeefu;
+            const u32 m32 = hash::mix(x32);
+            PPR_TEST_ASSERT(m32 != x32);
+        };
+
+        PPR_UNIT_TEST (hash_sized_and_unordered_range_and_ptr_combine) {
+            static_assert(hash::THashable<u32>);
+            std::vector<u32> v = {1, 2, 3};
+            auto hs = hash::sizedRange(v);
+            auto hs2 = hash::sizedRange(std::vector<u32>{1, 2, 3});
+            PPR_TEST_ASSERT(hs.m_value == hs2.m_value);
+            auto hu = hash::unorderedRange(v);
+            auto hu2 = hash::unorderedRange(std::vector<u32>{3, 2, 1});
+            PPR_TEST_ASSERT(hu.m_value == hu2.m_value);
+
+            int x = 0;
+            auto p1 = hash::ptr(&x);
+            auto p2 = hash::ptr(&x);
+            PPR_TEST_ASSERT(p1.m_value == p2.m_value);
+            auto c = hash::combine(hash_t{1}, hash_t{2});
+            PPR_TEST_ASSERT(c.m_value != 0);
+        };
+
+        PPR_UNIT_TEST (additional_hash_and_pointer_checks) {
+            auto a = hash::combine(hash_t{5}, hash_t{7});
+            auto b = hash::combine(hash_t{7}, hash_t{5});
+            PPR_TEST_ASSERT(a.m_value != 0 && b.m_value != 0);
+
+            int y = 3;
+            RelPtr rp(&y);
+            PPR_TEST_ASSERT(rp == &y);
+            PPR_TEST_ASSERT((rp <=> &y) == std::strong_ordering::equal);
+        };
+    }
+} // namespace pP::tests::detail
+
+namespace pP::tests {
+    extern const UnitTest relocatable = UnitTest::Named("relocatable") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::traits_relocatable_fundamentals,
+            detail::Container::traits_relocatable_user_type_negative,
+            detail::Container::traits_relocatable_specialized_types,
+        });
+    };
+    extern const UnitTest hash = UnitTest::Named("hash") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::hash_mix_64_and_32,
+            detail::Container::hash_sized_and_unordered_range_and_ptr_combine,
+            detail::Container::additional_hash_and_pointer_checks,
+        });
+    };
+    extern const UnitTest sort = UnitTest::Named("sort") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::shellsort_empty_and_single,
+            detail::Container::shellsort_projection_and_comparator,
+        });
+    };
+    extern const UnitTest bitmask = UnitTest::Named("bitmask") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::bitmask_basic_set_reset_test,
+            detail::Container::bitmask_rotate_and_pop_tests,
+            detail::Container::bitmask_range_and_flip_test,
+            detail::Container::bitmask_byte_swap_and_invert_and_set_first_last_unset_first,
+            detail::Container::bitmask_ref_mutation_visibility,
+            detail::Container::bitmask_ref_compound_ops,
+        });
+    };
+    extern const UnitTest pointers = UnitTest::Named("pointers") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::relptr_null_and_valid,
+            detail::Container::relptr_copy_assign_and_comparisons,
+            detail::Container::tagptr_basic_tag_and_data,
+            detail::Container::tagptr_bits_reinterpret_and_mutation,
+        });
+    };
+    extern const UnitTest iterators = UnitTest::Named("iterators") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::indexiterator_arithmetic_and_distance,
+            detail::Container::indexiterator_const_conversion_and_cross_compare,
+        });
+    };
+    extern const UnitTest stack = UnitTest::Named("stack") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::stack_push_pop_and_iterator,
+            detail::Container::stack_overflow_and_clear,
+        });
+    };
+    extern const UnitTest ring_buffer = UnitTest::Named("ring_buffer") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Container::ringbuffer_push_pop_wrap,
+            detail::Container::ringbuffer_pop_empty_resets_positions,
+        });
+    };
+} // namespace pP::tests

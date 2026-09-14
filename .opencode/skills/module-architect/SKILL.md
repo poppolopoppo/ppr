@@ -20,8 +20,8 @@ guides the orchestrator; `@fixer` performs bounded source and CMake edits.
 | Primary interface | `export module engine.core;` | `Core.cppm` |
 | Partition interface | `export module engine.core:memory.arena;` | `Core.Memory.Arena.cppm` |
 | Partition implementation | `module engine.core; import :memory.arena;` | `Core.Memory.Arena.cpp` |
-| Core test partition | `export module engine.tests.core:memory.arena;` | `Core.Memory.Arena.Tests.cppm` |
-| App test partition | `export module engine.tests.app:player;` | `App.Player.Tests.cppm` |
+| Core test group | `module engine.tests.core;` (impl unit, PRIVATE SOURCES) | `Core.Allocator.Tests.cpp` |
+| App test group | `module engine.tests.app;` (impl unit, PRIVATE SOURCES) | `App.Player.Tests.cpp` |
 
 - A colon separates a module from its partition; dots express partition
   hierarchy and are preserved in the filename suffix.
@@ -110,8 +110,19 @@ For a new, moved, split, renamed, or removed partition:
 
 - Core tests import `engine.core`; app tests import `engine.app`; shared test
   support is `engine.tests`.
-- Register test interfaces in their executable's `FILE_SET CXX_MODULES` and
-  add their test-umbrella import using the existing umbrella convention.
+- Test suites keep ONE exported root (`core` / `app`, declared `extern` in the
+  umbrella `.cppm`, defined in the suite root `.cpp`). Thematic test groups are
+  private `.cpp` impl units (`module engine.tests.<suite>;`): non-exported
+  `detail::` leaves plus one `extern const UnitTest <group>` built in the same
+  TU. No `export module engine.tests.<suite>:<part>` partitions.
+- Register the umbrella `.cppm` in the executable's `FILE_SET CXX_MODULES` and
+  every group/root `.cpp` in PRIVATE SOURCES; the suite root `.cpp`
+  forward-declares each node with `extern` and recurses them in fixed order.
+- Singleton leaves that sit directly under the root (e.g. app's `pixel_readback`
+  or lifecycle leaves) are re-exposed from their group file via copy, never
+  wrapped in a new `Named` group: `extern const UnitTest <leaf> = detail::<leaf>;`.
+  Wrapping one test in a `Named` would add a tree level and change its
+  `core/<...>` / `app/<...>` path.
 - Tests include `"pP/UnitTest.h"` for test macros and use `PPR_TEST_ASSERT`,
   not engine assertions, in test bodies.
 

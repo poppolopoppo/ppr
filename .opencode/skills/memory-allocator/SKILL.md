@@ -924,7 +924,7 @@ activates the ASAN code paths in the poison subsystem:
 The `__asan_default_options` function sets `abort_on_error=1` and `print_stats=1`
 for immediate failure with diagnostics.
 
-Many unit tests in `Core.Memory.Tests.cppm` are gated on
+Many unit tests in `Core.Poisoning.Tests.cpp` (poisoning group) are gated on
 `if constexpr (mem::is_asan_enabled_v)` and use `UnitTest::expect_crash` to
 verify that accessing poisoned memory correctly triggers ASAN.
 

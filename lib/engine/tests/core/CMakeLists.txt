@@ -3,32 +3,35 @@ add_executable(engine.tests.core main.cpp)
 target_sources(engine.tests.core
         PUBLIC
         FILE_SET CXX_MODULES FILES
-        Core.Math.Tests.cppm
-        Core.Opaque.Tests.cppm
-        Core.Service.Tests.cppm
-        Core.Enums.Tests.cppm
-        Core.HAL.Tests.cppm
-        Core.Memory.Tests.cppm
-        Core.Memory.Arena.Tests.cppm
-        Core.Memory.PagePool.Tests.cppm
-        Core.Containers.Tests.cppm
-        Core.Containers.FlatMap.Tests.cppm
-        Core.Containers.StableVector.Tests.cppm
-        Core.Containers.SparseVector.Tests.cppm
-        Core.Containers.HashMap.Tests.cppm
-        Core.Concurrency.Channel.Tests.cppm
-        Core.Concurrency.Context.Tests.cppm
-        Core.Concurrency.Event.Tests.cppm
-        Core.Io.Tests.cppm
-        Core.Io.FileWatcher.Tests.cppm
-        Core.Strings.Tests.cppm
-        Core.Utility.Tests.cppm
         Core.Tests.cppm
 )
 
 target_sources(engine.tests.core
         PRIVATE
         Core.Tests.cpp
+        Core.Memory.PagePool.Tests.cpp
+        Core.Memory.Arena.Tests.cpp
+        Core.Memory.Slab.Tests.cpp
+        Core.Allocator.Tests.cpp
+        Core.SafePtr.Tests.cpp
+        Core.Poisoning.Tests.cpp
+        Core.Containers.Core.Tests.cpp
+        Core.Containers.FlatMap.Tests.cpp
+        Core.Containers.HashMap.Tests.cpp
+        Core.Containers.StableVector.Tests.cpp
+        Core.Containers.SparseVector.Tests.cpp
+        Core.Concurrency.Channel.Tests.cpp
+        Core.Concurrency.Event.Tests.cpp
+        Core.Concurrency.Context.Tests.cpp
+        Core.Io.Tests.cpp
+        Core.Io.FileWatcher.Tests.cpp
+        Core.HAL.Tests.cpp
+        Core.Enums.Tests.cpp
+        Core.Math.Tests.cpp
+        Core.Strings.Tests.cpp
+        Core.Utility.Tests.cpp
+        Core.Opaque.Tests.cpp
+        Core.Service.Tests.cpp
 )
 
 setup_ppr_project(engine.tests.core

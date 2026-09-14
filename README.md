@@ -175,7 +175,7 @@ ctest --test-dir out/build/msvc-dev --output-on-failure
 
 ```bash
 out/build/msvc-dev/engine.tests.core --shuffle
-out/build/msvc-dev/engine.tests.app --run-test App.Player
+out/build/msvc-dev/engine.tests.app --run-test app/player
 ```
 
 ### Options
@@ -183,6 +183,18 @@ out/build/msvc-dev/engine.tests.app --run-test App.Player
 Full flag list lives with the shared test infrastructure (`lib/engine/tests/shared/`, `parseCli()`).
 
 ### Defining Tests
+
+Each suite keeps one exported root (`core` / `app`) and a set of thematic
+private group files (`lib/engine/tests/core/Core.Allocator.Tests.cpp`, …):
+a `module engine.tests.<suite>;` impl unit holding non-exported `detail::`
+leaves plus one top-level `extern const UnitTest <group>` per file
+(sub-groups live with their parent; `memory`/`containers` assembled in
+`Core.Tests.cpp`). Singleton leaves under the root are re-exposed via copy
+(`extern const <leaf> = detail::<leaf>;`, never a new `Named` — see
+`module-architect`). Add a
+new leaf to the existing thematic file; add a new group file (CMake PRIVATE
+SOURCES) plus one `extern` forward-declare and one recurse entry in the suite
+root only for a new thematic area:
 
 ```cpp
 PPR_UNIT_TEST(my_test) {

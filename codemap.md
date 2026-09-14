@@ -99,13 +99,23 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 ## Test Infrastructure
 
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
-  services, enums.
-- `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests.
+  services, enums. Thematic private groups (23 files: per-area splits such as `Core.Allocator.Tests.cpp`,
+  `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
+  `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core`.
+- `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
+  (16 files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
+  `App.Shader/Viewport/RenderView/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
+  `Tests.cpp` + `App.Tests.cpp` root of 28 nodes (`11` app singletons via copy-alias); umbrella exports only `extern const UnitTest app`.
+- Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
+  `extern const UnitTest <group>` per file; sub-groups live with their parent; `memory`/`containers` assembled in `Core.Tests.cpp`.
+  Singleton leaves under the root re-expose via copy (`extern const <leaf> = detail::<leaf>;`, never a new `Named`); see `module-architect`.
 - Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
-- Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (NOT `include/pP/Macros.h`).
+- Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
 
 ## Map maintenance
 
 Keep this document focused on finding code. Update links and summaries with
 their corresponding source changes; put durable rules in `AGENTS.md` instead.
+
+- Diagrams: rendered PlantUML galleries under `docs/diagrams/` (e.g. `docs/diagrams/engine.app/`).
 

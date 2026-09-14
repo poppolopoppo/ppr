@@ -4,25 +4,27 @@ target_sources(engine.tests.app
     PUBLIC
         FILE_SET CXX_MODULES FILES
             App.Tests.cppm
-            App.Camera.Tests.cppm
-            App.Devices.Tests.cppm
-            App.Player.Tests.cppm
-            App.Dispatch.Tests.cppm
-            App.Snapshot.Tests.cppm
-            App.PlayerService.Tests.cppm
-            App.Player.Graph.Tests.cppm
-            App.Shader.Tests.cppm
-            App.Viewport.Tests.cppm
-            App.RenderView.Tests.cppm
-            App.PixelReadback.Tests.cppm
-            App.Lifecycle.Tests.cppm
-            App.Quaternion.Tests.cppm
-            App.Input.Listener.Tests.cppm
-            App.WindowInput.Tests.cppm
-            App.ImGuiRouting.Tests.cppm
-            App.ImguiDpi.Tests.cppm
-            App.FilteredAnalog.Tests.cppm
-            App.ZeroVProbe.Tests.cppm
+    )
+
+target_sources(engine.tests.app
+    PRIVATE
+        App.Tests.cpp
+        App.Player.Tests.cpp
+        App.PlayerService.Tests.cpp
+        App.Player.Graph.Tests.cpp
+        App.Devices.Tests.cpp
+        App.Input.Listener.Tests.cpp
+        App.FilteredAnalog.Tests.cpp
+        App.WindowInput.Tests.cpp
+        App.Shader.Tests.cpp
+        App.Viewport.Tests.cpp
+        App.RenderView.Tests.cpp
+        App.PixelReadback.Tests.cpp
+        App.Camera.Tests.cpp
+        App.Quaternion.Tests.cpp
+        App.ImGuiRouting.Tests.cpp
+        App.ImguiDpi.Tests.cpp
+        App.ZeroVProbe.Tests.cpp
     )
 
 setup_ppr_project(engine.tests.app
