@@ -11,6 +11,7 @@ import :window.viewport;
 import std;
 
 namespace pP {
+    // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
 
     namespace {
@@ -123,7 +124,7 @@ namespace pP {
     std::error_code ApplicationEditor::shutdown() {
         std::error_code first_err{};
 
-        if (m_ui_service.get()) {
+        if (m_ui_service) {
             ServicesStore &app_services = getServices();
             PPR_VERIFY(app_services.erase(*m_ui_service));
 
@@ -131,32 +132,24 @@ namespace pP {
             m_ui_service.reset();
         }
 
-        if (m_triangle_pass.get()) {
+        if (m_triangle_pass) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->shutdown());
             m_triangle_pass.reset();
         }
 
-        if (m_main_input_context.get()) {
-            m_main_input_context->m_context.clearInputListeners();
-            m_main_input_context.reset();
-        }
-
-        if (m_player.get()) {
+        if (m_player) {
             m_player->getListener().clearInputMappings();
             m_player->clearFrameMessages();
         }
 
-        m_camera_controller.reset();
-        m_camera_input_mapping.reset();
-        m_camera.reset();
-
-        SharedWindow main_window{};
-        if (m_main_input_context.get()) {
+        safe_ptr<Window> main_window{};
+        if (m_main_input_context) {
             main_window = m_main_input_context->m_window;
+            m_main_input_context->m_context.clearInputListeners();
             m_main_input_context.reset();
         }
 
-        if (m_main_viewport.get()) {
+        if (m_main_viewport) {
             PPR_ASSERT(main_window == &m_main_viewport->getWindow());
             m_main_viewport.reset();
         }
@@ -166,6 +159,10 @@ namespace pP {
             std::ignore = window_service.setMainWindow(nullptr);
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, window_service.destroyWindow(std::move(main_window)));
         }
+
+        m_camera_input_mapping.reset();
+        m_camera_controller.reset();
+        m_camera.reset();
 
         PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, Application::shutdown());
         return first_err;

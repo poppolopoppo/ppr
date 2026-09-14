@@ -10,6 +10,7 @@ import std;
 
 export namespace pP {
     class TrianglePass;
+    class Window;
     class WindowInputContext;
     class InputMapping;
 
@@ -50,5 +51,7 @@ export namespace pP {
         std::unique_ptr<IUIService> m_ui_service{};
         std::unique_ptr<WindowViewport> m_main_viewport{};
         std::unique_ptr<TrianglePass> m_triangle_pass{};
+
+        void onMainWindowClosed_(const Window &window) noexcept;
     };
 }
