@@ -97,7 +97,7 @@ namespace pP {
 
         if (m_pressed.erase(button) > 0u) {
             std::ignore = context.postKeyEvent(dt, InputMessage{
-                input_key.value(), InputDigital(true),
+                input_key.value(), InputDigital(false),
                 device_id, EInputMessageEvent::released
             });
             return true;
