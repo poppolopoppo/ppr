@@ -10,7 +10,7 @@ import engine.core;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(Input, info, none)
+    PPR_DEFINE_LOG_CATEGORY(Input, verbose, none)
 
     // ------------------------------------------------------------------
     // input listener
@@ -130,6 +130,7 @@ namespace pP {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
                         {"input_value", event.m_value},
+                        {"input_key", message.m_key.m_name},
                         });
                     break;
 
@@ -149,6 +150,7 @@ namespace pP {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
                         {"input_value", event.m_value},
+                        {"input_key", message.m_key.m_name},
                         });
 
                     [[fallthrough]];
@@ -172,10 +174,11 @@ namespace pP {
                         m_action_callback(event, message.m_key);
                     }
 
-                    PPR_LOG(Input, verbose, "event triggered", {
+                    PPR_LOG(Input, debug, "event triggered", {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
                         {"input_value", event.m_value},
+                        {"input_key", message.m_key.m_name},
                         {"repeat_count", event.m_repeat_count},
                         });
                     break;

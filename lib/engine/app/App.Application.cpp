@@ -87,24 +87,11 @@ namespace pP {
             } catch (...) {
                 m_request_exit(std::make_error_code(std::errc::state_not_recoverable));
             }
+
+            Log::flush();
         }
 
-        // Assign-or-retain: PPR_RETAIN_ERROR_ON_FAIL ENSUREs an already-set
-        // error, which misfires when the lifecycle clause is the first error
-        // recorded (debug hooks turn it into a failure). Same observable
-        // contract — first error wins — without the tripwire. Warning, not
-        // error: a lifecycle clause is designed control flow (throw-to-clause
-        // propagation) and the error_code return already carries it.
-        if (const std::error_code lifecycle_err = m_lifecycle->error()) {
-            PPR_LOG(App, warning, "FAILED: m_lifecycle->error()", {
-                {"category", lifecycle_err.category().name()},
-                {"value", lifecycle_err.value()},
-                {"message", lifecycle_err.message()}
-            });
-            if (not first_err) {
-                first_err = lifecycle_err;
-            }
-        }
+        PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_lifecycle->error());
         return first_err;
     }
 

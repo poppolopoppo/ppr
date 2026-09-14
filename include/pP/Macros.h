@@ -277,7 +277,7 @@ extern "C" void _ReadWriteBarrier();
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
         });                                                                 \
-        if (not PPR_ENSURE(_RETAINED_ERRC)) {                               \
+        if (not (_RETAINED_ERRC)) {                                         \
             _RETAINED_ERRC = PPR_ANONYMIZE(_errc);                          \
         }                                                                   \
     }
