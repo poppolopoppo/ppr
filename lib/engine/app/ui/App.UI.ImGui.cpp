@@ -729,7 +729,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         void ImGuiService::onInputMouseWheel_(const InputActionEvent &event, const InputKey &) noexcept {
-            const float2 wheel_delta = event.getAxis2DValue().m_absolute;
+            const float2 wheel_delta = event.getAxis2DValue().m_relative;
             ImGui::GetIO().AddMouseWheelEvent(wheel_delta.x, wheel_delta.y);
         }
 
