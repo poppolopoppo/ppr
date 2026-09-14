@@ -25,7 +25,8 @@ Lowest-level platform abstraction (`export module engine.core:hal`) plus shared 
 - **memory**: `mem::OS` → `pageAlloc`/`pageCommit`/`pageFree`; poison/ASAN annotations wrap mapped and paged memory.
 - **concurrency**: `RawChannel` → `ringBufferAlloc`; channel/context/event wakeups ride `PulseEvent`/`Signal`.
 - **Core.Io**: thin RAII/event wrapper over `hal::io` (see `io/codemap.md`); `IoRequest` embeds the overlapped storage whose minimum the HAL declares.
-- **engine.app / engine.shader**: startup/debug/thread-naming/process APIs; shader loading via `mapFile`, hot-reload via watches.
+- **engine.app / engine.shader**: startup/debug/thread-naming/process APIs;
+  shader loading via `mapFile`; watches provide normalized file-change events.
 - **engine.tests.core**: page/ring-buffer round-trips, debugger/output probes, `spawnAndWait`, deadline timers, transcoding, IO submit/poll/wait and watch suites.
 
 ## Key Files

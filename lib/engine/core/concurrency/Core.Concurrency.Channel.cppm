@@ -133,6 +133,7 @@ export namespace pP {
         [[nodiscard]] bool isClosedOrClosing() const noexcept;
         [[nodiscard]] std::size_t capacity() const noexcept;
 
+        // TODO: refactor into errc with std::error_code and a custom error category
         enum EError {
             error_closed,
             error_empty,

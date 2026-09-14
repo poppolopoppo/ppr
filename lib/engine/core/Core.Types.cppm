@@ -307,6 +307,7 @@ export namespace pP {
 
         template<typename ReturnT, typename... ArgsT>
         struct FunctionTraits<ReturnT(ArgsT...)> {
+            static constexpr bool is_const_v = false;
             static constexpr bool is_noexcept_v = false;
 
             using return_type = ReturnT;
@@ -324,6 +325,7 @@ export namespace pP {
 
         template<typename ReturnT, typename... ArgsT>
         struct FunctionTraits<ReturnT(ArgsT...) noexcept> {
+            static constexpr bool is_const_v = false;
             static constexpr bool is_noexcept_v = true;
 
             using return_type = ReturnT;
@@ -337,6 +339,18 @@ export namespace pP {
 
             template<class ClassT>
             using const_member_func = ReturnT (ClassT::*)(ArgsT...) noexcept;
+        };
+
+        template<typename ReturnT, typename... ArgsT>
+        struct FunctionTraits<ReturnT(ArgsT...) const>
+                : FunctionTraits<ReturnT(ArgsT...)> {
+            static constexpr bool is_const_v = true;
+        };
+
+        template<typename ReturnT, typename... ArgsT>
+        struct FunctionTraits<ReturnT(ArgsT...) const noexcept>
+                : FunctionTraits<ReturnT(ArgsT...) noexcept> {
+            static constexpr bool is_const_v = true;
         };
 
         template<typename T>

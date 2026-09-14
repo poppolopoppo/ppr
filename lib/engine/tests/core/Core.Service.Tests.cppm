@@ -9,16 +9,16 @@ import engine.core;
 export namespace pP::tests {
     namespace Service {
         PPR_UNIT_TEST(type_uid_identity) {
-            constexpr pP::hash_t id_a = typeUid<int>();
-            constexpr pP::hash_t id_b = typeUid<int>();
+            const std::type_index id_a = typeid(int);
+            const std::type_index id_b = typeid(int);
             PPR_TEST_ASSERT(id_a == id_b);
         };
 
         PPR_UNIT_TEST(type_uid_unique_types) {
-            constexpr pP::hash_t id_int = typeUid<int>();
-            constexpr pP::hash_t id_float = typeUid<float>();
-            constexpr pP::hash_t id_double = typeUid<double>();
-            constexpr pP::hash_t id_char = typeUid<char>();
+            const std::type_index id_int = typeid(int);
+            const std::type_index id_float = typeid(float);
+            const std::type_index id_double = typeid(double);
+            const std::type_index id_char = typeid(char);
             PPR_TEST_ASSERT(id_int != id_float);
             PPR_TEST_ASSERT(id_int != id_double);
             PPR_TEST_ASSERT(id_float != id_double);
@@ -26,34 +26,36 @@ export namespace pP::tests {
         };
 
         PPR_UNIT_TEST(type_uid_template_identity) {
-            constexpr pP::hash_t id_a = typeUid<std::pair<int, float>>();
-            constexpr pP::hash_t id_b = typeUid<std::pair<int, float>>();
+            const std::type_index id_a = typeid(std::pair<int, float>);
+            const std::type_index id_b = typeid(std::pair<int, float>);
             PPR_TEST_ASSERT(id_a == id_b);
         };
 
         PPR_UNIT_TEST(type_uid_unique_templates) {
-            constexpr pP::hash_t id_pair = typeUid<std::pair<int, float>>();
-            constexpr pP::hash_t id_tuple = typeUid<std::tuple<int, float>>();
-            constexpr pP::hash_t id_vector = typeUid<std::vector<int>>();
+            const std::type_index id_pair = typeid(std::pair<int, float>);
+            const std::type_index id_tuple = typeid(std::tuple<int, float>);
+            const std::type_index id_vector = typeid(std::vector<int>);
             PPR_TEST_ASSERT(id_pair != id_tuple);
             PPR_TEST_ASSERT(id_pair != id_vector);
             PPR_TEST_ASSERT(id_tuple != id_vector);
         };
 
         PPR_UNIT_TEST(type_uid_cv_qualified) {
-            constexpr pP::hash_t id_int = typeUid<int>();
-            constexpr pP::hash_t id_const_int = typeUid<const int>();
-            constexpr pP::hash_t id_volatile_int = typeUid<volatile int>();
-            constexpr pP::hash_t id_ref = typeUid<int&>();
-            PPR_TEST_ASSERT(id_int != id_const_int);
-            PPR_TEST_ASSERT(id_int != id_volatile_int);
-            PPR_TEST_ASSERT(id_int != id_ref);
+            // [expr.typeid] strips top-level cv-qualifiers and reference-ness:
+            // all of these denote the same type_info as int.
+            const std::type_index id_int = typeid(int);
+            const std::type_index id_const_int = typeid(const int);
+            const std::type_index id_volatile_int = typeid(volatile int);
+            const std::type_index id_ref = typeid(int&);
+            PPR_TEST_ASSERT(id_int == id_const_int);
+            PPR_TEST_ASSERT(id_int == id_volatile_int);
+            PPR_TEST_ASSERT(id_int == id_ref);
         };
 
         PPR_UNIT_TEST(type_uid_pointer_types) {
-            constexpr pP::hash_t id_int_ptr = typeUid<int*>();
-            constexpr pP::hash_t id_float_ptr = typeUid<float*>();
-            constexpr pP::hash_t id_int_ptr_ptr = typeUid<int**>();
+            const std::type_index id_int_ptr = typeid(int *);
+            const std::type_index id_float_ptr = typeid(float *);
+            const std::type_index id_int_ptr_ptr = typeid(int **);
             PPR_TEST_ASSERT(id_int_ptr != id_float_ptr);
             PPR_TEST_ASSERT(id_int_ptr != id_int_ptr_ptr);
         };
@@ -112,13 +114,14 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(loc.insert(safe_ptr<MockServiceA>(&a)));
             PPR_TEST_ASSERT(loc.tryGet<MockServiceA>().isValid());
 
-            PPR_TEST_ASSERT(loc.erase<MockServiceA>());
+            PPR_TEST_ASSERT(loc.erase<MockServiceA>(a));
             PPR_TEST_ASSERT(not loc.tryGet<MockServiceA>().isValid());
         };
 
         PPR_UNIT_TEST(erase_nonexistent) {
+            MockServiceA a;
             ServicesStore loc;
-            PPR_TEST_ASSERT(not loc.erase<MockServiceA>());
+            PPR_TEST_ASSERT(not loc.erase<MockServiceA>(a));
         };
 
         PPR_UNIT_TEST(reset) {
@@ -187,7 +190,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(parent.insert(safe_ptr<MockServiceA>(&a)));
 
             ServicesStore child{safe_ptr<ServicesStore>(&parent)};
-            PPR_TEST_ASSERT(not child.erase<MockServiceA>());
+            PPR_TEST_ASSERT(not child.erase<MockServiceA>(a));
             PPR_TEST_ASSERT(parent.tryGet<MockServiceA>().isValid());
 
             auto retrieved = child.tryGet<MockServiceA>();

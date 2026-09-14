@@ -208,25 +208,27 @@ extern "C" void _ReadWriteBarrier();
 #define PPR_ENABLE_LOGGING 1
 
 #if PPR_ENABLE_LOGGING
-#   define PPR_DECLARE_LOG_CATEGORY(_NAME)                    \
-       namespace details::log {                               \
-           [[nodiscard]] pP::Log::Category &_NAME() noexcept; \
-       }
+#   define PPR_DECLARE_LOG_CATEGORY(_NAME)                                  \
+        namespace details::log {                                            \
+            [[nodiscard]] pP::Log::Category &_NAME() noexcept;              \
+        }
 
-#   define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)  \
-       namespace details::log {                                \
-           [[nodiscard]] pP::Log::Category &_NAME() noexcept { \
-               static pP::Log::Category g_instance{            \
-                   PPR_STRINGIZE(_NAME),                       \
-                   (pP::Log::ELevel::_VERBOSITY),              \
-                   (pP::Log::Category::EFlags::_FLAGS),        \
-               };                                              \
-               return g_instance;                              \
-           }                                                   \
-       }
+// ReSharper disable CppUseInternalLinkage
+#   define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)               \
+        namespace details::log {                                            \
+            [[nodiscard]] pP::Log::Category &_NAME() noexcept {             \
+                static pP::Log::Category g_instance{                        \
+                   PPR_STRINGIZE(_NAME),                                    \
+                   (pP::Log::ELevel::_VERBOSITY),                           \
+                   (pP::Log::Category::EFlags::_FLAGS),                     \
+                };                                                          \
+                return g_instance;                                          \
+            }                                                               \
+        }
+// ReSharper restore CppUseInternalLinkage
 
 #   define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...) \
-       pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
+        pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
 
 #   define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) \
         pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
@@ -256,7 +258,7 @@ extern "C" void _ReadWriteBarrier();
 
 #define PPR_RETURN_ERROR_ON_FAIL(_CATEGORY, ...)                            \
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
-        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
+        PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, error,                                           \
             "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
@@ -266,20 +268,23 @@ extern "C" void _ReadWriteBarrier();
         return PPR_ANONYMIZE(_errc);                                        \
     }
 
-#define PPR_LOG_WARNING_ON_FAIL(_CATEGORY, ...)                             \
+#define PPR_RETAIN_ERROR_ON_FAIL(_CATEGORY, _RETAINED_ERRC, ...)            \
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
-        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
-        PPR_LOG(_CATEGORY, warning,                                         \
+        PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
+        PPR_LOG(_CATEGORY, error,                                           \
             "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
         });                                                                 \
+        if (not PPR_ENSURE(_RETAINED_ERRC)) {                               \
+            _RETAINED_ERRC = PPR_ANONYMIZE(_errc);                          \
+        }                                                                   \
     }
 
 #define PPR_RETURN_UNEXPECTED_ON_FAIL(_CATEGORY, ...)                       \
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
-        hasFailed(PPR_ANONYMIZE(_errc))) [[unlikely]] {                     \
+        PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, error,                                           \
             "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
@@ -289,5 +294,13 @@ extern "C" void _ReadWriteBarrier();
         return std::unexpected{PPR_ANONYMIZE(_errc)};                       \
     }
 
-#define RHI_RETURN_ERROR_ON_FAIL(_CATEGORY, ...)                              \
-    PPR_RETURN_ERROR_ON_FAIL(_CATEGORY, pP::rhi::result(__VA_ARGS__))
+#define PPR_LOG_WARNING_ON_FAIL(_CATEGORY, ...)                             \
+    if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
+        PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
+        PPR_LOG(_CATEGORY, warning,                                         \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            {"category", PPR_ANONYMIZE(_errc).category().name()},           \
+            {"value", PPR_ANONYMIZE(_errc).value()},                        \
+            {"message", PPR_ANONYMIZE(_errc).message()}                     \
+        });                                                                 \
+    }

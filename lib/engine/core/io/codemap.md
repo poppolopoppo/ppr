@@ -18,7 +18,8 @@ Engine-level async file IO, memory-mapped files, and directory watching on top o
 ## Integration
 - **hal::io**: `init`/`deinit`, `openFile`/`closeFile`, `submit`/`poll`/`wait`/`wake`/`cancelIo`, `mapFile`/`unmapFile`/`mapData`/`mapSize`, `openWatch`/`closeWatch`/`pollWatch`/`waitWatch`/`parseWatchEvents`; `SubmitEntry::{m_user_data → IoRequest*, m_overlapped → embedded storage}` and `CompletionEntry` bridge the layers.
 - **concurrency**: `IoRequest`/`DirectoryWatcher` are `IEvent`s — completions and file changes are observed via `Signal`/`select` next to `RawChannel` and contexts.
-- **engine.shader**: shader sources mapped via `io::mapFile`; shader directories watched via `DirectoryWatcher` for hot-reload triggers.
+- **engine.shader**: shader sources mapped via `io::mapFile`; shader
+  directories may be observed via `DirectoryWatcher` for file-change events.
 - **engine.tests.core**: `IoPort` open/read/write/submit/poll/wait cycles, error paths, `Port::move_semantics` (no double-close) coverage; `MappedFile` map/span/size; watcher start/stop/event-delivery/`select` filtering suites.
 
 ## Key Files

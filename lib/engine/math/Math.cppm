@@ -8,6 +8,56 @@ export module engine.math;
 import engine.core;
 import std;
 
+namespace pP::math::details {
+    template<std::floating_point T>
+    [[nodiscard]] constexpr T roundHalfAwayFromZero(const T value) noexcept {
+        return std::round(value);
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr mango::math::Vector<T, DimV> roundHalfAwayFromZero(const mango::math::Vector<T, DimV> &value) noexcept {
+        return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<T, DimV> {
+            mango::math::Vector<T, DimV> result{};
+            ((result[idx] = std::round(value[idx])), ...);
+            return result;
+        });
+    }
+
+    template<typename ToT, typename FromT, u32 DimV>
+    [[nodiscard]] constexpr mango::math::Vector<ToT, DimV> vectorCast(const mango::math::Vector<FromT, DimV> &value) noexcept {
+        return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<ToT, DimV> {
+            mango::math::Vector<ToT, DimV> result{};
+            ((result[idx] = static_cast<ToT>(value[idx])), ...);
+            return result;
+        });
+    }
+
+    template<>
+    [[nodiscard]] constexpr mango::math::Vector<i32, 4u> vectorCast<i32, float, 4u>(const mango::math::Vector<float, 4u> &value) noexcept {
+        return mango::math::truncate<mango::math::Vector<i32, 4u> >(value);
+    }
+
+    template<>
+    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, i32, 4u>(const mango::math::Vector<i32, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4u> >(value);
+    }
+
+    template<>
+    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, u32, 4u>(const mango::math::Vector<u32, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4u> >(value);
+    }
+
+    template<>
+    [[nodiscard]] constexpr mango::math::Vector<u32, 4u> vectorCast<u32, float, 4u>(const mango::math::Vector<float, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<u32, 4u> >(value);
+    }
+
+    template<typename ToT, typename FromT>
+    [[nodiscard]] constexpr ToT scalarCast(const FromT value) noexcept {
+        return static_cast<ToT>(value);
+    }
+}
+
 export namespace pP {
     using namespace mango::math;
 
@@ -362,33 +412,94 @@ export namespace pP {
         });
     }
 
-    template<typename ToT, typename FromT, u32 DimV>
-        requires std::convertible_to<FromT, ToT>
-    [[nodiscard]] constexpr Vector<ToT, DimV> vector_cast(const Vector<FromT, DimV> &value) noexcept {
-        return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> Vector<ToT, DimV> {
-            return Vector<ToT, DimV>(
-                static_cast<ToT>(value[idx])...);
-        });
+    template<std::floating_point T>
+    [[nodiscard]] constexpr i32 ceilToInt(const T value) noexcept {
+        return math::details::scalarCast<i32>(ceil(value));
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr Vector<int, DimV> ceilToInt(const Vector<T, DimV> &value) noexcept {
-        return vector_cast<int>(ceil(value));
+    [[nodiscard]] constexpr Vector<i32, DimV> ceilToInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<i32>(ceil(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr i32 floorToInt(const T value) noexcept {
+        return math::details::scalarCast<i32>(floor(value));
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr Vector<int, DimV> floorToInt(const Vector<T, DimV> &value) noexcept {
-        return vector_cast<int>(floor(value));
+    [[nodiscard]] constexpr Vector<i32, DimV> floorToInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<i32>(floor(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr i32 roundToInt(const T value) noexcept {
+        return math::details::scalarCast<i32>(math::details::roundHalfAwayFromZero(value));
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr Vector<int, DimV> roundToInt(const Vector<T, DimV> &value) noexcept {
-        return vector_cast<int>(round(value));
+    [[nodiscard]] constexpr Vector<i32, DimV> roundToInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<i32>(math::details::roundHalfAwayFromZero(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr i32 truncToInt(const T value) noexcept {
+        return math::details::scalarCast<i32>(trunc(value));
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr Vector<int, DimV> truncToInt(const Vector<T, DimV> &value) noexcept {
-        return vector_cast<int>(trunc(value));
+    [[nodiscard]] constexpr Vector<i32, DimV> truncToInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<i32>(trunc(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr u32 ceilToUInt(const T value) noexcept {
+        return math::details::scalarCast<u32>(ceil(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<u32, DimV> ceilToUInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<u32>(ceil(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr u32 floorToUInt(const T value) noexcept {
+        return math::details::scalarCast<u32>(floor(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<u32, DimV> floorToUInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<u32>(floor(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr u32 roundToUInt(const T value) noexcept {
+        return math::details::scalarCast<u32>(math::details::roundHalfAwayFromZero(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<u32, DimV> roundToUInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<u32>(math::details::roundHalfAwayFromZero(value));
+    }
+
+    template<std::floating_point T>
+    [[nodiscard]] constexpr u32 truncToUInt(const T value) noexcept {
+        return math::details::scalarCast<u32>(trunc(value));
+    }
+
+    template<std::floating_point T, u32 DimV>
+    [[nodiscard]] constexpr Vector<u32, DimV> truncToUInt(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<u32>(trunc(value));
+    }
+
+    template<std::integral T>
+    [[nodiscard]] constexpr float toFloat(const T value) noexcept {
+        return math::details::scalarCast<float>(value);
+    }
+
+    template<std::integral T, u32 DimV>
+    [[nodiscard]] constexpr Vector<float, DimV> toFloat(const Vector<T, DimV> &value) noexcept {
+        return math::details::vectorCast<float>(value);
     }
 
     template<typename T, u32 DimV>

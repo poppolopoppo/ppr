@@ -31,7 +31,8 @@ The memory partition of `engine.core` defines the entire allocator hierarchy and
 ## Integration
 - **engine.math**: Uses `mem::GPA` for temporary math scratch buffers; `mem::ScratchPad` in thread-local storage for per-thread math work.
 - **engine.rhi**: GPU resource uploads go through `mem::GPA`; upload heaps and command list buffers are arena-allocated per-frame.
-- **engine.shader**: Compiled shader bytecode and hot-reload data use `mem::Arena` for persistent storage; scratch buffers use `mem::ScratchPad`.
+- **engine.shader**: Compiled shader bytecode uses `mem::Arena` for persistent
+  storage; scratch buffers use `mem::ScratchPad`.
 - **engine.app**: `Application` constructor creates the global GPA; viewport-specific allocators may be derived from it via `Fallback` or `Threshold`.
 - **function partition**: `BroadcastCallback`/`CallbackSink` default to `mem::GPA` for their `SparseVector` subscriber store; `safe_ptr` forwarding protects callback arguments.
 - **engine.tests.core**: Tests memory allocation, arena checkpoint/restore, poison behavior, GPA round-trip, PMR interop, and slab allocator bucket correctness.

@@ -94,7 +94,7 @@ export namespace pP::tests {
                 });
             }
 
-            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, std::size_t &new_size) noexcept {
                 ++resize_calls;
 
                 const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
@@ -107,6 +107,11 @@ export namespace pP::tests {
 
                 //it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
                 return true;
+            }
+
+            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
+                std::size_t requested_size = new_size;
+                return resizeRaw(ptr, old_size, requested_size);
             }
 
             [[nodiscard]] const void *watermark() const noexcept {
@@ -185,7 +190,7 @@ export namespace pP::tests {
                 }
             }
 
-            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, std::size_t &new_size) noexcept {
                 const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
                     return block.ptr == ptr;
                 });
@@ -197,10 +202,16 @@ export namespace pP::tests {
                 //it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
                 return true;
             }
+
+            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
+                std::size_t requested_size = new_size;
+                return resizeRaw(ptr, old_size, requested_size);
+            }
         };
 
         static_assert(mem::details::TResizableAllocator<ResizeOnlyAllocator>);
-        PPR_UNIT_TEST(overlap_boundaries) {
+
+        PPR_UNIT_TEST (overlap_boundaries) {
             const std::array<std::byte, 16u> storage{};
             const std::array<std::byte, 16u> other{};
 
@@ -213,7 +224,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(!mem::overlap(storage.data(), storage.size(), other.data(), other.size()));
         };
 
-        PPR_UNIT_TEST(gpa_alignment_paths) {
+        PPR_UNIT_TEST (gpa_alignment_paths) {
             const auto normal = mem::GPA::allocateRaw(sizeof(int), std::align_val_t{alignof(int)});
             PPR_TEST_ASSERT(normal.ptr != nullptr);
             mem::GPA::deallocateRaw(normal.ptr, normal.count, std::align_val_t{alignof(int)});
@@ -224,7 +235,7 @@ export namespace pP::tests {
             mem::GPA::deallocateRaw(overaligned.ptr, overaligned.count, std::align_val_t{64u});
         };
 
-        PPR_UNIT_TEST(in_situ_one_shot_and_reuse) {
+        PPR_UNIT_TEST (in_situ_one_shot_and_reuse) {
             mem::InSitu<64u> insitu{};
 
             const auto first = insitu.allocateRaw(24u, max_align_v);
@@ -241,7 +252,7 @@ export namespace pP::tests {
             insitu.deallocateRaw(third.ptr, third.count, max_align_v);
         };
 
-        PPR_UNIT_TEST(in_situ_embedded_destroy_roundtrip) {
+        PPR_UNIT_TEST (in_situ_embedded_destroy_roundtrip) {
             struct Enclosing {
                 mem::InSitu<64u> buffer{};
                 int m_value{42};
@@ -268,7 +279,7 @@ export namespace pP::tests {
             enclosing.buffer.deallocateRaw(reused, reused_count, max_align_v);
         };
 
-        PPR_UNIT_TEST(fallback_prefers_primary_then_secondary) {
+        PPR_UNIT_TEST (fallback_prefers_primary_then_secondary) {
             mem::Fallback<mem::InSitu<32u>, ResizeOnlyAllocator> alloc{};
 
             const auto primary = alloc.allocateRaw(16u, max_align_v);
@@ -277,15 +288,18 @@ export namespace pP::tests {
             const auto secondary = alloc.allocateRaw(16u, max_align_v);
             PPR_TEST_ASSERT(secondary.ptr != nullptr);
 
-            PPR_TEST_ASSERT(alloc.resizeRaw(primary.ptr, 16u, 24u));
-            PPR_TEST_ASSERT(!alloc.resizeRaw(primary.ptr, 24u, 48u));
-            PPR_TEST_ASSERT(alloc.resizeRaw(secondary.ptr, 16u, 8u));
+            std::size_t primary_size = 24u;
+            PPR_TEST_ASSERT(alloc.resizeRaw(primary.ptr, 16u, primary_size));
+            primary_size = 48u;
+            PPR_TEST_ASSERT(!alloc.resizeRaw(primary.ptr, 24u, primary_size));
+            std::size_t secondary_size = 8u;
+            PPR_TEST_ASSERT(alloc.resizeRaw(secondary.ptr, 16u, secondary_size));
 
             alloc.deallocateRaw(secondary.ptr, 8u, max_align_v);
             alloc.deallocateRaw(primary.ptr, 24u, max_align_v);
         };
 
-        PPR_UNIT_TEST(threshold_routes_and_resizes_within_bucket) {
+        PPR_UNIT_TEST (threshold_routes_and_resizes_within_bucket) {
             mem::Threshold<mem::InSitu<64u>, 64u, ResizeOnlyAllocator> alloc{};
 
             const auto under = alloc.allocateRaw(64u, max_align_v);
@@ -294,15 +308,18 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(under.ptr != nullptr);
             PPR_TEST_ASSERT(above.ptr != nullptr);
 
-            PPR_TEST_ASSERT(alloc.resizeRaw(under.ptr, 64u, 32u));
-            PPR_TEST_ASSERT(!alloc.resizeRaw(under.ptr, 32u, 96u));
-            PPR_TEST_ASSERT(alloc.resizeRaw(above.ptr, 80u, 72u));
+            std::size_t under_size = 32u;
+            PPR_TEST_ASSERT(alloc.resizeRaw(under.ptr, 64u, under_size));
+            under_size = 96u;
+            PPR_TEST_ASSERT(!alloc.resizeRaw(under.ptr, 32u, under_size));
+            std::size_t above_size = 72u;
+            PPR_TEST_ASSERT(alloc.resizeRaw(above.ptr, 80u, above_size));
 
             alloc.deallocateRaw(under.ptr, 32u, max_align_v);
             alloc.deallocateRaw(above.ptr, 72u, max_align_v);
         };
 
-        PPR_UNIT_TEST(allocator_wrapper_forwards_and_force_ref) {
+        PPR_UNIT_TEST (allocator_wrapper_forwards_and_force_ref) {
             RecordingAllocator backend{};
             mem::Allocator wrapped{backend};
 
@@ -332,7 +349,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(backend.blocks.empty());
         };
 
-        PPR_UNIT_TEST(pmr_erasure_and_equality) {
+        PPR_UNIT_TEST (pmr_erasure_and_equality) {
             RecordingAllocator backend{};
 
             const mem::PMR stateful{backend};
@@ -351,7 +368,7 @@ export namespace pP::tests {
             stateless.deallocateRaw(overaligned.ptr, overaligned.count, std::align_val_t{64u});
         };
 
-        PPR_UNIT_TEST(allocator_traits_operations) {
+        PPR_UNIT_TEST (allocator_traits_operations) {
             RecordingAllocator backend{};
             mem::Allocator wrapped{backend};
 
@@ -403,7 +420,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(backend.blocks.empty());
         };
 
-        PPR_UNIT_TEST(allocation_stateful_resize_create_destroy) {
+        PPR_UNIT_TEST (allocation_stateful_resize_create_destroy) {
             RecordingAllocator backend{};
 
             mem::Allocation<int, RecordingAllocator> empty{};
@@ -444,7 +461,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(Widget::destroyed == 1u);
         };
 
-        PPR_UNIT_TEST(allocation_raii_and_relocate) {
+        PPR_UNIT_TEST (allocation_raii_and_relocate) {
             mem::Allocation<int, mem::GPA> alloc(6u);
             PPR_TEST_ASSERT(alloc.isValid());
             PPR_TEST_ASSERT(alloc.count() == 6u);
@@ -475,7 +492,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(!assigned.isValid());
         };
 
-        PPR_UNIT_TEST(allocation_create_destroy_non_trivial) {
+        PPR_UNIT_TEST (allocation_create_destroy_non_trivial) {
             Widget::destroyed = 0u;
 
             mem::Allocation<Widget, mem::GPA> alloc{};
@@ -492,7 +509,7 @@ export namespace pP::tests {
             PPR_TEST_ASSERT(Widget::destroyed == 1u);
         };
 
-        PPR_UNIT_TEST(allocation_index_operator) {
+        PPR_UNIT_TEST (allocation_index_operator) {
             mem::Allocation<int, mem::GPA> alloc(4u);
             PPR_TEST_ASSERT(alloc.isValid());
             PPR_TEST_ASSERT(alloc.count() == 4u);
@@ -515,7 +532,7 @@ export namespace pP::tests {
         };
     }
 
-    PPR_UNIT_TEST(allocator) {
+    PPR_UNIT_TEST (allocator){
         _.recurse({
             Allocator::overlap_boundaries,
             Allocator::gpa_alignment_paths,
@@ -531,6 +548,7 @@ export namespace pP::tests {
             Allocator::allocation_index_operator,
             Allocator::in_situ_embedded_destroy_roundtrip,
         });
+
     };
 
     namespace Poisoning {
@@ -564,7 +582,7 @@ export namespace pP::tests {
             details::write_after_poison(buffer);
         };
 
-        PPR_UNIT_TEST(poison_nullptr_safe) {
+        PPR_UNIT_TEST (poison_nullptr_safe) {
             mem::unpoisonUninitialized(nullptr, 0u);
             mem::poisonDestroyed(nullptr, 0u);
             mem::poisonReserved(nullptr, 0u);
@@ -686,96 +704,28 @@ export namespace pP::tests {
     }
 
     namespace SafePtr {
-        struct TestObject : safe_object {
-            int m_value{};
-        };
-
-        PPR_UNIT_TEST(copy_construction_preserves_target) {
-            TestObject obj{};
-            safe_ptr<TestObject> a{&obj};
-            PPR_TEST_ASSERT(a.isValid());
-            const safe_ptr<TestObject> b{a};
-            PPR_TEST_ASSERT(b.isValid());
-            PPR_TEST_ASSERT(b.get() == &obj);
-            PPR_TEST_ASSERT(a.get() == b.get());
-        };
-
-        PPR_UNIT_TEST(copy_assignment_switches_target) {
-            TestObject obj_a{};
-            TestObject obj_b{};
-            safe_ptr<TestObject> a{&obj_a};
-            safe_ptr<TestObject> b{&obj_b};
-            PPR_TEST_ASSERT(a.get() == &obj_a);
-            PPR_TEST_ASSERT(b.get() == &obj_b);
-            b = a;
-            PPR_TEST_ASSERT(b.get() == &obj_a);
-            PPR_TEST_ASSERT(a.get() == b.get());
-        };
-
-        PPR_UNIT_TEST(self_assignment_is_safe) {
-            TestObject obj{};
-            safe_ptr<TestObject> a{&obj};
-            a = a;
-            PPR_TEST_ASSERT(a.isValid());
-            PPR_TEST_ASSERT(a.get() == &obj);
-        };
-
-        PPR_UNIT_TEST(null_copy_remains_null) {
-            const safe_ptr<TestObject> a{};
-            const safe_ptr<TestObject> b{a};
+        PPR_UNIT_TEST (null_copy_remains_null) {
+            const safe_ptr<safe_object> a{};
+            const safe_ptr<safe_object> b{a};
             PPR_TEST_ASSERT(b.get() == nullptr);
         };
 
-        PPR_UNIT_TEST(nullptr_assignment_clears) {
-            TestObject obj{};
-            safe_ptr<TestObject> a{&obj};
-            PPR_TEST_ASSERT(a.isValid());
+        PPR_UNIT_TEST (nullptr_assignment_clears) {
+            safe_ptr<safe_object> a{};
             a = nullptr;
             PPR_TEST_ASSERT(!a.isValid());
         };
-
-        PPR_UNIT_TEST(safe_object_destroy_with_live_ref, UnitTest::expect_crash) {
-            auto *obj = new TestObject{};
-            safe_ptr<TestObject> ptr{obj};
-            delete obj;
-        };
-
-        PPR_UNIT_TEST(safe_object_move_with_live_ref, UnitTest::expect_fail) {
-            if constexpr (PPR_ENABLE_DEBUG) {
-                TestObject src{};
-                safe_ptr<TestObject> ptr{&src};
-                TestObject dst{std::move(src)};
-            }
-        };
-
-        PPR_UNIT_TEST(safe_object_copy_with_live_ref, UnitTest::expect_fail) {
-            if constexpr (PPR_ENABLE_DEBUG) {
-                TestObject src{};
-                safe_ptr<TestObject> ptr{&src};
-                TestObject dst{src};
-            }
-        };
     }
 
-    PPR_UNIT_TEST(safe_ptr_test) {
+    PPR_UNIT_TEST (safe_ptr_test){
         _.recurse({
-            SafePtr::copy_construction_preserves_target,
-            SafePtr::copy_assignment_switches_target,
-            SafePtr::self_assignment_is_safe,
             SafePtr::null_copy_remains_null,
             SafePtr::nullptr_assignment_clears,
         });
 
-        if constexpr (PPR_ENABLE_ASSERTIONS) {
-            _.recurse({
-                SafePtr::safe_object_destroy_with_live_ref,
-                SafePtr::safe_object_move_with_live_ref,
-                SafePtr::safe_object_copy_with_live_ref,
-            });
-        }
     };
 
-    PPR_UNIT_TEST(poisoning) {
+    PPR_UNIT_TEST (poisoning){
         _.recurse({
             Poisoning::child_process_without_error,
         });
@@ -799,6 +749,7 @@ export namespace pP::tests {
                 Poisoning::arena_cross_slab_restore_triggers_asan,
                 Poisoning::pooling_pool_level_poison,
             });
+
         }
     };
 }

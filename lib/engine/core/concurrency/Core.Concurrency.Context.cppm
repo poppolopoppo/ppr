@@ -42,7 +42,8 @@ export namespace pP {
 
         struct CancelClauseFunc {
             std::weak_ptr<CancelContext> m_context{};
-            void operator()(const std::error_code error) const noexcept;
+            [[nodiscard]] bool isValid() const noexcept;
+            void operator()(std::error_code clause) const noexcept;
         };
 
         [[nodiscard]] std::pair<SharedContext, CancelFunc> withCancel(SharedContext parent);
@@ -66,20 +67,20 @@ export namespace pP {
         // associate opaque data with the context
         // --------------------------------------------------------------
 
-        [[nodiscard]] SharedContext withValue(SharedContext parent, const string_literal user_key, const opaque::Value &value);
+        [[nodiscard]] SharedContext withValue(SharedContext parent, string_literal user_key, const opaque::Value &value);
         [[nodiscard]] SharedContext withValues(SharedContext parent, const opaque::Dict &values);
 
         // --------------------------------------------------------------
         // cancels on timeout or parent cancel
         // --------------------------------------------------------------
 
-        [[nodiscard]] SharedContext withDeadlineCause(SharedContext parent, const TimePoint deadline, std::error_code cause,
+        [[nodiscard]] SharedContext withDeadlineCause(SharedContext parent, TimePoint deadline, std::error_code cause,
                                                        TimerManager &timer = TimerManager::mainTimer());
-        [[nodiscard]] SharedContext withDeadline(SharedContext parent, const TimePoint deadline,
+        [[nodiscard]] SharedContext withDeadline(SharedContext parent, TimePoint deadline,
                                                   TimerManager &timer = TimerManager::mainTimer());
-        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, const TimeSpan delay, std::error_code cause,
+        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, TimeSpan delay, std::error_code cause,
                                                       TimerManager &timer = TimerManager::mainTimer());
-        [[nodiscard]] SharedContext withTimeout(SharedContext parent, const TimeSpan delay,
+        [[nodiscard]] SharedContext withTimeout(SharedContext parent, TimeSpan delay,
                                                  TimerManager &timer = TimerManager::mainTimer());
     }
 }

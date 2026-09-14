@@ -106,7 +106,7 @@ export namespace pP {
         return not result;
     }
 
-    [[nodiscard]] constexpr bool hasFailed(const std::error_code &err) noexcept {
+    [[nodiscard]] bool hasFailed(const std::error_code &err) noexcept {
         return static_cast<bool>(err);
     }
 
@@ -156,5 +156,4 @@ export namespace pP {
             std::forward<F>(f),
             std::make_integer_sequence<T, N>{});
     }
-
 }

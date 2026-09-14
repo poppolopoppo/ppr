@@ -368,9 +368,13 @@ namespace pP::context {
         }
     }
 
-    void CancelClauseFunc::operator()(const std::error_code error) const noexcept {
+    bool CancelClauseFunc::isValid() const noexcept {
+        return not m_context.expired();
+    }
+
+    void CancelClauseFunc::operator()(const std::error_code clause) const noexcept {
         if (const std::shared_ptr<CancelContext> ctx = m_context.lock()) [[likely]] {
-            ctx->cancelCause(error);
+            ctx->cancelCause(clause);
         }
     }
 }

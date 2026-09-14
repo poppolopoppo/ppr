@@ -28,10 +28,11 @@ export namespace pP {
     using safe_referencer_key = SparseKeyId;
 
     class safe_object {
+    protected:
+        ~safe_object() noexcept(false);
+
     public:
         safe_object() noexcept = default;
-
-        ~safe_object() noexcept(false);
 
         // Relocation/copying changes object identity: the new instance starts
         // unobserved, and the source must not be observed at the time of the op.
@@ -101,7 +102,6 @@ export namespace pP {
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(const std::unique_ptr<std::remove_const_t<T>> &unique_ptr) noexcept
-            requires std::is_const_v<T>
             : safe_ptr(unique_ptr.get()) {
         }
 
@@ -215,8 +215,10 @@ export namespace pP {
             requires std::is_base_of_v<BaseT, T>
         [[nodiscard]] constexpr safe_ptr<BaseT> upcast() && noexcept {
             auto *const raw = static_cast<BaseT *>(m_ptr);
+            const safe_referencer_key key = *m_key;
             m_ptr = nullptr;
-            return safe_ptr<BaseT>(std::in_place, raw);
+            m_key.reset();
+            return safe_ptr<BaseT>(std::in_place, raw, key);
         }
 
         void reset(T *const ptr = nullptr) noexcept {
@@ -255,6 +257,10 @@ export namespace pP {
     template<typename T>
         requires std::is_base_of_v<safe_object, T>
     safe_ptr(T *) -> safe_ptr<T>;
+
+    template<typename T>
+        requires std::is_base_of_v<safe_object, T>
+    safe_ptr(const std::unique_ptr<T> &) -> safe_ptr<T>;
 
 #else
     // ------------------------------------------------------------------

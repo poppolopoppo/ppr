@@ -35,7 +35,7 @@ namespace pP {
     ITimerClock &ITimerClock::steady() noexcept {
         class SteadyClock final : public ITimerClock {
         public:
-            TimePoint now() noexcept override {
+            TimePoint now() const noexcept override {
                 return std::chrono::steady_clock::now();
             }
         };
@@ -77,7 +77,7 @@ namespace pP {
 
             while (not m_queue.empty() && m_queue.front().m_date <= current_tick) {
                 ready_callbacks.pushBack(std::move(m_queue.front().m_callback));
-                std::pop_heap(m_queue.begin(), m_queue.end(), std::greater{});
+                std::ranges::pop_heap(m_queue, std::greater{});
                 m_queue.pop_back();
             }
         }

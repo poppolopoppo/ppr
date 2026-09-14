@@ -75,6 +75,15 @@ export namespace pP {
             // `x + (x >> 3)` adjustment by Alberto Barbati and Dave Harris.
             return hash_t{mix(x + (x >> 3))};
         }
+
+        template<std::ranges::contiguous_range ContiguousRangeT>
+        [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t contiguousRange(ContiguousRangeT &&values, const hash_t seed = hash_t(default_seed_v)) noexcept
+            requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
+            return memory(
+                std::ranges::data(values),
+                std::ranges::size(values) * sizeof(std::ranges::range_value_t<ContiguousRangeT>),
+                seed.m_value);
+        }
     }
 
     template<typename EnumT>
@@ -99,33 +108,58 @@ export namespace pP {
         return hash::trivial(&numeric.m_value, hash::default_seed_v);
     }
 
+    template<typename T>
+        requires requires(const T &value)
+        {
+            { hashValue(value) } -> std::same_as<hash_t>;
+        }
+    [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t hashValue(const std::optional<T> &optional) noexcept {
+        if (optional.has_value()) {
+            return hashValue(optional.value());
+        }
+        return hash_t{hash::default_seed_v};
+    }
+
+    template<std::ranges::contiguous_range ContiguousRangeT>
+    [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t hashValue(ContiguousRangeT &&values) noexcept
+        requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
+        return hash::contiguousRange(std::forward<ContiguousRangeT>(values));
+    }
+
     [[nodiscard]] PPR_FLATTEN hash_t hashValue(const hal::Uuid &uuid) noexcept {
         return hash::trivial(&uuid.m_data, hash::default_seed_v);
     }
 
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const std::type_index &type_index) noexcept {
+        return hash_t{type_index.hash_code()};
+    }
+
     namespace hash {
         template<typename T>
-        concept THashable = requires(const std::remove_cvref_t<T> &value)
+        concept THashable = requires(const T &value)
         {
             { hashValue(value) } -> std::same_as<hash_t>;
         };
 
         template<THashable T>
         struct DefaultHash {
-            constexpr hash_t operator()(const T &value) const noexcept {
+            [[nodiscard]] constexpr hash_t operator()(param_lvref_t<const T> value) const noexcept {
                 return hashValue(value);
             }
         };
 
-        template<THashable HashableValueT>
-        [[nodiscard]] constexpr hash_t combine(const hash_t seed, const HashableValueT &value) noexcept {
-            return combine(seed, hashValue(value));
+        template<typename... HashableValuesT>
+            requires (THashable<std::remove_cvref_t<HashableValuesT> > and ...)
+        [[nodiscard]] PPR_FLATTEN constexpr hash_t combine(const hash_t seed, HashableValuesT &&... values) noexcept {
+            hash_t H{seed};
+            ((H = combine(H, hashValue(values))), ...);
+            return H;
         }
 
         template<std::ranges::sized_range SizedRangeT>
-        [[nodiscard]] PPR_FLATTEN constexpr hash_t sizedRange(SizedRangeT &&values) noexcept
+        [[nodiscard]] PPR_FLATTEN constexpr hash_t sizedRange(SizedRangeT &&values, const hash_t seed = hash_t(default_seed_v)) noexcept
             requires THashable<std::ranges::range_value_t<SizedRangeT> > {
-            hash_t H = hashValue(std::ranges::size(values));
+            hash_t H = combine(seed, std::ranges::size(values));
             for (const auto &value: values) {
                 H = hash::combine(H, value);
             }
@@ -133,9 +167,9 @@ export namespace pP {
         }
 
         template<std::ranges::range UnorderedRangeT>
-        [[nodiscard]] PPR_FLATTEN constexpr hash_t unorderedRange(UnorderedRangeT &&values) noexcept
+        [[nodiscard]] PPR_FLATTEN constexpr hash_t unorderedRange(UnorderedRangeT &&values, const hash_t seed = hash_t(default_seed_v)) noexcept
             requires THashable<std::ranges::range_value_t<UnorderedRangeT> > {
-            hash_t H{default_seed_v};
+            hash_t H{seed};
             for (const auto &value: values) {
                 // use an associative hash combine, so the final result is not order-dependant
                 H.m_value += hashValue(value).m_value;
@@ -143,21 +177,14 @@ export namespace pP {
             return H;
         }
 
-        template<std::ranges::contiguous_range ContiguousRangeT>
-        [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t contiguousRange(ContiguousRangeT &&values) noexcept
-            requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
-            return memory(
-                std::ranges::data(values), std::ranges::size(values) * sizeof(std::ranges::range_value_t<ContiguousRangeT>), default_seed_v);
-        }
-
         template<std::ranges::sized_range RangeT>
-        [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t anyRange(RangeT &&values) noexcept
+        [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t anyRange(RangeT &&values, const hash_t seed = hash_t(default_seed_v)) noexcept
             requires hash::THashable<std::ranges::range_value_t<RangeT> > ||
                      std::is_trivially_copyable_v<std::ranges::range_value_t<RangeT> > {
             if constexpr (std::ranges::contiguous_range<RangeT> && std::is_trivially_copyable_v<std::ranges::range_value_t<RangeT> >) {
-                return hash::contiguousRange(std::forward<RangeT>(values));
+                return hash::contiguousRange(std::forward<RangeT>(values), seed);
             } else {
-                return hash::sizedRange(std::forward<RangeT>(values));
+                return hash::sizedRange(std::forward<RangeT>(values), seed);
             }
         }
 
@@ -188,12 +215,6 @@ export namespace pP {
         }
     }
 
-    template<std::ranges::contiguous_range ContiguousRangeT>
-    [[nodiscard]] PPR_FORCE_INLINE constexpr hash_t hashValue(ContiguousRangeT &&values) noexcept
-        requires std::is_trivially_copyable_v<std::ranges::range_value_t<ContiguousRangeT> > {
-        return hash::contiguousRange(std::forward<ContiguousRangeT>(values));
-    }
-
     // ------------------------------------------------------------------
     // hash memoizer records the hashValue() to avoid computing it more than once
     // ------------------------------------------------------------------
@@ -212,6 +233,11 @@ export namespace pP {
             explicit constexpr Memoizer(T &&value) noexcept
                 : m_value(std::move(value)),
                   m_hash(hashValue(value)) {
+            }
+
+            // ReSharper disable once CppNonExplicitConversionOperator
+            constexpr operator const T &() const noexcept {
+                return m_value;
             }
 
             [[nodiscard]] friend constexpr bool operator==(const Memoizer &a, const Memoizer &b) noexcept

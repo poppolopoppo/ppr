@@ -46,14 +46,14 @@ namespace pP {
         }
 
         const auto exe_path = hal::process::currentExecutablePath();
-        const std::string test_path = run.currentPath();
+        const std::string test_path = run.getCurrentPath();
         const std::vector<std::string> child_args{"--child-run", "--run-test", test_path};
         const int exit_code = hal::process::spawnAndWait(exe_path, child_args);
         return (exit_code == 0);
     }
 
     std::string UnitTest::Id::path() const noexcept {
-        return m_run->currentPath();
+        return m_run->getCurrentPath();
     }
 
     void UnitTest::run(IRun &run) const noexcept {
@@ -159,11 +159,19 @@ namespace pP {
         return Id(*this);
     }
 
-    std::string UnitTest::RunImpl::currentPath() const {
+    std::string UnitTest::RunImpl::getCurrentPath() const {
         std::string result;
         auto it = std::back_inserter(result);
         getTestId().format<char>(it);
         return result;
+    }
+
+    void UnitTest::RunImpl::logEntry(const Log::Entry &entry) {
+        if (entry.m_site.m_verbosity >= Log::ELevel::error) {
+            failWith(entry.m_message.data());
+        } else {
+            log(entry.m_message.data());
+        }
     }
 
     void UnitTest::RunImpl::log(const char *msg) {
@@ -191,7 +199,7 @@ namespace pP {
 
     void UnitTest::RunImpl::recurse(const UnitTest &test) {
         if (m_context.hasFilter()) {
-            const std::string child_path = currentPath() + "/" + test.m_name;
+            const std::string child_path = getCurrentPath() + "/" + test.m_name;
             if (!m_context.filterMatches(child_path)) {
                 return;
             }
@@ -227,12 +235,12 @@ namespace pP {
         const std::stacktrace backtrace = std::stacktrace::current(9);
 
         std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
-                     "\tin function: {}\n"
-                     "\tin test: {}\n\n"
-                     "Callstack:\n{}",
-                     condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
-                     condition.m_site.function_name(), getTestId(),
-                     backtrace);
+            "\tin function: {}\n"
+            "\tin test: {}\n\n"
+            "Callstack:\n{}",
+            condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
+            condition.m_site.function_name(), getTestId(),
+            backtrace);
         std::cerr.flush();
 
         throw std::logic_error(condition.m_message);
@@ -245,16 +253,29 @@ namespace pP {
         m_prev_assert_policy = Assertion::setFailurePolicy(std::move(new_policy));
 #endif
 
-        m_start_time = std::chrono::steady_clock::now();
+        m_prev_logger_verbosity = Log::setMinimumVerboseLevel(Log::ELevel::warning);
+        m_prev_logger_policy = Log::setWriterPolicy({std23::nontype<&RunImpl::logEntry>, this});
 
         if (m_parent != nullptr) {
             m_context.m_num_executed++;
         }
+
+        m_start_time = std::chrono::steady_clock::now();
     }
 
     void UnitTest::RunImpl::stop() noexcept {
         m_end_time = std::chrono::steady_clock::now();
         const TimeSpan test_duration{m_end_time - m_start_time};
+
+        if (m_prev_assert_policy.has_value()) [[likely]] {
+            Log::setWriterPolicy(m_prev_logger_policy.value());
+            m_prev_logger_policy.reset();
+        }
+
+        if (m_prev_logger_verbosity.has_value()) [[likely]] {
+            Log::setMinimumVerboseLevel(m_prev_logger_verbosity.value());
+            m_prev_logger_policy.reset();
+        }
 
 #if PPR_ENABLE_ASSERTIONS
         PPR_DEFER {
@@ -271,12 +292,12 @@ namespace pP {
         const char *icon = m_status == pass ? "\u2705" : "\u274C";
 
         std::println(std::cout, " {} {:>3}/{:<3}  {} {:<70} ({})",
-                     icon,
-                     m_num_passed,
-                     m_num_passed + m_num_failed,
-                     bullet,
-                     test_id,
-                     test_duration);
+            icon,
+            m_num_passed,
+            m_num_passed + m_num_failed,
+            bullet,
+            test_id,
+            test_duration);
 
         if (m_status == fail) {
             std::println(std::cout, "    \u2514\u2500 {}", m_failure);

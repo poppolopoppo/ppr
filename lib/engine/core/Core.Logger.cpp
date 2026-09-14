@@ -135,13 +135,17 @@ namespace pP {
         entry->m_params.resetAssumeEmpty(params, slab);
 
         m_messages.producerSubmit(*hdr);
+
+        if (emitter.m_category.m_flags & Category::immediate) {
+            std::ignore = m_messages.flush();
+        }
     }
 
-    void Log::Handler::logRaw(const Emitter &emitter, const std::string_view message, const opaque::Dict params) noexcept {
+    void Log::Handler::logRaw(const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
         const TimePoint timestamp = std::chrono::steady_clock::now();
 
         const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
-        const std::size_t message_size_bytes = alignForward(message.size() * sizeof(message[0]), max_align_v);
+        const std::size_t message_size_bytes = alignForward((copy_message.size() + 1u/* '\0' */) * sizeof(copy_message[0]), max_align_v);
         const std::size_t entry_size_bytes = sizeof(Entry) + message_size_bytes + block_size_bytes;
 
         const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
@@ -152,10 +156,11 @@ namespace pP {
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
 
         auto *const embedded_message = reinterpret_cast<char *>(slot + sizeof(Entry));
-        std::memcpy(embedded_message, message.data(), message.size() * sizeof(message[0]));
+        std::copy(copy_message.begin(), copy_message.end(), embedded_message);
+        embedded_message[copy_message.size()] = '\0'; // make sure all messages are null terminated
 
         auto *const entry = new(slot) Entry{
-            .m_message{embedded_message, message.size()},
+            .m_message{embedded_message, copy_message.size()},
             .m_site{emitter},
             .m_timestamp{timestamp},
             .m_thread_id{hal::currentThreadId()},
@@ -183,7 +188,15 @@ namespace pP {
             entry.m_site.m_category.m_name.view(),
             entry.m_message, entry.m_params);
 
-        if (entry.m_site.m_verbosity > ELevel::verbose) {
+        if (entry.m_site.m_verbosity >= ELevel::warning) {
+            std::println(std::cout, "    \u2514\u2500 {}({}): {}",
+                entry.m_site.m_location.file_name(),
+                entry.m_site.m_location.line(),
+                entry.m_site.m_location.function_name());
+        }
+
+        if (entry.m_site.m_verbosity > ELevel::verbose or
+            (entry.m_site.m_category.m_flags & Category::immediate)) {
             std::cout.flush();
         }
 #endif
@@ -212,6 +225,38 @@ namespace pP {
     // public api for the logger
     // ------------------------------------------------------------------
 
+    static std::atomic g_log_minimum_verbose_level{Log::ELevel::debug};
+
+    bool Log::Emitter::shouldBreakDebugger() const noexcept {
+        if (m_verbosity >= ELevel::warning &&
+            (m_category.m_flags & Category::break_on_warning)) [[unlikely]] {
+            return true;
+        }
+        if (m_verbosity >= ELevel::error &&
+            (m_category.m_flags & Category::break_on_error)) [[unlikely]] {
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] static bool isLogEmitterVisible_(const Log::Emitter &emitter) noexcept {
+        if (emitter.shouldBreakDebugger()) [[unlikely]] {
+            hal::breakpointIfDebugging();
+        }
+        if (emitter.m_verbosity < emitter.m_category.m_verbosity) {
+            return false;
+        }
+        if (const Log::ELevel minimum_verbose_level{g_log_minimum_verbose_level.load()};
+            emitter.m_verbosity < minimum_verbose_level) {
+            return false;
+        }
+        return true;
+    }
+
+    Log::ELevel Log::setMinimumVerboseLevel(const ELevel verbosity) noexcept {
+        return g_log_minimum_verbose_level.exchange(verbosity);
+    }
+
     Log::Policy Log::setWriterPolicy(Policy writer_policy) noexcept {
         return Handler::get().setWriterPolicy(writer_policy);
     }
@@ -221,10 +266,14 @@ namespace pP {
     }
 
     void Log::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
-        Handler::get().log(emitter, message, params);
+        if (isLogEmitterVisible_(emitter)) {
+            Handler::get().log(emitter, message, params);
+        }
     }
 
     void Log::logRaw(const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
-        Handler::get().logRaw(emitter, copy_message, params);
+        if (isLogEmitterVisible_(emitter)) {
+            Handler::get().logRaw(emitter, copy_message, params);
+        }
     }
 }

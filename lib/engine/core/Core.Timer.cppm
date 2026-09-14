@@ -16,11 +16,18 @@ export namespace pP {
 
     using TimePoint = std::chrono::steady_clock::time_point;
     using TimeSpan = std::chrono::steady_clock::duration;
+    using TimeDuration = std::chrono::duration<double>;
 
     namespace time {
         [[nodiscard]] TimePoint now() noexcept;
+
         [[nodiscard]] TimeSpan since(TimePoint started_at) noexcept;
+
         [[nodiscard]] double seconds(TimeSpan duration) noexcept;
+
+        [[nodiscard]] double seconds(TimeDuration duration) noexcept {
+            return duration.count();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -29,10 +36,37 @@ export namespace pP {
 
     // ReSharper disable once CppPolymorphicClassWithNonVirtualPublicDestructor
     class ITimerClock {
+    protected:
+        ~ITimerClock() = default;
+
     public:
-        [[nodiscard]] virtual TimePoint now() noexcept = 0;
+        [[nodiscard]] virtual TimePoint now() const noexcept = 0;
 
         [[nodiscard]] static ITimerClock &steady() noexcept;
+    };
+
+    class TimerExplicitClock final : public ITimerClock {
+    public:
+        TimePoint m_now{};
+        TimeSpan m_elapsed{};
+
+        void tick(const TimePoint new_time) noexcept {
+            m_elapsed = new_time - m_now;
+            m_now = new_time;
+        }
+
+        void reset(const TimePoint new_time) noexcept {
+            m_elapsed = {};
+            m_now = new_time;
+        }
+
+        [[nodiscard]] TimePoint now() const noexcept override {
+            return m_now;
+        }
+
+        [[nodiscard]] TimePoint last() const noexcept {
+            return m_now - m_elapsed;
+        }
     };
 
     class TimerManager final {
@@ -60,7 +94,7 @@ export namespace pP {
 
         [[nodiscard]] TimePoint now() const noexcept;
 
-        void schedule(const TimePoint date, Callback &&callback) noexcept;
+        void schedule(TimePoint date, Callback &&callback) noexcept;
 
         void tick() noexcept;
 

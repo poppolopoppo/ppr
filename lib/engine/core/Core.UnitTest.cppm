@@ -5,6 +5,7 @@ export module engine.core:unit_test;
 import :assert;
 import :function.ref;
 import :hal;
+import :logger;
 
 import std;
 
@@ -150,7 +151,6 @@ namespace pP {
             }
         };
 
-
         static void run(const Context &context, const UnitTest &test) noexcept;
 
         struct Named {
@@ -194,6 +194,8 @@ namespace pP {
             const UnitTest &m_test;
             RunImpl *m_parent{nullptr};
 
+            std::optional<Log::Policy> m_prev_logger_policy{};
+            std::optional<Log::ELevel> m_prev_logger_verbosity{};
 #if PPR_ENABLE_ASSERTIONS
             std::optional<Assertion::Policy> m_prev_assert_policy{};
 #endif
@@ -219,9 +221,11 @@ namespace pP {
 
             [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept;
 
+            [[nodiscard]] std::string getCurrentPath() const;
+
             [[nodiscard]] Id getTestId() const noexcept override;
 
-            [[nodiscard]] std::string currentPath() const;
+            void logEntry(const Log::Entry &entry);
 
             void log(const char *msg) override;
 

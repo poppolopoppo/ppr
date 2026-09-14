@@ -1,38 +1,49 @@
 add_executable(engine.tests.core main.cpp)
 
 target_sources(engine.tests.core
-    PUBLIC
+        PUBLIC
         FILE_SET CXX_MODULES FILES
-            Core.Opaque.Tests.cppm
-            Core.Service.Tests.cppm
-            Core.Enums.Tests.cppm
-            Core.HAL.Tests.cppm
-            Core.Memory.Tests.cppm
-            Core.Memory.Arena.Tests.cppm
-            Core.Memory.PagePool.Tests.cppm
-            Core.Containers.Tests.cppm
-            Core.Containers.FlatMap.Tests.cppm
-            Core.Containers.StableVector.Tests.cppm
-            Core.Containers.SparseVector.Tests.cppm
-            Core.Containers.HashMap.Tests.cppm
-            Core.Concurrency.Channel.Tests.cppm
-            Core.Concurrency.Context.Tests.cppm
-            Core.Concurrency.Event.Tests.cppm
-            Core.Io.Tests.cppm
-            Core.Io.FileWatcher.Tests.cppm
-            Core.Strings.Tests.cppm
-            Core.Utility.Tests.cppm
-            Core.Tests.cppm
+        Core.Math.Tests.cppm
+        Core.Opaque.Tests.cppm
+        Core.Service.Tests.cppm
+        Core.Enums.Tests.cppm
+        Core.HAL.Tests.cppm
+        Core.Memory.Tests.cppm
+        Core.Memory.Arena.Tests.cppm
+        Core.Memory.PagePool.Tests.cppm
+        Core.Containers.Tests.cppm
+        Core.Containers.FlatMap.Tests.cppm
+        Core.Containers.StableVector.Tests.cppm
+        Core.Containers.SparseVector.Tests.cppm
+        Core.Containers.HashMap.Tests.cppm
+        Core.Concurrency.Channel.Tests.cppm
+        Core.Concurrency.Context.Tests.cppm
+        Core.Concurrency.Event.Tests.cppm
+        Core.Io.Tests.cppm
+        Core.Io.FileWatcher.Tests.cppm
+        Core.Strings.Tests.cppm
+        Core.Utility.Tests.cppm
+        Core.Tests.cppm
+)
+
+target_sources(engine.tests.core
+        PRIVATE
+        Core.Tests.cpp
 )
 
 setup_ppr_project(engine.tests.core
-  INTERNAL_PUBLIC_DEPS engine.core engine.shader engine.rhi engine.tests
+        INTERNAL_PUBLIC_DEPS
+        engine.core
+        engine.math
+        engine.shader
+        engine.rhi
+        engine.tests
 )
 
 target_include_directories(engine.tests.core PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
 
 # MSVC module workaround for __tlregdtor C++ linkage issue with thread_local destructors in modules
-if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
+if (MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     # When using C++23 modules with /MT, the compiler generates C++ mangled references
     # to __tlregdtor (for thread_local destructors), but libcmt.lib provides it as C linkage.
     # This provides the C++ mangled version that delegates to the C version.
@@ -41,12 +52,12 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     #        ${PPR_HAL_PLATFORM}/MSVC.tlregdtor.cpp
     #    )
     target_link_options(engine.tests.core PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
-endif()
+endif ()
 
 add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 set_tests_properties(EngineCoreUnitTests
-    PROPERTIES
+        PROPERTIES
         TIMEOUT 120
         LABELS "unit;engine;core"
 )

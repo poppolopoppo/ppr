@@ -22,7 +22,7 @@ export namespace pP {
 
     struct Log {
         enum class ELevel : u8 {
-            debug,
+            debug = 0,
             verbose,
             info,
             emphasis,
@@ -70,9 +70,12 @@ export namespace pP {
                   m_location(location),
                   m_verbosity(verbosity) {
             }
+
+            [[nodiscard]] bool shouldBreakDebugger() const noexcept;
         };
 
-        struct Entry {
+        struct Entry { // NOLINT(*-pro-type-member-init)
+            /// always null-terminated, but stored as a view
             std::string_view m_message;
             opaque::Block m_params;
             Emitter m_site;
@@ -80,6 +83,8 @@ export namespace pP {
             TimePoint m_timestamp;
             hal::ThreadId m_thread_id;
         };
+
+        static ELevel setMinimumVerboseLevel(ELevel verbosity) noexcept;
 
         using Policy = std23::function_ref<void(const Entry &)>;
 
