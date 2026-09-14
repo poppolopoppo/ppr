@@ -101,9 +101,6 @@ namespace pP {
         const safe_ptr<IRhiService> rhi_service{app_services.inject()};
         const safe_ptr<IShaderService> shader_service{app_services.inject()};
 
-        Renderer &renderer = getRenderer();
-        PPR_RETURN_ERROR_ON_FAIL(Editor, renderer.initialize(*rhi_service));
-
         // create dummy triangle render pass:
         m_triangle_pass = std::make_unique<TrianglePass>();
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->initialize(

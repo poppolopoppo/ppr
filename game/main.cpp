@@ -11,9 +11,9 @@ namespace demo {
     using namespace pP;
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
 
-    class TurboLarbin : public Application {
+    class TurboLarbin : public ApplicationEditor {
     public:
-        using super_t = Application;
+        using super_t = ApplicationEditor;
         using super_t::super_t;
 
     protected:
@@ -53,7 +53,7 @@ namespace demo {
 }
 
 int main(const int argc, char *argv[]) {
-    demo::TurboLarbin app(pP::ApplicationDomain{}, "ppr", std::span(&argv[0], argc));
+    demo::TurboLarbin app("ppr", std::span(&argv[0], argc));
     const std::error_code err = app.run();
     return err.value();
 }
