@@ -1,18 +1,16 @@
 module;
-
 #include "pP/Macros.h"
-
 module engine.app;
 
 import imgui_internal;
 
-import :ui.imgui;
-import :input.key;
 import :input.device;
+import :input.key;
 import :input.listener;
-import :service.ui;
 import :service.input;
+import :service.ui;
 import :service.window;
+import :ui.imgui;
 import :window.handle;
 
 import engine.core;
@@ -20,18 +18,8 @@ import engine.math;
 import engine.rhi;
 import engine.shader;
 
-// Bring ImGui symbols into scope for use throughout this file
-// (ImGuiKey_*, ImGuiContext, ImGuiIO, ImDrawVert, ...).
-using namespace ImGui;
-
-namespace pP::ui {
+namespace pP {
     PPR_DEFINE_LOG_CATEGORY(UI, info, none)
-
-    void imGuiDebugPrintf(const char *format, const char *buffer) {
-        PPR_ASSERT(std::string_view(format) == "%s");
-        PPR_ASSERT(buffer != nullptr);
-        PPR_LOG_RAW(UI, debug, buffer);
-    }
 
     namespace {
         constexpr string_literal kImGuiShader = R"(
@@ -63,12 +51,724 @@ float4 fragmentMain(PsInput input) : SV_Target {
 }
 )";
 
-        struct FrameResources {
-            rhi::ComPtr<rhi::IBuffer> m_vertex_buffer;
-            rhi::ComPtr<rhi::IBuffer> m_index_buffer;
-            u32 m_vertex_buffer_capacity{0};
-            u32 m_index_buffer_capacity{0};
+        void imGuiDebugPrintf(const char *format, const char *buffer) {
+            PPR_ASSERT(std::string_view(format) == "%s");
+            PPR_ASSERT(buffer != nullptr);
+            PPR_LOG_RAW(UI, debug, buffer);
+        }
+
+        [[nodiscard]] float2 framebufferScaleFor(const int2 &logical, const int2 &framebuffer) noexcept {
+            float2 scale{1.0f};
+            if (logical.x > 0) {
+                scale.x = static_cast<float>(framebuffer.x) / static_cast<float>(logical.x);
+            }
+            if (logical.y > 0) {
+                scale.y = static_cast<float>(framebuffer.y) / static_cast<float>(logical.y);
+            }
+            if (not(scale.x > 0.0f)) {
+                scale.x = 1.0f;
+            }
+            if (not(scale.y > 0.0f)) {
+                scale.y = 1.0f;
+            }
+            return scale;
+        }
+
+        class ImGuiService final : public IUIService {
+            ImGuiContext *m_imgui_context{nullptr};
+
+            /// input handling:
+            safe_ptr<InputContext> m_input_context{};
+
+            InputListener m_input_listener{};
+            InputMapping m_input_mapping{"ImGuiInputs"};
+
+            InputAction m_input_any_digital{"ImGuiAnyDigital", EInputValueType::digital};
+
+            InputAction m_input_mouse_cursor{"ImGuiMouseCursor", EInputValueType::axis_2d};
+            InputAction m_input_mouse_wheel{"ImGuiMouseWheel", EInputValueType::axis_1d};
+
+            InputAction m_input_gamepad_stick{"ImGuiGamepadStick", EInputValueType::axis_2d};
+            InputAction m_input_gamepad_trigger{"ImGuiGamepadTrigger", EInputValueType::axis_1d};
+
+            /// render resources:
+            rhi::ComPtr<rhi::ISampler> m_font_sampler{};
+            rhi::ComPtr<rhi::ITexture> m_font_texture{};
+            rhi::ComPtr<rhi::ITextureView> m_font_texture_view{};
+
+            rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
+            rhi::ComPtr<rhi::IInputLayout> m_vertex_layout{};
+
+            struct FrameResources {
+                rhi::ComPtr<rhi::IBuffer> m_index_buffer{};
+                rhi::ComPtr<rhi::IBuffer> m_vertex_buffer{};
+            };
+
+            std::array<FrameResources, 2u> m_frame_resources{};
+            std::size_t m_frame_revision{};
+
+            rhi::ComPtr<rhi::IRenderPipeline> m_render_pipeline{};
+            std::optional<RenderPipelineKey> m_render_pipeline_key{};
+
+            std::error_code createInvariantRenderState_(rhi::IDevice &device);
+
+            std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device);
+
+            std::error_code createFontTexture_(rhi::IDevice &device, rhi::ICommandQueue &device_queue);
+
+            std::error_code createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature);
+
+            std::error_code uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources);
+
+            static EInputMessageResponse onInputCharacter_(hal::native::char_t codepoint) noexcept;
+
+            static void onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+
+            static void onInputMouseCursor_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+
+            static void onInputMouseWheel_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+
+            static void onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+
+            static void onInputGamepadTrigger_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+
+        public:
+            ImGuiService() noexcept {
+                // TODO: track allocations with a custom scope
+                ImGui::SetAllocatorFunctions(
+                    [](const std::size_t sz, [[maybe_unused]] void *user_data) -> void * {
+                        return std::malloc(sz);
+                    },
+                    [](void *ptr, [[maybe_unused]] void *user_data) -> void {
+                        std::free(ptr);
+                    },
+                    nullptr
+                );
+
+                m_input_any_digital.setStarted(&onInputAnyDigital_);
+                m_input_any_digital.setTriggered(&onInputAnyDigital_);
+                m_input_any_digital.setCompleted(&onInputAnyDigital_);
+
+                m_input_mouse_cursor.setTriggered(&onInputMouseCursor_);
+                m_input_mouse_wheel.setTriggered(&onInputMouseWheel_);
+
+                m_input_gamepad_stick.setTriggered(&onInputGamepadStick_);
+                m_input_gamepad_trigger.setTriggered(&onInputGamepadTrigger_);
+
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_any_digital), InputKey::any_digital);
+
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_stick), InputKey::gamepad_left_2d);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_stick), InputKey::gamepad_right_2d);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_trigger), InputKey::gamepad_left_trigger_axis);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_trigger), InputKey::gamepad_right_trigger_axis);
+
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_cursor), InputKey::mouse_2d);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_x,
+                    []([[maybe_unused]] const TimeSpan dt, InputValue &output) noexcept {
+                        output = InputValue(std::get<InputAxis1D>(output), InputAxis1D{});
+                    });
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_y,
+                    []([[maybe_unused]] const TimeSpan dt, InputValue &output) noexcept {
+                        output = InputValue(InputAxis1D{}, std::get<InputAxis1D>(output));
+                    });
+
+                m_input_listener.addInputMapping(&m_input_mapping, 0);
+                m_input_listener.setCharacterInputCallback(&onInputCharacter_);
+            }
+
+            ~ImGuiService() noexcept override {
+                if (not PPR_ENSURE(m_imgui_context)) [[unlikely]] {
+                    std::ignore = ImGuiService::shutdown();
+                }
+            }
+
+            [[nodiscard]] void *getContext() const noexcept override {
+                return m_imgui_context;
+            }
+
+            std::error_code initialize(
+                WindowInputContext &window_input_context,
+                IRhiService &rhi_service,
+                IShaderService &shader_service,
+                const int input_listener_priority) override {
+                PPR_ASSERT(m_imgui_context == nullptr);
+
+                m_frame_revision = 0u;
+                m_imgui_context = ImGui::CreateContext();
+                if (not m_imgui_context) {
+                    PPR_LOG(UI, error, "failed to create ImGui context");
+                    return std::make_error_code(std::errc::not_supported);
+                }
+
+                // Route all ImGui recoverable errors through the engine logger.
+                // ConfigErrorRecoveryEnableAssert is OFF to prevent ImGui from calling
+                // assert() (which fires the CRT dialog). All errors go through the
+                // ErrorCallback below, which logs via PPR_LOG_RAW.
+                m_imgui_context->ErrorCallback = [](ImGuiContext *, void *, const char *msg) {
+                    PPR_LOG_RAW(UI, error, msg);
+                };
+                m_imgui_context->ErrorCallbackUserData = nullptr;
+
+                ImGui::SetCurrentContext(m_imgui_context);
+
+                ImGuiIO &io = ImGui::GetIO();
+                io.ConfigErrorRecovery = true;
+                io.ConfigErrorRecoveryEnableAssert = false;
+                io.ConfigErrorRecoveryEnableDebugLog = true;
+                io.ConfigErrorRecoveryEnableTooltip = static_cast<bool>(PPR_ENABLE_DEBUG);
+
+                io.BackendPlatformName = "pP_IUIService";
+                io.BackendRendererName = "pP_SlangRHI";
+                io.BackendPlatformUserData = this;
+
+                io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+                io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+
+                io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+                io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleFonts;
+                io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
+                io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+                // need to update display size before first call to ImGui::NewFrame()
+                io.DisplaySize = ImVec2{
+                    static_cast<float>(window_input_context.m_window->m_framebuffer_size.x),
+                    static_cast<float>(window_input_context.m_window->m_framebuffer_size.y)
+                };
+
+                io.DisplayFramebufferScale = ImVec2{
+                    window_input_context.m_window->m_content_scale.x,
+                    window_input_context.m_window->m_content_scale.y,
+                };
+
+                // attach our input listener to the window:
+                m_input_context = &window_input_context.m_context;
+                m_input_context->addInputListener(&m_input_listener, input_listener_priority);
+
+                // prepare rendering:
+                rhi::IDevice &device = rhi_service.getDevice();
+                PPR_RETURN_ERROR_ON_FAIL(UI, createInvariantRenderState_(device));
+                PPR_RETURN_ERROR_ON_FAIL(UI, createShaderProgram_(shader_service, device));
+
+                rhi::ComPtr<rhi::ICommandQueue> device_queue{};
+                PPR_RETURN_ERROR_ON_FAIL(UI, device.getQueue(rhi::QueueType::Graphics, device_queue.writeRef()));
+                PPR_RETURN_ERROR_ON_FAIL(UI, createFontTexture_(device, *device_queue));
+
+                PPR_LOG(UI, info, "UI service initialized", {});
+                return default_value_v;
+            }
+
+            std::error_code shutdown() override {
+                PPR_LOG(UI, info, "UI service shut down");
+
+                if (m_input_context) {
+                    m_input_context->removeInputListener(m_input_listener);
+                    m_input_context.reset();
+                }
+
+                m_render_pipeline.setNull();
+
+                m_font_texture_view.setNull();
+                m_font_texture.setNull();
+                m_font_sampler.setNull();
+
+                m_vertex_layout.setNull();
+                m_shader_program.setNull();
+
+                for (FrameResources &resources: m_frame_resources) {
+                    resources.m_index_buffer.setNull();
+                    resources.m_vertex_buffer.setNull();
+                }
+
+                if (m_imgui_context) {
+                    // Detach the backend before destroying the context:
+                    // ImGui asserts when Backend*UserData is still set at
+                    // DestroyContext ("Forgot to shutdown Platform backend?").
+                    ImGui::SetCurrentContext(m_imgui_context);
+                    ImGuiIO &io = ImGui::GetIO();
+                    io.BackendPlatformName = nullptr;
+                    io.BackendRendererName = nullptr;
+                    io.BackendPlatformUserData = nullptr;
+                    io.BackendRendererUserData = nullptr;
+                    io.BackendFlags = ImGuiBackendFlags_None;
+                    io.Fonts->SetTexID(nullptr);
+                    ImGui::SetCurrentContext(nullptr);
+                    ImGui::DestroyContext(m_imgui_context);
+                    m_imgui_context = nullptr;
+                }
+
+                return default_value_v;
+            }
+
+            std::error_code update(const TimeSpan dt, const WindowViewport &viewport) override {
+                if (not m_imgui_context) {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                ImGui::SetCurrentContext(m_imgui_context);
+                ImGuiIO &io = ImGui::GetIO();
+
+                io.DeltaTime = static_cast<float>(time::seconds(dt));
+
+                const int2 &display_size = viewport.getViewport().getClientRect().m_extent;
+                io.DisplaySize = ImVec2{
+                    static_cast<float>(display_size.x),
+                    static_cast<float>(display_size.y)
+                };
+
+                const float2 &content_scale = viewport.getWindow().m_content_scale;
+                io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
+
+#if 0 // TODO: useless?
+                if (m_input_service.isValid()) [[likely]] {
+                    const KeyboardDevice &kbd = m_input_service->getKeyboard();
+
+                    io.AddKeyEvent(ImGuiMod_Ctrl,
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_control) ||
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_control));
+                    io.AddKeyEvent(ImGuiMod_Shift,
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_shift) ||
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_shift));
+                    io.AddKeyEvent(ImGuiMod_Alt,
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_alt) ||
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_alt));
+                    io.AddKeyEvent(ImGuiMod_Super,
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::left_super) ||
+                        kbd.m_keys.m_pressed.contains(EKeyboardKey::right_super));
+                }
+#endif
+
+                ++m_frame_revision;
+                ImGui::NewFrame();
+                return default_value_v;
+            }
+
+            std::error_code render(const DrawContext &draw_context) override {
+                if (not m_imgui_context) {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                ImGui::SetCurrentContext(m_imgui_context);
+
+                ImGui::Render();
+
+                auto *draw_data = ImGui::GetDrawData();
+                if (not draw_data or not draw_data->Valid) {
+                    return default_value_v;
+                }
+
+                if (not m_render_pipeline_key.has_value() or
+                    *m_render_pipeline_key != draw_context.m_render_pipeline_key) {
+                    PPR_RETURN_ERROR_ON_FAIL(UI, createRenderPipeline_(draw_context.m_device, draw_context.m_render_pipeline_key));
+                    m_render_pipeline_key = draw_context.m_render_pipeline_key;
+                }
+
+                rhi::ShaderCursor shader_cursor{};
+                if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(m_render_pipeline.get()); PPR_ENSURE(shader_object)) {
+                    shader_cursor = rhi::ShaderCursor(shader_object);
+                } else {
+                    return make_error_code(std::errc::broken_pipe);
+                }
+
+                const ImGuiIO &io = ImGui::GetIO();
+                const float2 imgui_scale{2.0f / io.DisplaySize.x, -2.0f / io.DisplaySize.y};
+                const float2 imgui_offset{-1.0f, 1.0f};
+                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_scale"].setData(&imgui_scale, sizeof(float2)));
+                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_offset"].setData(&imgui_offset, sizeof(float2)));
+                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_fontSampler"].setBinding(m_font_sampler));
+                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_fontTexture"].setBinding(m_font_texture_view));
+
+                FrameResources &resources = m_frame_resources[m_frame_revision % 2u];
+                PPR_RETURN_ON_FAIL(UI, uploadDrawData_(draw_context.m_device, *draw_data, resources));
+
+                rhi::RenderState render_state{};
+                render_state.viewports[0] = draw_context.m_viewport;
+                render_state.viewportCount = 1u;
+                render_state.vertexBuffers[0] = rhi::BufferOffsetPair(resources.m_vertex_buffer.get(), 0u);
+                render_state.vertexBufferCount = 1u;
+                render_state.indexBuffer = rhi::BufferOffsetPair(resources.m_index_buffer.get(), 0u);
+                render_state.indexFormat = sizeof(ImDrawIdx) == 2u ? rhi::IndexFormat::Uint16 : rhi::IndexFormat::Uint32;
+                render_state.scissorRectCount = 1u;
+
+                const float4 clip_offset = imVec(draw_data->DisplayPos).xyxy;
+                const float4 clip_scale = imVec(io.DisplayFramebufferScale).xyxy;
+                const float2 framebuffer_extent{draw_context.m_viewport.extentX, draw_context.m_viewport.extentY};
+
+                u32 global_vtx_offset = 0;
+                u32 global_idx_offset = 0;
+                for (int n = 0; n < draw_data->CmdListsCount; n++) {
+                    const auto *cmdList = draw_data->CmdLists[n];
+
+                    for (int i = 0; i < cmdList->CmdBuffer.Size; i++) {
+                        const auto *cmd = &cmdList->CmdBuffer[i];
+
+                        if (cmd->UserCallback) {
+                            cmd->UserCallback(cmdList, cmd);
+                            continue;
+                        }
+
+                        const float4 clip_rect = (imVec(cmd->ClipRect) - clip_offset) * clip_scale;
+                        const uint4 scissor_rect = roundToUInt(float4(
+                            max(clip_rect.xy, float2(0)),
+                            min(clip_rect.zw, float2(framebuffer_extent))));
+                        if (scissor_rect.z <= scissor_rect.x or scissor_rect.w <= scissor_rect.y) {
+                            continue;
+                        }
+
+                        render_state.scissorRects[0] = rhi::ScissorRect{
+                            scissor_rect.x, scissor_rect.y,
+                            scissor_rect.z, scissor_rect.w
+                        };
+
+                        draw_context.m_pass.setRenderState(render_state);
+
+                        rhi::DrawArguments draw_arguments{};
+                        draw_arguments.vertexCount = cmd->ElemCount;
+                        draw_arguments.instanceCount = 1u;
+                        draw_arguments.startIndexLocation = cmd->IdxOffset + global_idx_offset;
+                        draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + global_vtx_offset);
+                        draw_arguments.startInstanceLocation = 0;
+
+                        draw_context.m_pass.drawIndexed(draw_arguments);
+                    }
+
+                    global_vtx_offset += cmdList->VtxBuffer.Size;
+                    global_idx_offset += cmdList->IdxBuffer.Size;
+                }
+
+                return default_value_v;
+            }
         };
+
+        [[nodiscard]] ImGuiKey keyboardKeyToImGuiKey(EKeyboardKey key) noexcept;
+
+        [[nodiscard]] ImGuiKey gamepadButtonToImGuiKey(EGamepadButton button) noexcept;
+
+        [[nodiscard]] int mouseButtonToImGui(EMouseButton button) noexcept;
+
+        std::error_code ImGuiService::createInvariantRenderState_(rhi::IDevice &device) {
+            constexpr rhi::InputElementDesc elements[] = {
+                {"POSITION", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, pos), 0},
+                {"TEXCOORD", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, uv), 0},
+                {"COLOR", 0, rhi::Format::RGBA8Unorm, PPR_OFFSETOF(ImDrawVert, col), 0},
+            };
+
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createInputLayout(
+                safe_narrowing(sizeof(ImDrawVert)),
+                elements,
+                3u,
+                m_vertex_layout.writeRef()));
+
+            rhi::SamplerDesc sampler_desc{};
+            sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
+            sampler_desc.magFilter = rhi::TextureFilteringMode::Linear;
+            sampler_desc.mipFilter = rhi::TextureFilteringMode::Linear;
+            sampler_desc.addressU = rhi::TextureAddressingMode::ClampToEdge;
+            sampler_desc.addressV = rhi::TextureAddressingMode::ClampToEdge;
+            sampler_desc.addressW = rhi::TextureAddressingMode::ClampToEdge;
+            sampler_desc.maxAnisotropy = 1;
+
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createSampler(sampler_desc, m_font_sampler.writeRef()));
+
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device) {
+            shader::ComPtr<shader::IModule> shader_module{};
+            PPR_RETURN_ERROR_ON_FAIL(UI, shader_service.loadModuleFromSource(
+                "imgui",
+                "imgui.slang",
+                kImGuiShader,
+                shader_module.writeRef()));
+
+            shader::ComPtr<shader::IEntryPoint> vertex_ep;
+            PPR_RETURN_ERROR_ON_FAIL(UI, shader_module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
+
+            shader::ComPtr<shader::IEntryPoint> fragment_ep;
+            PPR_RETURN_ERROR_ON_FAIL(UI, shader_module->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
+
+            shader::IComponentType *entryPoints[] = {vertex_ep.get(), fragment_ep.get()};
+
+            rhi::ShaderProgramDesc program_desc{};
+            program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            program_desc.slangGlobalScope = shader_module;
+            program_desc.slangEntryPoints = entryPoints;
+            program_desc.slangEntryPointCount = std::size(entryPoints);
+
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
+
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::createFontTexture_(rhi::IDevice &device, rhi::ICommandQueue &device_queue) {
+            ImGuiIO &io = ImGui::GetIO();
+
+            u8 *pixels = nullptr;
+            int width = 0, height = 0, bpp = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height, &bpp);
+
+            rhi::TextureDesc texture_desc{};
+            texture_desc.type = rhi::TextureType::Texture2D;
+            texture_desc.size = {static_cast<u32>(width), static_cast<u32>(height), 1};
+            texture_desc.arrayLength = 1;
+            texture_desc.mipCount = 1;
+            texture_desc.format = rhi::Format::RGBA8Unorm;
+            texture_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            texture_desc.usage = enumCombine(rhi::TextureUsage::ShaderResource, rhi::TextureUsage::CopyDestination);
+            texture_desc.defaultState = rhi::ResourceState::CopyDestination;
+            texture_desc.label = "imgui_font_atlas";
+
+            rhi::ComPtr<rhi::ITexture> texture;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createTexture(texture_desc, nullptr, texture.writeRef()));
+
+            const u64 pixelDataSize = static_cast<u64>(width) * height * 4;
+            rhi::BufferDesc staging_desc{};
+            staging_desc.size = pixelDataSize;
+            staging_desc.usage = rhi::BufferUsage::CopySource;
+            staging_desc.memoryType = rhi::MemoryType::Upload;
+            staging_desc.defaultState = rhi::ResourceState::General;
+            staging_desc.label = "imgui_font_staging";
+
+            rhi::ComPtr<rhi::IBuffer> staging_buffer;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createBuffer(staging_desc, pixels, staging_buffer.writeRef()));
+
+            rhi::ComPtr<rhi::ICommandEncoder> encoder;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device_queue.createCommandEncoder(encoder.writeRef()));
+
+            rhi::Offset3D dst_offset{0, 0, 0};
+            encoder->copyBufferToTexture(
+                texture.get(), 0, 0, dst_offset,
+                staging_buffer.get(), 0, pixelDataSize,
+                static_cast<u32>(pixelDataSize / height),
+                {static_cast<u32>(width), static_cast<u32>(height), 1});
+
+            encoder->setTextureState(texture.get(), rhi::SubresourceRange{
+                .layer = 0,
+                .layerCount = 1,
+                .mip = 0,
+                .mipCount = 1
+            }, rhi::ResourceState::ShaderResource);
+
+            rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
+            PPR_RETURN_ERROR_ON_FAIL(UI, encoder->finish(cmd_buffer.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(UI, device_queue.submit(cmd_buffer.get()));
+            PPR_RETURN_ERROR_ON_FAIL(UI, device_queue.waitOnHost());
+
+            staging_buffer.setNull();
+
+            rhi::ComPtr<rhi::ITextureView> view;
+            PPR_RETURN_ERROR_ON_FAIL(UI, texture->getDefaultView(view.writeRef()));
+
+            m_font_texture = std::move(texture);
+            m_font_texture_view = std::move(view);
+
+            io.Fonts->SetTexID(m_font_texture_view.get());
+
+            PPR_LOG(UI, info, "font texture created", {
+                {"width", width},
+                {"height", height},
+                });
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature) {
+            if (signature.m_color_formats.size() != 1u ||
+                signature.m_depth_stencil_format.has_value() ||
+                signature.m_sample_count != 1u) {
+                PPR_LOG(UI, error, "unsupported render pipeline signature", {
+                    {"color_format_count", signature.m_color_formats.size()},
+                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                    {"sample_count", signature.m_sample_count},
+                    });
+                return make_error_code(std::errc::operation_not_supported);
+            }
+
+            rhi::ColorTargetDesc color_target{};
+            color_target.format = signature.m_color_formats.front();
+            color_target.enableBlend = true;
+            color_target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
+            color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+            color_target.color.op = rhi::BlendOp::Add;
+            color_target.alpha.srcFactor = rhi::BlendFactor::One;
+            color_target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+            color_target.alpha.op = rhi::BlendOp::Add;
+            color_target.writeMask = rhi::RenderTargetWriteMask::All;
+
+            rhi::RenderPipelineDesc pipeline_desc{};
+            pipeline_desc.program = m_shader_program;
+            pipeline_desc.inputLayout = m_vertex_layout;
+            pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+            pipeline_desc.targets = &color_target;
+            pipeline_desc.targetCount = 1u;
+            pipeline_desc.rasterizer.cullMode = rhi::CullMode::None;
+            pipeline_desc.rasterizer.scissorEnable = true;
+            pipeline_desc.depthStencil.depthTestEnable = false;
+            pipeline_desc.depthStencil.depthWriteEnable = false;
+            pipeline_desc.label = "render_imgui";
+            pipeline_desc.multisample.sampleCount = signature.m_sample_count;
+
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createRenderPipeline(pipeline_desc, m_render_pipeline.writeRef()));
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
+            const u32 total_vtx_count = draw_data.TotalVtxCount;
+            const u32 total_idx_count = draw_data.TotalIdxCount;
+            if (total_vtx_count == 0 || total_idx_count == 0) {
+                return default_value_v;
+            }
+
+            if (not resources.m_vertex_buffer or
+                resources.m_vertex_buffer->getDesc().size < static_cast<u64>(total_vtx_count) * sizeof(ImDrawVert)) {
+                const u32 new_capacity = alignForward(total_vtx_count, 8192_u32);
+                const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawVert);
+
+                rhi::BufferDesc vb_desc{};
+                vb_desc.size = size_bytes;
+                vb_desc.usage = enumCombine(rhi::BufferUsage::VertexBuffer, rhi::BufferUsage::CopySource);
+                vb_desc.memoryType = rhi::MemoryType::Upload;
+                vb_desc.defaultState = rhi::ResourceState::General;
+                vb_desc.label = "imgui_vertex_buffer";
+
+                PPR_RETURN_ERROR_ON_FAIL(UI, device.createBuffer(
+                    vb_desc, nullptr, resources.m_vertex_buffer.writeRef()));
+            }
+
+            if (not resources.m_index_buffer or
+                resources.m_index_buffer->getDesc().size < static_cast<u64>(total_idx_count) * sizeof(ImDrawIdx)) {
+                const u32 new_capacity = alignForward(total_idx_count, 16384_u32);
+                const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawIdx);
+
+                rhi::BufferDesc ib_desc{};
+                ib_desc.size = size_bytes;
+                ib_desc.usage = enumCombine(rhi::BufferUsage::IndexBuffer, rhi::BufferUsage::CopySource);
+                ib_desc.memoryType = rhi::MemoryType::Upload;
+                ib_desc.defaultState = rhi::ResourceState::General;
+                ib_desc.label = "imgui_index_buffer";
+
+                PPR_RETURN_ERROR_ON_FAIL(UI, device.createBuffer(
+                    ib_desc, nullptr, resources.m_index_buffer.writeRef()));
+            }
+
+            void *mapped_vtx = nullptr;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(resources.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx));
+
+            void *mapped_idx = nullptr;
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(resources.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
+
+            auto *vtx_dst = static_cast<ImDrawVert *>(mapped_vtx);
+            auto *idx_dst = static_cast<ImDrawIdx *>(mapped_idx);
+
+            for (int n = 0; n < draw_data.CmdListsCount; n++) {
+                const ImDrawList *cmd_list = draw_data.CmdLists[n];
+
+                std::memcpy(vtx_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
+                std::memcpy(idx_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+
+                vtx_dst += cmd_list->VtxBuffer.Size;
+                idx_dst += cmd_list->IdxBuffer.Size;
+            }
+
+            device.unmapBuffer(resources.m_vertex_buffer.get());
+            device.unmapBuffer(resources.m_index_buffer.get());
+
+            return default_value_v;
+        }
+
+        EInputMessageResponse ImGuiService::onInputCharacter_(const hal::native::char_t codepoint) noexcept {
+            if (ImGuiIO &io = ImGui::GetIO(); io.WantTextInput) {
+                char8_t utf8_input[8]{};
+                const std::size_t utf8_len = hal::native::utf8(
+                    {&codepoint, 1u},
+                    utf8_input, std::size(utf8_input) - 1u/*\0*/);
+
+                if (utf8_len < std::size(utf8_input)) {
+                    utf8_input[utf8_len] = u8'\0';
+                    io.AddInputCharactersUTF8(reinterpret_cast<const char *>(&utf8_input[0]));
+                    return EInputMessageResponse::consumed;
+                }
+            }
+
+            return EInputMessageResponse::unhandled;
+        }
+
+        void ImGuiService::onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept {
+            std::visit(overloaded(
+                [&](const EKeyboardKey keyboard_key) noexcept {
+                    if (const ImGuiKey imgui_key = keyboardKeyToImGuiKey(keyboard_key); imgui_key != ImGuiKey_None) {
+                        ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
+                    }
+                },
+                [&](const EGamepadButton gamepad_button) noexcept {
+                    if (const ImGuiKey imgui_key = gamepadButtonToImGuiKey(gamepad_button); imgui_key != ImGuiKey_None) {
+                        ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
+                    }
+                },
+                [&](const EMouseButton mouse_button) noexcept {
+                    if (const ImGuiMouseButton imgui_button = mouseButtonToImGui(mouse_button); imgui_button >= 0) {
+                        ImGui::GetIO().AddMouseButtonEvent(imgui_button, event.getDigitalValue());
+                    }
+                },
+                [](auto) noexcept {
+                    std::unreachable();
+                }
+            ), trigger.m_code);
+        }
+
+        void ImGuiService::onInputMouseCursor_(const InputActionEvent &event, const InputKey &) noexcept {
+            const float2 client_pos = event.getAxis2DValue().m_absolute;
+            ImGui::GetIO().AddMousePosEvent(client_pos.x, client_pos.y);
+        }
+
+        void ImGuiService::onInputMouseWheel_(const InputActionEvent &event, const InputKey &) noexcept {
+            const float2 wheel_delta = event.getAxis2DValue().m_absolute;
+            ImGui::GetIO().AddMousePosEvent(wheel_delta.x, wheel_delta.y);
+        }
+
+        void ImGuiService::onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept {
+            int stick_index = none_v;
+            if (trigger == InputKey::gamepad_left_2d) {
+                stick_index = 0;
+            } else if (trigger == InputKey::gamepad_right_2d) {
+                stick_index = 1;
+            } else {
+                return;
+            }
+
+            const float2 stick_value = event.getAxis2DValue().m_absolute;
+            constexpr ImGuiKey stick_axes[][4] = {
+                {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight, ImGuiKey_GamepadLStickUp, ImGuiKey_GamepadLStickDown},
+                {ImGuiKey_GamepadRStickLeft, ImGuiKey_GamepadRStickRight, ImGuiKey_GamepadRStickUp, ImGuiKey_GamepadRStickDown},
+            };
+
+            // left
+            if (stick_value.x < 0) {
+                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][0], true, -stick_value.x);
+            }
+            // right
+            if (stick_value.x > 0) {
+                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][1], true, stick_value.x);
+            }
+            // down
+            if (stick_value.y < 0) {
+                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][2], true, -stick_value.y);
+            }
+            // up
+            if (stick_value.y > 0) {
+                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][3], true, stick_value.y);
+            }
+        }
+
+        void ImGuiService::onInputGamepadTrigger_(const InputActionEvent &event, const InputKey &trigger) noexcept {
+            const float trigger_value = event.getAxis1DValue().m_absolute;
+
+            if (trigger == InputKey::gamepad_left_trigger_axis) {
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadL2, true, trigger_value);
+            }
+
+            if (trigger == InputKey::gamepad_right_trigger_axis) {
+                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadR2, true, trigger_value);
+            }
+        }
 
         [[nodiscard]] ImGuiKey keyboardKeyToImGuiKey(const EKeyboardKey key) noexcept {
             switch (key) {
@@ -180,6 +880,26 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
         }
 
+        [[nodiscard]] ImGuiKey gamepadButtonToImGuiKey(const EGamepadButton button) noexcept {
+            switch (button) {
+                case EGamepadButton::start: return ImGuiKey_GamepadStart;
+                case EGamepadButton::back: return ImGuiKey_GamepadBack;
+                case EGamepadButton::X: return ImGuiKey_GamepadFaceLeft;
+                case EGamepadButton::B: return ImGuiKey_GamepadFaceRight;
+                case EGamepadButton::Y: return ImGuiKey_GamepadFaceUp;
+                case EGamepadButton::A: return ImGuiKey_GamepadFaceDown;
+                case EGamepadButton::dpad_left: return ImGuiKey_GamepadDpadLeft;
+                case EGamepadButton::dpad_right: return ImGuiKey_GamepadDpadRight;
+                case EGamepadButton::dpad_up: return ImGuiKey_GamepadDpadUp;
+                case EGamepadButton::dpad_down: return ImGuiKey_GamepadDpadDown;
+                case EGamepadButton::left_shoulder: return ImGuiKey_GamepadL1;
+                case EGamepadButton::right_shoulder: return ImGuiKey_GamepadR1;
+                case EGamepadButton::left_thumb: return ImGuiKey_GamepadL3;
+                case EGamepadButton::right_thumb: return ImGuiKey_GamepadR3;
+                default: return ImGuiKey_None;
+            }
+        }
+
         [[nodiscard]] int mouseButtonToImGui(const EMouseButton button) noexcept {
             switch (button) {
                 case EMouseButton::left: return 0;
@@ -190,611 +910,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 default: return -1;
             }
         }
-
-        [[nodiscard]] float2 framebufferScaleFor(const int2 logical, const int2 framebuffer) noexcept {
-            float2 scale{1.0f};
-            if (logical.x > 0) {
-                scale.x = static_cast<float>(framebuffer.x) / static_cast<float>(logical.x);
-            }
-            if (logical.y > 0) {
-                scale.y = static_cast<float>(framebuffer.y) / static_cast<float>(logical.y);
-            }
-            if (not (scale.x > 0.0f)) {
-                scale.x = 1.0f;
-            }
-            if (not (scale.y > 0.0f)) {
-                scale.y = 1.0f;
-            }
-            return scale;
-        }
     }
 
-    class ImGuiService final : public IUIService {
-    public:
-        ImGuiService() noexcept = default;
-
-        ~ImGuiService() noexcept override {
-            if (m_imgui_context) {
-                shutdown();
-            }
+    namespace ui {
+        std::unique_ptr<IUIService> createImGuiService() {
+            return std::make_unique<ImGuiService>();
         }
-
-        std::error_code initialize(
-            IRhiService &rhi,
-            IWindowService &window_service,
-            IInputService &input_service,
-            const Window &main_window,
-            const rhi::Format swapchain_format,
-            InputContext &window_input_context) override {
-            m_window_service = safe_ptr(&window_service);
-            m_input_service = safe_ptr(&input_service);
-            m_main_window = safe_ptr(&main_window);
-            m_window_input_context = safe_ptr(&window_input_context);
-            m_device = &rhi.getDevice();
-            m_swapchain_format = swapchain_format;
-
-            rhi::IDevice &device = *m_device;
-
-            m_imgui_context = ImGui::CreateContext();
-            if (not m_imgui_context) {
-                PPR_LOG(UI, error, "failed to create ImGui context");
-                return std::make_error_code(std::errc::not_supported);
-            }
-            ImGui::SetCurrentContext(m_imgui_context);
-
-            // Route all ImGui recoverable errors through the engine logger.
-            // ConfigErrorRecoveryEnableAssert is OFF to prevent ImGui from calling
-            // assert() (which fires the CRT dialog). All errors go through the
-            // ErrorCallback below, which logs via PPR_LOG_RAW.
-            m_imgui_context->ErrorCallback = [](ImGuiContext *, void *, const char *msg) {
-                PPR_LOG_RAW(UI, error, msg);
-            };
-            m_imgui_context->ErrorCallbackUserData = nullptr;
-
-            ImGuiIO &io = ImGui::GetIO();
-            io.ConfigErrorRecovery = true;
-            io.ConfigErrorRecoveryEnableAssert = false;
-            io.ConfigErrorRecoveryEnableDebugLog = true;
-            io.ConfigErrorRecoveryEnableTooltip = false;
-
-            io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
-            io.BackendPlatformName = "pP_IUIService";
-            io.BackendRendererName = "pP_SlangRHI";
-
-            RHI_RETURN_ERROR_ON_FAIL(UI, m_device->getQueue(rhi::QueueType::Graphics, m_queue.writeRef()));
-
-            m_framebuffer_size = main_window.m_framebuffer_size;
-            m_window_size = main_window.m_window_size;
-            m_framebuffer_scale = framebufferScaleFor(m_window_size, m_framebuffer_size);
-
-            {
-                const safe_ptr<IShaderService> shader_service = IShaderService::get();
-                PPR_ASSERT(shader_service.isValid());
-
-                PPR_RETURN_ERROR_ON_FAIL(UI,
-                    shader_service->loadModuleFromSource(
-                        "imgui",
-                        "imgui.slang",
-                        kImGuiShader,
-                        m_imgui_shader_handle.writeRef()));
-
-                shader::IModule *module = m_imgui_shader_handle.get();
-                PPR_ASSERT(module != nullptr);
-
-                shader::ComPtr<shader::IEntryPoint> vertex_ep;
-                PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(module->findEntryPointByName("vertexMain", vertex_ep.writeRef())));
-
-                shader::ComPtr<shader::IEntryPoint> fragment_ep;
-                PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(module->findEntryPointByName("fragmentMain", fragment_ep.writeRef())));
-
-                shader::IComponentType *entryPoints[] = {vertex_ep.get(), fragment_ep.get()};
-
-                rhi::ShaderProgramDesc program_desc{};
-                program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-                program_desc.slangGlobalScope = module;
-                program_desc.slangEntryPoints = entryPoints;
-                program_desc.slangEntryPointCount = std::size(entryPoints);
-
-                shader::Diagnose diagnostics;
-                PPR_RETURN_ERROR_ON_FAIL(UI, shader::result(device.createShaderProgram(program_desc, m_program.writeRef(), diagnostics.writeRef())));
-            }
-
-            {
-                rhi::InputElementDesc elements[] = {
-                    {"POSITION", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, pos), 0},
-                    {"TEXCOORD", 0, rhi::Format::RG32Float, PPR_OFFSETOF(ImDrawVert, uv), 0},
-                    {"COLOR", 0, rhi::Format::RGBA8Unorm, PPR_OFFSETOF(ImDrawVert, col), 0},
-                };
-
-                PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createInputLayout(
-                    safe_narrowing(sizeof(ImDrawVert)),
-                    elements,
-                    3u,
-                    m_input_layout.writeRef())));
-            }
-
-            {
-                rhi::SamplerDesc sampler_desc{};
-                sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
-                sampler_desc.magFilter = rhi::TextureFilteringMode::Linear;
-                sampler_desc.mipFilter = rhi::TextureFilteringMode::Linear;
-                sampler_desc.addressU = rhi::TextureAddressingMode::ClampToEdge;
-                sampler_desc.addressV = rhi::TextureAddressingMode::ClampToEdge;
-                sampler_desc.addressW = rhi::TextureAddressingMode::ClampToEdge;
-                sampler_desc.maxAnisotropy = 1;
-
-                PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createSampler(sampler_desc, m_font_sampler.writeRef())));
-            }
-
-            {
-                const std::error_code ft_err = createFontTexture_();
-                if (ft_err) {
-                    return ft_err;
-                }
-            }
-
-            {
-                rhi::ColorTargetDesc color_target{};
-                color_target.format = m_swapchain_format;
-                color_target.enableBlend = true;
-                color_target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
-                color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
-                color_target.color.op = rhi::BlendOp::Add;
-                color_target.alpha.srcFactor = rhi::BlendFactor::One;
-                color_target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
-                color_target.alpha.op = rhi::BlendOp::Add;
-                color_target.writeMask = rhi::RenderTargetWriteMask::All;
-
-                rhi::RenderPipelineDesc pipeline_desc{};
-                pipeline_desc.program = m_program.get();
-                pipeline_desc.inputLayout = m_input_layout.get();
-                pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
-                pipeline_desc.targets = &color_target;
-                pipeline_desc.targetCount = 1u;
-                pipeline_desc.rasterizer.cullMode = rhi::CullMode::None;
-                pipeline_desc.rasterizer.scissorEnable = true;
-                pipeline_desc.depthStencil.depthTestEnable = false;
-                pipeline_desc.depthStencil.depthWriteEnable = false;
-                pipeline_desc.label = "imgui pipeline";
-
-                PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createRenderPipeline(pipeline_desc, m_pipeline.writeRef())));
-            }
-
-            m_listener.setRawKeyCallback([this](const TimeSpan, const InputMessage &message) noexcept {
-                ImGuiIO &imgui_io = ImGui::GetIO();
-
-                if (message.m_key.isKeyboard()) {
-                    if (const auto *key = std::get_if<EKeyboardKey>(&message.m_key.m_code)) {
-                        const ImGuiKey imgui_key = keyboardKeyToImGuiKey(*key);
-                        if (imgui_key != ImGuiKey_None) {
-                            imgui_io.AddKeyEvent(imgui_key, message.isPressed() || message.isRepeat());
-                        }
-                    }
-                } else if (message.m_key.isMouse()) {
-                    if (const auto *button = std::get_if<EMouseButton>(&message.m_key.m_code)) {
-                        const int imgui_button = mouseButtonToImGui(*button);
-                        if (imgui_button >= 0) {
-                            imgui_io.AddMouseButtonEvent(imgui_button, message.isPressed() || message.isRepeat());
-                        }
-                    }
-                }
-            });
-            // Window-context binding: ImGui observes raw keys before the scene
-            // listener on the same context (priority -1000 vs scene 0). The
-            // listener carries no mappings so mapped keys still return unhandled.
-            window_input_context.addInputListener(safe_ptr<InputListener>(&m_listener), -1000);
-
-            PPR_LOG(UI, info, "UI service initialized", {
-                {"width", m_framebuffer_size.x},
-                {"height", m_framebuffer_size.y},
-                });
-
-            return {};
-        }
-
-        std::error_code newFrame(const TimeSpan dt) override {
-            if (not m_imgui_context) {
-                return std::make_error_code(std::errc::not_connected);
-            }
-            ImGui::SetCurrentContext(m_imgui_context);
-            ImGuiIO &io = ImGui::GetIO();
-
-            io.DisplaySize = ImVec2(
-                static_cast<float>(m_window_size.x),
-                static_cast<float>(m_window_size.y));
-            io.DisplayFramebufferScale = ImVec2(m_framebuffer_scale.x, m_framebuffer_scale.y);
-            io.DeltaTime = static_cast<float>(
-                std::chrono::duration<double>(dt).count());
-
-            if (m_input_service.isValid()) [[likely]] {
-                const KeyboardDevice &kbd = m_input_service->getKeyboard();
-                const MouseDevice &mouse = m_input_service->getMouse();
-
-                const float2 cursor{
-                    mouse.m_cursor_pos.m_raw.m_absolute.x,
-                    mouse.m_cursor_pos.m_raw.m_absolute.y,
-                };
-                if (cursor.x >= 0 && cursor.y >= 0) {
-                    io.AddMousePosEvent(cursor.x, cursor.y);
-                }
-
-                const float wheel_y = mouse.m_wheel_y.m_raw.m_relative;
-                const float wheel_x = mouse.m_wheel_x.m_raw.m_relative;
-                if (wheel_y != 0.0f || wheel_x != 0.0f) {
-                    io.AddMouseWheelEvent(wheel_x, wheel_y);
-                }
-
-                for (const auto &ch: kbd.m_character_inputs) {
-                    if (ch >= 32 && ch < 0xFFFE) {
-                        io.AddInputCharacter(ch);
-                    }
-                }
-
-                io.AddKeyEvent(ImGuiMod_Ctrl,
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_control) ||
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_control));
-                io.AddKeyEvent(ImGuiMod_Shift,
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_shift) ||
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_shift));
-                io.AddKeyEvent(ImGuiMod_Alt,
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_alt) ||
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_alt));
-                io.AddKeyEvent(ImGuiMod_Super,
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::left_super) ||
-                    kbd.m_keys.m_pressed.contains(EKeyboardKey::right_super));
-            }
-
-            ImGui::NewFrame();
-
-            return default_value_v;
-        }
-
-        std::error_code renderOverlay(rhi::IRenderPassEncoder &pass, const float2 &framebuffer_size) override {
-            if (not m_imgui_context) {
-                return std::make_error_code(std::errc::not_connected);
-            }
-            ImGui::SetCurrentContext(m_imgui_context);
-            ImGuiIO &io = ImGui::GetIO();
-
-            ImGui::Render();
-            auto *draw_data = ImGui::GetDrawData();
-            if (not draw_data or not draw_data->Valid) {
-                return default_value_v;
-            }
-
-            const float fb_width = io.DisplaySize.x * io.DisplayFramebufferScale.x;
-            const float fb_height = io.DisplaySize.y * io.DisplayFramebufferScale.y;
-            if (fb_width <= 0 || fb_height <= 0) {
-                return default_value_v;
-            }
-
-            auto *const fr = &m_frame_resources[m_current_frame];
-            PPR_RETURN_ON_FAIL(UI, uploadDrawData_(draw_data, fr));
-
-            auto *const root_obj = pass.bindPipeline(m_pipeline.get());
-            if (not root_obj) {
-                return std::make_error_code(std::errc::not_supported);
-            }
-
-            rhi::ShaderCursor root_cursor(root_obj);
-
-            const float2 scale{2.0f / framebuffer_size.x, -2.0f / framebuffer_size.y};
-            const float2 offset{-1.0f, 1.0f};
-            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_scale"].setData(&scale, sizeof(float2)));
-            RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_offset"].setData(&offset, sizeof(float2)));
-
-            {
-                auto *texture_view = m_fontTextureView.get();
-                auto *sampler = m_font_sampler.get();
-                if (texture_view) {
-                    RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontTexture"].setBinding(rhi::Binding(texture_view)));
-                }
-                if (sampler) {
-                    RHI_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontSampler"].setBinding(rhi::Binding(sampler)));
-                }
-            }
-
-            rhi::RenderState render_state{};
-            render_state.viewports[0] = rhi::Viewport::fromSize(fb_width, fb_height);
-            render_state.viewportCount = 1;
-            render_state.vertexBuffers[0] = rhi::BufferOffsetPair(fr->m_vertex_buffer.get(), 0);
-            render_state.vertexBufferCount = 1;
-            render_state.indexBuffer = rhi::BufferOffsetPair(fr->m_index_buffer.get(), 0);
-            render_state.indexFormat = sizeof(ImDrawIdx) == 2
-                                           ? rhi::IndexFormat::Uint16
-                                           : rhi::IndexFormat::Uint32;
-            render_state.scissorRectCount = 1;
-
-            const ImVec2 clip_off = draw_data->DisplayPos;
-            const ImVec2 clip_scale = io.DisplayFramebufferScale;
-
-            u32 global_vtx_offset = 0;
-            u32 global_idx_offset = 0;
-            for (int n = 0; n < draw_data->CmdListsCount; n++) {
-                const auto *cmdList = draw_data->CmdLists[n];
-
-                for (int i = 0; i < cmdList->CmdBuffer.Size; i++) {
-                    const auto *cmd = &cmdList->CmdBuffer[i];
-
-                    if (cmd->UserCallback) {
-                        cmd->UserCallback(cmdList, cmd);
-                        continue;
-                    }
-
-                    ImVec2 clip_min{
-                        (cmd->ClipRect.x - clip_off.x) * clip_scale.x,
-                        (cmd->ClipRect.y - clip_off.y) * clip_scale.y
-                    };
-                    ImVec2 clip_max{
-                        (cmd->ClipRect.z - clip_off.x) * clip_scale.x,
-                        (cmd->ClipRect.w - clip_off.y) * clip_scale.y
-                    };
-                    clip_min.x = std::max(clip_min.x, 0.0f);
-                    clip_min.y = std::max(clip_min.y, 0.0f);
-                    clip_max.x = std::min(clip_max.x, fb_width);
-                    clip_max.y = std::min(clip_max.y, fb_height);
-
-                    if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y) {
-                        continue;
-                    }
-
-                    render_state.scissorRects[0] = rhi::ScissorRect{
-                        static_cast<u32>(clip_min.x),
-                        static_cast<u32>(clip_min.y),
-                        static_cast<u32>(clip_max.x),
-                        static_cast<u32>(clip_max.y)
-                    };
-                    pass.setRenderState(render_state);
-
-                    rhi::DrawArguments draw_arguments{};
-                    draw_arguments.vertexCount = cmd->ElemCount;
-                    draw_arguments.instanceCount = 1;
-                    draw_arguments.startIndexLocation = cmd->IdxOffset + global_idx_offset;
-                    draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + global_vtx_offset);
-                    draw_arguments.startInstanceLocation = 0;
-                    pass.drawIndexed(draw_arguments);
-                }
-
-                global_vtx_offset += cmdList->VtxBuffer.Size;
-                global_idx_offset += cmdList->IdxBuffer.Size;
-            }
-
-            m_current_frame = (m_current_frame + 1) % kFrameCount;
-            return default_value_v;
-        }
-
-        std::error_code shutdown() noexcept override {
-            if (m_queue) {
-                m_queue->waitOnHost();
-            }
-
-            for (auto &fr: m_frame_resources) {
-                fr.m_vertex_buffer.setNull();
-                fr.m_index_buffer.setNull();
-                fr.m_vertex_buffer_capacity = 0;
-                fr.m_index_buffer_capacity = 0;
-            }
-
-            m_fontTexture.setNull();
-            m_fontTextureView.setNull();
-            m_font_sampler.setNull();
-            m_pipeline.setNull();
-            m_input_layout.setNull();
-            m_program.setNull();
-
-            m_queue.setNull();
-
-            // Remove from the same window context registered in initialize().
-            if (m_window_input_context.isValid()) {
-                std::ignore = m_window_input_context->removeInputListener(m_listener);
-                m_window_input_context.reset();
-            }
-
-            if (m_imgui_context) {
-                ImGui::DestroyContext(m_imgui_context);
-                m_imgui_context = nullptr;
-            }
-
-            m_input_service = nullptr;
-            m_window_service = nullptr;
-            m_main_window = nullptr;
-
-            PPR_LOG(UI, info, "UI service shut down");
-            return default_value_v;
-        }
-
-        std::error_code onResize(const int2 new_size) override {
-            if (new_size.x <= 0 || new_size.y <= 0) {
-                return default_value_v;
-            }
-
-            m_framebuffer_size = new_size;
-            if (m_main_window.isValid()) {
-                const Window &window = *m_main_window;
-                if (window.m_window_size.x > 0 && window.m_window_size.y > 0) {
-                    m_window_size = window.m_window_size;
-                }
-                if (window.m_framebuffer_size.x > 0 && window.m_framebuffer_size.y > 0) {
-                    m_framebuffer_size = window.m_framebuffer_size;
-                }
-            }
-            m_framebuffer_scale = framebufferScaleFor(m_window_size, m_framebuffer_size);
-            PPR_LOG(UI, info, "UI surface resize", {
-                {"width", new_size.x},
-                {"height", new_size.y},
-                });
-            return default_value_v;
-        }
-
-        [[nodiscard]] void *getContext() const noexcept override {
-            return m_imgui_context;
-        }
-
-    private:
-        static constexpr u32 kFrameCount = 2;
-
-        rhi::Format m_swapchain_format{rhi::Format::Undefined};
-        ImGuiContext *m_imgui_context{nullptr};
-        rhi::ComPtr<rhi::IDevice> m_device;
-        rhi::ComPtr<rhi::ICommandQueue> m_queue;
-        rhi::ComPtr<rhi::IRenderPipeline> m_pipeline;
-        rhi::ComPtr<rhi::IInputLayout> m_input_layout;
-        rhi::ComPtr<rhi::IShaderProgram> m_program;
-        rhi::ComPtr<rhi::ITexture> m_fontTexture;
-        rhi::ComPtr<rhi::ITextureView> m_fontTextureView;
-        rhi::ComPtr<rhi::ISampler> m_font_sampler;
-        int2 m_framebuffer_size{};
-        int2 m_window_size{};
-        float2 m_framebuffer_scale{1.0f};
-        u32 m_current_frame{0};
-        FrameResources m_frame_resources[kFrameCount]{};
-        InputListener m_listener{};
-        shader::SharedModule m_imgui_shader_handle;
-        safe_ptr<IInputService> m_input_service;
-        safe_ptr<IWindowService> m_window_service;
-        safe_ptr<const Window> m_main_window;
-        safe_ptr<InputContext> m_window_input_context;
-
-        [[nodiscard]] std::error_code createFontTexture_() {
-            ImGuiIO &io = ImGui::GetIO();
-
-            u8 *pixels = nullptr;
-            int width = 0, height = 0, bpp = 0;
-            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height, &bpp);
-
-            rhi::IDevice &device = *m_device;
-
-            rhi::TextureDesc texture_desc{};
-            texture_desc.type = rhi::TextureType::Texture2D;
-            texture_desc.size = {static_cast<u32>(width), static_cast<u32>(height), 1};
-            texture_desc.arrayLength = 1;
-            texture_desc.mipCount = 1;
-            texture_desc.format = rhi::Format::RGBA8Unorm;
-            texture_desc.memoryType = rhi::MemoryType::DeviceLocal;
-            texture_desc.usage = enumCombine(rhi::TextureUsage::ShaderResource, rhi::TextureUsage::CopyDestination);
-            texture_desc.defaultState = rhi::ResourceState::CopyDestination;
-            texture_desc.label = "imgui font atlas";
-
-            rhi::ComPtr<rhi::ITexture> texture;
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createTexture(texture_desc, nullptr, texture.writeRef())));
-
-            const u64 pixelDataSize = static_cast<u64>(width) * height * 4;
-            rhi::BufferDesc staging_desc{};
-            staging_desc.size = pixelDataSize;
-            staging_desc.usage = rhi::BufferUsage::CopySource;
-            staging_desc.memoryType = rhi::MemoryType::Upload;
-            staging_desc.defaultState = rhi::ResourceState::General;
-            staging_desc.label = "imgui font staging";
-
-            rhi::ComPtr<rhi::IBuffer> staging_buffer;
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createBuffer(staging_desc, pixels, staging_buffer.writeRef())));
-
-            rhi::ComPtr<rhi::ICommandEncoder> encoder;
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(m_queue->createCommandEncoder(encoder.writeRef())));
-
-            rhi::Offset3D dst_offset{0, 0, 0};
-            encoder->copyBufferToTexture(
-                texture.get(), 0, 0, dst_offset,
-                staging_buffer.get(), 0, pixelDataSize,
-                static_cast<u32>(pixelDataSize / height),
-                {static_cast<u32>(width), static_cast<u32>(height), 1});
-
-            encoder->setTextureState(texture.get(), rhi::SubresourceRange{0, 1, 0, 1}, rhi::ResourceState::ShaderResource);
-
-            rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(encoder->finish(cmd_buffer.writeRef())));
-
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(m_queue->submit(cmd_buffer.get())));
-
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(m_queue->waitOnHost()));
-
-            staging_buffer.setNull();
-
-            rhi::ComPtr<rhi::ITextureView> view;
-            PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(texture->getDefaultView(view.writeRef())));
-
-            m_fontTexture = std::move(texture);
-            m_fontTextureView = std::move(view);
-
-            io.Fonts->SetTexID(m_fontTextureView.get());
-
-            PPR_LOG(UI, info, "font texture created", {
-                {"width", width},
-                {"height", height},
-                });
-
-            return default_value_v;
-        }
-
-        [[nodiscard]] std::error_code uploadDrawData_(const ImDrawData *drawData, FrameResources *fr) {
-            const u32 total_vtx_count = drawData->TotalVtxCount;
-            const u32 total_idx_count = drawData->TotalIdxCount;
-
-            if (total_vtx_count == 0 || total_idx_count == 0) {
-                return default_value_v;
-            }
-
-            rhi::IDevice &device = *m_device;
-
-            if (not fr->m_vertex_buffer || fr->m_vertex_buffer_capacity < total_vtx_count) {
-                const u32 new_capacity = total_vtx_count + 8192;
-                const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawVert);
-
-                rhi::BufferDesc vb_desc{};
-                vb_desc.size = size_bytes;
-                vb_desc.usage = enumCombine(rhi::BufferUsage::VertexBuffer, rhi::BufferUsage::CopySource);
-                vb_desc.memoryType = rhi::MemoryType::Upload;
-                vb_desc.defaultState = rhi::ResourceState::General;
-                vb_desc.label = "imgui vertex buffer";
-
-                PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createBuffer(vb_desc, nullptr, fr->m_vertex_buffer.writeRef())));
-                fr->m_vertex_buffer_capacity = new_capacity;
-            }
-
-            if (not fr->m_index_buffer || fr->m_index_buffer_capacity < total_idx_count) {
-                const u32 new_capacity = total_idx_count + 16384;
-                const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawIdx);
-
-                rhi::BufferDesc ib_desc{};
-                ib_desc.size = size_bytes;
-                ib_desc.usage = enumCombine(rhi::BufferUsage::IndexBuffer, rhi::BufferUsage::CopySource);
-                ib_desc.memoryType = rhi::MemoryType::Upload;
-                ib_desc.defaultState = rhi::ResourceState::General;
-                ib_desc.label = "imgui index buffer";
-
-                PPR_RETURN_ERROR_ON_FAIL(UI, rhi::result(device.createBuffer(ib_desc, nullptr, fr->m_index_buffer.writeRef())));
-                fr->m_index_buffer_capacity = new_capacity;
-            }
-
-            {
-                void *mapped_vtx = nullptr;
-                RHI_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(fr->m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx));
-
-                void *mapped_idx = nullptr;
-                RHI_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(fr->m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
-
-                auto *vtx_dst = static_cast<ImDrawVert *>(mapped_vtx);
-                auto *idx_dst = static_cast<ImDrawIdx *>(mapped_idx);
-
-                for (int n = 0; n < drawData->CmdListsCount; n++) {
-                    const auto *cmd_list = drawData->CmdLists[n];
-
-                    std::memcpy(vtx_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
-                    std::memcpy(idx_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
-
-                    vtx_dst += cmd_list->VtxBuffer.Size;
-                    idx_dst += cmd_list->IdxBuffer.Size;
-                }
-
-                device.unmapBuffer(fr->m_vertex_buffer.get());
-                device.unmapBuffer(fr->m_index_buffer.get());
-            }
-
-            return default_value_v;
-        }
-    };
-
-    std::unique_ptr<IUIService> createImGuiService() {
-        return std::make_unique<ImGuiService>();
     }
 }

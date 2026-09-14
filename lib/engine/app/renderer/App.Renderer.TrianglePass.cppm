@@ -32,37 +32,30 @@ export namespace pP {
 
         static_assert(sizeof(FrameConstants) == 288, "FrameConstants must match the HLSL layout (4 * float4x4 + 2 * float4)");
 
-        [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
-        [[nodiscard]] std::error_code draw(
-            rhi::IRenderPassEncoder &pass,
-            const SceneView &scene_view,
-            const ColorTargetInfo &target_info);
+        [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
+
+        [[nodiscard]] std::error_code render(const DrawContext &draw_context);
 
         [[nodiscard]] std::error_code shutdown();
 
     private:
-        [[nodiscard]] std::error_code ensurePipeline_(const ColorTargetInfo &target_info);
+        std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
-        [[nodiscard]] std::error_code rebuildPipeline_(rhi::IDevice &device, const ColorTargetInfo &target_info);
+        std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
-        /// Creates a persistent root shader object and caches the g_frame cursor
-        /// resolved from it; must be re-run whenever the pipeline is rebuilt.
-        [[nodiscard]] std::error_code resolveFrameCursor_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature);
 
-        [[nodiscard]] std::error_code uploadFrameConstants_(const CameraSnapshot &snapshot);
+        [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
 
-        rhi::ComPtr<rhi::IRenderPipeline> m_pipeline;
-        rhi::ComPtr<rhi::IBuffer> m_vertex_buffer;
-        rhi::ComPtr<rhi::IInputLayout> m_input_layout;
-        rhi::ComPtr<rhi::IShaderProgram> m_program;
-        rhi::ComPtr<rhi::IShaderObject> m_root_object;
-        rhi::ShaderCursor m_frame_cursor;
+        rhi::ComPtr<rhi::IBuffer> m_vertex_buffer{};
+        rhi::ComPtr<rhi::IInputLayout> m_vertex_layout{};
+        rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
 
-        shader::SharedModule m_triangle_shader;
+        rhi::ComPtr<rhi::IRenderPipeline> m_render_pipeline{};
+        std::optional<RenderPipelineKey> m_render_pipeline_key;
 
-        rhi::Format m_pipeline_format{rhi::Format::Undefined};
-        u32 m_pipeline_sample_count{1};
-        safe_ptr<IRhiService> m_rhi_service;
+        CameraSnapshot m_camera_view;
     };
 }

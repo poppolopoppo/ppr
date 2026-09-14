@@ -2,8 +2,6 @@ module;
 export module engine.app:renderer;
 
 import :renderer.types;
-import :service.window;
-import :window.handle;
 
 import engine.core;
 import engine.math;
@@ -11,70 +9,57 @@ import engine.rhi;
 import std;
 
 export namespace pP {
+    class Window;
+    using WindowHandle = Numeric<void *, Window>;
+
     // ------------------------------------------------------------------
     // generic renderer: surfaces + queue + submission only
     // ------------------------------------------------------------------
-    // Submission shapes (RenderView/DrawSubmission/ColorPassOptions/SceneView)
-    // live in :renderer.types (Lane C); this class only owns surfaces,
-    // the graphics queue, and encode/submit/present.
 
-    class Renderer {
+    class Renderer final {
     public:
-        struct SurfaceRecord {
-            rhi::ComPtr<rhi::ISurface> m_surface;
-            // NOTE: explicit zeros — mango's default Vector ctor leaves
-            // components indeterminate.
-            int2 m_size{0, 0};
-            rhi::Format m_format{rhi::Format::Undefined};
-            bool m_configured{false};
-        };
-
-        [[nodiscard]] rhi::Format getWindowSurfaceFormat(WindowHandle handle) const noexcept;
+        rhi::Format m_preferred_surface_format{rhi::Format::Undefined};
+        u32 m_desired_image_count{3u};
+        bool m_enable_vsync{true};
 
         [[nodiscard]] std::error_code initialize(IRhiService &rhi_service);
 
-        [[nodiscard]] std::error_code createWindowSurface(IWindowService &window_service, const Window &window);
-
-        [[nodiscard]] std::error_code destroyWindowSurface(WindowHandle handle);
-
-        [[nodiscard]] std::error_code resizeWindowSurface(WindowHandle handle, int2 size);
-
-        [[nodiscard]] std::error_code renderAndPresent(
-            WindowHandle handle,
-            std::span<const DrawSubmission> draws,
-            const ColorPassOptions &options);
-
-        /// Encodes + submits into an offscreen texture without presenting or
-        /// waiting; the caller must waitForIdle() before readback.
-        [[nodiscard]] std::error_code submitToTexture(
-            rhi::ITexture &target,
-            std::span<const DrawSubmission> draws,
-            const ColorPassOptions &options);
-
-        [[nodiscard]] std::error_code waitForIdle();
-
         [[nodiscard]] std::error_code shutdown();
 
+        [[nodiscard]] std::error_code render(
+            string_literal description,
+            const rhi::RenderPassDesc &render_pass,
+            std::initializer_list<DrawSubmission> draws);
+
+        [[nodiscard]] std::error_code renderToTexture(
+            rhi::ITexture &render_target,
+            std::initializer_list<DrawSubmission> draws,
+            const ColorAttachmentOps &options = {});
+
+        [[nodiscard]] std::error_code renderAndPresent(
+            const Window &window,
+            std::initializer_list<DrawSubmission> draws,
+            const SurfaceRenderPass &surface_pass = {});
+
+        [[nodiscard]] std::error_code waitOnHost();
+
+        [[nodiscard]] std::error_code destroyWindowSurface(const Window &window);
+
     private:
-        [[nodiscard]] std::error_code configureSurface_(SurfaceRecord &record, int2 size);
+        struct SurfaceRecord final {
+            rhi::ComPtr<rhi::ISurface> m_surface{};
+            int2 m_extent{zero_v};
+            bool m_configured: 1 {false};
+        };
 
-        [[nodiscard]] std::error_code submitToTarget_(
-            rhi::ITexture &target,
-            const ColorTargetInfo &target_info,
-            std::span<const DrawSubmission> draws,
-            const ColorPassOptions &options);
+        [[nodiscard]] std::error_code createWindowSurface_(const Window &window, SurfaceRecord **out_record);
 
-        [[nodiscard]] static std::error_code encodeDraws_(
-            rhi::IRenderPassEncoder &pass,
-            const ColorTargetInfo &target_info,
-            std::span<const DrawSubmission> draws);
+        [[nodiscard]] std::error_code resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent);
 
-        // NOTE: temporary HWND-only adapter. A platform-neutral window-handle
-        // adapter replaces this helper without touching call sites.
-        [[nodiscard]] static rhi::WindowHandle toRhiWindowHandle_(void *const native) noexcept;
+        [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 
         FlatMap<WindowHandle, SurfaceRecord> m_surfaces{};
-        rhi::ComPtr<rhi::ICommandQueue> m_queue;
-        safe_ptr<IRhiService> m_rhi_service;
+        rhi::ComPtr<rhi::ICommandQueue> m_graphics_queue{};
+        safe_ptr<IRhiService> m_rhi_service{};
     };
 }
