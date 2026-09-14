@@ -28,11 +28,6 @@ export namespace pP::rhi {
 
     [[nodiscard]] std::error_code make_error_code(errc error_code) noexcept;
 
-    // shorter alias, because Slang::Result is just an int32 :/
-    [[nodiscard]] std::error_code result(const Slang::Result result) noexcept {
-        return make_error_code(result);
-    }
-
     using Slang::ComPtr;
 
     using slang_rhi::IRHI;
@@ -71,15 +66,9 @@ export namespace pP::rhi {
     using slang_rhi::DeviceLimits;
     using slang_rhi::DeviceType;
 
-    [[nodiscard]] float4x4 getOrthoMatrix(
-        const float width,
-        const float height) noexcept;
+    [[nodiscard]] float4x4 getOrthoMatrix(float width, float height) noexcept;
 
-    [[nodiscard]] float4x4 getPerspectiveMatrix(
-        const float fov,
-        const float aspect,
-        const float near_,
-        const float far_) noexcept;
+    [[nodiscard]] float4x4 getPerspectiveMatrix(float fov, float aspect, float near_, float far_) noexcept;
 
     using slang_rhi::DrawArguments;
     using slang_rhi::Format;
@@ -96,6 +85,7 @@ export namespace pP::rhi {
     using slang_rhi::QueueType;
     using slang_rhi::RenderPassDesc;
     using slang_rhi::RenderPassColorAttachment;
+    using slang_rhi::RenderPassDepthStencilAttachment;
     using slang_rhi::RenderPipelineDesc;
     using slang_rhi::RenderState;
     using slang_rhi::ResourceState;
@@ -120,6 +110,7 @@ export namespace pP::rhi {
     using slang_rhi::TextureFilteringMode;
     using slang_rhi::TextureType;
     using slang_rhi::TextureUsage;
+    using slang_rhi::TextureViewDesc;
     using slang_rhi::ShaderProgramDesc;
     using slang_rhi::StoreOp;
     using slang_rhi::StructType;
@@ -134,26 +125,25 @@ export namespace pP::rhi {
     using slang_rhi::DebugMessageSource;
     using slang_rhi::DebugMessageType;
     using slang_rhi::MarkerColor;
+
+    using slang_rhi::getFormatInfo;
+    using slang_rhi::getTextureDimension;
+}
+
+export namespace Slang {
+    using pP::shader::make_error_code;
 }
 
 export namespace pP {
-    // ------------------------------------------------------------------
-    // hasFailed() for rhi::Result — ADL target from pP namespace
-    // ------------------------------------------------------------------
+    using Slang::make_error_code;
 
-    [[nodiscard]] constexpr bool hasFailed(const rhi::Result status) noexcept {
-        return SLANG_FAILED(status);
-    }
-}
-
-export namespace pP {
     class IRhiService : public IService {
     public:
         [[nodiscard]] static safe_ptr<IRhiService> get() noexcept;
 
         [[nodiscard]] virtual std::error_code initialize(
             rhi::DeviceType device_type,
-            slang::IGlobalSession *global_session) = 0;
+            IShaderService &shader_service) = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 

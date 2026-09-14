@@ -13,7 +13,7 @@ import engine.core;
 import engine.math;
 import engine.shader;
 
-namespace pP::rhi {
+namespace pP {
     PPR_DEFINE_LOG_CATEGORY(RHI, info, none)
 
     namespace {
@@ -69,15 +69,15 @@ namespace pP::rhi {
         constexpr SlangRhiErrorCategory g_slang_rhi_error_category{};
     }
 
-    [[nodiscard]] const std::error_category &error_category() noexcept {
+    [[nodiscard]] const std::error_category &rhi::error_category() noexcept {
         return g_slang_rhi_error_category;
     }
 
-    [[nodiscard]] std::error_code make_error_code(const Result result) noexcept {
+    [[nodiscard]] std::error_code rhi::make_error_code(const Result result) noexcept {
         return SLANG_SUCCEEDED(result) ? std::error_code{} : std::error_code{result, g_slang_rhi_error_category};
     }
 
-    [[nodiscard]] std::error_code make_error_code(const errc error_code) noexcept {
+    [[nodiscard]] std::error_code rhi::make_error_code(const errc error_code) noexcept {
         return make_error_code(static_cast<Result>(error_code));
     }
 
@@ -87,7 +87,7 @@ namespace pP::rhi {
 
 #if PPR_ENABLE_LOGGING
     namespace {
-        class SlangRhiDebugCallback : public IDebugCallback {
+        class SlangRhiDebugCallback : public rhi::IDebugCallback {
         protected:
             ~SlangRhiDebugCallback() = default;
 
@@ -98,62 +98,62 @@ namespace pP::rhi {
             }
 
             void handleMessage(
-                DebugMessageType type,
-                DebugMessageSource source,
+                rhi::DebugMessageType type,
+                rhi::DebugMessageSource source,
                 const char *message) override {
                 const std::source_location loc = std::source_location::current();
                 auto &category = details::log::RHI();
 
                 std::string_view source_name{};
                 switch (source) {
-                    case DebugMessageSource::Layer:
+                    using enum rhi::DebugMessageSource;
+                    case Layer:
                         source_name = "layer";
                         break;
-                    case DebugMessageSource::Driver:
+                    case Driver:
                         source_name = "driver";
                         break;
-                    case DebugMessageSource::Slang:
+                    case Slang:
                         source_name = "slang";
                         break;
                 }
 
                 auto level = Log::ELevel::info;
                 switch (type) {
-                    case DebugMessageType::Info:
+                    using enum rhi::DebugMessageType;
+                    case Info:
                         level = Log::ELevel::info;
                         break;
-                    case DebugMessageType::Warning:
+                    case Warning:
                         level = Log::ELevel::warning;
                         break;
-                    case DebugMessageType::Error:
+                    case Error:
                         level = Log::ELevel::error;
                         break;
                 }
 
-                Log::logRaw(
-                    {category, level, loc},
-                    message,
-                    {{"source", source_name}});
+                Log::logRaw({category, level, loc}, message, {{"source", source_name}});
             }
         };
 
-        [[nodiscard]] static string_literal getDeviceTypeName_(const DeviceType device_type) noexcept {
+        [[nodiscard]] string_literal getDeviceTypeName_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                case DeviceType::Default:
+                using enum rhi::DeviceType;
+                case Default:
                     return "default";
-                case DeviceType::D3D11:
+                case D3D11:
                     return "d3d11";
-                case DeviceType::D3D12:
+                case D3D12:
                     return "d3d12";
-                case DeviceType::Vulkan:
+                case Vulkan:
                     return "vulkan";
-                case DeviceType::Metal:
+                case Metal:
                     return "metal";
-                case DeviceType::CPU:
+                case CPU:
                     return "cpu";
-                case DeviceType::CUDA:
+                case CUDA:
                     return "cuda";
-                case DeviceType::WGPU:
+                case WGPU:
                     return "wgpu";
             }
             std::unreachable();
@@ -162,20 +162,21 @@ namespace pP::rhi {
 #endif
 
     namespace {
-        [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const DeviceType device_type) noexcept {
+        [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                case DeviceType::Default:
-                case DeviceType::D3D11:
-                case DeviceType::D3D12:
+                using enum rhi::DeviceType;
+                case Default:
+                case D3D11:
+                case D3D12:
                     return SLANG_DXBC;
-                case DeviceType::Vulkan:
-                case DeviceType::WGPU:
+                case Vulkan:
+                case WGPU:
                     return SLANG_SPIRV;
-                case DeviceType::Metal:
+                case Metal:
                     return SLANG_METAL;
-                case DeviceType::CPU:
+                case CPU:
                     return SLANG_SHADER_HOST_CALLABLE;
-                case DeviceType::CUDA:
+                case CUDA:
                     return SLANG_CUDA_OBJECT_CODE;
             }
             std::unreachable();
@@ -186,122 +187,119 @@ namespace pP::rhi {
     // projection free functions
     // ------------------------------------------------------------------
 
-    [[nodiscard]] float4x4 getOrthoMatrix(
+    [[nodiscard]] float4x4 rhi::getOrthoMatrix(
         const float width,
         const float height) noexcept {
         return float4x4::orthoD3D(0.0f, width, 0.0f, height, 0.0f, 1.0f);
     }
 
-    [[nodiscard]] float4x4 getPerspectiveMatrix(
+    [[nodiscard]] float4x4 rhi::getPerspectiveMatrix(
         const float fov,
         const float aspect,
         const float near_,
         const float far_) noexcept {
-        const float xfov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
-        return float4x4::perspectiveD3D(xfov, fov, near_, far_);
+        const float x_fov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
+        return float4x4::perspectiveD3D(x_fov, fov, near_, far_);
     }
 
     // ------------------------------------------------------------------
     // slang RHI service
     // ------------------------------------------------------------------
 
-    class SlangRhiService : public IRhiService {
-    public:
-        ComPtr<IDevice> m_device{};
+    namespace {
+        class SlangRhiService final : public IRhiService {
+        public:
+            rhi::ComPtr<rhi::IDevice> m_device{};
 
-        [[nodiscard]] IRHI &getInstance() const noexcept override {
-            return *slang_rhi::getRHI();
-        }
-
-        [[nodiscard]] IDevice &getDevice() const noexcept override {
-            return *m_device;
-        }
-
-        [[nodiscard]] std::error_code initialize(
-            const DeviceType device_type,
-            slang::IGlobalSession *global_session) override {
-            if (m_device) {
-                PPR_LOG(RHI, warning, "RHI already initialized");
-                return errc::ok;
+            [[nodiscard]] rhi::IRHI &getInstance() const noexcept override {
+                return *slang_rhi::getRHI();
             }
 
-            IRHI *const p_instance = slang_rhi::getRHI();
-            if (not p_instance) {
-                PPR_LOG(RHI, error, "failed to get RHI instance");
-                return errc::no_interface;
+            [[nodiscard]] rhi::IDevice &getDevice() const noexcept override {
+                return *m_device;
             }
+
+            [[nodiscard]] std::error_code initialize(
+                const rhi::DeviceType device_type,
+                IShaderService &shader_service) override {
+                if (m_device) {
+                    PPR_LOG(RHI, warning, "RHI already initialized");
+                    return rhi::errc::ok;
+                }
+
+                rhi::IRHI *const p_instance = slang_rhi::getRHI();
+                if (not p_instance) {
+                    PPR_LOG(RHI, error, "failed to get RHI instance");
+                    return rhi::errc::no_interface;
+                }
 
 #if PPR_ENABLE_DEBUG
-            PPR_RETURN_ERROR_ON_FAIL(
-                RHI,
-                p_instance->setDebugLayerOptions({
+                PPR_LOG(RHI, info, "enabled Slang RHI debug layers", {
+                    {"coreValidation", true},
+                    {"GPUAssistedValidation", true}
+                    });
+
+                PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->setDebugLayerOptions({
                     .required = true,
                     .coreValidation = true,
                     .GPUAssistedValidation = true
-                }));
-            p_instance->enableDebugLayers();
+                    }));
+
+                p_instance->enableDebugLayers();
 #endif
 
-            constexpr slang_rhi::Feature required_features[] = {
-                slang_rhi::Feature::Surface,
-                slang_rhi::Feature::Rasterization,
-            };
+                constexpr slang_rhi::Feature required_features[] = {
+                    slang_rhi::Feature::Surface,
+                    slang_rhi::Feature::Rasterization,
+                };
 
-            DeviceDesc desc{};
-            desc.deviceType = device_type;
-            desc.slang.slangGlobalSession = global_session;
+                rhi::DeviceDesc desc{};
+                desc.deviceType = device_type;
+                desc.slang.slangGlobalSession = shader_service.getGlobalSession();
 
-            desc.requiredFeatures = required_features;
-            desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
+                desc.requiredFeatures = required_features;
+                desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
 
 #if PPR_ENABLE_DEBUG
-            desc.enableValidation = true;
+                desc.enableValidation = true;
 #endif
 #if PPR_ENABLE_LOGGING
-            desc.debugCallback = SlangRhiDebugCallback::get();
+                desc.debugCallback = SlangRhiDebugCallback::get();
 #endif
 
-            ComPtr<IDevice> device;
-            PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
+                rhi::ComPtr<rhi::IDevice> device;
+                PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
-            m_device = std::move(device);
+                const SlangCompileTarget compile_target = toSlangCompileTarget_(device->getDeviceType());
 
-            const std::error_code target_ec =
-                    IShaderService::get()->setTargetFormat(toSlangCompileTarget_(m_device->getDeviceType()));
-            if (target_ec) {
-                PPR_LOG(RHI, error, "failed to configure shader compilation target", {
-                    {"message", target_ec.message()}
-                });
-                return target_ec;
+                PPR_RETURN_ERROR_ON_FAIL(RHI, shader_service.setTargetFormat(compile_target));
+
+                m_device = std::move(device);
+                PPR_LOG(RHI, info, "RHI device created successfully", {
+                    {"device_type", getDeviceTypeName_(device_type)}
+                    });
+                return make_error_code(SLANG_OK);
             }
 
-            PPR_LOG(RHI, info, "RHI device created successfully", {
-                {"device_type", getDeviceTypeName_(device_type)}
-            });
-            return make_error_code(SLANG_OK);
-        }
+            [[nodiscard]] std::error_code shutdown() override {
+                if (m_device) {
+                    PPR_LOG(RHI, info, "RHI service shut down");
+                    m_device.setNull();
+                }
+                return default_value_v;
+            }
 
-        [[nodiscard]] std::error_code shutdown() override {
-            PPR_LOG(RHI, info, "RHI service shut down");
+            [[nodiscard]] rhi::Result createRenderPipeline(
+                const rhi::RenderPipelineDesc &desc,
+                rhi::IRenderPipeline **outPipeline) override {
+                return m_device->createRenderPipeline(desc, outPipeline);
+            }
+        };
+    }
 
-            m_device.setNull();
-
-            PPR_RETURN_ERROR_ON_FAIL(RHI, ::slang_rhi::destroyRHI());
-            return errc::ok;
-        }
-
-        [[nodiscard]] Result createRenderPipeline(
-            const RenderPipelineDesc &desc,
-            IRenderPipeline **outPipeline) override {
-            return m_device->createRenderPipeline(desc, outPipeline);
-        }
-    };
-}
-
-namespace pP {
     /*static*/
     safe_ptr<IRhiService> IRhiService::get() noexcept {
-        static rhi::SlangRhiService g_instance{};
+        static SlangRhiService g_instance{};
         return safe_ptr<IRhiService>(&g_instance);
     }
 }
