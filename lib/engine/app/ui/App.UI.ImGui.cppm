@@ -6,8 +6,7 @@ export module engine.app:ui.imgui;
 
 import std;
 import engine.math;
-
-export import imgui;
+import imgui;
 
 export namespace pP {
     class IUIService;

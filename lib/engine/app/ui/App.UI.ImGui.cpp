@@ -2,6 +2,7 @@ module;
 #include "pP/Macros.h"
 module engine.app;
 
+import imgui;
 import imgui_internal;
 
 import :input.device;
@@ -177,9 +178,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             ~ImGuiService() noexcept override {
-                if (not PPR_ENSURE(m_imgui_context)) [[unlikely]] {
-                    std::ignore = ImGuiService::shutdown();
-                }
+                PPR_ASSERT(m_imgui_context == nullptr);
+
+                m_input_listener.clearInputMappings();
+                m_input_mapping.clearKeymap();
             }
 
             [[nodiscard]] void *getContext() const noexcept override {
