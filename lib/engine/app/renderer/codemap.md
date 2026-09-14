@@ -2,50 +2,89 @@
 
 ## Responsibility
 
-The `engine.app:renderer` module provides the content-free generic `Renderer` (surfaces + graphics queue +
-submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`); submission shapes
-(`RenderView`/`DrawSubmission`/`ColorPassOptions`/`SceneView`) live in `engine.app:renderer.types`.
+The `engine.app:renderer` module provides the content-free generic `Renderer` (multi-window surfaces + graphics
+queue + validated submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
+camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
+`ColorAttachmentOps`, `SurfaceRenderPass`) live header-only in `engine.app:renderer.types`. There is no
+`App.Renderer.Types.cpp` — the partition is fully inline in `App.Renderer.Types.cppm`.
 
 ## Design
 
-- **Renderer** class with `initialize(IRhiService&)` — grabs the graphics queue only. Per-window swap chains are
-  owned as `FlatMap<WindowHandle, SurfaceRecord>` via `createWindowSurface` / `destroyWindowSurface` /
-  `resizeWindowSurface` / `getWindowSurfaceFormat` (unknown handle → `Format::Undefined`; minimized/unconfigured →
-  success no-op).
-- **renderAndPresent(handle, submissions, options)** — lookup → acquire → `submitToTarget_` → present.
-  **submitToTexture(target, submissions, options)** — same encode/submit without present or wait; the caller must
-  `waitForIdle()` before readback.
-- **encodeDraws_** — one color pass; per submission binds viewport/scissor via `RenderState` and invokes the borrowed
-  `DrawCallback`. Submissions retain nothing after return.
-- **TrianglePass** — owns triangle shader/pipeline/vertex buffer/root object/frame cursor; `draw()` rebuilds the
-  pipeline on target format/sample mismatch and uploads snapshot-fed frame constants (no velocity field; viewport size
-  from `SceneView::m_render_view`, never mutable `Camera`).
-- **shutdown()** — retain-first-error teardown: wait, unconfigure all surfaces, release queue/service refs.
-- **Moves**: viewport geometry moved out to `engine.app:window.viewport` (`App.Viewport.cpp/.cppm` deleted;
-  `makeRenderView` in `:renderer.types` now takes `const Viewport &`); camera state moved out to
-  `engine.app:scene.camera` (`lib/engine/app/camera/` deleted, `TrianglePass` consumes only `CameraSnapshot`).
+- **Renderer** (`App.Renderer.cppm/.cpp`): config `m_preferred_surface_format` (default Undefined → backend
+  preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}`; state `FlatMap<WindowHandle, SurfaceRecord>` +
+  `m_graphics_queue` + `safe_ptr<IRhiService>`. `SurfaceRecord` holds `ISurface`, last `m_extent`, `m_configured`.
+- `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only; `shutdown()` retain-first-error teardown:
+  `waitOnHost`, unconfigure every configured surface, clear map/queue/service refs. `waitOnHost()` forwards when
+  a queue exists, else success.
+- `render(description, render_pass, draws)`: rejects uninitialized queue/service (`not_connected`) and empty/null
+  attachment descriptors (`invalid_argument`); `inspectAttachment_` resolves each color/depth view to
+  format + mip-aware extent + sample count (null/missing/out-of-range/Undefined/0-sample → `invalid_argument`);
+  `validateMatchingAttachment_` requires identical extent + sample count across all attachments; resolve targets
+  require MSAA source (>1x), 1x resolve, same extent + format. Builds `RenderPipelineKey` signature, creates a
+  command encoder, `beginRenderPass` (null → `io_error`), pushes a purple debug group, derives default
+  viewport/scissor from the reference extent, then per `DrawSubmission` inserts a pink debug marker, applies
+  `m_viewport/m_scissor` or defaults via `RenderState`, and invokes `m_encode_draws(DrawContext{device, pass,
+  pipeline_key, viewport, target_extent})`; finishes and submits one command buffer.
+- `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
+  `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
+  Offscreen callers must `waitOnHost()` before readback.
+- `renderAndPresent(window, draws, surface_pass)`: rejects uninitialized backend (`not_connected`) and null window
+  handle (`no_such_device_or_address`); lazily `createWindowSurface_` on first use, otherwise
+  `resizeWindowSurface_` when `m_framebuffer_size` drifts; unconfigured record (minimized/zero extent) returns
+  success without drawing; otherwise `acquireNextImage`, assembles surface color + `m_additional_colors` +
+  optional `m_depth_stencil`, `render()` under the window-title debug group, then `present()`, retain-first-error.
+- `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
+  `resizeWindowSurface_` to the current framebuffer size, `insert_or_assign`. `resizeWindowSurface_`: zero/negative
+  extent unconfigures (keeps the record); otherwise waits when already configured, then `configure()` with
+  width/height + preferred format + image count + vsync. `destroyWindowSurface(window)` forwards to
+  `destroyWindowSurface_(handle)` (unknown handle → success no-op; else move-out, erase, unconfigure).
+- **Types** (`App.Renderer.Types.cppm`, header-only): `RenderPipelineSignature{color_formats span,
+  depth_stencil_format optional, sample_count}` with `operator==` + `hashValue` combine, memoized as
+  `RenderPipelineKey`; `DrawContext{IDevice&, IRenderPassEncoder&, pipeline_key, viewport, target_extent}`;
+  `DrawCallback = function_ref<error_code(DrawContext)>`; `TDrawable` concept (`render(DrawContext) →
+  error_code`); `DrawSubmission{description, encode_draws, optional viewport/scissor}` with direct and drawable
+  (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
+  `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`; `SurfaceRenderPass{surface_color,
+  additional_colors span, depth_stencil optional}`.
+- **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): owns vertex buffer/layout, shader program, render
+  pipeline + memoized key, and the last `CameraSnapshot`. `FrameConstants{view, projection, view_projection,
+  inverse_view_projection, camera_position, viewport_size}` with `static_assert(sizeof == 288)` matching HLSL
+  (4×float4x4 + 2×float4).
+- `initialize(rhi, shader, content_dir)`: `createInvariantRenderState_` (POSITION/COLOR RGB32Float input layout +
+  DeviceLocal vertex buffer with the 3-vertex RGB triangle) + `createShaderProgram_` (loads
+  `shaders/triangle.slang` module `"triangle"`, `vertexMain` + `fragmentMain`, `SingleProgram` link).
+  `update(dt, camera_view)` caches the snapshot (dt unused). `render(ctx)`: rebuilds via
+  `createRenderPipeline_` on pipeline-key mismatch, `bindPipeline` → `ShaderCursor`, dereferences `g_frame` into
+  `frame_cursor`, `uploadFrameConstants_` (view/projection/view_projection/invert→inverse, origin promoted via
+  `float4{origin,1}`, viewport size as `float4{size,0,0}`), sets viewport + vertex buffer state, `draw(3)`.
+  `createRenderPipeline_` accepts exactly one color target, no depth, 1x MSAA (else `operation_not_supported`);
+  single non-blended `TriangleList` pipeline. `shutdown()` releases key/pipeline/program/layout/buffer.
 
 ## Flow
 
-1. `Application::initialize()` → `renderer->initialize(rhi_service)` + `createWindowSurface(window_service, window)`
-2. Per-frame → stack `DrawSubmission`s (named lambdas + `function_ref`) → `renderAndPresent(handle, ...)`
-3. Offscreen/tests → `submitToTexture(target, ...)` → `waitForIdle()` → readback
-4. On resize → `resizeWindowSurface(handle, size)` (zero size unconfigures, keeps the record)
-5. `Application::shutdown()` → `triangle.shutdown()` → `destroyWindowSurface` → `renderer.shutdown()`
+1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
+   lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
+2. Per-frame → stack `DrawSubmission`s (named lambdas/`function_ref` or `TDrawable` refs) → `renderAndPresent`
+   (resize on drift → acquire → `render` → present); `TrianglePass::update(snapshot)` then `TrianglePass::render`
+   inside a submission's encode callback
+3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
+4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
+5. Shutdown → `triangle.shutdown()` → `destroyWindowSurface(window)` per window → `renderer.shutdown()`
+   (wait, unconfigure all, release)
 
 ## Integration
 
-- **Consumers**: `Application` (primary — owns `Renderer` + `TrianglePass`)
-- **Depends on**: `engine.core`, `engine.math`, `engine.rhi`, `engine.shader`, `engine.app:renderer.types`,
-  `engine.app:scene.camera` (TrianglePass snapshot), `engine.app:service.window` + `:window.handle` (surfaces)
+- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass`, drives update/render/shutdown)
+- **Depends on**: `engine.core`, `engine.math`, `engine.rhi` (devices, queues, surfaces, passes, pipelines),
+  `engine.shader` (TrianglePass program load), `:service.window` + `:window.handle` (Window resolves surfaces),
+  `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
 - **Provides**: `engine.app:renderer`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.types`
+  (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
 
-- `App.Renderer.cppm` — generic `Renderer` declaration (multi-surface registry, renderAndPresent/submitToTexture)
-- `App.Renderer.cpp` — Renderer implementations (configure/submit/encode/present, retain-first-error shutdown)
-- `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (content-owned pass, velocity-free FrameConstants)
-- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (program/layout/buffer/pipeline, snapshot upload)
-- `App.Renderer.Types.cppm` — boundary types (`ColorTargetInfo`/`RenderView`/`DrawContext`/`DrawCallback`/
-  `DrawSubmission`/`ColorPassOptions`/`SceneView`) + `makeRenderView`
-- `App.Renderer.Types.cpp` — `makeRenderView` (window-local translate, DPI scale, clip, empty → nullopt)
+- `App.Renderer.cppm` — generic `Renderer` declaration (config, multi-surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
+- `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
+- `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, pipeline helpers)
+- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, pipeline rebuild, frame-constant upload)
+- `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, `SurfaceRenderPass`); header-only, no matching `.cpp`

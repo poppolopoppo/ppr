@@ -1,28 +1,27 @@
 # lib/engine/app/platform
 
 ## Responsibility
-The `engine.app:platform` module provides the `IPlatform` interface and platform error/version infrastructure. `IPlatform` is the central abstraction that bridges the engine core with OS-specific windowing, input, player, and RHI integration. It is implemented by platform backends (currently GLFW in `glfw/`, covering Windows/Linux/macOS) and registered as a singleton service via the engine's service locator. This directory now holds only the interface partition; all GLFW backend files live in `glfw/` (see `glfw/codemap.md`).
+The `engine.app:platform` module provides the `IPlatform` interface plus platform error/version infrastructure. `IPlatform` is the central abstraction bridging engine core with OS-specific windowing, input, player, and RHI integration. Backend implementations (currently GLFW in `glfw/`, covering Windows/Linux/macOS) are created via the `IPlatform::create()` factory. This directory holds only the interface partition; all GLFW backend files live in `glfw/` (see `glfw/codemap.md`).
 
 ## Design
-- **IPlatform** inherits from `IService` — provides compile-time type-safe lookup via `typeUid<IPlatform>()` / `ServicesStore`
-- **Static `IPlatform::get()`** returns a `SharedPlatform` (raw pointer in debug, `safe_ptr` in release) to a globally unique instance
-- Seven pure virtual methods: `initialize(Application&)`, `shutdown(Application&)`, `getPlatformName()`, `getPlatformVersion()`, `getInputService()`, `getWindowService()`, `getPlayerService()`
-- Platform-specific `errc` enum (`ok`, `fail`, `initialization_failed`, `invalid_argument`) integrates with `std::error_code`
-- `Version` struct captures major/minor/revision via `glfwGetVersion()` at init time
-- `IPlatform` is stored in `Application.m_platform` (`safe_ptr<IPlatform>`) and retrieved via `m_services.get<IPlatform>()` or `IPlatform::get()`
+- **IPlatform** inherits from `safe_object` — instances are factory-owned (`std::unique_ptr<IPlatform>` from `create()`), referenced elsewhere via non-owning `safe_ptr`
+- Nine pure virtual methods: `initialize(Application&)`, `shutdown(Application&)`, `getPlatformName()`, `getPlatformVersion()`, `getApplication()`, `getInputService()`, `getWindowService()`, `getPlayerService()`, `update(TimeSpan dt)`
+- `create()` factory (defined in the GLFW backend translation unit) returns `std::make_unique<GlfwPlatform>()`; there is no global `IPlatform::get()` singleton
+- Platform-specific `errc` enum (`ok`, `fail`, `initialization_failed`, `invalid_argument`) integrates with `std::error_code` via `std::is_error_code_enum` specialization; helpers `platform::error_category()`, `make_error_code(int)`, `make_error_code(errc)`, `result(int)`
+- `Version` struct captures major/minor/revision (populated by the backend via `glfwGetVersion()` at query time)
+- `SharedPlatform` typedef is `safe_ptr<IPlatform>` (non-owning lifetime-checked view, not shared ownership)
 
 ## Flow
-1. `Application::Application()` retrieves `IPlatform::get()` — the singleton GLFW (or other) instance
-2. `Application::initialize()` calls `m_platform->initialize(*this)` which initializes the backend, creates the window/input/player services, and inserts them into the app's `ServicesStore`
-3. `Application::run()` loop: per-frame `update()` polls events via the cached window service, input poll routes through the `InputContext` tree, `render()` submits viewports via `m_renderer`
-4. `Application::shutdown()` calls `m_platform->shutdown(*this)` which tears down backend services, erases them from the store, and releases native resources
+1. Startup creates the backend via `IPlatform::create()` and stores it owning-side (e.g. `Application`); `initialize(app)` caches `m_application` and registers created services into the app's `ServicesStore`
+2. Per-frame `update(dt)` drives backend polling (GLFW backend polls input devices before window events — see `glfw/codemap.md`)
+3. Teardown `shutdown(app)` erases backend services from the store in reverse-dependency order, releases native resources, and resets `m_application` (idempotent second call is a no-op)
 
 ## Integration
-- **Consumers**: `Application` (primary), backend implementations in `glfw/` (`GlfwPlatform`, `GlfwWindow`, `GlfwInput`, `GlfwPlayer`)
-- **Depends on**: `engine.core` (safe_object, safe_ptr, IService), `engine.math` (int2, float2), `std` (string_view, error_code)
-- **Provides**: `engine.app:platform` module namespace with `IPlatform`, `errc`, `Version`
-- **Used by**: `Application` (m_platform member, getServices().get<IPlatform>()), `IPlatform::get()` static accessor, platform backends in `glfw/`; backend details documented in `glfw/codemap.md`
+- **Consumers**: `Application` (primary owner of the `unique_ptr<IPlatform>`), backend implementations in `glfw/` (`GlfwPlatform`, `GlfwWindow`, `GlfwInput`, `GlfwPlayer`)
+- **Depends on**: `engine.core` (safe_object, safe_ptr, TimeSpan/TimePoint, error helpers), `std` (string_view, error_code, unique_ptr)
+- **Provides**: `engine.app:platform` module namespace with `IPlatform`, `SharedPlatform`, `platform::errc`, `platform::Version`, `platform::error_category/make_error_code/result`
+- **Used by**: owning application shell (factory `create()` + `initialize`/`shutdown`/`update`), service lookup `getServices().get<IWindowService/IInputService/IPlayerService>()`, backend `getApplication/getInputService/getWindowService/getPlayerService` accessors; backend details documented in `glfw/codemap.md`
 
 ## Key Files
-- `App.Platform.cppm` — `IPlatform` class declaration, `errc` enum, `Version` struct, `SharedPlatform` typedef
+- `App.Platform.cppm` — `IPlatform` declaration, `create()` factory, `errc` enum, `Version` struct, error helpers, `SharedPlatform` typedef
 - `glfw/` — GLFW backend (`GlfwPlatform`, `GlfwWindow`, `GlfwInput`, `GlfwPlayer`); documented separately in `glfw/codemap.md`

@@ -191,3 +191,14 @@ CLion-first fallback described by `clion-tools`. Use PowerShell on Windows for
 shell work. Temporary artifacts belong in `.slim/tmp/` (repo-scoped) or
 `C:\Users\bek4b\AppData\Local\Temp\opencode\` (external). Do not commit,
 push, or change generated/configuration files unless explicitly requested.
+
+## Repository Map
+
+A full codemap is available at `codemap.md` in the project root.
+
+Before working on any task, read `codemap.md` to understand:
+- Project architecture and entry points
+- Directory responsibilities and design patterns
+- Data flow and integration points between modules
+
+For deep work on a specific folder, also read that folder's `codemap.md`.

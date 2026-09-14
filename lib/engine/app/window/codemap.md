@@ -5,8 +5,8 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 
 ## Design
 - **IWindowService** inherits from `IService` — provides compile-time type-safe lookup via `typeUid<IWindowService>()`. Thirty-two pure virtual methods covering every window operation: creation, destruction, manipulation, focus, monitoring, callbacks, clipboard, and scaling.
-- **Window model** (`WindowModel`) — plain data struct with fields: `title`, `window_size`, `framebuffer_size`, `visible`, `focused`, `decorated`, `resizable`. Passed by rvalue reference to `createWindow()`.
-- **Window** class (opaque, holds `WindowHandle` = `Numeric<void*, Window>` + `WindowModel`) — the owned window entity. `WindowHandle` is a numeric handle combining a pointer to the `Window` object and the type tag. `SharedWindow` = `safe_ptr<const Window>`.
+- **Window model** (`WindowModel`) — plain data struct: `m_title`, `m_fullscreen_monitor`, `m_share_resources_with`, `m_window_position`, `m_window_size`, bitfield flags `m_decorated`/`m_focused`/`m_iconified`/`m_resizable`/`m_visible`. No framebuffer size here — that lives on `Window`.
+- **Window** class (`WindowModel` + `safe_object`, move-only, copy deleted, move-assign deleted) — the owned window entity. Holds opaque `WindowHandle` (`Numeric<void*, Window>`) + `NativeWindowHandle` (`Numeric<void*, WindowHandle>`), `m_content_scale`, `m_framebuffer_size`, `m_hovered`, and `WindowDelegate` event fields: `m_when_closed`, `m_when_focused/hovered/iconified`, `m_when_moved/resized/scaled`, `m_when_character_input`, `m_when_keyboard_pressed/repeated`, `m_when_mouse_clicked/moved/scrolled`, `m_when_drag_and_dropped`. Ctor asserts non-null handles; move ctor transfers `m_handle`; `release()` swaps the handle out to null; debug dtor asserts the handle was released. `SharedWindow` = `safe_ptr<const Window>`.
 - **Monitor** class — holds `MonitorHandle` (`Numeric<void*, Monitor>`), `std::string name`, `VideoMode` (resolution, RGB bits, refresh rate), `physical_size`, `virtual_position`, `m_primary_monitor` flag.
 - **VideoMode** — `int2 resolution`, `int3 rgb_bits`, `u32 refresh_rate`.
 - GLFW backend (`GlfwWindow` inherits `IWindowService`) — singleton `GlfwWindow::get()` manages the single GLFW instance's window list, monitor list, and callback registration. All GLFW callbacks (close, focus, resize, iconify, framebuffer, content-scale, key, char, mouse-button, cursor-position, scroll) are registered in `createWindow()` and operate on the `Window` object's user pointer.
@@ -15,12 +15,14 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 - `setWindowMonitor(window, monitor, position, size)` → `glfwSetWindowMonitor()`.
 - `pollEvents()` → `glfwPollEvents()`, `waitEvents()` → `glfwWaitEvents()`.
 - **Viewport geometry** (`engine.app:window.viewport`, moved here from the deleted renderer `App.Viewport.cpp/.cppm`):
-  `BasicRect<T>` (origin/extent rect with `fromAabb`/`fromSize`, normalize/denormalize, `contains`), `PixelRect` (screen
-  pixels) / `NormalizedRect` (window-space UV), `ViewportLayout` policy variant
-  (`FullWindow`/`Centered`/`WindowRect`/`NormalizedWindowRect` with `clientRect(window_rect)`), immutable `Viewport`
-  (window + client rects, screen/window/client transforms, client normalize helpers), and `WindowViewport`
-  (window-bound viewport with `ViewportRevision`, `setLayout`, owner-driven `updateFromWindow()` after event polling —
-  holds no window subscription).
+  `BasicRect<T>` (origin/extent rect with `fromAabb`/`fromSize`, edge getters/setters, `getAspectRatio` asserting
+  non-zero height, `contains` point/rect, `normalize`/`denormalize` with `Clamp` variants on a pixel-center
+  convention), `PixelRect` (screen pixels) / `NormalizedRect` (window-space UV), `ViewportLayout` policy variant
+  (`FullWindow`/`Centered`/`WindowRect`/`NormalizedWindowRect` with `clientRect(window_rect)` — normalized maps with a
+  `+0.5f` origin bias and `round`), immutable `Viewport` (window + client rects, screen/window/client transforms,
+  client/window normalize helpers, degenerate-window guard collapsing the client to zero extent), and `WindowViewport`
+  (fixed `SharedWindow` binding + `ViewportRevision` bumped only on change, `setLayout` re-derives, owner-driven
+  `updateFromWindow()` after event polling — holds no window subscription).
 
 ## Flow
 1. `Application` constructor → `IPlatform::get()` → `GlfwPlatform` → `GlfwWindow::get()` (creates singleton GLFW window manager)
@@ -34,12 +36,12 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 ## Integration
 - **Consumers**: `Application` (primary — retrieves `m_cached_window_service` via `getServices().get<IWindowService>()`, handles `onWindowResized_`, polls events, checks `getWindowShouldClose`), `RHI` (via `m_renderer.createWindowSurface()` which calls `window_service.getNativeHandle()`), `ImGuiService` (routes events via input service), `GlfwPlatform` (primary implementer), `engine.app:renderer.types` (`makeRenderView` consumes `Viewport`), `engine.app:scene.camera` (`Camera::updateModel` consumes `Viewport`)
 - **Depends on**: `engine.core` (IService, typeUid, safe_ptr, hash_t, Numeric), `engine.math` (int2, float2), `std` (string_view, error_code), `engine.app:service.window` (IWindowService interface), `engine.app:platform.glfw` (GlfwWindow implementation)
-- **Provides**: `engine.app:window` module namespace with `IWindowService`, `Window`, `WindowModel`, `WindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `errc` error codes (via `IService` integration), plus `engine.app:window.viewport` (`BasicRect`/`PixelRect`/`NormalizedRect`, `ViewportLayout`, `Viewport`, `WindowViewport` — moved here from the deleted renderer `App.Viewport.cpp/.cppm`)
+- **Provides**: `engine.app:window` module namespace with `IWindowService`, `Window`, `WindowModel`, `WindowHandle`, `NativeWindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `errc` error codes (via `IService` integration), plus `engine.app:window.viewport` (`BasicRect`/`PixelRect`/`NormalizedRect`, `ViewportLayout`, `Viewport`, `WindowViewport` — moved here from the deleted renderer `App.Viewport.cpp/.cppm`)
 - **Used by**: `Application` (m_cached_window_service, m_main_window, onWindowResized_, getWorkingDir/ContentDir resolution via platform), `GlfwPlatform::initialize()` (creates initial window, inserts into services), `Renderer::createWindowSurface()` (gets native handle for RHI surface), `GlfwInput` (routes key/mouse events via GLFW callbacks)
 
 ## Key Files
-- `App.Window.Handle.cppm` — `Window`, `WindowModel`, `WindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor` declarations
-- `App.Window.Handle.cpp` — (minimal; most definitions are in the .cppm interface file, with implementations in GlfwWindow.cpp)
+- `App.Window.Handle.cppm` — `Window`, `WindowModel`, `WindowHandle`, `NativeWindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `WindowDelegate` declarations
+- `App.Window.Handle.cpp` — `Window` move ctor, `release()`, debug-dtor handle check (most behavior lives in the .cppm + GlfwWindow)
 - `App.Window.Monitor.cppm` — Monitor/VideoMode declarations (may be included in Handle.cppm)
 - `App.Window.Monitor.cpp` — Monitor method implementations
 - `App.Platform.Glfw.Window.cppm` — `GlfwWindow` class declaration (inherits IWindowService)

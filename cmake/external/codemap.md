@@ -8,11 +8,14 @@ module bindings for third-party libraries consumed by the engine.
 ## Design
 
 - **CPM packages** (`cmake/Dependencies.cmake` + per-lib files): GLFW (`find_package(glfw3)`, SYSTEM includes),
-  Mango (vcpkg prefix path, AVX/AVX2/SSE2, no examples/OpenGL/Vulkan), rapidhash (interface target), SlangRHI
-  (`SLANG_RHI_FETCH_SLANG ON`, unity build, D3D11/Optix/CUDA off), and STB (interface target).
-- **Mango normalization** (`Mango.cmake`): its concrete `mango*` targets set `CXX_MODULE_STD OFF` locally and
-  remove incompatible interface compile options so their differing flags cannot create incompatible std-module
-  synth targets. Other external dependencies use only the workarounds their own target structure requires.
+  Mango (poppolopoppo/mango pin, vcpkg prefix path + triplet passthrough, AVX/AVX2/SSE2/SSE4, `BUILD_IMPORT3D ON`,
+  no examples/OpenGL/Vulkan/shared-libs; ASan adds `/D_ANNOTATE_STL` via `CMAKE_CXX_FLAGS`), rapidhash (interface
+  target), SlangRHI (`SLANG_RHI_FETCH_SLANG ON`, unity build, D3D11/Optix/CUDA off), and STB (interface target).
+- **Mango normalization** (`Mango.cmake`): each concrete `mango*` target (`mango`, `mango-core`, `mango-image`,
+  `mango-import3d`, `mango-window`, `mango-opengl`, `mango-vulkan`) sets `CXX_MODULE_STD OFF` locally and strips
+  `/MP`, `/arch:AVX*`, `/Ox` (genex-wrapped) from `INTERFACE_COMPILE_OPTIONS` so their differing flags cannot
+  create incompatible std-module synth targets; `mango` includes marked SYSTEM. Other external dependencies use
+  only the workarounds their own target structure requires.
 - **DearImGui** (`DearImGui.cmake`, `imgui` v1.92.9b-docking via CPM): split into `imgui.base` (static lib over
   `imgui*.cpp`, SYSTEM includes, `CXX_MODULE_STD OFF`) and `imgui` (module lib over downloaded
   `imgui.cppm`/`imgui_internal.cppm` "Combined Module" bindings from `stripe2933/imgui-module` v1.92.9b —

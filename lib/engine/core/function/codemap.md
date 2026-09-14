@@ -17,20 +17,23 @@ handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
   compile-time-known targets, and `function_ptr` storage holds the erased callable plus its dispatch pointer.
   `constexpr`-constructible from lambdas, function pointers, and nontype wrappers; `operator()` invokes via direct
   dispatch (no heap allocation). Convertible across compatible signatures; comparable for equality.
-- **Delegate** (in `:function.callback`): single-subscriber callback holding `std::optional<function_ref<F>>`.
-  `subscribe()` exchanges and returns the previous subscriber; nullary `operator()` returns `default_value_v` for
+- **Delegate** (in `:function.callback`): single-subscriber callback over `details::DelegateImpl<FunctionT, params_tuple>` partial specialization. Holds `std::optional<function_ref<F>>`; `subscribe()` exchanges and returns the previous subscriber, with `nontype<F>` overloads (pointer/object) constrained by `requires` on `function_ref` constructibility; nullary `operator()` returns `default_value_v` for
   non-void signatures when empty; `reset()` clears.
 - **BroadcastCallback** (in `:function.callback`): multi-subscriber callback for `std::error_code`-returning
-  signatures (`TFunctionReturning<std::error_code>`), default allocator `mem::GPA`. Subscribers live in a mutable
+  signatures (`TFunctionReturning<std::error_code>`), default allocator `mem::GPA`, implemented as
+  `details::BroadcastCallbackImpl<FunctionT, AllocatorT, params_tuple>` partial specialization. Subscribers live in a mutable
   `SparseVectorInplace<Event, AllocatorT>` so `add()`/`remove()` are `const` (subscription through a const reference)
   while `clear()`/`operator()` stay non-const; dispatch short-circuits on the first error. `Handle` is a move-only
-  RAII token holding the callback pointer, `SparseKeyId`, and a shared atomic liveness flag — destroying the handle
-  unsubscribes, and destroying the callback flips the flag so late handle destruction never dangles. Removing during
-  dispatch invalidates iteration and must be deferred by callers.
-- **CallbackSink** (in `:function.callback`): deferred-dispatch wrapper over `BroadcastCallback` — `operator()(args… )`
-  latches the first argument set into `m_deferred_params`, `sink()` applies it to all subscribers and clears.
-  `ForwardAsLValue` rewrites `safe_object`-derived (`TSafeObject`) arguments to `safe_ptr` so callbacks observe
-  liveness (currently gated off by the `pP::Window` forward-declaration breakage, falling back to plain params).
+  RAII token holding the callback pointer, `SparseKeyId`, and a shared atomic liveness flag (`shared_ptr<atomic<bool>>`
+  set false on callback destruction, checked with acquire-load; move-assign unsubscribes first) — destroying the handle
+  unsubscribes, and destroying the callback flips the flag so late handle destruction never dangles (single-threaded
+  contract: the callback object itself is not ref-counted, so callers keep it alive past handles or drop handles first).
+  Removing during dispatch invalidates iteration and must be deferred by callers.
+- **CallbackSink** (in `:function.callback`): deferred-dispatch wrapper over `BroadcastCallback` via
+  `details::CallbackSinkImpl<FunctionT, AllocatorT, params_tuple>` — `operator()(args…)` latches only the first
+  argument set into `m_deferred_params` (later calls ignored until drained), `sink()` applies it via
+  `std::apply` + `exchange` and clears. `ForwardAsLValue` rewrites `safe_object`-derived (`TSafeObject`) arguments to
+  `safe_ptr` so callbacks observe liveness (currently dormant — the impl stores the raw params tuple).
 - **FunctionTraits** (`details::FunctionTraits`/`TFunction`/`TFunctionReturning`): compile-time signature
   introspection (return type, params tuple, noexcept) constraining `Delegate`/`BroadcastCallback`/`CallbackSink`.
 

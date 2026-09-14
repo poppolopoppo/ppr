@@ -8,9 +8,13 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Design
 
-- **Root `CMakeLists.txt`**: C++23, `CMAKE_CXX_SCAN_FOR_MODULES ON`, project `PPR`;
-  prevents in-source builds, validates `PPR_ENABLE_*` combinations, enforces preset constraints
-  (`PPR_EDIT_AND_CONTINUE` requires Ninja + MSVC + Debug).
+- **Root `CMakeLists.txt`**: C++23 (`CMAKE_CXX_STANDARD 23`, `SCAN_FOR_MODULES ON`,
+  `EXPORT_COMPILE_COMMANDS ON`), project `PPR`; version-gated `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` UUIDs
+  (4.2/4.3/4.4+) + `EXPORT_BUILD_DATABASE` before `project()`; `CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES`
+  exposes `include/` (Macros.h) to module scanning; prevents in-source builds, `enable_testing()`, developer-mode
+  flag fan-out (ASan + UBSan + cppcheck + warnings-as-errors); guards reject bad `PPR_ENABLE_*` combos
+  (`PPR_EDIT_AND_CONTINUE` requires Ninja + MSVC + Debug and no ASan; THREAD excludes ADDRESS/LEAK; MEMORY
+  excludes ADDRESS/THREAD/LEAK).
 - **`CMakePresets.json`** (single-config Ninja throughout — avoids the CMake 4.4 multi-config genex leak into
   C++ module BMIs): `default` (Debug + CPM/vcpkg cache vars), `developer` (+ `PPR_ENABLE_DEVELOPER_MODE`),
   `vcpkg` (toolchain from `$VCPKG_ROOT`), hidden `windows-default` (MSVC/Clang: `VS_SEGMENT_HEAP_ALLOWLIST`

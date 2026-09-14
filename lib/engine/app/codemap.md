@@ -3,48 +3,88 @@
 ## Responsibility
 
 `engine.app` is the application-layer umbrella module: the single compile-time aggregation point (`import engine.app;`)
-for the full stack — application lifecycle, input, player, scene camera, services, window, platform, renderer, and UI.
-`pP::Application` owns the main loop, directory resolution, service stores, main window/viewport, renderer + triangle
-pass, and the owned scene camera stack. `game/main.cpp` subclasses it (`TurboLarbin`) and drives `run()`.
+for application lifecycle, input, player, scene camera, services, window, platform, renderer, and UI.
+`pP::Application` (`:application`) is the slim lifecycle base — `ApplicationDomain`, run-loop, `IPlatform`,
+`ServicesStore`, shader/RHI/`Renderer` bootstrap, directory resolution. `pP::ApplicationEditor`
+(`:application_editor`) is the interactive-client subclass that owns window, viewport, input context, player, camera,
+triangle pass, and ImGui service, and implements `IClientService`. `game/main.cpp` drives `run()` on the concrete
+application.
 
 ## Design
 
-- Umbrella `App.cppm` only `export import`s partitions — `:application`, `:input.*` (5), `:player` + `:player.graph`,
-  `:scene.camera` + `:scene.camera.controller`, `:service.*` (input/player/ui/window), `:window.*`
-  (viewport/handle/monitor), `:platform`, `:renderer` + `:renderer.triangle_pass` + `:renderer.types`, `:ui.imgui`.
+- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:input.*` (5),
+  `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
+  `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
+  `:renderer` + `:renderer.triangle_pass` + `:renderer.types`, `:ui.imgui`.
 - `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
-  `initialize/update/render/shutdown` hooks returning `std::error_code`; lifecycle `SharedContext` + cancel func;
-  hot per-frame state (cached window/input service pointers, `WindowInputContext`, scene `InputListener` +
-  `InputMapping`, owned `Camera`/`CameraModel`/`FreeCameraController`, viewport, renderer, triangle pass) vs cold
-  init-time state (service stores, window callbacks, `IUIService`, platform, dirs).
-- DELETED: old top-level `camera/` directory is gone — camera now lives only under `scene/` (`:scene.camera`,
-  `:scene.camera.controller`, registered in CMakeLists). No `camera/` partition remains in the umbrella.
-- `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events) and
-  `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay implicit-instantiation cost.
-- CMakeLists registers all `.cppm` (FILE_SET CXX_MODULES) + `.cpp` privately; links `engine.core/math/shader/rhi`
-  public-internal, `glfw`/`mango` private, `imgui.base` + `imgui` public (so `import imgui;` resolves for importers).
+  `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerExplicitClock`
+  `m_application_clock`, `optional<TimeDuration> m_target_frame_duration`, `const unique_ptr<IPlatform> m_platform`
+  (declared before `ServicesStore m_services` so reverse-destruction releases store observers before platform owners),
+  `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`, single-use `m_has_torn_down` latch,
+  `Array<string>` args, `string` name, `const ApplicationDomain m_domain`, four `directory_entry` dirs
+  (install/config/content/working). Forward-declares `IClientService`. Accessors: `getName/Arguments/Domain/Platform`
+  (const ref), `getRenderer/Services` (const + mutable overloads), `getTimerClock/TargetFrameDuration`, dir getters;
+  `requestApplicationExit(clause)`, `setTargetFrameDuration(TimeDuration/nullopt)`, `setTargetFrameRate(fps)`, `run()`.
+- `ApplicationDomain` — immutable-after-construction bitfield struct: `m_is_headless` (false), `m_is_interactive`
+  (true), `m_needs_presence` (false), `m_needs_rendering` (true), `m_needs_user_interface` (true); `ApplicationEditor`
+  fixes these values at construction.
+- `ApplicationEditor` (`App.Application.Editor.cppm/.cpp`, `module engine.app:application_editor`) — `public
+  Application, protected IClientService`. Owns `unique_ptr<Player>`, `unique_ptr<Camera>`,
+  `unique_ptr<ICameraController>`, `unique_ptr<WindowInputContext> m_main_input_context`,
+  `unique_ptr<InputMapping> m_camera_input_mapping`, `unique_ptr<IUIService>`, `unique_ptr<WindowViewport>`,
+  `unique_ptr<TrianglePass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
+  getters plus protected `getApplication()` returning `this`. Local `EInputPriority { ui = 0, camera, player }`
+  orders the input chain.
+- `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
+  overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
+  implicit-instantiation cost.
+- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (5), platform (5),
+  player (2), renderer (3, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
+  (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
+  privately. Links `engine.core/math/shader/rhi` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
+  public (so `import imgui;` resolves for importers).
 
 ## Flow
 
-1. `game/main.cpp` → `TurboLarbin : Application` → `app.run()` → `initialize()` (lifecycle context, platform init,
-   dirs, window/viewport, renderer + triangle pass, scene camera + controller mapping, UI service) → loop
-   `update()` → `render()` until lifecycle errors/cancel → `shutdown()` via `PPR_DEFER` (throws `system_error` on
-   failure outside unwind).
-2. Per-frame `update()` polls window events, posts input messages, ticks the scene controller into the owned camera;
-   `render()` builds stack `DrawSubmission`s and submits via `Renderer::renderAndPresent` / `submitToTexture`.
-3. No runtime logic in `App.cppm` itself — compile-time re-export only.
+1. `Application::run()` (torn-down guard → `operation_not_permitted`) → `initialize()` → `PPR_DEFER shutdown()` →
+   loop `while (not m_lifecycle->error())`: `m_application_clock.tick(time::now())`, sleep-throttle to
+   `m_target_frame_duration`, `update(m_elapsed)` + `render()` with `catch (system_error/invalid_argument/bad_alloc/...)`
+   → `m_request_exit(code)`; exit: lifecycle clause logged as warning, first-error-wins return.
+2. `Application::initialize()` → `m_platform->initialize(*this)` → defer-on-failure `shutdown()` rollback → clock
+   reset, `content/install` = executable parent, `working` = `current_path`, `withCancelClause(background())` →
+   if `m_domain.m_needs_rendering`: `IShaderService::get()->initialize()` + insert, `IRhiService::get()->initialize(
+   DeviceType::Default, shader)` + insert, `make_unique<Renderer>()->initialize(rhi)`. `update()` =
+   `TimerManager::mainTimer().tick()` + `m_platform->update(dt)`; `render()` = no-op default.
+   `shutdown()` (latch set first, idempotent-success): `m_renderer->shutdown()` + reset → erase + shutdown RHI →
+   erase + shutdown shader → `m_platform->shutdown(*this)` last; `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
+3. `ApplicationEditor::initialize()` → `Application::initialize()` → `IWindowService::createWindow({title = getName(),
+   1280x720})` + `setMainWindow` → `WindowInputContext(input_service, main_window)` + `WindowViewport(main_window,
+   {})` → `Player(PlayerIdentity{})` + `Camera(perspective)` + `InputMapping("camera_input_mapping")` +
+   `FreeCameraController::provideInputActionKeyMappings` → player listener `addInputMapping(camera_mapping,
+   camera)` + context `addInputListener(player.listener, player)` → `app_services.inject<IRhiService/IShaderService>()`
+   → `Renderer::initialize(rhi)` → `TrianglePass::initialize(rhi, shader, getContentDir())` →
+   `ui::createImGuiService()->initialize(input_context, rhi, shader, ui_priority)` + `insert_or_assign(ui)`.
+4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
+   `camera->updateModel(dt, controller, viewport)` → `triangle_pass->update(dt, camera->getSnapshot())` →
+   `ui_service->update(dt, viewport)`; `render()` = `Application::render()` →
+   `renderer.renderAndPresent(window, { *m_triangle_pass, *m_ui_service })`. `shutdown()` unwinds UI (erase + shutdown
+   + reset) → triangle pass → clear input listeners/mappings + frame messages → controller/mapping/camera reset →
+   viewport reset → `setMainWindow(nullptr)` + `destroyWindow` → `Application::shutdown()`.
+5. No runtime logic in `App.cppm` itself — compile-time re-export only.
 
 ## Integration
 
-- **Consumers**: `game/main.cpp` (sole app subclass), `engine.tests.app` (platform tests).
+- **Consumers**: `game/main.cpp` (concrete application subclass), `engine.tests.app` (platform tests).
 - **Depends on**: `engine.core` (services, context, delegates), `engine.math`, `engine.rhi`, `engine.shader`
   (via renderer/UI pass), external `glfw`/`mango`/`imgui`.
 - **Provides**: every `engine.app:*` namespace; `Application` lifecycle + service-store accessors
-  (`getServices()`, `getUiServices()`, `getMainWindow()`, `getLifecycle()`).
+  (`getServices()`, `getPlatform()`, `getRenderer()`, `getDomain()`, `getTimerClock()`); `ApplicationEditor` client
+  ownership via `IClientService`.
 
 ## Key Files
 
-- `App.cppm` — umbrella re-export list (no runtime code).
-- `App.Application.cppm/.cpp` — `Application` interface + lifecycle/loop implementation.
+- `App.cppm` — umbrella re-export list incl. `:application_editor` + `:service.client` (no runtime code).
+- `App.Application.cppm/.cpp` — slim `Application` base: domain/run-loop/platform/services/shader-RHI-renderer bootstrap.
+- `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/triangle/UI ownership.
 - `App.TemplateInstantiations.cpp` — explicit `Delegate`/`BroadcastCallback` instantiations.
 - `CMakeLists.txt` — module + source registration, `setup_ppr_project` deps.

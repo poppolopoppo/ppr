@@ -20,12 +20,15 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
 - **Assertions**: debug `PPR_DETAILS_ASSERTION_IMPL` evaluates once, honors `consteval` (`PPR_ASSUME`), else
   routes failures to `Assertion::onFailure` from a `.ppr_dbg` code segment with `source_location`;
   `PPR_ASSERT`/`PPR_VERIFY` (require/verify), boolean `PPR_ENSURE`; release lowers to `PPR_ASSUME` (+ evaluate).
-- **Logging**: `PPR_DECLARE/DEFINE_LOG_CATEGORY`, `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attribute list),
-  `PPR_FLUSH_LOG`.
-- **Error returns** (log-and-return on `pP::hasFailed`, `[[unlikely]]`): `PPR_RETURN_ON_FAIL` (returns the failed
-  value), `PPR_RETURN_ERROR_ON_FAIL` (via `make_error_code`, logs category/value/message),
-  `PPR_LOG_WARNING_ON_FAIL` (log only), `PPR_RETURN_UNEXPECTED_ON_FAIL` (`std::unexpected`), and
-  `RHI_RETURN_ERROR_ON_FAIL` (`pP::rhi::result(...)` shorthand).
+- **Logging**: `PPR_DECLARE/DEFINE_LOG_CATEGORY` (define wrapped in ReSharper internal-linkage guards),
+  `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attribute list), `PPR_FLUSH_LOG`.
+- **Error returns** (log-and-return, `[[unlikely]]`): `PPR_RETURN_ON_FAIL` (generic `hasFailed` check,
+  returns the failed value — covers `std::error_code` and `rhi::Result`); `PPR_RETURN_ERROR_ON_FAIL`,
+  `PPR_RETAIN_ERROR_ON_FAIL`, `PPR_RETURN_UNEXPECTED_ON_FAIL`, `PPR_LOG_WARNING_ON_FAIL` (each binds
+  `make_error_code(__VA_ARGS__)` and tests implicit truthiness, logs category/value/message) —
+  `PPR_RETURN_ERROR_ON_FAIL` returns the code, `PPR_RETAIN_ERROR_ON_FAIL` retains the first failure into
+  `_RETAINED_ERRC` under a `PPR_ENSURE` guard, `PPR_RETURN_UNEXPECTED_ON_FAIL` returns `std::unexpected`,
+  `PPR_LOG_WARNING_ON_FAIL` logs only.
 - **RAII**: `PPR_ANONYMIZE` (line-unique name), `PPR_DEFER` (scope-exit via `pP::Deferred`).
 
 ## Flow
@@ -37,7 +40,7 @@ expands at preprocessor time before module scanning, so all partitions share one
 
 - Consumed by: every engine module partition and the game entry point.
 - Provides: the assertion/logging/error-handling vocabulary used by `Core.Assert`, `Core.Logger`, and all
-  `PPR_RETURN_*` / `RHI_RETURN_*` call sites (shader, RHI, app services).
+  `PPR_RETURN_*` / `PPR_RETAIN_*` / `PPR_LOG_WARNING_*` call sites (shader, RHI, app services).
 - Note: test-only macros (`PPR_UNIT_TEST`, `PPR_TEST_ASSERT`) live in
   `lib/engine/tests/include/pP/UnitTest.h`, NOT here.
 

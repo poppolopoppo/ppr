@@ -46,12 +46,13 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 - **Matrix Convention**: Mango-native left-handed view space (+Z forward, +Y up), row-major storage, row-vector
   `mul(float4, matrix)`, and common [0,1] depth. Set at the Slang session level (`SLANG_MATRIX_LAYOUT_ROW_MAJOR`).
 - **Application and rendering map**: `ApplicationDomain` describes an app's
-  required runtime services and is immutable after construction. Client/editor
-  code owns scene, player, camera,
-  viewport, and UI state. `WindowViewport` supplies window geometry;
-  `makeRenderView` creates a target-local `RenderView`; `SceneView` pairs it
-  with a `CameraSnapshot`. `Renderer` consumes `DrawSubmission` spans through
-  `renderAndPresent` or `submitToTexture`, while passes own scene-specific draw
+  required runtime services and is immutable after construction. Slim
+  `Application` owns the run loop + platform/services/shader-RHI-`Renderer`
+  bootstrap; `ApplicationEditor` implements `IClientService` and owns scene,
+  player, camera, viewport, input-context, triangle pass, and UI state.
+  `WindowViewport` supplies window geometry; `SceneView` pairs it with a
+  `CameraSnapshot`. `Renderer` consumes `DrawSubmission` spans through
+  `renderAndPresent` or `renderToTexture`, while passes own scene-specific draw
   resources and encoding.
 
 ## Directory Map (Aggregated)
@@ -72,14 +73,14 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/math/`              | Single-module mango::math re-export into `namespace pP` + math:: utilities.                           | [View Map](lib/engine/math/codemap.md)              |
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
-| `lib/engine/app/`               | Application umbrella: Application lifecycle, re-exports all app submodules.                           | [View Map](lib/engine/app/codemap.md)               |
+| `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
 | `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer (10 flat files).                      | [View Map](lib/engine/app/input/codemap.md)         |
-| `lib/engine/app/platform/`      | IPlatform abstraction interface.                                                                      | [View Map](lib/engine/app/platform/codemap.md)      |
+| `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
-| `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) and content-owning passes such as TrianglePass. | [View Map](lib/engine/app/renderer/codemap.md)      |
+| `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) + TrianglePass; boundary Types header-only (.cppm, no Types.cpp). | [View Map](lib/engine/app/renderer/codemap.md)      |
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
-| `lib/engine/app/service/`       | App-level service registration/lifecycle.                                                             | [View Map](lib/engine/app/service/codemap.md)       |
+| `lib/engine/app/service/`       | Five app service contracts: client/input/player/ui/window (behavior in platform/UI/Editor).            | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService).                                                             | [View Map](lib/engine/app/ui/codemap.md)            |
 | `lib/engine/app/window/`        | IWindowService lifecycle + Viewport geometry (moved from renderer).                                   | [View Map](lib/engine/app/window/codemap.md)        |
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
