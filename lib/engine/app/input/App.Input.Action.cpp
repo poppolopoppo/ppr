@@ -44,36 +44,18 @@ namespace pP {
         template<typename InputValueT>
             requires std::is_constructible_v<InputValue, InputValueT>
         [[nodiscard]] const InputValueT &getActionValue(const InputActionEvent &event) noexcept {
-            if (not event.m_value.has_value()) [[unlikely]] {
-#if PPR_ENABLE_ASSERTIONS
-                PPR_ASSERT(false && "missing action value");
-#endif
-                std::terminate();
-            }
-            return std::visit(
-                overloaded(
-                    [](const InputValueT &value) noexcept -> const InputValueT & {
-                        return value;
-                    },
-                    [](const auto &) noexcept -> const InputValueT & {
-                        std::unreachable();
-                    }),
-                *event.m_value);
+            return std::get<InputValueT>(*event.m_value);
         }
 
         template<typename InputValueT>
             requires std::is_constructible_v<InputValue, InputValueT>
         [[nodiscard]] std::optional<InputValueT> getIfActionValue(const InputActionEvent &event) noexcept {
-            if (not event.m_value.has_value()) [[unlikely]] return std::nullopt;
-            return std::visit(
-                overloaded(
-                    [](const InputValueT &value) noexcept -> std::optional<InputValueT> {
-                        return value;
-                    },
-                    [](const auto &) noexcept -> std::optional<InputValueT> {
-                        return std::nullopt;
-                    }),
-                *event.m_value);
+            if (event.m_value.has_value()) {
+                if (const InputValueT *input_value = std::get_if<InputValueT>(&event.m_value.value())) {
+                    return *input_value;
+                }
+            }
+            return std::nullopt;
         }
     }
 

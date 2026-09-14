@@ -37,8 +37,6 @@ export namespace pP {
 
         GlfwInput() noexcept = default;
 
-        [[nodiscard]] static GlfwInput &get() noexcept;
-
         std::error_code initialize();
 
         std::error_code shutdown();

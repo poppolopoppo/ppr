@@ -2,27 +2,33 @@ module;
 
 export module engine.app:application;
 
-import :input.action;
-import :input.listener;
-import :renderer;
-import :renderer.triangle_pass;
-import :scene.camera;
-import :scene.camera.controller;
-import :service.window;
-import :window.viewport;
-
 import engine.core;
 import std;
 
 export namespace pP {
+    class IClientService;
     class IInputService;
-    class IUIService;
     class IPlatform;
+    class IUIService;
     class IWindowService;
+    class Renderer;
+
+    struct ApplicationDomain {
+        /// headless applications run without a window
+        bool m_is_headless: 1 {false};
+        /// interactive applications may require user-input
+        bool m_is_interactive: 1 {true};
+        /// handle player profile and online services
+        bool m_needs_presence: 1 {false};
+        /// application needs to render something with the GPU
+        bool m_needs_rendering: 1 {true};
+        /// spawn ui service and render user-interfaces
+        bool m_needs_user_interface: 1 {true};
+    };
 
     class Application : public safe_object {
     public:
-        Application(std::string_view name, std::span<const char * const> argv);
+        Application(ApplicationDomain domain, std::string_view name, std::span<const char * const> argv);
 
         // ReSharper disable once CppHidingFunction - safe_object dtor is non-virtual; hiding is benign
         virtual ~Application() noexcept;
@@ -35,89 +41,66 @@ export namespace pP {
 
         Application &operator =(Application &&) = delete;
 
-        [[nodiscard]] std::string_view getName() const noexcept { return m_name; }
-        [[nodiscard]] std::string_view getVariant() const noexcept { return m_variant; }
-
+        [[nodiscard]] const std::string &getName() const noexcept { return m_name; }
         [[nodiscard]] std::span<const std::string> getArguments() const noexcept { return m_arguments; }
 
-        [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_installDir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_configDir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_content_dir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_workingDir; }
-
+        [[nodiscard]] const ApplicationDomain &getDomain() const noexcept { return m_domain; }
+        [[nodiscard]] const IPlatform &getPlatform() const noexcept { return *m_platform; }
+        [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
+        [[nodiscard]] const TimerExplicitClock &getTimerClock() const noexcept { return m_application_clock; }
+        [[nodiscard]] const std::optional<TimeDuration> &getTargetFrameDuration() const noexcept { return m_target_frame_duration; }
 
+        [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
 
-        void requestApplicationExit() noexcept;
+        [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_install_dir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_config_dir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_content_dir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_working_dir; }
+
+        void requestApplicationExit(std::error_code clause = {}) noexcept;
+
+        void setTargetFrameDuration(TimeDuration frame_time) noexcept;
+
+        void setTargetFrameDuration(std::nullopt_t) noexcept;
+
+        void setTargetFrameRate(int fps) noexcept;
 
         [[nodiscard]] std::error_code run();
-
-        using ApplicationCallback = BroadcastCallback<std::error_code (const Application &app)>;
 
     protected:
         [[nodiscard]] virtual std::error_code initialize();
 
-        [[nodiscard]] virtual std::error_code update();
+        [[nodiscard]] virtual std::error_code update(TimeSpan dt);
 
         [[nodiscard]] virtual std::error_code render();
 
-        [[nodiscard]] virtual std::error_code shutdown() noexcept;
-
-        [[nodiscard]] constexpr const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
-        [[nodiscard]] constexpr const SharedWindow &getMainWindow() const noexcept { return m_main_window; }
-
-        [[nodiscard]] ServicesStore &getUiServices() noexcept { return m_ui_services; }
+        [[nodiscard]] virtual std::error_code shutdown();
 
     private:
-        enum class EState : u8 {
-            created,
-            initialized,
-        };
+        std::unique_ptr<Renderer> m_renderer;
+        TimerExplicitClock m_application_clock{};
+        std::optional<TimeDuration> m_target_frame_duration{};
 
-        // Hot (per-frame): cached service pointers and owned scene state.
-        safe_ptr<IWindowService> m_cached_window_service{};
-        safe_ptr<IInputService> m_cached_input_service{};
-        std::unique_ptr<WindowInputContext> m_window_input{};
-        InputListener m_scene_listener{};
-        InputMapping m_scene_controller_mapping{"CameraController"};
-        Camera m_scene_camera{};
-        CameraModel m_scene_camera_model{};
-        FreeCameraController m_scene_controller{};
-        std::unique_ptr<WindowViewport> m_main_viewport{};
-        Renderer m_renderer{};
-        TrianglePass m_triangle_pass{};
-        SharedWindow m_main_window{};
-        SharedContext m_lifecycle{};
-        std::chrono::steady_clock::time_point m_last_frame_time{std::chrono::steady_clock::now()};
-        bool m_focused{true};
-
-        // Cold (init/shutdown only)
+        // m_platform precedes m_services so reverse-destruction releases the
+        // service-store observers before their platform owners (safe_ptr rule).
+        const std::unique_ptr<IPlatform> m_platform{};
         ServicesStore m_services{};
-        ServicesStore m_ui_services{safe_ptr<ServicesStore>(&m_services)};
-        context::CancelFunc m_cancel{};
-        IWindowService::WindowResizedCallback::Handle m_resize_handle{};
-        IWindowService::WindowFocusedCallback::Handle m_focus_handle{};
-        IWindowService::WindowCallback::Handle m_close_handle{};
+        SharedContext m_lifecycle{};
+        context::CancelClauseFunc m_request_exit{};
 
-        std::error_code onWindowResized_(const Window &window, const int2 &old_size);
+        // Single-use latch: set on the first teardown attempt, never reset.
+        // run()/initialize() after shutdown report operation_not_permitted.
+        bool m_has_torn_down{false};
 
-        std::error_code onWindowFocused_(const Window &window [[maybe_unused]], bool focused) noexcept;
+        const Array<std::string> m_arguments{};
+        const std::string m_name{};
+        const ApplicationDomain m_domain{};
 
-        std::error_code onWindowClosed_(const Window &window [[maybe_unused]]) noexcept;
-
-        EState m_state{EState::created};
-
-        // Cold (init-time)
-        std::unique_ptr<IUIService> m_ui_service;
-        safe_ptr<IPlatform> m_platform;
-        Array<std::string> m_arguments{};
-        std::string m_name{};
-        std::string m_variant{};
-
-        std::filesystem::directory_entry m_installDir{};
-        std::filesystem::directory_entry m_configDir{};
+        std::filesystem::directory_entry m_install_dir{};
+        std::filesystem::directory_entry m_config_dir{};
         std::filesystem::directory_entry m_content_dir{};
-        std::filesystem::directory_entry m_workingDir{};
+        std::filesystem::directory_entry m_working_dir{};
     };
 }

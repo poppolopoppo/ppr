@@ -3,6 +3,7 @@ module;
 export module engine.app;
 
 export import :application;
+export import :application_editor;
 
 export import :input.action;
 export import :input.device;
@@ -16,6 +17,7 @@ export import :player.graph;
 export import :scene.camera;
 export import :scene.camera.controller;
 
+export import :service.client;
 export import :service.input;
 export import :service.player;
 export import :service.ui;

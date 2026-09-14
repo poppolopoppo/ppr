@@ -7,6 +7,8 @@ import engine.math;
 import std;
 
 export namespace pP {
+    enum class EAnyKey : u8 {};
+
     // ------------------------------------------------------------------
     // keyboard
     // ------------------------------------------------------------------
@@ -266,7 +268,7 @@ export namespace pP {
     };
 
     using InputKeyCode = std::variant<
-        std::monostate,
+        EAnyKey,
 
         EKeyboardKey,
 
@@ -300,7 +302,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr bool isAny() const noexcept {
-            return std::get_if<std::monostate>(&m_code) != nullptr;
+            return std::get_if<EAnyKey>(&m_code) != nullptr;
         }
 
         [[nodiscard]] bool isKeyboard() const noexcept;
@@ -347,7 +349,7 @@ export namespace pP {
 
         // static aliases:
 
-        static const InputKey any_key;
+        static const InputKey any_digital;
 
         static const InputKey any_axis_1d;
         static const InputKey any_axis_2d;

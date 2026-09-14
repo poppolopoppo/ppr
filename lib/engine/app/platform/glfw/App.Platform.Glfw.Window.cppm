@@ -10,8 +10,6 @@ export namespace pP {
     class GlfwWindow final : public IWindowService {
         [[nodiscard]] std::error_code initializeMonitors_();
 
-        GlfwWindow() noexcept = default;
-
     public:
         MonitorCallback m_when_monitor_connected{};
         MonitorCallback m_when_monitor_disconnected{};
@@ -34,13 +32,9 @@ export namespace pP {
         safe_ptr<const Window> m_focused_window{};
         safe_ptr<const WindowViewport> m_main_viewport{};
 
-        bool m_shutdown{false};
-
-        [[nodiscard]] static GlfwWindow &get() noexcept;
-
         std::error_code initialize();
 
-        std::error_code shutdown() noexcept;
+        std::error_code shutdown();
 
         // ------------------------------------------------------------------
         // IWindowService overrides
@@ -66,20 +60,16 @@ export namespace pP {
         [[nodiscard]] MonitorCallback::Handle whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept override;
 
         // windows:
-        [[nodiscard]] std::expected<SharedWindow, std::error_code> createWindow(
+        [[nodiscard]] std::error_code createWindow(
             WindowModel &&definition,
-            const SharedMonitor &fullscreen,
-            const SharedWindow &share_resources_with) override;
+            safe_ptr<Window> *window_write_ref) override;
 
         [[nodiscard]] std::error_code destroyWindow(SharedWindow &&window) override;
 
         [[nodiscard]] const SharedWindow &getFocusedWindow() const noexcept override { return m_focused_window; }
         [[nodiscard]] const SharedWindow &getMainWindow() const noexcept override { return m_main_window; }
-        [[nodiscard]] const SharedWindowViewport &getMainViewport() const noexcept override { return m_main_viewport; }
 
         SharedWindow setMainWindow(SharedWindow window) override;
-
-        SharedWindowViewport setMainViewport(SharedWindowViewport viewport) override;
 
         [[nodiscard]] SharedMonitor getWindowMonitor(const Window &window) const noexcept override;
 

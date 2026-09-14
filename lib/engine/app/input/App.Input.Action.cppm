@@ -48,12 +48,10 @@ export namespace pP {
         InputAction(
             string_literal description,
             EInputValueType value_type,
-            EInputActionFlags flags) noexcept;
+            EInputActionFlags flags = EInputActionFlags::consume_input) noexcept;
 
         void setStarted(InputTriggerEvent callback) noexcept { m_when_started = std::move(callback); }
-
         void setCompleted(InputTriggerEvent callback) noexcept { m_when_completed = std::move(callback); }
-
         void setTriggered(InputTriggerEvent callback) noexcept { m_when_triggered = std::move(callback); }
 
         [[nodiscard]] constexpr bool hasConsumeInput() const noexcept {

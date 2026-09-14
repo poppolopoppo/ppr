@@ -78,7 +78,8 @@ namespace pP {
 
     template<typename ButtonT>
         requires std::is_enum_v<ButtonT> || std::is_integral_v<ButtonT>
-    bool InputDigitalState<ButtonT>::postInputMessages(const TimeSpan dt, const InputContext &context, const InputDeviceID device_id, ButtonT button, const bool pressed) {
+    bool InputDigitalState<ButtonT>::postInputMessages(const TimeSpan dt, const InputContext &context, const InputDeviceID device_id, ButtonT button,
+                                                       const bool pressed) {
         const std::optional input_key = InputKey::from(button);
         if (not input_key.has_value()) {
             return false;
@@ -119,8 +120,7 @@ namespace pP {
 
     void KeyboardDevice::postKeyboardCharacterInput(const InputContext &context, const hal::native::char_t codepoint) {
         m_character_inputs.push_back(codepoint);
-        // character inputs are always polled, neven triggered
-        std::ignore = context;
+        std::ignore = context.postCharacterInput(codepoint);
     }
 
     void KeyboardDevice::postKeyboardKeyPressed(const TimeSpan dt, const InputContext &context, const EKeyboardKey key, const bool pressed) {

@@ -618,10 +618,10 @@ namespace pP {
         });
     }
 
-    const InputKey InputKey::any_key{"any_key", std::monostate{}, EInputValueType::digital};
-    const InputKey InputKey::any_axis_1d{"any_axis_1d", std::monostate{}, EInputValueType::axis_1d};
-    const InputKey InputKey::any_axis_2d{"any_axis_2d", std::monostate{}, EInputValueType::axis_2d};
-    const InputKey InputKey::any_axis_3d{"any_axis_3d", std::monostate{}, EInputValueType::axis_3d};
+    const InputKey InputKey::any_digital{"any_key", EAnyKey{}, EInputValueType::digital};
+    const InputKey InputKey::any_axis_1d{"any_axis_1d", EAnyKey{}, EInputValueType::axis_1d};
+    const InputKey InputKey::any_axis_2d{"any_axis_2d", EAnyKey{}, EInputValueType::axis_2d};
+    const InputKey InputKey::any_axis_3d{"any_axis_3d", EAnyKey{}, EInputValueType::axis_3d};
     const InputKey InputKey::mouse_2d{"mouse2d", EMouseAxis::pointer, EInputValueType::axis_2d};
     const InputKey InputKey::mouse_wheel_axis_x{"mouse_wheel_axis_x", EMouseAxis::scroll_wheel_x, EInputValueType::axis_1d};
     const InputKey InputKey::mouse_wheel_axis_y{"mouse_wheel_axis_y", EMouseAxis::scroll_wheel_y, EInputValueType::axis_1d};

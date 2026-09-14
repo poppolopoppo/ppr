@@ -10,6 +10,8 @@ import :window.handle;
 import :window.monitor;
 import :window.viewport;
 
+import std;
+
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwWindow, info, none);
 
@@ -69,8 +71,6 @@ namespace pP {
             monitor_virtual_position,
             ::glfwGetPrimaryMonitor() == p_glfw_monitor);
 
-        ::glfwSetMonitorUserPointer(p_glfw_monitor, monitor.get());
-
         return std::move(monitor);
     }
 
@@ -78,59 +78,70 @@ namespace pP {
     // GLFW window service init/destroy
     // ------------------------------------------------------------------
 
-    /*static*/
-    GlfwWindow &GlfwWindow::get() noexcept {
-        static GlfwWindow g_instance;
-        return g_instance;
-    }
+    static safe_ptr<GlfwWindow> g_glfw_window{};
 
     std::error_code GlfwWindow::initialize() {
-        return initializeMonitors_();
+        g_glfw_window.reset(this);
+
+        PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, initializeMonitors_());
+        return default_value_v;
     }
 
-    std::error_code GlfwWindow::shutdown() noexcept {
-        if (m_shutdown) [[unlikely]] {
-            return make_error_code(std::errc::owner_dead);
-        }
-        m_shutdown = true;
+    std::error_code GlfwWindow::shutdown() {
+        PPR_DEFER {
+            m_main_viewport.reset();
+            m_focused_window.reset();
+            m_main_window.reset();
+            m_primary_monitor.reset();
 
-        m_main_window.reset();
-        m_focused_window.reset();
-        m_primary_monitor.reset();
+            m_windows.clear();
+            m_monitors.clear();
+        };
 
-        auto windows_snapshot = std::move(m_windows);
-        m_windows.clear();
+        ::glfwSetMonitorCallback(nullptr);
 
-        for (auto &window: windows_snapshot) {
-            PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, m_when_window_destroyed(*window));
+        g_glfw_window.reset();
+
+        std::error_code first_err{};
+
+        for (const std::unique_ptr<Window> &window: m_windows) {
+            PPR_RETAIN_ERROR_ON_FAIL(GlfwWindow, first_err, m_when_window_destroyed(*window));
 
             ::glfwDestroyWindow(glfwHandle_(window->release()));
         }
-        m_monitors.clear();
-        return default_value_v;
+
+        for (const std::unique_ptr<Monitor> &monitor: m_monitors) {
+            PPR_RETAIN_ERROR_ON_FAIL(GlfwWindow, first_err, m_when_monitor_disconnected(*monitor));
+
+            ::glfwSetMonitorUserPointer(glfwHandle_(monitor->release()), nullptr);
+        }
+
+        return first_err;
     }
 
     static void glfwMonitorCallback_(GLFWmonitor *p_glfw_monitor, const int status) {
         PPR_ASSERT(p_glfw_monitor != nullptr);
-        GlfwWindow &windows = GlfwWindow::get();
+        GlfwWindow &service = *g_glfw_window;
 
         if (status == GLFW_CONNECTED) {
             std::unique_ptr<Monitor> monitor = glfwCreateMonitor_(p_glfw_monitor);
+            service.m_monitors.push_back(std::move(monitor));
+            Monitor &published_monitor = *service.m_monitors.back();
+            ::glfwSetMonitorUserPointer(p_glfw_monitor, &published_monitor);
 
-            if (monitor->m_primary_monitor) {
-                windows.m_primary_monitor.reset(monitor.get());
+            if (published_monitor.m_primary_monitor) {
+                service.m_primary_monitor.reset(&published_monitor);
             }
 
-            windows.m_monitors.push_back(std::move(monitor));
-            PPR_LOG_WARNING_ON_FAIL(GlfwWindow, windows.m_when_monitor_connected(*windows.m_monitors.back()));
+            PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_connected(published_monitor));
             return;
         }
 
         if (status == GLFW_DISCONNECTED) {
-            if (const auto it = glfwAllocation_(windows.m_monitors, MonitorHandle{p_glfw_monitor});
-                windows.m_monitors.end() != it) {
-                PPR_LOG_WARNING_ON_FAIL(GlfwWindow, windows.m_when_monitor_disconnected(**it));
-                windows.m_monitors.erase(it);
+            if (const auto it = glfwAllocation_(service.m_monitors, MonitorHandle{p_glfw_monitor});
+                service.m_monitors.end() != it) {
+                PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_disconnected(**it));
+                service.m_monitors.erase(it);
             }
             return;
         }
@@ -145,19 +156,29 @@ namespace pP {
             return make_error_code(std::errc::no_such_device);
         }
 
-        m_monitors.reserve(safe_narrowing(monitors_count));
+        Array<std::unique_ptr<Monitor> > staged_monitors{};
+        staged_monitors.reserve(safe_narrowing(monitors_count));
+
+        safe_ptr<const Monitor> staged_primary{};
 
         for (int i = 0; i < monitors_count; ++i) {
             if (PPR_ENSURE(p_monitors_arr[i])) {
                 std::unique_ptr<Monitor> monitor = glfwCreateMonitor_(p_monitors_arr[i]);
 
                 if (monitor->m_primary_monitor) {
-                    m_primary_monitor.reset(monitor.get());
+                    staged_primary.reset(monitor.get());
                 }
 
-                m_monitors.push_back(std::move(monitor));
+                staged_monitors.push_back(std::move(monitor));
             }
         }
+
+        m_monitors = std::move(staged_monitors);
+        m_primary_monitor = staged_primary;
+
+        std::ranges::for_each(m_monitors, [](const std::unique_ptr<Monitor> &monitor) noexcept {
+            ::glfwSetMonitorUserPointer(glfwHandle_(monitor->m_handle), monitor.get());
+        });
 
         ::glfwSetMonitorCallback(&glfwMonitorCallback_);
         return default_value_v;
@@ -245,40 +266,42 @@ namespace pP {
         window.m_visible = false;
         window.m_when_closed(window);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_closed(window));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_closed(window));
 
-        if (g_service.m_focused_window == &window) {
-            g_service.m_focused_window.reset();
+        if (service.m_focused_window == &window) {
+            service.m_focused_window.reset();
         }
 
-        if (g_service.m_main_window == &window) {
-            g_service.m_main_window.reset();
+        if (service.m_main_window == &window) {
+            service.m_main_window.reset();
         }
     }
 
     static void glfwWindowFocusCallback_(::GLFWwindow *p_glfw_window, const int focused) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        window.m_focused = focused == GLFW_TRUE;
-        window.m_when_focused(window, window.m_focused);
+        const bool is_focused = focused == GLFW_TRUE;
+        window.m_focused = is_focused;
+        window.m_when_focused(window, is_focused);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_focused(window, window.m_focused));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_focused(window, window.m_focused));
 
         if (window.m_focused) {
-            g_service.m_focused_window = safe_ptr(&window);
-        } else if (g_service.m_focused_window == &window) {
-            g_service.m_focused_window.reset();
+            service.m_focused_window = safe_ptr(&window);
+        } else if (service.m_focused_window == &window) {
+            service.m_focused_window.reset();
         }
     }
 
     static void glfwWindowIconifyCallback_(::GLFWwindow *p_glfw_window, const int iconified) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        window.m_iconified = iconified == GLFW_TRUE;
-        window.m_when_iconified(window, window.m_iconified);
+        const bool is_iconified = iconified == GLFW_TRUE;
+        window.m_iconified = is_iconified;
+        window.m_when_iconified(window, is_iconified);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_iconified(window, window.m_iconified));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_iconified(window, window.m_iconified));
     }
 
     /// -> window geometry events:
@@ -289,8 +312,8 @@ namespace pP {
         window.m_window_position = int2{position_x, position_y};
         window.m_when_moved(window, old_position);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_moved(window, old_position));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_moved(window, old_position));
     }
 
     static void glfwWindowSizeCallback_(::GLFWwindow *p_glfw_window, const int size_x, const int size_y) {
@@ -315,8 +338,8 @@ namespace pP {
         window.m_framebuffer_size = int2{size_x, size_y};
         window.m_when_resized(window, old_size);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_resized(window, old_size));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_resized(window, old_size));
     }
 
     static void glfwWindowContentScaleCallback_(::GLFWwindow *p_glfw_window, const float scale_x, const float scale_y) {
@@ -325,8 +348,8 @@ namespace pP {
         window.m_content_scale = float2{scale_x, scale_y};
         window.m_when_scaled(window, old_content_scale);
 
-        auto &g_service = GlfwWindow::get();
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, g_service.m_when_window_scaled(window, old_content_scale));
+        GlfwWindow &service = *g_glfw_window;
+        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_scaled(window, old_content_scale));
     }
 
     /// -> window input events:
@@ -393,7 +416,7 @@ namespace pP {
             return;
         }
 
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         switch (action) {
             case GLFW_PRESS:
                 window.m_when_keyboard_pressed(window, *key, true);
@@ -415,12 +438,12 @@ namespace pP {
             return;
         }
 
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_when_character_input(window, checked_cast<hal::native::char_t>(codepoint));
     }
 
     static void glfwCursorEnterCallback_(::GLFWwindow *p_glfw_window, const int entered) {
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_when_hovered(window, entered);
     }
 
@@ -431,7 +454,7 @@ namespace pP {
 
         const auto button = static_cast<EMouseButton>(glfw_button);
 
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         switch (action) {
             case GLFW_PRESS:
                 window.m_when_mouse_clicked(window, button, true);
@@ -446,101 +469,105 @@ namespace pP {
     }
 
     static void glfwCursorPosCallback_(::GLFWwindow *p_glfw_window, const double cursor_x, const double cursor_y) {
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        const float2 new_cursor_pos{vector_cast<float>(double2(cursor_x, cursor_y))};
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const float2 new_cursor_pos{static_cast<float>(cursor_x), static_cast<float>(cursor_y)};
         window.m_when_mouse_moved(window, new_cursor_pos);
     }
 
     static void glfwScrollCallback_(::GLFWwindow *p_glfw_window, const double offset_x, const double offset_y) {
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
-        const float2 add_wheel_delta {vector_cast<float>(double2(offset_x, offset_y))};
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const float2 add_wheel_delta{static_cast<float>(offset_x), static_cast<float>(offset_y)};
         window.m_when_mouse_scrolled(window, add_wheel_delta);
     }
 
     /// -> window drag & drop:
 
     static void glfwDropCallback_(GLFWwindow *p_glfw_window, const int path_count, const char *paths[]) {
-        Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         window.m_when_drag_and_dropped(window, std::span{paths, paths + path_count});
     }
 
     /// -> window handling:
 
-    std::expected<SharedWindow, std::error_code> GlfwWindow::createWindow(
+    std::error_code GlfwWindow::createWindow(
         WindowModel &&definition,
-        const SharedMonitor &fullscreen,
-        const SharedWindow &share_resources_with) {
+        safe_ptr<Window> *window_write_ref) {
+        PPR_ASSERT(window_write_ref);
+
         ::glfwWindowHint(GLFW_FOCUSED, definition.m_focused ? GLFW_TRUE : GLFW_FALSE);
         ::glfwWindowHint(GLFW_VISIBLE, definition.m_visible ? GLFW_TRUE : GLFW_FALSE);
         ::glfwWindowHint(GLFW_DECORATED, definition.m_decorated ? GLFW_TRUE : GLFW_FALSE);
         ::glfwWindowHint(GLFW_RESIZABLE, definition.m_resizable ? GLFW_TRUE : GLFW_FALSE);
 
-        GLFWwindow *p_glfw_window = ::glfwCreateWindow(
-            definition.m_window_size.x,
-            definition.m_window_size.y,
-            definition.m_title.data(),
-            fullscreen.isValid() ? glfwHandle_(fullscreen->m_handle) : nullptr,
-            share_resources_with.isValid() ? glfwHandle_(share_resources_with->m_handle) : nullptr);
-
-        if (p_glfw_window == nullptr) {
-            return std::unexpected(std::make_error_code(std::errc::invalid_argument));
-        }
-
-        PPR_DEFER {
-            if (p_glfw_window) {
-                ::glfwDestroyWindow(p_glfw_window);
-            }
+        auto p_glfw_window = std::unique_ptr<GLFWwindow, decltype(&::glfwDestroyWindow)>{
+            ::glfwCreateWindow(
+                definition.m_window_size.x,
+                definition.m_window_size.y,
+                definition.m_title.data(),
+                definition.m_fullscreen_monitor.isValid() ? glfwHandle_(definition.m_fullscreen_monitor->m_handle) : nullptr,
+                definition.m_share_resources_with.isValid() ? glfwHandle_(definition.m_share_resources_with->m_handle) : nullptr),
+            &::glfwDestroyWindow
         };
 
-        ::glfwSetWindowAttrib(p_glfw_window, GLFW_DECORATED, definition.m_decorated);
-        ::glfwSetWindowAttrib(p_glfw_window, GLFW_RESIZABLE, definition.m_resizable);
+        if (not p_glfw_window) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        ::glfwSetWindowAttrib(p_glfw_window.get(), GLFW_DECORATED, definition.m_decorated);
+        ::glfwSetWindowAttrib(p_glfw_window.get(), GLFW_RESIZABLE, definition.m_resizable);
 
         int2 framebuffer_size{};
-        ::glfwGetFramebufferSize(p_glfw_window, &framebuffer_size.x, &framebuffer_size.y);
+        ::glfwGetFramebufferSize(p_glfw_window.get(), &framebuffer_size.x, &framebuffer_size.y);
 
         int2 window_position{};
-        ::glfwGetWindowPos(p_glfw_window, &window_position.x, &window_position.y);
+        ::glfwGetWindowPos(p_glfw_window.get(), &window_position.x, &window_position.y);
 
         int2 window_size{};
-        ::glfwGetWindowSize(p_glfw_window, &window_size.x, &window_size.y);
+        ::glfwGetWindowSize(p_glfw_window.get(), &window_size.x, &window_size.y);
 
         float2 content_scale{1.0};
-        ::glfwGetWindowContentScale(p_glfw_window, &content_scale.x, &content_scale.y);
+        ::glfwGetWindowContentScale(p_glfw_window.get(), &content_scale.x, &content_scale.y);
 
-        auto window = std::make_unique<Window>(WindowHandle{p_glfw_window}, std::move(definition));
+        ::glfwSetWindowCloseCallback(p_glfw_window.get(), &glfwWindowCloseCallback_);
+        ::glfwSetWindowFocusCallback(p_glfw_window.get(), &glfwWindowFocusCallback_);
+        ::glfwSetWindowIconifyCallback(p_glfw_window.get(), &glfwWindowIconifyCallback_);
+
+        ::glfwSetWindowPosCallback(p_glfw_window.get(), &glfwWindowPosCallback_);
+        ::glfwSetWindowSizeCallback(p_glfw_window.get(), &glfwWindowSizeCallback_);
+        ::glfwSetFramebufferSizeCallback(p_glfw_window.get(), &glfwFramebufferSizeCallback_);
+        ::glfwSetWindowContentScaleCallback(p_glfw_window.get(), &glfwWindowContentScaleCallback_);
+
+        ::glfwSetKeyCallback(p_glfw_window.get(), &glfwKeyCallback_);
+        ::glfwSetCharCallback(p_glfw_window.get(), &glfwCharCallback_);
+
+        ::glfwSetMouseButtonCallback(p_glfw_window.get(), &glfwMouseButtonCallback_);
+        ::glfwSetCursorPosCallback(p_glfw_window.get(), &glfwCursorPosCallback_);
+        ::glfwSetCursorEnterCallback(p_glfw_window.get(), &glfwCursorEnterCallback_);
+        ::glfwSetScrollCallback(p_glfw_window.get(), &glfwScrollCallback_);
+
+        ::glfwSetDropCallback(p_glfw_window.get(), &glfwDropCallback_);
+
+        const NativeWindowHandle native_handle{::glfwGetWin32Window(p_glfw_window.get())};
+
+        auto window = std::make_unique<Window>(
+            WindowHandle{p_glfw_window.release()},
+            native_handle,
+            std::move(definition));
         window->m_content_scale = content_scale;
         window->m_framebuffer_size = framebuffer_size;
         window->m_window_position = window_position;
         window->m_window_size = window_size;
 
-        ::glfwSetWindowUserPointer(p_glfw_window, window.get());
+        ::glfwSetWindowUserPointer(glfwHandle_(window->m_handle), window.get());
 
-        ::glfwSetWindowCloseCallback(p_glfw_window, &glfwWindowCloseCallback_);
-        ::glfwSetWindowFocusCallback(p_glfw_window, &glfwWindowFocusCallback_);
-        ::glfwSetWindowIconifyCallback(p_glfw_window, &glfwWindowIconifyCallback_);
-
-        ::glfwSetWindowPosCallback(p_glfw_window, &glfwWindowPosCallback_);
-        ::glfwSetWindowSizeCallback(p_glfw_window, &glfwWindowSizeCallback_);
-        ::glfwSetFramebufferSizeCallback(p_glfw_window, &glfwFramebufferSizeCallback_);
-        ::glfwSetWindowContentScaleCallback(p_glfw_window, &glfwWindowContentScaleCallback_);
-
-        ::glfwSetKeyCallback(p_glfw_window, &glfwKeyCallback_);
-        ::glfwSetCharCallback(p_glfw_window, &glfwCharCallback_);
-
-        ::glfwSetMouseButtonCallback(p_glfw_window, &glfwMouseButtonCallback_);
-        ::glfwSetCursorPosCallback(p_glfw_window, &glfwCursorPosCallback_);
-        ::glfwSetCursorEnterCallback(p_glfw_window, &glfwCursorEnterCallback_);
-        ::glfwSetScrollCallback(p_glfw_window, &glfwScrollCallback_);
-
-        ::glfwSetDropCallback(p_glfw_window, &glfwDropCallback_);
-
-        p_glfw_window = nullptr;
-
-        SharedWindow shared_window{window.get()};
+        window_write_ref->reset(window.get());
         m_windows.push_back(std::move(window));
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, m_when_window_created(*shared_window));
-        return shared_window;
+        if (const std::error_code err = m_when_window_created(*window)) [[unlikely]] {
+            std::ignore = destroyWindow(*window_write_ref);
+            return err;
+        }
+        return default_value_v;
     }
 
     std::error_code GlfwWindow::destroyWindow(SharedWindow &&window) {
@@ -560,11 +587,11 @@ namespace pP {
 
             PPR_DEFER {
                 if (was_main) {
-                    m_main_window = nullptr;
+                    m_main_window.reset();
                 }
 
                 if (was_focused) {
-                    m_focused_window = nullptr;
+                    m_focused_window.reset();
                 }
 
                 ::glfwDestroyWindow(glfwHandle_(extracted->release()));
@@ -581,15 +608,6 @@ namespace pP {
         SharedWindow old_main_window{m_main_window};
         m_main_window = std::move(window);
         return old_main_window;
-    }
-
-    SharedWindowViewport GlfwWindow::setMainViewport(SharedWindowViewport viewport) {
-        SharedWindowViewport old_main_viewport{m_main_viewport};
-        if (viewport.isValid()) {
-            std::ignore = setMainWindow(SharedWindow(&viewport->getWindow()));
-        }
-        m_main_viewport = std::move(viewport);
-        return old_main_viewport;
     }
 
     [[nodiscard]] SharedMonitor GlfwWindow::getWindowMonitor(const Window &window) const noexcept {
@@ -633,7 +651,7 @@ namespace pP {
         switch (mode) {
             case ECursorMode::normal:
                 ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            break;
+                break;
             case ECursorMode::captured:
                 ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_CAPTURED);
                 break;

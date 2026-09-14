@@ -4,22 +4,23 @@ export module engine.app:platform.glfw.player;
 
 import :service.player;
 import :player.graph;
-import :platform.glfw.input;
+
 import engine.core;
 import std;
 
 export namespace pP {
+    class GlfwInput;
+
     class GlfwPlayer final : public IPlayerService {
-        safe_ptr<GlfwInput> m_input;
-        // Owned here: the input service no longer hosts the player graph.
+        safe_ptr<GlfwInput> m_glfw_input{};
         PlayerGraph m_graph{};
         std::mt19937_64 m_id_generator{};
 
     public:
-        explicit GlfwPlayer(GlfwInput &input) noexcept;
-        ~GlfwPlayer() noexcept override;
+        GlfwPlayer() noexcept;
 
-        [[nodiscard]] static safe_ptr<GlfwPlayer> get() noexcept;
+        std::error_code initialize(GlfwInput &glfw_input);
+        std::error_code shutdown();
 
         // IPlayerService overrides
         [[nodiscard]] SharedPlayer getPlayer(const PlayerId &id) const noexcept override;

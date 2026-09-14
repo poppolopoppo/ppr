@@ -6,6 +6,7 @@ target_sources(engine.app
 
         App.cppm
         App.Application.cppm
+        App.Application.Editor.cppm
 
         input/App.Input.Action.cppm
         input/App.Input.Device.cppm
@@ -13,22 +14,23 @@ target_sources(engine.app
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
 
+        platform/App.Platform.cppm
         platform/glfw/App.Platform.Glfw.cppm
         platform/glfw/App.Platform.Glfw.Input.cppm
         platform/glfw/App.Platform.Glfw.Player.cppm
         platform/glfw/App.Platform.Glfw.Window.cppm
-        platform/App.Platform.cppm
 
         player/App.Player.cppm
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
-        renderer/App.Renderer.Types.cppm
         renderer/App.Renderer.TrianglePass.cppm
+        renderer/App.Renderer.Types.cppm
 
         scene/App.Scene.Camera.cppm
         scene/App.Scene.Camera.Controller.cppm
 
+        service/App.Service.Client.cppm
         service/App.Service.Input.cppm
         service/App.Service.Player.cppm
         service/App.Service.UI.cppm
@@ -43,6 +45,7 @@ target_sources(engine.app
         PRIVATE
 
         App.Application.cpp
+        App.Application.Editor.cpp
         App.TemplateInstantiations.cpp
 
         input/App.Input.Action.cpp
@@ -61,7 +64,6 @@ target_sources(engine.app
         player/App.Player.Graph.cpp
 
         renderer/App.Renderer.cpp
-        renderer/App.Renderer.Types.cpp
         renderer/App.Renderer.TrianglePass.cpp
 
         scene/App.Scene.Camera.cpp

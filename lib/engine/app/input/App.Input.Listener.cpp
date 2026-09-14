@@ -1,5 +1,4 @@
 module;
-#include "../../../../out/cpm_cache/mango/30d9/include/mango/core/timer.hpp"
 #include "pP/Macros.h"
 module engine.app;
 
@@ -75,6 +74,14 @@ namespace pP {
         }
     }
 
+    EInputMessageResponse InputListener::postCharacterInput(hal::native::char_t codepoint) const {
+        if (m_listener_mode != EInputMessageResponse::unhandled and
+            m_character_input_callback) {
+            return m_character_input_callback(codepoint);
+        }
+        return EInputMessageResponse::unhandled;
+    }
+
     EInputMessageResponse InputListener::postKeyEvent(const TimeSpan dt, const InputMessage &message) noexcept {
         using enum EInputMessageResponse;
         if (m_listener_mode == unhandled) [[unlikely]] {
@@ -82,7 +89,10 @@ namespace pP {
         }
 
         if (m_raw_key_callback) {
-            m_raw_key_callback(dt, message);
+            if (const EInputMessageResponse hook_response = m_raw_key_callback(dt, message);
+                hook_response != unhandled) {
+                return hook_response;
+            }
         }
 
         if (message.m_key.isAny()) [[unlikely]] {
@@ -249,9 +259,7 @@ namespace pP {
         : m_parent(std::move(parent_context)) {
     }
 
-    InputContext::InputContext(const InputContext &other) = default;
-
-    InputContext::InputContext(InputContext &&other) = default;
+    InputContext::InputContext(InputContext &&other) noexcept = default;
 
     bool InputContext::hasInputListener(const InputListener &listener) const noexcept {
         // NOTE: see hasInputMapping — locate by pointer identity.
@@ -278,6 +286,35 @@ namespace pP {
 
     void InputContext::clearInputListeners() {
         m_listeners.clear();
+    }
+
+    EInputMessageResponse InputContext::postCharacterInput(hal::native::char_t codepoint) const {
+        using enum EInputMessageResponse;
+        auto response{unhandled};
+
+        for (const auto &[_, listener]: m_listeners) {
+            switch (listener->postCharacterInput(codepoint)) {
+                case consumed:
+                    return consumed;
+                case handled:
+                    response = handled;
+                case unhandled:
+                    break;
+            }
+        }
+
+        if (const InputContext *const p_parent = m_parent.get()) {
+            switch (p_parent->postCharacterInput(codepoint)) {
+                case consumed:
+                    return consumed;
+                case handled:
+                    response = handled;
+                case unhandled:
+                    break;
+            }
+        }
+
+        return response;
     }
 
     EInputMessageResponse InputContext::postKeyEvent(const TimeSpan dt, const InputMessage &message) const {

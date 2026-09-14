@@ -43,7 +43,7 @@ export namespace pP {
         // ReSharper disable once CppHidingFunction
         virtual ~IPlatform() = default;
 
-        [[nodiscard]] static SharedPlatform get() noexcept;
+        [[nodiscard]] static std::unique_ptr<IPlatform> create() noexcept;
 
         [[nodiscard]] virtual std::error_code initialize(Application &app) = 0;
 
@@ -53,11 +53,15 @@ export namespace pP {
 
         [[nodiscard]] virtual platform::Version getPlatformVersion() const noexcept = 0;
 
+        [[nodiscard]] virtual safe_ptr<Application> getApplication() const noexcept = 0;
+
         [[nodiscard]] virtual safe_ptr<IInputService> getInputService() const noexcept = 0;
 
         [[nodiscard]] virtual safe_ptr<IWindowService> getWindowService() const noexcept = 0;
 
         [[nodiscard]] virtual safe_ptr<IPlayerService> getPlayerService() const noexcept = 0;
+
+        [[nodiscard]] virtual std::error_code update(TimeSpan dt) = 0;
     };
 }
 

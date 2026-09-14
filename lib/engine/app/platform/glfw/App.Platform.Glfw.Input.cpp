@@ -13,32 +13,58 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(GlfwInput, info, none);
 
-    /*static*/
-    GlfwInput &GlfwInput::get() noexcept {
-        static GlfwInput g_instance{};
-        return g_instance;
-    }
-
     static void glfwJoystickCallback_(int jid, int event);
 
+    static safe_ptr<GlfwInput> g_glfw_input{};
+
     std::error_code GlfwInput::initialize() {
-        m_devices_by_id.emplace(m_keyboard.m_device_id, safe_ptr{&m_keyboard});
-        m_devices_by_id.emplace(m_mouse.m_device_id, safe_ptr{&m_mouse});
+        PPR_ASSERT(m_devices_by_id.empty() && "trying to initialize GlfwInput with dirty state");
+
+        g_glfw_input.reset(this);
+        bool success = false;
+        PPR_DEFER {
+            if (not success) [[unlikely]] {
+                GlfwInput::shutdown();
+            }
+        };
+
+        m_devices_by_id[m_keyboard.m_device_id] = safe_ptr{&m_keyboard};
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_connected(m_keyboard));
+
+        m_devices_by_id[m_mouse.m_device_id] = safe_ptr{&m_mouse};
+        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_connected(m_mouse));
 
         ::glfwSetJoystickCallback(&glfwJoystickCallback_);
 
-        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_connected(m_keyboard));
-        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_connected(m_mouse));
+        success = true;
         return default_value_v;
     }
 
     std::error_code GlfwInput::shutdown() {
-        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_disconnected(m_mouse));
-        PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_disconnected(m_keyboard));
+        PPR_DEFER {
+            m_gamepads_ever_connected = false;
+            m_timestamp = {};
+            m_delta_time = {};
 
-        m_devices_by_id.clear();
+            m_keyboard.resetInputState();
+            m_mouse.resetInputState();
+
+            for (GamepadDevice &gamepad : m_gamepads) {
+                gamepad.resetInputState();
+            }
+
+            m_devices_by_id.clear();
+            m_all_contexts.clear();
+            m_context_by_device.clear();
+        };
 
         ::glfwSetJoystickCallback(nullptr);
+
+        g_glfw_input.reset();
+
+        for (const auto &[device_id, device] : m_devices_by_id) {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_disconnected(*device));
+        }
 
         return default_value_v;
     }
@@ -193,7 +219,7 @@ namespace pP {
             return;
         }
 
-        auto &glfw_input = GlfwInput::get();
+        GlfwInput &glfw_input = *g_glfw_input;
         GamepadDevice &gamepad = glfw_input.m_gamepads[jid];
 
         switch (event) {

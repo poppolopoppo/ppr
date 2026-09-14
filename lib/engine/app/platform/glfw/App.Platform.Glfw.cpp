@@ -53,22 +53,26 @@ namespace pP {
         }
     }
 
-    /*static*/
-    SharedPlatform IPlatform::get() noexcept {
-        static GlfwPlatform g_instance{};
-        return SharedPlatform(&g_instance);
+    std::unique_ptr<IPlatform> IPlatform::create() noexcept {
+        return std::make_unique<GlfwPlatform>();
+    }
+
+    GlfwPlatform::GlfwPlatform() noexcept = default;
+
+    safe_ptr<Application> GlfwPlatform::getApplication() const noexcept {
+        return m_application;
     }
 
     safe_ptr<IInputService> GlfwPlatform::getInputService() const noexcept {
-        return safe_ptr<IInputService>{&GlfwInput::get()};
+        return safe_ptr(m_input_service.get());
     }
 
     safe_ptr<IWindowService> GlfwPlatform::getWindowService() const noexcept {
-        return safe_ptr<IWindowService>{m_window_service};
+        return safe_ptr(m_window_service.get());
     }
 
     safe_ptr<IPlayerService> GlfwPlatform::getPlayerService() const noexcept {
-        return GlfwPlayer::get();
+        return safe_ptr(m_player_service.get());
     }
 
     std::string_view GlfwPlatform::getPlatformName() const noexcept { return "GLFW"; }
@@ -79,7 +83,14 @@ namespace pP {
         return {.m_major = major, .m_minor = minor, .m_revision = revision};
     }
 
-    std::error_code GlfwPlatform::initialize(Application &application) {
+    std::error_code GlfwPlatform::initialize(Application &app) {
+        PPR_LOG(GlfwPlatform, info, "initialize GLFW platform", {
+            {"version", ::glfwGetVersionString()}
+        });
+
+        PPR_ASSERT(not m_application.isValid());
+        m_application.reset(&app);
+
         ::glfwSetErrorCallback([](int error_code, const char *description) {
             PPR_LOG(GlfwPlatform, error, "GLFW error", {{"error_code", error_code}, {"description", description}});
         });
@@ -90,49 +101,105 @@ namespace pP {
             .deallocate = [](void *block, void *) { std::free(block); },
             .user = nullptr,
         };
+        // Intentional process-lifetime state: GLFW offers no API to clear a
+        // custom allocator, so these hooks stay installed on every exit path.
         ::glfwInitAllocator(&glfw_allocator);
 
         if (not::glfwInit()) [[unlikely]] {
             PPR_LOG(GlfwPlatform, error, "failed to init GLFW");
+            ::glfwSetErrorCallback(nullptr);
             return platform::errc::initialization_failed;
         }
-        m_glfw_initialized = true;
 
-        m_window_service = safe_ptr(&GlfwWindow::get());
+        // Rolls back every stage committed so far, then always releases GLFW
+        // itself; returns the stage error that triggered the unwind.
+        bool success = false;
+        PPR_DEFER {
+            if (not success) [[unlikely]] {
+                std::ignore = shutdown(app);
+            }
+        };
 
-        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_window_service->initialize());
+        const ApplicationDomain domain = app.getDomain();
+        ServicesStore &app_services = app.getServices();
 
-        const safe_ptr input_service{&GlfwInput::get()};
-        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, input_service->initialize());
+        if (not domain.m_is_headless) {
+            m_window_service = std::make_unique<GlfwWindow>();
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_window_service->initialize());
+            app_services.insert_or_assign<IWindowService>(m_window_service.get());
+        }
 
-        ServicesStore &app_services = application.getServices();
-        std::ignore = app_services.insert(safe_ptr<IInputService>{input_service});
-        std::ignore = app_services.insert(safe_ptr<IWindowService>{m_window_service});
-        std::ignore = app_services.insert(safe_ptr<IPlayerService>{GlfwPlayer::get()});
+        if (domain.m_is_interactive) {
+            m_input_service = std::make_unique<GlfwInput>();
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_input_service->initialize());
+            app_services.insert_or_assign<IInputService>(m_input_service.get());
+        }
 
+        if (domain.m_needs_presence) {
+            m_player_service = std::make_unique<GlfwPlayer>();
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, m_player_service->initialize(*m_input_service));
+            app_services.insert_or_assign<IPlayerService>(m_player_service.get());
+        }
+
+        success = true;
         return default_value_v;
     }
 
-    std::error_code GlfwPlatform::shutdown(Application &application) {
-        if (not m_glfw_initialized) [[unlikely]] {
+    std::error_code GlfwPlatform::shutdown(Application &app) {
+        PPR_LOG(GlfwPlatform, info, "shutdown GLFW platform", {
+            {"version", ::glfwGetVersionString()}
+        });
+
+        // Idempotent: Application::shutdown() calls here on every teardown,
+        // and initialize() already shuts down on failure, so a second call
+        // must not re-fire the application-identity assert below.
+        if (not m_application.isValid()) {
             return default_value_v;
         }
+        PPR_ASSERT(m_application == &app);
+        PPR_DEFER {
+            m_application.reset();
+        };
 
-        PPR_ASSERT(m_window_service.isValid());
-        if (m_window_service) [[likely]] {
-            m_window_service->shutdown();
-            m_window_service = nullptr;
+        ServicesStore &app_services = app.getServices();
+
+        std::error_code first_err{};
+        if (m_player_service) {
+            PPR_VERIFY(app_services.erase<IPlayerService>(*m_player_service));
+            PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_player_service->shutdown());
+            m_player_service.reset();
         }
 
-        ServicesStore &app_services = application.getServices();
-        app_services.erase<IInputService>();
-        app_services.erase<IPlayerService>();
-        app_services.erase<IWindowService>();
+        if (m_input_service) {
+            PPR_VERIFY(app_services.erase<IInputService>(*m_input_service));
+            PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_input_service->shutdown());
+            m_input_service.reset();
+        }
 
-        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, GlfwInput::get().shutdown());
+        if (m_window_service) {
+            PPR_VERIFY(app_services.erase<IWindowService>(*m_window_service));
+            PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_window_service->shutdown());
+            m_window_service.reset();
+        }
 
         ::glfwTerminate();
-        m_glfw_initialized = false;
+        ::glfwSetErrorCallback(nullptr);
+        return default_value_v;
+    }
+
+    std::error_code GlfwPlatform::update(const TimeSpan dt) {
+        // Clear transient input state BEFORE window-event dispatch appends this
+        // frame's characters. Safe to run first: device polling is event-pump
+        // independent (gamepads poll via glfwGetGamepadState, keyboard/mouse polls
+        // only reset transient
+        // state), and dispatch below then uses this frame's delta time.
+        if (GlfwInput *const p_inputs = m_input_service.get()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_inputs->pollInputDevices(dt));
+        }
+
+        if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+        }
 
         return default_value_v;
     }
