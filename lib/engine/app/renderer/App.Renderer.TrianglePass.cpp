@@ -49,11 +49,8 @@ namespace pP {
     }
 
     std::error_code TrianglePass::render(const DrawContext &draw_context) {
-        if (not
-            m_render_pipeline_key.has_value()
-        or
-        m_render_pipeline_key.value() != draw_context.m_render_pipeline_key)
-        {
+        if (not m_render_pipeline_key.has_value() or
+            m_render_pipeline_key.value() != draw_context.m_render_pipeline_key) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, createRenderPipeline_(draw_context.m_device, draw_context.m_render_pipeline_key));
             m_render_pipeline_key = draw_context.m_render_pipeline_key;
         }
@@ -90,7 +87,7 @@ namespace pP {
     std::error_code TrianglePass::shutdown() {
         PPR_LOG(TrianglePass, info, "TrianglePass shut down", {
             {"has_pipeline", m_render_pipeline != nullptr},
-        });
+            });
 
         m_render_pipeline_key.reset();
         m_render_pipeline.setNull();
@@ -154,7 +151,7 @@ namespace pP {
     std::error_code TrianglePass::createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature) {
         PPR_LOG(TrianglePass, info, "rebuilding triangle pipeline", {
             {"samples", signature.m_sample_count},
-        });
+            });
 
         if (signature.m_color_formats.size() != 1u ||
             signature.m_depth_stencil_format.has_value() ||
@@ -163,7 +160,7 @@ namespace pP {
                 {"color_format_count", signature.m_color_formats.size()},
                 {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
                 {"sample_count", signature.m_sample_count},
-            });
+                });
             return make_error_code(std::errc::operation_not_supported);
         }
 
