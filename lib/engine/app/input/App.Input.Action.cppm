@@ -207,6 +207,6 @@ export namespace pP {
 
         void unmapInputAction(const InputAction &action);
 
-        void clearInputMappings();
+        void clearKeymap();
     };
 }

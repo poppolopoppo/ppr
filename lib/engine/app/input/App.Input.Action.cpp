@@ -145,7 +145,7 @@ namespace pP {
         }
     }
 
-    void InputMapping::clearInputMappings() {
+    void InputMapping::clearKeymap() {
         m_keymap.clear();
     }
 }
