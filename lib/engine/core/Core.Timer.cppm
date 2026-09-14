@@ -55,6 +55,17 @@ export namespace pP {
             m_now = new_time;
         }
 
+        void tickThrottle(const TimePoint new_time, const TimeDuration target_rate) noexcept {
+            tick(new_time);
+
+            if (m_elapsed < target_rate) {
+                std::this_thread::sleep_for(target_rate - m_elapsed);
+
+                m_now = last();
+                tick(time::now());
+            }
+        }
+
         void reset(const TimePoint new_time) noexcept {
             m_elapsed = {};
             m_now = new_time;

@@ -30,8 +30,13 @@ namespace pP {
 
     Application::~Application() noexcept = default;
 
-    void Application::requestApplicationExit(const std::error_code clause) noexcept {
+    void Application::requestExit(const std::error_code clause) const noexcept {
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
+            PPR_LOG(App, info, "request exit", {
+                {"category", clause.category().name()},
+                {"cause", clause.message()}
+                });
+
             m_request_exit(clause);
         }
     }
@@ -59,19 +64,23 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(App, initialize());
 
+        PPR_LOG(App, emphasis, "🏁 run application loop");
+
         std::error_code first_err{};
         PPR_DEFER {
+            PPR_LOG(App, emphasis, "stop application loop, bye 👋", {
+                {"category", first_err.category().name()},
+                {"cause", first_err.message()}
+                });
+
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shutdown());
         };
 
-        while (not m_lifecycle->error()) {
-            m_application_clock.tick(time::now());
-
+        while (not m_lifecycle->pollEvent()) {
             // throttle if necessary to target desired frame rate, if any provided
-            if (m_application_clock.m_elapsed < m_target_frame_duration.value_or(zero_v)) {
-                std::this_thread::sleep_for(m_target_frame_duration.value() - m_application_clock.m_elapsed);
-
-                m_application_clock.m_now = m_application_clock.last();
+            if (m_target_frame_duration.has_value()) {
+                m_application_clock.tickThrottle(time::now(), m_target_frame_duration.value());
+            } else {
                 m_application_clock.tick(time::now());
             }
 

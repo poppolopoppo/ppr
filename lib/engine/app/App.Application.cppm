@@ -46,6 +46,7 @@ export namespace pP {
 
         [[nodiscard]] const ApplicationDomain &getDomain() const noexcept { return m_domain; }
         [[nodiscard]] const IPlatform &getPlatform() const noexcept { return *m_platform; }
+        [[nodiscard]] const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
         [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
         [[nodiscard]] const TimerExplicitClock &getTimerClock() const noexcept { return m_application_clock; }
@@ -59,7 +60,7 @@ export namespace pP {
         [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_content_dir; }
         [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_working_dir; }
 
-        void requestApplicationExit(std::error_code clause = {}) noexcept;
+        void requestExit(std::error_code clause = {}) const noexcept;
 
         void setTargetFrameDuration(TimeDuration frame_time) noexcept;
 
