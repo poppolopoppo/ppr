@@ -8,6 +8,12 @@ import std;
 
 namespace pP::tests::detail {
     namespace SafePtr {
+#if PPR_ENABLE_DEBUG
+        static_assert(not pP::details::is_relocatable_v<safe_ptr<safe_object>>);
+#else
+        static_assert(pP::details::is_relocatable_v<safe_ptr<safe_object>>);
+#endif
+
         PPR_UNIT_TEST (null_copy_remains_null) {
             const safe_ptr<safe_object> a{};
             const safe_ptr<safe_object> b{a};
