@@ -187,7 +187,10 @@ Use the named skill instead of reproducing its procedure here:
 | Reviews, commits, pushes, deep work, worktrees | Their named OMO skills/commands |
 
 Use CodeGraph first when the repository is indexed; otherwise use the
-CLion-first fallback described by `clion-tools`. Use PowerShell on Windows for
+CLion-first fallback described by `clion-tools`. When dispatching work that
+uses `clion_*` tools, spell out `projectPath="E:/Code/ppr"` in the dispatch
+prompt; the MCP server does not infer it (only the three auto-detect tools
+listed in `clion-tools` are exempt). Use PowerShell on Windows for
 shell work. Temporary artifacts belong in `.slim/tmp/` (repo-scoped) or
 `C:\Users\bek4b\AppData\Local\Temp\opencode\` (external). Do not commit,
 push, or change generated/configuration files unless explicitly requested.
