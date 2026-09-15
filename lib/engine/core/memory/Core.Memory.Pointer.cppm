@@ -180,6 +180,11 @@ export namespace pP {
             return *this;
         }
 
+        safe_ptr &operator=(T *const ptr) noexcept {
+            reset(ptr);
+            return *this;
+        }
+
         safe_ptr &operator=(std::nullptr_t) noexcept {
             decSafeRefIFP(m_ptr, m_key);
             m_ptr = nullptr;
@@ -229,6 +234,10 @@ export namespace pP {
 
         [[nodiscard]] friend bool operator==(const safe_ptr &lhs, const T *rhs) noexcept {
             return lhs.m_ptr == rhs;
+        }
+
+        [[nodiscard]] friend bool operator==(const T *lhs, const safe_ptr &rhs) noexcept {
+            return lhs == rhs.m_ptr;
         }
 
         [[nodiscard]] friend std::strong_ordering operator<=>(const safe_ptr &lhs, const T *rhs) noexcept {
@@ -289,19 +298,25 @@ export namespace pP {
     public:
         safe_ptr() noexcept = default;
 
-        explicit safe_ptr(pointer ptr) noexcept
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr safe_ptr(pointer ptr) noexcept
             : m_ptr(ptr) {
         }
 
+        // ReSharper disable once CppNonExplicitConvertingConstructor
+        constexpr safe_ptr(const std::unique_ptr<std::remove_const_t<T>> &unique_ptr) noexcept
+            : safe_ptr(unique_ptr.get()) {
+        }
+
         template<typename U>
-            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+            requires std::convertible_to<U *, pointer>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(const safe_ptr<U> &other) noexcept
             : m_ptr(other.m_ptr) {
         }
 
         template<typename U>
-            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+            requires std::convertible_to<U *, pointer>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(safe_ptr<U> &&other) noexcept
             : m_ptr(other.m_ptr) {
@@ -325,14 +340,14 @@ export namespace pP {
         safe_ptr &operator=(safe_ptr &&) noexcept = default;
 
         template<typename U>
-            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+            requires std::convertible_to<U *, pointer>
         safe_ptr &operator=(const safe_ptr<U> &other) noexcept {
             m_ptr = other.m_ptr;
             return *this;
         }
 
         template<typename U>
-            requires (std::is_base_of_v<safe_object, U> && std::convertible_to<U *, pointer>)
+            requires std::convertible_to<U *, pointer>
         safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
             m_ptr = other.m_ptr;
             other.m_ptr = nullptr;
@@ -359,12 +374,24 @@ export namespace pP {
             return m_ptr;
         }
 
+        template<typename BaseT>
+            requires std::is_base_of_v<BaseT, T>
+        [[nodiscard]] constexpr safe_ptr<BaseT> upcast() && noexcept {
+            safe_ptr<BaseT> result{static_cast<BaseT *>(m_ptr)};
+            m_ptr = nullptr;
+            return result;
+        }
+
         void reset(T *const ptr = nullptr) noexcept {
             m_ptr = ptr;
         }
 
-        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, pointer rhs) noexcept {
+        [[nodiscard]] friend bool operator==(const safe_ptr &lhs, const T *rhs) noexcept {
             return lhs.m_ptr == rhs;
+        }
+
+        [[nodiscard]] friend bool operator==(const T *lhs, const safe_ptr &rhs) noexcept {
+            return lhs == rhs.m_ptr;
         }
 
         [[nodiscard]] friend bool operator==(const safe_ptr &lhs, std::nullptr_t) noexcept {
@@ -383,6 +410,10 @@ export namespace pP {
             return lhs.m_ptr <=> rhs.m_ptr;
         }
 
+        friend void swap(safe_ptr &lhs, safe_ptr &rhs) noexcept {
+            std::swap(lhs.m_ptr, rhs.m_ptr);
+        }
+
         template<typename DerivedT>
             requires std::is_base_of_v<T, DerivedT>
         [[nodiscard]] friend safe_ptr<DerivedT> checked_cast(const safe_ptr &safe) noexcept {
@@ -393,6 +424,10 @@ export namespace pP {
     template<typename T>
         requires std::is_base_of_v<safe_object, T>
     safe_ptr(T *) -> safe_ptr<T>;
+
+    template<typename T>
+        requires std::is_base_of_v<safe_object, T>
+    safe_ptr(const std::unique_ptr<T> &) -> safe_ptr<T>;
 
     // Zero-overhead invariant: in release builds safe_ptr<T> must be a drop-in
     // replacement for a raw T* (pointer-sized, trivially copyable/destructible).
