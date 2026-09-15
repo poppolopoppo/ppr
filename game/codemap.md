@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Demo executable (`app.game`): the thin `demo::TurboLarbin : ApplicationEditor` subclass (from the `engine.app` C++23 module) plus `main()` that constructs it (`"ppr"`, argv span) and returns `app.run().value()` as the exit code. It hosts the `Application` run loop without owning engine behavior: scene, player, camera, viewport, and UI state are inherited from `ApplicationEditor`/`Application`; game code only adds lifecycle-hook overrides, a startup timestamp, and a debug-only ImGui demo window.
+Demo executable (`app.game`): the thin `demo::TurboLarbin : ApplicationEditor` subclass (from the `engine.app` C++23 module) plus `main()` that constructs it (`"ppr"`, argv span) and returns `app.run().value()` as the exit code. The editor partition SHIPS — `main.cpp` imports `ApplicationEditor` unconditionally, so do not attempt to gate it behind `BUILD_TESTING`/`PPR_ENABLE_UNIT_TEST`. It hosts the `Application` run loop without owning engine behavior: scene, player, camera, viewport, and UI state are inherited from `ApplicationEditor`/`Application`; game code only adds lifecycle-hook overrides, a startup timestamp, and a debug-only ImGui demo window.
 
 ## Design
 
