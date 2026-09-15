@@ -194,8 +194,9 @@ namespace pP {
                 entry.m_site.m_location.function_name());
         }
 
-        if (entry.m_site.m_verbosity > ELevel::verbose or
-            entry.m_site.m_category.m_flags & Category::immediate) {
+        // if (entry.m_site.m_verbosity > ELevel::verbose or
+        //     entry.m_site.m_category.m_flags & Category::immediate) {
+        {
             std::cout.flush();
         }
 #endif
