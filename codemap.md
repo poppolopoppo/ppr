@@ -23,7 +23,11 @@ lifecycle-hook overrides, a startup timestamp, and a debug-only ImGui demo windo
 
 - `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span) with `initialize()` / `update(TimeSpan)` / `shutdown()` hook overrides, a startup timestamp, and a debug-only ImGui demo window; `main()` returns `app.run().value()`.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
-  include `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-*`, and `clang-*`;
+  include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
+  `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; live-only `/MDd`; LNK4075 validators fail
+  at configure time), `msvc-rel` (shipping: pinned `/O2` + `/Ob2`, `/GL` + `/LTCG`, `/OPT:REF,ICF`,
+  `/INCREMENTAL:NO`, `/DEBUG` + stripped `app.game.stripped.pdb` beside full `app.game.pdb`; Release `/Zi`,
+  dev `/Z7`; `BUILD_TESTING OFF`), `clang-cl-*`, and `clang-*`;
   `gcc-*` presets are hidden and do not support modules.
 - `include/pP/Macros.h` — The single public non-module header (included via `module; #include` in the global
   fragment); engine-wide preprocessor vocabulary: build-mode + memory-poisoning detection, pointer-size
@@ -104,6 +108,9 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 
 ## Test Infrastructure
 
+- Test targets + `Core.UnitTest` partition (`PPR_ENABLE_UNIT_TEST`, conditional `export import :unit_test`)
+  sit behind `BUILD_TESTING` (undefined-tolerant: present unless explicitly `OFF`; `msvc-rel` sets `OFF`).
+  The editor partition ships — `game/main.cpp` imports `ApplicationEditor` unconditionally.
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
   services, enums. Thematic private groups (23 files: per-area splits such as `Core.Allocator.Tests.cpp`,
   `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,

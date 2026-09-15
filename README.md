@@ -76,7 +76,12 @@ cmake --build out/build/msvc-dev
 
 Common presets are `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-dev`,
 `clang-cl-rel`, `clang-dev`, and `clang-rel`. The hidden `gcc-*` presets do not
-support C++ modules.
+support C++ modules. `msvc-live` is the Edit & Continue preset (`/ZI` + `/DEBUG:FULL` +
+`/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, live-only `/MDd`;
+misconfigurations fail at configure time). `msvc-rel` is the shipping preset (pinned
+`/O2` + `/Ob2`, `/GL` + `/LTCG`, `/OPT:REF,ICF`, `/INCREMENTAL:NO`, `/DEBUG` with a stripped
+`app.game.stripped.pdb` beside the full `app.game.pdb`; Release `/Zi`, dev `/Z7`) and sets
+`BUILD_TESTING=OFF`.
 
 ### Developer Mode
 
@@ -99,6 +104,9 @@ cmake --build build
 | `PPR_ENABLE_CPPCHECK` | Run cppcheck | OFF |
 | `PPR_ENABLE_UNITY_BUILD` | Unity build for faster compilation | OFF |
 | `PPR_WARNINGS_AS_ERRORS` | Treat warnings as errors | OFF |
+| `PPR_RELEASE_PERF_FLAGS` | Release `/O2` + `/Ob2` + `/GL` + `/Gw` + `/Zc:checkGwOdr` | ON |
+| `PPR_ENABLE_AVX2` | Opt-in AVX2 codegen (`/arch:AVX2`, 2013+ CPU); default min-spec unchanged | OFF |
+| `PPR_EDIT_AND_CONTINUE` | MSVC Edit & Continue (Debug, `/ZI` + live link set) | OFF |
 | `ENABLE_CACHE` | Enable compiler cache (ccache) for non-module TUs | OFF (ON in dev mode) |
 | `PPR_HAL_PLATFORM` | HAL platform override (windows, linux, darwin, generic) | auto-detected |
 
@@ -164,6 +172,10 @@ Two separate test executables are provided:
 - **`engine.tests.app`** — Links GLFW; tests platform-dependent features
 
 They share a common test infrastructure library (`engine.tests`) in `lib/engine/tests/shared/`.
+Test targets and the `Core.UnitTest` partition (`PPR_ENABLE_UNIT_TEST`, conditional
+`export import :unit_test`) are present unless `BUILD_TESTING` is explicitly `OFF`
+(`msvc-rel` sets it `OFF`). The editor partition is not gated — `game/main.cpp` imports
+`ApplicationEditor` unconditionally.
 
 ### Via CTest
 

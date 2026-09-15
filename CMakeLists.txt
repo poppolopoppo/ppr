@@ -91,6 +91,37 @@ if(PPR_EDIT_AND_CONTINUE)
         message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE requires CMAKE_BUILD_TYPE=Debug "
                 "(Edit & Continue needs non-optimized code). Current: '${CMAKE_BUILD_TYPE}'.")
     endif()
+    # Branch condition note: guards key off PPR_EDIT_AND_CONTINUE (preset-scoped),
+    # not merely CMAKE_BUILD_TYPE==Debug, so msvc-dev Debug stays on /Z7 while
+    # only msvc-live gets /ZI + the EnC link contract. Per-target PDBs come from
+    # /DEBUG:FULL above; link is amd64 link.exe (EnC requires a native 64-bit
+    # link; 32-bit mspdbserv hosting is unsupported for large PDBs).
+    # LNK4075 guard: manually forced incremental-off or REF/ICF opts break EnC.
+    foreach(_ppr_enc_link_var IN ITEMS CMAKE_EXE_LINKER_FLAGS CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS_DEBUG CMAKE_MODULE_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS_DEBUG CMAKE_STATIC_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS_DEBUG)
+        if(DEFINED ${_ppr_enc_link_var})
+            string(TOUPPER "${${_ppr_enc_link_var}}" _ppr_enc_link_upper)
+            if(_ppr_enc_link_upper MATCHES "/INCREMENTAL:NO")
+                message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE forbids /INCREMENTAL:NO in ${_ppr_enc_link_var} "
+                        "(EnC requires /INCREMENTAL; LNK4075).")
+            endif()
+            if(_ppr_enc_link_upper MATCHES "/OPT:(REF|ICF)")
+                message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE forbids /OPT:REF|ICF in ${_ppr_enc_link_var} "
+                        "(EnC requires /OPT:NOREF,NOICF).")
+            endif()
+            if(_ppr_enc_link_upper MATCHES "/DEBUG:FASTLINK")
+                message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE forbids /DEBUG:FASTLINK in ${_ppr_enc_link_var} "
+                        "(EnC requires /DEBUG:FULL).")
+            endif()
+            if(_ppr_enc_link_upper MATCHES "/LTCG")
+                if(NOT _ppr_enc_link_upper MATCHES "/LTCG:OFF")
+                    message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE forbids /LTCG in ${_ppr_enc_link_var} "
+                            "(EnC requires /LTCG:OFF).")
+                endif()
+            endif()
+        endif()
+    endforeach()
+    unset(_ppr_enc_link_var)
+    unset(_ppr_enc_link_upper)
 endif()
 
 # Sanitizer mutual exclusions (cannot be combined on any toolchain).
