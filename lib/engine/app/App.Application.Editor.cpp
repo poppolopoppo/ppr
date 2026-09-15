@@ -91,6 +91,7 @@ namespace pP {
 
         m_camera_input_mapping = std::make_unique<InputMapping>("camera_input_mapping");
         m_camera_controller = std::make_unique<FreeCameraController>();
+        m_camera_controller->lookAt(float3{0.0f, 0.0f, -2.0f}, float3{0.0f, 0.0f, 0.0f}, math::axis_y);
         m_camera_controller->provideInputActionKeyMappings(*m_camera_input_mapping);
 
         // return camera inputs to player input listener, which is register to the window input context:

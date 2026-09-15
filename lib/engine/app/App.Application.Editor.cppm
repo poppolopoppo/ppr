@@ -9,10 +9,11 @@ import engine.core;
 import std;
 
 export namespace pP {
+    class FreeCameraController;
+    class InputMapping;
     class TrianglePass;
     class Window;
     class WindowInputContext;
-    class InputMapping;
 
     class ApplicationEditor : public Application, protected IClientService {
     public:
@@ -45,13 +46,11 @@ export namespace pP {
     private:
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};
-        std::unique_ptr<ICameraController> m_camera_controller{};
+        std::unique_ptr<FreeCameraController> m_camera_controller{};
         std::unique_ptr<WindowInputContext> m_main_input_context{};
         std::unique_ptr<InputMapping> m_camera_input_mapping{};
         std::unique_ptr<IUIService> m_ui_service{};
         std::unique_ptr<WindowViewport> m_main_viewport{};
         std::unique_ptr<TrianglePass> m_triangle_pass{};
-
-        void onMainWindowClosed_(const Window &window) noexcept;
     };
 }
