@@ -11,14 +11,41 @@ endif ()
 
 if (PPR_EDIT_AND_CONTINUE)
     # /ZI (EditAndContinue) required for VS Edit & Continue. Forces /Gy+/FC, needs
-    # /DEBUG+/INCREMENTAL, conflicts with /OPT:REF/ICF.
+    # /DEBUG:FULL+/INCREMENTAL, conflicts with /OPT:REF/ICF and /LTCG.
+    # /DEBUG:FASTLINK is forbidden here (LNK4075 with /INCREMENTAL).
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug>:EditAndContinue>" CACHE STRING "" FORCE)
+    # EnC link contract (live-only: this branch is PPR_EDIT_AND_CONTINUE-scoped,
+    # so msvc-rel static+LTCG is untouched): /DEBUG:FULL + /INCREMENTAL +
+    # /OPT:NOREF,NOICF + /LTCG:OFF. /PDBTMCACHE speeds EnC session startup.
+    # Each flag is its own genex element so Ninja/cl quoting stays one-token-per-flag.
+    add_link_options(
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/DEBUG:FULL>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/INCREMENTAL>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/OPT:NOREF>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/OPT:NOICF>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/LTCG:OFF>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/PDBTMCACHE>"
+    )
 else ()
-    # Use per-object debug info (/Z7) instead of shared PDB (/Zi).
-    # This is required for ccache support and avoids PDB lock contention
-    # in parallel builds.
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded" CACHE STRING "" FORCE)
+    # Release ships a shared PDB (/Zi) for crash dumps; non-Release non-EnC
+    # stays on per-object debug info (/Z7) for ccache support and to avoid
+    # PDB lock contention in parallel builds.
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Release>:ProgramDatabase>$<$<NOT:$<CONFIG:Release>>:Embedded>" CACHE STRING "" FORCE)
 endif ()
+
+# Release link contract (shipping: CONFIG:Release-genexed, unconditional on
+# Release — the EnC validator requires Debug so the two contracts never meet):
+# /LTCG + /OPT:REF,ICF + /INCREMENTAL:NO for a fully optimized image, plus
+# /DEBUG with a stripped PDB (/PDBSTRIPPED without a filename derives the
+# stripped PDB name from the full PDB name).
+add_link_options(
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/LTCG>"
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/OPT:REF>"
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/OPT:ICF>"
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/INCREMENTAL:NO>"
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/DEBUG>"
+    "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:LINKER:/PDBSTRIPPED>"
+)
 
 # Enable C++ exceptions (required by the C++ Standard Library module)
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
@@ -32,19 +59,31 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 # synth that triggers "Disagreement of the location of the 'std' module" errors.
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
 
-# Release profile: /O2 /Ob2 /DNDEBUG come from the CMAKE_BUILD_TYPE. On top of
-# that, maximize performance with AVX2 codegen (replaces the SSE2 baseline;
-# requires a 2013+ CPU) and whole-program global-data optimization (/Gw).
+# Release profile: pin /O2 /Ob2 explicitly (/DNDEBUG comes from CMAKE_BUILD_TYPE),
+# plus whole-program optimization (/GL) and global-data optimization (/Gw) paired
+# with /Zc:checkGwOdr (exists since VS 2022 17.5; repo toolchain floor is 17.x).
+# /arch:AVX2 stays opt-in via PPR_ENABLE_AVX2 (default OFF — not default min-spec).
 # Applied globally so module synth targets (including the std module BMI) see
 # exactly the same flags — divergent flags break module BCI location matching.
-option(PPR_RELEASE_PERF_FLAGS "Enable extra release-only performance flags (/arch:AVX2 /Gw)" ON)
+option(PPR_RELEASE_PERF_FLAGS "Enable extra release-only performance flags (/O2 /Ob2 /GL /Gw /Zc:checkGwOdr)" ON)
+option(PPR_ENABLE_AVX2 "Enable AVX2 codegen (/arch:AVX2, requires a 2013+ CPU) on Release" OFF)
 if (PPR_RELEASE_PERF_FLAGS)
     # Each flag must be its own genex element: a single "/arch:AVX2 /Gw" string
     # is quoted as one argv token and cl.exe rejects it with D9002.
     add_compile_options(
-        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/arch:AVX2>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/O2>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/Ob2>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/GL>"
         "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/Gw>"
+        "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/Zc:checkGwOdr>"
     )
+    # /GL is incompatible with /ZI — the Release-only genex above keeps them
+    # disjoint (EnC is Debug-only by validator). No Debug line gains /GL.
+    if (PPR_ENABLE_AVX2)
+        add_compile_options(
+            "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/arch:AVX2>"
+        )
+    endif ()
 endif ()
 
 # The /Zc:__cplusplus compiler option enables the __cplusplus preprocessor macro to report an updated
