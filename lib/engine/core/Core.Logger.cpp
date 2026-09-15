@@ -1,5 +1,4 @@
 module;
-#include "../../../out/build/msvc-dev/vcpkg_installed/x64-windows/include/fmt/base.h"
 #include "pP/Macros.h"
 module engine.core;
 import :hal;
