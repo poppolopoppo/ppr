@@ -53,7 +53,6 @@ target_sources(engine.core
             Core.Strings.cppm
             Core.Timer.cppm
             Core.Types.cppm
-            Core.UnitTest.cppm
             Core.Utility.cppm
             Core.cppm
     PRIVATE
@@ -74,9 +73,22 @@ target_sources(engine.core
         Core.Opaque.cpp
         Core.Service.cpp
         Core.Timer.cpp
-        Core.UnitTest.cpp
         ${HAL_PLATFORM_SOURCES}
 )
+
+# Dev-only unit-test support (Core.UnitTest partition + runner): excluded from
+# shipping configs with tests disabled (e.g. msvc-rel). No lib/game source
+# outside tests/ imports this partition.
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+    target_compile_definitions(engine.core PRIVATE PPR_ENABLE_UNIT_TEST=1)
+    target_sources(engine.core
+        PUBLIC
+            FILE_SET CXX_MODULES FILES
+                Core.UnitTest.cppm
+        PRIVATE
+            Core.UnitTest.cpp
+    )
+endif()
 
 setup_ppr_project(engine.core
     EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash

@@ -31,5 +31,7 @@ export import :service;
 export import :strings;
 export import :timer;
 export import :types;
+#if defined(PPR_ENABLE_UNIT_TEST)
 export import :unit_test;
+#endif
 export import :utility;
