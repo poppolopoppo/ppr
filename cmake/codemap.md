@@ -14,19 +14,22 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   exposes `include/` (Macros.h) to module scanning; prevents in-source builds, `enable_testing()`, developer-mode
   flag fan-out (ASan + UBSan + cppcheck + warnings-as-errors); guards reject bad `PPR_ENABLE_*` combos
   (`PPR_EDIT_AND_CONTINUE` requires Ninja + MSVC + Debug and no ASan; THREAD excludes ADDRESS/LEAK; MEMORY
-  excludes ADDRESS/THREAD/LEAK).
+  excludes ADDRESS/THREAD/LEAK); LNK4075 validators reject EnC-breaking link flags (`/INCREMENTAL:NO`,
+  `/OPT:REF/ICF`, `/DEBUG:FASTLINK`, `/LTCG`) at configure time — configuration, not build, is the validated gate.
 - **`CMakePresets.json`** (single-config Ninja throughout — avoids the CMake 4.4 multi-config genex leak into
   C++ module BMIs): `default` (Debug + CPM/vcpkg cache vars), `developer` (+ `PPR_ENABLE_DEVELOPER_MODE`),
   `vcpkg` (toolchain from `$VCPKG_ROOT`), hidden `windows-default` (MSVC/Clang: `VS_SEGMENT_HEAP_ALLOWLIST`
   for game+tests, `SegmentHeap.cmake`, `x64-windows` triplet) and `unix-like-default` (inherits `vcpkg`),
-  `msvc-dev`/`msvc-rel`, `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue, no
-  sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
+  `msvc-dev`/`msvc-rel` (rel: shipping link set + `BUILD_TESTING OFF`, tests excluded), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
+  `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
+  `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
   hidden `gcc-dev`/`gcc-rel` (**no modules**).
 - **`setup_ppr_project(target INTERNAL_PUBLIC_DEPS … EXTERNAL_SYSTEM_PRIVATE_DEPS … …)`**
   (`cmake/Compilers.cmake`): the single helper every PPR target uses — applies target-local
   `cxx_std_23`/`CXX_MODULE_STD` opt-in,
   warning sets, and link edges. `app.game` links all five engine modules; `engine.app` additionally links
-  `imgui` PUBLIC so `import imgui;` resolves from importers.
+  `imgui` PUBLIC so `import imgui;` resolves from importers. Applies the live-only EnC link contract per target
+  (no-op unless `PPR_EDIT_AND_CONTINUE` is ON, so `msvc-rel` static+LTCG is untouched).
 - **Runtime/shader delivery** (`game/CMakeLists.txt`): `POST_BUILD` copies `$<TARGET_RUNTIME_DLLS:app.game>`
   next to the exe (no hardcoded DLL list) and copies `assets/shaders` → `<exe>/shaders`.
 

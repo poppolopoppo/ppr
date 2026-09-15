@@ -31,6 +31,13 @@ endif()
 if(DEFINED VCPKG_INSTALLED_DIR OR DEFINED ENV{VCPKG_ROOT})
     # Derive runtime from triplet name (Windows only)
     if(DEFINED VCPKG_TARGET_TRIPLET)
+        # EnC requires /MDd everywhere: CPM-built slang-rhi, vcpkg libs (e.g. glfw
+        # via /Z7 objects linked into a /ZI live binary), and the prebuilt slang
+        # binary must agree. A -static triplet forces /MT and breaks EnC (LNK2038).
+        if(PPR_EDIT_AND_CONTINUE AND VCPKG_TARGET_TRIPLET MATCHES "-static")
+            message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE requires a dynamic vcpkg triplet (/MDd); "
+                    "'${VCPKG_TARGET_TRIPLET}' forces /MT which is incompatible with Edit & Continue.")
+        endif()
         if(VCPKG_TARGET_TRIPLET MATCHES "-static" AND WIN32)
             set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
         elseif(WIN32)
@@ -40,6 +47,12 @@ if(DEFINED VCPKG_INSTALLED_DIR OR DEFINED ENV{VCPKG_ROOT})
     endif()
     if(WIN32)
         message(STATUS "PPR: MSVC runtime: ${CMAKE_MSVC_RUNTIME_LIBRARY}")
+        # Fail configure on a /MT mix with EnC even when the triplet name was
+        # overridden by hand: only a DLL runtime (/MDd) is EnC-compatible.
+        if(PPR_EDIT_AND_CONTINUE AND DEFINED CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+            message(FATAL_ERROR "PPR_EDIT_AND_CONTINUE requires /MDd (CMAKE_MSVC_RUNTIME_LIBRARY with DLL); "
+                    "current '${CMAKE_MSVC_RUNTIME_LIBRARY}' forces /MT which breaks Edit & Continue.")
+        endif()
     endif()
 
     # Add vcpkg config-mode packages to CMAKE_PREFIX_PATH for find_package()

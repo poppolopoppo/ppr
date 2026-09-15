@@ -19,7 +19,8 @@ if(CACHE_BINARY)
   # This is safe because:
   #   - Non-module TUs (all external deps, .cpp impl files) are correctly cached.
   #   - C++20 module TUs cannot be safely cached (ccache doesn't track BMI content).
-  #   - MSVC /Zi PDB race is avoided: PPR uses /Z7 via CMAKE_MSVC_DEBUG_INFORMATION_FORMAT.
+  #   - MSVC /Zi PDB race is avoided: PPR uses /Z7 via CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+  #     (live/EnC uses /ZI EditAndContinue instead; see cmake/compiler/MSVC.cmake).
   set(CMAKE_C_COMPILER_LAUNCHER "${CACHE_BINARY}")
   set(CMAKE_CXX_COMPILER_LAUNCHER "${CACHE_BINARY}")
   message(STATUS "${CACHE_BINARY} found and enabled for non-module TUs")

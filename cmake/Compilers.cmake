@@ -31,6 +31,20 @@ function(setup_ppr_project project_name)
   # Enable code sanitization IFN
   enable_sanitizers(${project_name})
 
+  # Live-only EnC link contract (per-target narrow application point; no-op
+  # unless PPR_EDIT_AND_CONTINUE is ON, so msvc-rel static+LTCG is untouched).
+  # Mirrors the directory-scoped contract in cmake/compiler/MSVC.cmake.
+  if(PPR_EDIT_AND_CONTINUE)
+    target_link_options(${project_name} PRIVATE
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/DEBUG:FULL>"
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/INCREMENTAL>"
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/OPT:NOREF>"
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/OPT:NOICF>"
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/LTCG:OFF>"
+      "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:LINKER:/PDBTMCACHE>"
+    )
+  endif()
+
   # Link internal public deps (engine targets, public propagation)
   if(PPR_PROJECT_INTERNAL_PUBLIC_DEPS)
     foreach(dep IN LISTS PPR_PROJECT_INTERNAL_PUBLIC_DEPS)
