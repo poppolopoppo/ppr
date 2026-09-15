@@ -12,17 +12,23 @@ entry points change. For durable architecture and coding policy, see
 A high-performance, real-time C++23 game engine built on C++20 modules. PPR
 provides a flat fan-out foundation, a tiered allocator hierarchy, lock-free
 concurrency primitives, a platform HAL (Windows/Linux/Darwin/Generic),
-Slang-based shader compilation, and a Slang-RHI GPU abstraction. The `game/`
-demo hosts the `Application` run loop.
+Slang-based shader compilation, and a Slang-RHI GPU abstraction. Slim
+`Application` owns the run loop + platform/services/shader-RHI-`Renderer`
+bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
+player, camera, viewport, input-context, triangle pass, and UI state. The `game/`
+demo hosts only a thin `TurboLarbin : ApplicationEditor` subclass with
+lifecycle-hook overrides, a startup timestamp, and a debug-only ImGui demo window.
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : pP::Application` and calls `app.run()`.
+- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span) with `initialize()` / `update(TimeSpan)` / `shutdown()` hook overrides, a startup timestamp, and a debug-only ImGui demo window; `main()` returns `app.run().value()`.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
   include `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-*`, and `clang-*`;
   `gcc-*` presets are hidden and do not support modules.
-- `include/pP/Macros.h` — The single public header; engine-wide macros (assertions, logging, attributes, error
-  handling).
+- `include/pP/Macros.h` — The single public non-module header (included via `module; #include` in the global
+  fragment); engine-wide preprocessor vocabulary: build-mode + memory-poisoning detection, pointer-size
+  selection, compiler-attribute portability, wide-char literals, assertions, logging, error-propagation returns,
+  RAII helpers.
 - `vcpkg.json` — Dependency manifest (vcpkg or CPM fallback).
 
 ## Architecture Overview
@@ -81,14 +87,14 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) + TrianglePass; boundary Types header-only (.cppm, no Types.cpp). | [View Map](lib/engine/app/renderer/codemap.md)      |
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | Five app service contracts: client/input/player/ui/window (behavior in platform/UI/Editor).            | [View Map](lib/engine/app/service/codemap.md)       |
-| `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService).                                                             | [View Map](lib/engine/app/ui/codemap.md)            |
+| `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService; overlay shader embedded in `App.UI.ImGui.cpp`, not an asset). | [View Map](lib/engine/app/ui/codemap.md)            |
 | `lib/engine/app/window/`        | IWindowService lifecycle + Viewport geometry (moved from renderer).                                   | [View Map](lib/engine/app/window/codemap.md)        |
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: SlangRHI, DearImGui, GLFW).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Entry point (main.cpp) + app.game CMake target.                                                   | [View Map](game/codemap.md)                         |
-| `include/pP/`                   | Public header `Macros.h` (assertions, logging, attributes).                                           | [View Map](include/pP/codemap.md)                   |
-| `assets/`                       | Runtime assets (Slang shaders).                                                                       | [View Map](assets/codemap.md)                       |
+| `game/`                         | Thin demo exe (`app.game`): `TurboLarbin : ApplicationEditor` + `main()`; POST_BUILD stages DLLs + `shaders/`. | [View Map](game/codemap.md)                         |
+| `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
+| `assets/`                       | Shader-only runtime asset root; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources (including `triangle.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
 
 > Removed locations (do not look here): `lib/engine/app/camera/` → moved to `lib/engine/app/scene/`;

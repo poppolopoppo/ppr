@@ -24,23 +24,25 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   command encoder, `beginRenderPass` (null → `io_error`), pushes a purple debug group, derives default
   viewport/scissor from the reference extent, then per `DrawSubmission` inserts a pink debug marker, applies
   `m_viewport/m_scissor` or defaults via `RenderState`, and invokes `m_encode_draws(DrawContext{device, pass,
-  pipeline_key, viewport, target_extent})`; finishes and submits one command buffer.
+  pipeline_key, viewport, scissor, target_extent})`; finishes and submits one command buffer.
 - `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
   `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
   Offscreen callers must `waitOnHost()` before readback.
 - `renderAndPresent(window, draws, surface_pass)`: rejects uninitialized backend (`not_connected`) and null window
   handle (`no_such_device_or_address`); lazily `createWindowSurface_` on first use, otherwise
   `resizeWindowSurface_` when `m_framebuffer_size` drifts; unconfigured record (minimized/zero extent) returns
-  success without drawing; otherwise `acquireNextImage`, assembles surface color + `m_additional_colors` +
+  `resource_unavailable_try_again` without drawing; otherwise `acquireNextImage`, assembles surface color + `m_additional_colors` +
   optional `m_depth_stencil`, `render()` under the window-title debug group, then `present()`, retain-first-error.
 - `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
   `resizeWindowSurface_` to the current framebuffer size, `insert_or_assign`. `resizeWindowSurface_`: zero/negative
   extent unconfigures (keeps the record); otherwise waits when already configured, then `configure()` with
-  width/height + preferred format + image count + vsync. `destroyWindowSurface(window)` forwards to
-  `destroyWindowSurface_(handle)` (unknown handle → success no-op; else move-out, erase, unconfigure).
+  width/height + preferred format + image count + vsync. `destroyWindowSurface(window)` rejects null handle
+  (`invalid_argument`) and forwards to `destroyWindowSurface_(handle)` (unknown handle → `invalid_argument`;
+  else move-out, erase, unconfigure).
 - **Types** (`App.Renderer.Types.cppm`, header-only): `RenderPipelineSignature{color_formats span,
   depth_stencil_format optional, sample_count}` with `operator==` + `hashValue` combine, memoized as
-  `RenderPipelineKey`; `DrawContext{IDevice&, IRenderPassEncoder&, pipeline_key, viewport, target_extent}`;
+  `RenderPipelineKey`; `DrawContext{IDevice&, IRenderPassEncoder&, pipeline_key, viewport, scissor,
+  target_extent}`;
   `DrawCallback = function_ref<error_code(DrawContext)>`; `TDrawable` concept (`render(DrawContext) →
   error_code`); `DrawSubmission{description, encode_draws, optional viewport/scissor}` with direct and drawable
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
@@ -56,7 +58,8 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `update(dt, camera_view)` caches the snapshot (dt unused). `render(ctx)`: rebuilds via
   `createRenderPipeline_` on pipeline-key mismatch, `bindPipeline` → `ShaderCursor`, dereferences `g_frame` into
   `frame_cursor`, `uploadFrameConstants_` (view/projection/view_projection/invert→inverse, origin promoted via
-  `float4{origin,1}`, viewport size as `float4{size,0,0}`), sets viewport + vertex buffer state, `draw(3)`.
+  `float4{origin,1}`, viewport size as `float4{size,0,0}`), sets viewport + scissor + vertex buffer state,
+  `draw(3)` with `vertexCount{3}`.
   `createRenderPipeline_` accepts exactly one color target, no depth, 1x MSAA (else `operation_not_supported`);
   single non-blended `TriangleList` pipeline. `shutdown()` releases key/pipeline/program/layout/buffer.
 

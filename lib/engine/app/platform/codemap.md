@@ -1,20 +1,22 @@
 # lib/engine/app/platform
 
 ## Responsibility
-The `engine.app:platform` module provides the `IPlatform` interface plus platform error/version infrastructure. `IPlatform` is the central abstraction bridging engine core with OS-specific windowing, input, player, and RHI integration. Backend implementations (currently GLFW in `glfw/`, covering Windows/Linux/macOS) are created via the `IPlatform::create()` factory. This directory holds only the interface partition; all GLFW backend files live in `glfw/` (see `glfw/codemap.md`).
+The `engine.app:platform` module is the HAL-facing platform abstraction for `engine.app`. It defines the `IPlatform` interface plus platform error/version infrastructure, isolating OS-specific windowing, input, player, and event-pump mechanics from `Application` and `Renderer`. Backend implementations live below this directory (currently GLFW in `glfw/`, covering Windows/Linux/macOS) and are selected via the `IPlatform::create()` factory. This directory holds only the interface partition; all `GlfwPlatform`/`GlfwWindow`/`GlfwInput`/`GlfwPlayer` behavior is documented in `glfw/codemap.md` and summarized here.
 
 ## Design
-- **IPlatform** inherits from `safe_object` — instances are factory-owned (`std::unique_ptr<IPlatform>` from `create()`), referenced elsewhere via non-owning `safe_ptr`
-- Nine pure virtual methods: `initialize(Application&)`, `shutdown(Application&)`, `getPlatformName()`, `getPlatformVersion()`, `getApplication()`, `getInputService()`, `getWindowService()`, `getPlayerService()`, `update(TimeSpan dt)`
-- `create()` factory (defined in the GLFW backend translation unit) returns `std::make_unique<GlfwPlatform>()`; there is no global `IPlatform::get()` singleton
+- **IPlatform** inherits from `safe_object` — instances are factory-owned (`std::unique_ptr<IPlatform>` from `create()`), referenced elsewhere via non-owning `safe_ptr` (`SharedPlatform` typedef)
+- Nine pure virtual methods: `initialize(Application&)`, `shutdown(Application&)`, `getPlatformName()`, `getPlatformVersion()`, `getApplication()`, `getInputService()`, `getWindowService()`, `getPlayerService()`, `update(TimeSpan dt)`; there is no global `IPlatform::get()` singleton
+- HAL isolation contract: `initialize` caches the owning `Application` and registers created services into the app's `ServicesStore`; `update(dt)` drives the backend event pump; `shutdown(app)` erases services in reverse-dependency order and releases native resources (idempotent)
+- Domain-gated service creation (enforced by the backend): headless suppresses window creation, non-interactive suppresses input, no-presence suppresses player — see `glfw/codemap.md` for the `GlfwWindow`/`GlfwInput`/`GlfwPlayer` gating
 - Platform-specific `errc` enum (`ok`, `fail`, `initialization_failed`, `invalid_argument`) integrates with `std::error_code` via `std::is_error_code_enum` specialization; helpers `platform::error_category()`, `make_error_code(int)`, `make_error_code(errc)`, `result(int)`
 - `Version` struct captures major/minor/revision (populated by the backend via `glfwGetVersion()` at query time)
-- `SharedPlatform` typedef is `safe_ptr<IPlatform>` (non-owning lifetime-checked view, not shared ownership)
+- GLFW backend summary (detail in `glfw/codemap.md`): `GlfwPlatform` owns `unique_ptr<GlfwWindow/GlfwInput/GlfwPlayer>` plus an application view; installs process-lifetime GLFW allocator hooks and error-callback routing; `GlfwWindow` owns monitor/window lifecycle with dual-level (window + service) callbacks, Win32 native handles, and clipboard; `GlfwInput` owns context-routed keyboard/mouse/gamepad polling with joystick hot-plug; `GlfwPlayer` owns graph-backed keyboard/gamepad player lifecycle over the input devices
 
 ## Flow
-1. Startup creates the backend via `IPlatform::create()` and stores it owning-side (e.g. `Application`); `initialize(app)` caches `m_application` and registers created services into the app's `ServicesStore`
-2. Per-frame `update(dt)` drives backend polling (GLFW backend polls input devices before window events — see `glfw/codemap.md`)
-3. Teardown `shutdown(app)` erases backend services from the store in reverse-dependency order, releases native resources, and resets `m_application` (idempotent second call is a no-op)
+1. Startup `IPlatform::create()` returns the backend (`std::make_unique<GlfwPlatform>()`); the owner (e.g. `Application`) stores it and calls `initialize(app)` → backend installs error callback + allocator, `glfwInit()`, then domain-gated `GlfwWindow::initialize()` (monitor enumeration) → `GlfwInput::initialize()` (keyboard/mouse registration, joystick callback) → `GlfwPlayer::initialize(input)` → each service inserted into `app.getServices()`
+2. Per-frame `update(dt)` drives backend polling in input-first order: `GlfwInput::pollInputDevices(dt)` (timestamp advance, transient-state flush, per-pad `glfwGetGamepadState` → context dispatch) then `GlfwWindow::pollEvents()` (`glfwPollEvents()` → static C-callbacks → window-level + service-level sinks feeding `GlfwInput::post*`)
+3. Presentation/events outward: window service owns `Window` handles consumed by `Renderer::renderAndPresent(window, …)`; gamepad hot-plug callbacks register/erase devices and drive player graph add/remove
+4. Teardown `shutdown(app)` erases backend services from the store in reverse-dependency order (player → input → window, retain-first-error), resets each service, then `glfwTerminate()` + clears the error callback and resets the application view (idempotent second call is a no-op)
 
 ## Integration
 - **Consumers**: `Application` (primary owner of the `unique_ptr<IPlatform>`), backend implementations in `glfw/` (`GlfwPlatform`, `GlfwWindow`, `GlfwInput`, `GlfwPlayer`)

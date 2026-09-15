@@ -12,24 +12,30 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
   `PPR_ENABLE_MEMORY_POISONING`/`PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN or debug; `PPR_ENABLE_ASSERTIONS`
   = `PPR_ENABLE_DEBUG`; `PPR_ENABLE_LOGGING` fixed `1`.
 - **Pointer size**: `PPR_64BIT`/`PPR_32BIT` + `PPR_32BIT_OR_64BIT` selector (errors on unknown pointer size).
-- **Macro helpers**: `PPR_EXPAND`, `PPR_COMMA`/`PPR_COMMA_PROTECT`, `PPR_STRINGIZE`, `PPR_CONCAT`/`PPR_CONCAT3`.
-- **Compiler attributes** (MSVC / Clang+GCC / fallback): `PPR_ASSUME`, `PPR_FORCE_INLINE`/`PPR_NO_INLINE`/
-  `PPR_FLATTEN`, `PPR_EMPTY_BASES`, `PPR_LIFETIME_BOUND`, `PPR_OFFSETOF`, `PPR_ATTRIBUTE_CODE_SEGMENT`,
-  `PPR_COMPILER_READWRITE_BARRIER`, `PPR_PRAGMA_WARNING_PUSH/POP`, `PPR_PRAGMA_WARNING_DISABLE_MSVC`/
-  `DISABLE_GCC_CLANG`, `PPR_PRAGMA_SYSTEM_HEADER`; plus `TEXT` and char-generic `PPR_LITERAL_FOR`.
+- **Macro helpers**: `PPR_EXPAND`/`PPR_EXPAND_VA` (indirection + `, ##__VA_ARGS__` passthrough),
+  `PPR_COMMA_3/2/1` chain + `PPR_COMMA`/`PPR_COMMA_PROTECT`, layered `PPR_STRINGIZE_2/1/0` + `PPR_STRINGIZE`,
+  `PPR_CONCAT_I/OO` internals + `PPR_CONCAT`/`PPR_CONCAT3`.
+- **Compiler attributes** (MSVC / Clang-or-GCC / fallback): `PPR_ASSUME`, `PPR_FORCE_INLINE`/`PPR_NO_INLINE`/
+  `PPR_FLATTEN`, `PPR_EMPTY_BASES`, `PPR_LIFETIME_BOUND` (`msvc::` / `clang::` / `gcc::` per toolchain),
+  `PPR_OFFSETOF`, `PPR_ATTRIBUTE_CODE_SEGMENT`, `PPR_COMPILER_READWRITE_BARRIER` (MSVC intrinsic vs
+  `asm volatile("" ::: "memory")`), `PPR_PRAGMA_WARNING_PUSH/POP`, `PPR_PRAGMA_WARNING_DISABLE_MSVC`/
+  `DISABLE_GCC_CLANG` (clang- vs gcc-diagnostic pragmas), `PPR_PRAGMA_SYSTEM_HEADER`.
+- **Wide chars**: `TEXT` (MSVC `L##quote`, identity elsewhere); consteval char-generic `PPR_LITERAL_FOR`
+  (`char`/`wchar_t`/`char8_t` via `L##`/`u8##`, `std::unreachable()` otherwise).
+- **RAII**: `PPR_ANONYMIZE` (line-unique name via `PPR_CONCAT` + `__LINE__`), `PPR_DEFER` (scope-exit via
+  `const pP::Deferred` lambda assignment).
 - **Assertions**: debug `PPR_DETAILS_ASSERTION_IMPL` evaluates once, honors `consteval` (`PPR_ASSUME`), else
   routes failures to `Assertion::onFailure` from a `.ppr_dbg` code segment with `source_location`;
   `PPR_ASSERT`/`PPR_VERIFY` (require/verify), boolean `PPR_ENSURE`; release lowers to `PPR_ASSUME` (+ evaluate).
 - **Logging**: `PPR_DECLARE/DEFINE_LOG_CATEGORY` (define wrapped in ReSharper internal-linkage guards),
   `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attribute list), `PPR_FLUSH_LOG`.
-- **Error returns** (log-and-return, `[[unlikely]]`): `PPR_RETURN_ON_FAIL` (generic `hasFailed` check,
-  returns the failed value — covers `std::error_code` and `rhi::Result`); `PPR_RETURN_ERROR_ON_FAIL`,
-  `PPR_RETAIN_ERROR_ON_FAIL`, `PPR_RETURN_UNEXPECTED_ON_FAIL`, `PPR_LOG_WARNING_ON_FAIL` (each binds
-  `make_error_code(__VA_ARGS__)` and tests implicit truthiness, logs category/value/message) —
-  `PPR_RETURN_ERROR_ON_FAIL` returns the code, `PPR_RETAIN_ERROR_ON_FAIL` retains the first failure into
-  `_RETAINED_ERRC` under a `PPR_ENSURE` guard, `PPR_RETURN_UNEXPECTED_ON_FAIL` returns `std::unexpected`,
-  `PPR_LOG_WARNING_ON_FAIL` logs only.
-- **RAII**: `PPR_ANONYMIZE` (line-unique name), `PPR_DEFER` (scope-exit via `pP::Deferred`).
+- **Error returns** (log-and-return, `[[unlikely]]`, if-with-initializer + line-unique binding):
+  `PPR_RETURN_ON_FAIL` (generic `hasFailed` check, returns the failed value — covers `std::error_code` and
+  `rhi::Result`); `PPR_RETURN_ERROR_ON_FAIL`, `PPR_RETAIN_ERROR_ON_FAIL`, `PPR_RETURN_UNEXPECTED_ON_FAIL`,
+  `PPR_LOG_WARNING_ON_FAIL` (each binds `make_error_code(__VA_ARGS__)` and tests implicit truthiness, logs
+  category/value/message) — `PPR_RETURN_ERROR_ON_FAIL` returns the code, `PPR_RETAIN_ERROR_ON_FAIL` retains
+  the first failure into `_RETAINED_ERRC` via `if (not (_RETAINED_ERRC))`, `PPR_RETURN_UNEXPECTED_ON_FAIL`
+  returns `std::unexpected`, `PPR_LOG_WARNING_ON_FAIL` logs only.
 
 ## Flow
 

@@ -19,7 +19,7 @@ namespace pP {
                 case debug:
                     return PPR_LITERAL_FOR(CharT, "👾");
                 case verbose:
-                    return PPR_LITERAL_FOR(CharT, "🗣️️");
+                    return PPR_LITERAL_FOR(CharT, "🗣️");
                 case info:
                     return PPR_LITERAL_FOR(CharT, "🔹");
                 case emphasis:
