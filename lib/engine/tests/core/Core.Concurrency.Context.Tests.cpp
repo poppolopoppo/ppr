@@ -217,28 +217,31 @@ namespace pP::tests::detail {
         };
 
         namespace Deadline {
+
             PPR_UNIT_TEST (deadline_is_set) {
-                const TimePoint dl = TimerManager::mainTimer().now() + std::chrono::seconds(60);
+                TimerManager timer{ITimerClock::steady()};
+                const TimePoint dl = timer.now() + std::chrono::seconds(60);
                 const auto [parent, cancel_] = context::withCancel(context::background());
-                const SharedContext ctx = context::withDeadline(parent, dl);
+                const SharedContext ctx = context::withDeadline(parent, dl, timer);
                 PPR_TEST_ASSERT(ctx->pollEvent() == false);
                 std::ignore = cancel_;
             };
 
             PPR_UNIT_TEST (parent_cancel_overrides_deadline) {
                 const auto [parent, cancel_parent] = context::withCancel(context::background());
-                const TimePoint dl = TimerManager::mainTimer().now() + std::chrono::seconds(60);
-                const SharedContext child = context::withDeadline(parent, dl);
+                TimerManager timer{ITimerClock::steady()};
+                const TimePoint dl = timer.now() + std::chrono::seconds(60);
+                const SharedContext child = context::withDeadline(parent, dl, timer);
                 cancel_parent();
                 PPR_TEST_ASSERT(child->pollEvent());
             };
 
             PPR_UNIT_TEST (timeout_sets_deadline) {
-                const SharedContext ctx = context::withTimeout(
-                    context::background(), std::chrono::milliseconds(150));
-                PPR_TEST_ASSERT(ctx->pollEvent() == false);
+                TimerManager timer{ITimerClock::steady()};
 
-                TimerManager &timer = TimerManager::mainTimer();
+                const SharedContext ctx = context::withTimeout(
+                    context::background(), std::chrono::milliseconds(150), timer);
+                PPR_TEST_ASSERT(ctx->pollEvent() == false);
 
                 while (not ctx->pollEvent())
                 {

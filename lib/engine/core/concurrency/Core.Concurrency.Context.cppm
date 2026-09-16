@@ -80,16 +80,12 @@ export namespace pP {
         // cancels on timeout or parent cancel
         // --------------------------------------------------------------
 
-        [[nodiscard]] SharedContext withDeadlineCause(SharedContext parent, TimePoint deadline, std::error_code cause,
-                                                      TimerManager &timer = TimerManager::mainTimer());
+        [[nodiscard]] SharedContext withDeadlineCause(SharedContext parent, TimePoint deadline, std::error_code cause, TimerManager &timer);
 
-        [[nodiscard]] SharedContext withDeadline(SharedContext parent, TimePoint deadline,
-                                                 TimerManager &timer = TimerManager::mainTimer());
+        [[nodiscard]] SharedContext withDeadline(SharedContext parent, TimePoint deadline, TimerManager &timer);
 
-        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, TimeSpan delay, std::error_code cause,
-                                                     TimerManager &timer = TimerManager::mainTimer());
+        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, TimeSpan delay, std::error_code cause, TimerManager &timer);
 
-        [[nodiscard]] SharedContext withTimeout(SharedContext parent, TimeSpan delay,
-                                                TimerManager &timer = TimerManager::mainTimer());
+        [[nodiscard]] SharedContext withTimeout(SharedContext parent, TimeSpan delay, TimerManager &timer);
     }
 }

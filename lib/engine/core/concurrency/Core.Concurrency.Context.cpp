@@ -280,15 +280,16 @@ namespace pP::context {
         }
 
         [[nodiscard]] static SharedContext schedule(SharedContext parent, const TimePoint deadline, const std::error_code cause,
-                                                    TimerManager &timer = TimerManager::mainTimer()) {
+                                                    TimerManager &timer) {
             auto ctx = std::make_shared<DeadlineContext>(
                 std::move(parent), deadline, cause);
 
             timer.schedule(
-                deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept {
+                deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept -> std::error_code {
                     if (const std::shared_ptr<DeadlineContext> self = weak_self.lock()) [[likely]] {
                         self->cancelDeadline(now);
                     }
+                    return default_value_v;
                 });
 
             return std::move(ctx);

@@ -5,6 +5,7 @@ export module engine.core:timer;
 import :assert;
 import :containers.stable_vector;
 import :containers.stl;
+import :memory.pointer;
 import :opaque;
 
 import std;
@@ -25,7 +26,7 @@ export namespace pP {
 
         [[nodiscard]] double seconds(TimeSpan duration) noexcept;
 
-        [[nodiscard]] double seconds(TimeDuration duration) noexcept {
+        [[nodiscard]] double seconds(const TimeDuration duration) noexcept {
             return duration.count();
         }
     }
@@ -35,81 +36,52 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     // ReSharper disable once CppPolymorphicClassWithNonVirtualPublicDestructor
-    class ITimerClock {
+    class ITimerClock : public safe_object {
     protected:
         ~ITimerClock() = default;
 
     public:
         [[nodiscard]] virtual TimePoint now() const noexcept = 0;
 
-        [[nodiscard]] static ITimerClock &steady() noexcept;
+        [[nodiscard]] static const ITimerClock &steady() noexcept;
     };
 
-    class TimerExplicitClock final : public ITimerClock {
+    class TimerManager final : public ITimerClock {
     public:
-        TimePoint m_now{};
-        TimeSpan m_elapsed{};
-
-        void tick(const TimePoint new_time) noexcept {
-            m_elapsed = new_time - m_now;
-            m_now = new_time;
-        }
-
-        void tickThrottle(const TimePoint new_time, const TimeDuration target_rate) noexcept {
-            tick(new_time);
-
-            if (m_elapsed < target_rate) {
-                std::this_thread::sleep_for(target_rate - m_elapsed);
-
-                m_now = last();
-                tick(time::now());
-            }
-        }
-
-        void reset(const TimePoint new_time) noexcept {
-            m_elapsed = {};
-            m_now = new_time;
-        }
-
-        [[nodiscard]] TimePoint now() const noexcept override {
-            return m_now;
-        }
-
-        [[nodiscard]] TimePoint last() const noexcept {
-            return m_now - m_elapsed;
-        }
-    };
-
-    class TimerManager final {
+        using Callback = std::move_only_function<std::error_code(TimePoint) noexcept>;
+    private:
         struct Event {
             TimePoint m_date{};
-            std::move_only_function<void(TimePoint) noexcept> m_callback{};
+            Callback m_callback{};
 
             [[nodiscard]] constexpr std::strong_ordering operator<=>(const Event &other) const noexcept {
                 return m_date <=> other.m_date;
             }
         };
 
-        TimePoint updateLastTick_() noexcept;
+        safe_ptr<const ITimerClock> m_clock{};
 
-        ITimerClock *const m_clock{nullptr};
         std::atomic<long long> m_last_tick{0};
+        std::atomic<long long> m_delta_time{0};
+        std::atomic<long long> m_total_elapsed{0};
 
         std::mutex m_mutex{};
         Array<Event> m_queue{};
 
     public:
-        using Callback = std::move_only_function<void(TimePoint) noexcept>;
+        explicit TimerManager(const ITimerClock &clock = steady()) noexcept;
 
-        explicit TimerManager(ITimerClock &clock = ITimerClock::steady()) noexcept;
+        [[nodiscard]] TimePoint now() const noexcept override;
 
-        [[nodiscard]] TimePoint now() const noexcept;
+        [[nodiscard]] TimeSpan getDeltaTime() const noexcept;
+
+        [[nodiscard]] TimeSpan getTotalElapsed() const noexcept;
+
+        void reset();
 
         void schedule(TimePoint date, Callback &&callback) noexcept;
 
-        void tick() noexcept;
-
-        static TimerManager &mainTimer() noexcept;
+        std::error_code tick(TimeSpan *out_delta_time, TimeDuration target_period = {}) noexcept;
     };
 }
 
