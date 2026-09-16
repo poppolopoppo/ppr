@@ -149,13 +149,16 @@ export namespace pP {
     class WindowInputContext final {
     public:
         const safe_ptr<IInputService> m_inputs{};
-        const safe_ptr<Window> m_window{};
+        safe_ptr<Window> m_window{};
 
         InputContext m_context;
 
-        WindowInputContext(safe_ptr<IInputService> inputs, safe_ptr<Window> window);
+        explicit WindowInputContext(safe_ptr<IInputService> inputs);
 
         ~WindowInputContext();
+
+        std::error_code initialize(safe_ptr<Window> window);
+        std::error_code shutdown();
 
     private:
         void onWindowCharacterInput_(const Window &window, hal::native::char_t codepoint) const;

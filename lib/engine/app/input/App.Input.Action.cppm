@@ -17,10 +17,11 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     enum class EInputActionFlags : u8 {
-        none = 0b00u,
+        none = 0b000u,
 
-        consume_input = 0b01u,
-        trigger_when_paused = 0b10u,
+        consume_input = 0b001u,
+        disabled = 0b010u,
+        trigger_when_paused = 0b100u,
 
         all = consume_input | trigger_when_paused,
     };
@@ -60,6 +61,22 @@ export namespace pP {
 
         [[nodiscard]] constexpr bool hasTriggerWhenPaused() const noexcept {
             return any(m_flags & EInputActionFlags::trigger_when_paused);
+        }
+
+        [[nodiscard]] constexpr bool isDisabled() const noexcept {
+            return any(m_flags & EInputActionFlags::disabled);
+        }
+
+        constexpr void setConsumeInput(const bool value) noexcept {
+            m_flags = value ? m_flags + EInputActionFlags::consume_input : m_flags - EInputActionFlags::consume_input;
+        }
+
+        constexpr void setTriggerWhenPaused(const bool value) noexcept {
+            m_flags = value ? m_flags + EInputActionFlags::trigger_when_paused : m_flags - EInputActionFlags::trigger_when_paused;
+        }
+
+        constexpr void setEnabled(const bool value) noexcept {
+            m_flags = value ? m_flags - EInputActionFlags::disabled : m_flags + EInputActionFlags::disabled;
         }
 
         [[nodiscard]] static InputModifierEvent modulate(float value) noexcept;

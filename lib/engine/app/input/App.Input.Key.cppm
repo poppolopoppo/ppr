@@ -7,7 +7,15 @@ import engine.math;
 import std;
 
 export namespace pP {
-    enum class EAnyKey : u8 {};
+    enum class EAnyKey : u8 {
+        none = 0u,
+
+        gamepad = 0b001u,
+        keyboard = 0b010u,
+        mouse = 0b100u,
+
+        all = gamepad | keyboard | mouse,
+    };
 
     // ------------------------------------------------------------------
     // keyboard
@@ -327,6 +335,8 @@ export namespace pP {
 
         static std::error_code enumerateAll(Collector<InputKey> push_back) noexcept;
 
+        static std::error_code enumerateAny(EAnyKey any_key, Collector<InputKey> push_back) noexcept;
+
         static std::error_code enumerateKeyboardKeys(Collector<InputKey> push_back) noexcept;
 
         static std::error_code enumerateGamepadAxes(Collector<InputKey> push_back) noexcept;
@@ -350,6 +360,10 @@ export namespace pP {
         // static aliases:
 
         static const InputKey any_digital;
+
+        static const InputKey any_gamepad_button;
+        static const InputKey any_keyboard_key;
+        static const InputKey any_mouse_button;
 
         static const InputKey any_axis_1d;
         static const InputKey any_axis_2d;

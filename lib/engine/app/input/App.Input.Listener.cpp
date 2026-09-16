@@ -104,9 +104,16 @@ namespace pP {
             return unhandled;
         }
 
+        bool has_handled_an_action = false;
         for (auto it = first; it != last; ++it) {
             const InputActionKeyMapping &key_mapping = getKeyMapping_(it->second);
             PPR_ASSERT(message.m_key == key_mapping.m_key || key_mapping.m_key.isAny());
+
+            if (key_mapping.m_action->isDisabled()) {
+                continue;
+            }
+
+            has_handled_an_action = true;
 
             InputActionEvent &event = m_action_events.at(key_mapping.m_action);
             event.m_value = message.m_value;
@@ -129,8 +136,9 @@ namespace pP {
                     PPR_LOG(Input, verbose, "event completed", {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_value", event.m_value},
                         {"input_key", message.m_key.m_name},
+                        {"input_value", event.m_value},
+                        {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
                     break;
 
@@ -149,8 +157,9 @@ namespace pP {
                     PPR_LOG(Input, verbose, "event started", {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_value", event.m_value},
                         {"input_key", message.m_key.m_name},
+                        {"input_value", event.m_value},
+                        {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
 
                     [[fallthrough]];
@@ -160,6 +169,7 @@ namespace pP {
                     [[fallthrough]];
                 case EInputMessageEvent::axis:
                     event.m_trigger_state = EInputTriggerEvent::triggered;
+
                     if (message.m_event == EInputMessageEvent::repeat) {
                         event.m_elapsed_triggered_time += dt;
                         ++event.m_repeat_count;
@@ -177,15 +187,21 @@ namespace pP {
                     PPR_LOG(Input, debug, "event triggered", {
                         {"action", event.m_source->m_description.view()},
                         {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_value", event.m_value},
                         {"input_key", message.m_key.m_name},
+                        {"input_value", event.m_value},
                         {"repeat_count", event.m_repeat_count},
+                        {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
                     break;
             }
+
+            // do not follow with other bound actions if this one consumed the input:
+            if (key_mapping.m_action->hasConsumeInput()) {
+                return m_listener_mode;
+            }
         }
 
-        return m_listener_mode;
+        return has_handled_an_action ? handled : unhandled;
     }
 
     const InputActionKeyMapping &InputListener::getKeyMapping_(const InputBinding &binding) const noexcept {
@@ -242,8 +258,8 @@ namespace pP {
                 if (not action_keymap.m_key.isAny()) [[likely]] {
                     map_key(action_keymap.m_key, action_keymap.m_action, binding);
                 } else {
-                    // expand AnyKey to all possible keys
-                    InputKey::enumerateAll([&](const InputKey &key) -> std::error_code {
+                    // expand EAnyKey to all possible keys for selected sources
+                    InputKey::enumerateAny(get<EAnyKey>(action_keymap.m_key.m_code), [&](const InputKey &key) -> std::error_code {
                         if (key.m_value == action_keymap.m_key.m_value) {
                             map_key(key, action_keymap.m_action, binding);
                         }
@@ -353,14 +369,29 @@ namespace pP {
     // window input context - setup an input context for a specific window
     // ------------------------------------------------------------------
 
-    WindowInputContext::WindowInputContext(safe_ptr<IInputService> inputs, safe_ptr<Window> window)
+    WindowInputContext::WindowInputContext(safe_ptr<IInputService> inputs)
         : m_inputs(std::move(inputs)),
-          m_window(std::move(window)),
           m_context(safe_ptr(&m_inputs->getGlobalInputContext())) {
         PPR_ASSERT(m_inputs.isValid());
-        PPR_ASSERT(m_window.isValid());
 
         m_inputs->addInputContext(SharedInputContext(&m_context));
+    }
+
+    WindowInputContext::~WindowInputContext() {
+        PPR_ASSERT(not m_window.isValid());
+
+        m_inputs->removeInputContext(m_context);
+    }
+
+    std::error_code WindowInputContext::initialize(safe_ptr<Window> window) {
+        if (m_window.isValid()) [[unlikely]] {
+            return make_error_code(std::errc::already_connected);
+        }
+        if (not window.isValid()) [[unlikely]] {
+            return make_error_code(std::errc::invalid_argument);
+        }
+
+        m_window = std::move(window);
 
         m_window->m_when_character_input.subscribe<&WindowInputContext::onWindowCharacterInput_>(this);
         m_window->m_when_keyboard_pressed.subscribe<&WindowInputContext::onKeyboardPressed_>(this);
@@ -368,9 +399,15 @@ namespace pP {
         m_window->m_when_mouse_clicked.subscribe<&WindowInputContext::onMouseClicked_>(this);
         m_window->m_when_mouse_moved.subscribe<&WindowInputContext::onMouseMoved_>(this);
         m_window->m_when_mouse_scrolled.subscribe<&WindowInputContext::onMouseScrolled_>(this);
+
+        return default_value_v;
     }
 
-    WindowInputContext::~WindowInputContext() {
+    std::error_code WindowInputContext::shutdown() {
+        if (not m_window) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
         m_window->m_when_mouse_clicked.reset();
         m_window->m_when_mouse_moved.reset();
         m_window->m_when_mouse_scrolled.reset();
@@ -378,7 +415,9 @@ namespace pP {
         m_window->m_when_character_input.reset();
         m_window->m_when_keyboard_pressed.reset();
 
-        m_inputs->removeInputContext(m_context);
+        m_window.reset();
+
+        return default_value_v;
     }
 
     void WindowInputContext::onWindowCharacterInput_([[maybe_unused]] const Window &window, const hal::native::char_t codepoint) const {

@@ -183,21 +183,19 @@ namespace pP {
     }
 
     opaque::Value opaqueValue(const InputValue &value) noexcept {
-        return std::visit(
-            overloaded(
-                [](const InputDigital digital) constexpr noexcept -> opaque::Value {
-                    return *digital;
-                },
-                [](const InputAxis1D &axis1d) constexpr noexcept -> opaque::Value {
-                    return opaque::Struct{std23::nontype<&opaqueStruct1D>, axis1d};
-                },
-                [](const InputAxis2D &axis2d) constexpr noexcept -> opaque::Value {
-                    return opaque::Struct{std23::nontype<&opaqueStruct2D>, axis2d};
-                },
-                [](const InputAxis3D &axis3d) constexpr noexcept -> opaque::Value {
-                    return opaque::Struct{std23::nontype<&opaqueStruct3D>, axis3d};
-                }),
-            value);
+        return std::visit(overloaded(
+            [](const InputDigital digital) constexpr noexcept -> opaque::Value {
+                return *digital;
+            },
+            [](const InputAxis1D &axis1d) constexpr noexcept -> opaque::Value {
+                return opaque::Struct{std23::nontype<&opaqueStruct1D>, axis1d};
+            },
+            [](const InputAxis2D &axis2d) constexpr noexcept -> opaque::Value {
+                return opaque::Struct{std23::nontype<&opaqueStruct2D>, axis2d};
+            },
+            [](const InputAxis3D &axis3d) constexpr noexcept -> opaque::Value {
+                return opaque::Struct{std23::nontype<&opaqueStruct3D>, axis3d};
+            }), value);
     }
 
     // ------------------------------------------------------------------
@@ -205,54 +203,55 @@ namespace pP {
     // ------------------------------------------------------------------
 
     bool InputKey::isKeyboard() const noexcept {
-        return std::visit(
-            overloaded(
-                [](EKeyboardKey) constexpr noexcept -> bool {
-                    return true;
-                },
-                [](auto) constexpr noexcept -> bool {
-                    return false;
-                }), m_code);
+        return std::visit(overloaded(
+            [](const EAnyKey any_key) constexpr noexcept -> bool {
+                return any(any_key & EAnyKey::keyboard);
+            },
+            [](EKeyboardKey) constexpr noexcept -> bool {
+                return true;
+            },
+            [](auto) constexpr noexcept -> bool {
+                return false;
+            }), m_code);
     }
 
     bool InputKey::isGamepad() const noexcept {
-        return std::visit(
-            overloaded(
-                [](EGamepadAxis) constexpr noexcept -> bool {
-                    return true;
-                },
-                [](EGamepadButton) constexpr noexcept -> bool {
-                    return true;
-                },
-                [](auto) constexpr noexcept -> bool {
-                    return false;
-                }), m_code);
+        return std::visit(overloaded(
+            [](const EAnyKey any_key) constexpr noexcept -> bool {
+                return any(any_key & EAnyKey::gamepad);
+            },
+            [](EGamepadAxis) constexpr noexcept -> bool {
+                return true;
+            },
+            [](EGamepadButton) constexpr noexcept -> bool {
+                return true;
+            },
+            [](auto) constexpr noexcept -> bool {
+                return false;
+            }), m_code);
     }
 
     bool InputKey::isMouse() const noexcept {
-        return std::visit(
-            overloaded(
-                [](EMouseAxis) constexpr noexcept -> bool {
-                    return true;
-                },
-                [](EMouseButton) constexpr noexcept -> bool {
-                    return true;
-                },
-                [](auto) constexpr noexcept -> bool {
-                    return false;
-                }), m_code);
+        return std::visit(overloaded(
+            [](const EAnyKey any_key) constexpr noexcept -> bool {
+                return any(any_key & EAnyKey::mouse);
+            },
+            [](EMouseAxis) constexpr noexcept -> bool {
+                return true;
+            },
+            [](EMouseButton) constexpr noexcept -> bool {
+                return true;
+            },
+            [](auto) constexpr noexcept -> bool {
+                return false;
+            }), m_code);
     }
 
     hash_t hashValue(const InputKey &value) noexcept {
-        return std::visit(
-            overloaded(
-                [](const std::monostate) constexpr noexcept -> hash_t {
-                    return hash_t(zero_v);
-                },
-                [](auto input_code) constexpr noexcept -> hash_t {
-                    return hashValue(enumOrd(input_code));
-                }),
-            value.m_code);
+        return std::visit(overloaded(
+            [](auto input_code) constexpr noexcept -> hash_t {
+                return hashValue(enumOrd(input_code));
+            }), value.m_code);
     }
 
     opaque::Value opaqueValue(const InputKey &value) noexcept {
@@ -285,7 +284,6 @@ namespace pP {
             case EGamepadButton::dpad_left: return gamepad_dpad_left;
             case EGamepadButton::dpad_right: return gamepad_dpad_right;
             case EGamepadButton::dpad_down: return gamepad_dpad_down;
-
 
             case EGamepadButton::left_thumb: return gamepad_left_thumbstick;
             case EGamepadButton::right_thumb: return gamepad_right_thumbstick;
@@ -449,6 +447,32 @@ namespace pP {
             &enumerateMouseAxes,
             &enumerateMouseButtons
         });
+    }
+
+    std::error_code InputKey::enumerateAny(const EAnyKey any_key, const Collector<InputKey> push_back) noexcept {
+        if (any_key == EAnyKey::all) {
+            return enumerateAll(push_back);
+        }
+
+        if (any(any_key & EAnyKey::gamepad)) {
+            if (const std::error_code err = push_back.combine({&enumerateGamepadAxes, &enumerateGamepadButtons})) [[unlikely]] {
+                return err;
+            }
+        }
+
+        if (any(any_key & EAnyKey::keyboard)) {
+            if (const std::error_code err = enumerateKeyboardKeys(push_back)) [[unlikely]] {
+                return err;
+            }
+        }
+
+        if (any(any_key & EAnyKey::mouse)) {
+            if (const std::error_code err = push_back.combine({&enumerateMouseAxes, &enumerateMouseButtons})) [[unlikely]] {
+                return err;
+            }
+        }
+
+        return default_value_v;
     }
 
 
@@ -618,10 +642,13 @@ namespace pP {
         });
     }
 
-    const InputKey InputKey::any_digital{"any_key", EAnyKey{}, EInputValueType::digital};
-    const InputKey InputKey::any_axis_1d{"any_axis_1d", EAnyKey{}, EInputValueType::axis_1d};
-    const InputKey InputKey::any_axis_2d{"any_axis_2d", EAnyKey{}, EInputValueType::axis_2d};
-    const InputKey InputKey::any_axis_3d{"any_axis_3d", EAnyKey{}, EInputValueType::axis_3d};
+    const InputKey InputKey::any_digital{"any_digital", EAnyKey::all, EInputValueType::digital};
+    const InputKey InputKey::any_gamepad_button{"any_gamepad_button", EAnyKey::gamepad, EInputValueType::digital};
+    const InputKey InputKey::any_keyboard_key{"any_keyboard_key", EAnyKey::keyboard, EInputValueType::digital};
+    const InputKey InputKey::any_mouse_button{"any_mouse_button", EAnyKey::mouse, EInputValueType::digital};
+    const InputKey InputKey::any_axis_1d{"any_axis_1d", EAnyKey::all, EInputValueType::axis_1d};
+    const InputKey InputKey::any_axis_2d{"any_axis_2d", EAnyKey::all, EInputValueType::axis_2d};
+    const InputKey InputKey::any_axis_3d{"any_axis_3d", EAnyKey::all, EInputValueType::axis_3d};
     const InputKey InputKey::mouse_2d{"mouse2d", EMouseAxis::pointer, EInputValueType::axis_2d};
     const InputKey InputKey::mouse_wheel_axis_x{"mouse_wheel_axis_x", EMouseAxis::scroll_wheel_x, EInputValueType::axis_1d};
     const InputKey InputKey::mouse_wheel_axis_y{"mouse_wheel_axis_y", EMouseAxis::scroll_wheel_y, EInputValueType::axis_1d};
