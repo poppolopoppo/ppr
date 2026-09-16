@@ -22,6 +22,11 @@ namespace demo {
 
             m_started_at = time::now();
 
+            // quit the application in 3 seconds to debug shutdown for agents
+            getTimerManager().schedule(*m_started_at + std::chrono::seconds(3u), [](TimePoint) noexcept -> std::error_code {
+                return make_error_code(std::errc::timed_out);
+            });
+
             return default_value_v;
         }
 
