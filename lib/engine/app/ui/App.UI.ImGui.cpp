@@ -84,7 +84,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             InputListener m_input_listener{};
             InputMapping m_input_mapping{"ImGuiInputs"};
 
-            InputAction m_input_any_digital{"ImGuiAnyDigital", EInputValueType::digital};
+            InputAction m_input_any_keyboard_key{"ImGuiAnyKeyboardKey", EInputValueType::digital};
+            InputAction m_input_any_mouse_button{"ImGuiAnyMouseButton", EInputValueType::digital};
+            InputAction m_input_any_gamepad_button{"ImGuiAnyGamepadButton", EInputValueType::digital};
 
             InputAction m_input_mouse_cursor{"ImGuiMouseCursor", EInputValueType::axis_2d};
             InputAction m_input_mouse_wheel{"ImGuiMouseWheel", EInputValueType::axis_1d};
@@ -146,9 +148,17 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     nullptr
                 );
 
-                m_input_any_digital.setStarted(&onInputAnyDigital_);
-                m_input_any_digital.setTriggered(&onInputAnyDigital_);
-                m_input_any_digital.setCompleted(&onInputAnyDigital_);
+                m_input_any_keyboard_key.setStarted(&onInputAnyDigital_);
+                m_input_any_keyboard_key.setTriggered(&onInputAnyDigital_);
+                m_input_any_keyboard_key.setCompleted(&onInputAnyDigital_);
+
+                m_input_any_gamepad_button.setStarted(&onInputAnyDigital_);
+                m_input_any_gamepad_button.setTriggered(&onInputAnyDigital_);
+                m_input_any_gamepad_button.setCompleted(&onInputAnyDigital_);
+
+                m_input_any_mouse_button.setStarted(&onInputAnyDigital_);
+                m_input_any_mouse_button.setTriggered(&onInputAnyDigital_);
+                m_input_any_mouse_button.setCompleted(&onInputAnyDigital_);
 
                 m_input_mouse_cursor.setTriggered(&onInputMouseCursor_);
                 m_input_mouse_wheel.setTriggered(&onInputMouseWheel_);
@@ -156,7 +166,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_input_gamepad_stick.setTriggered(&onInputGamepadStick_);
                 m_input_gamepad_trigger.setTriggered(&onInputGamepadTrigger_);
 
-                m_input_mapping.mapInputKey(safe_ptr(&m_input_any_digital), InputKey::any_digital);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_any_keyboard_key), InputKey::any_keyboard_key);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_any_gamepad_button), InputKey::any_gamepad_button);
+                m_input_mapping.mapInputKey(safe_ptr(&m_input_any_mouse_button), InputKey::any_mouse_button);
 
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_stick), InputKey::gamepad_left_2d);
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_stick), InputKey::gamepad_right_2d);
@@ -232,16 +244,17 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-                // need to update display size before first call to ImGui::NewFrame()
-                io.DisplaySize = ImVec2{
-                    static_cast<float>(window_input_context.m_window->m_framebuffer_size.x),
-                    static_cast<float>(window_input_context.m_window->m_framebuffer_size.y)
-                };
-
-                io.DisplayFramebufferScale = ImVec2{
-                    window_input_context.m_window->m_content_scale.x,
-                    window_input_context.m_window->m_content_scale.y,
-                };
+                // TODO: remove?
+                // // need to update display size before first call to ImGui::NewFrame()
+                // io.DisplaySize = ImVec2{
+                //     static_cast<float>(window_input_context.m_window->m_framebuffer_size.x),
+                //     static_cast<float>(window_input_context.m_window->m_framebuffer_size.y)
+                // };
+                //
+                // io.DisplayFramebufferScale = ImVec2{
+                //     window_input_context.m_window->m_content_scale.x,
+                //     window_input_context.m_window->m_content_scale.y,
+                // };
 
                 // attach our input listener to the window:
                 m_input_context = &window_input_context.m_context;
@@ -319,6 +332,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 const float2 &content_scale = viewport.getWindow().m_content_scale;
                 io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
+
+                m_input_any_keyboard_key.setConsumeInput(not io.WantCaptureKeyboard);
+                m_input_any_mouse_button.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
+                m_input_mouse_cursor.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
+                m_input_mouse_wheel.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
 
                 ++m_frame_revision;
                 ImGui::NewFrame();
