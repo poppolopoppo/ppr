@@ -50,7 +50,7 @@ export namespace pP {
         [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
         [[nodiscard]] const TimerManager &getTimerManager() const noexcept { return m_application_clock; }
-        [[nodiscard]] const std::optional<TimeDuration> &getTargetFrameDuration() const noexcept { return m_target_frame_duration; }
+        [[nodiscard]] const std::optional<TimeDuration> &getTargetFrameDuration() const noexcept;
 
         [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
@@ -62,6 +62,8 @@ export namespace pP {
         [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_working_dir; }
 
         void requestExit(std::error_code clause = {}) const noexcept;
+
+        void setBackgroundPriority(bool throttle) noexcept;
 
         void setTargetFrameDuration(TimeDuration frame_time) noexcept;
 
@@ -92,6 +94,8 @@ export namespace pP {
         SharedContext m_lifecycle{};
         context::CancelClauseFunc m_request_exit{};
 
+        /// throttle refresh loop to low frame-rate when application is in background
+        bool m_has_background_priority{false};
         // Single-use latch: set on the first teardown attempt, never reset.
         // run()/initialize() after shutdown report operation_not_permitted.
         bool m_has_torn_down{false};

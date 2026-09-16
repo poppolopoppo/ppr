@@ -196,6 +196,9 @@ namespace pP {
         if (m_main_viewport) [[likely]] {
             m_main_viewport->updateFromWindow();
 
+            // throttle application when main window loses focus
+            setBackgroundPriority(not m_main_viewport->getWindow().m_focused);
+
             safe_ptr<IWindowService> window_service{getServices().inject()};
             window_service->renameWindow(m_main_viewport->getWindow(),
                 std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));

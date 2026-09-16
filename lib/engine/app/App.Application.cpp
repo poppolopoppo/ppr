@@ -31,6 +31,13 @@ namespace pP {
 
     Application::~Application() noexcept = default;
 
+    const std::optional<TimeDuration> &Application::getTargetFrameDuration() const noexcept {
+        if (m_has_background_priority) {
+            return TimeDuration{1.0/5.0}; // 5fps
+        }
+        return m_target_frame_duration;
+    }
+
     void Application::requestExit(const std::error_code clause) const noexcept {
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
             PPR_LOG(App, info, "request exit", {
@@ -42,7 +49,11 @@ namespace pP {
         }
     }
 
-    void Application::setTargetFrameDuration(TimeDuration frame_time) noexcept {
+    void Application::setBackgroundPriority(const bool throttle) noexcept {
+        m_has_background_priority = throttle;
+    }
+
+    void Application::setTargetFrameDuration(const TimeDuration frame_time) noexcept {
         m_target_frame_duration = frame_time;
     }
 
@@ -84,13 +95,12 @@ namespace pP {
             // throttle if necessary to target desired frame rate, if any provided
             TimeSpan dt{};
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt,
-                m_target_frame_duration.value_or({})));
+                getTargetFrameDuration().value_or({})));
 
             try {
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
 
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
-
             } catch (const std::system_error &e) {
                 m_request_exit(e.code());
             } catch (const std::invalid_argument &) {
