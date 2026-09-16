@@ -60,7 +60,7 @@ export namespace pP {
 
         virtual SharedWindow setMainWindow(SharedWindow window) = 0;
 
-        [[nodiscard]] virtual SharedMonitor getWindowMonitor(const Window &window) const noexcept = 0;
+        [[nodiscard]] virtual SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept = 0;
 
         virtual void setWindowMonitor(
             const Window &window,

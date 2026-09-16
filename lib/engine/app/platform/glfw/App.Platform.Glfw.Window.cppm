@@ -76,7 +76,7 @@ export namespace pP {
 
         SharedWindow setMainWindow(SharedWindow window) override;
 
-        [[nodiscard]] SharedMonitor getWindowMonitor(const Window &window) const noexcept override;
+        [[nodiscard]] SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept override;
 
         void setWindowMonitor(
             const Window &window,

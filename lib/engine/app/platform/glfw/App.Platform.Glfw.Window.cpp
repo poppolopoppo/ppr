@@ -636,7 +636,7 @@ namespace pP {
         return old_main_window;
     }
 
-    [[nodiscard]] SharedMonitor GlfwWindow::getWindowMonitor(const Window &window) const noexcept {
+    [[nodiscard]] SharedMonitor GlfwWindow::getWindowFullscreenMonitor(const Window &window) const noexcept {
         if (window.m_handle) [[likely]] {
             if (::GLFWmonitor *const p_glfw_monitor = ::glfwGetWindowMonitor(glfwHandle_(window.m_handle))) {
                 const auto it = glfwAllocation_(m_monitors, MonitorHandle{p_glfw_monitor});
