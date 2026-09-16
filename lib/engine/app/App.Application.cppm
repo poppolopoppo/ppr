@@ -49,11 +49,12 @@ export namespace pP {
         [[nodiscard]] const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
         [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
-        [[nodiscard]] const TimerExplicitClock &getTimerClock() const noexcept { return m_application_clock; }
+        [[nodiscard]] const TimerManager &getTimerManager() const noexcept { return m_application_clock; }
         [[nodiscard]] const std::optional<TimeDuration> &getTargetFrameDuration() const noexcept { return m_target_frame_duration; }
 
         [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
+        [[nodiscard]] TimerManager &getTimerManager() noexcept { return m_application_clock; }
 
         [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_install_dir; }
         [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_config_dir; }
@@ -81,7 +82,7 @@ export namespace pP {
 
     private:
         std::unique_ptr<Renderer> m_renderer;
-        TimerExplicitClock m_application_clock{};
+        TimerManager m_application_clock{};
         std::optional<TimeDuration> m_target_frame_duration{};
 
         // m_platform precedes m_services so reverse-destruction releases the

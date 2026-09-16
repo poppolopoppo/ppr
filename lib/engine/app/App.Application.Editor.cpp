@@ -69,22 +69,6 @@ namespace pP {
     std::error_code ApplicationEditor::initialize() {
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::initialize());
 
-        // create main window:
-        IWindowService &window_service = *getPlatform().getWindowService();
-
-        safe_ptr<Window> main_window{};
-        PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.createWindow(WindowModel{
-            .m_title = getName(),
-            .m_window_size = int2{1280, 720},
-            }, &main_window));
-
-        std::ignore = window_service.setMainWindow(main_window);
-
-        const safe_ptr<IInputService> input_service = getPlatform().getInputService();
-
-        m_main_input_context = std::make_unique<WindowInputContext>(input_service, main_window);
-        m_main_viewport = std::make_unique<WindowViewport>(main_window, ViewportLayout{});
-
         // create dummy player for the editor with a camera & a free camera controller:
         m_player = std::make_unique<Player>(PlayerIdentity{});
         m_camera = std::make_unique<Camera>(ECameraProjection::perspective);
@@ -96,6 +80,9 @@ namespace pP {
 
         // return camera inputs to player input listener, which is register to the window input context:
         m_player->getListener().addInputMapping(m_camera_input_mapping, EInputPriority_camera);
+
+        const safe_ptr<IInputService> input_service = getPlatform().getInputService();
+        m_main_input_context = std::make_unique<WindowInputContext>(input_service);
         m_main_input_context->m_context.addInputListener(&m_player->getListener(), EInputPriority_player);
 
         // initialize the renderer:
@@ -118,6 +105,37 @@ namespace pP {
             *shader_service,
             EInputPriority_ui));
 
+        // create main window:
+        IWindowService &window_service = *getPlatform().getWindowService();
+
+        safe_ptr<Window> main_window{};
+        PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.createWindow(WindowModel{
+            .m_title = getName(),
+            .m_window_size = int2{1280, 720},
+            }, &main_window));
+
+        SharedMonitor main_monitor = window_service.getWindowFullscreenMonitor(*main_window);
+        if (not main_monitor) {
+            main_monitor = window_service.getPrimaryMonitor();
+        }
+        if (main_monitor and PPR_ENSURE(main_monitor->m_video_mode.m_refresh_rate > 0)) {
+            const TimeDuration min_frame_duration{1.0 / main_monitor->m_video_mode.m_refresh_rate};
+
+            PPR_LOG(Editor, info, "set maximum refresh rate", {
+                {"width", main_monitor->m_video_mode.m_resolution.x},
+                {"height", main_monitor->m_video_mode.m_resolution.y},
+                {"refresh_rate", main_monitor->m_video_mode.m_refresh_rate},
+                });
+
+            setTargetFrameDuration(min_frame_duration);
+        }
+
+        m_main_viewport = std::make_unique<WindowViewport>(main_window, ViewportLayout{});
+
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_main_input_context->initialize(main_window));
+
+        std::ignore = window_service.setMainWindow(main_window);
+
         getServices().insert_or_assign(safe_ptr(m_ui_service));
         return default_value_v;
     }
@@ -138,14 +156,12 @@ namespace pP {
             m_triangle_pass.reset();
         }
 
-        if (m_player) {
-            m_player->getListener().clearInputMappings();
-            m_player->clearFrameMessages();
-        }
-
         safe_ptr<Window> main_window{};
         if (m_main_input_context) {
             main_window = m_main_input_context->m_window;
+
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_main_input_context->shutdown());
+
             m_main_input_context->m_context.clearInputListeners();
             m_main_input_context.reset();
         }
@@ -161,6 +177,11 @@ namespace pP {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, window_service.destroyWindow(std::move(main_window)));
         }
 
+        if (m_player) {
+            m_player->getListener().clearInputMappings();
+            m_player->clearFrameMessages();
+        }
+
         m_camera_input_mapping.reset();
         m_camera_controller.reset();
         m_camera.reset();
@@ -174,6 +195,10 @@ namespace pP {
 
         if (m_main_viewport) [[likely]] {
             m_main_viewport->updateFromWindow();
+
+            safe_ptr<IWindowService> window_service{getServices().inject()};
+            window_service->renameWindow(m_main_viewport->getWindow(),
+                std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
         }
 
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());

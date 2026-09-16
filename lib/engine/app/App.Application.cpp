@@ -18,7 +18,8 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
     Application::Application(ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv)
-        : m_platform(IPlatform::create()),
+        : m_application_clock(ITimerClock::steady()),
+          m_platform(IPlatform::create()),
           m_arguments(argv.begin(), argv.end()),
           m_name(name),
           m_domain(std::move(domain)) {
@@ -66,27 +67,30 @@ namespace pP {
 
         PPR_LOG(App, emphasis, "🏁 run application loop");
 
-        std::error_code first_err{};
         PPR_DEFER {
-            PPR_LOG(App, emphasis, "stop application loop, bye 👋", {
-                {"category", first_err.category().name()},
-                {"cause", first_err.message()}
-                });
+            PPR_LOG(App, emphasis, "stop application loop, bye 👋");
 
-            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shutdown());
+            std::error_code shutdown_err{};
+            PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, shutdown());
+
+            if (shutdown_err) [[unlikely]] {
+                m_request_exit(shutdown_err);
+            }
         };
 
         while (not m_lifecycle->pollEvent()) {
+            std::error_code first_err{};
+
             // throttle if necessary to target desired frame rate, if any provided
-            if (m_target_frame_duration.has_value()) {
-                m_application_clock.tickThrottle(time::now(), m_target_frame_duration.value());
-            } else {
-                m_application_clock.tick(time::now());
-            }
+            TimeSpan dt{};
+            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt,
+                m_target_frame_duration.value_or({})));
 
             try {
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(m_application_clock.m_elapsed));
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
+
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
+
             } catch (const std::system_error &e) {
                 m_request_exit(e.code());
             } catch (const std::invalid_argument &) {
@@ -98,16 +102,21 @@ namespace pP {
             }
 
             Log::flush();
+
+            if (first_err) [[unlikely]] {
+                m_request_exit(first_err);
+            }
         }
 
-        PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_lifecycle->error());
-        return first_err;
+        return m_lifecycle->error();
     }
 
     std::error_code Application::initialize() {
         if (m_has_torn_down) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(App, std::errc::operation_not_permitted);
         }
+
+        m_application_clock.reset();
 
         PPR_LOG(App, info, "starting application", {
             {"name", m_name},
@@ -127,8 +136,6 @@ namespace pP {
                 std::ignore = Application::shutdown();
             }
         };
-
-        m_application_clock.reset(time::now());
 
         m_content_dir = std::filesystem::directory_entry(hal::process::currentExecutablePath().parent_path());
         m_working_dir = std::filesystem::directory_entry(std::filesystem::current_path());
@@ -184,10 +191,6 @@ namespace pP {
             }
         }
 
-        // Teardown inverse of setup: platform initialized first, so it shuts
-        // down last, after graphics. Best effort: retain the first error and
-        // always attempt the platform pair it committed (safe on partial init:
-        // GlfwPlatform::shutdown is idempotent over unowned services).
         if (m_platform) {
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_platform->shutdown(*this));
         }
@@ -196,9 +199,6 @@ namespace pP {
     }
 
     std::error_code Application::update(TimeSpan dt) {
-        // Pump deadline callbacks so withDeadline/withTimeout contexts can fire.
-        TimerManager::mainTimer().tick();
-
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->update(dt));
         return default_value_v;
     }
