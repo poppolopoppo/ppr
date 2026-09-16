@@ -66,6 +66,16 @@ export namespace pP {
     }
 
     template<details::TEnumFlags EnumT>
+    [[nodiscard]] constexpr EnumT operator +(const EnumT lhs, const EnumT rhs) noexcept {
+        return static_cast<EnumT>(enumOrd(lhs) | enumOrd(rhs));
+    }
+
+    template<details::TEnumFlags EnumT>
+    [[nodiscard]] constexpr EnumT operator -(const EnumT lhs, const EnumT rhs) noexcept {
+        return static_cast<EnumT>(enumOrd(lhs) & ~enumOrd(rhs));
+    }
+
+    template<details::TEnumFlags EnumT>
     constexpr EnumT &operator &=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs & rhs;
     }
@@ -78,6 +88,16 @@ export namespace pP {
     template<details::TEnumFlags EnumT>
     constexpr EnumT &operator ^=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs ^ rhs;
+    }
+
+    template<details::TEnumFlags EnumT>
+    constexpr EnumT &operator +=(EnumT &lhs, const EnumT rhs) noexcept {
+        return lhs = lhs + rhs;
+    }
+
+    template<details::TEnumFlags EnumT>
+    constexpr EnumT &operator -=(EnumT &lhs, const EnumT rhs) noexcept {
+        return lhs = lhs - rhs;
     }
 
     template<details::TEnumFlags EnumT>
