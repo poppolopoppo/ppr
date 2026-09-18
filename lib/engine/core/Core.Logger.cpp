@@ -95,7 +95,7 @@ namespace pP {
     }
 
     Log::Handler::~Handler() noexcept {
-        PPR_VERIFY(m_messages.close().has_value());
+        PPR_VERIFY(!m_messages.close());
     }
 
     Log::Handler &Log::Handler::get() noexcept {
@@ -284,7 +284,7 @@ namespace pP {
     }
 
     Log::Policy Log::setWriterPolicy(Policy writer_policy) noexcept {
-        return Handler::get().setWriterPolicy(writer_policy);
+        return Handler::get().setWriterPolicy(std::move(writer_policy));
     }
 
     std::error_code Log::flush(const bool wait) noexcept {

@@ -218,12 +218,12 @@ namespace pP::tests::detail {
             });
 
             const auto flush = chan.flush();
-            PPR_TEST_ASSERT(flush.has_value());
+            PPR_TEST_ASSERT(!flush);
 
             PPR_TEST_ASSERT(test_phase == 2u);
 
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
         };
 
         PPR_UNIT_TEST (peek_without_blocking_empty) {
@@ -252,11 +252,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(chan.isOpened());
 
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
             PPR_TEST_ASSERT(chan.isClosedOrClosing());
 
             const auto close2 = chan.close();
-            PPR_TEST_ASSERT(close2.error() == RawChannel::error_closed);
+            PPR_TEST_ASSERT(close2 == RawChannel::error_closed);
             PPR_TEST_ASSERT(chan.isClosedOrClosing());
         };
 
@@ -269,7 +269,7 @@ namespace pP::tests::detail {
             chan.producerSubmit(*hdr);
 
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
             PPR_TEST_ASSERT(chan.isClosedOrClosing());
 
             auto read = chan.consumerAcquire(RawChannel::peek_without_blocking);
@@ -362,7 +362,7 @@ namespace pP::tests::detail {
                 chan.consumerRelease(*hdr);
             }
 
-            PPR_TEST_ASSERT(chan.close().has_value());
+            PPR_TEST_ASSERT(!chan.close());
         };
 
         PPR_UNIT_TEST (concurrent_mpsc) {
@@ -379,7 +379,7 @@ namespace pP::tests::detail {
             std::barrier close_barrier{
                 num_producers, [&]() noexcept {
                     const auto close = chan.close();
-                    PPR_TEST_ASSERT(close.has_value());
+                    PPR_TEST_ASSERT(!close);
                 }
             };
 
@@ -495,7 +495,7 @@ namespace pP::tests::detail {
 
             for (RawChannel &chan: channels) {
                 const auto flush = chan.flush();
-                PPR_TEST_ASSERT(flush.has_value());
+                PPR_TEST_ASSERT(!flush);
             }
 
             constexpr int total = num_producers * messages_per_thread;
@@ -504,7 +504,7 @@ namespace pP::tests::detail {
 
             for (RawChannel &chan: channels) {
                 const auto close = chan.close();
-                PPR_TEST_ASSERT(close.has_value());
+                PPR_TEST_ASSERT(!close);
             }
 
             for (auto &p: consumers) {
@@ -523,7 +523,7 @@ namespace pP::tests::detail {
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
         };
 
         PPR_UNIT_TEST (select_one) {
@@ -606,8 +606,8 @@ namespace pP::tests::detail {
             RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
             RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
 
-            PPR_TEST_ASSERT(chan_a.close().has_value());
-            PPR_TEST_ASSERT(chan_b.close().has_value());
+            PPR_TEST_ASSERT(!chan_a.close());
+            PPR_TEST_ASSERT(!chan_b.close());
 
             auto signal = select(chan_a, chan_b);
 
@@ -627,8 +627,8 @@ namespace pP::tests::detail {
             RawChannel chan_a{static_cast<std::size_t>(hal::page_granularity)};
             RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
 
-            PPR_TEST_ASSERT(chan_a.close().has_value());
-            PPR_TEST_ASSERT(chan_b.close().has_value());
+            PPR_TEST_ASSERT(!chan_a.close());
+            PPR_TEST_ASSERT(!chan_b.close());
 
             bool chan_a_closed = false;
             bool chan_b_closed = false;
@@ -763,9 +763,9 @@ namespace pP::tests::detail {
             RawChannel chan_b{static_cast<std::size_t>(hal::page_granularity)};
             RawChannel chan_c{static_cast<std::size_t>(hal::page_granularity)};
 
-            PPR_TEST_ASSERT(chan_a.close().has_value());
-            PPR_TEST_ASSERT(chan_b.close().has_value());
-            PPR_TEST_ASSERT(chan_c.close().has_value());
+            PPR_TEST_ASSERT(!chan_a.close());
+            PPR_TEST_ASSERT(!chan_b.close());
+            PPR_TEST_ASSERT(!chan_c.close());
 
             std::size_t closed_count = 0;
             for (auto event: select(chan_a, chan_b, chan_c)) {
@@ -797,7 +797,7 @@ namespace pP::tests::detail {
                 chan_a.producerSubmit(*send);
             }
 
-            PPR_TEST_ASSERT(chan_b.close().has_value());
+            PPR_TEST_ASSERT(!chan_b.close());
 
             {
                 auto send = chan_c.producerReserve(8, RawChannel::wait_if_full);
@@ -853,7 +853,7 @@ namespace pP::tests::detail {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             PPR_TEST_ASSERT(not woke.load(std::memory_order_acquire));
 
-            PPR_TEST_ASSERT(chan.close().has_value());
+            PPR_TEST_ASSERT(!chan.close());
 
             consumer.join();
             PPR_TEST_ASSERT(woke.load(std::memory_order_acquire));
@@ -1001,7 +1001,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (send_and_receive_int) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
 
-            PPR_TEST_ASSERT(chan.emplace(42).has_value());
+            PPR_TEST_ASSERT(!chan.emplace(42));
             const auto result = chan.peek();
             PPR_TEST_ASSERT(result.has_value());
             PPR_TEST_ASSERT(*result == 42);
@@ -1011,7 +1011,7 @@ namespace pP::tests::detail {
             auto chan = pP::Channel<std::string>(std::in_place_t{}, 16u);
 
             const auto sent = chan.send(std::string("hello world"));
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             const auto result = chan.peek();
             PPR_TEST_ASSERT(result.has_value());
@@ -1025,7 +1025,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(!empty.has_value());
 
             const auto sent = chan.send(99);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             const auto val = chan.peek();
             PPR_TEST_ASSERT(val.has_value());
@@ -1036,7 +1036,7 @@ namespace pP::tests::detail {
             auto chan = pP::Channel<std::string>(std::in_place_t{}, 8u);
 
             std::string msg = "test message";
-            PPR_TEST_ASSERT(chan.emplace(std::move(msg)).has_value());
+            PPR_TEST_ASSERT(!chan.emplace(std::move(msg)));
             PPR_TEST_ASSERT(msg.empty());
 
             const auto result = chan.peek();
@@ -1062,15 +1062,15 @@ namespace pP::tests::detail {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
 
             auto sent = chan.send(42);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             sent = chan.send(84);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             int val = 0;
-            PPR_TEST_ASSERT((chan >> val).has_value());
+            PPR_TEST_ASSERT(!(chan >> val));
             PPR_TEST_ASSERT(val == 42);
-            PPR_TEST_ASSERT((chan >> val).has_value());
+            PPR_TEST_ASSERT(!(chan >> val));
             PPR_TEST_ASSERT(val == 84);
         };
 
@@ -1078,11 +1078,11 @@ namespace pP::tests::detail {
             pP::Channel<int> chan{std::in_place_t{}, 32u};
 
             auto sent = chan.send(1);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
             sent = chan.send(2);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
             sent = chan.send(3);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             PPR_TEST_ASSERT(chan.receive().value() == 1);
             PPR_TEST_ASSERT(chan.receive().value() == 2);
@@ -1092,10 +1092,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (close_propagation) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
 
-            PPR_TEST_ASSERT(chan.send(1).has_value());
+            PPR_TEST_ASSERT(!chan.send(1));
 
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
 
             const auto recv = chan.receive();
             PPR_TEST_ASSERT(recv.has_value());
@@ -1104,14 +1104,14 @@ namespace pP::tests::detail {
             const auto peak = chan.peek();
             PPR_TEST_ASSERT(not peak.has_value());
 
-            PPR_TEST_ASSERT(not chan.send(2));
+            PPR_TEST_ASSERT(bool(chan.send(2)));
         };
 
         PPR_UNIT_TEST (backpressure_drop) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 2u);
 
             int sent = 0;
-            for (int i = 1; chan.send(i); i++) {
+            for (int i = 1; !chan.send(i); i++) {
                 sent += i;
             }
 
@@ -1128,7 +1128,7 @@ namespace pP::tests::detail {
             details::TrackedDestruction::count = 0u;
 
             auto chan = pP::Channel<details::TrackedDestruction>(std::in_place_t{}, 8u);
-            PPR_TEST_ASSERT(chan.emplace(42).has_value());
+            PPR_TEST_ASSERT(!chan.emplace(42));
 
             const auto result = chan.receive();
             PPR_TEST_ASSERT(result.has_value());
@@ -1138,7 +1138,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(n == 1u);
 
             const auto close = chan.close();
-            PPR_TEST_ASSERT(close.has_value());
+            PPR_TEST_ASSERT(!close);
         };
 
         PPR_UNIT_TEST (concurrent_channel) {
@@ -1147,8 +1147,7 @@ namespace pP::tests::detail {
 
             std::jthread producer([&chan] {
                 for (int i = 0; i < num_messages; ++i) {
-                    while (not chan.emplace(i))
-                    {
+                    while (chan.emplace(i)) {
                         std::this_thread::yield();
                     }
                 }
@@ -1160,15 +1159,15 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(result.value() == i);
             }
 
-            PPR_TEST_ASSERT(chan.close().has_value());
+            PPR_TEST_ASSERT(!chan.close());
         };
 
         PPR_UNIT_TEST (operator_receive_on_closed) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
-            PPR_TEST_ASSERT(chan.close().has_value());
+            PPR_TEST_ASSERT(!chan.close());
 
             int val = 0;
-            PPR_TEST_ASSERT(not(chan >> val));
+            PPR_TEST_ASSERT(bool(chan >> val));
         };
 
         PPR_UNIT_TEST (operator_receive_empty) {
@@ -1186,7 +1185,7 @@ namespace pP::tests::detail {
             auto chan = pP::Channel<int>(std::move(raw));
 
             const auto sent = chan.send(777);
-            PPR_TEST_ASSERT(sent.has_value());
+            PPR_TEST_ASSERT(!sent);
 
             const auto result = chan.receive();
             PPR_TEST_ASSERT(result.has_value());
@@ -1196,8 +1195,8 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (flush) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
 
-            PPR_TEST_ASSERT(chan.send(1).has_value());
-            PPR_TEST_ASSERT(chan.send(2).has_value());
+            PPR_TEST_ASSERT(!chan.send(1));
+            PPR_TEST_ASSERT(!chan.send(2));
 
             std::atomic<int> total{0};
 
@@ -1212,9 +1211,9 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not r3);
             });
 
-            PPR_TEST_ASSERT(!!chan.flush());
+            PPR_TEST_ASSERT(!chan.flush());
             PPR_TEST_ASSERT(total == 3);
-            PPR_TEST_ASSERT(!!chan.close());
+            PPR_TEST_ASSERT(!chan.close());
         };
 
         PPR_UNIT_TEST (auto_close_in_destructor){
@@ -1229,8 +1228,8 @@ namespace pP::tests::detail {
             details::TrackedDestruction::count = 0u;
             {
                 auto chan = pP::Channel<details::TrackedDestruction>(std::in_place_t{}, 8u);
-                PPR_TEST_ASSERT(chan.emplace(42).has_value());
-                PPR_TEST_ASSERT(chan.emplace(99).has_value());
+                PPR_TEST_ASSERT(!chan.emplace(42));
+                PPR_TEST_ASSERT(!chan.emplace(99));
                 const auto r1 = chan.receive();
                 PPR_TEST_ASSERT(r1.has_value());
                 PPR_TEST_ASSERT(r1->value == 42);
@@ -1249,9 +1248,9 @@ namespace pP::tests::detail {
 
             std::jthread producer([&chan] {
                 for (int i = 0; i < 5; ++i) {
-                    PPR_TEST_ASSERT(chan.emplace(i).has_value());
+                    PPR_TEST_ASSERT(!chan.emplace(i));
                 }
-                PPR_TEST_ASSERT(chan.close().has_value());
+                PPR_TEST_ASSERT(!chan.close());
             });
 
             int expected = 0;
@@ -1264,10 +1263,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (range_iteration_non_blocking) {
             auto chan = pP::Channel<int>(std::in_place_t{}, 16u);
 
-            PPR_TEST_ASSERT(chan.emplace(1).has_value());
-            PPR_TEST_ASSERT(chan.emplace(2).has_value());
-            PPR_TEST_ASSERT(chan.emplace(3).has_value());
-            PPR_TEST_ASSERT(chan.close().has_value());
+            PPR_TEST_ASSERT(!chan.emplace(1));
+            PPR_TEST_ASSERT(!chan.emplace(2));
+            PPR_TEST_ASSERT(!chan.emplace(3));
+            PPR_TEST_ASSERT(!chan.close());
 
             int sum = 0;
             for (auto it = chan.begin(RawChannel::EPolling::peek_without_blocking); it != chan.end(); ++it) {

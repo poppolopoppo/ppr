@@ -133,17 +133,16 @@ export namespace pP {
         [[nodiscard]] bool isClosedOrClosing() const noexcept;
         [[nodiscard]] std::size_t capacity() const noexcept;
 
-        // TODO: refactor into errc with std::error_code and a custom error category
-        enum EError {
-            error_closed,
+        enum errc : int {
+            error_closed = 1,
             error_empty,
             error_full,
             error_invalid,
         };
 
-        std::expected<void, EError> flush() noexcept;
+        [[nodiscard]] std::error_code flush() noexcept;
 
-        std::expected<void, EError> close() noexcept;
+        [[nodiscard]] std::error_code close() noexcept;
 
         enum EBackPressure {
             drop_if_full,
@@ -152,11 +151,11 @@ export namespace pP {
         };
 
     private:
-        [[nodiscard]] std::expected<Record, EError>
+        [[nodiscard]] std::expected<Record, errc>
         producerReserveAssumeNotClosed_(const std::size_t size_bytes, const EBackPressure policy) noexcept;
 
     public:
-        [[nodiscard]] std::expected<Record, EError>
+        [[nodiscard]] std::expected<Record, errc>
         producerReserve(const std::size_t size_bytes, const EBackPressure policy = wait_if_full) noexcept;
 
         void producerSubmit(RecordHeader &written) noexcept;
@@ -168,7 +167,7 @@ export namespace pP {
             peek_without_blocking,
         };
 
-        [[nodiscard]] std::expected<Record, EError>
+        [[nodiscard]] std::expected<Record, errc>
         consumerAcquire(const EPolling policy = block_until_available) noexcept;
 
         void consumerRelease(const RecordHeader &read) noexcept;
@@ -184,6 +183,16 @@ export namespace pP {
     };
 
     PPR_PRAGMA_WARNING_POP()
+}
+
+template<>
+struct std::is_error_code_enum<pP::RawChannel::errc> : std::true_type { // NOLINT(*-dcl58-cpp)
+};
+
+export namespace pP {
+    [[nodiscard]] const std::error_category &error_category() noexcept;
+
+    [[nodiscard]] std::error_code make_error_code(RawChannel::errc error) noexcept;
 
     using SharedRawChannelPtr = std::shared_ptr<RawChannel>;
 
@@ -210,11 +219,11 @@ export namespace pP {
 
     public:
         using EBackPressure = RawChannel::EBackPressure;
-        using EError = RawChannel::EError;
+        using EError = RawChannel::errc;
         using EPolling = RawChannel::EPolling;
 
         using enum RawChannel::EBackPressure;
-        using enum RawChannel::EError;
+        using enum RawChannel::errc;
         using enum RawChannel::EPolling;
 
         explicit Channel(SharedRawChannelPtr &&chan) noexcept
@@ -229,7 +238,7 @@ export namespace pP {
 
         ~Channel() noexcept {
             [[maybe_unused]] auto err = close();
-            PPR_ASSERT(err.has_value() or err.error() == error_closed);
+            PPR_ASSERT(not err or err == make_error_code(error_closed));
 
 #if PPR_ENABLE_ASSERTIONS
             if constexpr (not std::is_trivially_destructible_v<T>
@@ -244,18 +253,18 @@ export namespace pP {
 #endif
         }
 
-        std::expected<void, EError> flush() noexcept {
+        [[nodiscard]] std::error_code flush() noexcept {
             if (RawChannel *const p_chan = m_chan.get()) [[likely]] {
                 return p_chan->flush();
             }
-            return std::unexpected(error_invalid);
+            return make_error_code(error_invalid);
         }
 
-        std::expected<void, EError> close() noexcept {
+        [[nodiscard]] std::error_code close() noexcept {
             if (RawChannel *const p_chan = m_chan.get()) [[likely]] {
                 return p_chan->close();
             }
-            return std::unexpected(error_invalid);
+            return make_error_code(error_invalid);
         }
 
         [[nodiscard]] ChannelReader<T> reader() noexcept;
@@ -263,7 +272,7 @@ export namespace pP {
         [[nodiscard]] ChannelWriter<T> writer() noexcept;
 
         template<typename LikeT>
-        [[nodiscard]] std::expected<void, EError>
+        [[nodiscard]] std::error_code
         send(LikeT &&value, const EBackPressure policy = drop_if_full) noexcept
             requires std::conjunction_v<std::is_nothrow_constructible<T, LikeT &&>, std::is_nothrow_move_constructible<T> > {
             auto hdr = m_chan->producerReserve(sizeof(T), policy);
@@ -274,11 +283,11 @@ export namespace pP {
                 return {};
             }
 
-            return std::unexpected(hdr.error());
+            return make_error_code(hdr.error());
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::expected<void, EError>
+        [[nodiscard]] std::error_code
         emplace(const EBackPressure policy, ArgsT &&... args) noexcept
             requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
             auto hdr = m_chan->producerReserve(sizeof(T), policy);
@@ -287,11 +296,11 @@ export namespace pP {
                 m_chan->producerSubmit(*hdr);
                 return {};
             }
-            return std::unexpected(hdr.error());
+            return make_error_code(hdr.error());
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::expected<void, EError>
+        [[nodiscard]] std::error_code
         emplace(ArgsT &&... args) noexcept
             requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
             return emplace(wait_if_full, std::forward<ArgsT>(args)...);
@@ -300,13 +309,13 @@ export namespace pP {
         template<typename ChannelT>
         class [[nodiscard]] BasicSendResult {
             ChannelT &m_chan;
-            std::optional<EError> m_error{std::nullopt};
+            std::optional<std::error_code> m_error{std::nullopt};
 
         public:
-            BasicSendResult(ChannelT &chan, const std::expected<void, EError> &result) noexcept
+            BasicSendResult(ChannelT &chan, const std::error_code &result) noexcept
                 : m_chan{chan} {
-                if (not result.has_value()) {
-                    m_error = result.error();
+                if (result) {
+                    m_error = result;
                 }
             }
 
@@ -314,7 +323,7 @@ export namespace pP {
                 return m_error.has_value();
             }
 
-            [[nodiscard]] EError error() const noexcept {
+            [[nodiscard]] std::error_code error() const noexcept {
                 return m_error.value();
             }
 
@@ -348,7 +357,7 @@ export namespace pP {
         class [[nodiscard]] OutputIterator {
             Channel m_writer;
             EBackPressure m_policy{wait_if_full};
-            std::optional<EError> m_error;
+            std::optional<std::error_code> m_error;
 
         public:
             using iterator_category = std::output_iterator_tag;
@@ -361,7 +370,7 @@ export namespace pP {
                 : m_writer{writer}, m_policy{policy} {
             }
 
-            [[nodiscard]] std::optional<EError> error() const noexcept {
+            [[nodiscard]] std::optional<std::error_code> error() const noexcept {
                 return m_error;
             }
 
@@ -371,16 +380,16 @@ export namespace pP {
 
             OutputIterator &operator=(const T &value) noexcept
                 requires std::is_nothrow_copy_constructible_v<T> {
-                if (auto status = m_writer.send(value, m_policy); status.has_error()) [[unlikely]] {
-                    m_error = status.error();
+                if (const std::error_code status = m_writer.send(value, m_policy); status) [[unlikely]] {
+                    m_error = status;
                 }
                 return *this;
             }
 
             OutputIterator &operator=(T &&value) noexcept
                 requires std::is_nothrow_move_constructible_v<T> {
-                if (auto status = m_writer.send(value, m_policy); status.has_error()) [[unlikely]] {
-                    m_error = status.error();
+                if (const std::error_code status = m_writer.send(value, m_policy); status) [[unlikely]] {
+                    m_error = status;
                 }
                 return *this;
             }
@@ -425,13 +434,13 @@ export namespace pP {
             return std::nullopt;
         }
 
-        friend std::expected<void, EError> operator>>(Channel &reader, T &dst) noexcept {
+        friend std::error_code operator>>(Channel &reader, T &dst) noexcept {
             auto result = reader.receive();
             if (result.has_value()) [[likely]] {
                 dst = std::move(*result);
                 return {};
             }
-            return std::unexpected(result.error());
+            return make_error_code(result.error());
         }
 
         class [[nodiscard]] InputIterator {
@@ -518,11 +527,11 @@ export namespace pP {
         Channel<T> m_channel;
 
     public:
-        using EError = Channel<T>::EError;
-        using EPolling = Channel<T>::EPolling;
-        using InputIterator = Channel<T>::InputIterator;
+        using EError = typename Channel<T>::EError;
+        using EPolling = typename Channel<T>::EPolling;
+        using InputIterator = typename Channel<T>::InputIterator;
 
-        using enum RawChannel::EError;
+        using enum RawChannel::errc;
         using enum RawChannel::EPolling;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
@@ -542,7 +551,7 @@ export namespace pP {
             return m_channel.peek(peek_without_blocking);
         }
 
-        [[nodiscard]] friend std::expected<void, EError>
+        [[nodiscard]] friend std::error_code
         operator>>(ChannelReader &reader, T &dst) noexcept {
             return reader.m_channel >> dst;
         }
@@ -562,36 +571,36 @@ export namespace pP {
         Channel<T> m_channel;
 
     public:
-        using EBackPressure = Channel<T>::EBackPressure;
-        using EError = Channel<T>::EError;
-        using OutputIterator = Channel<T>::OutputIterator;
-        using SendResult = Channel<T>::template BasicSendResult<ChannelWriter>;
+        using EBackPressure = typename Channel<T>::EBackPressure;
+        using EError = typename Channel<T>::EError;
+        using OutputIterator = typename Channel<T>::OutputIterator;
+        using SendResult = typename Channel<T>::template BasicSendResult<ChannelWriter>;
 
         using enum RawChannel::EBackPressure;
-        using enum RawChannel::EError;
+        using enum RawChannel::errc;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
         ChannelWriter(const Channel<T> &channel) noexcept
             : m_channel{channel} {
         }
 
-        void flush() noexcept {
-            m_channel.flush();
+        [[nodiscard]] std::error_code flush() noexcept {
+            return m_channel.flush();
         }
 
-        void close() noexcept {
-            m_channel.close();
+        [[nodiscard]] std::error_code close() noexcept {
+            return m_channel.close();
         }
 
         template<typename LikeT>
-        [[nodiscard]] std::expected<void, EError>
+        [[nodiscard]] std::error_code
         send(LikeT &&value) noexcept
             requires std::is_nothrow_constructible_v<T, LikeT &&> {
             return m_channel.send(std::forward<LikeT>(value));
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::expected<void, EError>
+        [[nodiscard]] std::error_code
         emplace(ArgsT &&... args) noexcept
             requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
             return m_channel.emplace(std::forward<ArgsT>(args)...);
