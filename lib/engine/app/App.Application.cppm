@@ -51,7 +51,7 @@ export namespace pP {
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
         [[nodiscard]] const TimerManager &getTimerManager() const noexcept { return m_application_clock; }
 
-        [[nodiscard]] std::optional<TimeDuration> getTargetFrameDuration() const noexcept;
+        [[nodiscard]] std::optional<TimeSpan> getTargetFrameTime() const noexcept;
 
         [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
@@ -86,7 +86,7 @@ export namespace pP {
     private:
         std::unique_ptr<Renderer> m_renderer;
         TimerManager m_application_clock{};
-        std::optional<TimeDuration> m_target_frame_duration{};
+        std::optional<TimeSpan> m_target_frame_time{};
 
         // m_platform precedes m_services so reverse-destruction releases the
         // service-store observers before their platform owners (safe_ptr rule).

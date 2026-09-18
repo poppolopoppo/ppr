@@ -81,7 +81,7 @@ export namespace pP {
 
         void schedule(TimePoint date, Callback &&callback) noexcept;
 
-        std::error_code tick(TimeSpan *out_delta_time, TimeDuration target_period = {}) noexcept;
+        std::error_code tick(TimeSpan *out_delta_time, TimeSpan target_period = {}) noexcept;
     };
 }
 

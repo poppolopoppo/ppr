@@ -75,6 +75,7 @@ void RawChannel::resetEvent() noexcept {
 
 auto RawChannel::flush() noexcept -> std::expected<void, EError> {
     auto hdr = producerReserve(sizeof(std::atomic_flag), wait_if_full);
+
     if (not hdr.has_value()) [[unlikely]] {
         return std::unexpected(hdr.error());
     }

@@ -32,12 +32,12 @@ namespace pP {
 
     Application::~Application() noexcept = default;
 
-    std::optional<TimeDuration> Application::getTargetFrameDuration() const noexcept {
+    std::optional<TimeSpan> Application::getTargetFrameTime() const noexcept {
         if (m_has_background_priority) {
-            constexpr TimeDuration background_frame_duration{1.0 / 5.0};
+            constexpr TimeSpan background_frame_duration = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 5.0});
             return background_frame_duration; // 5fps
         }
-        return m_target_frame_duration;
+        return m_target_frame_time;
     }
 
     void Application::requestExit(const std::error_code clause) const noexcept {
@@ -56,11 +56,11 @@ namespace pP {
     }
 
     void Application::setTargetFrameDuration(const TimeDuration frame_time) noexcept {
-        m_target_frame_duration = frame_time;
+        m_target_frame_time = std::chrono::duration_cast<TimeSpan>(frame_time);
     }
 
     void Application::setTargetFrameDuration(std::nullopt_t) noexcept {
-        m_target_frame_duration.reset();
+        m_target_frame_time.reset();
     }
 
     void Application::setTargetFrameRate(const int fps) noexcept {
@@ -75,6 +75,8 @@ namespace pP {
         PPR_DEFER {
             std::error_code shutdown_err{};
             PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, shutdown());
+
+            PPR_FLUSH_LOG(true);
 
             if (shutdown_err) [[unlikely]] {
                 m_request_exit(shutdown_err);
@@ -91,7 +93,7 @@ namespace pP {
             // throttle if necessary to target desired frame rate, if any provided
             TimeSpan dt{};
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt,
-                getTargetFrameDuration().value_or({})));
+                getTargetFrameTime().value_or({})));
 
             try {
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
@@ -107,11 +109,11 @@ namespace pP {
                 m_request_exit(std::make_error_code(std::errc::state_not_recoverable));
             }
 
-            Log::flush();
-
             if (first_err) [[unlikely]] {
                 m_request_exit(first_err);
             }
+
+            PPR_FLUSH_LOG(false);
         }
 
         PPR_LOG(App, emphasis, "stop application loop, bye 👋");

@@ -6,6 +6,8 @@ import :logger;
 import std;
 
 namespace pP {
+    PPR_DEFINE_LOG_CATEGORY(Internal, error, immediate);
+
     // ------------------------------------------------------------------
     // logger level formatting
     // ------------------------------------------------------------------
@@ -78,7 +80,7 @@ namespace pP {
 
         Policy setWriterPolicy(Policy writer_policy) noexcept;
 
-        void flush() noexcept;
+        [[nodiscard]] std::error_code flush(bool wait) noexcept;
 
         void log(const Emitter &emitter, string_literal message, opaque::Dict params = {}) noexcept;
 
@@ -89,7 +91,7 @@ namespace pP {
         : m_messages(buffer_size_v),
           m_writer_policy{std23::nontype<&Handler::defaultWriter_>, this},
           m_background_worker(&Handler::backgroundWorkerLoop_, std::ref(*this)),
-          m_started_at(std::chrono::steady_clock::now()) {
+          m_started_at(time::now()) {
     }
 
     Log::Handler::~Handler() noexcept {
@@ -107,12 +109,37 @@ namespace pP {
         return writer_policy;
     }
 
-    void Log::Handler::flush() noexcept {
-        std::ignore = m_messages.flush();
+    std::error_code Log::Handler::flush(const bool wait) noexcept {
+        static const Emitter g_flush_emitter{details::log::Internal(), ELevel::verbose};
+
+        const TimePoint timestamp = time::now();
+
+        constexpr std::size_t entry_size_bytes = sizeof(Entry);
+
+        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
+        if (not hdr.has_value()) [[unlikely]] {
+            return make_error_code(std::errc::device_or_resource_busy);
+        }
+
+        auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
+        new(slot) Entry{
+            .m_message{},
+            .m_site{g_flush_emitter},
+            .m_timestamp{timestamp},
+            .m_thread_id{hal::currentThreadId()},
+        };
+
+        m_messages.producerSubmit(*hdr);
+
+        if (wait) {
+            std::ignore = m_messages.flush();
+        }
+
+        return default_value_v;
     }
 
     void Log::Handler::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {
-        const TimePoint timestamp = std::chrono::steady_clock::now();
+        const TimePoint timestamp = time::now();
 
         const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
         const std::size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
@@ -134,14 +161,10 @@ namespace pP {
         entry->m_params.resetAssumeEmpty(params, slab);
 
         m_messages.producerSubmit(*hdr);
-
-        if (emitter.m_category.m_flags & Category::immediate) {
-            std::ignore = m_messages.flush();
-        }
     }
 
     void Log::Handler::logRaw(const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
-        const TimePoint timestamp = std::chrono::steady_clock::now();
+        const TimePoint timestamp = time::now();
 
         const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
         const std::size_t message_size_bytes = alignForward((copy_message.size() + 1u/* '\0' */) * sizeof(copy_message[0]), max_align_v);
@@ -181,22 +204,22 @@ namespace pP {
             elapsed_seconds, entry.m_thread_id, entry.m_site.m_category.m_name.view(),
             entry.m_message, entry.m_params);
 #else
-        std::println(std::cout, "{:08.3f} {} {} [{:16}] -- {} {}",
-            elapsed_seconds, entry.m_thread_id,
-            toString_<char>(entry.m_site.m_verbosity),
-            entry.m_site.m_category.m_name.view(),
-            entry.m_message, entry.m_params);
+        if (not entry.m_message.empty()) {
+            std::println(std::cout, "{:08.3f} {} {} [{:16}] -- {} {}",
+                elapsed_seconds, entry.m_thread_id,
+                toString_<char>(entry.m_site.m_verbosity),
+                entry.m_site.m_category.m_name.view(),
+                entry.m_message, entry.m_params);
 
-        if (entry.m_site.m_verbosity >= ELevel::error) {
-            std::println(std::cout, "    \u2514\u2500 {}({}): {}",
-                entry.m_site.m_location.file_name(),
-                entry.m_site.m_location.line(),
-                entry.m_site.m_location.function_name());
+            if (entry.m_site.m_verbosity >= ELevel::error) {
+                std::println(std::cout, "    \u2514\u2500 {}({}): {}",
+                    entry.m_site.m_location.file_name(),
+                    entry.m_site.m_location.line(),
+                    entry.m_site.m_location.function_name());
+            }
         }
 
-        // if (entry.m_site.m_verbosity > ELevel::verbose or
-        //     entry.m_site.m_category.m_flags & Category::immediate) {
-        {
+        if (entry.m_site.m_category.m_flags & Category::immediate) {
             std::cout.flush();
         }
 #endif
@@ -219,6 +242,7 @@ namespace pP {
 
             const std::lock_guard scope_lock(handler.m_writer_barrier);
             auto *const p_entry = static_cast<const Entry *>(hdr->data());
+
             handler.m_writer_policy(*p_entry);
         }
     }
@@ -263,8 +287,8 @@ namespace pP {
         return Handler::get().setWriterPolicy(writer_policy);
     }
 
-    void Log::flush() noexcept {
-        Handler::get().flush();
+    std::error_code Log::flush(const bool wait) noexcept {
+        return Handler::get().flush(wait);
     }
 
     void Log::log(const Emitter &emitter, const string_literal message, const opaque::Dict params) noexcept {

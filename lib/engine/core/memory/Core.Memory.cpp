@@ -94,6 +94,7 @@ namespace pP {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
         {
             const std::unique_lock scope_lock{m_referencer_barrier};
+
             for (const auto [index, referencer]: std::ranges::enumerate_view(m_references)) {
                 const std::stacktrace &callstack = referencer.m_callstack;
 
@@ -104,7 +105,10 @@ namespace pP {
                     {"stacktrace", opaqueValue(callstack)},
                 });
             }
-            PPR_FLUSH_LOG();
+
+            if (not m_references.isEmpty()) {
+                PPR_FLUSH_LOG(true);
+            }
         }
 #endif
 

@@ -86,7 +86,7 @@ namespace pP {
         callback(current_tick);
     }
 
-    std::error_code TimerManager::tick(TimeSpan *out_delta_time, const TimeDuration target_period) noexcept {
+    std::error_code TimerManager::tick(TimeSpan *out_delta_time, const TimeSpan target_period) noexcept {
         StableVectorInplace<Callback> ready_callbacks{};
 
         const TimePoint previous_tick = now();
@@ -94,7 +94,7 @@ namespace pP {
 
         TimeSpan delta_time = current_tick - previous_tick;
         if (delta_time < target_period) {
-            std::this_thread::sleep_for(target_period - delta_time);
+            std::this_thread::sleep_until(previous_tick + target_period);
 
             current_tick = m_clock->now();
             delta_time = current_tick - previous_tick;

@@ -233,7 +233,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) \
         pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
 
-#   define PPR_FLUSH_LOG() pP::Log::flush()
+#   define PPR_FLUSH_LOG(...) std::ignore = pP::Log::flush(__VA_ARGS__)
 
 #else
 #   define PPR_DECLARE_LOG_CATEGORY(_NAME)

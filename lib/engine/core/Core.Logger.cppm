@@ -94,7 +94,7 @@ export namespace pP {
 
         static void logRaw(const Emitter &emitter, std::string_view copy_message, opaque::Dict params = {}) noexcept;
 
-        static void flush() noexcept;
+        [[nodiscard]] static std::error_code flush(bool wait = false) noexcept;
 
         class Handler;
     };
