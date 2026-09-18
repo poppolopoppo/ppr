@@ -243,10 +243,10 @@ namespace pP::tests::detail {
                     context::background(), std::chrono::milliseconds(150), timer);
                 PPR_TEST_ASSERT(ctx->pollEvent() == false);
 
-                while (not ctx->pollEvent())
-                {
+                while (not ctx->pollEvent()) {
                     std::this_thread::yield();
-                    timer.tick();
+                    TimeSpan dt{};
+                    std::ignore = timer.tick(&dt);
                 }
             };
         }

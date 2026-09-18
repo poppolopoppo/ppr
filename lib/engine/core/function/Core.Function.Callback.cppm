@@ -138,6 +138,19 @@ export namespace pP {
                 }
 
                 ~Handle() noexcept {
+                    reset();
+                }
+
+                [[nodiscard]] constexpr bool isValid() const noexcept {
+                    return m_callback != nullptr;
+                }
+
+                SparseKeyId release() noexcept {
+                    m_callback = nullptr;
+                    return std::exchange(m_event_key, default_value_v);
+                }
+
+                void reset() {
                     // Single-threaded contract: Handle destruction must not race with
                     // Callback destruction. The shared liveness flag synchronizes the
                     // Callback's release-store with the Handle's acquire-load, but the
@@ -148,15 +161,6 @@ export namespace pP {
                         std::ignore = m_callback->remove(m_event_key);
                         m_callback = nullptr;
                     }
-                }
-
-                [[nodiscard]] constexpr bool isValid() const noexcept {
-                    return m_callback != nullptr;
-                }
-
-                SparseKeyId release() noexcept {
-                    m_callback = nullptr;
-                    return std::exchange(m_event_key, default_value_v);
                 }
             };
 
