@@ -255,13 +255,13 @@ Parameters: `files` (required, array of project-relative paths), `startLine`
 
 ### Required C++ edit lifecycle
 1. Complete all functional writes.
-2. Invoke `clion_reformat_file` exactly on every touched C++ file.
-3. Perform only read-only verification and diff inspection.
+2. Invoke `clion_reformat_file` exactly on every touched C++ file, always passing `projectPath="E:/Code/ppr"` so the Project scheme resolves.
+3. Perform only read-only verification and diff inspection; during that review, reject any whitespace-only hunks outside the functional edit (spot-check `git diff --stat` vs `git diff -w --stat` only if the reformat looks suspicious).
+4. Perform only read-only verification and diff inspection.
 
 If a post-format write is necessary, repeat the reformat step before final
 inspection. Do not issue text edits after the final reformat. The active project
-CLion C/C++ Code Style is the formatting authority; `.clang-format` is only a
-tracked reference and configuration file.
+CLion C/C++ Code Style is the sole formatting authority.
 
 ## 4. Building & Running
 

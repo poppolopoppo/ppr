@@ -152,8 +152,9 @@ normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
 
 The active project CLion C/C++ Code Style is canonical for mechanical
 formatting; invoke it manually through Reformat Code and through
-`clion_reformat_file` as an agent. `.clang-format` remains a tracked reference
-and configuration file, but is not the agent formatting authority. Agents must
+`clion_reformat_file` as an agent. Every `clion_reformat_file` call MUST pass
+`projectPath="E:/Code/ppr"` so the Project scheme resolves; the final diff
+review rejects any whitespace-only hunks outside the functional edit. Agents must
 not manually alter whitespace, line wrapping, indentation, blank lines, or
 brace placement as part of a functional patch. Apply these additional rules:
 

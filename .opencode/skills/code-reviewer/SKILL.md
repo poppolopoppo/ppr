@@ -102,7 +102,7 @@ verdict.
   not private implementation structure.
 
 ### 7. Project formatting and local conventions
-- Changes follow `.clang-format`, `AGENTS.md`, naming, module split, macro, and
+- Changes follow the active project CLion C/C++ Code Style, `AGENTS.md`, naming, module split, macro, and
   comment conventions. Flag only material inconsistencies, not unrelated style
   preferences.
 
