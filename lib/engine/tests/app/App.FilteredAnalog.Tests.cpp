@@ -44,10 +44,10 @@ namespace pP::tests::detail {
             analog.update(std::chrono::milliseconds{16}); // filtered = 0
             analog.add(1.0f);
             analog.update(std::chrono::milliseconds{16});
-            // t = pow(0.016, 1/2) = sqrt(0.016) â‰ˆ 0.1265
-            const float expected = std::sqrt(0.016f);
-            PPR_TEST_ASSERT(std::abs(analog.filtered() - expected) < 1e-3f);
-            PPR_TEST_ASSERT(std::abs(analog.delta() - expected) < 1e-3f);
+            // Rate contract: alpha = 1 - exp(-lambda * dt).
+            const float expected = 1.0f - std::exp(-2.0f * 0.016f);
+            PPR_TEST_ASSERT(std::abs(analog.filtered() - expected) < 1e-6f);
+            PPR_TEST_ASSERT(std::abs(analog.delta() - expected) < 1e-6f);
             PPR_TEST_ASSERT(std::abs(analog.raw() - 1.0f) < kEps);
         };
 
@@ -64,8 +64,77 @@ namespace pP::tests::detail {
 
             PPR_TEST_ASSERT(std::abs(clamped.filtered() - reference.filtered()) < 1e-4f);
             // Unclamped 200ms would converge further than 150ms.
-            const float unclamped = std::sqrt(0.2f);
+            const float unclamped = 1.0f - std::exp(-2.0f * 0.2f);
             PPR_TEST_ASSERT(clamped.filtered() < unclamped - 1e-3f);
+        };
+
+        PPR_UNIT_TEST (zero_rate_freezes_filter) {
+            FilteredAnalog<float> analog{0.0f, 0.0f};
+            analog.update(std::chrono::milliseconds{16}); // prime: filtered = 0
+            analog.add(1.0f);
+            analog.update(std::chrono::milliseconds{16});
+            PPR_TEST_ASSERT(std::abs(analog.filtered()) < kEps);
+            PPR_TEST_ASSERT(std::abs(analog.delta()) < kEps);
+            PPR_TEST_ASSERT(std::abs(analog.raw() - 1.0f) < kEps);
+        };
+
+        PPR_UNIT_TEST (huge_sensitivity_snaps_to_raw) {
+            FilteredAnalog<float> analog{0.0f, 100000.0f};
+            analog.update(std::chrono::milliseconds{16}); // prime: filtered = 0
+            analog.add(1.0f);
+            analog.update(std::chrono::milliseconds{16});
+            PPR_TEST_ASSERT(std::abs(analog.filtered() - 1.0f) < 1e-4f);
+        };
+
+        // Primed controller, equal wall time, constant raw: 30/60/120Hz must
+        // converge within tolerance. Closed form gives exact invariance:
+        // residual after T is exp(-lambda * T) regardless of partitioning.
+        PPR_UNIT_TEST (primed_equal_wall_time_converges) {
+            const auto run_at = [](const int steps, const std::chrono::microseconds step) {
+                FilteredAnalog<float> analog{0.0f, 2.0f};
+                analog.update(std::chrono::milliseconds{16}); // prime: filtered = 0
+                analog.add(1.0f); // constant raw = 1 from here on
+                for (int i = 0; i < steps; ++i) {
+                    analog.update(step);
+                }
+                return analog.filtered();
+            };
+            // 1s wall time at 30/60/120Hz.
+            const float at30 = run_at(30, std::chrono::microseconds{33333});
+            const float at60 = run_at(60, std::chrono::microseconds{16667});
+            const float at120 = run_at(120, std::chrono::microseconds{8333});
+            const float expected = 1.0f - std::exp(-2.0f * 1.0f);
+            PPR_TEST_ASSERT(std::abs(at30 - expected) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at60 - expected) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at120 - expected) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at30 - at60) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at60 - at120) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at30 - at120) < 2e-3f);
+        };
+
+        // Same invariance for vector state: post-priming motion must not stall
+        // at small dt (the old pow(dt, 1/s) contract was ~1e-12 at 16ms/0.15).
+        PPR_UNIT_TEST (primed_float3_equal_wall_time_converges) {
+            const auto run_at = [](const int steps, const std::chrono::microseconds step) {
+                FilteredAnalog<float3> analog{float3{zero_v}, 8.0f};
+                analog.update(std::chrono::milliseconds{16}); // prime
+                analog.add(float3{1.0f, 0.0f, 0.0f});
+                for (int i = 0; i < steps; ++i) {
+                    analog.update(step);
+                }
+                return analog.filtered();
+            };
+            const float3 at30 = run_at(30, std::chrono::microseconds{33333});
+            const float3 at60 = run_at(60, std::chrono::microseconds{16667});
+            const float3 at120 = run_at(120, std::chrono::microseconds{8333});
+            const float expected = 1.0f - std::exp(-8.0f * 1.0f);
+            PPR_TEST_ASSERT(std::abs(at30.x - expected) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at60.x - expected) < 2e-3f);
+            PPR_TEST_ASSERT(std::abs(at120.x - expected) < 2e-3f);
+            PPR_TEST_ASSERT(distance(at30, at60) < 2e-3f);
+            PPR_TEST_ASSERT(distance(at60, at120) < 2e-3f);
+            // Motion is meaningful after 1s, not stalled near zero.
+            PPR_TEST_ASSERT(at60.x > 0.9f);
         };
 
         PPR_UNIT_TEST (reset_restores_init) {
@@ -113,6 +182,10 @@ namespace pP::tests {
             detail::FilteredAnalogTests::first_update_snapshots_raw,
             detail::FilteredAnalogTests::update_lerps_toward_raw,
             detail::FilteredAnalogTests::dt_clamped_to_150ms,
+            detail::FilteredAnalogTests::zero_rate_freezes_filter,
+            detail::FilteredAnalogTests::huge_sensitivity_snaps_to_raw,
+            detail::FilteredAnalogTests::primed_equal_wall_time_converges,
+            detail::FilteredAnalogTests::primed_float3_equal_wall_time_converges,
             detail::FilteredAnalogTests::reset_restores_init,
             detail::FilteredAnalogTests::set_sensitivity,
             detail::FilteredAnalogTests::float3_accumulation,

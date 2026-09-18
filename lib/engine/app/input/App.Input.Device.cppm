@@ -119,6 +119,7 @@ export namespace pP {
         details::input_value<value_type> m_filtered{};
 
         value_type m_next_raw_absolute{zero_v};
+        bool m_has_active_output{false};
 
         float m_dead_zone{epsilon_v<float>};
         float m_sensitivity{2.0f};
@@ -147,7 +148,8 @@ export namespace pP {
             const InputContext &context,
             InputDeviceID device_id,
             InputKey input_key,
-            bool enable_filtered_inputs) const noexcept;
+            bool enable_filtered_inputs,
+            bool emit_terminal_inactive = false) noexcept;
 
         void reset() noexcept;
 
@@ -162,7 +164,9 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename ButtonT>
-        requires std::is_enum_v<ButtonT> or std::is_integral_v<ButtonT>
+        requires std::is_enum_v<ButtonT>
+    or std::is_integral_v<ButtonT>
+
     class InputDigitalState {
     public:
         using set_type = FlatSet<ButtonT>;

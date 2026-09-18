@@ -8,6 +8,7 @@ import imgui_internal;
 import :input.device;
 import :input.key;
 import :input.listener;
+import :input.routing;
 import :service.input;
 import :service.ui;
 import :service.window;
@@ -79,9 +80,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             ImGuiContext *m_imgui_context{nullptr};
 
             /// input handling:
-            safe_ptr<InputContext> m_input_context{};
-
             InputListener m_input_listener{};
+            safe_ptr<InputContext> m_input_context{};
+            bool m_pending_deselect{false};
             InputMapping m_input_mapping{"ImGuiInputs"};
 
             InputAction m_input_any_keyboard_key{"ImGuiAnyKeyboardKey", EInputValueType::digital};
@@ -123,6 +124,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             std::error_code uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources);
 
+            void drainPendingDeselect_();
+
             static EInputMessageResponse onInputCharacter_(hal::native::char_t codepoint) noexcept;
 
             static void onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept;
@@ -137,7 +140,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
         public:
             ImGuiService() noexcept {
-                // TODO: track allocations with a custom scope
                 ImGui::SetAllocatorFunctions(
                     [](const std::size_t sz, [[maybe_unused]] void *user_data) -> void * {
                         return std::malloc(sz);
@@ -187,6 +189,18 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 m_input_listener.addInputMapping(&m_input_mapping, 0);
                 m_input_listener.setCharacterInputCallback(&onInputCharacter_);
+                m_input_listener.setRawKeyCallback([this]([[maybe_unused]] const TimeSpan dt, const InputMessage &message) {
+                    if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
+                        button not_eq nullptr and InputBackgroundLatch::isBackgroundDragButton(*button)) {
+                        if (message.m_event == EInputMessageEvent::pressed or
+                            message.m_event == EInputMessageEvent::repeat) [[likely]] {
+                            if (not hasMouseCaptureUnlessPopupClose()) [[likely]] {
+                                m_pending_deselect = true;
+                            }
+                        }
+                    }
+                    return EInputMessageResponse::unhandled;
+                });
             }
 
             ~ImGuiService() noexcept override {
@@ -196,11 +210,28 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_input_mapping.clearKeymap();
             }
 
+            [[nodiscard]] bool hasMouseCaptureUnlessPopupClose() const noexcept override {
+                return m_input_any_mouse_button.hasConsumeInput();
+            }
+
+            [[nodiscard]] std::error_code clearWindowFocus() override {
+                if (not m_imgui_context) {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                ImGui::SetCurrentContext(m_imgui_context);
+                ImGui::SetWindowFocus(nullptr);
+                return default_value_v;
+            }
+
             [[nodiscard]] void *getContext() const noexcept override {
                 return m_imgui_context;
             }
 
-            std::error_code initialize(
+            safe_ptr<const InputListener> getInputListener() const noexcept override {
+                return safe_ptr{&m_input_listener};
+            }
+
+            [[nodiscard]] std::error_code initialize(
                 WindowInputContext &window_input_context,
                 IRhiService &rhi_service,
                 IShaderService &shader_service,
@@ -244,23 +275,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-                // TODO: remove?
-                // // need to update display size before first call to ImGui::NewFrame()
-                // io.DisplaySize = ImVec2{
-                //     static_cast<float>(window_input_context.m_window->m_framebuffer_size.x),
-                //     static_cast<float>(window_input_context.m_window->m_framebuffer_size.y)
-                // };
-                //
-                // io.DisplayFramebufferScale = ImVec2{
-                //     window_input_context.m_window->m_content_scale.x,
-                //     window_input_context.m_window->m_content_scale.y,
-                // };
-
-                // attach our input listener to the window:
                 m_input_context = &window_input_context.m_context;
                 m_input_context->addInputListener(&m_input_listener, input_listener_priority);
 
-                // prepare rendering:
                 rhi::IDevice &device = rhi_service.getDevice();
                 PPR_RETURN_ERROR_ON_FAIL(UI, createInvariantRenderState_(device));
                 PPR_RETURN_ERROR_ON_FAIL(UI, createShaderProgram_(shader_service, device));
@@ -273,13 +290,23 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 return default_value_v;
             }
 
-            std::error_code shutdown() override {
+            [[nodiscard]] std::error_code shutdown() override {
                 PPR_LOG(UI, info, "UI service shut down");
 
                 if (m_input_context) {
                     m_input_context->removeInputListener(m_input_listener);
                     m_input_context.reset();
                 }
+                m_pending_deselect = false;
+
+                // Reset consume gating to non-consuming (defaults to player).
+                m_input_any_keyboard_key.setConsumeInput(false);
+                m_input_any_mouse_button.setConsumeInput(false);
+                m_input_mouse_cursor.setConsumeInput(false);
+                m_input_mouse_wheel.setConsumeInput(false);
+                m_input_any_gamepad_button.setConsumeInput(false);
+                m_input_gamepad_stick.setConsumeInput(false);
+                m_input_gamepad_trigger.setConsumeInput(false);
 
                 m_render_pipeline.setNull();
 
@@ -296,9 +323,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 }
 
                 if (m_imgui_context) {
-                    // Detach the backend before destroying the context:
-                    // ImGui asserts when Backend*UserData is still set at
-                    // DestroyContext ("Forgot to shutdown Platform backend?").
+                    // Detach backend before destroying context.
                     ImGui::SetCurrentContext(m_imgui_context);
                     ImGuiIO &io = ImGui::GetIO();
                     io.BackendPlatformName = nullptr;
@@ -315,7 +340,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 return default_value_v;
             }
 
-            std::error_code update(const TimeSpan dt, const WindowViewport &viewport) override {
+            [[nodiscard]] std::error_code update(const TimeSpan dt, const WindowViewport &viewport) override {
                 if (not m_imgui_context) {
                     return std::make_error_code(std::errc::not_connected);
                 }
@@ -333,17 +358,25 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 const float2 &content_scale = viewport.getWindow().m_content_scale;
                 io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
 
-                m_input_any_keyboard_key.setConsumeInput(not io.WantCaptureKeyboard);
-                m_input_any_mouse_button.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
-                m_input_mouse_cursor.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
-                m_input_mouse_wheel.setConsumeInput(not io.WantCaptureMouseUnlessPopupClose);
-
                 ++m_frame_revision;
                 ImGui::NewFrame();
+
+                // Focus gate: consume flags from last frame's widgets.
+                m_input_any_keyboard_key.setConsumeInput(io.WantCaptureKeyboard);
+                m_input_any_mouse_button.setConsumeInput(io.WantCaptureMouseUnlessPopupClose);
+                m_input_mouse_cursor.setConsumeInput(io.WantCaptureMouseUnlessPopupClose);
+                m_input_mouse_wheel.setConsumeInput(io.WantCaptureMouseUnlessPopupClose);
+
+                const bool gamepad_nav_capture = io.NavActive &&
+                                                 (io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) != 0;
+                m_input_any_gamepad_button.setConsumeInput(gamepad_nav_capture);
+                m_input_gamepad_stick.setConsumeInput(gamepad_nav_capture);
+                m_input_gamepad_trigger.setConsumeInput(gamepad_nav_capture);
+                drainPendingDeselect_();
                 return default_value_v;
             }
 
-            std::error_code render(const DrawContext &draw_context) override {
+            [[nodiscard]] std::error_code render(const DrawContext &draw_context) override {
                 if (not m_imgui_context) {
                     return std::make_error_code(std::errc::not_connected);
                 }
@@ -675,6 +708,16 @@ float4 fragmentMain(PsInput input) : SV_Target {
             return default_value_v;
         }
 
+        void ImGuiService::drainPendingDeselect_() {
+            if (not m_pending_deselect) {
+                return;
+            }
+            m_pending_deselect = false;
+            if (const std::error_code err = clearWindowFocus(); err) {
+                PPR_LOG(UI, warning, "drain pending deselect failed");
+            }
+        }
+
         EInputMessageResponse ImGuiService::onInputCharacter_(const hal::native::char_t codepoint) noexcept {
             // Ctrl+key produces a control character (e.g. Ctrl+A -> 0x01), not text.
             if (ImGui::GetIO().KeyCtrl) {
@@ -703,7 +746,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         const bool is_key_down = event.getDigitalValue();
 
                         ImGuiIO &io = ImGui::GetIO();
-                        io .AddKeyEvent(imgui_key, is_key_down);
+                        io.AddKeyEvent(imgui_key, is_key_down);
 
                         // handle modifier keys:
                         switch (keyboard_key) {

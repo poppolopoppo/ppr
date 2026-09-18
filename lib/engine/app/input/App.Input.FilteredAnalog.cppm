@@ -8,7 +8,21 @@ import std;
 
 export namespace pP {
     // ------------------------------------------------------------------
-    // FilteredAnalog — exponentially filtered analog input
+    // FilteredAnalog — exponentially filtered analog input.
+    //
+    // Time contract: first-order lag dF/dt = lambda * (R - F) integrated as
+    // alpha = 1 - exp(-lambda * dt), where `sensitivity` is the convergence
+    // rate lambda in s^-1. Larger sensitivity tracks raw faster; zero freezes
+    // the filter; very large values snap to raw. Equal wall time converges
+    // equally regardless of frame partitioning (exact for constant raw).
+    //
+    // Compatibility: replaces the former alpha = pow(dt, 1/sensitivity)
+    // contract, which tended to zero for sub-second dt at small sensitivity
+    // (e.g. ~1e-12 at 16ms/0.15) and stalled post-priming motion in a
+    // frame-rate-dependent way. Direction is preserved (larger = faster, huge
+    // = instant), but absolute feel is retuned: previous small values such as
+    // 0.15 now behave as a slow 0.15 Hz rate, so camera defaults moved to
+    // faster rates (see camera controller).
     // ------------------------------------------------------------------
 
     template <typename T>
@@ -17,16 +31,27 @@ export namespace pP {
         using value_type = T;
 
         explicit FilteredAnalog(T init = T{}, float sensitivity = 2.0f) noexcept;
+
         [[nodiscard]] T filtered() const noexcept;
+
         [[nodiscard]] T delta() const noexcept;
+
         [[nodiscard]] T raw() const noexcept;
+
         [[nodiscard]] float sensitivity() const noexcept;
+
         void setSensitivity(float s) noexcept;
+
         void add(const T &offset) noexcept;
+
         void addClamp(const T &offset, const T &vmin, const T &vmax) noexcept;
+
         void setRaw(const T &raw) noexcept;
+
         void update(TimeSpan dt) noexcept;
+
         void reset(T init) noexcept;
+
         void clear() noexcept;
 
     private:

@@ -127,6 +127,27 @@ namespace pP::tests::detail {
             device.m_controller_id = GamepadControllerID{0};
             PPR_TEST_ASSERT(device.isConnected());
         };
+
+        PPR_UNIT_TEST (axis_posts_terminal_zero_once) {
+            GamepadDevice device{InputDeviceID{0u}};
+            device.m_has_axis_filtering = false;
+            DeviceHarness::Capture capture{};
+            const TimeSpan dt{std::chrono::milliseconds{16}};
+
+            device.postGamepadAxis2DMoved(dt, capture.context, EGamepadAxis::left_stick, float2{0.0f, 1.0f});
+            PPR_TEST_ASSERT(capture.messages.size() == 1u);
+            PPR_TEST_ASSERT(capture.messages[0u].m_key == InputKey::gamepad_left_2d);
+            PPR_TEST_ASSERT(capture.messages[0u].getAxis2DValue().m_absolute.y > 0.0f);
+
+            const float resting_value = device.m_left_stick.m_dead_zone / 2.0f;
+            device.postGamepadAxis2DMoved(dt, capture.context, EGamepadAxis::left_stick, float2{0.0f, resting_value});
+            PPR_TEST_ASSERT(capture.messages.size() == 2u);
+            PPR_TEST_ASSERT(distance(capture.messages[1u].getAxis2DValue().m_absolute, float2{zero_v}) < epsilon_v<float>);
+            PPR_TEST_ASSERT(distance(capture.messages[1u].getAxis2DValue().m_relative, float2{zero_v}) < epsilon_v<float>);
+
+            device.postGamepadAxis2DMoved(dt, capture.context, EGamepadAxis::left_stick, float2{0.0f, resting_value});
+            PPR_TEST_ASSERT(capture.messages.size() == 2u);
+        };
     }
 
     namespace DigitalState {
@@ -179,6 +200,7 @@ namespace pP::tests {
             detail::Gamepad::construct_with_id_and_index,
             detail::Gamepad::is_disconnected_by_default,
             detail::Gamepad::set_status_connected,
+            detail::Gamepad::axis_posts_terminal_zero_once,
             detail::DigitalState::pressed_down_up_transitions,
             detail::DigitalState::reset_clears_held,
         });

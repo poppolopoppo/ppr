@@ -38,9 +38,22 @@ export namespace pP {
 
     using GamepadControllerID = Numeric<int, IInputDevice>;
 
+    // Context priorities; detector(1) != mapping-camera(1).
+    // Detector is the deterministic pre-player tier for the background-drag
+    // actuator: ui(0) < detector(1) < player(2). Plans in :input.routing
+    // carry both priorities explicitly.
+    enum class EInputListenerPriority : int {
+        ui = 0,
+        detector = 1,
+        player = 2,
+    };
+
+    enum class EInputMappingPriority : int {
+        camera = 1,
+    };
+
     class IInputService : public virtual IService {
     public:
-        // devices:
         [[nodiscard]] virtual const KeyboardDevice &
         getKeyboard() const noexcept = 0;
 
@@ -57,7 +70,6 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code enumerateInputKeysSupported(Collector<InputKey> supports_key) const = 0;
 
-        // contexts:
         [[nodiscard]] virtual InputContext &getGlobalInputContext() noexcept = 0;
 
         [[nodiscard]] virtual bool hasInputContext(const InputContext &context) const noexcept = 0;
@@ -74,7 +86,6 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code enumerateInputContextDeviceAssignments(Collector<IInputDevice, InputContext> each_assignment) const = 0;
 
-        // input events:
         [[nodiscard]] virtual std::error_code pollInputDevices(TimeSpan dt) = 0;
 
         virtual void resetInputDevices() noexcept = 0;
@@ -89,7 +100,6 @@ export namespace pP {
 
         virtual void postMouseScrollWheel(const InputContext &context, const float2 &delta) = 0;
 
-        // callbacks:
         using DeviceCallback = BroadcastCallback<std::error_code (const IInputDevice &device)>;
 
         [[nodiscard]] virtual DeviceCallback::Handle whenDeviceConnected(DeviceCallback::Event on_connected) = 0;

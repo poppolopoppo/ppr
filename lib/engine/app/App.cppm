@@ -10,6 +10,7 @@ export import :input.device;
 export import :input.filtered_analog;
 export import :input.key;
 export import :input.listener;
+export import :input.routing;
 
 export import :platform;
 

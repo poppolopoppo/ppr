@@ -13,6 +13,7 @@ target_sources(engine.app
         input/App.Input.FilteredAnalog.cppm
         input/App.Input.Key.cppm
         input/App.Input.Listener.cppm
+        input/App.Input.Routing.cppm
 
         platform/App.Platform.cppm
         platform/glfw/App.Platform.Glfw.cppm
@@ -53,6 +54,7 @@ target_sources(engine.app
         input/App.Input.FilteredAnalog.cpp
         input/App.Input.Key.cpp
         input/App.Input.Listener.cpp
+        input/App.Input.Routing.cpp
 
         platform/glfw/App.Platform.Glfw.include.hpp
         platform/glfw/App.Platform.Glfw.cpp
@@ -82,5 +84,5 @@ setup_ppr_project(engine.app
         EXTERNAL_SYSTEM_PUBLIC_DEPS imgui.base
 )
 
-# `import imgui;` (C++20 binding for Dear ImGui) must be resolvable from every engine.app importer.
+# `import imgui;` must be resolvable from every engine.app importer.
 target_link_libraries(engine.app PUBLIC imgui)

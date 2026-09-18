@@ -6,21 +6,17 @@ module engine.app;
 
 import :application_editor;
 import :input.action;
+import :input.device;
+import :input.key;
 import :input.listener;
+import :input.routing;
+import :service.input;
 import :window.viewport;
 import std;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
-
-    namespace {
-        enum EInputPriority : int {
-            EInputPriority_ui = 0,
-            EInputPriority_camera,
-            EInputPriority_player,
-        };
-    }
 
     ApplicationEditor::ApplicationEditor(const std::string_view name, const std::span<const char *const> argv)
         : Application(ApplicationDomain{
@@ -69,43 +65,56 @@ namespace pP {
     std::error_code ApplicationEditor::initialize() {
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::initialize());
 
-        // create dummy player for the editor with a camera & a free camera controller:
         m_player = std::make_unique<Player>(PlayerIdentity{});
         m_camera = std::make_unique<Camera>(ECameraProjection::perspective);
 
+        // Camera controller is a pure motion integrator; the
+        // background-drag latch lives in Routing (m_bg_state).
         m_camera_input_mapping = std::make_unique<InputMapping>("camera_input_mapping");
         m_camera_controller = std::make_unique<FreeCameraController>();
         m_camera_controller->lookAt(float3{0.0f, 0.0f, -2.0f}, float3{0.0f, 0.0f, 0.0f}, math::axis_y);
         m_camera_controller->provideInputActionKeyMappings(*m_camera_input_mapping);
 
-        // return camera inputs to player input listener, which is register to the window input context:
-        m_player->getListener().addInputMapping(m_camera_input_mapping, EInputPriority_camera);
+        m_player->getListener().addInputMapping(m_camera_input_mapping, static_cast<int>(EInputMappingPriority::camera));
 
         const safe_ptr<IInputService> input_service = getPlatform().getInputService();
-        m_main_input_context = std::make_unique<WindowInputContext>(input_service);
-        m_main_input_context->m_context.addInputListener(&m_player->getListener(), EInputPriority_player);
 
-        // initialize the renderer:
+        m_main_input_context = std::make_unique<WindowInputContext>(input_service);
+
+        m_input_background_latch = std::make_unique<InputBackgroundLatch>(
+            static_cast<int>(EInputListenerPriority::ui),
+            safe_ptr{&m_player->getListener()},
+            static_cast<int>(EInputListenerPriority::player),
+            static_cast<int>(EInputListenerPriority::detector));
+
+        m_device_disconnected_handle = input_service->whenDeviceDisconnected([this](const IInputDevice &) noexcept {
+            // Session reset (Routing latch) is separate from motion reset (controller).
+            m_input_background_latch->resetInputState();
+            if (m_camera_controller) {
+                m_camera_controller->resetInputState();
+            }
+            return default_value_v;
+        });
+
         ServicesStore &app_services = getServices();
         const safe_ptr<IRhiService> rhi_service{app_services.inject()};
         const safe_ptr<IShaderService> shader_service{app_services.inject()};
 
-        // create dummy triangle render pass:
         m_triangle_pass = std::make_unique<TrianglePass>();
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->initialize(
             *rhi_service,
             *shader_service,
             getContentDir()));
 
-        // create imgui backend service:
         m_ui_service = ui::createImGuiService();
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->initialize(
             *m_main_input_context,
             *rhi_service,
             *shader_service,
-            EInputPriority_ui));
+            m_input_background_latch->m_foreground_priority));
 
-        // create main window:
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_input_background_latch->initialize(m_main_input_context->m_context, m_ui_service->getInputListener()));
+
         IWindowService &window_service = *getPlatform().getWindowService();
 
         safe_ptr<Window> main_window{};
@@ -136,6 +145,9 @@ namespace pP {
 
         std::ignore = window_service.setMainWindow(main_window);
 
+        // Window-blur drag clear: focus loss releases background hold.
+        main_window->m_when_focused.subscribe<&ApplicationEditor::onMainWindowFocused_>(this);
+
         getServices().insert_or_assign(safe_ptr(m_ui_service));
         return default_value_v;
     }
@@ -143,9 +155,23 @@ namespace pP {
     std::error_code ApplicationEditor::shutdown() {
         std::error_code first_err{};
 
+        // Detach detector first so no callback fires during teardown.
+        m_device_disconnected_handle.reset();
+
+        if (m_camera_controller) {
+            m_camera_controller->resetInputState();
+        }
+
+        if (m_input_background_latch) {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_input_background_latch->shutdown(m_main_input_context->m_context));
+            m_input_background_latch.reset();
+        }
+
         if (m_ui_service) {
             ServicesStore &app_services = getServices();
-            PPR_VERIFY(app_services.erase(*m_ui_service));
+            if (not app_services.erase(*m_ui_service)) {
+                PPR_LOG(Editor, warning, "ui service was not registered");
+            }
 
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_ui_service->shutdown());
             m_ui_service.reset();
@@ -172,6 +198,9 @@ namespace pP {
         }
 
         if (main_window) {
+            // Drop blur subscription alongside detector detach.
+            main_window->m_when_focused.reset();
+
             IWindowService &window_service = *getPlatform().getWindowService();
             std::ignore = window_service.setMainWindow(nullptr);
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, window_service.destroyWindow(std::move(main_window)));
@@ -190,21 +219,35 @@ namespace pP {
         return first_err;
     }
 
+    void ApplicationEditor::onMainWindowFocused_([[maybe_unused]] const Window &window, const bool focused) {
+        setBackgroundPriority(focused);
+
+        if (not focused) {
+            // Session reset (Routing latch) is separate from motion reset (controller).
+            if (m_input_background_latch) {
+                m_input_background_latch->resetInputState();
+            }
+
+            if (m_camera_controller) {
+                m_camera_controller->resetInputState();
+            }
+        }
+    }
+
     std::error_code ApplicationEditor::update(TimeSpan dt) {
-        PPR_RETURN_ERROR_ON_FAIL(Editor, Application::update(dt));
-
-        if (m_main_viewport) [[likely]] {
-            m_main_viewport->updateFromWindow();
-
-            // throttle application when main window loses focus
-            setBackgroundPriority(not m_main_viewport->getWindow().m_focused);
-
-            safe_ptr<IWindowService> window_service{getServices().inject()};
-            window_service->renameWindow(m_main_viewport->getWindow(),
-                std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
+        if (not m_main_viewport) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
         }
 
+        PPR_RETURN_ERROR_ON_FAIL(Editor, Application::update(dt));
+
+        m_main_viewport->updateFromWindow();
+
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());
+
+        safe_ptr<IWindowService> window_service{getServices().inject()};
+        window_service->renameWindow(m_main_viewport->getWindow(),
+            std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
 

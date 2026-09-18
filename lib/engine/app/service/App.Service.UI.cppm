@@ -8,7 +8,7 @@ import engine.shader;
 import std;
 
 export namespace pP {
-    class InputMapping;
+    class InputListener;
     class WindowInputContext;
     class WindowViewport;
     struct DrawContext;
@@ -23,10 +23,18 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 
+        // Cached mouse-capture flag for press-time sampling.
+        [[nodiscard]] virtual bool hasMouseCaptureUnlessPopupClose() const noexcept = 0;
+
+        // Clears UI window focus; call post-update with open frame.
+        [[nodiscard]] virtual std::error_code clearWindowFocus() = 0;
+
         [[nodiscard]] virtual std::error_code update(TimeSpan dt, const WindowViewport &viewport) = 0;
 
         [[nodiscard]] virtual std::error_code render(const DrawContext &draw_context) = 0;
 
         [[nodiscard]] virtual void *getContext() const noexcept = 0;
+
+        [[nodiscard]] virtual safe_ptr<const InputListener> getInputListener() const noexcept = 0;
     };
 }

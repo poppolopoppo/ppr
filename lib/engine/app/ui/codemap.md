@@ -19,8 +19,15 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   and builds the `ImGuiInputs` mapping: `any_digital`, `gamepad_left/right_2d`, `gamepad_left/right_trigger_axis`,
   `mouse_2d`, plus `mouse_wheel_axis_x/y` each folded into the wheel action via a small 1D→pair lambda; character
   callback installed on the listener.
-- Input routing: five `InputAction`s (`ImGuiAnyDigital` digital, `ImGuiMouseCursor` axis_2d, `ImGuiMouseWheel` axis_1d,
-  `ImGuiGamepadStick` axis_2d, `ImGuiGamepadTrigger` axis_1d). Character callback drops Ctrl+key control characters,
+- Input routing: seven `InputAction`s (split per device).
+  gamepad-button digitals, cursor axis_2d, wheel axis_1d, stick axis_2d, trigger
+  axis_1d). `update()` gates per-action consume AFTER `NewFrame()` (last
+  frame's widgets, one-frame staleness): keyboard follows `WantCaptureKeyboard`
+  (ActiveId/modal/nav — no `AnyWindowFocused` fallback); mouse follows
+  `WantCaptureMouseUnlessPopupClose` (hover-split); gamepad follows `NavActive`
+  with `NavEnableGamepad` (typing never blocks gamepad). Set flag sinks into
+  the UI (`consumed`); cleared flag yields `handled` downstream. `shutdown()`
+  resets all consume flags to non-consuming (player default). Character callback drops Ctrl+key control characters,
   gates on `io.WantTextInput`, UTF-8-encodes the codepoint (`hal::native::utf8`) and returns `consumed`/`unhandled`.
   Any-digital dispatches on `trigger.m_code` to `AddKeyEvent` (keyboard via `keyboardKeyToImGuiKey`, gamepad via
   `gamepadButtonToImGuiKey`) or `AddMouseButtonEvent` (via `mouseButtonToImGui`); keyboard path also mirrors
