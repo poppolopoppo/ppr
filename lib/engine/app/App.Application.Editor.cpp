@@ -245,7 +245,7 @@ namespace pP {
 
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());
 
-        safe_ptr<IWindowService> window_service{getServices().inject()};
+        const safe_ptr window_service{getPlatform().getWindowService()};
         window_service->renameWindow(m_main_viewport->getWindow(),
             std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 

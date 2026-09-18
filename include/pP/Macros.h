@@ -15,15 +15,19 @@
 #endif
 
 // ------------------------------------------------------------------
-// memory poisoning is enabled when ASAN or debug builds are active
+// safe-object tracking is ASAN-only; memory poisoning is DEBUG-only
 // ------------------------------------------------------------------
 
-#if defined(PPR_ENABLE_SANITIZER_ADDRESS) || PPR_ENABLE_DEBUG
-#   define PPR_ENABLE_MEMORY_POISONING      1
-#   define PPR_ENABLE_SAFE_OBJECT_TRACKING  1
+#if defined(PPR_ENABLE_SANITIZER_ADDRESS)
+#   define PPR_ENABLE_SAFE_OBJECT_TRACKING      1
 #else
-#   define PPR_ENABLE_MEMORY_POISONING      0
-#   define PPR_ENABLE_SAFE_OBJECT_TRACKING  0
+#   define PPR_ENABLE_SAFE_OBJECT_TRACKING      0
+#endif
+
+#if PPR_ENABLE_DEBUG
+#   define PPR_ENABLE_MEMORY_POISONING          1
+#else
+#   define PPR_ENABLE_MEMORY_POISONING          0
 #endif
 
 // ------------------------------------------------------------------

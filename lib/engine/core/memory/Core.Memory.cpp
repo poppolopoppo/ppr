@@ -64,7 +64,7 @@ namespace pP {
         return g_instance;
     }
 
-    auto mem::SmallPage::getThreadLocalCache() noexcept -> local_block_cache_t& {
+    auto mem::SmallPage::getThreadLocalCache() noexcept -> local_block_cache_t & {
         static const auto &_{HugePage::getThreadLocalCache()};
         alignas(hal::cacheline_size_v) thread_local local_block_cache_t g_instance_tls{};
         return g_instance_tls;
@@ -77,22 +77,24 @@ namespace pP {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
     PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none);
 }
-namespace std {
-    static void formatStackEntryTo(const std::stacktrace_entry &entry, pP::opaque::format_context &ctx) noexcept { // NOLINT(*-dcl58-cpp)
-        ctx.write(std::to_string(entry));
-    }
+    namespace std {
+        static void formatStackEntryTo(const std::stacktrace_entry &entry, pP::opaque::format_context &ctx) noexcept { // NOLINT(*-dcl58-cpp)
+            ctx.write(std::to_string(entry));
+        }
 
-    pP::opaque::Value opaqueValue(const std::stacktrace_entry &entry) noexcept { // NOLINT(*-dcl58-cpp)
-        return pP::opaque::Formatter{std23::nontype<&formatStackEntryTo>, entry};
+        pP::opaque::Value opaqueValue(const std::stacktrace_entry &entry) noexcept { // NOLINT(*-dcl58-cpp)
+            return pP::opaque::Formatter{std23::nontype<&formatStackEntryTo>, entry};
+        }
     }
-}
-namespace pP {
+    namespace pP {
+
 #endif
 
-    #if PPR_ENABLE_DEBUG
+#if PPR_ENABLE_DEBUG
     safe_object::~safe_object() noexcept(false) {
+
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
-        {
+    {
             const std::unique_lock scope_lock{m_referencer_barrier};
 
             for (const auto [index, referencer]: std::ranges::enumerate_view(m_references)) {
@@ -103,7 +105,7 @@ namespace pP {
                     {"address", std::bit_cast<std::uintptr_t>(referencer.m_derived)},
                     {"index", index},
                     {"stacktrace", opaqueValue(callstack)},
-                });
+                    });
             }
 
             if (not m_references.isEmpty()) {
@@ -112,8 +114,8 @@ namespace pP {
         }
 #endif
 
-        PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-            "safe_object destroyed while safe_ptr references still exist!");
+    PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+        "safe_object destroyed while safe_ptr references still exist!");
     }
 
     // Relocation/copying changes object identity: the new instance starts
@@ -148,26 +150,31 @@ namespace pP {
         return *this;
     }
 
+#if PPR_ENABLE_SAFE_OBJECT_TRACKING
     SparseKeyId safe_object::incSafeRef([[maybe_unused]] const void *derived) const noexcept {
         m_safe_ref_count.fetch_add(1, std::memory_order_acquire);
-#if PPR_ENABLE_SAFE_OBJECT_TRACKING
         const std::unique_lock scope_lock{m_referencer_barrier};
         return m_references.add({
             .m_derived = derived,
-            .m_callstack = std::stacktrace::current(2u )
+            .m_callstack = std::stacktrace::current(2u)
         });
-#else
-        return default_value_v;
-#endif
     }
 
     void safe_object::decSafeRef([[maybe_unused]] const void *derived, const SparseKeyId referencer_key) const noexcept {
         [[maybe_unused]] const int prev = m_safe_ref_count.fetch_sub(1, std::memory_order_release);
         PPR_ASSERT(prev > 0 && "safe object ref count underflow!");
-#if PPR_ENABLE_SAFE_OBJECT_TRACKING
         const std::unique_lock scope_lock{m_referencer_barrier};
         PPR_VERIFY(m_references.erase(referencer_key));
-#endif
     }
+#else
+    void safe_object::incSafeRef([[maybe_unused]] const void *derived) const noexcept {
+        m_safe_ref_count.fetch_add(1, std::memory_order_acquire);
+    }
+
+    void safe_object::decSafeRef([[maybe_unused]] const void *derived) const noexcept {
+        [[maybe_unused]] const int prev = m_safe_ref_count.fetch_sub(1, std::memory_order_release);
+        PPR_ASSERT(prev > 0 && "safe object ref count underflow!");
+    }
+#endif
 #endif // PPR_ENABLE_DEBUG
 }
