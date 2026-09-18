@@ -17,11 +17,11 @@ Slang-based shader compilation, and a Slang-RHI GPU abstraction. Slim
 bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
 player, camera, viewport, input-context, triangle pass, and UI state. The `game/`
 demo hosts only a thin `TurboLarbin : ApplicationEditor` subclass with
-lifecycle-hook overrides, a startup timestamp, and a debug-only ImGui demo window.
+lifecycle-hook overrides and a debug-only ImGui demo window.
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span) with `initialize()` / `update(TimeSpan)` / `shutdown()` hook overrides, a startup timestamp, and a debug-only ImGui demo window; `main()` returns `app.run().value()`.
+- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span) with `initialize()` / `update(TimeSpan)` / `shutdown()` hook overrides and a debug-only ImGui demo window (timed-shutdown debug hook present but disabled behind `#if 0`); `main()` returns `app.run().value()`.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
   include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
   `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; live-only `/MDd`; LNK4075 validators fail
@@ -84,7 +84,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
-| `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer (10 flat files).                      | [View Map](lib/engine/app/input/codemap.md)         |
+| `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer + Routing background-drag latch (12 files, 6 partitions).                      | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
@@ -92,10 +92,10 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | Five app service contracts: client/input/player/ui/window (behavior in platform/UI/Editor).            | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService; overlay shader embedded in `App.UI.ImGui.cpp`, not an asset). | [View Map](lib/engine/app/ui/codemap.md)            |
-| `lib/engine/app/window/`        | IWindowService lifecycle + Viewport geometry (moved from renderer).                                   | [View Map](lib/engine/app/window/codemap.md)        |
+| `lib/engine/app/window/`        | IWindowService lifecycle (Handle/Monitor) + Viewport geometry (moved from renderer).                                   | [View Map](lib/engine/app/window/codemap.md)        |
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
-| `cmake/external/`               | External dependency CMake (CPM/vcpkg: SlangRHI, DearImGui, GLFW).                                     | [View Map](cmake/external/codemap.md)               |
+| `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
 | `game/`                         | Thin demo exe (`app.game`): `TurboLarbin : ApplicationEditor` + `main()`; POST_BUILD stages DLLs + `shaders/`. | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Shader-only runtime asset root; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
@@ -116,7 +116,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
   `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core`.
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
-  (16 files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
+  (17 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
   `App.Shader/Viewport/RenderView/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
   `Tests.cpp` + `App.Tests.cpp` root of 28 nodes (`11` app singletons via copy-alias); umbrella exports only `extern const UnitTest app`.
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one

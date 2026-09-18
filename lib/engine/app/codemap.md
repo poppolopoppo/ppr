@@ -12,7 +12,7 @@ application.
 
 ## Design
 
-- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:input.*` (5),
+- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:input.*` (6),
   `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
   `:renderer` + `:renderer.triangle_pass` + `:renderer.types`, `:ui.imgui`.
@@ -41,7 +41,7 @@ application.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
   overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
   implicit-instantiation cost.
-- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (5), platform (5),
+- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (6, incl. new `:input.routing`), platform (5),
   player (2), renderer (3, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
   (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
   privately. Links `engine.core/math/shader/rhi` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`

@@ -1,7 +1,7 @@
 # lib/engine/app/window
 
 ## Responsibility
-The `engine.app:window` module provides the `IWindowService` interface and the GLFW concrete implementation for window creation, lifecycle management, monitor enumeration, and event handling. It abstracts platform-specific window operations (creation, resizing, closing, input, clipboard, monitoring) behind a consistent C++20 interface that integrates with the engine's service locator pattern. The window service is the primary conduit between the OS/GLFW and the engine's application loop.
+The `engine.app:window` module provides the `IWindowService` interface plus the `Window`/`Monitor` models and `Viewport` geometry for window creation, lifecycle management, monitor enumeration, and event handling. It abstracts platform-specific window operations (creation, resizing, closing, input, clipboard, monitoring) behind a consistent C++20 interface that integrates with the engine's service locator pattern. The GLFW concrete implementation (`GlfwWindow`) lives in `engine.app:platform.glfw` (see `platform/glfw/codemap.md`), not here.
 
 ## Design
 - **IWindowService** inherits from `IService` — provides compile-time type-safe lookup via `typeUid<IWindowService>()`. Thirty-two pure virtual methods covering every window operation: creation, destruction, manipulation, focus, monitoring, callbacks, clipboard, and scaling.
@@ -41,12 +41,8 @@ The `engine.app:window` module provides the `IWindowService` interface and the G
 
 ## Key Files
 - `App.Window.Handle.cppm` — `Window`, `WindowModel`, `WindowHandle`, `NativeWindowHandle`, `SharedWindow`, `Monitor`, `VideoMode`, `MonitorHandle`, `SharedMonitor`, `WindowDelegate` declarations
-- `App.Window.Handle.cpp` — `Window` move ctor, `release()`, debug-dtor handle check (most behavior lives in the .cppm + GlfwWindow)
-- `App.Window.Monitor.cppm` — Monitor/VideoMode declarations (may be included in Handle.cppm)
-- `App.Window.Monitor.cpp` — Monitor method implementations
-- `App.Platform.Glfw.Window.cppm` — `GlfwWindow` class declaration (inherits IWindowService)
-- `App.Platform.Glfw.Window.cpp` — GlfwWindow method implementations (createWindow, destroyWindow, pollEvents/waitEvents, all callbacks, manipulation, monitor, clipboard, native handle)
-- `App.Window.Monitor.cppm` — Monitor/VideoMode type declarations
+- `App.Window.Handle.cpp` — `Window` move ctor, `release()`, debug-dtor handle check (most behavior lives in the .cppm + `GlfwWindow` in `platform/glfw/`)
+- `App.Window.Monitor.cppm` — Monitor/VideoMode declarations
 - `App.Window.Monitor.cpp` — Monitor method implementations
 - `App.Window.Viewport.cppm` — `BasicRect`/`PixelRect`/`NormalizedRect`, `ViewportLayout`, `Viewport`, `WindowViewport` declarations (moved from renderer `App.Viewport`)
 - `App.Window.Viewport.cpp` — `BasicRect` aspect ratio, `ViewportLayout::clientRect`, `Viewport` transforms, `WindowViewport::updateFromWindow` implementations
