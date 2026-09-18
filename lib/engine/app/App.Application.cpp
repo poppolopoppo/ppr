@@ -31,9 +31,10 @@ namespace pP {
 
     Application::~Application() noexcept = default;
 
-    const std::optional<TimeDuration> &Application::getTargetFrameDuration() const noexcept {
+    std::optional<TimeDuration> Application::getTargetFrameDuration() const noexcept {
         if (m_has_background_priority) {
-            return TimeDuration{1.0/5.0}; // 5fps
+            constexpr TimeDuration background_frame_duration{1.0 / 5.0};
+            return background_frame_duration; // 5fps
         }
         return m_target_frame_duration;
     }
@@ -70,17 +71,7 @@ namespace pP {
     }
 
     std::error_code Application::run() {
-        if (m_has_torn_down) [[unlikely]] {
-            PPR_RETURN_ERROR_ON_FAIL(App, std::errc::operation_not_permitted);
-        }
-
-        PPR_RETURN_ERROR_ON_FAIL(App, initialize());
-
-        PPR_LOG(App, emphasis, "🏁 run application loop");
-
         PPR_DEFER {
-            PPR_LOG(App, emphasis, "stop application loop, bye 👋");
-
             std::error_code shutdown_err{};
             PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, shutdown());
 
@@ -88,6 +79,10 @@ namespace pP {
                 m_request_exit(shutdown_err);
             }
         };
+
+        PPR_RETURN_ERROR_ON_FAIL(App, initialize());
+
+        PPR_LOG(App, emphasis, "🏁 run application loop");
 
         while (not m_lifecycle->pollEvent()) {
             std::error_code first_err{};
@@ -118,14 +113,12 @@ namespace pP {
             }
         }
 
+        PPR_LOG(App, emphasis, "stop application loop, bye 👋");
+
         return m_lifecycle->error();
     }
 
     std::error_code Application::initialize() {
-        if (m_has_torn_down) [[unlikely]] {
-            PPR_RETURN_ERROR_ON_FAIL(App, std::errc::operation_not_permitted);
-        }
-
         m_application_clock.reset();
 
         PPR_LOG(App, info, "starting application", {
@@ -172,11 +165,6 @@ namespace pP {
     }
 
     std::error_code Application::shutdown() {
-        // Latch first: every teardown attempt (including rollback and
-        // best-effort paths that retain an error below) consumes the instance.
-        // shutdown() itself stays idempotent-success; only reuse is rejected.
-        m_has_torn_down = true;
-
         PPR_LOG(App, info, "shut down application", {
             {"name", m_name},
             {"platform", hal::platformName()}
@@ -209,11 +197,19 @@ namespace pP {
     }
 
     std::error_code Application::update(TimeSpan dt) {
+        if (not m_platform) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->update(dt));
         return default_value_v;
     }
 
     std::error_code Application::render() {
+        if (m_domain.m_needs_rendering and not m_renderer) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
         return default_value_v;
     }
 }

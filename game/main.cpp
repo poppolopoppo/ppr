@@ -20,8 +20,6 @@ namespace demo {
         std::error_code initialize() override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::initialize());
 
-            m_started_at = time::now();
-
             // quit the application in 3 seconds to debug shutdown for agents
 #if 0
             getTimerManager().schedule(*m_started_at + std::chrono::seconds(3u), [](TimePoint) noexcept -> std::error_code {
@@ -47,15 +45,11 @@ namespace demo {
         }
 
         std::error_code shutdown() override {
-            m_started_at.reset();
 
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::shutdown());
 
             return default_value_v;
         }
-
-    private:
-        std::optional<TimePoint> m_started_at{};
     };
 }
 

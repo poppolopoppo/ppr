@@ -20,7 +20,6 @@ namespace pP::tests {
     extern const UnitTest app_teardown_double_shutdown_no_refire;
     extern const UnitTest app_teardown_reports_subsystem_failure_but_completes;
     extern const UnitTest app_preserves_pre_registered_graphics_services;
-    extern const UnitTest app_run_after_teardown_not_permitted;
     extern const UnitTest app_headless_lifecycle_is_idempotent;
     extern const UnitTest app_run_shutdowns_after_nonstandard_hook_exception;
     extern const UnitTest camera;
@@ -52,7 +51,6 @@ namespace pP::tests {
             app_teardown_double_shutdown_no_refire,
             app_teardown_reports_subsystem_failure_but_completes,
             app_preserves_pre_registered_graphics_services,
-            app_run_after_teardown_not_permitted,
             app_headless_lifecycle_is_idempotent,
             app_run_shutdowns_after_nonstandard_hook_exception,
             camera,

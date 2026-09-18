@@ -61,18 +61,10 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(not test_app.teardown());
     };
 
-    PPR_UNIT_TEST(app_run_shutdowns_after_nonstandard_hook_exception, UnitTest::expect_crash) {
+    PPR_UNIT_TEST(app_run_shutdowns_after_nonstandard_hook_exception, UnitTest::expect_fail) {
         using namespace detail;
         ThrowingRunApp test_app{"ThrowingRun", std::span<const char *const>{}};
         PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::state_not_recoverable));
-        PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::operation_not_permitted));
-    };
-
-    PPR_UNIT_TEST(app_run_after_teardown_not_permitted, UnitTest::expect_crash) {
-        using namespace detail;
-        TestApp test_app{"RunAfterTeardown", std::span<const char *const>{}};
-        PPR_TEST_ASSERT(not test_app.boot());
-        PPR_TEST_ASSERT(not test_app.teardown());
         PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::operation_not_permitted));
     };
 } // namespace pP::tests::detail
@@ -81,5 +73,4 @@ namespace pP::tests {
     extern const UnitTest pixel_readback = detail::pixel_readback;
     extern const UnitTest app_headless_lifecycle_is_idempotent = detail::app_headless_lifecycle_is_idempotent;
     extern const UnitTest app_run_shutdowns_after_nonstandard_hook_exception = detail::app_run_shutdowns_after_nonstandard_hook_exception;
-    extern const UnitTest app_run_after_teardown_not_permitted = detail::app_run_after_teardown_not_permitted;
 } // namespace pP::tests

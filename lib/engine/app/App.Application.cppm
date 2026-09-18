@@ -50,7 +50,8 @@ export namespace pP {
         [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
         [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
         [[nodiscard]] const TimerManager &getTimerManager() const noexcept { return m_application_clock; }
-        [[nodiscard]] const std::optional<TimeDuration> &getTargetFrameDuration() const noexcept;
+
+        [[nodiscard]] std::optional<TimeDuration> getTargetFrameDuration() const noexcept;
 
         [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
         [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
@@ -96,9 +97,6 @@ export namespace pP {
 
         /// throttle refresh loop to low frame-rate when application is in background
         bool m_has_background_priority{false};
-        // Single-use latch: set on the first teardown attempt, never reset.
-        // run()/initialize() after shutdown report operation_not_permitted.
-        bool m_has_torn_down{false};
 
         const Array<std::string> m_arguments{};
         const std::string m_name{};
