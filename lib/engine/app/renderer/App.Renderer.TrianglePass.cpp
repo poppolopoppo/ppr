@@ -15,7 +15,7 @@ import engine.shader;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(TrianglePass, info, none)
+    PPR_DEFINE_LOG_CATEGORY(TrianglePass, debug, none)
 
     namespace {
         struct DummyVertex {

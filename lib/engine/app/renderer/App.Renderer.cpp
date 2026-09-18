@@ -356,6 +356,7 @@ namespace pP {
         *out_record = std::addressof(it->second);
 
         PPR_LOG(Renderer, info, "window surface created", {
+            {"description", window.m_title},
             {"width", it->second.m_extent.x},
             {"height", it->second.m_extent.y},
             });
