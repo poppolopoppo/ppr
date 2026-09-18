@@ -203,6 +203,8 @@ namespace pP {
     }
 
     void Log::Handler::backgroundWorkerLoop_(Handler &handler) noexcept {
+        hal::setThreadName("Logger");
+
         while (true) {
             const auto hdr = handler.m_messages.consumerAcquire();
 
