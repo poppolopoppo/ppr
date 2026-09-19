@@ -110,7 +110,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest stable_vector = UnitTest::Named("stable_vector") / [](UnitTest::IRun &_) -> void {
+    const UnitTest stable_vector = UnitTest::Named("stable_vector") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Stable_vector::growth_and_indexing,
             detail::Stable_vector::iterator_navigation,
@@ -119,4 +119,8 @@ namespace pP::tests {
             detail::Stable_vector::memory_compaction,
         });
     };
+
+    const UnitTest &stable_vectorTests() noexcept {
+        return stable_vector;
+    }
 } // namespace pP::tests

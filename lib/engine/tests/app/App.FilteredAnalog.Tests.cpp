@@ -175,7 +175,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest filtered_analog = UnitTest::Named("filtered_analog") / [](UnitTest::IRun &_) -> void {
+    const UnitTest filtered_analog = UnitTest::Named("filtered_analog") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::FilteredAnalogTests::initial_state,
             detail::FilteredAnalogTests::add_accumulation,
@@ -191,4 +191,8 @@ namespace pP::tests {
             detail::FilteredAnalogTests::float3_accumulation,
         });
     };
+
+    const UnitTest &filtered_analogTests() noexcept {
+        return filtered_analog;
+    }
 } // namespace pP::tests

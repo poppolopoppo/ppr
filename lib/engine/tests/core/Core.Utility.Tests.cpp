@@ -200,7 +200,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest utility = UnitTest::Named("utility") / [](UnitTest::IRun &_) -> void {
+    const UnitTest utility = UnitTest::Named("utility") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Utility::divide_round_up_basic,
             detail::Utility::align_backward_basic,
@@ -221,4 +221,8 @@ namespace pP::tests {
             detail::Utility::failed_ec_nonzero_returns_true,
         });
     };
+
+    const UnitTest &utilityTests() noexcept {
+        return utility;
+    }
 } // namespace pP::tests

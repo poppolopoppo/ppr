@@ -161,7 +161,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest poisoning = UnitTest::Named("poisoning") / [](UnitTest::IRun &_) -> void {
+    const UnitTest poisoning = UnitTest::Named("poisoning") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Poisoning::child_process_without_error,
         });
@@ -186,4 +186,8 @@ namespace pP::tests {
             });
         }
     };
+
+    const UnitTest &poisoningTests() noexcept {
+        return poisoning;
+    }
 } // namespace pP::tests

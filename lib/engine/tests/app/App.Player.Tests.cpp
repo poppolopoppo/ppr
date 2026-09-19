@@ -116,21 +116,35 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest player = UnitTest::Named("player") / [](UnitTest::IRun &_) -> void {
+    const UnitTest player = UnitTest::Named("player") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::player_id_ordering,
             detail::player_construction_and_device_views,
         });
     };
-    extern const UnitTest dispatch = UnitTest::Named("dispatch") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &playerTests() noexcept {
+        return player;
+    }
+
+    const UnitTest dispatch = UnitTest::Named("dispatch") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::player_mapping_to_action,
             detail::is_any_key_returns_unhandled,
         });
     };
-    extern const UnitTest snapshot = UnitTest::Named("snapshot") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &dispatchTests() noexcept {
+        return dispatch;
+    }
+
+    const UnitTest snapshot = UnitTest::Named("snapshot") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::captures_frame_messages,
         });
     };
+
+    const UnitTest &snapshotTests() noexcept {
+        return snapshot;
+    }
 } // namespace pP::tests

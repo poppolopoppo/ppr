@@ -921,7 +921,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest imgui_routing = UnitTest::Named("imgui_routing") / [](UnitTest::IRun &_) -> void {
+    const UnitTest imgui_routing = UnitTest::Named("imgui_routing") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::imgui_first_on_window_context_observes_scene_mapped_key,
             detail::detector_observes_before_player_mapping_and_never_consumes,
@@ -939,4 +939,8 @@ namespace pP::tests {
             detail::pending_deselect_drain_clears_focus_without_explicit_clear,
         });
     };
+
+    const UnitTest &imgui_routingTests() noexcept {
+        return imgui_routing;
+    }
 } // namespace pP::tests

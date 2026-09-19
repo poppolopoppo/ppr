@@ -382,7 +382,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest strings = UnitTest::Named("strings") / [](UnitTest::IRun &_) -> void {
+    const UnitTest strings = UnitTest::Named("strings") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::String::helpers,
             detail::String::literal,
@@ -391,4 +391,8 @@ namespace pP::tests {
             detail::String::lazy,
         });
     };
+
+    const UnitTest &stringsTests() noexcept {
+        return strings;
+    }
 } // namespace pP::tests

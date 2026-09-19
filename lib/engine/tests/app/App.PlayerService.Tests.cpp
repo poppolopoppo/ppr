@@ -148,7 +148,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest player_service = UnitTest::Named("player_service") / [](UnitTest::IRun &_) -> void {
+    const UnitTest player_service = UnitTest::Named("player_service") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::player_service_keyboard_and_gamepad,
             detail::gamepad_player_creation,
@@ -157,4 +157,8 @@ namespace pP::tests {
             detail::player_service_callbacks,
         });
     };
+
+    const UnitTest &player_serviceTests() noexcept {
+        return player_service;
+    }
 } // namespace pP::tests

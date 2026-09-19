@@ -112,7 +112,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest hash_map = UnitTest::Named("hash_map") / [](UnitTest::IRun &_) -> void {
+    const UnitTest hash_map = UnitTest::Named("hash_map") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Hash_map::eviction,
             detail::Hash_map::const_find,
@@ -129,4 +129,8 @@ namespace pP::tests {
             _.recurse(detail::Hash_map::stale_iterator_after_reserve_crashes);
         }
     };
+
+    const UnitTest &hash_mapTests() noexcept {
+        return hash_map;
+    }
 } // namespace pP::tests

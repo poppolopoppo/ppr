@@ -536,7 +536,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest allocator = UnitTest::Named("allocator") / [](UnitTest::IRun &_) -> void {
+    const UnitTest allocator = UnitTest::Named("allocator") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Allocator::overlap_boundaries,
             detail::Allocator::gpa_alignment_paths,
@@ -553,4 +553,8 @@ namespace pP::tests {
             detail::Allocator::in_situ_embedded_destroy_roundtrip,
         });
     };
+
+    const UnitTest &allocatorTests() noexcept {
+        return allocator;
+    }
 } // namespace pP::tests

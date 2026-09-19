@@ -70,7 +70,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest page_pool = UnitTest::Named("page_pool") / [](UnitTest::IRun &_) -> void {
+    const UnitTest page_pool = UnitTest::Named("page_pool") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Page_pool::bit_tree_mechanics,
             detail::Page_pool::bundle_flow,
@@ -78,4 +78,8 @@ namespace pP::tests {
             detail::Page_pool::allocate_deallocate_cycle,
         });
     };
+
+    const UnitTest &page_poolTests() noexcept {
+        return page_pool;
+    }
 } // namespace pP::tests

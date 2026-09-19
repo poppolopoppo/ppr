@@ -1278,7 +1278,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest raw_channel = UnitTest::Named("raw_channel") / [](UnitTest::IRun &_) -> void {
+    const UnitTest raw_channel = UnitTest::Named("raw_channel") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Raw_channel::construction_and_state,
             detail::Raw_channel::single_threaded_send_receive,
@@ -1315,7 +1315,7 @@ namespace pP::tests {
             detail::Raw_channel::select_multiple_channels_concurrent,
         });
     };
-    extern const UnitTest typed_channel = UnitTest::Named("typed_channel") / [](UnitTest::IRun &_) -> void {
+    const UnitTest typed_channel = UnitTest::Named("typed_channel") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Typed_channel::send_and_receive_int,
             detail::Typed_channel::emplace_construction,
@@ -1338,10 +1338,14 @@ namespace pP::tests {
             detail::Typed_channel::range_iteration_non_blocking,
         });
     };
-    extern const UnitTest channel = UnitTest::Named("channel") / [](UnitTest::IRun &_) -> void {
+    const UnitTest channel = UnitTest::Named("channel") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             raw_channel,
             typed_channel,
         });
     };
+
+    const UnitTest &channelTests() noexcept {
+        return channel;
+    }
 } // namespace pP::tests

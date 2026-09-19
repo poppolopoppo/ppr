@@ -372,7 +372,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest shader = UnitTest::Named("shader") / [](UnitTest::IRun &_) -> void {
+    const UnitTest shader = UnitTest::Named("shader") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::ShaderErrC::errc_enum_values,
             detail::ShaderErrC::errc_category_name,
@@ -397,4 +397,8 @@ namespace pP::tests {
             detail::RhiLifecycle::init_shutdown_init_roundtrip,
         });
     };
+
+    const UnitTest &shaderTests() noexcept {
+        return shader;
+    }
 } // namespace pP::tests

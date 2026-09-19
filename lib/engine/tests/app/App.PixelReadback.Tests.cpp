@@ -70,7 +70,21 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest pixel_readback = detail::pixel_readback;
-    extern const UnitTest app_headless_lifecycle_is_idempotent = detail::app_headless_lifecycle_is_idempotent;
-    extern const UnitTest app_run_shutdowns_after_nonstandard_hook_exception = detail::app_run_shutdowns_after_nonstandard_hook_exception;
+    const UnitTest pixel_readback = detail::pixel_readback;
+
+    const UnitTest &pixel_readbackTests() noexcept {
+        return pixel_readback;
+    }
+
+    const UnitTest app_headless_lifecycle_is_idempotent = detail::app_headless_lifecycle_is_idempotent;
+
+    const UnitTest &app_headless_lifecycle_is_idempotentTests() noexcept {
+        return app_headless_lifecycle_is_idempotent;
+    }
+
+    const UnitTest app_run_shutdowns_after_nonstandard_hook_exception = detail::app_run_shutdowns_after_nonstandard_hook_exception;
+
+    const UnitTest &app_run_shutdowns_after_nonstandard_hook_exceptionTests() noexcept {
+        return app_run_shutdowns_after_nonstandard_hook_exception;
+    }
 } // namespace pP::tests

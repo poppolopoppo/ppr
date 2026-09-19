@@ -152,7 +152,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest arena = UnitTest::Named("arena") / [](UnitTest::IRun &_) -> void {
+    const UnitTest arena = UnitTest::Named("arena") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Arena::lifo_operations,
             detail::Arena::multi_slab,
@@ -163,4 +163,8 @@ namespace pP::tests {
             detail::Arena::scratch_pad_scoped,
         });
     };
+
+    const UnitTest &arenaTests() noexcept {
+        return arena;
+    }
 } // namespace pP::tests

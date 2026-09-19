@@ -875,7 +875,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest camera = UnitTest::Named("camera") / [](UnitTest::IRun &_) -> void {
+    const UnitTest camera = UnitTest::Named("camera") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::camera_model,
             detail::viewport_size,
@@ -917,4 +917,8 @@ namespace pP::tests {
             detail::free_camera_primed_held_key_partition_invariant,
         });
     };
+
+    const UnitTest &cameraTests() noexcept {
+        return camera;
+    }
 } // namespace pP::tests

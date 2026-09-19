@@ -91,7 +91,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest hal = UnitTest::Named("hal") / [](UnitTest::IRun &_) -> void {
+    const UnitTest hal = UnitTest::Named("hal") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Hal::thread_id,
             detail::Hal::set_get_name_roundtrip,
@@ -99,4 +99,8 @@ namespace pP::tests {
             detail::Hal::worker_thread_name,
         });
     };
+
+    const UnitTest &halTests() noexcept {
+        return hal;
+    }
 } // namespace pP::tests

@@ -51,10 +51,14 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest imgui_dpi = UnitTest::Named("imgui_dpi") / [](UnitTest::IRun &_) -> void {
+    const UnitTest imgui_dpi = UnitTest::Named("imgui_dpi") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::ImguiDpi::scale_2_client_to_framebuffer_mapping,
             detail::ImguiDpi::degenerate_logical_falls_back_to_1,
         });
     };
+
+    const UnitTest &imgui_dpiTests() noexcept {
+        return imgui_dpi;
+    }
 } // namespace pP::tests

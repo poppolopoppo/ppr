@@ -118,7 +118,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest sparse_vector = UnitTest::Named("sparse_vector") / [](UnitTest::IRun &_) -> void {
+    const UnitTest sparse_vector = UnitTest::Named("sparse_vector") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Sparse_vector::allocation_and_free_list,
             detail::Sparse_vector::jump_counting_logic,
@@ -128,4 +128,8 @@ namespace pP::tests {
             detail::Sparse_vector::memory_stability,
         });
     };
+
+    const UnitTest &sparse_vectorTests() noexcept {
+        return sparse_vector;
+    }
 } // namespace pP::tests

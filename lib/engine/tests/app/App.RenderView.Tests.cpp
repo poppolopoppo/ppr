@@ -58,7 +58,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest render_view = UnitTest::Named("render_view") / [](UnitTest::IRun &_) -> void {
+    const UnitTest render_view = UnitTest::Named("render_view") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::RendererBoundary::color_attachment_ops_have_sane_defaults,
             detail::RendererBoundary::draw_submission_carries_camera_free_raster_state,
@@ -67,4 +67,8 @@ namespace pP::tests {
             detail::RendererBoundary::ortho_uses_d3d_convention_without_y_flip,
         });
     };
+
+    const UnitTest &render_viewTests() noexcept {
+        return render_view;
+    }
 } // namespace pP::tests

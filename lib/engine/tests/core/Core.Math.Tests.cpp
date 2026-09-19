@@ -151,7 +151,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest math = UnitTest::Named("math") / [](UnitTest::IRun &_) -> void {
+    const UnitTest math = UnitTest::Named("math") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Math::scalar_rounding_to_int,
             detail::Math::scalar_rounding_to_uint,
@@ -163,4 +163,8 @@ namespace pP::tests {
             detail::Math::generic_vector_rounding_fallback,
         });
     };
+
+    const UnitTest &mathTests() noexcept {
+        return math;
+    }
 } // namespace pP::tests

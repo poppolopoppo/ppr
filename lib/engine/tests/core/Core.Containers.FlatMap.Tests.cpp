@@ -223,7 +223,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest flat_map = UnitTest::Named("flat_map") / [](UnitTest::IRun &_) -> void {
+    const UnitTest flat_map = UnitTest::Named("flat_map") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Flat_map::empty,
             detail::Flat_map::single_insert,
@@ -249,4 +249,8 @@ namespace pP::tests {
             detail::Flat_map::initializer_list,
         });
     };
+
+    const UnitTest &flat_mapTests() noexcept {
+        return flat_map;
+    }
 } // namespace pP::tests

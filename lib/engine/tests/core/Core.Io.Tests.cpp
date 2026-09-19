@@ -513,7 +513,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest file = UnitTest::Named("file") / [](UnitTest::IRun &_) -> void {
+    const UnitTest file = UnitTest::Named("file") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Io::File::open_and_close,
             detail::Io::File::move_semantics,
@@ -521,7 +521,7 @@ namespace pP::tests {
             detail::Io::File::double_close_safe,
         });
     };
-    extern const UnitTest mapped = UnitTest::Named("mapped") / [](UnitTest::IRun &_) -> void {
+    const UnitTest mapped = UnitTest::Named("mapped") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Io::Mapped::read_content,
             detail::Io::Mapped::empty_file,
@@ -530,7 +530,7 @@ namespace pP::tests {
             detail::Io::Mapped::write_content,
         });
     };
-    extern const UnitTest request = UnitTest::Named("request") / [](UnitTest::IRun &_) -> void {
+    const UnitTest request = UnitTest::Named("request") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Io::Request::default_state,
             detail::Io::Request::i_event_interface,
@@ -544,12 +544,12 @@ namespace pP::tests {
             detail::Io::Request::cancel_then_destroy,
         });
     };
-    extern const UnitTest port = UnitTest::Named("port") / [](UnitTest::IRun &_) -> void {
+    const UnitTest port = UnitTest::Named("port") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Io::Port::move_semantics,
         });
     };
-    extern const UnitTest io = UnitTest::Named("io") / [](UnitTest::IRun &_) -> void {
+    const UnitTest io = UnitTest::Named("io") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             file,
             mapped,
@@ -557,4 +557,8 @@ namespace pP::tests {
             port,
         });
     };
+
+    const UnitTest &ioTests() noexcept {
+        return io;
+    }
 } // namespace pP::tests

@@ -264,14 +264,14 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest background = UnitTest::Named("background") / [](UnitTest::IRun &_) -> void {
+    const UnitTest background = UnitTest::Named("background") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::Background::done_is_never_event,
             detail::Context::Background::error_is_none,
             detail::Context::Background::value_is_none,
         });
     };
-    extern const UnitTest cancel = UnitTest::Named("cancel") / [](UnitTest::IRun &_) -> void {
+    const UnitTest cancel = UnitTest::Named("cancel") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::Cancel::done_initially_empty,
             detail::Context::Cancel::manual_cancel_fires_done,
@@ -281,19 +281,19 @@ namespace pP::tests {
             detail::Context::Cancel::child_cancel_does_not_affect_parent,
         });
     };
-    extern const UnitTest cancel_clause = UnitTest::Named("cancel_clause") / [](UnitTest::IRun &_) -> void {
+    const UnitTest cancel_clause = UnitTest::Named("cancel_clause") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::CancelClause::clause_fires_done_with_error,
             detail::Context::CancelClause::clause_error_matches,
         });
     };
-    extern const UnitTest without_cancel = UnitTest::Named("without_cancel") / [](UnitTest::IRun &_) -> void {
+    const UnitTest without_cancel = UnitTest::Named("without_cancel") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::WithoutCancel::done_never_fires,
             detail::Context::WithoutCancel::error_always_none,
         });
     };
-    extern const UnitTest after_func = UnitTest::Named("after_func") / [](UnitTest::IRun &_) -> void {
+    const UnitTest after_func = UnitTest::Named("after_func") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::AfterFunc::callback_called_on_destruction,
             detail::Context::AfterFunc::callback_receives_context,
@@ -302,21 +302,21 @@ namespace pP::tests {
     // NOTE: identifier is `context_value` (not `value`) because the opaque
     // group in Core.Opaque.Tests.cpp owns `pP::tests::value`; the test NAME
     // stays "value" so the path core/context/value is unchanged.
-    extern const UnitTest context_value = UnitTest::Named("value") / [](UnitTest::IRun &_) -> void {
+    const UnitTest context_value = UnitTest::Named("value") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::Value::value_is_retrievable,
             detail::Context::Value::missing_key_returns_none,
             detail::Context::Value::values_from_parent_fallback,
         });
     };
-    extern const UnitTest deadline = UnitTest::Named("deadline") / [](UnitTest::IRun &_) -> void {
+    const UnitTest deadline = UnitTest::Named("deadline") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Context::Deadline::deadline_is_set,
             detail::Context::Deadline::parent_cancel_overrides_deadline,
             detail::Context::Deadline::timeout_sets_deadline,
         });
     };
-    extern const UnitTest context = UnitTest::Named("context") / [](UnitTest::IRun &_) -> void {
+    const UnitTest context = UnitTest::Named("context") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             background,
             cancel,
@@ -327,4 +327,8 @@ namespace pP::tests {
             deadline,
         });
     };
+
+    const UnitTest &contextTests() noexcept {
+        return context;
+    }
 } // namespace pP::tests

@@ -248,7 +248,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest player_graph = UnitTest::Named("player_graph") / [](UnitTest::IRun &_) -> void {
+    const UnitTest player_graph = UnitTest::Named("player_graph") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::empty_initially,
             detail::add_keyboard_player,
@@ -266,4 +266,8 @@ namespace pP::tests {
             detail::clear_also_clears_callbacks,
         });
     };
+
+    const UnitTest &player_graphTests() noexcept {
+        return player_graph;
+    }
 } // namespace pP::tests

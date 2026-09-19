@@ -282,7 +282,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest never_event = UnitTest::Named("never_event") / [](UnitTest::IRun &_) -> void {
+    const UnitTest never_event = UnitTest::Named("never_event") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Event::Never::poll_returns_false,
             detail::Event::Never::subscribe_returns_default,
@@ -290,7 +290,7 @@ namespace pP::tests {
             detail::Event::Never::reset_noop,
         });
     };
-    extern const UnitTest pulse_event = UnitTest::Named("pulse_event") / [](UnitTest::IRun &_) -> void {
+    const UnitTest pulse_event = UnitTest::Named("pulse_event") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Event::Pulse::poll_initially_false,
             detail::Event::Pulse::emit_sets_flag,
@@ -301,7 +301,7 @@ namespace pP::tests {
             detail::Event::Pulse::unsubscribe_restores_previous,
         });
     };
-    extern const UnitTest broadcast_event = UnitTest::Named("broadcast_event") / [](UnitTest::IRun &_) -> void {
+    const UnitTest broadcast_event = UnitTest::Named("broadcast_event") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Event::Broadcast::poll_initially_false,
             detail::Event::Broadcast::emit_sets_flag,
@@ -310,7 +310,7 @@ namespace pP::tests {
             detail::Event::Broadcast::unsubscribe_removes_subscriber,
         });
     };
-    extern const UnitTest signal_single = UnitTest::Named("signal_single") / [](UnitTest::IRun &_) -> void {
+    const UnitTest signal_single = UnitTest::Named("signal_single") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Event::SignalSingle::poll_empty_returns_nullopt,
             detail::Event::SignalSingle::poll_after_emit_returns_event,
@@ -318,7 +318,7 @@ namespace pP::tests {
             detail::Event::SignalSingle::iterator_sentinel,
         });
     };
-    extern const UnitTest signal_multi = UnitTest::Named("signal_multi") / [](UnitTest::IRun &_) -> void {
+    const UnitTest signal_multi = UnitTest::Named("signal_multi") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Event::SignalMulti::poll_two_events_emits_first,
             detail::Event::SignalMulti::poll_two_events_emits_second,
@@ -326,7 +326,7 @@ namespace pP::tests {
             detail::Event::SignalMulti::both_events_set,
         });
     };
-    extern const UnitTest event = UnitTest::Named("event") / [](UnitTest::IRun &_) -> void {
+    const UnitTest event = UnitTest::Named("event") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             never_event,
             pulse_event,
@@ -335,4 +335,8 @@ namespace pP::tests {
             signal_multi,
         });
     };
+
+    const UnitTest &eventTests() noexcept {
+        return event;
+    }
 } // namespace pP::tests

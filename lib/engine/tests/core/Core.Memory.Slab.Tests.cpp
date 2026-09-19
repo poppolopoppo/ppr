@@ -93,7 +93,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest slab = UnitTest::Named("slab") / [](UnitTest::IRun &_) -> void {
+    const UnitTest slab = UnitTest::Named("slab") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Slab::lifo_operations,
             detail::Slab::out_of_memory,
@@ -102,4 +102,8 @@ namespace pP::tests {
             detail::Slab::allocator_compliance,
         });
     };
+
+    const UnitTest &slabTests() noexcept {
+        return slab;
+    }
 } // namespace pP::tests

@@ -189,7 +189,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest type_uid = UnitTest::Named("type_uid") / [](UnitTest::IRun &_) -> void {
+    const UnitTest type_uid = UnitTest::Named("type_uid") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Service::type_uid_identity,
             detail::Service::type_uid_unique_types,
@@ -199,7 +199,7 @@ namespace pP::tests {
             detail::Service::type_uid_pointer_types,
         });
     };
-    extern const UnitTest service_locator = UnitTest::Named("service_locator") / [](UnitTest::IRun &_) -> void {
+    const UnitTest service_locator = UnitTest::Named("service_locator") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Service_locator::empty,
             detail::Service_locator::insert_and_try_get,
@@ -214,10 +214,14 @@ namespace pP::tests {
             detail::Service_locator::child_erase_does_not_affect_parent,
         });
     };
-    extern const UnitTest service = UnitTest::Named("service") / [](UnitTest::IRun &_) -> void {
+    const UnitTest service = UnitTest::Named("service") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             type_uid,
             service_locator,
         });
     };
+
+    const UnitTest &serviceTests() noexcept {
+        return service;
+    }
 } // namespace pP::tests

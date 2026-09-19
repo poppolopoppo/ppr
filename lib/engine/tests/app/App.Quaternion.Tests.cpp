@@ -64,7 +64,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest quaternion = UnitTest::Named("quaternion") / [](UnitTest::IRun &_) -> void {
+    const UnitTest quaternion = UnitTest::Named("quaternion") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::QuaternionTests::identity,
             detail::QuaternionTests::yaw_pitch_roll,
@@ -72,4 +72,8 @@ namespace pP::tests {
             detail::QuaternionTests::length_preserved,
         });
     };
+
+    const UnitTest &quaternionTests() noexcept {
+        return quaternion;
+    }
 } // namespace pP::tests

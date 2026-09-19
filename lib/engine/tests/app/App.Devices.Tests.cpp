@@ -188,7 +188,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest devices = UnitTest::Named("devices") / [](UnitTest::IRun &_) -> void {
+    const UnitTest devices = UnitTest::Named("devices") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Keyboard::construct_with_device_id,
             detail::Keyboard::supported_keys_non_empty,
@@ -205,4 +205,8 @@ namespace pP::tests {
             detail::DigitalState::reset_clears_held,
         });
     };
+
+    const UnitTest &devicesTests() noexcept {
+        return devices;
+    }
 } // namespace pP::tests

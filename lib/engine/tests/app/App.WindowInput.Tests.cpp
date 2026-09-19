@@ -1035,7 +1035,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest window_input = UnitTest::Named("window_input") / [](UnitTest::IRun &_) -> void {
+    const UnitTest window_input = UnitTest::Named("window_input") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::WindowInput::mouse_keeps_client_space_with_nonzero_window_origin,
             detail::WindowInput::char_posted_after_poll_clear_survives_to_consumer,
@@ -1057,14 +1057,52 @@ namespace pP::tests {
             detail::WindowInput::imgui_consume_flags_reset_on_shutdown,
         });
     };
+
+    const UnitTest &window_inputTests() noexcept {
+        return window_input;
+    }
 } // namespace pP::tests
 
 namespace pP::tests {
-    extern const UnitTest renderer_triangle_reinit_ok = detail::renderer_triangle_reinit_ok;
-    extern const UnitTest imgui_live_shutdown_idempotent = detail::imgui_live_shutdown_idempotent;
-    extern const UnitTest app_init_rollback_on_window_create_failure = detail::app_init_rollback_on_window_create_failure;
-    extern const UnitTest app_init_rollback_on_input_connect_failure = detail::app_init_rollback_on_input_connect_failure;
-    extern const UnitTest app_teardown_double_shutdown_no_refire = detail::app_teardown_double_shutdown_no_refire;
-    extern const UnitTest app_teardown_reports_subsystem_failure_but_completes = detail::app_teardown_reports_subsystem_failure_but_completes;
-    extern const UnitTest app_preserves_pre_registered_graphics_services = detail::app_preserves_pre_registered_graphics_services;
+    const UnitTest renderer_triangle_reinit_ok = detail::renderer_triangle_reinit_ok;
+
+    const UnitTest &renderer_triangle_reinit_okTests() noexcept {
+        return renderer_triangle_reinit_ok;
+    }
+
+    const UnitTest imgui_live_shutdown_idempotent = detail::imgui_live_shutdown_idempotent;
+
+    const UnitTest &imgui_live_shutdown_idempotentTests() noexcept {
+        return imgui_live_shutdown_idempotent;
+    }
+
+    const UnitTest app_init_rollback_on_window_create_failure = detail::app_init_rollback_on_window_create_failure;
+
+    const UnitTest &app_init_rollback_on_window_create_failureTests() noexcept {
+        return app_init_rollback_on_window_create_failure;
+    }
+
+    const UnitTest app_init_rollback_on_input_connect_failure = detail::app_init_rollback_on_input_connect_failure;
+
+    const UnitTest &app_init_rollback_on_input_connect_failureTests() noexcept {
+        return app_init_rollback_on_input_connect_failure;
+    }
+
+    const UnitTest app_teardown_double_shutdown_no_refire = detail::app_teardown_double_shutdown_no_refire;
+
+    const UnitTest &app_teardown_double_shutdown_no_refireTests() noexcept {
+        return app_teardown_double_shutdown_no_refire;
+    }
+
+    const UnitTest app_teardown_reports_subsystem_failure_but_completes = detail::app_teardown_reports_subsystem_failure_but_completes;
+
+    const UnitTest &app_teardown_reports_subsystem_failure_but_completesTests() noexcept {
+        return app_teardown_reports_subsystem_failure_but_completes;
+    }
+
+    const UnitTest app_preserves_pre_registered_graphics_services = detail::app_preserves_pre_registered_graphics_services;
+
+    const UnitTest &app_preserves_pre_registered_graphics_servicesTests() noexcept {
+        return app_preserves_pre_registered_graphics_services;
+    }
 } // namespace pP::tests

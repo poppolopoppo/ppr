@@ -283,27 +283,42 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest relocatable = UnitTest::Named("relocatable") / [](UnitTest::IRun &_) -> void {
+    const UnitTest relocatable = UnitTest::Named("relocatable") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::traits_relocatable_fundamentals,
             detail::Container::traits_relocatable_user_type_negative,
             detail::Container::traits_relocatable_specialized_types,
         });
     };
-    extern const UnitTest hash = UnitTest::Named("hash") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &relocatableTests() noexcept {
+        return relocatable;
+    }
+
+    const UnitTest hash = UnitTest::Named("hash") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::hash_mix_64_and_32,
             detail::Container::hash_sized_and_unordered_range_and_ptr_combine,
             detail::Container::additional_hash_and_pointer_checks,
         });
     };
-    extern const UnitTest sort = UnitTest::Named("sort") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &hashTests() noexcept {
+        return hash;
+    }
+
+    const UnitTest sort = UnitTest::Named("sort") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::shellsort_empty_and_single,
             detail::Container::shellsort_projection_and_comparator,
         });
     };
-    extern const UnitTest bitmask = UnitTest::Named("bitmask") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &sortTests() noexcept {
+        return sort;
+    }
+
+    const UnitTest bitmask = UnitTest::Named("bitmask") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::bitmask_basic_set_reset_test,
             detail::Container::bitmask_rotate_and_pop_tests,
@@ -313,7 +328,12 @@ namespace pP::tests {
             detail::Container::bitmask_ref_compound_ops,
         });
     };
-    extern const UnitTest pointers = UnitTest::Named("pointers") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &bitmaskTests() noexcept {
+        return bitmask;
+    }
+
+    const UnitTest pointers = UnitTest::Named("pointers") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::relptr_null_and_valid,
             detail::Container::relptr_copy_assign_and_comparisons,
@@ -321,22 +341,41 @@ namespace pP::tests {
             detail::Container::tagptr_bits_reinterpret_and_mutation,
         });
     };
-    extern const UnitTest iterators = UnitTest::Named("iterators") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &pointersTests() noexcept {
+        return pointers;
+    }
+
+    const UnitTest iterators = UnitTest::Named("iterators") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::indexiterator_arithmetic_and_distance,
             detail::Container::indexiterator_const_conversion_and_cross_compare,
         });
     };
-    extern const UnitTest stack = UnitTest::Named("stack") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &iteratorsTests() noexcept {
+        return iterators;
+    }
+
+    const UnitTest stack = UnitTest::Named("stack") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::stack_push_pop_and_iterator,
             detail::Container::stack_overflow_and_clear,
         });
     };
-    extern const UnitTest ring_buffer = UnitTest::Named("ring_buffer") / [](UnitTest::IRun &_) -> void {
+
+    const UnitTest &stackTests() noexcept {
+        return stack;
+    }
+
+    const UnitTest ring_buffer = UnitTest::Named("ring_buffer") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Container::ringbuffer_push_pop_wrap,
             detail::Container::ringbuffer_pop_empty_resets_positions,
         });
     };
+
+    const UnitTest &ring_bufferTests() noexcept {
+        return ring_buffer;
+    }
 } // namespace pP::tests

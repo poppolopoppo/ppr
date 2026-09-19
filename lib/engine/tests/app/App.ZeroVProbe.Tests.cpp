@@ -32,11 +32,15 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest zerov_probe = UnitTest::Named("zerov_probe") / [](UnitTest::IRun &_) -> void {
+    const UnitTest zerov_probe = UnitTest::Named("zerov_probe") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::ZeroVProbe::brace_splat_int2,
             detail::ZeroVProbe::brace_splat_float2,
             detail::ZeroVProbe::zero_extent_rect_preserves_origin,
         });
     };
+
+    const UnitTest &zerov_probeTests() noexcept {
+        return zerov_probe;
+    }
 } // namespace pP::tests

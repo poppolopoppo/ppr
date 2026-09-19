@@ -186,7 +186,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest file_watcher = UnitTest::Named("file_watcher") / [](UnitTest::IRun &_) -> void {
+    const UnitTest file_watcher = UnitTest::Named("file_watcher") / [](UnitTest::IRun &_) -> void {
         _.recurse(detail::File_watcher::create_file);
         _.recurse(detail::File_watcher::modify_file);
         _.recurse(detail::File_watcher::delete_file);
@@ -195,4 +195,8 @@ namespace pP::tests {
         _.recurse(detail::File_watcher::i_event_interface);
         _.recurse(detail::File_watcher::multiple_files);
     };
+
+    const UnitTest &file_watcherTests() noexcept {
+        return file_watcher;
+    }
 } // namespace pP::tests

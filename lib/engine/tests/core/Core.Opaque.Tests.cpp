@@ -574,7 +574,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest value = UnitTest::Named("value") / [](UnitTest::IRun &_) -> void {
+    const UnitTest value = UnitTest::Named("value") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Opaque::Value::decl_scalars,
             detail::Opaque::Value::decl_arrays,
@@ -589,7 +589,7 @@ namespace pP::tests {
             detail::Opaque::Value::format_formatter,
         });
     };
-    extern const UnitTest block = UnitTest::Named("block") / [](UnitTest::IRun &_) -> void {
+    const UnitTest block = UnitTest::Named("block") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Opaque::Block::value,
             detail::Opaque::Block::builder_scalars,
@@ -605,10 +605,14 @@ namespace pP::tests {
             detail::Opaque::Block::constructor_with_generator_fmt,
         });
     };
-    extern const UnitTest opaque = UnitTest::Named("opaque") / [](UnitTest::IRun &_) -> void {
+    const UnitTest opaque = UnitTest::Named("opaque") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             value,
             block,
         });
     };
+
+    const UnitTest &opaqueTests() noexcept {
+        return opaque;
+    }
 } // namespace pP::tests

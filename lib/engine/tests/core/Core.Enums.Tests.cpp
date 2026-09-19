@@ -85,7 +85,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest enums = UnitTest::Named("enums") / [](UnitTest::IRun &_) -> void {
+    const UnitTest enums = UnitTest::Named("enums") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Enum::ord,
             detail::Enum::flags_any,
@@ -96,4 +96,8 @@ namespace pP::tests {
             detail::Enum::open_flags_or,
         });
     };
+
+    const UnitTest &enumsTests() noexcept {
+        return enums;
+    }
 } // namespace pP::tests

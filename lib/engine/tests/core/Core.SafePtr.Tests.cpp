@@ -29,10 +29,14 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest safe_ptr_test = UnitTest::Named("safe_ptr_test") / [](UnitTest::IRun &_) -> void {
+    const UnitTest safe_ptr_test = UnitTest::Named("safe_ptr_test") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::SafePtr::null_copy_remains_null,
             detail::SafePtr::nullptr_assignment_clears,
         });
     };
+
+    const UnitTest &safe_ptr_testTests() noexcept {
+        return safe_ptr_test;
+    }
 } // namespace pP::tests

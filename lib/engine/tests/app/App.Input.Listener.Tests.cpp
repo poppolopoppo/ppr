@@ -121,7 +121,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest input_listener = UnitTest::Named("input_listener") / [](UnitTest::IRun &_) -> void {
+    const UnitTest input_listener = UnitTest::Named("input_listener") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::pressed_fires_started_handler,
             detail::pressed_fires_triggered_handler,
@@ -132,4 +132,8 @@ namespace pP::tests {
             detail::modulate_fires_once_per_event_not_per_trigger,
         });
     };
+
+    const UnitTest &input_listenerTests() noexcept {
+        return input_listener;
+    }
 } // namespace pP::tests

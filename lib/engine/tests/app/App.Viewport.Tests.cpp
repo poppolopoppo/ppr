@@ -291,7 +291,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    extern const UnitTest viewport = UnitTest::Named("viewport") / [](UnitTest::IRun &_) -> void {
+    const UnitTest viewport = UnitTest::Named("viewport") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::ProjectionConv::all_backends_use_one_projection,
             detail::ViewportTypes::window_viewport_layout_switch_bumps_revision,
@@ -316,4 +316,8 @@ namespace pP::tests {
             });
         }
     };
+
+    const UnitTest &viewportTests() noexcept {
+        return viewport;
+    }
 } // namespace pP::tests
