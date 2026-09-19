@@ -12,6 +12,8 @@ import :input.listener;
 import :input.routing;
 import :service.input;
 import :window.viewport;
+
+import engine.core;
 import std;
 
 namespace pP {

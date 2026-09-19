@@ -4,9 +4,9 @@ export module engine.app:player;
 
 import std;
 import engine.core;
+import :service.input;
 import :input.listener;
 import :input.device;
-import :input.key;
 import :input.action;
 
 export namespace pP {

@@ -9,7 +9,6 @@ import :platform;
 import :renderer;
 
 import engine.core;
-import engine.math;
 import engine.rhi;
 import engine.shader;
 import std;

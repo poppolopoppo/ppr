@@ -3,6 +3,8 @@ module;
 export module engine.app:input.action;
 
 import engine.core;
+import engine.math;
+import std;
 import :input.key;
 
 export namespace pP {

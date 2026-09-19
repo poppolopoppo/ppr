@@ -4,7 +4,10 @@ module;
 export module engine.app:platform.glfw.window;
 
 import :service.window;
+
 import engine.core;
+import engine.math;
+import std;
 
 export namespace pP {
     class Application;

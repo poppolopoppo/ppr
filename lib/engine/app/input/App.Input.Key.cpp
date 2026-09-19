@@ -4,6 +4,10 @@ module engine.app;
 
 import :input.key;
 
+import engine.core;
+import engine.math;
+import std;
+
 namespace pP {
     // ------------------------------------------------------------------
     // input value

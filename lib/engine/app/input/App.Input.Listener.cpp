@@ -5,8 +5,11 @@ module engine.app;
 import :input.listener;
 import :input.action;
 import :input.device;
+import :service.input;
+import :window.handle;
 
 import engine.core;
+import std;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage

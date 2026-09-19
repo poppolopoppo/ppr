@@ -3,6 +3,8 @@ module;
 export module engine.app:input.device;
 
 import engine.core;
+import engine.math;
+import std;
 import :service.input;
 import :input.key;
 

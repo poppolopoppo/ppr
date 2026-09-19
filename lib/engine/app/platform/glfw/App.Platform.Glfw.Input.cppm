@@ -5,6 +5,9 @@ export module engine.app:platform.glfw.input;
 import :input.device;
 import :input.listener;
 
+import engine.core;
+import std;
+
 export namespace pP {
     class GlfwInput final : public IInputService {
         std::error_code pollInputGamepad_(const InputContext &context, GamepadDevice &gamepad) const;

@@ -5,6 +5,8 @@ module;
 module engine.app;
 
 import :input.routing;
+
+import engine.core;
 import std;
 
 namespace pP {

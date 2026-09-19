@@ -9,7 +9,6 @@ import engine.math;
 import :input.filtered_analog;
 import :input.key;
 import :scene.camera;
-import :service.input;
 
 export namespace pP {
     struct InputAction;

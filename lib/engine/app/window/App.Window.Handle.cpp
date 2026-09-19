@@ -4,6 +4,9 @@ module engine.app;
 
 import :window.handle;
 
+import engine.core;
+import std;
+
 namespace pP {
     // ------------------------------------------------------------------
     // window handle

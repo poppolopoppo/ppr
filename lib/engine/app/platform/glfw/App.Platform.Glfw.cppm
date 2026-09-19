@@ -4,6 +4,9 @@ export module engine.app:platform.glfw;
 
 import :platform;
 
+import engine.core;
+import std;
+
 export namespace pP {
     // ------------------------------------------------------------------
     // GLFW platform integration

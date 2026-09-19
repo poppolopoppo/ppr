@@ -5,6 +5,10 @@ module engine.app;
 import :input.device;
 import :input.listener;
 
+import engine.core;
+import engine.math;
+import std;
+
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(InputDevice, info, none);
