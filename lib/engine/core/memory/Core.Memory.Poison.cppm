@@ -10,8 +10,7 @@ module;
 
 export module engine.core:memory.poison;
 
-import :assert;
-import :hal;
+import :types;
 
 import std;
 

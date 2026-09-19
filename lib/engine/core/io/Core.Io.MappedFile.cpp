@@ -2,8 +2,6 @@ module;
 #include "pP/Macros.h"
 module engine.core;
 
-import :assert;
-import :containers;
 import :hal;
 import :io.mapped_file;
 import :memory.poison;

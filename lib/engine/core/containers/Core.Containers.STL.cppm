@@ -2,7 +2,6 @@ module;
 #include "pP/Macros.h"
 export module engine.core:containers.stl;
 
-import :assert;
 import :memory;
 import :memory.allocator;
 import std;

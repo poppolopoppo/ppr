@@ -3,7 +3,6 @@ module;
 export module engine.core:assert;
 
 import :function.ref;
-import :hal;
 
 import std;
 

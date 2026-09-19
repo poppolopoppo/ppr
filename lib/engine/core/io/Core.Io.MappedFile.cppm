@@ -2,15 +2,12 @@ module;
 #include "pP/Macros.h"
 export module engine.core:io.mapped_file;
 
-import :assert;
 import :containers;
 import :hal;
-import :memory.poison;
 
 import std;
 
 export namespace pP {
-
     // ------------------------------------------------------------------
     // MappedFile — memory-mapped file (RAII move-only, standalone)
     // ------------------------------------------------------------------

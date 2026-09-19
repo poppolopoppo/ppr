@@ -4,7 +4,6 @@ module;
 export module engine.core:memory;
 
 import :memory.allocator;
-import :hal;
 import :memory.page_pool;
 
 import std;

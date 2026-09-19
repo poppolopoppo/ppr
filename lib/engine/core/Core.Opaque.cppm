@@ -5,6 +5,7 @@ export module engine.core:opaque;
 
 import :memory.arena;
 import :assert;
+import :containers;
 import :memory.allocator;
 import :function.ref;
 import :strings;

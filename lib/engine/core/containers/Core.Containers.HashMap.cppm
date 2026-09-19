@@ -4,6 +4,7 @@ export module engine.core:containers.hash_map;
 
 import :assert;
 import :containers;
+import :hashing;
 import :memory;
 
 import std;

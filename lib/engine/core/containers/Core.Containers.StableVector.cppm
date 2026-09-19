@@ -3,7 +3,7 @@ module;
 export module engine.core:containers.stable_vector;
 
 import :assert;
-import :hal;
+import :containers;
 import :memory;
 import :memory.poison;
 

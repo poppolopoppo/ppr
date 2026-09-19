@@ -3,7 +3,6 @@ module;
 
 export module engine.core:io.file_watcher;
 
-import :assert;
 import :containers.stl;
 import :concurrency.event;
 import :hal;

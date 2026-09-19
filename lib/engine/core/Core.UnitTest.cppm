@@ -4,7 +4,6 @@ export module engine.core:unit_test;
 
 import :assert;
 import :function.ref;
-import :hal;
 import :logger;
 
 import std;

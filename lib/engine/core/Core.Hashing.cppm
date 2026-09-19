@@ -4,7 +4,8 @@ module;
 
 export module engine.core:hashing;
 
-import :assert;
+import :hal;
+import :types;
 
 import std;
 

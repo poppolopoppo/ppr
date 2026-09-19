@@ -4,7 +4,6 @@ module;
 export module engine.core:concurrency.event;
 
 import :assert;
-import :memory.allocator;
 import :containers;
 import :hal;
 import :containers.stable_vector;

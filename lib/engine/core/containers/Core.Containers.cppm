@@ -3,9 +3,11 @@ module;
 export module engine.core:containers;
 
 import :assert;
-import :hal;
+import :function.ref;
 import :hashing;
 import :memory.poison;
+import :types;
+import :utility;
 
 import std;
 

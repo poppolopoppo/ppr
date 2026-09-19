@@ -4,9 +4,9 @@ export module engine.core:containers.sparse_vector;
 
 import :assert;
 import :containers;
-import :hal;
-import :memory;
 import :containers.stable_vector;
+import :hashing;
+import :memory;
 
 import std;
 

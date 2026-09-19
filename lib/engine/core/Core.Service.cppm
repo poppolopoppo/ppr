@@ -2,9 +2,8 @@ module;
 #include "pP/Macros.h"
 export module engine.core:service;
 
+import :assert;
 import :containers.stl;
-import :hal;
-import :memory.arena;
 import :memory.pointer;
 import std;
 

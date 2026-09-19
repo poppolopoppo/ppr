@@ -4,7 +4,6 @@ module;
 
 export module engine.core:hal;
 
-import :types;
 export import :types;
 import std;
 

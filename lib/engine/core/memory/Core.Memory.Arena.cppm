@@ -8,12 +8,10 @@ import :containers;
 import :hal;
 import :memory;
 import :memory.poison;
-import :memory.page_pool;
 
 import std;
 
 export namespace pP::mem {
-
     // ------------------------------------------------------------------
     // slab allocator has a single chunk of fixed size, which it does not own
     // ------------------------------------------------------------------

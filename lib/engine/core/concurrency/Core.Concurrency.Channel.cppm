@@ -4,8 +4,6 @@ module;
 export module engine.core:concurrency.channel;
 
 import :assert;
-import :containers;
-import :enums;
 import :concurrency.event;
 import :hal;
 

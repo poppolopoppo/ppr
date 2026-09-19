@@ -4,7 +4,6 @@ module;
 module engine.core;
 
 import :timer;
-import :hal;
 import :assert;
 import :containers.stable_vector;
 

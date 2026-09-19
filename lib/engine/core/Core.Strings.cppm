@@ -6,6 +6,8 @@ export module engine.core:strings;
 import :assert;
 import :memory.arena;
 import :containers;
+import :hal;
+import :hashing;
 
 import std;
 

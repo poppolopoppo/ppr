@@ -2,9 +2,10 @@ module;
 #include "pP/Macros.h"
 export module engine.core:function.callback;
 
-import :assert;
 import :containers.sparse_vector;
 import :function.ref;
+import :memory;
+import :memory.allocator;
 import :memory.pointer;
 
 import std;

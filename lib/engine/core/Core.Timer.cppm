@@ -2,8 +2,6 @@ module;
 #include "pP/Macros.h"
 export module engine.core:timer;
 
-import :assert;
-import :containers.stable_vector;
 import :containers.stl;
 import :memory.pointer;
 import :opaque;

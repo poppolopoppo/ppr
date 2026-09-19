@@ -2,10 +2,7 @@ module;
 #include "pP/Macros.h"
 export module engine.core:logger;
 
-import :concurrency.channel;
-import :enums;
 import :hal;
-import :memory.allocator;
 import :opaque;
 import :strings;
 import :timer;

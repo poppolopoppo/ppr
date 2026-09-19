@@ -2,8 +2,6 @@ module;
 #include "pP/Macros.h"
 export module engine.core:enums;
 
-import :assert;
-
 import std;
 
 export namespace pP {
