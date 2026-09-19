@@ -7,13 +7,16 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
 
 ## Design
 
-- **MSVC** (`MSVC.cmake`, primary toolchain): bootstraps the vcpkg toolchain from `VCPKG_ROOT` when no
-  toolchain is preset; debug info is per-object Embedded (`/Z7`, ccache-friendly, no PDB contention), shared-PDB
-  (`/Zi`) on Release, and `/ZI` under `PPR_EDIT_AND_CONTINUE` (Debug only); live EnC link set (all
-  `PPR_EDIT_AND_CONTINUE`-scoped): `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` +
-  `/PDBTMCACHE`; live-only `/MDd` asserts (dynamic vcpkg triplet + DLL runtime; `/MT` fails configure with
-  `LNK2038`); LNK4075 validators (`/INCREMENTAL:NO`, `/OPT:REF/ICF`, `/DEBUG:FASTLINK`, `/LTCG`) fail at
-  configure time, not build; `/EHsc` (required by `import std`), `/utf-8`
+- **MSVC** (`MSVC.cmake`, primary toolchain): bootstraps the vcpkg toolchain from `VCPKG_ROOT` only when
+  `CMAKE_TOOLCHAIN_FILE` is unset; debug info is per-object Embedded (`/Z7`, ccache-friendly, no PDB contention), shared-PDB
+  (`/Zi`) on Release, and `/ZI` (`EditAndContinue`) under `PPR_EDIT_AND_CONTINUE` (Debug only) via
+  `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT`; live EnC link set (all
+  `PPR_EDIT_AND_CONTINUE`-scoped, one genex element per flag so Ninja quoting stays one-token-per-flag):
+  `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` +
+  `/PDBTMCACHE` (`/DEBUG:FASTLINK` forbidden — LNK4075 with `/INCREMENTAL`); the `/MDd` runtime requirement is
+  enforced in `cmake/VCPkg.cmake` (dynamic triplet + DLL runtime; `/MT` fails configure, `LNK2038` otherwise) and the
+  LNK4075 validators (`/INCREMENTAL:NO`, `/OPT:REF/ICF`, `/DEBUG:FASTLINK`, `/LTCG`) live in root `CMakeLists.txt`
+  and fail at configure time, not build; `/EHsc` (required by `import std`), `/utf-8`
   and `/bigobj` applied globally via genex `add_compile_options`.
 - **Module-synth consistency**: `/bigobj` stays global (per-target use forks `@cmake_cxx_std` synth targets →
   "Disagreement of the location of the 'std' module"); release `/O2` + `/Ob2` (pinned) + `/GL` + `/Gw` +
@@ -33,13 +36,16 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
 
 ## Flow
 
-1. `Compilers.cmake` detects `CMAKE_CXX_COMPILER_ID`, includes the matching file.
+1. `Compilers.cmake` dispatches on `MSVC`, then `CMAKE_CXX_COMPILER_ID` (`.*Clang` including clang-cl,
+  `GNU`), and includes the matching `compiler/*.cmake` file.
 2. Global genex `add_compile_options` apply per-compiler/config flags to every target including synth targets.
 3. `setup_ppr_project()` layers `cxx_std_23` / `CXX_MODULE_STD ON` / warning sets / link edges per target.
 
 ## Integration
 
 - Included from root `CMakeLists.txt` via `include(Compilers)`; flags propagate via `add_compile_options`.
+  Cache interplay: `/Z7` embedded debug info keeps the `Cache.cmake` launcher safe (no shared-PDB contention);
+  every `setup_ppr_project()` target opts back out via `ppr_disable_compiler_cache()` (module BMIs uncacheable).
 - Preset side: `msvc-live` sets `PPR_EDIT_AND_CONTINUE=ON` (→ `/ZI` path); `PPR_RELEASE_PERF_FLAGS=OFF` there.
   `msvc-rel` sets `BUILD_TESTING=OFF` (test targets + `:unit_test` excluded from shipping configs).
 - Workaround refs: root-scope `@cmake_cxx_std.lib` LNK2001 (see `cmake/external/` + AGENTS.md "CMake Version
@@ -47,7 +53,8 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
 
 ## Key Files
 
-- `MSVC.cmake` — vcpkg bootstrap, `/Z7` vs `/Zi` vs `/ZI`, EnC link set (`/DEBUG:FULL`, `/INCREMENTAL`,
+- `MSVC.cmake` — vcpkg bootstrap (toolchain-file unset only), `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT`
+  (`/Z7` vs `/Zi` vs `/ZI`), EnC link set (`/DEBUG:FULL`, `/INCREMENTAL`,
   `/OPT:NOREF,NOICF`, `/LTCG:OFF`, `/PDBTMCACHE`), release link set (`/LTCG`, `/OPT:REF,ICF`, `/INCREMENTAL:NO`,
   `/DEBUG`, `/PDBSTRIPPED`), `/EHsc`, `/utf-8`, `/bigobj`, `/O2` + `/Ob2` + `/GL` + `/Gw` + `/Zc:checkGwOdr`,
   opt-in `/arch:AVX2` (`PPR_ENABLE_AVX2`),
