@@ -81,11 +81,18 @@ export namespace pP {
     using float4x4 = Matrix4x4;
 
     using mango::math::abs;
+    using mango::math::acos;
+    using mango::math::asin;
+    using mango::math::atan;
+    using mango::math::atan2;
     using mango::math::ceil;
     using mango::math::clamp;
+    using mango::math::cos;
     using mango::math::cross;
     using mango::math::distance;
     using mango::math::dot;
+    using mango::math::exp;
+    using mango::math::exp2;
     using mango::math::floor;
     using mango::math::fract;
     using mango::math::hmax;
@@ -93,19 +100,24 @@ export namespace pP {
     using mango::math::inverse;
     using mango::math::length;
     using mango::math::lerp;
+    using mango::math::log;
+    using mango::math::log2;
     using mango::math::max;
     using mango::math::min;
     using mango::math::mod;
     using mango::math::normalize;
+    using mango::math::pow;
     using mango::math::rcp;
-    using mango::math::refract;
     using mango::math::reflect;
+    using mango::math::refract;
     using mango::math::round;
     using mango::math::rsqrt;
     using mango::math::sign;
+    using mango::math::sin;
     using mango::math::smoothstep;
     using mango::math::sqrt;
     using mango::math::square;
+    using mango::math::tan;
     using mango::math::transpose;
     using mango::math::trunc;
 
