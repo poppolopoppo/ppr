@@ -175,17 +175,24 @@ namespace pP {
     }
 
     void UnitTest::RunImpl::log(const char *msg) {
-        if (m_context.m_log.has_value()) {
-            (*m_context.m_log)(*this, msg);
+        if (msg != nullptr) {
+            if (m_context.m_log.has_value()) {
+                (*m_context.m_log)(*this, msg);
+            } else {
+                std::println("{}: {}", std::string_view(m_test.m_name), std::string_view(msg));
+            }
         } else {
-            std::println("{}: {}", std::string_view(m_test.m_name), std::string_view(msg));
+            std::cout.flush();
         }
     }
 
     void UnitTest::RunImpl::failWith(const char *msg) noexcept(false) {
         if (m_num_failed++ == 0u) {
-            m_failure = msg;
             m_status = fail;
+        }
+
+        if (m_failure.empty() and msg != nullptr) {
+            m_failure.assign(msg);
         }
 
         if (m_parent != nullptr) {
