@@ -114,14 +114,19 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
   services, enums. Thematic private groups (23 files: per-area splits such as `Core.Allocator.Tests.cpp`,
   `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
-  `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core`.
+   `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
   (17 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
   `App.Shader/Viewport/RenderView/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
-  `Tests.cpp` + `App.Tests.cpp` root of 28 nodes (`11` app singletons via copy-alias); umbrella exports only `extern const UnitTest app`.
+  `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
-  `extern const UnitTest <group>` per file; sub-groups live with their parent; `memory`/`containers` assembled in `Core.Tests.cpp`.
-  Singleton leaves under the root re-expose via copy (`extern const <leaf> = detail::<leaf>;`, never a new `Named`); see `module-architect`.
+  TU-local `const UnitTest` + non-exported `const UnitTest &<node>Tests() noexcept` accessor per root-visible node;
+  file-local sub-groups need no accessor; `memory`/`containers` assembled in `Core.Tests.cpp`.
+  Suite roots forward-declare each accessor and call it in `_.recurse({...})` in fixed order; only `core`/`app`
+  remain `extern`. Direct-root singleton leaves use a TU-local copy plus accessor
+  (`const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`,
+  called as `<leaf>Tests()` — no additional `Named` wrapper, which would add a tree
+  level and change its `core/<...>` / `app/<...>` path); see `module-architect`.
 - Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
 

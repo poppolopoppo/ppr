@@ -196,17 +196,20 @@ Full flag list lives with the shared test infrastructure (`lib/engine/tests/shar
 
 ### Defining Tests
 
-Each suite keeps one exported root (`core` / `app`) and a set of thematic
+Each suite keeps one exported root (`core` / `app`, decl-only `.cppm` +
+out-of-line def is the MSVC C1001 workaround) and a set of thematic
 private group files (`lib/engine/tests/core/Core.Allocator.Tests.cpp`, …):
 a `module engine.tests.<suite>;` impl unit holding non-exported `detail::`
-leaves plus one top-level `extern const UnitTest <group>` per file
-(sub-groups live with their parent; `memory`/`containers` assembled in
-`Core.Tests.cpp`). Singleton leaves under the root are re-exposed via copy
-(`extern const <leaf> = detail::<leaf>;`, never a new `Named` — see
-`module-architect`). Add a
+leaves plus one TU-local `const UnitTest` and one non-exported
+`const UnitTest &<node>Tests() noexcept` accessor per root-visible node
+(file-local sub-groups need no accessor; `memory`/`containers` assembled in
+`Core.Tests.cpp`). Direct-root singleton leaves use a TU-local copy plus
+accessor (`const UnitTest <leaf> = detail::<leaf>;` +
+`const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`, called as
+`<leaf>Tests()` — never a new `Named`; see `module-architect`). Add a
 new leaf to the existing thematic file; add a new group file (CMake PRIVATE
-SOURCES) plus one `extern` forward-declare and one recurse entry in the suite
-root only for a new thematic area:
+SOURCES in the same change) plus one accessor forward-declare and one recurse
+call in the suite root only for a new thematic area:
 
 ```cpp
 PPR_UNIT_TEST(my_test) {

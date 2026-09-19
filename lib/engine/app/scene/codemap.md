@@ -27,14 +27,17 @@ location no longer exists.
   `updateModel(dt, ICameraController&, viewport)` copies current state, runs `controller.updateCameraModel`, then
   snapshots; full getter surface (pose, basis vectors, matrices, frusta, velocities, jitter).
 - **ICameraController** (`safe_object`) — `provideInputActionKeyMappings(out_mapping)` (const, fills bindings) +
-  `updateCameraModel(dt, model)`; `DummyCameraController` is the noop placeholder.
+  `updateCameraModel(dt, model)` + `resetInputState()` (noop default; `Basic` clears rate maps, deltas, impulses, and
+  mouse-look for focus-loss/device-reset); `DummyCameraController` is the noop placeholder.
 - **BasicCameraController** (`details::`) — owns five `unique_ptr<InputAction>` (`CameraMove` axis_3d, `CameraRotate`
   axis_2d, `CameraSpeed`/`CameraFov` axis_1d, `CameraLook` digital) wired in the ctor: translate accumulates
   `m_delta_position`, rotate accumulates quaternion deltas (absolute for keys/sticks, relative only when RMB
   `m_has_mouse_look` for `mouse_2d`), speed/fov `addClamp` into `FilteredAnalog<float>` ranges, look started/completed
   toggles mouse-look; `FilteredAnalog` pose state (rotation `Quaternion`, position `float3`, fov, speed multiplier) plus
-  sensitivity/speed tuning (`m_mouse_sensitivity`, `m_gamepad_sensitivity`, translate/rotate speeds, fov/speed ranges);
-  `updateCameraModel` ticks fov/speed filters, calls virtual `updateCameraPose_`, publishes `m_fov`/`m_has_camera_cut`,
+   sensitivity/speed tuning (`m_mouse_sensitivity`, `m_gamepad_sensitivity`, translate/rotate speeds, fov/speed ranges);
+   convergence rates follow the `FilteredAnalog` first-order-lag contract (`alpha = 1−exp(−λ·dt)`): position/rotation
+   `8.0` (~125 ms), fov `0.8`, speed `2.5`;
+   `updateCameraModel` ticks fov/speed filters, calls virtual `updateCameraPose_`, publishes `m_fov`/`m_has_camera_cut`,
   then clears deltas/teleport; base `updateCameraPose_` blends rotation deltas, world-transforms position deltas by
   speed × orientation, and publishes filtered origin/basis; base `provideInputActionKeyMappings` binds RMB look,
   Shift/Ctrl + shoulder speed modifiers and `+/-` fov modifiers via `InputAction::modulate` range-scaled samplers.

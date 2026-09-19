@@ -17,15 +17,17 @@ application.
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
   `:renderer` + `:renderer.triangle_pass` + `:renderer.types`, `:ui.imgui`.
 - `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
-  `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerExplicitClock`
-  `m_application_clock`, `optional<TimeDuration> m_target_frame_duration`, `const unique_ptr<IPlatform> m_platform`
+  `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerManager`
+  `m_application_clock`, `optional<TimeSpan> m_target_frame_time` plus `m_has_background_priority` (background 5 fps
+  throttle surfaced via `getTargetFrameTime`), `const unique_ptr<IPlatform> m_platform`
   (declared before `ServicesStore m_services` so reverse-destruction releases store observers before platform owners),
-  `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`, single-use `m_has_torn_down` latch,
+  `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`,
   `Array<string>` args, `string` name, `const ApplicationDomain m_domain`, `directory_entry` dirs
   (install/content/working resolved; config left default). Ctor wires `IPlatform::create()` plus
-  `hal::disableSystemErrorReporting/installDebugAssertHooks`. Forward-declares `IClientService`. Accessors:
-  `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services` (const + mutable overloads),
-  `getTimerClock/TargetFrameDuration`, dir getters; `requestExit(clause = {})`, `setTargetFrameDuration(TimeDuration/nullopt)`,
+  `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")`. Forward-declares `IClientService`. Accessors:
+  `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services/TimerManager` (const + mutable overloads),
+  `getTargetFrameTime`, dir getters; `requestExit(clause = {})`, `setBackgroundPriority(throttle)`,
+  `setTargetFrameDuration(TimeDuration/nullopt)`,
   `setTargetFrameRate(fps)` (non-positive clears throttle), `run()`.
 - `ApplicationDomain` — immutable-after-construction bitfield struct: `m_is_headless` (false), `m_is_interactive`
   (true), `m_needs_presence` (false), `m_needs_rendering` (true), `m_needs_user_interface` (true); `ApplicationEditor`
@@ -35,9 +37,12 @@ application.
   `unique_ptr<ICameraController>`, `unique_ptr<WindowInputContext> m_main_input_context`,
   `unique_ptr<InputMapping> m_camera_input_mapping`, `unique_ptr<IUIService>`, `unique_ptr<WindowViewport>`,
   `unique_ptr<TrianglePass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
-  getters (input getters wrap `&m_main_input_context->m_context`) plus protected `getApplication()` returning `this`.
-  Declares private `onMainWindowClosed_(const Window&)` hook with no definition in the matching `.cpp`. Local
-  `EInputPriority { ui = 0, camera, player }` orders the input chain.
+   getters (input getters wrap `&m_main_input_context->m_context`) plus protected `getApplication()` returning `this`.
+   Owns `unique_ptr<InputBackgroundLatch> m_input_background_latch` (registrar == owner; actuator borrows it,
+   detach-before-destroy) + device-disconnect handle. Private `onMainWindowFocused_(window, focused)` throttles to
+   5 fps via `setBackgroundPriority` and, on focus loss, resets the routing latch + camera-controller motion state.
+   Input-chain order comes from `:service.input`: listener `EInputListenerPriority { ui = 0, detector = 1, player = 2 }`
+   with mapping `EInputMappingPriority::camera = 1`.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
   overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
   implicit-instantiation cost.
@@ -63,20 +68,23 @@ application.
    `TimerManager::mainTimer().tick()` + `m_platform->update(dt)`; `render()` = no-op default.
    `shutdown()` (latch set first, idempotent-success): `m_renderer->shutdown()` + reset → erase + shutdown RHI →
    erase + shutdown shader → `m_platform->shutdown(*this)` last; `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
-3. `ApplicationEditor::initialize()` → `Application::initialize()` → `IWindowService::createWindow({title = getName(),
-   1280x720})` + ignored-`setMainWindow` → `WindowInputContext(input_service, main_window)` + `WindowViewport(main_window,
-   ViewportLayout{})` → `Player(PlayerIdentity{})` + `Camera(perspective)` + `InputMapping("camera_input_mapping")` +
-   `FreeCameraController::provideInputActionKeyMappings` → player listener `addInputMapping(camera_mapping,
-   camera)` + context `addInputListener(player.listener, player)` → `app_services.inject()` deducing
-   `IRhiService/IShaderService` → `TrianglePass::initialize(rhi, shader, getContentDir())` →
-   `ui::createImGuiService()->initialize(input_context, rhi, shader, ui_priority)` + `insert_or_assign(ui)`.
+3. `ApplicationEditor::initialize()` → `Application::initialize()` → `Player(PlayerIdentity{})` +
+   `Camera(perspective)` + `InputMapping("camera_input_mapping")` + `FreeCameraController::lookAt`/`provideInputActionKeyMappings`
+   → player listener `addInputMapping(camera_mapping, EInputMappingPriority::camera)` → `WindowInputContext(input_service)`
+   → `InputBackgroundLatch(ui, player-listener, player, detector)` + device-disconnect handle (resets latch + controller
+   motion) → `app_services.inject()` deducing `IRhiService/IShaderService` → `TrianglePass::initialize(rhi, shader,
+   getContentDir())` → `ui::createImGuiService()->initialize(input_context, rhi, shader, latch.m_foreground_priority)` →
+   `latch.initialize(context, ui-listener)` → `IWindowService::createWindow({title = getName(), 1280x720})` → refresh-rate
+   throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
+   `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
-   `camera->updateModel(dt, controller, viewport->getViewport())` → `triangle_pass->update(dt, camera->getSnapshot())` →
+   `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("<name> - CPU = <ms> ms")` →
+   `triangle_pass->update(dt, camera->getSnapshot())` →
    `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` →
-   `renderer.renderAndPresent(viewport->getWindow(), { *m_triangle_pass, *m_ui_service })`. `shutdown()` unwinds UI
-   (`PPR_VERIFY erase` + shutdown + reset) → triangle pass → clear player mappings + frame messages (player itself not
-   reset) → capture window from input context + `clearInputListeners` + reset context → assert viewport window matches +
-   reset viewport → `setMainWindow(nullptr)` + `destroyWindow` → reset mapping/controller/camera →
+   `renderer.renderAndPresent(viewport->getWindow(), { *m_triangle_pass, *m_ui_service })`. `shutdown()` detaches the
+   device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
+   erases + shuts down UI, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
+   resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then
    `Application::shutdown()`.
 5. No runtime logic in `App.cppm` itself — compile-time re-export only.
 

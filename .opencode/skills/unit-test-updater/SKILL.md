@@ -60,12 +60,13 @@ group file(s) corresponding to the modified source:
   e.g. `lib/engine/tests/app/App.Player.Tests.cpp` (player group)
 - Test layout: each suite keeps ONE exported root (`core` / `app`) and a set of
   thematic private group `.cpp` files (`module engine.tests.<suite>;` impl units,
-  `namespace detail` leaves, one top-level `extern const UnitTest <group>` per
-  file; sub-groups live with their parent; `memory`/`containers` assembled in
-  `Core.Tests.cpp`). A new leaf joins its thematic file; a
+  `namespace detail` leaves, one TU-local `const UnitTest` plus one
+  non-exported `const UnitTest &<node>Tests() noexcept` accessor per
+  root-visible node; file-local sub-groups need no accessor; `memory`/`containers`
+  assembled in `Core.Tests.cpp`). A new leaf joins its thematic file; a
   new file only for a new thematic area.
   If no group file covers the area, note that a new group file must be created
-  (PRIVATE SOURCES + 1 `extern` forward-declare + 1 recurse entry).
+  (PRIVATE SOURCES + 1 accessor forward-declare + 1 recurse call per root-visible node).
 
 ---
 
@@ -96,8 +97,8 @@ For each changed observable behavior, classify the required test action:
 4. **Namespace:** Leaves in `namespace pP::tests::detail`; group/root nodes in `namespace pP::tests`
 5. **Nested grouping:** Use inner namespaces under `detail` for sub-grouping
 6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`)
-7. **Parent tests:** one top-level `extern const` per file: `extern const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` — always spell `extern const`; sub-groups live with their parent
-8. **Top-level registration:** In the suite root `.cpp` (`Core.Tests.cpp` / `App.Tests.cpp`), forward-declare the group (`extern const UnitTest <group>;`) and add it to the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET)
+7. **Parent tests:** one TU-local group plus one accessor per root-visible node: `const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` then `const UnitTest &<group>Tests() noexcept { return <group>; }` — file-local sub-groups need no accessor; direct-root singleton leaves use `const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`; never spell `extern` except for the `core`/`app` roots
+8. **Top-level registration:** In the suite root `.cpp` (`Core.Tests.cpp` / `App.Tests.cpp`), forward-declare the accessor (`const UnitTest &<group>Tests() noexcept;`) and call it in the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET) in the same change
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
 10. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
@@ -150,25 +151,28 @@ Rules:
 Ensure every leaf test is aggregated via its group node:
 
 ```cpp
-extern const UnitTest subsystem = UnitTest::Named("subsystem") / [](UnitTest::IRun &_) -> void {
+const UnitTest subsystem = UnitTest::Named("subsystem") / [](UnitTest::IRun &_) -> void {
     _.recurse({
         detail::Group::test_a,
         detail::Group::test_b,
     });
 };
+
+const UnitTest &subsystemTests() noexcept { return subsystem; }
 ```
 
 New leaf in an existing group file = edit that file only. New thematic
-group = new `.cpp` (CMake PRIVATE SOURCES) + 1 `extern` forward-declare +
-1 recurse entry in the suite root `.cpp`. Singleton leaves sitting directly
-under the root are re-exposed via copy — `extern const <leaf> = detail::<leaf>;`
-— never wrap one in a `Named` group (that would add a tree level and change its
-path); see `module-architect` for the alias rule.
+group = new `.cpp` (CMake PRIVATE SOURCES in the same change) + 1 accessor
+forward-declare + 1 recurse call per root-visible node in the suite root `.cpp`.
+Direct-root singleton leaves use a TU-local copy plus accessor
+(`const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`),
+called as `<leaf>Tests()` — never wrap one in a `Named` group (that would add a
+tree level and change its path); see `module-architect`.
 
 ### In the suite root (e.g. `lib/engine/tests/core/Core.Tests.cpp`):
 
-1. Forward-declare the group: `extern const UnitTest <subsystem>;`
-2. Add `<subsystem>` to the root `_.recurse({...})` in fixed order (test
+1. Forward-declare the accessor: `const UnitTest &<subsystem>Tests() noexcept;`
+2. Call `<subsystem>Tests()` in the root `_.recurse({...})` in fixed order (test
    paths `core/<...>` / `app/<...>` derive from these names — keep them stable)
 
 ---

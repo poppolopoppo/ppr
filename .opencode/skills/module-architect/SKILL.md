@@ -111,18 +111,19 @@ For a new, moved, split, renamed, or removed partition:
 - Core tests import `engine.core`; app tests import `engine.app`; shared test
   support is `engine.tests`.
 - Test suites keep ONE exported root (`core` / `app`, declared `extern` in the
-  umbrella `.cppm`, defined in the suite root `.cpp`). Thematic test groups are
+  umbrella `.cppm`, defined in the suite root `.cpp` — decl-only `.cppm` +
+  out-of-line def is the MSVC C1001 workaround). Thematic test groups are
   private `.cpp` impl units (`module engine.tests.<suite>;`): non-exported
-  `detail::` leaves plus one `extern const UnitTest <group>` built in the same
-  TU. No `export module engine.tests.<suite>:<part>` partitions.
+  `detail::` leaves plus one TU-local `const UnitTest` and one non-exported
+  `const UnitTest &<node>Tests() noexcept` accessor per root-visible node built
+  in the same TU; file-local sub-groups need no accessor. No `export module engine.tests.<suite>:<part>` partitions.
 - Register the umbrella `.cppm` in the executable's `FILE_SET CXX_MODULES` and
   every group/root `.cpp` in PRIVATE SOURCES; the suite root `.cpp`
-  forward-declares each node with `extern` and recurses them in fixed order.
-- Singleton leaves that sit directly under the root (e.g. app's `pixel_readback`
-  or lifecycle leaves) are re-exposed from their group file via copy, never
-  wrapped in a new `Named` group: `extern const UnitTest <leaf> = detail::<leaf>;`.
-  Wrapping one test in a `Named` would add a tree level and change its
-  `core/<...>` / `app/<...>` path.
+  forward-declares each accessor and calls it in `_.recurse({...})` in fixed order.
+- Direct-root singleton leaves use a TU-local copy plus accessor
+  (`const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`,
+  called as `<leaf>Tests()`): never wrap one in a new `Named` group — that would
+  add a tree level and change its `core/<...>` / `app/<...>` path.
 - Tests include `"pP/UnitTest.h"` for test macros and use `PPR_TEST_ASSERT`,
   not engine assertions, in test bodies.
 

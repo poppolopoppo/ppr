@@ -28,8 +28,8 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
   `Application` (`:application`) is a `safe_object` subclass with virtual `initialize/update/render/shutdown`
   returning `std::error_code`, owning `Renderer`/`TimerExplicitClock`/`IPlatform`/`ServicesStore`/`SharedContext`
   + torn-down latch. `ApplicationEditor` (`:application_editor`, `Application` + `IClientService`) owns
-  player/camera/controller/input-mapping/UI-service/viewport/triangle pass with
-  `EInputPriority { ui, camera, player }` ordering the input chain.
+   player/camera/controller/input-mapping/UI-service/viewport/triangle pass with listener
+   `EInputListenerPriority { ui, detector, player }` + mapping `EInputMappingPriority::camera` ordering the input chain.
 - Service locator: `IService : safe_object` → `ServicesStore` (parent-chain fallback) → `ServiceInjector`;
   per-viewport child stores chain to the root. App services are five contracts:
   `service.client/input/player/ui/window`. Lifetime checked by `safe_ptr` (debug assert, release raw).

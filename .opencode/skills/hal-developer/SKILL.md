@@ -1036,7 +1036,7 @@ namespace pP::tests::detail {
 }
 
 namespace pP::tests {
-    extern const UnitTest hal = UnitTest::Named("hal") / [](UnitTest::IRun &_) -> void {
+    const UnitTest hal = UnitTest::Named("hal") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Hal::thread_id,
             detail::Hal::set_get_name_roundtrip,
@@ -1044,11 +1044,13 @@ namespace pP::tests {
             detail::Hal::worker_thread_name,
         });
     };
+
+    const UnitTest &halTests() noexcept { return hal; }
 }
 ```
 
-Groups are forward-declared with `extern` and recursed in fixed order in
-`Core.Tests.cpp` (the umbrella `Core.Tests.cppm` exports only
+Accessors are forward-declared (`const UnitTest &halTests() noexcept;`) and called
+in `Core.Tests.cpp` in fixed order (the umbrella `Core.Tests.cppm` exports only
 `extern const UnitTest core`). The
 existing `hal` group covers: `thread_id`, `set_get_name_roundtrip`,
 `buffer_truncation`, `worker_thread_name` — all guarded by

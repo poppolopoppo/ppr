@@ -17,8 +17,10 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
 - Construction (`ImGuiService()`): installs `malloc`/`free` via `SetAllocatorFunctions` (TODO: custom scope), wires
   `InputAction` callbacks (`any_digital` on started/triggered/completed, cursor/wheel/sticks/triggers on triggered),
   and builds the `ImGuiInputs` mapping: `any_digital`, `gamepad_left/right_2d`, `gamepad_left/right_trigger_axis`,
-  `mouse_2d`, plus `mouse_wheel_axis_x/y` each folded into the wheel action via a small 1D→pair lambda; character
-  callback installed on the listener.
+   `mouse_2d`, plus `mouse_wheel_axis_x/y` each folded into the wheel action via a small 1D→pair lambda; character
+   callback installed on the listener; raw-key callback arms `m_pending_deselect` on background-drag-button
+   pressed/repeat (`InputBackgroundLatch::isBackgroundDragButton`) when `hasMouseCaptureUnlessPopupClose()` is false,
+   always returning `unhandled`, drained in `update()` via `drainPendingDeselect_()`.
 - Input routing: seven `InputAction`s (split per device).
   gamepad-button digitals, cursor axis_2d, wheel axis_1d, stick axis_2d, trigger
   axis_1d). `update()` gates per-action consume AFTER `NewFrame()` (last
@@ -49,7 +51,9 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   input layout/sampler (`POSITION/TEXCOORD RG32Float`, `COLOR RGBA8Unorm`; linear `ClampToEdge` sampler) + shader +
   font. `update(dt, WindowViewport&)` (`not_connected` when no context) refreshes `DeltaTime` (`time::seconds`),
   display size from `viewport.getViewport().getClientRect().m_extent`, framebuffer scale from
-  `viewport.getWindow().m_content_scale`, bumps `m_frame_revision`, and calls `NewFrame`. `render(DrawContext)`
+   `viewport.getWindow().m_content_scale`, bumps `m_frame_revision`, calls `NewFrame`, refreshes the consume gate from
+   last frame's widgets (`WantCaptureKeyboard`/`WantCaptureMouseUnlessPopupClose`/gamepad nav), then
+   `drainPendingDeselect_()`. `render(DrawContext)`
   (`not_connected` when no context; no-op when `draw_data` null/invalid) lazily rebuilds the pipeline per
   `RenderPipelineKey` via `createRenderPipeline_` (rejects anything but single color target, no depth, sample count 1;
   SrcAlpha/InvSrcAlpha color blend, One/InvSrcAlpha alpha blend, `CullMode::None`, scissor on, no depth test/write,
@@ -60,9 +64,11 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   first, releases pipeline/buffers/texture-view/texture/sampler/layout/program, then detaches backend fields
   (`Backend*Name/UserData=null`, `BackendFlags=None`, `SetTexID(nullptr)`), destroys the context, and nulls pointers.
   Helpers `keyboardKeyToImGuiKey` / `gamepadButtonToImGuiKey` / `mouseButtonToImGui` (unknown → `None`/`-1`),
-  `framebufferScaleFor` (logical→framebuffer ratio, guarded fallback to 1), and `imGuiDebugPrintf` (`%s` assert +
-  `PPR_LOG_RAW`). `getContext()` exposes the raw `ImGuiContext*` so `game/main.cpp` can `SetCurrentContext` +
-  `ShowDemoWindow`; destructor asserts context already destroyed and clears mapping/listener bindings.
+   `framebufferScaleFor` (logical→framebuffer ratio, guarded fallback to 1), and `imGuiDebugPrintf` (`%s` assert +
+   `PPR_LOG_RAW`). `getContext()` exposes the raw `ImGuiContext*` so `game/main.cpp` can `SetCurrentContext` +
+   `ShowDemoWindow`; `getInputListener()` exposes the foreground listener for latch registration;
+   `hasMouseCaptureUnlessPopupClose()` reports `m_input_any_mouse_button.hasConsumeInput()`; `clearWindowFocus()`
+   clears ImGui window focus; destructor asserts context already destroyed and clears mapping/listener bindings.
 
 ## Flow
 

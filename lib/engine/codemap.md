@@ -30,7 +30,8 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
   destruction, `SharedContext m_lifecycle` + cancel clause, single-use torn-down latch, args/name/domain/four
   directory entries. `ApplicationEditor` (`:application_editor`, `public Application, protected IClientService`)
   owns `Player`/`Camera`/`ICameraController`/`WindowInputContext`/`InputMapping`/`IUIService`/`WindowViewport`/
-  `TrianglePass` with `EInputPriority { ui, camera, player }` ordering the input chain.
+   `TrianglePass` with listener `EInputListenerPriority { ui, detector, player }` + mapping
+   `EInputMappingPriority::camera` ordering the input chain.
   `App.TemplateInstantiations.cpp` pins explicit `Delegate`/`BroadcastCallback` instantiations.
 - **Service locator**: `IService : safe_object` base (no UID member) → `ServicesStore`
   (`FlatMap<type_index, safe_ptr<IService>>` keyed by `typeid(T)`, `shared_mutex`, parent-chain fallback on

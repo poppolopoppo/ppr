@@ -15,7 +15,10 @@ window, and UI overlay.
   (`InputContext`). Encapsulates window events and camera handling per scenario; forward-declares
   `Application/Camera/ICameraController/InputContext/Player/WindowViewport` to avoid partition cycles.
 - `IInputService` (`App.Service.Input.cppm`, `:service.input`) — keyboard/mouse/gamepad device accessors, device-by-ID
-  lookup + enumeration, supported-key enumeration, input contexts/listeners/mappings, action-event callbacks.
+  lookup + enumeration, supported-key enumeration, global/per-device input contexts + listener registration,
+  device→context assignment, `pollInputDevices`/`resetInputDevices`, `post*` delegates, device connect/disconnect
+  callbacks; plus chain-order enums `EInputListenerPriority { ui = 0, detector = 1, player = 2 }` (detector is the
+  deterministic pre-player tier for the background-drag actuator) and `EInputMappingPriority { camera = 1 }`.
 - `IPlayerService` (`App.Service.Player.cppm`, `:service.player`, `public virtual IService`) — player identity store:
   `getPlayer(id)` / `enumeratePlayers` (`noexcept`), `getOrCreateKeyboardPlayer` / `addGamepadPlayer(u32)` returning
   `Expected<SharedPlayer>`, `removePlayer(id)` returning `std::error_code`, `whenPlayerAdded/Removed` broadcast
@@ -37,7 +40,7 @@ window, and UI overlay.
    initialize()` additionally creates window/viewport/input-context/player/camera and inserts the initialized
    `IUIService` into `m_services` via `insert_or_assign`.
 2. Per-frame: platform `update(dt)` drives `IWindowService::pollEvents()` + input device polling/posting into
-   listeners/mappings (editor priority order `ui < camera < player`); `IPlayerService` callbacks fire on player
+   listeners/mappings (listener order `ui(0) < detector(1) < player(2)` with the camera mapping at `1`); `IPlayerService` callbacks fire on player
    add/remove; editor `update` ticks camera model + `TrianglePass::update(dt, snapshot)` + `IUIService::update`, and
    `render` submits `{ triangle_pass, ui_service }` via `Renderer::renderAndPresent`.
 3. Lookup rule: `m_services.get<T>()` first, else walk to parent store — UI-scoped code sees both `m_ui_services`

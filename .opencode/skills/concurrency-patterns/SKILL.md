@@ -731,8 +731,8 @@ for (auto &event : select(req, shutdown_event)) {
 
 Tests use `PPR_UNIT_TEST(name)` macros and are organized in nested namespaces
 with `_.recurse({...})` for hierarchical test registration (for test file
-layout — private group `.cpp` files, `detail::` leaves, `extern const` groups —
-see `unit-test-updater`):
+layout — private group `.cpp` files, `detail::` leaves, TU-local groups +
+accessors — see `unit-test-updater`):
 
 ```cpp
 namespace pP::tests::detail {
@@ -745,11 +745,13 @@ namespace pP::tests::detail {
 }
 
 namespace pP::tests {
-    extern const UnitTest my_feature = UnitTest::Named("my_feature") / [](UnitTest::IRun &_) -> void {
+    const UnitTest my_feature = UnitTest::Named("my_feature") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::MyFeature::test_name,
         });
     };
+
+    const UnitTest &my_featureTests() noexcept { return my_feature; }
 }
 ```
 
