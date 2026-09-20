@@ -1,0 +1,12 @@
+{
+  "C_Cpp.default.cppStandard": "c++23",
+  "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "files.associations": {
+    "*.cppm": "cpp",
+    "*.ixx": "cpp"
+  },
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.errorSquiggles": "enabled"
+}
