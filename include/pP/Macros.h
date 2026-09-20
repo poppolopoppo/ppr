@@ -232,10 +232,10 @@ extern "C" void _ReadWriteBarrier();
 // ReSharper restore CppUseInternalLinkage
 
 #   define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...) \
-        pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
+        pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), ## __VA_ARGS__)
 
 #   define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) \
-        pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), __VA_ARGS__)
+        pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), ## __VA_ARGS__)
 
 #   define PPR_FLUSH_LOG(...) std::ignore = pP::Log::flush(__VA_ARGS__)
 
@@ -255,7 +255,7 @@ extern "C" void _ReadWriteBarrier();
     if (auto const PPR_ANONYMIZE(_ppr_result) = (__VA_ARGS__);              \
         hasFailed(PPR_ANONYMIZE(_ppr_result))) [[unlikely]] {               \
         PPR_LOG(_CATEGORY, error,                                           \
-            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{        \
         });                                                                 \
         return PPR_ANONYMIZE(_ppr_result);                                  \
     }
@@ -264,7 +264,7 @@ extern "C" void _ReadWriteBarrier();
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
         PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, error,                                           \
-            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
@@ -276,7 +276,7 @@ extern "C" void _ReadWriteBarrier();
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
         PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, error,                                           \
-            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
@@ -290,7 +290,7 @@ extern "C" void _ReadWriteBarrier();
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
         PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, error,                                           \
-            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
@@ -302,7 +302,7 @@ extern "C" void _ReadWriteBarrier();
     if (auto const PPR_ANONYMIZE(_errc) = make_error_code(__VA_ARGS__);     \
         PPR_ANONYMIZE(_errc)) [[unlikely]] {                                \
         PPR_LOG(_CATEGORY, warning,                                         \
-            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), {                        \
+            "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{        \
             {"category", PPR_ANONYMIZE(_errc).category().name()},           \
             {"value", PPR_ANONYMIZE(_errc).value()},                        \
             {"message", PPR_ANONYMIZE(_errc).message()}                     \
