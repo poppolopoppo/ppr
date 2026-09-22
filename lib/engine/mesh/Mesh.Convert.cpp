@@ -53,8 +53,7 @@ namespace pP {
 
             [[nodiscard]] bool skipJsonWs(const char *&ptr, const char *end) noexcept {
                 while (ptr != end
-                    and(*ptr == ' ' or * ptr == '\t' or * ptr == '\n' or * ptr == '\r'))
-                {
+                       and (*ptr == ' ' or *ptr == '\t' or *ptr == '\n' or *ptr == '\r')) {
                     ++ptr;
                 }
                 return ptr != end;
@@ -81,13 +80,12 @@ namespace pP {
             [[nodiscard]] bool skipJsonNumber(const char *&ptr, const char *end) noexcept {
                 const char *start = ptr;
                 while (ptr != end
-                    and((*ptr >= '0' and * ptr <= '9')
-                or *ptr == '-'
-                or *ptr == '+'
-                or *ptr == '.'
-                or *ptr == 'e'
-                or *ptr == 'E'))
-                {
+                       and ((*ptr >= '0' and *ptr <= '9')
+                            or *ptr == '-'
+                            or *ptr == '+'
+                            or *ptr == '.'
+                            or *ptr == 'e'
+                            or *ptr == 'E')) {
                     ++ptr;
                 }
                 return ptr != start;
@@ -95,8 +93,7 @@ namespace pP {
 
             [[nodiscard]] bool matchJsonLiteral(const char *&ptr, const char *end, const std::string_view word) noexcept {
                 if (static_cast<std::size_t>(end - ptr) < word.size()
-                    or std::string_view{ptr, word.size()} != word)
-                {
+                    or std::string_view{ptr, word.size()} != word) {
                     return false;
                 }
                 ptr += word.size();
@@ -105,8 +102,7 @@ namespace pP {
 
             [[nodiscard]] bool skipJsonValue(const char *&ptr, const char *end, const u32 depth = 0u) noexcept {
                 if (depth > 32u
-                    or not skipJsonWs(ptr, end))
-                {
+                    or not skipJsonWs(ptr, end)) {
                     return false;
                 }
                 const char c = *ptr;
@@ -114,8 +110,7 @@ namespace pP {
                     return skipJsonString(ptr, end);
                 }
                 if (c == '{'
-                    or c == '[')
-                {
+                    or c == '[') {
                     const char close = c == '{' ? '}' : ']';
                     ++ptr;
                     if (not skipJsonWs(ptr, end)) {
@@ -128,8 +123,7 @@ namespace pP {
                     while (true) {
                         if (c == '{') {
                             if (*ptr != '"'
-                                or not skipJsonString(ptr, end) or not skipJsonWs(ptr, end) or *ptr != ':')
-                            {
+                                or not skipJsonString(ptr, end) or not skipJsonWs(ptr, end) or *ptr != ':') {
                                 return false;
                             }
                             ++ptr;
@@ -167,9 +161,8 @@ namespace pP {
                 u64 value = 0u;
                 bool any = false;
                 while (ptr != end
-                    and *ptr >= '0'
-                and *ptr <= '9')
-                {
+                       and *ptr >= '0'
+                       and *ptr <= '9') {
                     const u64 digit = static_cast<u64>(*ptr - '0');
                     if (value > (std::numeric_limits<u64>::max() - digit) / 10u) {
                         return false;
@@ -188,8 +181,7 @@ namespace pP {
             // Captures a JSON key body; escapes are passed through raw, which
             // is compare-safe for the ASCII keys below.
             [[nodiscard]] bool parseJsonKey(const char *&ptr, const char *end, std::string &out) {
-                if (not skipJsonWs(ptr, end) or ptr == end or *ptr != '"')
-                {
+                if (not skipJsonWs(ptr, end) or ptr == end or *ptr != '"') {
                     return false;
                 }
                 ++ptr;
@@ -226,8 +218,7 @@ namespace pP {
                     return true;
                 }
                 while (true) {
-                    if (not parseJsonKey(ptr, end, key) or not skipJsonWs(ptr, end) or ptr == end or *ptr != ':')
-                    {
+                    if (not parseJsonKey(ptr, end, key) or not skipJsonWs(ptr, end) or ptr == end or *ptr != ':') {
                         return false;
                     }
                     ++ptr;
@@ -238,14 +229,12 @@ namespace pP {
                         return false;
                     }
                     if (ptr != end
-                        and *ptr == ',')
-                    {
+                        and *ptr == ',') {
                         ++ptr;
                         continue;
                     }
                     if (ptr != end
-                        and *ptr == '}')
-                    {
+                        and *ptr == '}') {
                         ++ptr;
                         return true;
                     }
@@ -272,18 +261,15 @@ namespace pP {
 
             [[nodiscard]] bool parseGlbJson(const char *begin, const char *end, GlbJsonIndex &index) {
                 const char *ptr = begin;
-                if (not skipJsonWs(ptr, end) or ptr == end or *ptr != '{')
-                {
+                if (not skipJsonWs(ptr, end) or ptr == end or *ptr != '{') {
                     return false;
                 }
                 auto onTop = [&](const std::string &name, const char *&p, const char *e) -> bool {
                     if (name != "images"
-                        and name != "bufferViews")
-                    {
+                        and name != "bufferViews") {
                         return skipJsonValue(p, e);
                     }
-                    if (not skipJsonWs(p, e) or p == e or *p != '[')
-                    {
+                    if (not skipJsonWs(p, e) or p == e or *p != '[') {
                         return false;
                     }
                     ++p;
@@ -296,8 +282,7 @@ namespace pP {
                             return true;
                         }
                         if (p == e
-                            or *p != '{')
-                        {
+                            or *p != '{') {
                             return false;
                         }
                         if (name == "images") {
@@ -343,14 +328,12 @@ namespace pP {
                             return false;
                         }
                         if (p != e
-                            and *p == ',')
-                        {
+                            and *p == ',') {
                             ++p;
                             continue;
                         }
                         if (p != e
-                            and *p == ']')
-                        {
+                            and *p == ']') {
                             ++p;
                             return true;
                         }
@@ -373,23 +356,20 @@ namespace pP {
                 const std::size_t size = bytes.size();
                 const std::byte *data = bytes.data();
                 if (data == nullptr
-                    or size<20u)
-                {
+                    or size < 20u) {
                     return table;
                 }
                 auto readAt = [&](const std::size_t off, u32 &out) noexcept -> bool {
                     if (off > size
                         or size
-                    -off < sizeof(u32))
-                    {
+                        - off < sizeof(u32)) {
                         return false;
                     }
                     std::memcpy(&out, data + off, sizeof(out));
                     return true;
                 };
                 u32 magic = 0u, total = 0u;
-                if (not readAt(0u, magic) or magic != kGlbMagic or not readAt(8u, total) or total > size)
-                {
+                if (not readAt(0u, magic) or magic != kGlbMagic or not readAt(8u, total) or total > size) {
                     return table;
                 }
                 const char *json_begin = nullptr;
@@ -400,9 +380,8 @@ namespace pP {
                 bool have_bin = false;
                 std::size_t chunk = 12u;
                 while (chunk + 8u >= 8u
-                    and chunk
-                +8u <= size)
-                {
+                       and chunk
+                       + 8u <= size) {
                     u32 chunk_len = 0u, chunk_type = 0u;
                     if (not readAt(chunk, chunk_len) or not readAt(chunk + 4u, chunk_type)) {
                         break;
@@ -410,19 +389,16 @@ namespace pP {
                     const u64 start = static_cast<u64>(chunk) + 8u;
                     const u64 finish = start + static_cast<u64>(chunk_len);
                     if (finish < start
-                        or finish > static_cast<u64>(total))
-                    {
+                        or finish > static_cast<u64>(total)) {
                         break;
                     }
                     if (chunk_type == kGlbJsonChunk
-                        and not have_json)
-                    {
+                        and not have_json) {
                         json_begin = reinterpret_cast<const char *>(data + static_cast<std::size_t>(start));
                         json_end = reinterpret_cast<const char *>(data + static_cast<std::size_t>(finish));
                         have_json = true;
                     } else if (chunk_type == kGlbBinChunk
-                        and not have_bin)
-                    {
+                               and not have_bin) {
                         bin_start = start;
                         bin_size = static_cast<u64>(chunk_len);
                         have_bin = true;
@@ -448,28 +424,25 @@ namespace pP {
                     const GlbImageDesc &image = refs.m_images[i];
                     if (not
                         image.m_has_view
-                    or
-                    image.m_buffer_view >= refs.m_views.size())
-                    {
+                        or
+                        image.m_buffer_view >= refs.m_views.size()) {
                         continue;
                     }
                     const GlbBufferViewDesc &view =
                             refs.m_views[static_cast<std::size_t>(image.m_buffer_view)];
                     if (not
                         view.m_has_length
-                    or
-                    view.m_length == 0u
-                    or
-                    view.m_buffer != 0u)
-                    {
+                        or
+                        view.m_length == 0u
+                        or
+                        view.m_buffer != 0u) {
                         continue;
                     }
                     const u64 begin = bin_start + view.m_offset;
                     const u64 finish = begin + view.m_length;
                     if (begin < bin_start
-                        or finish<begin or finish>
-                    static_cast<u64>(size))
-                    {
+                        or finish < begin or finish >
+                        static_cast<u64>(size)) {
                         continue;
                     }
                     table[i] =
@@ -479,7 +452,8 @@ namespace pP {
             }
 
             [[nodiscard]] Expected<ImageRef> convertImage(const m3d::ImageSource &source, const std::filesystem::path &dir,
-                                                          const u32 image_index, const Array<mem::SharedBuffer> &glb_embeds) {
+                                                          const u32 image_index, const Array<mem::SharedBuffer> &glb_embeds,
+                                                          Array<std::pair<std::string, mem::SharedBuffer> > &file_cache) {
                 ImageRef ref;
                 ref.m_name = source.name;
                 ref.m_ext = source.extension;
@@ -500,6 +474,15 @@ namespace pP {
                 if (source.isFile()) {
                     ref.m_rel_path = source.filename;
                     ref.m_is_file = true;
+                    // Same texture file referenced twice maps once: the
+                    // mapping is frozen SharedBuffer, shared by value.
+                    const std::string key = (dir / source.filename).string();
+                    for (const auto &cached: file_cache) {
+                        if (cached.first == key) {
+                            ref.m_bytes = cached.second;
+                            return ref;
+                        }
+                    }
                     Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(dir / source.filename);
                     if (not
                         mapped.has_value())
@@ -507,6 +490,7 @@ namespace pP {
                         return std::unexpected{mapped.error()};
                     }
                     ref.m_bytes = std::move(*mapped);
+                    file_cache.push_back({key, ref.m_bytes});
                     return ref;
                 }
                 // Empty source: never referenced by slots (Mango filters them
@@ -518,8 +502,7 @@ namespace pP {
             [[nodiscard]] Expected<MaterialImageSlot> convertSlot(const m3d::ImageSample &sample, const Array<ImageRef> &images) {
                 MaterialImageSlot slot;
                 if (not
-                    sample.enabled())
-                {
+                    sample.enabled()) {
                     return slot;
                 }
                 if (sample.image >= images.size()) [[unlikely]] {
@@ -546,35 +529,35 @@ namespace pP {
             [[nodiscard]] std::error_code checkDeferredModules(const m3d::Material &material) {
                 if (material.clearcoatFactor != 0.0f
                     or
-                material.clearcoatRoughnessFactor != 0.0f
-                or
-                material.clearcoat.enabled()
-                or
-                material.clearcoatRoughness.enabled()
-                or
-                material.clearcoatNormal.enabled())
+                    material.clearcoatRoughnessFactor != 0.0f
+                    or
+                    material.clearcoat.enabled()
+                    or
+                    material.clearcoatRoughness.enabled()
+                    or
+                    material.clearcoatNormal.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_clearcoat is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
                 }
                 if (material.sheenColorFactor.x != 0.0f
                     or
-                material.sheenColorFactor.y != 0.0f
-                or
-                material.sheenColorFactor.z != 0.0f
-                or
-                material.sheenRoughnessFactor != 0.0f
-                or
-                material.sheenColor.enabled()
-                or
-                material.sheenRoughness.enabled())
+                    material.sheenColorFactor.y != 0.0f
+                    or
+                    material.sheenColorFactor.z != 0.0f
+                    or
+                    material.sheenRoughnessFactor != 0.0f
+                    or
+                    material.sheenColor.enabled()
+                    or
+                    material.sheenRoughness.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_sheen is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
                 }
                 if (material.anisotropyStrength != 0.0f
                     or
-                material.anisotropy.enabled())
+                    material.anisotropy.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_anisotropy is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
@@ -728,8 +711,7 @@ namespace pP {
                     const u32 global = static_cast<u32>(resolved);
                     if (held < 2u) {
                         window[held] = global;
-                        if (not is_strip and held == 0u)
-                        {
+                        if (not is_strip and held == 0u) {
                             anchor = global;
                         }
                         ++held;
@@ -777,14 +759,12 @@ namespace pP {
                     return false;
                 }
                 if ((mesh.flags & m3d::Vertex::Normal) == 0u
-                    or(mesh.flags & m3d::Vertex::Texcoord) == 0u)
-                {
+                    or (mesh.flags & m3d::Vertex::Texcoord) == 0u) {
                     return false;
                 }
                 const u64 vert_count = mesh.vertices.size();
                 if (vert_count == 0u
-                    or vert_count > static_cast<u64>(std::numeric_limits<u32>::max()))
-                {
+                    or vert_count > static_cast<u64>(std::numeric_limits<u32>::max())) {
                     return false;
                 }
                 m3d::Mesh soup;
@@ -793,16 +773,14 @@ namespace pP {
                 bool want = false;
                 for (const m3d::Primitive &prim: mesh.primitives) {
                     if (prim.material >= materials.size()
-                        or not materials[prim.material].normal.enabled())
-                    {
+                        or not materials[prim.material].normal.enabled()) {
                         continue;
                     }
                     const u64 start = prim.start;
                     const u64 count = prim.count;
                     if (count < 3u
                         or start > mesh.indices.size()
-                    or count > mesh.indices.size() - start)
-                    {
+                        or count > mesh.indices.size() - start) {
                         return false;
                     }
                     const u64 base = prim.base;
@@ -840,8 +818,7 @@ namespace pP {
                         }
                         if (expanded.empty()
                             or
-                        expanded.size() % 3u != 0u)
-                        {
+                            expanded.size() % 3u != 0u) {
                             return false;
                         }
                         for (std::size_t t = 0u; t < expanded.size(); t += 3u) {
@@ -856,8 +833,7 @@ namespace pP {
                     }
                     want = true;
                 }
-                if (not want or soup.triangles.empty())
-                {
+                if (not want or soup.triangles.empty()) {
                     return false;
                 }
                 PPR_ASSERT(corner_global.size() == soup.triangles.size() * 3u);
@@ -890,7 +866,7 @@ namespace pP {
                 // an empty Mango mesh: fail closed, never an empty asset.
                 if (mesh.vertices.empty()
                     or
-                mesh.primitives.empty())
+                    mesh.primitives.empty())
                 [[unlikely]] {
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
@@ -945,7 +921,7 @@ namespace pP {
                     const u64 count = prim.count;
                     if (count < 3u
                         or start > out.m_indices.size()
-                    or count > out.m_indices.size() - start)
+                        or count > out.m_indices.size() - start)
                     [[unlikely]] {
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
@@ -979,7 +955,7 @@ namespace pP {
                         Expected<u32> range_count = toU32(count);
                         if (not
                             range_start.has_value()
-                        or not range_count.has_value())
+                            or not range_count.has_value())
                         [[unlikely]] {
                             return std::unexpected{make_error_code(errc::invalid_argument)};
                         }
@@ -998,7 +974,7 @@ namespace pP {
                         }
                         if (expanded.empty()
                             or
-                        expanded.size() % 3u != 0u)
+                            expanded.size() % 3u != 0u)
                         [[unlikely]] {
                             return std::unexpected{make_error_code(errc::invalid_argument)};
                         }
@@ -1006,7 +982,7 @@ namespace pP {
                         Expected<u32> range_count = toU32(expanded.size());
                         if (not
                             range_start.has_value()
-                        or not range_count.has_value())
+                            or not range_count.has_value())
                         [[unlikely]] {
                             return std::unexpected{range_start.has_value() ? range_count.error() : range_start.error()};
                         }
@@ -1021,8 +997,7 @@ namespace pP {
                     bool want_tangent = false;
                     for (const m3d::Primitive &prim: mesh.primitives) {
                         if (prim.material < materials.size()
-                            and materials[prim.material].normal.enabled())
-                        {
+                            and materials[prim.material].normal.enabled()) {
                             want_tangent = true;
                             break;
                         }
@@ -1051,8 +1026,7 @@ namespace pP {
                     return std::unexpected{make_error_code(errc::function_not_supported)};
                 }
                 if (not
-                    scene.animations.empty())
-                {
+                    scene.animations.empty()) {
                     // Static bind-pose snapshot stays well-defined (authored
                     // local transforms); animations are ignored with a warning.
                     PPR_LOG(Mesh, warning, "ignoring animation channels; using the static bind-pose snapshot");
@@ -1064,9 +1038,10 @@ namespace pP {
                 out.m_images.reserve(scene.images.size());
                 // Index-aligned with glb_embeds (Scene.images pushes 1:1 with
                 // asset.images, empties included).
+                Array<std::pair<std::string, mem::SharedBuffer> > file_cache{};
                 for (std::size_t i = 0u; i < scene.images.size(); ++i) {
                     Expected<ImageRef> ref =
-                            convertImage(scene.images[i], dir, static_cast<u32>(i), glb_embeds);
+                            convertImage(scene.images[i], dir, static_cast<u32>(i), glb_embeds, file_cache);
                     if (not
                         ref.has_value())
                     [[unlikely]] {
@@ -1171,21 +1146,19 @@ namespace pP {
                 std::string ext = file.extension().string();
                 for (char &c: ext) {
                     if (c >= 'A'
-                        and c <= 'Z')
-                    {
+                        and c <= 'Z') {
                         c = static_cast<char>(c + ('a' - 'A'));
                     }
                 }
                 return ext == ".gltf"
-                or ext == ".glb";
+                       or ext == ".glb";
             }
 
             [[nodiscard]] bool isGlbFile(const std::filesystem::path &file) {
                 std::string ext = file.extension().string();
                 for (char &c: ext) {
                     if (c >= 'A'
-                        and c <= 'Z')
-                    {
+                        and c <= 'Z') {
                         c = static_cast<char>(c + ('a' - 'A'));
                     }
                 }
@@ -1228,7 +1201,7 @@ namespace pP {
         [[nodiscard]] Expected<SceneAsset> importAndConvert(const std::filesystem::path &dir, const std::string_view file) {
             if (dir.empty()
                 or
-            file.empty())
+                file.empty())
             [[unlikely]] {
                 return std::unexpected{make_error_code(errc::invalid_argument)};
             }

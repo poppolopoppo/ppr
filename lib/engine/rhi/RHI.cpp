@@ -167,10 +167,6 @@ namespace pP {
                     using enum rhi::DeviceType;
                 case Default:
                 case D3D12:
-                    // P3: bindless .Handle programs require SM6.6 descriptor
-                    // heaps, which FXC/DXBC cannot compile (X3004). D3D12 goes
-                    // DXIL; D3D11 stays DXBC (no bindless there). Gate 4 reviews
-                    // any fallout on pre-existing shaders.
                     return SLANG_DXIL;
                 case D3D11:
                     return SLANG_DXBC;

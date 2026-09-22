@@ -180,6 +180,10 @@ export namespace pP {
     // signatures (verts stay typed Arrays) — buffers appear only for staging
     // copies. GPU memory is bump-allocated per bucket; free-list deferred.
     // A bag that does not fit u32 offsets is rejected with invalid_argument.
+    // Single-load contract (MVP): release() retires records without
+    // reclaiming GPU bytes and slots never reuse — the pass loads one scene
+    // per cache lifetime and drops everything at shutdown. No eviction, no
+    // streaming; a free-list waits for a streaming phase that needs it.
     class TriangleBagCache {
     public:
         [[nodiscard]] std::error_code initialize(rhi::IDevice &device);
@@ -336,7 +340,9 @@ export namespace pP {
 
     // Pass-owned; stable slots into StructuredBuffer<GpuMaterial>. The caller
     // resolves ImageAssetId→TextureHandle first, then residentIndex →
-    // GpuTextureRefs, and passes the slots in.
+    // GpuTextureRefs, and passes the slots in. The GPU buffer is allocated
+    // once at capacity (512×80 B); pack/release rewrite one slot in place and
+    // slots never reuse (single-load contract, same as the bag buckets).
     class BindlessMaterialCache {
     public:
         // shared_sampler is a non-owning view: the pass creates and owns ONE
@@ -365,13 +371,12 @@ export namespace pP {
 
         [[nodiscard]] const MaterialEntry *findEntry_(SparseKeyId key) const noexcept;
 
-        [[nodiscard]] std::error_code rebuildBuffer_();
+        [[nodiscard]] std::error_code writeSlot_(u32 slot, const GpuMaterial &gpu);
 
         bool m_initialized = false;
         rhi::IDevice *m_device = nullptr;
         rhi::ISampler *m_shared_sampler = nullptr;
         u32 m_next_slot = 0u;
-        Array<GpuMaterial> m_mirror{};
         SparseVector<MaterialEntry> m_entries{};
         rhi::ComPtr<rhi::IBuffer> m_material_buffer{};
     };

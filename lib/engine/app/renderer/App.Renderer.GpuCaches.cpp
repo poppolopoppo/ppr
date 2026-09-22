@@ -387,14 +387,15 @@ namespace pP {
 
         const DedupKey key = dedupKey_(asset);
         if (const auto found = m_dedup.find(key); found != m_dedup.end()) {
-            for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-                if (it.getKey() == *found->second
-                    and
-                            bytesEqual_(it->m_pinned, asset))
-                {
-                    ++it->m_refcount;
-                    return found->second;
-                }
+            // Handle-first: the dedup map names the entry directly, so one
+            // generation-checked lookup plus a single confirming byte-compare
+            // replaces the old linear scan (hash alone never decides).
+            if (TextureEntry *const entry = m_entries.tryGet(*found->second);
+                entry != nullptr
+                    and bytesEqual_(entry->m_pinned, asset))
+            {
+                ++entry->m_refcount;
+                return found->second;
             }
         }
 
@@ -528,6 +529,23 @@ namespace pP {
         }
         m_device = &device;
         m_shared_sampler = shared_sampler;
+        // One capacity-sized buffer for the cache lifetime (512×80 B);
+        // pack/release rewrite a single slot in place — never re-create.
+        rhi::BufferDesc buffer_desc{};
+        buffer_desc.size = kMaterialCapacity * sizeof(GpuMaterial);
+        buffer_desc.elementSize = sizeof(GpuMaterial);
+        buffer_desc.memoryType = rhi::MemoryType::Upload;
+        buffer_desc.usage = rhi::BufferUsage::ShaderResource;
+        buffer_desc.defaultState = rhi::ResourceState::ShaderResource;
+        buffer_desc.label = "bindless materials";
+        if (const std::error_code err = make_error_code(
+            device.createBuffer(buffer_desc, nullptr, m_material_buffer.writeRef()))) [[unlikely]] {
+            m_material_buffer.setNull();
+            m_device = nullptr;
+            m_shared_sampler = nullptr;
+            PPR_LOG(GpuCaches, error, "material buffer creation failed", {{"message", err.message()}});
+            return err;
+        }
         m_initialized = true;
         return default_value_v;
     }
@@ -535,7 +553,6 @@ namespace pP {
     std::error_code BindlessMaterialCache::shutdown() {
         m_material_buffer.setNull();
         m_entries.clear();
-        m_mirror.clear();
         m_next_slot = 0u;
         m_shared_sampler = nullptr;
         m_device = nullptr;
@@ -557,19 +574,19 @@ namespace pP {
         return nullptr;
     }
 
-    std::error_code BindlessMaterialCache::rebuildBuffer_() {
-        if (m_mirror.empty()) {
-            m_material_buffer.setNull();
-            return default_value_v;
+    std::error_code BindlessMaterialCache::writeSlot_(const u32 slot, const GpuMaterial &gpu) {
+        if (slot >= kMaterialCapacity
+            or m_material_buffer == nullptr)
+        [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
         }
-        rhi::BufferDesc buffer_desc{};
-        buffer_desc.size = m_mirror.size() * sizeof(GpuMaterial);
-        buffer_desc.elementSize = sizeof(GpuMaterial);
-        buffer_desc.memoryType = rhi::MemoryType::Upload;
-        buffer_desc.usage = rhi::BufferUsage::ShaderResource;
-        buffer_desc.defaultState = rhi::ResourceState::ShaderResource;
-        buffer_desc.label = "bindless materials";
-        return make_error_code(m_device->createBuffer(buffer_desc, m_mirror.data(), m_material_buffer.writeRef()));
+        void *mapped = nullptr;
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches,
+            m_device->mapBuffer(m_material_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
+        std::memcpy(static_cast<std::byte *>(mapped) + static_cast<std::size_t>(slot) * sizeof(GpuMaterial),
+            &gpu, sizeof(GpuMaterial));
+        m_device->unmapBuffer(m_material_buffer.get());
+        return default_value_v;
     }
 
     Expected<MaterialHandle> BindlessMaterialCache::pack(
@@ -587,12 +604,9 @@ namespace pP {
         if (m_next_slot >= kMaterialCapacity) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
-        const u32 slot = m_next_slot++;
-        if (slot >= m_mirror.size()) {
-            m_mirror.resize(static_cast<std::size_t>(slot) + 1u);
-        }
-        m_mirror[slot] = *gpu;
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, rebuildBuffer_());
+        const u32 slot = m_next_slot;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, writeSlot_(slot, *gpu));
+        ++m_next_slot;
         MaterialEntry entry{.m_gpu = *gpu, .m_slot = slot};
         const SparseKeyId key = m_entries.add(std::move(entry));
         return MaterialHandle{key};
@@ -607,11 +621,9 @@ namespace pP {
         }
         for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
             if (it.getKey() == key) {
-                if (it->m_slot < m_mirror.size()) {
-                    m_mirror[it->m_slot] = GpuMaterial{};
-                }
+                const u32 slot = it->m_slot;
                 std::ignore = m_entries.erase(it);
-                return rebuildBuffer_();
+                return writeSlot_(slot, GpuMaterial{});
             }
         }
         return std::make_error_code(std::errc::invalid_argument);

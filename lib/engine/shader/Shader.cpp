@@ -98,8 +98,11 @@ namespace pP {
 
             // ISlangUnknown
             SLANG_NO_THROW SlangResult SLANG_MCALL
+
             queryInterface(const SlangUUID &uuid, void **out_object) override {
-                if (uuid == ISlangUnknown::getTypeGuid() or uuid == ISlangBlob::getTypeGuid()) {
+                if (uuid == ISlangUnknown::getTypeGuid()
+                    or uuid == ISlangBlob::getTypeGuid())
+                {
                     addRef();
                     *out_object = static_cast<IBlob *>(this);
                     return SLANG_OK;
@@ -133,6 +136,15 @@ namespace pP {
         // ShaderService — singleton implementing IShaderService
         // ------------------------------------------------------------------
 
+        // P3 bindless: program composites link on the session, so a profileless
+        // DXIL target defaults stage profiles to vs_5_1 and DXC rejects them.
+        // Pin sm_6_6 (descriptor heaps need it); other formats keep defaults.
+        void pinSm66ForDxil_(IGlobalSession *const session, TargetDesc &target_desc, const SlangCompileTarget format) {
+            if (format == SLANG_DXIL) {
+                target_desc.profile = session->findProfile("sm_6_6");
+            }
+        }
+
         class ShaderService final : public IShaderService {
             ComPtr<IGlobalSession> m_global_session{};
             ComPtr<ISession> m_session{};
@@ -164,13 +176,7 @@ namespace pP {
                 // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
-                if (m_target_format == SLANG_DXIL) {
-                    // P3 bindless: program composites link on this session, so a
-                    // profileless DXIL target defaults stage profiles to vs_5_1
-                    // and DXC rejects them. Pin sm_6_6 (descriptor heaps need
-                    // it); other formats keep slang defaults.
-                    target_desc.profile = global_session->findProfile("sm_6_6");
-                }
+                pinSm66ForDxil_(global_session.get(), target_desc, m_target_format);
 
                 SessionDesc session_desc{};
                 session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
@@ -185,7 +191,7 @@ namespace pP {
 
                 PPR_LOG(Shader, info, "Shader service initialized", {
                     {"target", static_cast<int>(m_target_format)}
-                    });
+                });
                 return errc::ok;
             }
 
@@ -209,10 +215,7 @@ namespace pP {
                 // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
-                if (m_target_format == SLANG_DXIL) {
-                    // Same sm_6_6 pin as initialize(): composites link here.
-                    target_desc.profile = m_global_session->findProfile("sm_6_6");
-                }
+                pinSm66ForDxil_(m_global_session.get(), target_desc, m_target_format);
 
                 SessionDesc session_desc{};
                 session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
@@ -223,7 +226,7 @@ namespace pP {
 
                 PPR_LOG(Shader, info, "shader target format set", {
                     {"target", static_cast<int>(m_target_format)}
-                    });
+                });
                 return default_value_v;
             }
 
@@ -263,11 +266,11 @@ namespace pP {
                     source_blob,
                     diagnostics.writeRef());
 
-                if (not*out_module) {
+                if (not * out_module) {
                     PPR_LOG(Shader, error, "failed to compile shader module from file", {
                         {"name", module_name},
                         {"path", path_string}
-                        });
+                    });
                     return make_error_code(errc::invalid_arg);
                 }
 
@@ -287,11 +290,11 @@ namespace pP {
                     source.data(),
                     diagnostics.writeRef());
 
-                if (not*out_module) {
+                if (not * out_module) {
                     PPR_LOG(Shader, error, "failed to compile shader module from source", {
                         {"name", module_name},
                         {"path", path}
-                        });
+                    });
                     return make_error_code(errc::invalid_arg);
                 }
 
