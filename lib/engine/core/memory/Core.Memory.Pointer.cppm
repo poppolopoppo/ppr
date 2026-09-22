@@ -2,6 +2,8 @@ module;
 #include "pP/Macros.h"
 export module engine.core:memory.pointer;
 
+import :containers;
+
 import std;
 
 #if PPR_ENABLE_DEBUG
@@ -514,5 +516,17 @@ export namespace pP {
     static_assert(sizeof(safe_ptr<safe_object>) == sizeof(safe_object *));
     static_assert(std::is_trivially_copyable_v<safe_ptr<safe_object> >);
     static_assert(std::is_trivially_destructible_v<safe_ptr<safe_object> >);
+#endif
+
+    // Debug shape tracks ownership and must never be mem-copied; release shape
+    // is a raw pointer and relocates trivially.
+#if PPR_ENABLE_DEBUG
+    template<typename T>
+    struct details::relocatable<safe_ptr<T> > : std::false_type {
+    };
+#else
+    template<typename T>
+    struct details::relocatable<safe_ptr<T> > : std::true_type {
+    };
 #endif
 }
