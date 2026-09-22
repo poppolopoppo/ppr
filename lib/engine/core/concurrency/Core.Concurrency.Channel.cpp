@@ -40,7 +40,7 @@ namespace pP {
         }
     };
 
-    static constexpr ChannelErrorCategory g_channel_error_category{};
+    static const ChannelErrorCategory g_channel_error_category{};
 
     [[nodiscard]] const std::error_category &error_category() noexcept {
         return g_channel_error_category;
@@ -122,11 +122,10 @@ namespace pP {
 
         alignas(hal::cacheline_size_v) std::atomic_flag flush_signal{};
 
-        // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
-        // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (Channel.cpp:84).
-        // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
+        // C++23 std::start_lifetime_as is unavailable in this libc++; launder over
+        // reinterpreted storage is the portable spelling (MSVC accepts both).
         //noinspection ClangdErrorsAndWarnings
-        *std::start_lifetime_as<std::atomic_flag *>(hdr->data()) = &flush_signal;
+        *std::launder(reinterpret_cast<std::atomic_flag **>(hdr->data())) = &flush_signal;
         hdr->m_header.get().m_flags |= RecordHeader::flag_flush;
 
         producerSubmit(*hdr);
@@ -210,12 +209,9 @@ namespace pP {
 
         while (commit < m_write) {
             const std::size_t offset = commit & (m_capacity - 1u);
-            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
-            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (Channel.cpp:168).
-            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
             //noinspection ClangdErrorsAndWarnings
-            const auto *hdr = std::start_lifetime_as<RecordHeader>(
-                static_cast<std::byte *>(m_data) + offset);
+            const auto *hdr = std::launder(reinterpret_cast<RecordHeader *>(
+                static_cast<std::byte *>(m_data) + offset));
 
             if (hdr->m_flags & RecordHeader::flag_busy) {
                 break;
@@ -259,12 +255,9 @@ namespace pP {
             }
 
             const std::size_t offset = read_pos & (m_capacity - 1u);
-            // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
-            // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (Channel.cpp:213).
-            // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
             //noinspection ClangdErrorsAndWarnings
-            auto *const hdr = std::start_lifetime_as<RecordHeader>(
-                static_cast<std::byte *>(m_data) + offset);
+            auto *const hdr = std::launder(reinterpret_cast<RecordHeader *>(
+                static_cast<std::byte *>(m_data) + offset));
 
             const std::uint32_t f = hdr->m_flags;
             PPR_ASSERT(!(f & RecordHeader::flag_busy));
@@ -275,12 +268,9 @@ namespace pP {
 
                 if (f & RecordHeader::flag_flush) {
                     PPR_ASSERT(hdr->m_available_size >= sizeof(std::atomic_flag));
-                    // FP: C++23 std::start_lifetime_as valid per P0476R2, MSVC 19.52 /WX-clean;
-                    // IDE CL-262.9437.136 cannot consume MSVC BMIs for `import std` (Channel.cpp:225).
-                    // Scope: next line only (ClangdErrorsAndWarnings); re-check after toolchain/BMI refresh.
                     //noinspection ClangdErrorsAndWarnings
-                    auto *const p_atomic_signal = *std::start_lifetime_as<std::atomic_flag *>(
-                        hdr->data());
+                    auto *const p_atomic_signal = *std::launder(reinterpret_cast<std::atomic_flag *const *>(
+                        hdr->data()));
 
                     p_atomic_signal->test_and_set(std::memory_order_release);
                     p_atomic_signal->notify_all();
