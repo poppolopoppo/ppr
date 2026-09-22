@@ -279,13 +279,18 @@ export namespace pP {
 
         [[nodiscard]] std::size_t transcode(std::u8string_view utf8, char *p_dst, std::size_t capacity) noexcept;
 
-        template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
-        [[nodiscard]] decltype(auto) toString(const std::basic_string_view<SrcCharT> src, [[maybe_unused]] AllocatorT &&alloc = {})
-            noexcept(std::is_same_v<SrcCharT, DstCharT>) {
-            if constexpr (std::is_same_v<DstCharT, SrcCharT>) {
-                return src;
-            }
+        [[nodiscard]] std::size_t transcode(std::string_view ansi, char *p_dst, std::size_t capacity) noexcept;
 
+        // identity: same char type passes the view through (no allocation).
+        template<details::TChar CharT, typename AllocatorT = std::basic_string<CharT>::allocator_type>
+        [[nodiscard]] std::basic_string_view<CharT> toString(const std::basic_string_view<CharT> src, [[maybe_unused]] AllocatorT &&alloc = {}) noexcept {
+            return src;
+        }
+
+        // converting: transcodes into a newly allocated string.
+        template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
+            requires (not std::is_same_v<DstCharT, SrcCharT>)
+        [[nodiscard]] std::basic_string<DstCharT> toString(const std::basic_string_view<SrcCharT> src, AllocatorT &&alloc = {}) noexcept(false) {
             const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
             std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
             [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
@@ -426,7 +431,7 @@ export namespace pP {
                 void *m_data{nullptr};
             };
 
-            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::move_only_function<void()> callback) noexcept(false);
+            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false);
 
             void cancelDeadline(DeadlineHandle &handle) noexcept;
         }

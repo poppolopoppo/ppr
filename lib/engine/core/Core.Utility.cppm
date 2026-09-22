@@ -120,7 +120,7 @@ export namespace pP {
     {
         { hasFailed(result) } -> std::convertible_to<bool>;
     }
-    PPR_FORCE_INLINE [[nodiscard]] constexpr bool hasSucceeded(const T &result) noexcept {
+    [[nodiscard]] PPR_FORCE_INLINE constexpr bool hasSucceeded(const T &result) noexcept {
         return not hasFailed(result);
     }
 

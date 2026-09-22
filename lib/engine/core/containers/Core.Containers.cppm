@@ -11,6 +11,17 @@ import :utility;
 
 import std;
 
+// Unexported: C++26 `std::ranges::range_const_reference_t` is unavailable in
+// C++23 mode; equivalent const-iterating formulation from C++20/23 parts.
+namespace pP {
+    namespace details {
+        template<std::ranges::input_range RangeT>
+        using range_const_reference_t = std::common_reference_t<
+            const std::ranges::range_value_t<RangeT> &,
+            std::ranges::range_reference_t<RangeT> >;
+    }
+}
+
 export namespace pP {
     namespace details {
         template<std::forward_iterator IteratorT, typename T>
@@ -93,7 +104,7 @@ export namespace pP {
         }
 
         template<std::ranges::input_range RangeT>
-            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, tuple_t>
+            requires std::convertible_to<details::range_const_reference_t<RangeT>, tuple_t>
         [[nodiscard]] std::error_code append(const RangeT &input_range) const {
             return append(std::ranges::begin(input_range), std::ranges::end(input_range));
         }
@@ -133,7 +144,7 @@ export namespace pP {
         }
 
         template<std::ranges::input_range RangeT>
-            requires std::convertible_to<std::ranges::range_const_reference_t<RangeT>, clvref_t>
+            requires std::convertible_to<details::range_const_reference_t<RangeT>, clvref_t>
         [[nodiscard]] std::error_code append(const RangeT &input_range) const {
             return append(std::ranges::begin(input_range), std::ranges::end(input_range));
         }
@@ -696,7 +707,7 @@ export namespace pP {
                 static_cast<std::uintptr_t>(m_offset));
         }
 
-        PPR_FORCE_INLINE constexpr void setData(pointer ptr PPR_LIFETIME_BOUND) & noexcept {
+        PPR_FORCE_INLINE constexpr void setData(pointer ptr) & noexcept {
             if (ptr == nullptr) {
                 m_offset = 0;
                 return;
@@ -844,7 +855,7 @@ export namespace pP {
         }
 
         /// Replaces the pointer, preserving the current flags.
-        PPR_FORCE_INLINE constexpr void setData(T *const ptr PPR_LIFETIME_BOUND) noexcept {
+        PPR_FORCE_INLINE constexpr void setData(T *const ptr) noexcept {
             PPR_ASSERT((std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0
                 && "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
             m_packed = (m_packed & FLAG_MASK) | std::bit_cast<std::uintptr_t>(ptr);
@@ -1060,7 +1071,7 @@ export namespace pP {
         //     reset(std::ranges::data(contiguous_range), std::ranges::size(contiguous_range));
         // }
 
-        constexpr void reset(pointer ptr PPR_LIFETIME_BOUND, const std::size_t n) noexcept {
+        constexpr void reset(pointer ptr, const std::size_t n) noexcept {
             m_data = ptr;
             m_size = safe_narrowing(n);
         }

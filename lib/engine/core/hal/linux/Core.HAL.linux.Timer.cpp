@@ -12,12 +12,12 @@ import std;
 namespace pP::hal::timer {
 
 struct TimerData {
-    std::move_only_function<void()> m_callback;
+    std::function<void()> m_callback;
     std::atomic<bool> m_fired{false};
     timer_t m_timer_id{};
 };
 
-DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::move_only_function<void()> callback) noexcept(false) {
+DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false) {
     auto *data = new TimerData{std::move(callback)};
 
     struct sigevent sev{};

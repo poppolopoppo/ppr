@@ -47,13 +47,67 @@ namespace pP::mem {
             return m_bits[at];
         }
 
-        [[nodiscard]] constexpr u32 countOnes_(const BuildInfos &infos, u32 up_to) const noexcept;
+        [[nodiscard]] constexpr u32 countOnes_(const BuildInfos &infos, u32 up_to) const noexcept {
+            PPR_ASSERT(up_to <= infos.m_desired_size && "Count up to size exceeds desired size");
+            const word_t *p_word = std::addressof(wordAt_(infos.m_leaves_first_word));
 
-        constexpr void allocateBitAtDepth_(u32 bit, u32 d, u32 offset) noexcept;
+            u32 count = 0;
+            for (; up_to >= word_bit_count; up_to -= word_bit_count, ++p_word) {
+                count += static_cast<u32>(std::popcount(*p_word));
+            }
+
+            if (up_to > 0) {
+                count += static_cast<u32>(std::popcount(*p_word << (word_bit_count - up_to)));
+            }
+
+            return count;
+        }
+
+        constexpr void allocateBitAtDepth_(u32 bit, u32 d, u32 offset) noexcept {
+            u32 r = bit % word_bit_count;
+            u32 w = offset + bit / word_bit_count;
+
+            ref_mask_t m = {wordAt_(w)};
+            PPR_ASSERT(!m.test(r));
+            m.set(r);
+
+            if (d > 0 && m.all()) [[unlikely]] {
+                do {
+                    r = (w - 1) % word_bit_count;
+                    w = (w - 1) / word_bit_count;
+
+                    m = {wordAt_(w)};
+                    PPR_ASSERT(not m.test(r));
+                    m.set(r);
+
+                    if (not m.all()) [[likely]] {
+                        break;
+                    }
+
+                    d--;
+                } while (d);
+            }
+        }
 
         PPR_NO_INLINE constexpr void allocateBubbleUpIsFull_(u32 d, u32 offset, ref_mask_t m) noexcept;
 
-        PPR_NO_INLINE constexpr void deallocateBubbleUpWasFull_(u32 d, u32 offset, ref_mask_t m) noexcept;
+        PPR_NO_INLINE constexpr void deallocateBubbleUpWasFull_(u32 d, u32 offset, ref_mask_t m) noexcept {
+            do {
+                const u32 r = (offset - 1) % word_bit_count;
+                offset = (offset - 1) / word_bit_count;
+
+                m = {wordAt_(offset)};
+                const bool wasFull = m.all();
+                PPR_ASSERT(m.test(r));
+                m.reset(r);
+
+                if (not wasFull) [[likely]] {
+                    break;
+                }
+
+                d--;
+            } while (d);
+        }
 
     public:
         // ReSharper disable once CppDFAConstantFunctionResult
@@ -94,7 +148,26 @@ namespace pP::mem {
 
         [[nodiscard]] constexpr AllocRange allocateContiguous(const BuildInfos &infos, u32 requested_count, bool &out_was_empty) noexcept;
 
-        [[maybe_unused]] PPR_FORCE_INLINE constexpr bool deallocate(const BuildInfos &infos, u32 bit) noexcept;
+        [[maybe_unused]] PPR_FORCE_INLINE constexpr bool deallocate(const BuildInfos &infos, u32 bit) noexcept {
+            PPR_ASSERT(bit < infos.m_desired_size);
+
+            const u32 d = infos.m_tree_depth - 1u;
+            const u32 r = bit % word_bit_count;
+            const u32 offset = infos.m_leaves_first_word + bit / word_bit_count;
+
+            ref_mask_t m = {wordAt_(offset)};
+            PPR_ASSERT(m.test(r));
+
+            const bool was_full = m.all();
+            m.reset(r);
+            const bool is_empty = m.none();
+
+            if (was_full && d > 0u) [[unlikely]] {
+                deallocateBubbleUpWasFull_(d, offset, m);
+            }
+
+            return is_empty;
+        }
 
         [[nodiscard]] constexpr u32 nextAllocateBit(const BuildInfos &infos) const noexcept;
 
@@ -165,12 +238,24 @@ namespace pP::mem {
         alignas(hal::cacheline_size_v) PartialBundle m_partial_bundle{};
         alignas(hal::cacheline_size_v) FullBundle m_full_bundle{};
 
-        [[nodiscard]] PPR_FORCE_INLINE void *pageAt_(u32 page_index) const noexcept;
+        [[nodiscard]] PPR_FORCE_INLINE void *pageAt_(u32 page_index) const noexcept {
+            PPR_ASSERT(page_index < m_tree_infos.m_desired_size);
+            PPR_ASSUME(m_reserved_space != nullptr);
+            // ReSharper disable once CppDFANullDereference
+            return m_reserved_space + page_index * m_page_size;
+        }
 
-        [[nodiscard]] PPR_FORCE_INLINE u32 pageIndex_(const void *ptr) const noexcept;
+        [[nodiscard]] PPR_FORCE_INLINE u32 pageIndex_(const void *ptr) const noexcept {
+            const auto p = std::bit_cast<std::uintptr_t>(ptr);
+            const auto r = std::bit_cast<std::uintptr_t>(m_reserved_space);
+            PPR_ASSERT(p >= r && p + m_page_size <= r + m_tree_infos.m_desired_size * m_page_size);
+            return checked_cast<u32>((p - r) / m_page_size);
+        }
 
         // the full bundle is always sorted
-        [[nodiscard]] PPR_FORCE_INLINE bool hasFullBundle_() const noexcept;
+        [[nodiscard]] PPR_FORCE_INLINE bool hasFullBundle_() const noexcept {
+            return m_full_bundle[0u] < m_tree_infos.m_desired_size;
+        }
 
         PPR_FORCE_INLINE static constexpr auto runListAssumeSorted_(std::span<const u32> indices) noexcept {
             return indices

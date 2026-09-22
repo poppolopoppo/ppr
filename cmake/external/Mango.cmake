@@ -36,6 +36,8 @@ CPMAddPackage(
         "BUILD_IMPORT3D ON"
         "BUILD_EXAMPLES OFF"
         "BUILD_SHARED_LIBS OFF"
+        "BUILD_TESTS OFF"
+        "BUILD_TOOLS OFF"
 )
 
 # Remove /MP, /arch:AVX*, and /Ox from Mango targets' INTERFACE_COMPILE_OPTIONS

@@ -18,6 +18,11 @@ set(PPR_PROJECT_WARNINGS_CXX
   -Wformat=2 # warning on security issues around functions that format output (ie printf)
   -Wimplicit-fallthrough # warn on statements that fallthrough without an explicit annotation
   -Wextra-semi # Warn about semicolon after in-class function definition.
+  # The compiler's own `std`/`std.compat` module sources use the reserved module
+  # name `std`; silence that warning so the synthesized std BMI precompiles
+  # (which inherit these PRIVATE options) succeed under -Werror. Project code
+  # never declares a module named `std`, so this changes no project diagnostic.
+  -Wno-reserved-module-identifier
 )
 
 # Add libc++ include paths for module support

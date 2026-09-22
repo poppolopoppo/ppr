@@ -69,4 +69,10 @@ namespace pP::hal {
         const std::wstring wide = toString<wchar_t>(utf8);
         return transcode(wide, p_dst, capacity);
     }
+
+    [[nodiscard]] std::size_t transcode(const std::string_view ansi, char *const p_dst, const std::size_t capacity) noexcept {
+        const std::size_t n_chars = std::min(ansi.size(), capacity);
+        std::memcpy(p_dst, ansi.data(), n_chars * sizeof(char));
+        return n_chars;
+    }
 }
