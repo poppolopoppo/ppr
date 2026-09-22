@@ -54,7 +54,7 @@ namespace demo {
 }
 
 int main(const int argc, char *argv[]) {
-    demo::TurboLarbin app("ppr", std::span(&argv[0], argc));
+    demo::TurboLarbin app("ppr", std::span(&argv[0], pP::checked_cast<std::size_t>(argc)));
     const std::error_code err = app.run();
     return err.value();
 }
