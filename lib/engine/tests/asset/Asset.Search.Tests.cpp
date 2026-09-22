@@ -31,8 +31,7 @@ namespace pP::tests::detail {
                     const i64 resolved =
                             static_cast<i64>(mesh_asset.m_indices[prim.m_start + static_cast<u32>(k)])
                             + static_cast<i64>(prim.m_base);
-                    if (resolved < 0
-                        or resolved >= vert_count)
+                    if (resolved < 0 or resolved >= vert_count)
                     {
                         return false;
                     }

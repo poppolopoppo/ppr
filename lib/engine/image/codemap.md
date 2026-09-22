@@ -31,8 +31,8 @@ hold) lives. Caches/consumers live in `engine.app`.
 ## Integration
 
 - Depends on: `engine.core` + `engine.math` (public), `mango-image` (private).
-- Consumed by: (future) `engine.app` caches; `engine.tests.asset` (image decode/format/block/
-  hash/error tests with runtime-generated fixtures).
+- Consumed by: `engine.app` pass caches (upload) + scene ownership; `engine.tests.asset`
+  (image decode/format/block/hash/error tests with runtime-generated fixtures).
 - Build: `Image.cppm`, `Image.Types.cppm`, `Image.Decode.cppm` in `FILE_SET CXX_MODULES`;
   `Image.Types.cpp` + `Image.Decode.cpp` as PRIVATE sources;
   `setup_ppr_project(engine.image INTERNAL_PUBLIC_DEPS engine.core engine.math

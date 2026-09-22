@@ -209,6 +209,7 @@ export namespace pP::mesh {
     };
 
     [[nodiscard]] const std::error_category &error_category() noexcept;
+
     [[nodiscard]] std::error_code make_error_code(errc err) noexcept;
 }
 

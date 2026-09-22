@@ -38,6 +38,7 @@ export namespace pP::image {
     };
 
     [[nodiscard]] const std::error_category &error_category() noexcept;
+
     [[nodiscard]] std::error_code make_error_code(errc err) noexcept;
 
     enum class BlockTag : u32 { none, bc1, bc3, bc4, bc5, bc7, astc4x4, astc6x6, astc8x8 };
@@ -62,6 +63,7 @@ export namespace pP::image {
     };
 
     enum class ImageUsage : u8 { color, data };
+
     enum class ImageDimension : u8 { image2d };
 
     struct ImageDecodeDesc {
@@ -69,11 +71,12 @@ export namespace pP::image {
         bool m_multithread = false;
         bool m_flip_v = false;
     };
+
     // m_multithread=false is engine POLICY (no Mango pool in the RT path), not the Mango default.
     // m_flip_v=false: glTF/Mango V already matches (import_gltf.cpp:740-742).
 
     struct ImageSubresource {
-        mem::SharedBuffer m_view;
+        mem::SharedBuffer m_view{};
         u64 m_row_pitch = 0u;
         u64 m_slice_pitch = 0u;
     };
@@ -90,9 +93,10 @@ export namespace pP::image {
         u32 m_bytes_per_block = 4u;
         bool m_is_srgb = false;
         bool m_is_block = false;
-        mem::SharedBuffer m_storage;
-        Array<ImageSubresource> m_subresources;
+        mem::SharedBuffer m_storage{};
+        Array<ImageSubresource> m_subresources{};
     };
+
     // Invariants (checked at decode return; PPR_ASSERT + invalid_argument on violation):
     // - m_dimension is ALWAYS image2d in MVP; 1D/3D/arrays/cubemaps are REJECTED with
     //   function_not_supported (or fully represented if scope widens — never silently treated as 2D).
@@ -185,6 +189,7 @@ export namespace pP::image {
     [[nodiscard]] inline hash_t contentHash(const mem::SharedBufferView view) noexcept {
         return hash::contiguousRange(view);
     }
+
     // Cross-load dedup key; NEVER hashValue(SharedBuffer) (owner identity).
 }
 

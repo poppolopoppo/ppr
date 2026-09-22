@@ -129,9 +129,7 @@ namespace pP::tests::detail {
                     make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr
-                or
-                blob->getBufferPointer() == nullptr) {
+            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             GatePixels pixels{};
@@ -181,9 +179,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or
-                    node_index >= scene.m_nodes.size()) {
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size()) {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
                 const float4x4 &world = scene.m_nodes[node_index].m_world;
@@ -254,19 +250,6 @@ namespace pP::tests::detail {
 
             const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);
             PPR_TEST_ASSERT(pixels.has_value());
-            {
-                // TEMPORARY gate debug dump (removed before Gate 4 sign-off).
-                std::error_code dump_ec{};
-                std::filesystem::create_directories(
-                    std::filesystem::current_path() / "temp_gate_fixtures", dump_ec);
-                const mango::image::Surface dump_surface{
-                    256, 256,
-                    mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
-                    static_cast<std::size_t>(pixels->m_row_pitch), pixels->m_bytes.data()
-                };
-                std::ignore = dump_surface.save(
-                    (std::filesystem::current_path() / "temp_gate_fixtures" / "gate_box_dump.png").string());
-            }
             const std::array<u8, 4u> center_texel = gateTexel_(*pixels, 128u, 128u);
             PPR_TEST_ASSERT(spread_(center_texel) > 12u);
             // Dark-sage center (debugger-measured 38,56,46) is mid-gradient,
@@ -288,8 +271,7 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(chromatic >= 5u);
             PPR_TEST_ASSERT(
-                texelDist_(gateTexel_(*pixels, 64u, 64u), gateTexel_(*pixels, 192u, 192u)) > 12u
-                or
+                texelDist_(gateTexel_(*pixels, 64u, 64u), gateTexel_(*pixels, 192u, 192u)) > 12u or
                 texelDist_(gateTexel_(*pixels, 64u, 192u), gateTexel_(*pixels, 192u, 64u)) > 12u);
 
             PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
@@ -564,8 +546,10 @@ namespace pP::tests::detail {
             const float3 box_center = bounds_scene->m_meshes.front().m_bounds.center();
             const float3 box_size = bounds_scene->m_meshes.front().m_bounds.size();
             const float box_max = std::max({box_size.x, box_size.y, box_size.z});
-            const float3 box_eye{box_center.x + 0.25f * box_max, box_center.y + 0.2f * box_max,
-                box_center.z + 2.2f * box_max};
+            const float3 box_eye{
+                box_center.x + 0.25f * box_max, box_center.y + 0.2f * box_max,
+                box_center.z + 2.2f * box_max
+            };
             PPR_TEST_ASSERT(not test_app.trianglePass().update(TimeSpan{}, gateCamera_(box_eye, box_center, float2{256.0f, 256.0f})));
 
             const auto rhi = test_app.getServices().get<IRhiService>();

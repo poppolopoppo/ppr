@@ -48,20 +48,21 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
   `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`; `SurfaceRenderPass{surface_color,
   additional_colors span, depth_stencil optional}`.
-- **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): owns vertex buffer/layout, shader program, render
-  pipeline + memoized key, and the last `CameraSnapshot`. `FrameConstants{view, projection, view_projection,
-  inverse_view_projection, camera_position, viewport_size}` with `static_assert(sizeof == 288)` matching HLSL
-  (4×float4x4 + 2×float4).
-- `initialize(rhi, shader, content_dir)`: `createInvariantRenderState_` (POSITION/COLOR RGB32Float input layout +
-  DeviceLocal vertex buffer with the 3-vertex RGB triangle) + `createShaderProgram_` (loads
-  `shaders/triangle.slang` module `"triangle"`, `vertexMain` + `fragmentMain`, `SingleProgram` link).
-  `update(dt, camera_view)` caches the snapshot (dt unused). `render(ctx)`: rebuilds via
-  `createRenderPipeline_` on pipeline-key mismatch, `bindPipeline` → `ShaderCursor`, dereferences `g_frame` into
-  `frame_cursor`, `uploadFrameConstants_` (view/projection/view_projection/invert→inverse, origin promoted via
-  `float4{origin,1}`, viewport size as `float4{size,0,0}`), sets viewport + scissor + vertex buffer state,
-  `draw(3)` with `vertexCount{3}`.
-  `createRenderPipeline_` accepts exactly one color target, no depth, 1x MSAA (else `operation_not_supported`);
-  single non-blended `TriangleList` pipeline. `shutdown()` releases key/pipeline/program/layout/buffer.
+- **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): pass-owned GPU caches +
+  shared sampler + narrow upload APIs (`uploadMesh/uploadTexture/packMaterial/submitInstance`)
+  +   per-instance list + pipeline-variant map (+ kept `CameraSnapshot`). Binds the scalar-handle
+  `mesh_bindless.slang` program (StructuredBuffer fetch, no fixed-function geometry) and encodes
+  per-instance pushes/resolved slots/descriptors with fail-closed handle resolution.
+  `FrameConstants` keeps its `sizeof == 288` HLSL mirror assert (4×float4x4 + 2×float4).
+- **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic
+  bump buckets, stable `TriangleBagRange`), `BindlessTextureCache` (content-hash dedup +
+  refcount + pin-while-held), `BindlessMaterialCache` (stable `GpuMaterial` slots, 80 B stride),
+  `buildGpuMaterial` pack mapping, pipeline-variant key. Render-thread confined; shutdown
+  caches → sampler → pipelines before renderer `waitOnHost` (§2.4).
+- `initialize(rhi, shader, content_dir)`: bindless program/layout + `caches.initialize(device)`
+  with reverse-order rollback; `createShaderProgram_` loads `mesh_bindless.slang`;
+  `createRenderPipeline_` keys opaque/mask variants (blend rejected); `update(dt, camera_view)`
+  caches the snapshot; `render(ctx)` encodes per instance (§6).
 
 ## Flow
 
@@ -79,7 +80,8 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 - **Consumers**: owning application shell (owns `Renderer` + `TrianglePass`, drives update/render/shutdown)
 - **Depends on**: `engine.core`, `engine.math`, `engine.rhi` (devices, queues, surfaces, passes, pipelines),
-  `engine.shader` (TrianglePass program load), `:service.window` + `:window.handle` (Window resolves surfaces),
+  `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
+  `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
 - **Provides**: `engine.app:renderer`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
@@ -88,6 +90,8 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 - `App.Renderer.cppm` — generic `Renderer` declaration (config, multi-surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
 - `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
-- `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, pipeline helpers)
-- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, pipeline rebuild, frame-constant upload)
+- `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, caches, pipeline helpers)
+- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, §6 encode, frame-constant upload)
+- `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `GpuMaterial`, caches)
+- `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, `SurfaceRenderPass`); header-only, no matching `.cpp`

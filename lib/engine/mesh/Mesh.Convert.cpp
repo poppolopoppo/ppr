@@ -53,8 +53,7 @@ namespace pP {
             inline constexpr u32 kGlbBinChunk{0x004E4942u};
 
             [[nodiscard]] bool skipJsonWs(const char *&ptr, const char *end) noexcept {
-                while (ptr != end
-                       and (*ptr == ' ' or *ptr == '\t' or *ptr == '\n' or *ptr == '\r')) {
+                while (ptr != end and (*ptr == ' ' or *ptr == '\t' or *ptr == '\n' or *ptr == '\r')) {
                     ++ptr;
                 }
                 return ptr != end;
@@ -80,21 +79,21 @@ namespace pP {
 
             [[nodiscard]] bool skipJsonNumber(const char *&ptr, const char *end) noexcept {
                 const char *start = ptr;
-                while (ptr != end
-                       and ((*ptr >= '0' and *ptr <= '9')
-                            or *ptr == '-'
-                            or *ptr == '+'
-                            or *ptr == '.'
-                            or *ptr == 'e'
-                            or *ptr == 'E')) {
+                while (ptr != end and
+                       ((*ptr >= '0' and *ptr <= '9') or
+                        *ptr == '-' or
+                        *ptr == '+' or
+                        *ptr == '.' or
+                        *ptr == 'e' or
+                        *ptr == 'E')) {
                     ++ptr;
                 }
                 return ptr != start;
             }
 
             [[nodiscard]] bool matchJsonLiteral(const char *&ptr, const char *end, const std::string_view word) noexcept {
-                if (static_cast<std::size_t>(end - ptr) < word.size()
-                    or std::string_view{ptr, word.size()} != word) {
+                if (static_cast<std::size_t>(end - ptr) < word.size() or
+                    std::string_view{ptr, word.size()} != word) {
                     return false;
                 }
                 ptr += word.size();
@@ -102,16 +101,14 @@ namespace pP {
             }
 
             [[nodiscard]] bool skipJsonValue(const char *&ptr, const char *end, const u32 depth = 0u) noexcept {
-                if (depth > 32u
-                    or not skipJsonWs(ptr, end)) {
+                if (depth > 32u or not skipJsonWs(ptr, end)) {
                     return false;
                 }
                 const char c = *ptr;
                 if (c == '"') {
                     return skipJsonString(ptr, end);
                 }
-                if (c == '{'
-                    or c == '[') {
+                if (c == '{' or c == '[') {
                     const char close = c == '{' ? '}' : ']';
                     ++ptr;
                     if (not skipJsonWs(ptr, end)) {
@@ -123,8 +120,8 @@ namespace pP {
                     }
                     while (true) {
                         if (c == '{') {
-                            if (*ptr != '"'
-                                or not skipJsonString(ptr, end) or not skipJsonWs(ptr, end) or *ptr != ':') {
+                            if (*ptr != '"' or
+                                not skipJsonString(ptr, end) or not skipJsonWs(ptr, end) or *ptr != ':') {
                                 return false;
                             }
                             ++ptr;
@@ -161,9 +158,7 @@ namespace pP {
                 }
                 u64 value = 0u;
                 bool any = false;
-                while (ptr != end
-                       and *ptr >= '0'
-                       and *ptr <= '9') {
+                while (ptr != end and *ptr >= '0' and *ptr <= '9') {
                     const u64 digit = static_cast<u64>(*ptr - '0');
                     if (value > (std::numeric_limits<u64>::max() - digit) / 10u) {
                         return false;
@@ -229,13 +224,12 @@ namespace pP {
                     if (not skipJsonWs(ptr, end)) {
                         return false;
                     }
-                    if (ptr != end
-                        and *ptr == ',') {
+                    if (ptr != end and *ptr == ',') {
                         ++ptr;
                         continue;
                     }
-                    if (ptr != end
-                        and *ptr == '}') {
+                    if (ptr != end and
+                        *ptr == '}') {
                         ++ptr;
                         return true;
                     }
@@ -266,8 +260,7 @@ namespace pP {
                     return false;
                 }
                 auto onTop = [&](const std::string &name, const char *&p, const char *e) -> bool {
-                    if (name != "images"
-                        and name != "bufferViews") {
+                    if (name != "images" and name != "bufferViews") {
                         return skipJsonValue(p, e);
                     }
                     if (not skipJsonWs(p, e) or p == e or *p != '[') {
@@ -282,8 +275,7 @@ namespace pP {
                             ++p;
                             return true;
                         }
-                        if (p == e
-                            or *p != '{') {
+                        if (p == e or *p != '{') {
                             return false;
                         }
                         if (name == "images") {
@@ -328,13 +320,11 @@ namespace pP {
                         if (not skipJsonWs(p, e)) {
                             return false;
                         }
-                        if (p != e
-                            and *p == ',') {
+                        if (p != e and *p == ',') {
                             ++p;
                             continue;
                         }
-                        if (p != e
-                            and *p == ']') {
+                        if (p != e and *p == ']') {
                             ++p;
                             return true;
                         }
@@ -356,14 +346,11 @@ namespace pP {
                 const mem::SharedBufferView bytes = mapping.getBufferData();
                 const std::size_t size = bytes.size();
                 const std::byte *data = bytes.data();
-                if (data == nullptr
-                    or size < 20u) {
+                if (data == nullptr or size < 20u) {
                     return table;
                 }
                 auto readAt = [&](const std::size_t off, u32 &out) noexcept -> bool {
-                    if (off > size
-                        or size
-                        - off < sizeof(u32)) {
+                    if (off > size or size - off < sizeof(u32)) {
                         return false;
                     }
                     std::memcpy(&out, data + off, sizeof(out));
@@ -380,26 +367,21 @@ namespace pP {
                 bool have_json = false;
                 bool have_bin = false;
                 std::size_t chunk = 12u;
-                while (chunk + 8u >= 8u
-                       and chunk
-                       + 8u <= size) {
+                while (chunk + 8u >= 8u and chunk + 8u <= size) {
                     u32 chunk_len = 0u, chunk_type = 0u;
                     if (not readAt(chunk, chunk_len) or not readAt(chunk + 4u, chunk_type)) {
                         break;
                     }
                     const u64 start = static_cast<u64>(chunk) + 8u;
                     const u64 finish = start + static_cast<u64>(chunk_len);
-                    if (finish < start
-                        or finish > static_cast<u64>(total)) {
+                    if (finish < start or finish > static_cast<u64>(total)) {
                         break;
                     }
-                    if (chunk_type == kGlbJsonChunk
-                        and not have_json) {
+                    if (chunk_type == kGlbJsonChunk and not have_json) {
                         json_begin = reinterpret_cast<const char *>(data + static_cast<std::size_t>(start));
                         json_end = reinterpret_cast<const char *>(data + static_cast<std::size_t>(finish));
                         have_json = true;
-                    } else if (chunk_type == kGlbBinChunk
-                               and not have_bin) {
+                    } else if (chunk_type == kGlbBinChunk and not have_bin) {
                         bin_start = start;
                         bin_size = static_cast<u64>(chunk_len);
                         have_bin = true;
@@ -423,27 +405,17 @@ namespace pP {
                 table.resize(refs.m_images.size());
                 for (std::size_t i = 0u; i < refs.m_images.size(); ++i) {
                     const GlbImageDesc &image = refs.m_images[i];
-                    if (not
-                        image.m_has_view
-                        or
-                        image.m_buffer_view >= refs.m_views.size()) {
+                    if (not image.m_has_view or image.m_buffer_view >= refs.m_views.size()) {
                         continue;
                     }
                     const GlbBufferViewDesc &view =
                             refs.m_views[static_cast<std::size_t>(image.m_buffer_view)];
-                    if (not
-                        view.m_has_length
-                        or
-                        view.m_length == 0u
-                        or
-                        view.m_buffer != 0u) {
+                    if (not view.m_has_length or view.m_length == 0u or view.m_buffer != 0u) {
                         continue;
                     }
                     const u64 begin = bin_start + view.m_offset;
                     const u64 finish = begin + view.m_length;
-                    if (begin < bin_start
-                        or finish < begin or finish >
-                        static_cast<u64>(size)) {
+                    if (begin < bin_start or finish < begin or finish > static_cast<u64>(size)) {
                         continue;
                     }
                     table[i] =
@@ -462,8 +434,7 @@ namespace pP {
                     // Non-File-backed embeds dangle (see above): use the
                     // PPR-resolved file-backed bytes, or fail closed — never
                     // read the mango view.
-                    if (image_index >= glb_embeds.size()
-                        or glb_embeds[image_index].getBufferData().empty())
+                    if (image_index >= glb_embeds.size() or glb_embeds[image_index].getBufferData().empty())
                     [[unlikely]] {
                         PPR_LOG(Mesh, error, "embed image has no file-backed resolution — refusing the mango view");
                         return std::unexpected{make_error_code(errc::invalid_argument)};
@@ -528,37 +499,26 @@ namespace pP {
             // unlit have no Mango Material fields (dropped at the Mango
             // boundary with a logged note here), so nothing reaches the asset.
             [[nodiscard]] std::error_code checkDeferredModules(const m3d::Material &material) {
-                if (material.clearcoatFactor != 0.0f
-                    or
-                    material.clearcoatRoughnessFactor != 0.0f
-                    or
-                    material.clearcoat.enabled()
-                    or
-                    material.clearcoatRoughness.enabled()
-                    or
+                if (material.clearcoatFactor != 0.0f or
+                    material.clearcoatRoughnessFactor != 0.0f or
+                    material.clearcoat.enabled() or
+                    material.clearcoatRoughness.enabled() or
                     material.clearcoatNormal.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_clearcoat is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
                 }
-                if (material.sheenColorFactor.x != 0.0f
-                    or
-                    material.sheenColorFactor.y != 0.0f
-                    or
-                    material.sheenColorFactor.z != 0.0f
-                    or
-                    material.sheenRoughnessFactor != 0.0f
-                    or
-                    material.sheenColor.enabled()
-                    or
+                if (material.sheenColorFactor.x != 0.0f or
+                    material.sheenColorFactor.y != 0.0f or
+                    material.sheenColorFactor.z != 0.0f or
+                    material.sheenRoughnessFactor != 0.0f or
+                    material.sheenColor.enabled() or
                     material.sheenRoughness.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_sheen is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
                 }
-                if (material.anisotropyStrength != 0.0f
-                    or
-                    material.anisotropy.enabled())
+                if (material.anisotropyStrength != 0.0f or material.anisotropy.enabled())
                 [[unlikely]] {
                     PPR_LOG(Mesh, error, "KHR_materials_anisotropy is authored but deferred — rejecting material");
                     return make_error_code(errc::function_not_supported);
@@ -759,13 +719,11 @@ namespace pP {
                 if ((mesh.flags & m3d::Vertex::Tangent) != 0u) {
                     return false;
                 }
-                if ((mesh.flags & m3d::Vertex::Normal) == 0u
-                    or (mesh.flags & m3d::Vertex::Texcoord) == 0u) {
+                if ((mesh.flags & m3d::Vertex::Normal) == 0u or (mesh.flags & m3d::Vertex::Texcoord) == 0u) {
                     return false;
                 }
                 const u64 vert_count = mesh.vertices.size();
-                if (vert_count == 0u
-                    or vert_count > static_cast<u64>(std::numeric_limits<u32>::max())) {
+                if (vert_count == 0u or vert_count > static_cast<u64>(std::numeric_limits<u32>::max())) {
                     return false;
                 }
                 m3d::Mesh soup;
@@ -773,15 +731,12 @@ namespace pP {
                 Array<u32> corner_global;
                 bool want = false;
                 for (const m3d::Primitive &prim: mesh.primitives) {
-                    if (prim.material >= materials.size()
-                        or not materials[prim.material].normal.enabled()) {
+                    if (prim.material >= materials.size() or not materials[prim.material].normal.enabled()) {
                         continue;
                     }
                     const u64 start = prim.start;
                     const u64 count = prim.count;
-                    if (count < 3u
-                        or start > mesh.indices.size()
-                        or count > mesh.indices.size() - start) {
+                    if (count < 3u or start > mesh.indices.size() or count > mesh.indices.size() - start) {
                         return false;
                     }
                     const u64 base = prim.base;
@@ -817,9 +772,7 @@ namespace pP {
                         if (const std::error_code err = expandStripFan(prim, file_slice, vert_count, expanded)) {
                             return false;
                         }
-                        if (expanded.empty()
-                            or
-                            expanded.size() % 3u != 0u) {
+                        if (expanded.empty() or expanded.size() % 3u != 0u) {
                             return false;
                         }
                         for (std::size_t t = 0u; t < expanded.size(); t += 3u) {
@@ -865,9 +818,7 @@ namespace pP {
                 }
                 // Missing POSITION (or fully attribute-mismatched prims) leaves
                 // an empty Mango mesh: fail closed, never an empty asset.
-                if (mesh.vertices.empty()
-                    or
-                    mesh.primitives.empty())
+                if (mesh.vertices.empty() or mesh.primitives.empty())
                 [[unlikely]] {
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
@@ -920,9 +871,7 @@ namespace pP {
                     }
                     const u64 start = prim.start;
                     const u64 count = prim.count;
-                    if (count < 3u
-                        or start > out.m_indices.size()
-                        or count > out.m_indices.size() - start)
+                    if (count < 3u or start > out.m_indices.size() or count > out.m_indices.size() - start)
                     [[unlikely]] {
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
@@ -954,9 +903,7 @@ namespace pP {
                         }
                         Expected<u32> range_start = toU32(start);
                         Expected<u32> range_count = toU32(count);
-                        if (not
-                            range_start.has_value()
-                            or not range_count.has_value())
+                        if (not range_start.has_value() or not range_count.has_value())
                         [[unlikely]] {
                             return std::unexpected{make_error_code(errc::invalid_argument)};
                         }
@@ -973,17 +920,13 @@ namespace pP {
                         if (const std::error_code err = expandStripFan(prim, file_slice, verts, expanded)) [[unlikely]] {
                             return std::unexpected{err};
                         }
-                        if (expanded.empty()
-                            or
-                            expanded.size() % 3u != 0u)
+                        if (expanded.empty() or expanded.size() % 3u != 0u)
                         [[unlikely]] {
                             return std::unexpected{make_error_code(errc::invalid_argument)};
                         }
                         Expected<u32> range_start = toU32(out.m_indices.size());
                         Expected<u32> range_count = toU32(expanded.size());
-                        if (not
-                            range_start.has_value()
-                            or not range_count.has_value())
+                        if (not range_start.has_value() or not range_count.has_value())
                         [[unlikely]] {
                             return std::unexpected{range_start.has_value() ? range_count.error() : range_start.error()};
                         }
@@ -997,8 +940,7 @@ namespace pP {
                 if (not file_tangents and not regen_ok) {
                     bool want_tangent = false;
                     for (const m3d::Primitive &prim: mesh.primitives) {
-                        if (prim.material < materials.size()
-                            and materials[prim.material].normal.enabled()) {
+                        if (prim.material < materials.size() and materials[prim.material].normal.enabled()) {
                             want_tangent = true;
                             break;
                         }
@@ -1087,8 +1029,7 @@ namespace pP {
                         PPR_LOG(Mesh, error, "skinned node instance is deferred — rejecting scene");
                         return std::unexpected{make_error_code(errc::function_not_supported)};
                     }
-                    if (node.mesh.has_value()
-                        and *node.mesh >= scene.meshes.size())
+                    if (node.mesh.has_value() and *node.mesh >= scene.meshes.size())
                     [[unlikely]] {
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
@@ -1146,20 +1087,17 @@ namespace pP {
             [[nodiscard]] bool hasGltfExtension(const std::filesystem::path &file) {
                 std::string ext = file.extension().string();
                 for (char &c: ext) {
-                    if (c >= 'A'
-                        and c <= 'Z') {
+                    if (c >= 'A' and c <= 'Z') {
                         c = static_cast<char>(c + ('a' - 'A'));
                     }
                 }
-                return ext == ".gltf"
-                       or ext == ".glb";
+                return ext == ".gltf" or ext == ".glb";
             }
 
             [[nodiscard]] bool isGlbFile(const std::filesystem::path &file) {
                 std::string ext = file.extension().string();
                 for (char &c: ext) {
-                    if (c >= 'A'
-                        and c <= 'Z') {
+                    if (c >= 'A' and c <= 'Z') {
                         c = static_cast<char>(c + ('a' - 'A'));
                     }
                 }
@@ -1212,9 +1150,7 @@ namespace pP {
             if (mango::isEnable(mango::Print::Verbose)) {
                 mango::printEnable(mango::Print::Verbose, false);
             }
-            if (dir.empty()
-                or
-                file.empty())
+            if (dir.empty() or file.empty())
             [[unlikely]] {
                 return std::unexpected{make_error_code(errc::invalid_argument)};
             }

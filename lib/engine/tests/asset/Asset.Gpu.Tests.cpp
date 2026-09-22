@@ -20,13 +20,7 @@ namespace pP::tests::detail {
         // GPU rows are plain float arrays (Gate 3 C2); mango float4 is the
         // expected side only (float4 == float4 yields a simd mask, not bool).
         [[nodiscard]] bool float4Equal_(const float (&lhs)[4], const float4 &rhs) noexcept {
-            return lhs[0] == rhs.x
-            and
-                    lhs[1] == rhs.y
-            and
-                    lhs[2] == rhs.z
-            and
-                    lhs[3] == rhs.w;
+            return lhs[0] == rhs.x and lhs[1] == rhs.y and lhs[2] == rhs.z and lhs[3] == rhs.w;
         }
 
         PPR_UNIT_TEST (handles_default_invalid) {
@@ -221,22 +215,14 @@ namespace pP::tests::detail {
                     for (int round = 0; round < 5; ++round) {
                         const Expected<image::ImageAsset> decoded = image::decodeToRgba8(
                             png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
-                        if (not
-                            decoded.has_value()
-                        or
-                        decoded->m_width != 4u
-                        or
-                        decoded->m_height != 4u)
+                        if (not decoded.has_value() or decoded->m_width != 4u or decoded->m_height != 4u)
                         {
                             failures.fetch_add(1, std::memory_order_relaxed);
                             return;
                         }
                         const char *const file = (t + round) % 2 == 0 ? "textured_quad.glb" : "textured_box.gltf";
                         const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(hammerMeshDir(), file);
-                        if (not
-                            scene.has_value()
-                        or
-                        scene->m_meshes.empty())
+                        if (not scene.has_value() or scene->m_meshes.empty())
                         {
                             failures.fetch_add(1, std::memory_order_relaxed);
                             return;

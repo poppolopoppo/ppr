@@ -129,9 +129,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
-        if (verts.empty()
-            or
-            idx.empty())
+        if (verts.empty() or idx.empty())
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -215,9 +213,7 @@ namespace pP {
         for (const mesh::StaticMeshAsset &mesh_asset: scene.m_meshes) {
             for (const mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
                 const u64 end = static_cast<u64>(prim.m_start) + static_cast<u64>(prim.m_count);
-                if (prim.m_count == 0u
-                    or
-                    end > static_cast<u64>(mesh_asset.m_indices.size()))
+                if (prim.m_count == 0u or end > static_cast<u64>(mesh_asset.m_indices.size()))
                 [[unlikely]] {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
@@ -307,10 +303,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not
-            m_bag_cache.resolve(bag).has_value()
-            or
-            not m_material_cache.materialIndex(material).has_value())
+        if (not m_bag_cache.resolve(bag).has_value() or not m_material_cache.materialIndex(material).has_value())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -332,9 +325,7 @@ namespace pP {
                 });
             return std::unexpected{err};
         }
-        if (not
-            m_render_pipeline_key.has_value()
-            or
+        if (not m_render_pipeline_key.has_value() or
             not(static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) == signature)) {
             m_variant_pipelines.clear();
             m_render_pipeline_key.reset();
@@ -343,8 +334,8 @@ namespace pP {
         if (const auto found = m_variant_pipelines.find(variant); found != m_variant_pipelines.end()) {
             return found->second.get();
         }
-        if (signature.m_color_formats.size() != 1u ||
-            signature.m_depth_stencil_format.has_value() ||
+        if (signature.m_color_formats.size() != 1u or
+            signature.m_depth_stencil_format.has_value() or
             signature.m_sample_count != 1u) {
             PPR_LOG(TrianglePass, error, "unsupported render pipeline signature", {
                 {"color_format_count", signature.m_color_formats.size()},
@@ -405,9 +396,7 @@ namespace pP {
         }
         rhi::IBuffer *const vertex_buffer = m_bag_cache.vertexBuffer(*bucket);
         rhi::IBuffer *const index_buffer = m_bag_cache.indexBuffer(*bucket);
-        if (vertex_buffer == nullptr
-            or
-            index_buffer == nullptr)
+        if (vertex_buffer == nullptr or index_buffer == nullptr)
         [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
@@ -432,8 +421,8 @@ namespace pP {
         // recorded at upload and the material stride must match the
         // StructuredBuffer element strides the shader was compiled against.
         // Fail closed — never draw with a reinterpreted buffer.
-        if (vertex_buffer->getDesc().elementSize != sizeof(mesh::StaticMeshVertex)
-            or material_buffer->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
+        if (vertex_buffer->getDesc().elementSize != sizeof(mesh::StaticMeshVertex) or
+            material_buffer->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
             PPR_LOG(TrianglePass, error, "bag/material stride mismatch vs shader expectation", {
                 {"vertex_stride", vertex_buffer->getDesc().elementSize},
                 {"material_stride", material_buffer->getDesc().elementSize},

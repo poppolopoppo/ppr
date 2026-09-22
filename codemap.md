@@ -40,7 +40,7 @@ lifecycle-hook overrides and a debug-only ImGui demo window.
 Module dependencies (flat fan-out, per CMake):
 
 ```
-game/main.cpp → engine.app → engine.core / engine.math / engine.shader / engine.rhi
+game/main.cpp → engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
                  engine.rhi → engine.core / engine.math / engine.shader
                   engine.shader → engine.core
                   engine.math → engine.core
@@ -84,7 +84,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/core/hal/generic/`  | Stub HAL: throw/no-op fallback for any platform.                                                      | [View Map](lib/engine/core/hal/generic/codemap.md)  |
 | `lib/engine/math/`              | Single-module mango::math re-export into `namespace pP` + math:: utilities.                           | [View Map](lib/engine/math/codemap.md)              |
 | `lib/engine/image/`             | CPU image assets (`:types` frozen §2.2 vocabulary + `:decode` PNG/JPG/KTX2/DDS via private Mango). | [View Map](lib/engine/image/codemap.md)             |
-| `lib/engine/mesh/`              | CPU static mesh assets (`:types` + `:convert` skeleton, P0 wiring only; glTF/GLB convert in P1).      | [View Map](lib/engine/mesh/codemap.md)              |
+| `lib/engine/mesh/`              | CPU static mesh assets (`:types` frozen vocabulary + `:convert` glTF/GLB import).      | [View Map](lib/engine/mesh/codemap.md)              |
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
@@ -92,7 +92,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
-| `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) + TrianglePass; boundary Types header-only (.cppm, no Types.cpp). | [View Map](lib/engine/app/renderer/codemap.md)      |
+| `lib/engine/app/renderer/`      | Content-free Renderer (surfaces, queue, submission) + bindless TrianglePass (pass-owned GPU caches); boundary Types header-only (.cppm, no Types.cpp). | [View Map](lib/engine/app/renderer/codemap.md)      |
 | `lib/engine/app/scene/`         | Camera + controller (lookat view, view*projection snapshot).                                          | [View Map](lib/engine/app/scene/codemap.md)         |
 | `lib/engine/app/service/`       | Five app service contracts: client/input/player/ui/window (behavior in platform/UI/Editor).            | [View Map](lib/engine/app/service/codemap.md)       |
 | `lib/engine/app/ui/`            | UI layer (ImGui integration, IUIService; overlay shader embedded in `App.UI.ImGui.cpp`, not an asset). | [View Map](lib/engine/app/ui/codemap.md)            |
@@ -100,10 +100,10 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Thin demo exe (`app.game`): `TurboLarbin : ApplicationEditor` + `main()`; POST_BUILD stages DLLs + `shaders/` + `textures/` (`meshes/` once Lane B lands). | [View Map](game/codemap.md)                         |
+| `game/`                         | Thin demo exe (`app.game`): `TurboLarbin : ApplicationEditor` + `main()`; POST_BUILD stages DLLs + `shaders/` + `textures/` + `meshes/`. | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
-| `assets/`                       | Shader-only runtime asset root; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
-| `assets/shaders/`               | Slang shader sources (including `triangle.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
+| `assets/`                       | Runtime asset root: shaders + textures + meshes; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
+| `assets/shaders/`               | Slang shader sources (including `mesh_bindless.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
 
 > Removed locations (do not look here): `lib/engine/app/camera/` → moved to `lib/engine/app/scene/`;
 > `lib/engine/app/input/device/` → consolidated into the unified `:input.device` partition; renderer `App.Viewport`
@@ -133,11 +133,11 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   level and change its `core/<...>` / `app/<...>` path); see `module-architect`.
 - `engine.tests.asset` (`lib/engine/tests/asset/`) — asset-pipeline suite (`EngineAssetUnitTests`,
   `asset/` root with the same extern-umbrella + `Tests()`-accessor + POST_BUILD fixture-staging
-  pattern). Lane A owns the scaffolding plus the `asset/image` group: RGBA/block decode, format
-  predicates, block geometry, content-hash, errc mapping, frozen cross-thread sharing
-  (runtime-generated PNG/JPG/DDS fixtures). Mesh/GPU-cache groups arrive in later lanes.
-  Links `engine.image + engine.tests` (private `mango-image` for fixture encoding); test
-  dependencies never change the production graph.
+  pattern): `asset/image` (decode/format/block/hash/error), `asset/mesh` (import/convert/layout),
+  `asset/staging` (separator regression), `asset/gpu` (handles/pack/caches), `asset/gate`
+  (textured render gate + arbitration + editor flow). Links `engine.image + engine.mesh +
+  engine.app + engine.rhi + engine.shader + engine.core + engine.math + engine.tests`
+  (private GLFW for GPU integration); test dependencies never change the production graph.
 - Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
 

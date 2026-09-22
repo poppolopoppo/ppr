@@ -100,8 +100,7 @@ namespace pP {
             SLANG_NO_THROW SlangResult SLANG_MCALL
 
             queryInterface(const SlangUUID &uuid, void **out_object) override {
-                if (uuid == ISlangUnknown::getTypeGuid()
-                    or uuid == ISlangBlob::getTypeGuid())
+                if (uuid == ISlangUnknown::getTypeGuid() or uuid == ISlangBlob::getTypeGuid())
                 {
                     addRef();
                     *out_object = static_cast<IBlob *>(this);

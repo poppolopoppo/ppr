@@ -156,8 +156,7 @@ export namespace pP {
 
         // Hand-written (no defaulted comparisons: MSVC module ICE family).
         [[nodiscard]] constexpr bool operator==(const TrianglePipelineVariant &other) const noexcept {
-            return m_twosided == other.m_twosided
-            and m_alpha == other.m_alpha;
+            return m_twosided == other.m_twosided and m_alpha == other.m_alpha;
         }
 
         [[nodiscard]] constexpr bool operator<(const TrianglePipelineVariant &other) const noexcept {
@@ -202,9 +201,7 @@ export namespace pP {
         [[nodiscard]] Expected<TriangleBagHandle> upload(
             const std::span<const V> verts, const std::span<const u32> idx, const i32 base) {
             static_assert(std::is_trivially_copyable_v<V>);
-            if (verts.empty()
-                or
-            idx.empty())
+            if (verts.empty() or idx.empty())
             [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
@@ -287,12 +284,11 @@ export namespace pP {
 
             // Hand-written (no defaulted comparisons: MSVC module ICE family).
             [[nodiscard]] bool operator==(const DedupKey &other) const noexcept {
-                return m_hash == other.m_hash
-                and m_width == other.m_width
-                and m_height == other.m_height
-                and
-                        m_format == other.m_format
-                and m_mips == other.m_mips;
+                return m_hash == other.m_hash and
+                    m_width == other.m_width and
+                    m_height == other.m_height and
+                    m_format == other.m_format and
+                    m_mips == other.m_mips;
             }
 
             [[nodiscard]] bool operator<(const DedupKey &other) const noexcept {

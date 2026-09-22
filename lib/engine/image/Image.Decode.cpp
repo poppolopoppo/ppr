@@ -132,7 +132,7 @@ namespace pP::image {
             if (asset.m_subresources.size() != asset.m_mip_count) {
                 return false;
             }
-            for (const ImageSubresource &sub : asset.m_subresources) {
+            for (const ImageSubresource &sub: asset.m_subresources) {
                 if (sub.m_row_pitch != rowPitchFor(asset.m_width, asset.m_tag)) {
                     return false;
                 }
@@ -180,7 +180,8 @@ namespace pP::image {
         }
 
         const mango::ConstMemory mango_mem{
-            reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()};
+            reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()
+        };
         mango::image::ImageDecoder decoder{mango_mem, "memory" + dotted};
         if (not decoder.isDecoder()) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
@@ -212,7 +213,8 @@ namespace pP::image {
         options.simd = desc.m_simd;
         options.multithread = false;
         const mango::image::Surface surface{
-            header.width, header.height, rgba8Format_(), static_cast<std::size_t>(row_pitch), target->data()};
+            header.width, header.height, rgba8Format_(), static_cast<std::size_t>(row_pitch), target->data()
+        };
         const bool decoded = [&] {
             try {
                 return static_cast<bool>(decoder.decode(surface, options));
@@ -280,7 +282,8 @@ namespace pP::image {
         }
 
         const mango::ConstMemory mango_mem{
-            reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()};
+            reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()
+        };
         mango::image::ImageDecoder decoder{mango_mem, "memory" + dotted};
         if (not decoder.isDecoder()) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
@@ -334,7 +337,8 @@ namespace pP::image {
                 return std::unexpected{make_error_code(errc::function_not_supported)};
             }
             blob_view = mem::SharedBufferView{
-                reinterpret_cast<const std::byte *>(blob_storage.address), blob_storage.size};
+                reinterpret_cast<const std::byte *>(blob_storage.address), blob_storage.size
+            };
         }
 
         const u32 width = static_cast<u32>(header.width);

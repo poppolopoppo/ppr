@@ -88,7 +88,7 @@ namespace pP::tests::detail {
             return a.size() == b.size() and std::ranges::equal(a, b);
         }
 
-        PPR_UNIT_TEST (rgba_png_color_is_srgb) {
+        PPR_UNIT_TEST(rgba_png_color_is_srgb) {
             constexpr u32 kWidth = 4u;
             constexpr u32 kHeight = 2u;
             constexpr std::array<std::byte, kWidth * kHeight * 4u> kPixels{
@@ -105,7 +105,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(decoded.has_value());
             const image::ImageAsset &decoded_asset = *decoded;
             PPR_TEST_ASSERT(decoded_asset.m_width == kWidth);
@@ -126,7 +126,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(bytesEqual_(sub.m_view.getBufferData(), kPixels));
         };
 
-        PPR_UNIT_TEST (rgba_data_usage_is_linear) {
+        PPR_UNIT_TEST(rgba_data_usage_is_linear) {
             constexpr std::array<std::byte, 8u> kPixels{
                 std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0xFF},
                 std::byte{0x44}, std::byte{0x55}, std::byte{0x66}, std::byte{0xFF},
@@ -135,26 +135,26 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
+                    image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
             PPR_TEST_ASSERT(decoded.has_value());
             PPR_TEST_ASSERT(decoded->m_format == image::NativeImageFormat::rgba8_linear);
             PPR_TEST_ASSERT(not decoded->m_is_srgb);
         };
 
-        PPR_UNIT_TEST (rgba_jpg_decodes) {
+        PPR_UNIT_TEST(rgba_jpg_decodes) {
             constexpr std::array<std::byte, 48u> kPixels{};
             const mem::SharedBuffer file = encodeSurfaceFixture("rgba_lossy.jpg", 4u, 3u, kPixels);
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".jpg", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".jpg", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(decoded.has_value());
             PPR_TEST_ASSERT(decoded->m_width == 4u);
             PPR_TEST_ASSERT(decoded->m_height == 3u);
             PPR_TEST_ASSERT(decoded->m_format == image::NativeImageFormat::rgba8_srgb);
         };
 
-        PPR_UNIT_TEST (rgba_rejects_unsupported_extension) {
+        PPR_UNIT_TEST(rgba_rejects_unsupported_extension) {
             constexpr std::array<std::byte, 8u> kPixels{
                 std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}, std::byte{0xFF},
                 std::byte{0xDD}, std::byte{0xEE}, std::byte{0xFF}, std::byte{0xFF},
@@ -164,12 +164,12 @@ namespace pP::tests::detail {
 
             // BMP decodes in Mango but is outside the MVP scope: still invalid_argument.
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".bmp", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".bmp", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(not decoded.has_value());
             PPR_TEST_ASSERT(decoded.error() == std::errc::invalid_argument);
         };
 
-        PPR_UNIT_TEST (rgba_rejects_empty_and_corrupt) {
+        PPR_UNIT_TEST(rgba_rejects_empty_and_corrupt) {
             constexpr std::array<std::byte, 16u> kGarbage{
                 std::byte{'P'}, std::byte{'P'}, std::byte{'R'}, std::byte{'!'},
                 std::byte{0x00}, std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
@@ -190,7 +190,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(corrupt.error() == std::errc::invalid_argument);
         };
 
-        PPR_UNIT_TEST (rgba_flip_v_reverses_rows) {
+        PPR_UNIT_TEST(rgba_flip_v_reverses_rows) {
             constexpr std::array<std::byte, 16u> kPixels{
                 std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
                 std::byte{0x00}, std::byte{0xFF}, std::byte{0x00}, std::byte{0xFF},
@@ -205,7 +205,7 @@ namespace pP::tests::detail {
             const Expected<image::ImageAsset> straight = image::decodeToRgba8(
                 file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
             const Expected<image::ImageAsset> flipped_asset =
-                image::decodeToRgba8(file.getBufferData(), ".png", flipped, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".png", flipped, image::ImageUsage::color);
             PPR_TEST_ASSERT(straight.has_value());
             PPR_TEST_ASSERT(flipped_asset.has_value());
 
@@ -218,12 +218,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(flipped_asset->m_subresources.front().m_row_pitch == 8u);
         };
 
-        PPR_UNIT_TEST (rgba_dds_decompresses) {
+        PPR_UNIT_TEST(rgba_dds_decompresses) {
             const mem::SharedBuffer file = makeDxt1Fixture();
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".dds", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".dds", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(decoded.has_value());
             PPR_TEST_ASSERT(decoded->m_width == 4u);
             PPR_TEST_ASSERT(decoded->m_height == 4u);
@@ -238,7 +238,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(static_cast<unsigned char>(pixels[3]) == 255u);
         };
 
-        PPR_UNIT_TEST (blocks_png_never_recompresses) {
+        PPR_UNIT_TEST(blocks_png_never_recompresses) {
             constexpr std::array<std::byte, 8u> kPixels{
                 std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0xFF},
                 std::byte{0x40}, std::byte{0x50}, std::byte{0x60}, std::byte{0xFF},
@@ -249,32 +249,32 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(jpg.isValid());
 
             const Expected<image::ImageAsset> from_png =
-                image::decodeToBlocks(png.getBufferData(), ".png", image::BlockTag::bc7, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(png.getBufferData(), ".png", image::BlockTag::bc7, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not from_png.has_value());
             PPR_TEST_ASSERT(from_png.error() == std::errc::function_not_supported);
 
             const Expected<image::ImageAsset> from_jpg =
-                image::decodeToBlocks(jpg.getBufferData(), ".jpg", image::BlockTag::bc1, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(jpg.getBufferData(), ".jpg", image::BlockTag::bc1, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not from_jpg.has_value());
             PPR_TEST_ASSERT(from_jpg.error() == std::errc::function_not_supported);
         };
 
-        PPR_UNIT_TEST (blocks_none_target_is_invalid) {
+        PPR_UNIT_TEST(blocks_none_target_is_invalid) {
             const mem::SharedBuffer file = makeDxt1Fixture();
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::none, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::none, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not decoded.has_value());
             PPR_TEST_ASSERT(decoded.error() == std::errc::invalid_argument);
         };
 
-        PPR_UNIT_TEST (blocks_dxt1_passthrough) {
+        PPR_UNIT_TEST(blocks_dxt1_passthrough) {
             const mem::SharedBuffer file = makeDxt1Fixture();
             PPR_TEST_ASSERT(file.isValid());
 
             const Expected<image::ImageAsset> decoded =
-                image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::bc1, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::bc1, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(decoded.has_value());
             const image::ImageAsset &block_asset = *decoded;
             PPR_TEST_ASSERT(block_asset.m_width == 4u);
@@ -292,18 +292,18 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(block_asset.m_subresources.front().m_slice_pitch == 8u);
         };
 
-        PPR_UNIT_TEST (blocks_mismatched_target_fails) {
+        PPR_UNIT_TEST(blocks_mismatched_target_fails) {
             const mem::SharedBuffer file = makeDxt1Fixture();
             PPR_TEST_ASSERT(file.isValid());
 
             // BC1 source cannot serve a BC7 transcode target.
             const Expected<image::ImageAsset> decoded =
-                image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::bc7, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(file.getBufferData(), ".dds", image::BlockTag::bc7, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not decoded.has_value());
             PPR_TEST_ASSERT(decoded.error() == std::errc::function_not_supported);
         };
 
-        PPR_UNIT_TEST (block_geometry_math) {
+        PPR_UNIT_TEST(block_geometry_math) {
             PPR_TEST_ASSERT(image::rowPitchFor(4u, image::BlockTag::bc1) == 8u);
             PPR_TEST_ASSERT(image::slicePitchFor(4u, 4u, image::BlockTag::bc1) == 8u);
             PPR_TEST_ASSERT(image::rowPitchFor(5u, image::BlockTag::bc1) == 16u);
@@ -319,7 +319,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(image::slicePitchFor(7u, 7u, image::BlockTag::astc6x6) == 64u);
         };
 
-        PPR_UNIT_TEST (format_predicate_roundtrip) {
+        PPR_UNIT_TEST(format_predicate_roundtrip) {
             constexpr image::NativeImageFormat kFormats[]{
                 image::NativeImageFormat::rgba8_linear,
                 image::NativeImageFormat::rgba8_srgb,
@@ -338,7 +338,7 @@ namespace pP::tests::detail {
                 image::NativeImageFormat::astc8x8_linear,
                 image::NativeImageFormat::astc8x8_srgb,
             };
-            for (const image::NativeImageFormat format : kFormats) {
+            for (const image::NativeImageFormat format: kFormats) {
                 const bool blocked = image::isBlocked(format);
                 PPR_TEST_ASSERT(image::isSrgb(format) or not image::isSrgb(format));
                 if (not blocked) {
@@ -357,7 +357,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(image::isBlocked(image::NativeImageFormat::bc7_srgb));
         };
 
-        PPR_UNIT_TEST (content_hash_is_content_keyed) {
+        PPR_UNIT_TEST(content_hash_is_content_keyed) {
             constexpr std::array<std::byte, 8u> kPixels{
                 std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0xFF},
                 std::byte{0x04}, std::byte{0x05}, std::byte{0x06}, std::byte{0xFF},
@@ -368,7 +368,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(second.isValid());
 
             const Expected<image::ImageAsset> a =
-                image::decodeToRgba8(first.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(first.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
             const Expected<image::ImageAsset> b = image::decodeToRgba8(
                 second.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(a.has_value());
@@ -382,14 +382,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(ha == hash::contiguousRange(std::span<const std::byte>{kPixels.data(), kPixels.size()}));
         };
 
-        PPR_UNIT_TEST (map_file_missing_reports_not_found) {
+        PPR_UNIT_TEST(map_file_missing_reports_not_found) {
             const Expected<mem::SharedBuffer> mapped =
-                mem::SharedBuffer::mapFile(fixtureDir() / "does_not_exist.png");
+                    mem::SharedBuffer::mapFile(fixtureDir() / "does_not_exist.png");
             PPR_TEST_ASSERT(not mapped.has_value());
             PPR_TEST_ASSERT(mapped.error() == std::errc::no_such_file_or_directory);
         };
 
-        PPR_UNIT_TEST (frozen_asset_shares_across_threads) {
+        PPR_UNIT_TEST(frozen_asset_shares_across_threads) {
             constexpr std::array<std::byte, 16u> kPixels{
                 std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF},
                 std::byte{0xCA}, std::byte{0xFE}, std::byte{0xBA}, std::byte{0xBE},
@@ -399,7 +399,7 @@ namespace pP::tests::detail {
             const mem::SharedBuffer file = encodeSurfaceFixture("frozen_share.png", 2u, 2u, kPixels);
             PPR_TEST_ASSERT(file.isValid());
             const Expected<image::ImageAsset> decoded =
-                image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                    image::decodeToRgba8(file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
             PPR_TEST_ASSERT(decoded.has_value());
 
             // Frozen SharedBuffers share by value; decoders + UniqueBuffers stay per-job.
@@ -417,7 +417,7 @@ namespace pP::tests::detail {
                     }
                 });
             }
-            for (std::thread &worker : workers) {
+            for (std::thread &worker: workers) {
                 worker.join();
             }
             PPR_TEST_ASSERT(mismatches.load(std::memory_order_relaxed) == 0);

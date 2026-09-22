@@ -11,7 +11,8 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
 
 - Partitioned umbrella: `Mesh.cppm` re-exports `:types` + `:convert` only (`:validate` folds
   into `:convert`).
-- `:types` holds the frozen §2.3 vocabulary: `StaticMeshVertex` (60 B), `EMeshAttribute`
+- `:types` holds the frozen §2.3 vocabulary: `StaticMeshVertex` (64 B plain-float
+  arrays), `EMeshAttribute`
   (no joints/weights), `MeshPrimitiveRange` (stored base honoured), `StaticMeshAsset`,
   `UvTransformAsset`, `MaterialImageSlot::enabled()`, `MaterialAsset` (split MR maps,
   emissive map, occlusion/normal scalars, opaque/mask only), `ImageRef` (local duplicate —
@@ -20,15 +21,18 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
   and `mesh::errc` + `make_error_code`.
 - `:convert` (`Mesh.Convert.cppm` decl + `Mesh.Convert.cpp` impl) is the synchronous
   thread-safe `importAndConvert(dir, file)`: Mango `importScene` per call, verbatim LH copy
-  (tangent `w` kept verbatim pending the P1-parallel lighting probe), file-order indices +
-  base honour, V-down no-flip, row-vector `S*R*T` / `parent*local`, MR split
+  (file-tangent `w` negated, missing tangents via in-fork MikkTSpace regen gated on the
+  material normal map), file-order indices + base honour, V-down no-flip, row-vector
+  `S*R*T` / `parent*local`, MR split
   (roughness=g/metallic=b Linear), strip/fan expanded to lists mirroring Mango winding.
   Rejections: silent-empty→`invalid_argument`, missing POSITION/bad indices→`invalid_argument`,
   joints/skins→`function_not_supported`, blend + authored clearcoat/sheen/anisotropy/opacity→
   `function_not_supported`, animations→static snapshot with warning, Mango exceptions→
-  `import_failed`. Embed bytes cloned via per-job `UniqueBuffer`→`moveToShared` (materialize
-  propagated + `isMaterialized` checked); file refs via `SharedBuffer::mapFile`.
-  Mango headers stay in the `.cpp` global fragment (PRIVATE dep, never exported).
+  `import_failed`. GLB embeds re-resolve from PPR's own `mapFile` mapping (`resolveGlbEmbeds`;
+  mango blob views dangle — never read, unresolvable embeds fail closed); file refs map once
+  per convert (`file_cache` dedupe by resolved path). Mango `Verbose` import chatter is
+  silenced once at entry (`printEnable`, Error and above stay visible). Mango headers stay
+  in the `.cpp` global fragment (PRIVATE dep, never exported).
 
 ## Flow
 
@@ -38,9 +42,10 @@ pack joins `ImageRef` → `decodeTo_*`, uploads per mesh, packs per material (P2
 ## Integration
 
 - Depends on: `engine.core` + `engine.math` (public), `mango-import3d` (private).
-- Consumed by: (future) `engine.app` passes; `engine.tests.asset` (P1, Lane A owned).
-- Build: `Mesh.cppm`, `Mesh.Types.cppm`, `Mesh.Convert.cppm`, `Mesh.Convert.cpp`
-  (partition implementation unit) in `FILE_SET CXX_MODULES`;
+- Consumed by: `engine.app` pass caches + scene ownership; `engine.tests.asset` (mesh
+  import/convert/material/rejection/layout tests, GLB-embed + external-URI fixtures).
+- Build: `Mesh.cppm`, `Mesh.Types.cppm`, `Mesh.Convert.cppm` in `FILE_SET CXX_MODULES`;
+  `Mesh.Convert.cpp` is a PRIVATE source (the only Mango-including TU);
   `setup_ppr_project(engine.mesh INTERNAL_PUBLIC_DEPS engine.core engine.math
   EXTERNAL_SYSTEM_PRIVATE_DEPS mango-import3d)`.
 

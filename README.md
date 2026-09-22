@@ -160,6 +160,8 @@ auto handle = sparse.add(42.0f);
 |--------|-------------|
 | `engine.core` | Core foundation (types, memory, containers, concurrency, IO, services, opaque, HAL, function) |
 | `engine.math` | Math types and functions (float2-4, float3x3, float4x4, Quaternion, easing) |
+| `engine.image` | CPU image assets (decode to native format + plain layout) |
+| `engine.mesh` | CPU static mesh assets (glTF/GLB conversion) |
 | `engine.shader` | Shader compilation and `IShaderService` |
 | `engine.rhi` | Rendering interface (device, buffers, shaders, command buffers) |
 | `engine.app` | Application framework (slim lifecycle + editor client, services, renderer, UI) |
@@ -170,6 +172,7 @@ Two separate test executables are provided:
 
 - **`engine.tests.core`** — GLFW-free; tests memory, containers, concurrency, IO, strings, services
 - **`engine.tests.app`** — Links GLFW; tests platform-dependent features
+- **`engine.tests.asset`** — Asset pipeline; tests image decode, mesh convert, GPU caches, render gate
 
 They share a common test infrastructure library (`engine.tests`) in `lib/engine/tests/shared/`.
 Test targets and the `Core.UnitTest` partition (`PPR_ENABLE_UNIT_TEST`, conditional

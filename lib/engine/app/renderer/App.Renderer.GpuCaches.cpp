@@ -157,10 +157,7 @@ namespace pP {
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
-        if (vert_bytes.empty()
-            or
-        idx.empty()
-        or stride == 0u)
+        if (vert_bytes.empty() or idx.empty() or stride == 0u)
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -170,9 +167,8 @@ namespace pP {
         const u64 vert_count = vert_bytes.size() / stride;
         const u64 vert_bytes_size = vert_bytes.size();
         const u64 index_bytes_size = idx.size_bytes();
-        if (vert_count > static_cast<u64>(std::numeric_limits<u32>::max())
-            or
-        idx.size() > static_cast<u64>(std::numeric_limits<u32>::max()))
+        if (vert_count > static_cast<u64>(std::numeric_limits<u32>::max()) or
+            idx.size() > static_cast<u64>(std::numeric_limits<u32>::max()))
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -216,9 +212,8 @@ namespace pP {
         if (static_cast<u64>(bucket.m_stride) != stride) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        if (bucket.m_vertex_used + vert_bytes_size > bucket.m_vertex_capacity
-            or
-        bucket.m_index_used + index_bytes_size > bucket.m_index_capacity)
+        if (bucket.m_vertex_used + vert_bytes_size > bucket.m_vertex_capacity or
+            bucket.m_index_used + index_bytes_size > bucket.m_index_capacity)
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
@@ -365,21 +360,15 @@ namespace pP {
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
-        if (asset.m_dimension != image::ImageDimension::image2d
-            or
-        asset.m_width == 0u
-        or
-        asset.m_height == 0u
-        or
-        asset.m_mip_count == 0u
-        or
-        asset.m_subresources.size() != asset.m_mip_count)
+        if (asset.m_dimension != image::ImageDimension::image2d or
+            asset.m_width == 0u or
+            asset.m_height == 0u or
+            asset.m_mip_count == 0u or
+            asset.m_subresources.size() != asset.m_mip_count)
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        if (not
-            asset.m_storage.isValid()
-        or not asset.m_storage.isMaterialized())
+        if (not asset.m_storage.isValid() or not asset.m_storage.isMaterialized())
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -391,8 +380,8 @@ namespace pP {
             // generation-checked lookup plus a single confirming byte-compare
             // replaces the old linear scan (hash alone never decides).
             if (TextureEntry *const entry = m_entries.tryGet(*found->second);
-                entry != nullptr
-                    and bytesEqual_(entry->m_pinned, asset))
+                entry != nullptr and
+                bytesEqual_(entry->m_pinned, asset))
             {
                 ++entry->m_refcount;
                 return found->second;
@@ -412,18 +401,12 @@ namespace pP {
         Array<rhi::SubresourceData> init_data{};
         init_data.reserve(asset.m_mip_count);
         for (const image::ImageSubresource &sub: asset.m_subresources) {
-            if (not
-                sub.m_view.isValid()
-            or not sub.m_view.isMaterialized())
+            if (not sub.m_view.isValid() or not sub.m_view.isMaterialized())
             [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             const mem::SharedBufferView bytes = sub.m_view.getBufferData();
-            if (bytes.empty()
-                or
-            sub.m_row_pitch == 0u
-            or
-            sub.m_slice_pitch == 0u)
+            if (bytes.empty() or sub.m_row_pitch == 0u or sub.m_slice_pitch == 0u)
             [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
@@ -575,8 +558,7 @@ namespace pP {
     }
 
     std::error_code BindlessMaterialCache::writeSlot_(const u32 slot, const GpuMaterial &gpu) {
-        if (slot >= kMaterialCapacity
-            or m_material_buffer == nullptr)
+        if (slot >= kMaterialCapacity or m_material_buffer == nullptr)
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
