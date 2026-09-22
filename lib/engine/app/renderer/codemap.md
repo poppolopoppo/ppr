@@ -72,6 +72,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   with reverse-order rollback; `createShaderProgram_` loads `mesh_bindless.slang`;
   `createRenderPipeline_` keys opaque/mask variants (blend rejected); `update(dt, camera_view)`
   caches the snapshot; `render(ctx)` encodes per instance (§6).
+  Linux/clang bring-up: the bindless render state explicitly sets `.indexBuffer = {}` — Clang `-Werror=missing-field-initializers` rejects the omitted member that MSVC silently zero-initializes (no vertex buffers; NON-INDEXED StructuredBuffer fetch).
 
 ## Flow
 

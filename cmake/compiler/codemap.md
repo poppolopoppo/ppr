@@ -31,6 +31,12 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   (incl. `/wd5050` for `_UTF8`-in-command-line vs module-command-line mismatches on `import std`); `/WX` appended
   under `PPR_WARNINGS_AS_ERRORS`; `/D_ANNOTATE_STL` under `PPR_ENABLE_SANITIZER_ADDRESS`.
 - **Clang** (`Clang.cmake`): `-stdlib=libc++`, `-Wall/-Wextra` family, `-Werror` under `PPR_WARNINGS_AS_ERRORS`;
+  `-Wno-reserved-module-identifier` so the synthesized `std`/`std.compat` BMI precompiles (which inherit these
+  PRIVATE options) succeed under `-Werror` — project code never declares a module named `std`, so no project
+  diagnostic changes. Version-agnostic `libc++.modules.json` probe (no pinned LLVM major): `llvm-config --libdir`,
+  `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known versioned/multiarch fallbacks
+  (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`); `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the
+  file exists, otherwise left unset for CMake default lookup;
   **clang-cl** reuses it in MSVC-compat mode (`clang-cl-dev`/`clang-cl-rel` presets). **GCC** (`GCC.cmake`)
   extends Clang warnings — presets stay hidden: **no C++ modules support**.
 

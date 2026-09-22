@@ -17,9 +17,12 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
   `PPR_CONCAT_I/OO` internals + `PPR_CONCAT`/`PPR_CONCAT3`.
 - **Compiler attributes** (MSVC / Clang-or-GCC / fallback): `PPR_ASSUME`, `PPR_FORCE_INLINE`/`PPR_NO_INLINE`/
   `PPR_FLATTEN`, `PPR_EMPTY_BASES`, `PPR_LIFETIME_BOUND` (`msvc::` / `clang::` / `gcc::` per toolchain),
-  `PPR_OFFSETOF`, `PPR_ATTRIBUTE_CODE_SEGMENT`, `PPR_COMPILER_READWRITE_BARRIER` (MSVC intrinsic vs
+  `PPR_OFFSETOF`, `PPR_ATTRIBUTE_CODE_SEGMENT` (`__declspec(code_seg)` on MSVC, no-op elsewhere — Clang/GCC have
+  no equivalent section attribute for the `.ppr_dbg` assertion path), `PPR_COMPILER_READWRITE_BARRIER` (MSVC intrinsic vs
   `asm volatile("" ::: "memory")`), `PPR_PRAGMA_WARNING_PUSH/POP`, `PPR_PRAGMA_WARNING_DISABLE_MSVC`/
-  `DISABLE_GCC_CLANG` (clang- vs gcc-diagnostic pragmas), `PPR_PRAGMA_SYSTEM_HEADER`.
+  `DISABLE_GCC_CLANG` (standard `_Pragma("clang diagnostic …")` / `_Pragma("GCC diagnostic …")` with
+  `PPR_STRINGIZE` composition on Clang/GCC — `__pragma` is MSVC-only and breaks the Linux bring-up; `MSVC`
+  branch keeps `__pragma(warning…)`), `PPR_PRAGMA_SYSTEM_HEADER`.
 - **Wide chars**: `TEXT` (MSVC `L##quote`, identity elsewhere); consteval char-generic `PPR_LITERAL_FOR`
   (`char`/`wchar_t`/`char8_t` via `L##`/`u8##`, `std::unreachable()` otherwise).
 - **RAII**: `PPR_ANONYMIZE` (line-unique name via `PPR_CONCAT` + `__LINE__`), `PPR_DEFER` (scope-exit via

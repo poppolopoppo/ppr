@@ -30,6 +30,10 @@ window, and UI overlay.
 - `IUIService` (`App.Service.UI.cppm`, `:service.ui`) — overlay contract only: `initialize(WindowInputContext &,
   IRhiService &, IShaderService &, int input_listener_priority)`, `shutdown`, `update(TimeSpan, const WindowViewport
   &)`, `render(const DrawContext &)`, `getContext`. Implementation lives in `ui/App.UI.ImGui.cpp`, NOT here.
+- Linux bring-up: no service-partition source changed — the bring-up contract change is that input callbacks posted
+  through `IInputService` now resolve to the conditional `std23::move_only_function` alias from `Core.Function.Ref`
+  (see `input/codemap.md`), so service consumers (`GlfwInput`, `ImGuiService`, player listeners) share one callback
+  type on Clang and MSVC alike.
 - No `service/*.cpp` files exist; all service behavior is implemented by the platform backend, the UI module, and
   `ApplicationEditor` (client contract).
 

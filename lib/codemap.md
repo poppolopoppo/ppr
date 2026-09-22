@@ -36,6 +36,12 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
 - Foundation + matrix: strong `Numeric`/hash/`opaque`/async `Log`/`TimerManager`/`UnitTest`/HAL helpers in core;
   Mango-native left-handed view space (+Z forward, +Y up), row-major, row-vector `mul(float4, matrix)`;
   Slang `ROW_MAJOR`; RHI `orthoD3D`/`perspectiveD3D` with [0,1] depth, shared untransposed by all backends.
+- Linux bring-up conformance (no contract changes): math spells explicit `<T,DimV>` at `vectorCast`/
+  `roundHalfAwayFromZero` call sites with inner forwarding (mango `int`-dim vs engine `u32`-dim boundary),
+  float literals by policy (`2.0f`, no double promotion), no trailing `;` in `PPR_POLYMORPHIC_BASIC_NUMBER`;
+  mango `-m(avx512|avx|sse|bmi|fma|…)` flags are filtered from its `INTERFACE_COMPILE_OPTIONS` so every
+  importer shares one AVX-baseline BMI; RHI/Shader error-category instances are `static const` (libc++
+  rejects `constexpr` on the polymorphic `std::error_category`).
 - `app.game` (`game/`) links all five engine modules; no engine code lives outside `lib/engine/`.
 
 ## Flow

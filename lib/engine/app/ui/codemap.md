@@ -65,7 +65,11 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   (`Backend*Name/UserData=null`, `BackendFlags=None`, `SetTexID(nullptr)`), destroys the context, and nulls pointers.
   Helpers `keyboardKeyToImGuiKey` / `gamepadButtonToImGuiKey` / `mouseButtonToImGui` (unknown → `None`/`-1`),
    `framebufferScaleFor` (logical→framebuffer ratio, guarded fallback to 1), and `imGuiDebugPrintf` (`%s` assert +
-   `PPR_LOG_RAW`). `getContext()` exposes the raw `ImGuiContext*` so `game/main.cpp` can `SetCurrentContext` +
+   `PPR_LOG_RAW`). Linux/clang bring-up: both helpers are `[[maybe_unused]]` (Clang warns on the file-local debug-only
+   functions MSVC keeps silently); scissor math uses `roundToUInt<float, 4u>` with an explicit dim; `ImDrawList` counts
+   cross the `int`-vs-`u32` boundary only via `checked_cast<u32/size_t>` (`TotalVtx/IdxCount`, `Vtx/IdxBuffer.Size`,
+   `global_vtx/idx_offset` accumulation, `memcpy` sizes); `startVertexLocation` is `static_cast<u32>` (not `i32`);
+   `pixelDataSize`/row-pitch arithmetic widens `height` to `u64` before multiply/divide. `getContext()` exposes the raw `ImGuiContext*` so `game/main.cpp` can `SetCurrentContext` +
    `ShowDemoWindow`; `getInputListener()` exposes the foreground listener for latch registration;
    `hasMouseCaptureUnlessPopupClose()` reports `m_input_any_mouse_button.hasConsumeInput()`; `clearWindowFocus()`
    clears ImGui window focus; destructor asserts context already destroyed and clears mapping/listener bindings.

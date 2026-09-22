@@ -15,7 +15,9 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
   `default_error_condition` mapping invalid-arg→`invalid_argument`, OOM→`not_enough_memory`,
   not-found→`no_such_file_or_directory`, timeout→`timed_out`, not-implemented→`function_not_supported`,
   buffer-too-small→`result_out_of_range` via static `slang_error_condition`); `make_error_code(Result)`
-  returns success on `SLANG_SUCCEEDED` else `{result, g_slang_error_category}` (`constexpr` instance).
+  returns success on `SLANG_SUCCEEDED` else `{result, g_slang_error_category}` (`static const` instance —
+  `constexpr` is rejected because `std::error_category` is polymorphic/non-literal under libc++ on the
+  Linux bring-up; same fix as `engine.rhi`'s `SlangRhiErrorCategory`).
   Slang vocabulary: `ComPtr`/`Result`, `IBlob`/`IComponentType`/`IEntryPoint`/`IGlobalSession`/`IModule`/
   `ISession` plus `using namespace Slang; using namespace slang;`. `export namespace Slang` defines the
   `PPR_RETURN_*_ON_FAIL` ADL predicate `hasFailed(Result)` (`SLANG_FAILED`, `constexpr`) and re-exports

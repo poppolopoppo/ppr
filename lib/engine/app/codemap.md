@@ -45,12 +45,24 @@ application.
    with mapping `EInputMappingPriority::camera = 1`.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
   overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
-  implicit-instantiation cost.
+  implicit-instantiation cost. Linux/clang bring-up: the seven `function_ref<...Window...>` extern templates removed
+  from `:window.handle` are pinned here instead, keeping the header free of per-TU instantiation pins.
+- Linux/clang bring-up summary (detail per area): GLFW native headers gated per OS + complete-type partition imports
+  (`platform/glfw`); `[[nodiscard]]`-free friend declarations with namespace-scope attribute declarations (`input.key`);
+  `:input.action` imported by the scene controller (`scene`); conditional `std23::move_only_function` callback aliases
+  (`input`, `service`); explicit mango dims (`<float, 2u/3u/4u>`, `toFloat<int, 2u>`) at the `int`-vs-`u32` boundary
+  (`input`, `scene`, `ui`, `window`); `[[fallthrough]]` + index-loop `Listener` fixes (`input`); `checked_cast` +
+  `static_cast<double/u32/u64>` conversions (`input`, `platform/glfw`, `ui`); `.indexBuffer = {}` (`renderer`);
+  `[[maybe_unused]]` debug helpers (`ui`).
 - CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (6, incl. new `:input.routing`), platform (5),
   player (2), renderer (3, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
   (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
   privately. Links `engine.core/math/shader/rhi` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
   public (so `import imgui;` resolves for importers).
+- Linux bring-up conformance (no lifecycle/renderer contract change): call sites spell the same explicit dim
+  args math requires (`opaqueValue<float,2u/3u>` on the axis structs — same mango `int`-dim vs engine
+  `u32`-dim boundary); `std23::move_only_function` without `const noexcept`, explicit `[[fallthrough]]`,
+  index loops over `views::enumerate`, no `[[nodiscard]]` on friend declarations — all Clang/libc++ strictness.
 
 ## Flow
 
