@@ -239,9 +239,12 @@ namespace pP {
 
 #if PPR_ENABLE_ASSERTIONS
     void UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
+#if defined(__cpp_lib_stacktrace)
         const std::stacktrace backtrace = std::stacktrace::current(9);
+#endif
 
         if (not m_test.isExpectedToFail()) {
+#if defined(__cpp_lib_stacktrace)
             std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
                 "\tin function: {}\n"
                 "\tin test: {}\n\n"
@@ -249,6 +252,13 @@ namespace pP {
                 condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
                 condition.m_site.function_name(), getTestId(),
                 backtrace);
+#else
+            std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
+                "\tin function: {}\n"
+                "\tin test: {}",
+                condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
+                condition.m_site.function_name(), getTestId());
+#endif
             std::cerr.flush();
         }
 
