@@ -1,6 +1,7 @@
 module;
 
 #include <pwd.h>
+#include <unistd.h>
 
 #include "pP/Macros.h"
 

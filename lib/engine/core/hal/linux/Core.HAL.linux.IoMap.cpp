@@ -4,6 +4,7 @@ module;
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include "pP/Macros.h"
 

@@ -294,7 +294,7 @@ export namespace pP {
             const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
             std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
             [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
-            return dst;
+            return {dst.data(), dst.size()};
         }
 
         namespace native {

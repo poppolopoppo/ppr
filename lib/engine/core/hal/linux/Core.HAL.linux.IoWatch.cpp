@@ -4,6 +4,7 @@ module;
 #include <poll.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include "pP/Macros.h"
 
@@ -146,7 +147,7 @@ namespace pP::hal::io {
             std::memcpy(write_ptr, &path_len, sizeof(u32));
             write_ptr += sizeof(u32);
             std::memcpy(write_ptr, rel_str.data(), path_len - 1u);
-            write_ptr[path_len - 1u] = '\0';
+            write_ptr[path_len - 1u] = std::byte{'\0'};
             write_ptr += path_len;
 
             raw_ptr = reinterpret_cast<std::byte *>(nextEvent_(const_cast<::inotify_event *>(ev)));
