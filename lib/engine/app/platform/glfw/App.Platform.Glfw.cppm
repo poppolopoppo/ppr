@@ -2,7 +2,11 @@ module;
 
 export module engine.app:platform.glfw;
 
+import :application;
 import :platform;
+import :platform.glfw.input;
+import :platform.glfw.player;
+import :platform.glfw.window;
 
 import engine.core;
 import std;
@@ -11,10 +15,6 @@ export namespace pP {
     // ------------------------------------------------------------------
     // GLFW platform integration
     // ------------------------------------------------------------------
-
-    class GlfwInput;
-    class GlfwPlayer;
-    class GlfwWindow;
 
     class GlfwPlatform : public IPlatform {
     public:

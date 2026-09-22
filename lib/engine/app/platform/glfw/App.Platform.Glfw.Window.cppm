@@ -3,7 +3,11 @@ module;
 #include "pP/Macros.h"
 export module engine.app:platform.glfw.window;
 
+import :application;
 import :service.window;
+import :window.handle;
+import :window.monitor;
+import :window.viewport;
 
 import engine.core;
 import engine.math;
