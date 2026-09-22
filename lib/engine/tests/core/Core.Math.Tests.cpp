@@ -39,10 +39,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (float2_rounding_to_int) {
             const float2 value{-1.25f, 1.75f};
 
-            const int2 ceil_value = ceilToInt(value);
-            const int2 floor_value = floorToInt(value);
-            const int2 round_value = roundToInt(value);
-            const int2 trunc_value = truncToInt(value);
+            const int2 ceil_value = ceilToInt<float, 2u>(value);
+            const int2 floor_value = floorToInt<float, 2u>(value);
+            const int2 round_value = roundToInt<float, 2u>(value);
+            const int2 trunc_value = truncToInt<float, 2u>(value);
 
             PPR_TEST_ASSERT(ceil_value.x == -1 and ceil_value.y == 2);
             PPR_TEST_ASSERT(floor_value.x == -2 and floor_value.y == 1);
@@ -53,10 +53,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (float3_rounding_to_uint) {
             const float3 value{1.25f, 2.75f, 3.5f};
 
-            const uint3 ceil_value = ceilToUInt(value);
-            const uint3 floor_value = floorToUInt(value);
-            const uint3 round_value = roundToUInt(value);
-            const uint3 trunc_value = truncToUInt(value);
+            const uint3 ceil_value = ceilToUInt<float, 3u>(value);
+            const uint3 floor_value = floorToUInt<float, 3u>(value);
+            const uint3 round_value = roundToUInt<float, 3u>(value);
+            const uint3 trunc_value = truncToUInt<float, 3u>(value);
 
             PPR_TEST_ASSERT(ceil_value.x == 2u and ceil_value.y == 3u and ceil_value.z == 4u);
             PPR_TEST_ASSERT(floor_value.x == 1u and floor_value.y == 2u and floor_value.z == 3u);
@@ -70,16 +70,16 @@ namespace pP::tests::detail {
             const float4 signed_tie_value{2.5f, -2.5f, 0.0f, 0.0f};
             const float4 unsigned_tie_value{2.5f, 0.0f, 0.0f, 0.0f};
 
-            const int4 signed_ceil = ceilToInt(signed_value);
-            const int4 signed_floor = floorToInt(signed_value);
-            const int4 signed_round = roundToInt(signed_value);
-            const int4 signed_trunc = truncToInt(signed_value);
-            const uint4 unsigned_ceil = ceilToUInt(unsigned_value);
-            const uint4 unsigned_floor = floorToUInt(unsigned_value);
-            const uint4 unsigned_round = roundToUInt(unsigned_value);
-            const uint4 unsigned_trunc = truncToUInt(unsigned_value);
-            const int4 signed_tie_round = roundToInt(signed_tie_value);
-            const uint4 unsigned_tie_round = roundToUInt(unsigned_tie_value);
+            const int4 signed_ceil = ceilToInt<float, 4u>(signed_value);
+            const int4 signed_floor = floorToInt<float, 4u>(signed_value);
+            const int4 signed_round = roundToInt<float, 4u>(signed_value);
+            const int4 signed_trunc = truncToInt<float, 4u>(signed_value);
+            const uint4 unsigned_ceil = ceilToUInt<float, 4u>(unsigned_value);
+            const uint4 unsigned_floor = floorToUInt<float, 4u>(unsigned_value);
+            const uint4 unsigned_round = roundToUInt<float, 4u>(unsigned_value);
+            const uint4 unsigned_trunc = truncToUInt<float, 4u>(unsigned_value);
+            const int4 signed_tie_round = roundToInt<float, 4u>(signed_tie_value);
+            const uint4 unsigned_tie_round = roundToUInt<float, 4u>(unsigned_tie_value);
 
             PPR_TEST_ASSERT(signed_ceil.x == -1 and signed_ceil.y == -2 and signed_ceil.z == 4 and signed_ceil.w == 5);
             PPR_TEST_ASSERT(signed_floor.x == -2 and signed_floor.y == -3 and signed_floor.z == 3 and signed_floor.w == 4);
@@ -97,14 +97,14 @@ namespace pP::tests::detail {
             const double2 signed_value{-1.25, 2.75};
             const double4 unsigned_value{1.25, 2.75, 3.5, 4.25};
 
-            const int2 signed_ceil = ceilToInt(signed_value);
-            const int2 signed_floor = floorToInt(signed_value);
-            const int2 signed_round = roundToInt(signed_value);
-            const int2 signed_trunc = truncToInt(signed_value);
-            const uint4 unsigned_ceil = ceilToUInt(unsigned_value);
-            const uint4 unsigned_floor = floorToUInt(unsigned_value);
-            const uint4 unsigned_round = roundToUInt(unsigned_value);
-            const uint4 unsigned_trunc = truncToUInt(unsigned_value);
+            const int2 signed_ceil = ceilToInt<double, 2u>(signed_value);
+            const int2 signed_floor = floorToInt<double, 2u>(signed_value);
+            const int2 signed_round = roundToInt<double, 2u>(signed_value);
+            const int2 signed_trunc = truncToInt<double, 2u>(signed_value);
+            const uint4 unsigned_ceil = ceilToUInt<double, 4u>(unsigned_value);
+            const uint4 unsigned_floor = floorToUInt<double, 4u>(unsigned_value);
+            const uint4 unsigned_round = roundToUInt<double, 4u>(unsigned_value);
+            const uint4 unsigned_trunc = truncToUInt<double, 4u>(unsigned_value);
 
             PPR_TEST_ASSERT(signed_ceil.x == -1 and signed_ceil.y == 3);
             PPR_TEST_ASSERT(signed_floor.x == -2 and signed_floor.y == 2);
@@ -126,9 +126,9 @@ namespace pP::tests::detail {
             fallback_value[3] = 4;
             fallback_value[4] = -5;
 
-            const float4 signed_float = toFloat(signed_value);
-            const float4 unsigned_float = toFloat(unsigned_value);
-            const math::Vector<float, 5> fallback_float = toFloat(fallback_value);
+            const float4 signed_float = toFloat<int, 4u>(signed_value);
+            const float4 unsigned_float = toFloat<u32, 4u>(unsigned_value);
+            const math::Vector<float, 5> fallback_float = toFloat<i32, 5u>(fallback_value);
 
             PPR_TEST_ASSERT(signed_float.x == -1.0f and signed_float.y == 2.0f and signed_float.z == -3.0f and signed_float.w == 4.0f);
             PPR_TEST_ASSERT(unsigned_float.x == 1.0f and unsigned_float.y == 2.0f and unsigned_float.z == 3.0f and unsigned_float.w == 4.0f);
@@ -143,7 +143,7 @@ namespace pP::tests::detail {
             value[2] = 3.5f;
             value[3] = 4.25f;
             value[4] = 5.75f;
-            const math::Vector<i32, 5> result = truncToInt(value);
+            const math::Vector<i32, 5> result = truncToInt<float, 5u>(value);
 
             PPR_TEST_ASSERT(result[0] == -1 and result[1] == -2 and result[2] == 3 and result[3] == 4 and result[4] == 5);
         };

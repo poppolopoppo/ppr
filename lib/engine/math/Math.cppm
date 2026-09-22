@@ -302,7 +302,7 @@ export namespace pP {
     constexpr auto _NAME = math::details::Number<ValueT, \
         []<_CONCEPT T>() constexpr noexcept { \
             return __VA_ARGS__; \
-        }>::value;
+        }>::value
 
 #define PPR_POLYMORPHIC_ARITHMETIC(_NAME, ...) \
     PPR_POLYMORPHIC_BASIC_NUMBER(math::details::TArithmetic, _NAME, __VA_ARGS__)
@@ -380,7 +380,7 @@ export namespace pP {
         // IDE CL-262.9437.136 cannot consume MSVC BMIs (Math.cppm:317).
         // Scope: next line only (clang-diagnostic-error); re-check after toolchain/BMI refresh.
         // NOLINTNEXTLINE(clang-diagnostic-error)
-        return axis * (2.0 * half_angle / seconds);
+        return axis * (2.0f * half_angle / seconds);
     }
 
     using mango::math::operator!=;
@@ -431,7 +431,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> ceilToInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<i32>(ceil(value));
+        return math::details::vectorCast<i32, T, DimV>(ceil(value));
     }
 
     template<std::floating_point T>
@@ -441,7 +441,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> floorToInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<i32>(floor(value));
+        return math::details::vectorCast<i32, T, DimV>(floor(value));
     }
 
     template<std::floating_point T>
@@ -451,7 +451,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> roundToInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<i32>(math::details::roundHalfAwayFromZero(value));
+        return math::details::vectorCast<i32, T, DimV>(math::details::roundHalfAwayFromZero<T, DimV>(value));
     }
 
     template<std::floating_point T>
@@ -461,7 +461,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> truncToInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<i32>(trunc(value));
+        return math::details::vectorCast<i32, T, DimV>(trunc(value));
     }
 
     template<std::floating_point T>
@@ -471,7 +471,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> ceilToUInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<u32>(ceil(value));
+        return math::details::vectorCast<u32, T, DimV>(ceil(value));
     }
 
     template<std::floating_point T>
@@ -481,7 +481,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> floorToUInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<u32>(floor(value));
+        return math::details::vectorCast<u32, T, DimV>(floor(value));
     }
 
     template<std::floating_point T>
@@ -491,7 +491,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> roundToUInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<u32>(math::details::roundHalfAwayFromZero(value));
+        return math::details::vectorCast<u32, T, DimV>(math::details::roundHalfAwayFromZero<T, DimV>(value));
     }
 
     template<std::floating_point T>
@@ -501,7 +501,7 @@ export namespace pP {
 
     template<std::floating_point T, u32 DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> truncToUInt(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<u32>(trunc(value));
+        return math::details::vectorCast<u32, T, DimV>(trunc(value));
     }
 
     template<std::integral T>
@@ -511,7 +511,7 @@ export namespace pP {
 
     template<std::integral T, u32 DimV>
     [[nodiscard]] constexpr Vector<float, DimV> toFloat(const Vector<T, DimV> &value) noexcept {
-        return math::details::vectorCast<float>(value);
+        return math::details::vectorCast<float, T, DimV>(value);
     }
 
     template<typename T, u32 DimV>
