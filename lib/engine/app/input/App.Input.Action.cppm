@@ -10,9 +10,9 @@ import :input.key;
 export namespace pP {
     struct InputActionEvent;
 
-    using InputModifierEvent = std::function<void(TimeSpan dt, InputValue &value)>;
+    using InputModifierEvent = std23::move_only_function<void(TimeSpan dt, InputValue &value)>;
 
-    using InputTriggerEvent = std::function<void(const InputActionEvent &event, const InputKey &trigger)>;
+    using InputTriggerEvent = std23::move_only_function<void(const InputActionEvent &event, const InputKey &trigger)>;
 
     // ------------------------------------------------------------------
     // input action

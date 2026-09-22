@@ -5,6 +5,7 @@ module;
 export module engine.core:hal;
 
 export import :types;
+import :function.ref;
 import std;
 
 export import :utility;
@@ -431,7 +432,7 @@ export namespace pP {
                 void *m_data{nullptr};
             };
 
-            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::function<void()> callback) noexcept(false);
+            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std23::move_only_function<void()> callback) noexcept(false);
 
             void cancelDeadline(DeadlineHandle &handle) noexcept;
         }

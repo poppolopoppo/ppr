@@ -932,5 +932,17 @@ export namespace std23 {
     template<auto V, class T>
     function_ref(nontype_t<V>, T &&)
         -> function_ref<_drop_first_arg_to_invoke_t<decltype(V), T &> >;
+
+    // ------------------------------------------------------------------
+    // owning callable (move_only_function where available, function fallback)
+    // ------------------------------------------------------------------
+
+#if defined(_MSC_VER)
+    template<class Sig>
+    using move_only_function = std::move_only_function<Sig>;
+#else
+    template<class Sig>
+    using move_only_function = std::function<Sig>;
+#endif
 } // namespace std23
 #endif
