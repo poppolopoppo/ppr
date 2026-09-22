@@ -195,8 +195,8 @@ export namespace pP::mem {
         }
 
         template<typename T, details::TAllocator AllocatorT, std::align_val_t AlignmentV>
-            requires std::is_trivially_destructible_v<T> and
-                     not (Allocation<T, AllocatorT, AlignmentV>::is_stateless_v)
+            requires (std::is_trivially_destructible_v<T> and
+                      not (Allocation<T, AllocatorT, AlignmentV>::is_stateless_v))
         UniqueBuffer(Allocation<T, AllocatorT, AlignmentV> &&allocation, AllocatorT &allocator) noexcept
             : UniqueBuffer(BufferOwner(
                 allocation.discard(),

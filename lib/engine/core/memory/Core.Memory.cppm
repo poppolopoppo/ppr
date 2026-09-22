@@ -207,7 +207,7 @@ export namespace pP::mem {
         }
     };
 
-    thread_local u32 SmallPage::LocalHint::value{};
+    inline thread_local u32 SmallPage::LocalHint::value{};
 
     static_assert(details::use_inplace_v<SmallPage>);
     static_assert(details::TBlockAllocator<SmallPage>);

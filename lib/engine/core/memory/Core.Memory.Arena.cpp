@@ -102,7 +102,7 @@ ScopedArenaWithDebug::~ScopedArenaWithDebug() noexcept {
         return;
     i32 &g_depth_tls = getDepthTLS();
     PPR_ASSERT(g_depth_tls == m_depth);
-    g_depth_tls = m_depth - 1u;
+    g_depth_tls = m_depth - 1;
 }
 
 ScopedArenaWithDebug::ScopedArenaWithDebug(ScopedArenaWithDebug &&other) noexcept
@@ -115,7 +115,7 @@ ScopedArenaWithDebug &ScopedArenaWithDebug::operator=(ScopedArenaWithDebug &&oth
     if (m_depth >= 0) {
         i32 &g_depth_tls = getDepthTLS();
         PPR_ASSERT(g_depth_tls == m_depth);
-        g_depth_tls = m_depth - 1u;
+        g_depth_tls = m_depth - 1;
     }
 
     ScopedArena::operator=(std::move(other));

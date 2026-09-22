@@ -136,7 +136,7 @@ namespace pP::mem {
         hal::pageFree(m_committed_pages.getAllocationPtr(), metadata_size_bytes);
 
         const std::size_t reserved_size_bytes = static_cast<std::size_t>(m_tree_infos.m_desired_size) * static_cast<std::size_t>(m_page_size);
-        const std::size_t committed_size_bytes = m_highest_committed_space - m_reserved_space;
+        const std::size_t committed_size_bytes = checked_cast<std::size_t>(m_highest_committed_space - m_reserved_space);
         hal::pageFree(m_reserved_space, std::min(reserved_size_bytes, committed_size_bytes));
     }
 
