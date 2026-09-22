@@ -289,7 +289,8 @@ namespace pP {
     // BindlessTextureCache
     // ------------------------------------------------------------------
 
-    std::error_code BindlessTextureCache::initialize(rhi::IDevice &device, const u32 texture_budget) {
+    std::error_code BindlessTextureCache::initialize(
+        rhi::IDevice &device, const u32 texture_budget, const rhi::DescriptorHandle fallback_descriptor) {
         if (m_initialized) {
             PPR_LOG(GpuCaches, warning, "BindlessTextureCache already initialized");
             return default_value_v;
@@ -303,8 +304,23 @@ namespace pP {
         if (texture_budget == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+        rhi::BufferDesc descriptor_desc{};
+        descriptor_desc.size = static_cast<u64>(texture_budget) * sizeof(u64);
+        descriptor_desc.elementSize = sizeof(u64);
+        descriptor_desc.memoryType = rhi::MemoryType::Upload;
+        descriptor_desc.usage = rhi::BufferUsage::ShaderResource;
+        descriptor_desc.defaultState = rhi::ResourceState::ShaderResource;
+        descriptor_desc.label = "bindless texture descriptors";
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches, device.createBuffer(descriptor_desc, nullptr, m_descriptor_buffer.writeRef()));
+        const u64 packed_fallback = fallback_descriptor.value;
+        void *mapped = nullptr;
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches, device.mapBuffer(m_descriptor_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
+        std::memcpy(mapped, &packed_fallback, sizeof(packed_fallback));
+        device.unmapBuffer(m_descriptor_buffer.get());
+
         m_device = &device;
         m_texture_budget = texture_budget;
+        m_next_slot = 1u;
         m_initialized = true;
         return default_value_v;
     }
@@ -312,7 +328,8 @@ namespace pP {
     std::error_code BindlessTextureCache::shutdown() {
         m_dedup.clear();
         m_entries.clear();
-        m_next_slot = 0u;
+        m_descriptor_buffer.setNull();
+        m_next_slot = 1u;
         m_texture_budget = 0u;
         m_device = nullptr;
         m_initialized = false;
@@ -435,7 +452,17 @@ namespace pP {
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
             entry.m_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &entry.m_descriptor));
 
-        entry.m_slot = TextureBindlessIndex{m_next_slot++};
+        entry.m_slot = TextureBindlessIndex{m_next_slot};
+        const u64 packed_descriptor = entry.m_descriptor.value;
+        void *mapped = nullptr;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GpuCaches, m_device->mapBuffer(m_descriptor_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
+        std::memcpy(
+            static_cast<std::byte *>(mapped) + static_cast<u64>(*entry.m_slot) * sizeof(u64),
+            &packed_descriptor,
+            sizeof(packed_descriptor));
+        m_device->unmapBuffer(m_descriptor_buffer.get());
+        ++m_next_slot;
         entry.m_pinned = asset.m_storage;
         entry.m_refcount = 1u;
         entry.m_key = key;
@@ -482,14 +509,8 @@ namespace pP {
         return nullptr;
     }
 
-    Expected<rhi::DescriptorHandle> BindlessTextureCache::descriptorForSlot(
-        const TextureBindlessIndex slot) const noexcept {
-        for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-            if (it->m_slot == slot) {
-                return it->m_descriptor;
-            }
-        }
-        return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+    rhi::IBuffer *BindlessTextureCache::descriptorBuffer() const noexcept {
+        return m_descriptor_buffer.get();
     }
 
     // ------------------------------------------------------------------

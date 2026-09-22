@@ -334,6 +334,9 @@ namespace pP::tests::detail {
 
             const Expected<TextureHandle> tex2 = pass.uploadTexture(*decoded);
             PPR_TEST_ASSERT(tex2.has_value());
+            PPR_TEST_ASSERT(pass.textureCache().descriptorBuffer() != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().descriptorBuffer()->getDesc().elementSize == sizeof(u64));
+            PPR_TEST_ASSERT(*pass.textureCache().residentIndex(*tex2) >= 1u);
             const TextureHandle invalid_tex{};
             const TextureHandle resolved_slots[] = {*tex2, invalid_tex, invalid_tex, invalid_tex};
             const Expected<MaterialHandle> mat0 =

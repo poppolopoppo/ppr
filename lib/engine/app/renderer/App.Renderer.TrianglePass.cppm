@@ -129,6 +129,7 @@ export namespace pP {
         rhi::ComPtr<rhi::ITexture> m_fallback_texture{};
         rhi::ComPtr<rhi::ITextureView> m_fallback_view{};
         rhi::DescriptorHandle m_fallback_descriptor{};
+        bool m_texture_heap_bound = false;
         bool m_caches_ready = false;
 
         Array<Instance> m_instances{};

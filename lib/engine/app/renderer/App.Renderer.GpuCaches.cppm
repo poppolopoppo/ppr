@@ -257,7 +257,8 @@ export namespace pP {
     // ONE shared sampler.
     class BindlessTextureCache {
     public:
-        [[nodiscard]] std::error_code initialize(rhi::IDevice &device, u32 texture_budget);
+        [[nodiscard]] std::error_code initialize(
+            rhi::IDevice &device, u32 texture_budget, rhi::DescriptorHandle fallback_descriptor);
 
         [[nodiscard]] std::error_code shutdown();
 
@@ -270,9 +271,9 @@ export namespace pP {
 
         [[nodiscard]] rhi::ITextureView *view(TextureHandle handle) const noexcept;
 
-        // §6 encode: slot → descriptor for per-instance setDescriptorHandle.
-        // kNoTexture never matches; stale slots fail with invalid_argument.
-        [[nodiscard]] Expected<rhi::DescriptorHandle> descriptorForSlot(TextureBindlessIndex slot) const noexcept;
+        // §6 texture heap: slot 0 is fallback-white; real texture slots begin at 1.
+        // The pass binds this container once per render invocation.
+        [[nodiscard]] rhi::IBuffer *descriptorBuffer() const noexcept;
 
     private:
         struct DedupKey {
@@ -328,8 +329,9 @@ export namespace pP {
 
         bool m_initialized = false;
         rhi::IDevice *m_device = nullptr;
+        rhi::ComPtr<rhi::IBuffer> m_descriptor_buffer{};
         u32 m_texture_budget = 0u;
-        u32 m_next_slot = 0u;
+        u32 m_next_slot = 1u;
         FlatMap<DedupKey, TextureHandle> m_dedup{};
         SparseVector<TextureEntry> m_entries{};
     };

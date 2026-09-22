@@ -233,6 +233,7 @@ namespace pP::tests::detail {
             images.push_back(*decoded);
             const Expected<TrianglePass::UploadedScene> uploaded = pass.uploadScene(*scene, images);
             PPR_TEST_ASSERT(uploaded.has_value());
+            PPR_TEST_ASSERT(pass.textureCache().descriptorBuffer() != nullptr);
             PPR_TEST_ASSERT(not submitScene_(pass, *scene, *uploaded));
 
             const mesh::StaticMeshAsset &mesh_asset = scene->m_meshes.front();

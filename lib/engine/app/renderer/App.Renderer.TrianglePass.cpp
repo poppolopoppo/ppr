@@ -76,7 +76,8 @@ namespace pP {
                 });
             return err;
         }
-        if (const std::error_code err = m_texture_cache.initialize(device, rhi::kBindlessTextureBudget)) {
+        if (const std::error_code err =
+                m_texture_cache.initialize(device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
             PPR_LOG(TrianglePass, error, "texture cache init failed", {
                 {"message", err.message()},
                 });
@@ -375,6 +376,9 @@ namespace pP {
     // setDescriptorHandle via seam (a)), push setData, NO vertex/index-buffer
     // bindings, NON-INDEXED draw with sv_vertex_id driving the manual lookup.
     std::error_code TrianglePass::render(const DrawContext &draw_context) {
+        // The descriptor container is stable for one render invocation. Bind it
+        // on the first draw only; subsequent draws only push instance data.
+        m_texture_heap_bound = false;
         for (const Instance &instance: m_instances) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeInstance_(draw_context, instance));
         }
@@ -413,7 +417,8 @@ namespace pP {
             return material_slot.error();
         }
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
-        if (material_buffer == nullptr) [[unlikely]] {
+        rhi::IBuffer *const texture_buffer = m_texture_cache.descriptorBuffer();
+        if (material_buffer == nullptr or texture_buffer == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 
@@ -461,25 +466,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             shader_cursor["g_materials"].setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
 
-        const TextureBindlessIndex slots[] = {
-            gpu->m_textures.m_albedo,
-            gpu->m_textures.m_metallic_roughness,
-            gpu->m_textures.m_normal,
-            gpu->m_textures.m_emissive,
-        };
-        const char *const names[] = {"g_albedoTex", "g_mrTex", "g_normalTex", "g_emissiveTex"};
-        for (u32 i = 0u; i < 4u; ++i) {
-            rhi::DescriptorHandle descriptor = m_fallback_descriptor;
-            if (slots[i] != kNoTexture) {
-                Expected<rhi::DescriptorHandle> resolved = m_texture_cache.descriptorForSlot(slots[i]);
-                if (not
-                    resolved.has_value())
-                [[unlikely]] {
-                    return resolved.error();
-                }
-                descriptor = *resolved;
-            }
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor[names[i]].setDescriptorHandle(descriptor));
+        if (not m_texture_heap_bound) {
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+                shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
+            m_texture_heap_bound = true;
         }
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
@@ -530,6 +520,7 @@ namespace pP {
         m_fallback_view.setNull();
         m_fallback_texture.setNull();
         m_sampler_handle = rhi::DescriptorHandle{};
+        m_texture_heap_bound = false;
         return first_err;
     }
 

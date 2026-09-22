@@ -1,10 +1,9 @@
 // Bindless static-mesh pass (docs/plans/asset-pipeline.md §6): PURE
 // StructuredBuffer fetch. The CPU StaticMeshVertex stride is 64 B
 // (plain-float arrays, 12+12+8+16+16); BagVertex mirrors it exactly.
-// Gate 1 scalar-Handles fallback: one Texture2D<float4>.Handle per material
-// slot + one shared sampler (NO Handle[N] array — vendored slang-rhi has zero
-// array coverage). Missing slots (0xFFFFFFFF) take the factor path; the CPU
-// still binds the 1x1 white fallback texture so every uniform is valid.
+// Texture descriptors reside in one StructuredBuffer heap. Heap slot 0 is the
+// reserved 1x1 white fallback; host material slots start at 1. kNoTexture
+// resolves to slot 0, while normal-map absence still takes its unperturbed path.
 struct BagVertex {
     float3 m_position;
     float3 m_normal;
@@ -54,6 +53,13 @@ StructuredBuffer<BagVertex> g_vertices;
 StructuredBuffer<uint> g_indices;
 StructuredBuffer<GpuMaterial> g_materials;
 
+static const uint kNoTexture = 0xFFFFFFFF;
+static const uint kFallbackTextureSlot = 0u;
+
+uint resolveTextureSlot(uint slot) {
+    return slot == kNoTexture ? kFallbackTextureSlot : slot;
+}
+
 struct BindlessVertexOutput {
     float4 position : SV_Position;
     float3 world : WORLDPOS;
@@ -83,22 +89,16 @@ BindlessVertexOutput vertexMain(
     return output;
 }
 
-// Texture/sampler handles ride FRAGMENT entry-point params (root constants
-// as uint2 heap indices) for the same $Globals reason: global scope stays
-// free of ordinary data.
+// The texture heap and shared sampler ride FRAGMENT entry-point params for the
+// same $Globals reason: global scope stays free of ordinary data.
 [shader("fragment")]
 float4 fragmentMain(
     BindlessVertexOutput input,
-    uniform Texture2D<float4>.Handle g_albedoTex,
-    uniform Texture2D<float4>.Handle g_mrTex,
-    uniform Texture2D<float4>.Handle g_normalTex,
-    uniform Texture2D<float4>.Handle g_emissiveTex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) : SV_Target {
     GpuMaterial mat = g_materials[input.material];
     float4 albedo = mat.m_base_color;
-    if (mat.m_textures.x != 0xFFFFFFFF) {
-        albedo *= g_albedoTex.Sample(g_sampler, input.uv);
-    }
+    albedo *= nonuniform(g_textures[resolveTextureSlot(mat.m_textures.x)]).Sample(g_sampler, input.uv);
     // Opaque + mask only (plan §7): blend is rejected at pack time.
     if ((mat.m_flags & 0x3u) == 1u && albedo.a < mat.m_rough_alpha_occl_nscale.y) {
         discard;
@@ -106,23 +106,19 @@ float4 fragmentMain(
     float3 normal = normalize(input.normal);
     float3 tangent = normalize(input.tangent.xyz);
     float3 bitangent = cross(normal, tangent) * input.tangent.w;
-    if (mat.m_textures.z != 0xFFFFFFFF) {
-        float3 texel = g_normalTex.Sample(g_sampler, input.uv).rgb * 2.0 - 1.0;
+    if (mat.m_textures.z != kNoTexture) {
+        float3 texel = nonuniform(g_textures[resolveTextureSlot(mat.m_textures.z)]).Sample(g_sampler, input.uv).rgb * 2.0 - 1.0;
         normal = normalize(tangent * texel.x + bitangent * texel.y + normal * texel.z);
     }
     float metallic = mat.m_emissive_metallic.w;
     float roughness = mat.m_rough_alpha_occl_nscale.x;
     float occlusion = mat.m_rough_alpha_occl_nscale.z;
-    if (mat.m_textures.y != 0xFFFFFFFF) {
-        float3 mr = g_mrTex.Sample(g_sampler, input.uv).rgb;
-        occlusion *= mr.x;
-        roughness *= mr.y;
-        metallic *= mr.z;
-    }
+    float3 mr = nonuniform(g_textures[resolveTextureSlot(mat.m_textures.y)]).Sample(g_sampler, input.uv).rgb;
+    occlusion *= mr.x;
+    roughness *= mr.y;
+    metallic *= mr.z;
     float3 emissive = mat.m_emissive_metallic.rgb;
-    if (mat.m_textures.w != 0xFFFFFFFF) {
-        emissive *= g_emissiveTex.Sample(g_sampler, input.uv).rgb;
-    }
+    emissive *= nonuniform(g_textures[resolveTextureSlot(mat.m_textures.w)]).Sample(g_sampler, input.uv).rgb;
     float3 light_dir = normalize(float3(-0.35, 0.55, 0.76));
     float diffuse = saturate(dot(normal, light_dir));
     float3 view_dir = normalize(g_frame.m_camera_position.xyz - input.world);

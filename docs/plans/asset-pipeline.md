@@ -530,7 +530,7 @@ Slang `nonuniform()`, never HLSL-native `NonUniformResourceIndex`. P0c
 `Handle[4096]` probe verdict amended to compile-only (SPIR-V/DXIL-SM6.6
 rc=0; zero slang-rhi runtime contract).
 
-Container upgrade (only if eviction/dedup pressure demands it):
+Container upgrade (IMPLEMENTED):
 `StructuredBuffer<DescriptorHandle<Texture2D<float4>>>` heap + plain-uint
 slots in `GpuMaterial` — raw `Handle[N]` root params never.
 
