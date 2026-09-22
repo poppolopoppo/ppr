@@ -32,7 +32,7 @@ namespace pP {
     }
 
     void Camera::updateModel(const TimeSpan dt, const CameraModel &new_model, const Viewport &viewport) noexcept {
-        PPR_ASSERT(not isNan(new_model.m_origin));
+        PPR_ASSERT(not isNan<float, 3u>(new_model.m_origin));
         PPR_ASSERT(not isNan(new_model.m_basis));
         PPR_ASSERT(not isNan(new_model.m_fov));
         PPR_ASSERT(not isNan(new_model.m_z_near));
@@ -73,7 +73,7 @@ namespace pP {
             m_actual_state.m_revision = 0;
         }
 
-        m_actual_state.m_viewport_size = toFloat(client_rect.m_extent);
+        m_actual_state.m_viewport_size = toFloat<int, 2u>(client_rect.m_extent);
         m_actual_state.m_aspect_ratio = client_rect.getAspectRatio();
 
         m_actual_state.m_right = quaternionTransform(new_model.m_basis, math::axis_x);
@@ -159,8 +159,8 @@ namespace pP {
         m_translational_velocity = (m_actual_state.m_origin - previous_state.m_origin) / dt_seconds;
         m_angular_velocity = angularVelocity(dt_seconds, previous_state.m_basis, m_actual_state.m_basis);
 
-        PPR_ASSERT(not isNan(m_angular_velocity));
-        PPR_ASSERT(not isNan(m_translational_velocity));
+        PPR_ASSERT(not isNan<float, 3u>(m_angular_velocity));
+        PPR_ASSERT(not isNan<float, 3u>(m_translational_velocity));
     }
 
     void Camera::updateModel(const TimeSpan dt, ICameraController &controller, const Viewport &viewport) noexcept {

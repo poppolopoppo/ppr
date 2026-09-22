@@ -77,6 +77,7 @@ namespace pP {
             .scissorRectCount = 1u,
             .vertexBuffers = {{m_vertex_buffer.get(), 0u}},
             .vertexBufferCount = 1u,
+            .indexBuffer = {},
         });
 
         draw_context.m_pass.draw({.vertexCount = 3u});

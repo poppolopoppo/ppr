@@ -108,7 +108,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr float2 normalizeClamp(const vector_type &pos) const noexcept {
-            return saturate(normalize(pos));
+            return saturate<float, 2u>(normalize(pos));
         }
 
         [[nodiscard]] constexpr vector_type denormalize(const float2 &uv) const noexcept {
@@ -119,7 +119,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr vector_type denormalizeClamp(const float2 &uv) const noexcept {
-            return denormalize(saturate(uv));
+            return denormalize(saturate<float, 2u>(uv));
         }
 
         [[nodiscard]] constexpr bool operator ==(const BasicRect &other) const noexcept {

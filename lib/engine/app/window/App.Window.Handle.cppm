@@ -93,12 +93,4 @@ export namespace pP {
 
         [[nodiscard]] WindowHandle release() noexcept;
     };
-
-    extern template class std23::function_ref<void (const Window &)>;
-    extern template class std23::function_ref<void (const Window &, bool)>;
-    extern template class std23::function_ref<void (const Window &, const float2 &)>;
-    extern template class std23::function_ref<void (const Window &, EKeyboardKey)>;
-    extern template class std23::function_ref<void (const Window &, EKeyboardKey, bool)>;
-    extern template class std23::function_ref<void (const Window &, EMouseButton, bool)>;
-    extern template class std23::function_ref<void (const Window &, hal::native::char_t)>;
 }

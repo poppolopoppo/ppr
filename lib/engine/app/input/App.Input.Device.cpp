@@ -31,7 +31,7 @@ namespace pP {
 
         const float blend_rate = saturate(static_cast<float>(
             std::pow(elapsed_seconds,
-                1.0 / std::max<float>(m_sensitivity, epsilon_v<float>))));
+                static_cast<double>(1.0f / std::max<float>(m_sensitivity, epsilon_v<float>)))));
 
         const value_type next_filtered = lerp(
             m_filtered.m_absolute,

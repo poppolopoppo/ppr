@@ -219,7 +219,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     void FreeCameraController::lookAt(const float3 &eye, const float3 &target, const float3 &up, const bool has_teleported) noexcept {
-        const float3 forward = safeNormalize(target - eye, math::forward);
+        const float3 forward = safeNormalize<float, 3u>(target - eye, math::forward);
         const float3 right = normalize(cross(up, forward));
         const float3 corrected_up = cross(forward, right);
         const Quaternion rotation(float3x3{right, corrected_up, forward});
@@ -309,8 +309,8 @@ namespace pP {
     // ------------------------------------------------------------------
 
     void PanCameraController::setParallelPlane(const float3 &plane_normal, const float3 &plane_up, const bool has_teleported) noexcept {
-        PPR_ASSERT(isNormalized(plane_normal));
-        PPR_ASSERT(isNormalized(plane_up));
+        PPR_ASSERT(isNormalized<float, 3u>(plane_normal));
+        PPR_ASSERT(isNormalized<float, 3u>(plane_up));
 
         const float3 forward = -plane_normal; // faces the plane
         const float3 right = normalize(cross(plane_up, forward));
@@ -413,7 +413,7 @@ namespace pP {
             const float3 reference_up = std::abs(dot(forward, math::up)) < 1.0f - epsilon_v<float>
                                             ? math::up
                                             : math::right;
-            return safeNormalize(cross(reference_up, forward), math::right);
+            return safeNormalize<float, 3u>(cross(reference_up, forward), math::right);
         }
 
         [[nodiscard]] float3 orbitOrigin_(const Quaternion &basis, const float3 &target, const float radius) noexcept {
@@ -422,9 +422,9 @@ namespace pP {
     }
 
     void OrbitCameraController::lookAt(const float3 &eye, const float3 &target, const bool has_teleported) noexcept {
-        const float3 forward = safeNormalize(target - eye, math::forward);
+        const float3 forward = safeNormalize<float, 3u>(target - eye, math::forward);
         const float3 right = safeOrbitRight_(forward);
-        const float3 corrected_up = safeNormalize(cross(forward, right), math::up);
+        const float3 corrected_up = safeNormalize<float, 3u>(cross(forward, right), math::up);
 
         const Quaternion rotation(float3x3{right, corrected_up, forward});
         const float radius = clampOrbitRadius_(distance(target, eye));

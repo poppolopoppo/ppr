@@ -7,11 +7,11 @@ import engine.core;
 import engine.math;
 
 import :input.filtered_analog;
+import :input.action;
 import :input.key;
 import :scene.camera;
 
 export namespace pP {
-    struct InputAction;
     class InputMapping;
 
     class ICameraController : public safe_object {
