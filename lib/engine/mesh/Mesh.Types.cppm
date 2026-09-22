@@ -202,6 +202,27 @@ export namespace pP::mesh {
         Array<SceneInstance> m_instances;
     };
 
+    // Configurable production limits (Phase 5 hardening): GLB container
+    // bounds (file bytes, chunk iterations, JSON index entries) plus scene
+    // counts and per-mesh allocation caps. Over-limit inputs fail closed
+    // with invalid_argument — no new errc, the taxonomy already covers
+    // deterministic rejection; never a throw, never a partial asset.
+    struct MeshLimits {
+        u64 m_max_glb_bytes = 134217728u;
+        u32 m_max_glb_chunks = 64u;
+        u32 m_max_glb_images = 4096u;
+        u32 m_max_glb_buffer_views = 65536u;
+        u32 m_max_images = 4096u;
+        u32 m_max_materials = 65536u;
+        u32 m_max_meshes = 65536u;
+        u32 m_max_nodes = 1048576u;
+        u32 m_max_primitives_per_mesh = 65536u;
+        u32 m_max_vertices_per_mesh = 4194304u;
+        u32 m_max_indices_per_mesh = 16777216u;
+    };
+
+    inline constexpr MeshLimits kDefaultMeshLimits{};
+
     enum class errc : int {
         invalid_argument = 1,
         function_not_supported,

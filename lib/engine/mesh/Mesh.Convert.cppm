@@ -22,5 +22,7 @@ export namespace pP::mesh {
     // indices → invalid_argument; joint/skin data → function_not_supported;
     // AlphaMode::blend and authored clearcoat/sheen/anisotropy/opacity content
     // → function_not_supported; Mango failures → import_failed.
-    [[nodiscard]] Expected<SceneAsset> importAndConvert(const std::filesystem::path &dir, std::string_view file);
+    // Over-limit inputs (MeshLimits) → invalid_argument, fail-closed.
+    [[nodiscard]] Expected<SceneAsset> importAndConvert(
+        const std::filesystem::path &dir, std::string_view file, const MeshLimits &limits = kDefaultMeshLimits);
 }

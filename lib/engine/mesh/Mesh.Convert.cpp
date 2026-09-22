@@ -254,7 +254,8 @@ namespace pP {
                 Array<GlbBufferViewDesc> m_views;
             };
 
-            [[nodiscard]] bool parseGlbJson(const char *begin, const char *end, GlbJsonIndex &index) {
+            [[nodiscard]] bool parseGlbJson(
+                const char *begin, const char *end, GlbJsonIndex &index, const MeshLimits &limits) {
                 const char *ptr = begin;
                 if (not skipJsonWs(ptr, end) or ptr == end or *ptr != '{') {
                     return false;
@@ -293,6 +294,11 @@ namespace pP {
                             if (not parseJsonObject(p, e, onImage)) {
                                 return false;
                             }
+                            // Production cap: a hostile images[] array must not
+                            // grow the index without bound.
+                            if (index.m_images.size() >= limits.m_max_glb_images) {
+                                return false;
+                            }
                             index.m_images.push_back(desc);
                         } else {
                             GlbBufferViewDesc desc;
@@ -313,6 +319,9 @@ namespace pP {
                                 return skipJsonValue(q, f);
                             };
                             if (not parseJsonObject(p, e, onView)) {
+                                return false;
+                            }
+                            if (index.m_views.size() >= limits.m_max_glb_buffer_views) {
                                 return false;
                             }
                             index.m_views.push_back(desc);
@@ -341,7 +350,10 @@ namespace pP {
             // the Scene lives. Entries stay empty when unresolvable
             // (no BIN chunk, foreign buffer index, bad range, JSON anomaly) —
             // convertImage fails those closed instead of reading dead views.
-            [[nodiscard]] Array<mem::SharedBuffer> resolveGlbEmbeds(const mem::SharedBuffer &mapping) {
+            // Over-limit containers (chunk iterations beyond the cap) fail
+            // closed with invalid_argument — never a truncated silent success.
+            [[nodiscard]] Expected<Array<mem::SharedBuffer> > resolveGlbEmbeds(
+                const mem::SharedBuffer &mapping, const MeshLimits &limits) {
                 Array<mem::SharedBuffer> table;
                 const mem::SharedBufferView bytes = mapping.getBufferData();
                 const std::size_t size = bytes.size();
@@ -367,7 +379,13 @@ namespace pP {
                 bool have_json = false;
                 bool have_bin = false;
                 std::size_t chunk = 12u;
+                u32 chunk_count = 0u;
                 while (chunk + 8u >= 8u and chunk + 8u <= size) {
+                    // Production cap: bound chunk-walk work on hostile files.
+                    if (chunk_count >= limits.m_max_glb_chunks) [[unlikely]] {
+                        return std::unexpected{make_error_code(errc::invalid_argument)};
+                    }
+                    ++chunk_count;
                     u32 chunk_len = 0u, chunk_type = 0u;
                     if (not readAt(chunk, chunk_len) or not readAt(chunk + 4u, chunk_type)) {
                         break;
@@ -399,7 +417,7 @@ namespace pP {
                     return table;
                 }
                 GlbJsonIndex refs;
-                if (not parseGlbJson(json_begin, json_end, refs) or not have_bin) {
+                if (not parseGlbJson(json_begin, json_end, refs, limits) or not have_bin) {
                     return table;
                 }
                 table.resize(refs.m_images.size());
@@ -811,7 +829,8 @@ namespace pP {
                 return true;
             }
 
-            [[nodiscard]] Expected<StaticMeshAsset> convertMesh(const m3d::IndexedMesh &mesh, const std::vector<m3d::Material> &materials) {
+            [[nodiscard]] Expected<StaticMeshAsset> convertMesh(
+                const m3d::IndexedMesh &mesh, const std::vector<m3d::Material> &materials, const MeshLimits &limits) {
                 if ((mesh.flags & (m3d::Vertex::Joints | m3d::Vertex::Weights)) != 0u) [[unlikely]] {
                     PPR_LOG(Mesh, error, "JOINTS_0/WEIGHTS_0 are deferred (no skins in MVP) — rejecting mesh");
                     return std::unexpected{make_error_code(errc::function_not_supported)};
@@ -820,6 +839,14 @@ namespace pP {
                 // an empty Mango mesh: fail closed, never an empty asset.
                 if (mesh.vertices.empty() or mesh.primitives.empty())
                 [[unlikely]] {
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
+                // Production allocation caps: reject before reserving or
+                // copying (fail-closed invalid_argument, never a throw).
+                if (mesh.vertices.size() > limits.m_max_vertices_per_mesh or
+                    mesh.indices.size() > limits.m_max_indices_per_mesh or
+                    mesh.primitives.size() > limits.m_max_primitives_per_mesh) [[unlikely]] {
+                    PPR_LOG(Mesh, error, "mesh exceeds production allocation caps — rejecting mesh");
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 Expected<u32> vert_count = toU32(mesh.vertices.size());
@@ -924,6 +951,14 @@ namespace pP {
                         [[unlikely]] {
                             return std::unexpected{make_error_code(errc::invalid_argument)};
                         }
+                        // Strip/fan expansion multiplies indices: cap the
+                        // expanded total before appending (overflow-safe).
+                        if (expanded.size() > limits.m_max_indices_per_mesh or
+                            out.m_indices.size() > limits.m_max_indices_per_mesh - expanded.size())
+                        [[unlikely]] {
+                            PPR_LOG(Mesh, error, "expanded strip/fan exceeds production index cap — rejecting mesh");
+                            return std::unexpected{make_error_code(errc::invalid_argument)};
+                        }
                         Expected<u32> range_start = toU32(out.m_indices.size());
                         Expected<u32> range_count = toU32(expanded.size());
                         if (not range_start.has_value() or not range_count.has_value())
@@ -956,7 +991,12 @@ namespace pP {
             }
 
             [[nodiscard]] Expected<SceneAsset> buildScene(const m3d::Scene &scene, const std::filesystem::path &dir,
-                                                          const Array<mem::SharedBuffer> &glb_embeds) {
+                                                          const Array<mem::SharedBuffer> &glb_embeds, const MeshLimits &limits) {
+                // Mango returns a silent-empty Scene on parse failure (no
+                // exception): fail closed instead of an empty asset.
+                if (scene.meshes.empty()) [[unlikely]] {
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
                 // Mango returns a silent-empty Scene on parse failure (no
                 // exception): fail closed instead of an empty asset.
                 if (scene.meshes.empty()) [[unlikely]] {
@@ -975,6 +1015,14 @@ namespace pP {
                     PPR_LOG(Mesh, warning, "ignoring animation channels; using the static bind-pose snapshot");
                 }
                 SceneAsset out;
+                // Production count caps: reject before reserving scene
+                // storage (fail-closed invalid_argument, never a throw).
+                if (scene.images.size() > limits.m_max_images or scene.materials.size() > limits.m_max_materials or
+                    scene.meshes.size() > limits.m_max_meshes or scene.nodes.size() > limits.m_max_nodes)
+                [[unlikely]] {
+                    PPR_LOG(Mesh, error, "scene exceeds production count caps — rejecting scene");
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
                 if (scene.images.size() > static_cast<std::size_t>(std::numeric_limits<u32>::max())) [[unlikely]] {
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
@@ -1007,7 +1055,7 @@ namespace pP {
                     if (not mesh) [[unlikely]] {
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
-                    Expected<StaticMeshAsset> converted = convertMesh(*mesh, scene.materials);
+                    Expected<StaticMeshAsset> converted = convertMesh(*mesh, scene.materials, limits);
                     if (not
                         converted.has_value())
                     [[unlikely]] {
@@ -1137,28 +1185,27 @@ namespace pP {
             return std::error_code{static_cast<int>(err), g_mesh_error_category};
         }
 
-        [[nodiscard]] Expected<SceneAsset> importAndConvert(const std::filesystem::path &dir, const std::string_view file) {
+        [[nodiscard]] Expected<SceneAsset> importAndConvert(
+            const std::filesystem::path &dir, const std::string_view file, const MeshLimits &limits) {
             // Mango import chatter: the fork dumps every import at
             // Print::Verbose through a process-global switch (printEnable —
             // no per-call context). Disable Verbose once here, the single
             // PPR-side entry point; Error and above stay visible.
             // Thread-safety is explicit: the switch is global, so per-import
             // toggling would race restores under parallel imports (the 8-way
-            // hammer). Set-once never restores — concurrent first imports
-            // may redundantly write `false`, and PPR never reads mango
-            // stdout, so that race is noise-only. No own-global added.
-            if (mango::isEnable(mango::Print::Verbose)) {
+            // hammer). Set-once never restores; std::call_once serializes the
+            // single Mango write before any import continues.
+            static std::once_flag mango_verbose_silenced;
+            std::call_once(mango_verbose_silenced, [] {
                 mango::printEnable(mango::Print::Verbose, false);
-            }
+            });
             if (dir.empty() or file.empty())
             [[unlikely]] {
                 return std::unexpected{make_error_code(errc::invalid_argument)};
             }
             const std::filesystem::path filename{file};
             if (not details::hasGltfExtension(filename)) [[unlikely]] {
-                // Contractual MVP rejection (returned as invalid_argument): warning,
-                // not error — the harness fails a case on any error-level log.
-                PPR_LOG(Mesh, warning, "only STATIC glTF/GLB is accepted in MVP (OBJ/FBX deferred)");
+                PPR_LOG(Mesh, error, "only STATIC glTF/GLB is accepted in MVP (OBJ/FBX deferred)");
                 return std::unexpected{make_error_code(errc::invalid_argument)};
             }
             // GLB embeds dangle in the fork (see above): map the file here so
@@ -1171,13 +1218,23 @@ namespace pP {
                 if (not
                     mapped.has_value())
                 [[unlikely]] {
-                    // Tests pin missing-file to import_failed (returned below):
-                    // warning, not error — the harness fails a case on any
-                    // error-level log.
-                    PPR_LOG(Mesh, warning, "GLB file is missing or unmappable", {{"what", mapped.error().message()}});
+                    PPR_LOG(Mesh, error, "GLB file is missing or unmappable", {{"what", mapped.error().message()}});
                     return std::unexpected{make_error_code(errc::import_failed)};
                 }
-                glb_embeds = details::resolveGlbEmbeds(*mapped);
+                // Production cap: bound container-parse work before touching
+                // the bytes (fail-closed invalid_argument).
+                if (mapped->getBufferData().size() > limits.m_max_glb_bytes) [[unlikely]] {
+                    PPR_LOG(Mesh, error, "GLB exceeds production container cap — rejecting file");
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
+                Expected<Array<mem::SharedBuffer> > embeds = details::resolveGlbEmbeds(*mapped, limits);
+                if (not
+                    embeds.has_value())
+                [[unlikely]] {
+                    PPR_LOG(Mesh, error, "GLB container exceeds production chunk cap — rejecting file");
+                    return std::unexpected{embeds.error()};
+                }
+                glb_embeds = std::move(*embeds);
             }
             std::shared_ptr<mango::import3d::Scene> scene;
             try {
@@ -1196,7 +1253,7 @@ namespace pP {
             if (not scene) [[unlikely]] {
                 return std::unexpected{make_error_code(errc::import_failed)};
             }
-            Expected<SceneAsset> converted = details::buildScene(*scene, dir, glb_embeds);
+            Expected<SceneAsset> converted = details::buildScene(*scene, dir, glb_embeds, limits);
             if (not
                 converted.has_value())
             [[unlikely]] {

@@ -20,6 +20,26 @@ namespace pP::tests::detail {
             return std::filesystem::current_path() / "meshes" / "";
         }
 
+        void discardExpectedFailureLog_(const Log::Entry &) noexcept {
+        }
+
+        class ExpectedFailureLogGuard final {
+            Log::Policy m_previous;
+
+        public:
+            ExpectedFailureLogGuard() noexcept
+                : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
+            }
+
+            ~ExpectedFailureLogGuard() noexcept {
+                // The logger drains asynchronously: flush under the discard
+                // policy so no queued error entry can leak past the restore
+                // and fail a later test (or the root) nondeterministically.
+                std::ignore = Log::flush(true);
+                Log::setWriterPolicy(m_previous);
+            }
+        };
+
         [[nodiscard]] bool allResolvedInRange_(const pP::mesh::StaticMeshAsset &mesh_asset) noexcept {
             const i64 vert_count = static_cast<i64>(mesh_asset.m_verts.size());
             for (const pP::mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
@@ -202,6 +222,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (rejects_non_gltf_extension) {
             // OBJ/FBX are deferred entirely: rejected before any import.
+            ExpectedFailureLogGuard expected_failure_log;
             const Expected<pP::mesh::SceneAsset> obj = pP::mesh::importAndConvert(meshDir(), "mesh.obj");
             PPR_TEST_ASSERT(not obj.has_value());
             PPR_TEST_ASSERT(obj.error() == std::errc::invalid_argument);
@@ -221,6 +242,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty_file.has_value());
             PPR_TEST_ASSERT(empty_file.error() == std::errc::invalid_argument);
 
+            ExpectedFailureLogGuard expected_failure_log;
             const Expected<pP::mesh::SceneAsset> missing =
                     pP::mesh::importAndConvert(meshDir(), "does_not_exist.glb");
             PPR_TEST_ASSERT(not missing.has_value());
