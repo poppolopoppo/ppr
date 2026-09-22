@@ -3,10 +3,13 @@ module;
 export module engine.app:application_editor;
 
 import :application;
+import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
 
 import engine.core;
+import engine.image;
+import engine.mesh;
 import std;
 
 export namespace pP {
@@ -40,6 +43,18 @@ export namespace pP {
 
         [[nodiscard]] safe_ptr<InputContext> getMainInputContext() noexcept override;
 
+    public:
+        // §7 scene flow: editor-owned SceneAsset + decoded ImageAssets +
+        // pass-uploaded GPU handles. loadScene imports, decodes (mapFile for
+        // file refs, embedded bytes otherwise) and uploads with partial
+        // rollback; update() submits one instance per (scene instance, prim)
+        // with the node world matrix; unloadScene releases in reverse order.
+        [[nodiscard]] std::error_code loadScene(const std::filesystem::path &dir, std::string_view file);
+
+        [[nodiscard]] std::error_code unloadScene();
+
+        [[nodiscard]] TrianglePass &trianglePass() noexcept { return *m_triangle_pass; }
+
     protected:
         // ReSharper disable once CppOverrideWithDifferentVisibility
         [[nodiscard]] safe_ptr<const Application> getApplication() const noexcept override { return this; }
@@ -55,6 +70,13 @@ export namespace pP {
 
     private:
         void onMainWindowFocused_(const Window &window, bool focused);
+
+        [[nodiscard]] std::error_code submitSceneInstances_();
+
+        mesh::SceneAsset m_scene{};
+        Array<image::ImageAsset> m_images{};
+        TrianglePass::UploadedScene m_uploaded_scene{};
+        bool m_has_scene = false;
 
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};

@@ -10,10 +10,13 @@ import :input.device;
 import :input.key;
 import :input.listener;
 import :input.routing;
+import :renderer.triangle_pass;
 import :service.input;
 import :window.viewport;
 
 import engine.core;
+import engine.image;
+import engine.mesh;
 import std;
 
 namespace pP {
@@ -154,8 +157,124 @@ namespace pP {
         return default_value_v;
     }
 
+    std::error_code ApplicationEditor::loadScene(const std::filesystem::path &dir, const std::string_view file) {
+        PPR_RETURN_ERROR_ON_FAIL(Editor, unloadScene());
+        if (not m_triangle_pass) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
+        Expected<mesh::SceneAsset> scene = mesh::importAndConvert(dir, file);
+        if (not
+            scene.has_value())
+        [[unlikely]] {
+            return scene.error();
+        }
+
+        Array<image::ImageAsset> images{};
+        for (const mesh::ImageRef &ref : scene->m_images) {
+            mem::SharedBuffer bytes{};
+            if (ref.m_is_file) {
+                Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(dir / ref.m_rel_path);
+                if (not
+                    mapped.has_value())
+                [[unlikely]] {
+                    return mapped.error();
+                }
+                bytes = *mapped;
+            } else {
+                bytes = ref.m_bytes;
+            }
+            if (not bytes.isValid()) [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
+            }
+            Expected<image::ImageAsset> decoded = image::decodeToRgba8(
+                bytes.getBufferData(), ref.m_ext, image::ImageDecodeDesc{}, image::ImageUsage::color);
+            if (not
+                decoded.has_value())
+            [[unlikely]] {
+                return decoded.error();
+            }
+            images.push_back(*decoded);
+        }
+
+        Expected<TrianglePass::UploadedScene> uploaded = m_triangle_pass->uploadScene(*scene, images);
+        if (not
+            uploaded.has_value())
+        [[unlikely]] {
+            return uploaded.error();
+        }
+
+        m_scene = std::move(*scene);
+        m_images = std::move(images);
+        m_uploaded_scene = std::move(*uploaded);
+        m_has_scene = true;
+        PPR_LOG(Editor, info, "scene loaded", {
+            {"meshes", m_scene.m_meshes.size()},
+            {"images", m_images.size()},
+            {"prims", m_uploaded_scene.m_prims.size()},
+        });
+        return default_value_v;
+    }
+
+    std::error_code ApplicationEditor::unloadScene() {
+        std::error_code first_err{};
+        if (m_has_scene
+            and
+        m_triangle_pass)
+        {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->releaseScene(m_uploaded_scene));
+        }
+        m_uploaded_scene = TrianglePass::UploadedScene{};
+        m_images.clear();
+        m_scene = mesh::SceneAsset{};
+        m_has_scene = false;
+        if (m_triangle_pass) {
+            m_triangle_pass->clearInstances();
+        }
+        return first_err;
+    }
+
+    std::error_code ApplicationEditor::submitSceneInstances_() {
+        m_triangle_pass->clearInstances();
+        std::size_t prim_cursor = 0u;
+        for (const mesh::SceneInstance &instance : m_scene.m_instances) {
+            const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
+            const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
+            if (mesh_index >= m_scene.m_meshes.size()
+                or
+            node_index >= m_scene.m_nodes.size())
+            [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
+            }
+            const mesh::StaticMeshAsset &mesh_asset = m_scene.m_meshes[mesh_index];
+            const float4x4 &world = m_scene.m_nodes[node_index].m_world;
+            for ([[maybe_unused]] const mesh::MeshPrimitiveRange &prim : mesh_asset.m_prims) {
+                if (prim_cursor >= m_uploaded_scene.m_prims.size()) [[unlikely]] {
+                    return make_error_code(std::errc::invalid_argument);
+                }
+                const TrianglePass::UploadedPrimitive &uploaded = m_uploaded_scene.m_prims[prim_cursor++];
+                MaterialHandle material = uploaded.m_material;
+                if (instance.m_materialOverride != mesh::kInvalidMaterial) {
+                    const std::size_t override_index = static_cast<std::size_t>(*instance.m_materialOverride);
+                    if (override_index >= m_uploaded_scene.m_materials.size()) [[unlikely]] {
+                        return make_error_code(std::errc::invalid_argument);
+                    }
+                    material = m_uploaded_scene.m_materials[override_index];
+                }
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->submitInstance(uploaded.m_bag, material, world));
+            }
+        }
+        return default_value_v;
+    }
+
     std::error_code ApplicationEditor::shutdown() {
         std::error_code first_err{};
+
+        // Release scene GPU handles while the pass caches are still alive,
+        // before the §2.4 pass shutdown below.
+        if (m_has_scene) {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, unloadScene());
+        }
 
         // Detach detector first so no callback fires during teardown.
         m_device_disconnected_handle.reset();
@@ -252,6 +371,10 @@ namespace pP {
             std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
+
+        if (m_has_scene) {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, submitSceneInstances_());
+        }
 
         if (m_ui_service) [[likely]] {
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->update(dt, *m_main_viewport));

@@ -25,6 +25,7 @@ target_sources(engine.app
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
+        renderer/App.Renderer.GpuCaches.cppm
         renderer/App.Renderer.TrianglePass.cppm
         renderer/App.Renderer.Types.cppm
 
@@ -66,6 +67,7 @@ target_sources(engine.app
         player/App.Player.Graph.cpp
 
         renderer/App.Renderer.cpp
+        renderer/App.Renderer.GpuCaches.cpp
         renderer/App.Renderer.TrianglePass.cpp
 
         scene/App.Scene.Camera.cpp
@@ -79,7 +81,7 @@ target_sources(engine.app
 )
 
 setup_ppr_project(engine.app
-        INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader engine.rhi
+        INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader engine.rhi engine.image engine.mesh
         EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango
         EXTERNAL_SYSTEM_PUBLIC_DEPS imgui.base
 )

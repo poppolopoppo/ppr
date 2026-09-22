@@ -1,5 +1,4 @@
 module;
-#include "slang-rhi.h"
 #include "pP/Macros.h"
 module engine.app;
 
@@ -258,8 +257,11 @@ namespace pP {
         rhi::ITexture &render_target,
         const std::initializer_list<DrawSubmission> draws,
         const ColorAttachmentOps &options) {
+        // Hold the view: getDefaultView() returns an owning ComPtr and the
+        // attachment only borrows it — binding the temporary dangles.
+        rhi::ComPtr<rhi::ITextureView> target_view = render_target.getDefaultView();
         rhi::RenderPassColorAttachment color_attachment{};
-        color_attachment.view = render_target.getDefaultView();
+        color_attachment.view = target_view.get();
         applyColorAttachmentOps_(color_attachment, options);
 
         const string_literal description{std::in_place, render_target.getDesc().label};

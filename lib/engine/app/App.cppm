@@ -17,6 +17,7 @@ export import :platform;
 export import :player.graph;
 export import :player;
 
+export import :renderer.gpu_caches;
 export import :renderer.triangle_pass;
 export import :renderer.types;
 export import :renderer;
