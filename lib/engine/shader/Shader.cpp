@@ -59,7 +59,7 @@ namespace pP {
             }
         };
 
-        static constexpr SlangErrorCategory g_slang_error_category{};
+        static const SlangErrorCategory g_slang_error_category{};
 
         [[nodiscard]] const std::error_category &error_category() noexcept {
             return g_slang_error_category;
