@@ -59,13 +59,13 @@ namespace pP {
     }
 
     auto mem::SmallPage::getGlobalPool() noexcept -> pooling_allocator_t & {
-        static const auto &_{HugePage::getGlobalPool()};
+        [[maybe_unused]] static const auto &_{HugePage::getGlobalPool()};
         alignas(hal::cacheline_size_v) static pooling_allocator_t g_instance{};
         return g_instance;
     }
 
     auto mem::SmallPage::getThreadLocalCache() noexcept -> local_block_cache_t & {
-        static const auto &_{HugePage::getThreadLocalCache()};
+        [[maybe_unused]] static const auto &_{HugePage::getThreadLocalCache()};
         alignas(hal::cacheline_size_v) thread_local local_block_cache_t g_instance_tls{};
         return g_instance_tls;
     }
