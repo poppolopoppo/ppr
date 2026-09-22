@@ -60,7 +60,7 @@ export namespace pP {
 
     struct SparseKeyId {
         u32 m_index: 24 = 0xFFFFFFu;
-        u32 m_seed: 8 = 0xFFu;
+        u32 m_seed: 8 = 0u;
 
         constexpr SparseKeyId() noexcept = default;
 

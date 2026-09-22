@@ -114,6 +114,103 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(&vec[keys[i]] == ptrs[i]);
             }
         };
+
+        PPR_UNIT_TEST (default_key_is_invalid) {
+            constexpr pP::SparseKeyId default_key{};
+            PPR_TEST_ASSERT(!default_key.isValid());
+            PPR_TEST_ASSERT(default_key.m_seed == 0u);
+
+            constexpr pP::SparseKeyId value_init = pP::SparseKeyId();
+            PPR_TEST_ASSERT(!value_init.isValid());
+
+            const pP::SparseKeyId invalid_from_default = pP::default_value_v;
+            PPR_TEST_ASSERT(!invalid_from_default.isValid());
+        };
+
+        PPR_UNIT_TEST (add_yields_valid_key) {
+            pP::SparseVector<int> vec;
+            const auto key = vec.add(42);
+            PPR_TEST_ASSERT(key.isValid());
+            PPR_TEST_ASSERT(key.m_seed != 0u);
+            PPR_TEST_ASSERT(vec.contains(key));
+            PPR_TEST_ASSERT(vec[key] == 42);
+        };
+
+        PPR_UNIT_TEST (erased_key_fails_closed) {
+            pP::SparseVector<int> vec;
+            const auto key = vec.add(7);
+            PPR_TEST_ASSERT(vec.erase(key));
+            PPR_TEST_ASSERT(!vec.contains(key));
+            PPR_TEST_ASSERT(vec.tryGet(key) == nullptr);
+            PPR_TEST_ASSERT(!vec.erase(key));
+        };
+
+        PPR_UNIT_TEST (seed_reuse_invalidates_stale) {
+            pP::SparseVector<int> vec;
+            vec.reserveAssumeEmpty(8u);
+            const auto stale_key = vec.add(10);
+            // fill to capacity so the freed slot is recycled on next add
+            for (int i = 0u; vec.size() < vec.capacity(); ++i) {
+                vec.add(i);
+            }
+            PPR_TEST_ASSERT(vec.erase(stale_key));
+            const auto fresh_key = vec.add(30);
+            PPR_TEST_ASSERT(fresh_key.m_index == stale_key.m_index);
+            PPR_TEST_ASSERT(fresh_key.m_seed != stale_key.m_seed);
+            PPR_TEST_ASSERT(fresh_key.isValid());
+            PPR_TEST_ASSERT(!vec.contains(stale_key));
+            PPR_TEST_ASSERT(vec.tryGet(stale_key) == nullptr);
+            PPR_TEST_ASSERT(!vec.erase(stale_key));
+            PPR_TEST_ASSERT(vec.contains(fresh_key));
+            PPR_TEST_ASSERT(vec[fresh_key] == 30);
+        };
+
+        PPR_UNIT_TEST (key_ordering_invalid_vs_valid) {
+            pP::SparseVector<int> vec;
+            const auto valid_key = vec.add(1);
+            constexpr pP::SparseKeyId invalid_key{};
+            PPR_TEST_ASSERT(!invalid_key.isValid());
+            PPR_TEST_ASSERT(valid_key.isValid());
+            PPR_TEST_ASSERT((valid_key <=> invalid_key) == std::strong_ordering::less);
+            PPR_TEST_ASSERT((invalid_key <=> valid_key) == std::strong_ordering::greater);
+            PPR_TEST_ASSERT((invalid_key <=> pP::SparseKeyId{}) == std::strong_ordering::equal);
+            PPR_TEST_ASSERT(valid_key == valid_key);
+            PPR_TEST_ASSERT(!(valid_key == invalid_key));
+        };
+
+        PPR_UNIT_TEST (numeric_handle_capabilities) {
+            struct SparseKeyTag {
+            };
+            struct U32Tag {
+            };
+            using SparseHandle = pP::Numeric<pP::SparseKeyId, SparseKeyTag>;
+            using U32Handle = pP::Numeric<pP::u32, U32Tag>;
+
+            static_assert(std::is_standard_layout_v<pP::SparseKeyId>);
+            static_assert(sizeof(pP::SparseKeyId) == 4u);
+            static_assert(std::is_standard_layout_v<SparseHandle>);
+            static_assert(sizeof(SparseHandle) == 4u);
+            static_assert(std::is_standard_layout_v<U32Handle>);
+            static_assert(sizeof(U32Handle) == 4u);
+            static_assert(std::equality_comparable<SparseHandle>);
+            static_assert(std::three_way_comparable<SparseHandle>);
+            static_assert(std::equality_comparable<U32Handle>);
+            static_assert(std::three_way_comparable<U32Handle>);
+            static_assert(pP::hash::THashable<SparseHandle>);
+            static_assert(pP::hash::THashable<U32Handle>);
+
+            constexpr SparseHandle default_handle{};
+            constexpr U32Handle default_u32{};
+            PPR_TEST_ASSERT(!(*default_handle).isValid());
+            PPR_TEST_ASSERT(*default_u32 == 0u);
+
+            constexpr SparseHandle copy_handle{default_handle.m_value};
+            PPR_TEST_ASSERT(copy_handle == default_handle);
+            PPR_TEST_ASSERT(!(copy_handle != default_handle));
+
+            PPR_TEST_ASSERT(pP::hashValue(default_handle) == pP::hashValue(copy_handle));
+            PPR_TEST_ASSERT(pP::hashValue(default_u32) == pP::hashValue(U32Handle{}));
+        };
     }
 } // namespace pP::tests::detail
 
@@ -126,6 +223,12 @@ namespace pP::tests {
             detail::Sparse_vector::copy_and_move,
             detail::Sparse_vector::iteration_boundary,
             detail::Sparse_vector::memory_stability,
+            detail::Sparse_vector::default_key_is_invalid,
+            detail::Sparse_vector::add_yields_valid_key,
+            detail::Sparse_vector::erased_key_fails_closed,
+            detail::Sparse_vector::seed_reuse_invalidates_stale,
+            detail::Sparse_vector::key_ordering_invalid_vs_valid,
+            detail::Sparse_vector::numeric_handle_capabilities,
         });
     };
 
