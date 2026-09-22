@@ -182,6 +182,7 @@ Use the named skill instead of reproducing its procedure here:
 | Code search, IDE build/run/debug/diagnostics | `clion-tools` |
 | Modules, exports, partitions, `import std` | `module-architect` |
 | CMake, presets, dependencies, sanitizers | `build-system` |
+| Slang shaders, reflection, CPU/GPU layouts, and Slang-RHI bindings | `slang-shader-developer` |
 | HAL changes | `hal-developer` |
 | Allocators and `safe_ptr` mechanics | `memory-allocator` |
 | Concurrency and async I/O | `concurrency-patterns` |

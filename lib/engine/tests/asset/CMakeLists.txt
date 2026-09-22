@@ -46,7 +46,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     )
 endif()
 
-# TrianglePass::initialize loads triangle.slang via content_dir (same shape as
+# TrianglePass::initialize loads mesh_bindless.slang via content_dir (same shape as
 # the app suite); the GPU cache group boots a rendering TestApp.
 add_custom_command(TARGET engine.tests.asset POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
