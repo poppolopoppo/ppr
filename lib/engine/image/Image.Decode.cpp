@@ -35,6 +35,78 @@ namespace pP::image {
             return dotted == ".ktx2" or dotted == ".dds";
         }
 
+        // Parser-safety floors (Phase 5 hardening): Mango's image parsers do
+        // sequential unchecked reads, so a short input over-reads past the end
+        // (ASan container-overflow in ParserPNG::read_IHDR on truncation).
+        // Reject below-floor inputs deterministically before the decoder runs.
+        [[nodiscard]] std::size_t minInputBytesFor_(const std::string_view dotted) noexcept {
+            if (dotted == ".png") {
+                return 33u; // signature(8) + len(4) + "IHDR"(4) + data(13) + crc(4)
+            }
+            if (dotted == ".ktx2") {
+                return 80u; // 12-byte magic + fixed header fields
+            }
+            if (dotted == ".dds") {
+                return 128u; // magic(4) + DDS_HEADER(124)
+            }
+            return 16u; // JPG: SOI marker plus minimal segment presence
+        }
+
+        // PNG chunk-chain pre-validation: walks len/type/data/crc links with
+        // overflow-safe bounds, requiring IHDR first (len 13, Mango's own rule)
+        // and a terminating IEND. Closes length-jump over-reads (a flipped
+        // high length byte would otherwise skip past EOF) and truncations.
+        // Lenient on chunk types and post-IEND bytes: anything Mango decodes
+        // today still validates; only structurally unsound chains reject.
+        [[nodiscard]] bool validatePngChunks_(const std::span<const std::byte> bytes) noexcept {
+            const std::size_t size = bytes.size();
+            if (size < 33u) {
+                return false;
+            }
+            static constexpr std::byte kSignature[8] = {
+                std::byte{0x89}, std::byte{'P'}, std::byte{'N'}, std::byte{'G'},
+                std::byte{0x0D}, std::byte{0x0A}, std::byte{0x1A}, std::byte{0x0A},
+            };
+            if (not std::ranges::equal(std::span{bytes.data(), 8u}, std::span{kSignature, 8u})) {
+                return false;
+            }
+            auto readBe32 = [&](const std::size_t off) noexcept {
+                u32 value = 0u;
+                std::memcpy(&value, bytes.data() + off, sizeof(value));
+                return (value >> 24u) | ((value >> 8u) & 0xFF00u) | ((value << 8u) & 0xFF0000u) |
+                       (value << 24u);
+            };
+            auto typeIs = [&](const std::size_t off, const std::string_view want) noexcept {
+                for (std::size_t k = 0u; k < 4u; ++k) {
+                    if (bytes[off + 4u + k] != static_cast<std::byte>(want[k])) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            std::size_t off = 8u;
+            bool seen_ihdr = false;
+            while (true) {
+                if (off + 8u > size) {
+                    return false;
+                }
+                const u64 len = readBe32(off);
+                // Overflow-safe data+crc fit: len + 12 <= size - off.
+                if (len + 12u > static_cast<u64>(size) - static_cast<u64>(off)) {
+                    return false;
+                }
+                if (not seen_ihdr) {
+                    if (len != 13u or not typeIs(off, "IHDR")) {
+                        return false;
+                    }
+                    seen_ihdr = true;
+                } else if (typeIs(off, "IEND")) {
+                    return true;
+                }
+                off += static_cast<std::size_t>(len) + 12u;
+            }
+        }
+
         [[nodiscard]] mango::image::Format rgba8Format_() {
             using mango::image::Format;
             return Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8);
@@ -178,6 +250,21 @@ namespace pP::image {
         if (bytes.empty()) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
+        // Parser-safety gates before decoder construction (see above):
+        // below-floor inputs and unsound PNG chains would over-read.
+        if (bytes.size_bytes() < minInputBytesFor_(dotted)) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
+        if (dotted == ".png" and
+            not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
+        // Production limits first: bound header-parse work before the decoder
+        // runs, then header claims before any allocation (fail-closed,
+        // invalid_argument — never a throw, never a partial asset).
+        if (bytes.size_bytes() > desc.m_limits.m_max_input_bytes) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
 
         const mango::ConstMemory mango_mem{
             reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()
@@ -193,12 +280,19 @@ namespace pP::image {
         if (header.depth > 1 or header.faces > 1) [[unlikely]] {
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
-
+        if (static_cast<u64>(header.width) > desc.m_limits.m_max_width or
+            static_cast<u64>(header.height) > desc.m_limits.m_max_height) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
         // sRGB from the header (!header.linear); usage data forces linear.
         const bool is_srgb = usage == ImageUsage::color ? not header.linear : false;
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
         const u64 row_pitch = rowPitchFor(width, BlockTag::none);
+        // u64 compare before narrowing: closes overflow as well as over-limit.
+        if (row_pitch * static_cast<u64>(height) > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
         const auto size_bytes = static_cast<std::size_t>(row_pitch * height);
 
         // One Mango decoder AND one UniqueBuffer per job: decode stages are
@@ -280,6 +374,16 @@ namespace pP::image {
         if (bytes.empty()) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
+        if (bytes.size_bytes() < minInputBytesFor_(dotted)) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
+        if (dotted == ".png" and
+            not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
+        if (bytes.size_bytes() > desc.m_limits.m_max_input_bytes) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
 
         const mango::ConstMemory mango_mem{
             reinterpret_cast<const mango::u8 *>(bytes.data()), bytes.size_bytes()
@@ -294,6 +398,10 @@ namespace pP::image {
         }
         if (header.depth > 1 or header.faces > 1) [[unlikely]] {
             return std::unexpected{make_error_code(errc::function_not_supported)};
+        }
+        if (static_cast<u64>(header.width) > desc.m_limits.m_max_width or
+            static_cast<u64>(header.height) > desc.m_limits.m_max_height) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
         }
 
         const bool is_srgb = not header.linear;
@@ -344,7 +452,11 @@ namespace pP::image {
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
         const u64 row_pitch = rowPitchFor(width, want);
-        const auto size_bytes = static_cast<std::size_t>(slicePitchFor(width, height, want));
+        const u64 slice_bytes = slicePitchFor(width, height, want);
+        if (slice_bytes > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
+            return std::unexpected{make_error_code(errc::invalid_argument)};
+        }
+        const auto size_bytes = static_cast<std::size_t>(slice_bytes);
         if (blob_view.size() < size_bytes) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }

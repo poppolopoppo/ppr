@@ -66,10 +66,27 @@ export namespace pP::image {
 
     enum class ImageDimension : u8 { image2d };
 
+    // Configurable production limits (Phase 5 hardening): every decode
+    // rejects over-limit inputs fail-closed with invalid_argument (no new
+    // errc — the taxonomy already covers deterministic rejection). Width and
+    // height bound header claims before any allocation; decoded bytes bound
+    // the allocation itself (u64 compare, never narrowed first); input bytes
+    // bound header-parse work. Defaults are production: 8K RGBA is exactly
+    // 256 MiB, so dimensions and bytes agree.
+    struct ImageLimits {
+        u32 m_max_width = 8192u;
+        u32 m_max_height = 8192u;
+        u64 m_max_decoded_bytes = 268435456u;
+        u64 m_max_input_bytes = 268435456u;
+    };
+
+    inline constexpr ImageLimits kDefaultImageLimits{};
+
     struct ImageDecodeDesc {
         bool m_simd = true;
         bool m_multithread = false;
         bool m_flip_v = false;
+        ImageLimits m_limits = kDefaultImageLimits;
     };
 
     // m_multithread=false is engine POLICY (no Mango pool in the RT path), not the Mango default.
