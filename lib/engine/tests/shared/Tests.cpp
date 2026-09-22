@@ -17,7 +17,6 @@ namespace pP::tests {
 
         TestCli cli{};
         bool shuffle_seen = false;
-        bool explicit_seed = false;
         std::random_device rng{};
 
         for (int i = 1; i < argc; ++i) {
@@ -35,7 +34,6 @@ namespace pP::tests {
                     if (auto [ptr, ec] = std::from_chars(next.data(), next.data() + next.size(), seed);
                         ec == std::errc{}) {
                         ++i;
-                        explicit_seed = true;
                     }
                 }
                 context.m_shuffle_seed = seed;
@@ -43,7 +41,7 @@ namespace pP::tests {
                 shuffle_seen = true;
                 context.m_shuffle_seed = std::nullopt;
             } else if (arg == "--loop" && i + 1 < argc) {
-                cli.m_loops = std::stoul(argv[++i]);
+                cli.m_loops = static_cast<unsigned>(std::stoul(argv[++i]));
             } else if (arg == "--help" || arg == "-h") {
                 std::println(
                     "Usage: <test> [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--help]\n"

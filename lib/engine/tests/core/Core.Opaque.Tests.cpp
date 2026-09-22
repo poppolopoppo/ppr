@@ -500,7 +500,7 @@ namespace pP::tests::detail {
                             return dict[i].second;
                         }
                     }
-                    PPR_TEST_ASSERT(!"key not found");
+                    PPR_TEST_ASSERT(false && "key not found");
                     static opaque::Block::Value fallback{};
                     return fallback;
                 };

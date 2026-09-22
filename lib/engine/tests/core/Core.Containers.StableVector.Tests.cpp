@@ -46,7 +46,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(*back_it == 63);
 
             PPR_TEST_ASSERT(vec.begin() + 10 == vec.begin() + 10);
-            PPR_TEST_ASSERT(vec.begin() + vec.size() == vec.end());
+            PPR_TEST_ASSERT(vec.begin() + checked_cast<std::ptrdiff_t>(vec.size()) == vec.end());
         };
 
         struct Mock {
