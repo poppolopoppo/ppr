@@ -6,7 +6,7 @@ import :logger;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(Internal, error, immediate);
+    PPR_DEFINE_LOG_CATEGORY(Internal, error, immediate)
 
     // ------------------------------------------------------------------
     // logger level formatting
@@ -124,6 +124,7 @@ namespace pP {
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
         new(slot) Entry{
             .m_message{},
+            .m_params{},
             .m_site{g_flush_emitter},
             .m_timestamp{timestamp},
             .m_thread_id{hal::currentThreadId()},
@@ -152,6 +153,7 @@ namespace pP {
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
         auto *const entry = new(slot) Entry{
             .m_message{message.view()},
+            .m_params{},
             .m_site{emitter},
             .m_timestamp{timestamp},
             .m_thread_id{hal::currentThreadId()},
@@ -183,6 +185,7 @@ namespace pP {
 
         auto *const entry = new(slot) Entry{
             .m_message{embedded_message, copy_message.size()},
+            .m_params{},
             .m_site{emitter},
             .m_timestamp{timestamp},
             .m_thread_id{hal::currentThreadId()},
@@ -196,7 +199,7 @@ namespace pP {
 
     void Log::Handler::defaultWriter_(const Entry &entry) const noexcept {
         using namespace std::chrono;
-        const auto elapsed_seconds = duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count() / 1e9;
+        const auto elapsed_seconds = static_cast<double>(duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count()) / 1e9;
 
 #if 0
         hal::outputDebugFmt("{} [{:08.3f}][{}][{}] -- {} {}\n",

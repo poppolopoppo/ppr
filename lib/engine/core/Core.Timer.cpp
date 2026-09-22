@@ -10,7 +10,7 @@ import :containers.stable_vector;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(Time, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Time, debug, none)
 
     // ------------------------------------------------------------------
     // time point and duration representations
