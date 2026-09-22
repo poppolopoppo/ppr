@@ -212,7 +212,7 @@ export namespace pP {
         [[nodiscard]] constexpr reference operator*() const noexcept {
             PPR_ASSERT(m_container != nullptr);
             PPR_ASSUME(m_container != nullptr);
-            return (*m_container)[m_index]; // use [] (not at) for iterator semantics
+            return (*m_container)[checked_cast<std::size_t>(m_index)]; // use [] (not at) for iterator semantics
         }
 
         [[nodiscard]] constexpr std::add_pointer_t<value_type> operator->() const noexcept
@@ -977,7 +977,7 @@ export namespace pP {
         }
 
         constexpr ArrayView(std::initializer_list<T> init_list PPR_LIFETIME_BOUND) noexcept
-            : m_data(init_list.data()),
+            : m_data(std::data(init_list)),
               m_size(init_list.size()) {
         }
 
