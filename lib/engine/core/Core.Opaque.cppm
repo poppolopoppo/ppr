@@ -628,6 +628,26 @@ export namespace pP {
                 reset();
             }
 
+            Unique(const Unique &) = delete;
+
+            Unique &operator=(const Unique &) = delete;
+
+            Unique(Unique &&other) noexcept(std::is_nothrow_move_constructible_v<allocator_type>)
+                : allocator_type(std::move(other)),
+                  m_alloc(std::exchange(other.m_alloc, {})),
+                  m_block(std::exchange(other.m_block, default_value_v)) {
+            }
+
+            Unique &operator=(Unique &&other) noexcept(std::is_nothrow_move_assignable_v<allocator_type>) {
+                if (this != &other) [[likely]] {
+                    reset();
+                    allocator_type::operator=(std::move(other));
+                    m_alloc = std::exchange(other.m_alloc, {});
+                    m_block = std::exchange(other.m_block, default_value_v);
+                }
+                return *this;
+            }
+
             [[nodiscard]] const Block &block() const noexcept {
                 return m_block;
             }
