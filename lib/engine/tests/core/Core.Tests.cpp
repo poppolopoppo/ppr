@@ -35,6 +35,8 @@ namespace pP::tests {
 
     const UnitTest &allocatorTests() noexcept;
 
+    const UnitTest &bufferTests() noexcept;
+
     const UnitTest &safe_ptr_testTests() noexcept;
 
     const UnitTest &poisoningTests() noexcept;
@@ -69,6 +71,7 @@ namespace pP::tests {
             arenaTests(),
             slabTests(),
             allocatorTests(),
+            bufferTests(),
             safe_ptr_testTests(),
             poisoningTests(),
         });

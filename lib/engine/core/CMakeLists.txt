@@ -44,6 +44,7 @@ target_sources(engine.core
             Core.Logger.cppm
             memory/Core.Memory.Allocator.cppm
             memory/Core.Memory.Arena.cppm
+            memory/Core.Memory.Buffer.cppm
             memory/Core.Memory.PagePool.cppm
             memory/Core.Memory.Pointer.cppm
             memory/Core.Memory.Poison.cppm
@@ -67,6 +68,7 @@ target_sources(engine.core
         io/Core.Io.cpp
         Core.Logger.cpp
         memory/Core.Memory.Arena.cpp
+        memory/Core.Memory.Buffer.cpp
         memory/Core.Memory.PagePool.cpp
         memory/Core.Memory.Poison.cpp
         memory/Core.Memory.cpp

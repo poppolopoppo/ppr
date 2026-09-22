@@ -379,7 +379,8 @@ export namespace pP {
                     } sink{m_arena};
                     formatter(sink);
 
-                    m_target.emplace<String>(sink.m_output.discard());
+                    const std::allocation_result alloc{sink.m_output.discard()};
+                    m_target.emplace<String>(std::span{alloc.ptr, alloc.count});
                 }
 
                 void operator()(const Struct str) const noexcept {

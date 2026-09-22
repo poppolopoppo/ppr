@@ -16,9 +16,9 @@ export namespace pP::mem {
     class GPA {
     public:
         [[nodiscard]] static std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept;
+        allocateRaw(std::size_t bytes, std::align_val_t alignment) noexcept;
 
-        static void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept;
+        static void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment) noexcept;
     };
 
     static_assert(details::use_inplace_v<GPA>);
@@ -30,9 +30,9 @@ export namespace pP::mem {
     class OS {
     public:
         [[nodiscard]] static std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment);
+        allocateRaw(std::size_t bytes, std::align_val_t alignment);
 
-        static void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment);
+        static void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment);
     };
 
     static_assert(details::use_inplace_v<OS>);

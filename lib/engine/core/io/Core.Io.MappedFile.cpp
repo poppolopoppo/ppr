@@ -52,6 +52,10 @@ namespace pP {
         }
     }
 
+    hal::io::MapHandle MappedFile::discard() noexcept {
+        return std::exchange(m_map, nullptr);
+    }
+
     MappedFile::MappedFile(const hal::io::MapHandle map) noexcept
         : m_map(map) {
 #if PPR_ENABLE_SANITIZER_ADDRESS

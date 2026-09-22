@@ -135,6 +135,24 @@ export namespace pP {
         return hash_t{type_index.hash_code()};
     }
 
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const std::error_code &error_code) noexcept {
+        return hash_t{std::hash<std::error_code>{}(error_code)};
+    }
+
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const std::filesystem::path &path) noexcept {
+        return hash_t{std::hash<std::filesystem::path>{}(path)};
+    }
+
+    template<typename T>
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const std::shared_ptr<T> &shared_ptr) noexcept {
+        return hash_t{std::hash<std::shared_ptr<T>>{}(shared_ptr)};
+    }
+
+    template<typename T>
+    [[nodiscard]] PPR_FLATTEN hash_t hashValue(const std::unique_ptr<T> &unique_ptr) noexcept {
+        return hash_t{std::hash<std::unique_ptr<T>>{}(unique_ptr)};
+    }
+
     namespace hash {
         template<typename T>
         concept THashable = requires(const T &value)

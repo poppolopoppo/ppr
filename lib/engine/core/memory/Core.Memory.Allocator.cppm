@@ -174,10 +174,10 @@ export namespace pP::mem {
         }
 
         /// forget the allocation: it won't be deallocated by the destructor
-        [[nodiscard]] PPR_FORCE_INLINE constexpr std::span<T> discard() noexcept {
-            std::span<T> discarded{};
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::allocation_result<T *> discard() noexcept {
+            std::allocation_result<T *> discarded{};
             if (T *const p_data = data()) [[likely]] {
-                discarded = std::span<T>{p_data, count()};
+                discarded = {.ptr = p_data, .count = count()};
                 m_block = {}; // reset to default value
             }
             return discarded;

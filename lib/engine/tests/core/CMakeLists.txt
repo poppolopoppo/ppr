@@ -13,6 +13,7 @@ target_sources(engine.tests.core
         Core.Memory.Arena.Tests.cpp
         Core.Memory.Slab.Tests.cpp
         Core.Allocator.Tests.cpp
+        Core.Buffer.Tests.cpp
         Core.SafePtr.Tests.cpp
         Core.Poisoning.Tests.cpp
         Core.Containers.Core.Tests.cpp

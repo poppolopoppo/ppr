@@ -18,6 +18,8 @@ export namespace pP {
     public:
         MappedFile() noexcept = default;
 
+        explicit MappedFile(hal::io::MapHandle map) noexcept;
+
         MappedFile(MappedFile &&other) noexcept
             : m_map(std::exchange(other.m_map, nullptr)) {
         }
@@ -43,7 +45,7 @@ export namespace pP {
 
         [[nodiscard]] std::size_t size() const noexcept;
 
-        explicit MappedFile(hal::io::MapHandle map) noexcept;
+        [[nodiscard]] hal::io::MapHandle discard() noexcept;
 
     private:
         void unmap_() noexcept;

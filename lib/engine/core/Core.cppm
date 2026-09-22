@@ -23,6 +23,7 @@ export import :logger;
 export import :memory;
 export import :memory.allocator;
 export import :memory.arena;
+export import :memory.buffer;
 export import :memory.page_pool;
 export import :memory.pointer;
 export import :memory.poison;
