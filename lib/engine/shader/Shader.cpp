@@ -164,6 +164,13 @@ namespace pP {
                 // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
+                if (m_target_format == SLANG_DXIL) {
+                    // P3 bindless: program composites link on this session, so a
+                    // profileless DXIL target defaults stage profiles to vs_5_1
+                    // and DXC rejects them. Pin sm_6_6 (descriptor heaps need
+                    // it); other formats keep slang defaults.
+                    target_desc.profile = global_session->findProfile("sm_6_6");
+                }
 
                 SessionDesc session_desc{};
                 session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
@@ -202,6 +209,10 @@ namespace pP {
                 // Row-major is the only layout reliably portable across all targets
                 TargetDesc target_desc{};
                 target_desc.format = m_target_format;
+                if (m_target_format == SLANG_DXIL) {
+                    // Same sm_6_6 pin as initialize(): composites link here.
+                    target_desc.profile = m_global_session->findProfile("sm_6_6");
+                }
 
                 SessionDesc session_desc{};
                 session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;

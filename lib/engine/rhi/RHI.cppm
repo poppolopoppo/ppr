@@ -126,6 +126,21 @@ export namespace pP::rhi {
     using slang_rhi::DebugMessageType;
     using slang_rhi::MarkerColor;
 
+    // P2 descriptor seam (docs/plans/asset-pipeline.md §5, choice (a)): the
+    // pass-owned GPU caches bind through these engine.rhi aliases only — app
+    // code never reaches past engine.rhi into slang-rhi directly.
+    using slang_rhi::DescriptorHandle;
+    using slang_rhi::DescriptorHandleAccess;
+    using slang_rhi::DescriptorHandleType;
+    using slang_rhi::Feature;
+
+    // P2 bindless heap budget (docs/plans/asset-pipeline.md §4): create-time
+    // only; changing counts later means device recreation (no update API).
+    inline constexpr u32 kBindlessTextureBudget{4096u};
+    inline constexpr u32 kBindlessCombinedBudget{4096u};
+    inline constexpr u32 kBindlessSamplerBudget{128u};
+    inline constexpr u32 kBindlessBufferBudget{1024u};
+
     using slang_rhi::getFormatInfo;
     using slang_rhi::getTextureDimension;
 }

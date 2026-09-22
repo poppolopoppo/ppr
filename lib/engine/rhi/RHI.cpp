@@ -106,7 +106,7 @@ namespace pP {
 
                 std::string_view source_name{};
                 switch (source) {
-                    using enum rhi::DebugMessageSource;
+                        using enum rhi::DebugMessageSource;
                     case Layer:
                         source_name = "layer";
                         break;
@@ -120,7 +120,7 @@ namespace pP {
 
                 auto level = Log::ELevel::info;
                 switch (type) {
-                    using enum rhi::DebugMessageType;
+                        using enum rhi::DebugMessageType;
                     case Info:
                         level = Log::ELevel::info;
                         break;
@@ -138,7 +138,7 @@ namespace pP {
 
         [[nodiscard]] string_literal getDeviceTypeName_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                using enum rhi::DeviceType;
+                    using enum rhi::DeviceType;
                 case Default:
                     return "default";
                 case D3D11:
@@ -164,10 +164,15 @@ namespace pP {
     namespace {
         [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                using enum rhi::DeviceType;
+                    using enum rhi::DeviceType;
                 case Default:
-                case D3D11:
                 case D3D12:
+                    // P3: bindless .Handle programs require SM6.6 descriptor
+                    // heaps, which FXC/DXBC cannot compile (X3004). D3D12 goes
+                    // DXIL; D3D11 stays DXBC (no bindless there). Gate 4 reviews
+                    // any fallout on pre-existing shaders.
+                    return SLANG_DXIL;
+                case D3D11:
                     return SLANG_DXBC;
                 case Vulkan:
                 case WGPU:
@@ -237,13 +242,13 @@ namespace pP {
                 PPR_LOG(RHI, info, "enabled Slang RHI debug layers", {
                     {"coreValidation", true},
                     {"GPUAssistedValidation", true}
-                    });
+                });
 
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->setDebugLayerOptions({
                     .required = true,
                     .coreValidation = true,
                     .GPUAssistedValidation = true
-                    }));
+                }));
 
                 p_instance->enableDebugLayers();
 #endif
@@ -260,6 +265,14 @@ namespace pP {
                 desc.requiredFeatures = required_features;
                 desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
 
+                // P2 bindless budget (§4): create-time only. Feature::Bindless
+                // stays OUT of requiredFeatures (would fail weak hardware);
+                // pass caches check hasFeature(Bindless) at init instead.
+                desc.bindless.textureCount = rhi::kBindlessTextureBudget;
+                desc.bindless.combinedTextureSamplerCount = rhi::kBindlessCombinedBudget;
+                desc.bindless.samplerCount = rhi::kBindlessSamplerBudget;
+                desc.bindless.bufferCount = rhi::kBindlessBufferBudget;
+
 #if PPR_ENABLE_DEBUG
                 desc.enableValidation = true;
 #endif
@@ -270,6 +283,14 @@ namespace pP {
                 rhi::ComPtr<rhi::IDevice> device;
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
+                if (not
+                    device->hasFeature(rhi::Feature::Bindless))
+                {
+                    PPR_LOG(RHI, warning, "device lacks bindless support; GPU caches will fail at init", {
+                        {"device_type", getDeviceTypeName_(device_type)}
+                    });
+                }
+
                 const SlangCompileTarget compile_target = toSlangCompileTarget_(device->getDeviceType());
 
                 PPR_RETURN_ERROR_ON_FAIL(RHI, shader_service.setTargetFormat(compile_target));
@@ -277,7 +298,7 @@ namespace pP {
                 m_device = std::move(device);
                 PPR_LOG(RHI, info, "RHI device created successfully", {
                     {"device_type", getDeviceTypeName_(device_type)}
-                    });
+                });
                 return make_error_code(SLANG_OK);
             }
 
