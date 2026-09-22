@@ -100,16 +100,16 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_FORCE_INLINE [[gnu::always_inline]] inline
 #   if defined(__clang__)
 #      define PPR_LIFETIME_BOUND [[clang::lifetimebound]]
-#      define PPR_PRAGMA_WARNING_PUSH() __pragma(clang diagnostic push)
-#      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) __pragma(clang diagnostic ignored #_WARNING_ID)
-#      define PPR_PRAGMA_WARNING_POP() __pragma(clang diagnostic pop)
-#      define PPR_PRAGMA_SYSTEM_HEADER() __pragma(clang system_header)
+#      define PPR_PRAGMA_WARNING_PUSH() _Pragma("clang diagnostic push")
+#      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) _Pragma(PPR_STRINGIZE(clang diagnostic ignored #_WARNING_ID))
+#      define PPR_PRAGMA_WARNING_POP() _Pragma("clang diagnostic pop")
+#      define PPR_PRAGMA_SYSTEM_HEADER() _Pragma("clang system_header")
 #   else
 #      define PPR_LIFETIME_BOUND [[gcc::lifetimebound]]
-#      define PPR_PRAGMA_WARNING_PUSH() __pragma(gcc diagnostic push)
-#      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) __pragma(gcc diagnostic ignored #_WARNING_ID)
-#      define PPR_PRAGMA_WARNING_POP() __pragma(gcc diagnostic pop)
-#      define PPR_PRAGMA_SYSTEM_HEADER() __pragma(gcc system_header)
+#      define PPR_PRAGMA_WARNING_PUSH() _Pragma("GCC diagnostic push")
+#      define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID) _Pragma(PPR_STRINGIZE(GCC diagnostic ignored #_WARNING_ID))
+#      define PPR_PRAGMA_WARNING_POP() _Pragma("GCC diagnostic pop")
+#      define PPR_PRAGMA_SYSTEM_HEADER() _Pragma("GCC system_header")
 #   endif
 #   define PPR_NO_INLINE [[gnu::noinline]]
 #   define PPR_OFFSETOF(_STRUCT, _MEMBER) __builtin_offsetof(_STRUCT, _MEMBER)
