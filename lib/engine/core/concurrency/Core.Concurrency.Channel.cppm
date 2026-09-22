@@ -116,7 +116,7 @@ export namespace pP {
         explicit RawChannel(const std::size_t buffer_size) noexcept;
         explicit RawChannel() noexcept;
         RawChannel(const std::size_t num_elements, const std::size_t element_size) noexcept;
-        ~RawChannel() noexcept;
+        virtual ~RawChannel() noexcept;
 
         RawChannel(const RawChannel &) = delete;
 
@@ -559,7 +559,7 @@ export namespace pP {
         }
 
         [[nodiscard]] static std::default_sentinel_t end() noexcept {
-            return m_channel.end();
+            return std::default_sentinel;
         }
     };
 

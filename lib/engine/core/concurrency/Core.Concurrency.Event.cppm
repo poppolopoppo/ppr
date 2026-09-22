@@ -18,6 +18,10 @@ export namespace pP {
     class IEvent;
 
     class ISignal {
+    protected:
+        // non-owning interface (observed via TagPtr): no deletion through base.
+        ~ISignal() = default;
+
     public:
         virtual void notify(const std::size_t event_tag) noexcept = 0;
 
@@ -25,6 +29,10 @@ export namespace pP {
     };
 
     class IEvent {
+    protected:
+        // non-owning interface (observed via TagPtr): no deletion through base.
+        ~IEvent() = default;
+
     public:
         virtual TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept = 0;
         virtual void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept = 0;
@@ -108,7 +116,7 @@ export namespace pP {
                     break;
                 }
             };
-            const std::size_t ready_index = std::countr_zero(pending);
+            const std::size_t ready_index = checked_cast<std::size_t>(std::countr_zero(pending));
             return getOptionalEvent_(ready_index);
         }
 
@@ -391,7 +399,7 @@ export namespace pP {
         constexpr void unsubscribeEvent(const TagPtr<ISignal>, const TagPtr<ISignal>) noexcept override {
         }
 
-        constexpr [[nodiscard]] bool pollEvent() noexcept override {
+        [[nodiscard]] constexpr bool pollEvent() noexcept override {
             return false;
         }
 
