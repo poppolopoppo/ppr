@@ -22,7 +22,59 @@ set(PPR_PROJECT_WARNINGS_CXX
 
 # Add libc++ include paths for module support
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
-set(CMAKE_CXX_STDLIB_MODULES_JSON "/usr/lib/llvm-20/lib/libc++.modules.json")
+
+# Locate the libc++ modules manifest without pinning an LLVM major version.
+# Probe llvm-config, LLVM_DIR, and the compiler resource dir first, then fall
+# back to well-known versioned/multiarch locations. Only set the variable when
+# the file exists so newer/older toolchains keep working.
+set(PPR_LIBCXX_MODULES_JSON_HINTS)
+find_program(PPR_LLVM_CONFIG NAMES llvm-config)
+if(PPR_LLVM_CONFIG)
+    execute_process(
+        COMMAND "${PPR_LLVM_CONFIG}" --libdir
+        OUTPUT_VARIABLE PPR_LLVM_LIBDIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(PPR_LLVM_LIBDIR)
+        list(APPEND PPR_LIBCXX_MODULES_JSON_HINTS "${PPR_LLVM_LIBDIR}")
+    endif()
+    unset(PPR_LLVM_LIBDIR)
+endif()
+if(DEFINED ENV{LLVM_DIR})
+    list(APPEND PPR_LIBCXX_MODULES_JSON_HINTS "$ENV{LLVM_DIR}" "$ENV{LLVM_DIR}/lib")
+endif()
+if(CMAKE_CXX_COMPILER)
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
+        OUTPUT_VARIABLE PPR_CLANG_RESOURCE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(PPR_CLANG_RESOURCE_DIR)
+        get_filename_component(PPR_CLANG_LIBDIR "${PPR_CLANG_RESOURCE_DIR}/../.." ABSOLUTE)
+        list(APPEND PPR_LIBCXX_MODULES_JSON_HINTS "${PPR_CLANG_LIBDIR}")
+        unset(PPR_CLANG_LIBDIR)
+    endif()
+    unset(PPR_CLANG_RESOURCE_DIR)
+endif()
+find_file(
+    PPR_LIBCXX_MODULES_JSON
+    NAMES libc++.modules.json
+    PATHS
+        ${PPR_LIBCXX_MODULES_JSON_HINTS}
+        /usr/lib/llvm-22/lib
+        /usr/lib/llvm-20/lib
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/llvm/lib
+)
+if(PPR_LIBCXX_MODULES_JSON)
+    set(CMAKE_CXX_STDLIB_MODULES_JSON "${PPR_LIBCXX_MODULES_JSON}")
+    message(STATUS "Using libc++ modules manifest: ${CMAKE_CXX_STDLIB_MODULES_JSON}")
+else()
+    message(STATUS "libc++.modules.json not found; leaving CMAKE_CXX_STDLIB_MODULES_JSON unset (CMake will use its default lookup)")
+endif()
+unset(PPR_LIBCXX_MODULES_JSON_HINTS)
 
 if(PPR_WARNINGS_AS_ERRORS)
   set(PPR_PROJECT_WARNINGS_CXX ${PPR_PROJECT_WARNINGS_CXX} -Werror)

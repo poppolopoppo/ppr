@@ -1,7 +1,6 @@
 add_library(engine.core)
 
 set(HAL_PLATFORM_SOURCES
-    hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.include.hpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Debugger.cpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Filesystem.cpp
     hal/${PPR_HAL_PLATFORM}/Core.HAL.${PPR_HAL_PLATFORM}.Io.cpp
@@ -16,6 +15,7 @@ set(HAL_PLATFORM_SOURCES
 
 if(PPR_HAL_PLATFORM STREQUAL "windows")
     list(APPEND HAL_PLATFORM_SOURCES
+        hal/windows/Core.HAL.windows.include.hpp
         hal/windows/Core.HAL.windows.Random.cpp
         hal/windows/Core.HAL.windows.RingBuffer.cpp
     )
