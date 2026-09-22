@@ -3,6 +3,7 @@ module;
 export module engine.core:timer;
 
 import :containers.stl;
+import :function.ref;
 import :memory.pointer;
 import :opaque;
 
@@ -46,7 +47,7 @@ export namespace pP {
 
     class TimerManager final : public ITimerClock {
     public:
-        using Callback = std::function<std::error_code(TimePoint)>;
+        using Callback = std23::move_only_function<std::error_code(TimePoint)>;
     private:
         struct Event {
             TimePoint m_date{};
