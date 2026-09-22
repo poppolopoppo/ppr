@@ -2,8 +2,11 @@
 
 ## Responsibility
 
-Runtime asset root for the demo. Currently shader-only: holds the Slang sources that `engine.shader` compiles at
-startup and `engine.rhi` links into pipelines. No textures, meshes, or config files live here yet.
+Runtime asset root for the demo. Shader sources that `engine.shader` compiles at
+startup and `engine.rhi` links into pipelines live in `shaders/`; `textures/` holds the
+`PROVENANCE.md` fixture record and `meshes/` the CC0 mesh fixtures (`textured_quad.glb`,
+`textured_box.gltf + .bin + .png` + `PROVENANCE.md`); both stage beside the
+executables via POST_BUILD.
 
 ## Design
 

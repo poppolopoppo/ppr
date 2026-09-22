@@ -1,5 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(math)
+add_subdirectory(image)
+add_subdirectory(mesh)
 add_subdirectory(shader)
 add_subdirectory(rhi)
 add_subdirectory(app)

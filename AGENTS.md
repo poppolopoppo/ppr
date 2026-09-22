@@ -22,6 +22,8 @@ engine.app -> engine.core, engine.math, engine.shader, engine.rhi
 engine.rhi -> engine.core, engine.math, engine.shader
 engine.shader -> engine.core
 engine.math -> engine.core
+engine.image -> engine.core, engine.math (+ PRIVATE mango-image)
+engine.mesh -> engine.core, engine.math (+ PRIVATE mango-import3d)
 ```
 
 `engine.core` supplies types, allocators, containers, concurrency, services,
