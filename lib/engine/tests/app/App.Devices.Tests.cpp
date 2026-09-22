@@ -5,6 +5,7 @@ module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.math;
 import std;
 
 namespace pP::tests::detail {

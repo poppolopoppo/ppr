@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 
 module engine.tests.core;
@@ -152,7 +153,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (self_copy_assign_noop) {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
+            PPR_PRAGMA_WARNING_PUSH()
+            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself-assign-overloaded)
             p = p;
+            PPR_PRAGMA_WARNING_POP()
             PPR_TEST_ASSERT(p.get() == &obj);
             p.reset();
         };
@@ -160,7 +164,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (self_move_assign_noop) {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
+            PPR_PRAGMA_WARNING_PUSH()
+            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself-move)
             p = std::move(p);
+            PPR_PRAGMA_WARNING_POP()
             PPR_TEST_ASSERT(p.get() == &obj);
             p.reset();
         };

@@ -160,15 +160,16 @@ namespace pP::tests::detail {
             };
 
             PPR_UNIT_TEST (callback_receives_context) {
-                bool received_correct_context = false;
                 const SharedContext parent = context::background();
-                {
-                    const SharedContext ctx = context::withAfterFunc(
-                        parent, [&received_correct_context](const IContext &c) noexcept {
-                            received_correct_context = (&c != nullptr);
-                        });
-                }
-                PPR_TEST_ASSERT(received_correct_context);
+                const IContext *received = nullptr;
+                SharedContext ctx = context::withAfterFunc(
+                    parent, [&received](const IContext &c) noexcept {
+                        received = &c;
+                    });
+                const IContext *expected = ctx.get();
+                ctx.reset(); // destroys the AfterContext, firing the callback
+                PPR_TEST_ASSERT(received != nullptr);
+                PPR_TEST_ASSERT(received == expected);
             };
         }
 
