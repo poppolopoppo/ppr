@@ -113,13 +113,13 @@ export namespace pP {
         // This relies on the compiler's internal representation of the function signature
 #if defined(__clang__) || defined(__GNUC__)
         constexpr std::string_view name = __PRETTY_FUNCTION__;
-        constexpr size_t start = name.find_last_of(":") + 1;
-        constexpr size_t end = name.find_last_of("]");
+        constexpr std::size_t start = name.find_last_of(":") + 1;
+        constexpr std::size_t end = name.find_last_of("]");
         return name.substr(start, end - start);
 #elif defined(_MSC_VER)
         constexpr std::string_view name = __FUNCSIG__;
-        constexpr size_t start = name.find_last_of(":") + 1;
-        constexpr size_t end = name.find_last_of(">");
+        constexpr std::size_t start = name.find_last_of(":") + 1;
+        constexpr std::size_t end = name.find_last_of(">");
         return name.substr(start, end - start);
 #endif
     }

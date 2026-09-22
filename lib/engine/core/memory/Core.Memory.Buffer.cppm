@@ -5,6 +5,10 @@ export module engine.core:memory.buffer;
 
 import :assert;
 import :enums;
+import :hal;
+import :hashing;
+import :memory;
+import :memory.allocator;
 import :memory.pointer;
 import :types;
 import :utility;
@@ -192,7 +196,7 @@ export namespace pP::mem {
 
         template<typename T, details::TAllocator AllocatorT, std::align_val_t AlignmentV>
             requires std::is_trivially_destructible_v<T> and
-                     not Allocation<T, AllocatorT, AlignmentV>::is_stateless_v
+                     not (Allocation<T, AllocatorT, AlignmentV>::is_stateless_v)
         UniqueBuffer(Allocation<T, AllocatorT, AlignmentV> &&allocation, AllocatorT &allocator) noexcept
             : UniqueBuffer(BufferOwner(
                 allocation.discard(),

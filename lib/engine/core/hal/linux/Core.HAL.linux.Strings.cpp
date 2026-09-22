@@ -85,4 +85,10 @@ namespace pP::hal {
         std::memcpy(p_dst, utf8.data(), n * sizeof(char));
         return n;
     }
+
+    [[nodiscard]] std::size_t transcode(const std::string_view ansi, char *p_dst, std::size_t capacity) noexcept {
+        const std::size_t n_chars = std::min(ansi.size(), capacity);
+        std::memcpy(p_dst, ansi.data(), n_chars * sizeof(char));
+        return n_chars;
+    }
 }

@@ -92,7 +92,7 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(_WARNING_ID)
 #   define PPR_PRAGMA_WARNING_POP() __pragma(warning(pop))
 #elif defined(__clang__) || defined(__GNUC__)
-#   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME) __attribute((code_seg(_NAME)))
+#   define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME)
 #   define PPR_ASSUME(...) __builtin_assume(__VA_ARGS__)
 #   define PPR_COMPILER_READWRITE_BARRIER() asm volatile("" ::: "memory")
 #   define PPR_EMPTY_BASES

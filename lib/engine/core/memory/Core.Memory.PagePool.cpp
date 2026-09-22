@@ -10,25 +10,6 @@ namespace pP::mem {
     // OS page pooling allocator
     // ------------------------------------------------------------------
 
-    void *PagePool::pageAt_(const u32 page_index) const noexcept {
-        PPR_ASSERT(page_index < m_tree_infos.m_desired_size);
-        PPR_ASSUME(m_reserved_space != nullptr);
-        // ReSharper disable once CppDFANullDereference
-        return m_reserved_space + page_index * m_page_size;
-    }
-
-    u32 PagePool::pageIndex_(const void *const ptr) const noexcept {
-        const auto p = std::bit_cast<std::uintptr_t>(ptr);
-        const auto r = std::bit_cast<std::uintptr_t>(m_reserved_space);
-        PPR_ASSERT(p >= r && p + m_page_size <= r + m_tree_infos.m_desired_size * m_page_size);
-        return checked_cast<u32>((p - r) / m_page_size);
-    }
-
-    // the full bundle is always sorted
-    bool PagePool::hasFullBundle_() const noexcept {
-        return m_full_bundle[0u] < m_tree_infos.m_desired_size;
-    }
-
     void PagePool::decommitFullBundle_() {
         for (auto [page_first, page_count]: runListAssumeSorted_(m_full_bundle)) {
             if (page_first < m_tree_infos.m_desired_size) {
@@ -234,48 +215,6 @@ namespace pP::mem {
         m_leaves_first_word = row_offset_in_words;
     }
 
-    constexpr u32 BitmapTree::countOnes_(const BuildInfos &infos, u32 up_to) const noexcept {
-        PPR_ASSERT(up_to <= infos.m_desired_size && "Count up to size exceeds desired size");
-        const word_t *p_word = std::addressof(wordAt_(infos.m_leaves_first_word));
-
-        u32 count = 0;
-        for (; up_to >= word_bit_count; up_to -= word_bit_count, ++p_word) {
-            count += static_cast<u32>(std::popcount(*p_word));
-        }
-
-        if (up_to > 0) {
-            count += static_cast<u32>(std::popcount(*p_word << (word_bit_count - up_to)));
-        }
-
-        return count;
-    }
-
-    constexpr void BitmapTree::allocateBitAtDepth_(const u32 bit, u32 d, const u32 offset) noexcept {
-        u32 r = bit % word_bit_count;
-        u32 w = offset + bit / word_bit_count;
-
-        ref_mask_t m = {wordAt_(w)};
-        PPR_ASSERT(!m.test(r));
-        m.set(r);
-
-        if (d > 0 && m.all()) [[unlikely]] {
-            do {
-                r = (w - 1) % word_bit_count;
-                w = (w - 1) / word_bit_count;
-
-                m = {wordAt_(w)};
-                PPR_ASSERT(not m.test(r));
-                m.set(r);
-
-                if (not m.all()) [[likely]] {
-                    break;
-                }
-
-                d--;
-            } while (d);
-        }
-    }
-
     constexpr void BitmapTree::allocateBubbleUpIsFull_(u32 d, u32 offset, ref_mask_t m) noexcept {
         do {
             const u32 r = (offset - 1) % word_bit_count;
@@ -286,24 +225,6 @@ namespace pP::mem {
             m.set(r);
 
             if (not m.all()) [[likely]] {
-                break;
-            }
-
-            d--;
-        } while (d);
-    }
-
-    constexpr void BitmapTree::deallocateBubbleUpWasFull_(u32 d, u32 offset, ref_mask_t m) noexcept {
-        do {
-            const u32 r = (offset - 1) % word_bit_count;
-            offset = (offset - 1) / word_bit_count;
-
-            m = {wordAt_(offset)};
-            const bool wasFull = m.all();
-            PPR_ASSERT(m.test(r));
-            m.reset(r);
-
-            if (not wasFull) [[likely]] {
                 break;
             }
 
@@ -441,27 +362,6 @@ namespace pP::mem {
             d++;
             offset = offset * word_bit_count + 1u + jmp;
         }
-    }
-
-    constexpr bool BitmapTree::deallocate(const BuildInfos &infos, const u32 bit) noexcept {
-        PPR_ASSERT(bit < infos.m_desired_size);
-
-        const u32 d = infos.m_tree_depth - 1u;
-        const u32 r = bit % word_bit_count;
-        const u32 offset = infos.m_leaves_first_word + bit / word_bit_count;
-
-        ref_mask_t m = {wordAt_(offset)};
-        PPR_ASSERT(m.test(r));
-
-        const bool was_full = m.all();
-        m.reset(r);
-        const bool is_empty = m.none();
-
-        if (was_full && d > 0u) [[unlikely]] {
-            deallocateBubbleUpWasFull_(d, offset, m);
-        }
-
-        return is_empty;
     }
 
     constexpr u32 BitmapTree::nextAllocateBit(const BuildInfos &infos) const noexcept {

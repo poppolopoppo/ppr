@@ -64,3 +64,12 @@ target_link_libraries(imgui PUBLIC imgui.base)
 # CXX_MODULE_STD OFF: CMake 4.4 root-scope std-module synthetic-target link workaround
 # (`@cmake_cxx_std.lib` LNK2001) — see AGENTS.md "CMake Version Tracking"; re-test on newer CMake.
 set_target_properties(imgui PROPERTIES CXX_MODULE_STD OFF)
+# The upstream-generated `imgui.cppm` binding has an extra `;` after a member
+# body (e.g. `CheckVersion`), which clang reports as `-Wc++98-compat-extra-semi`
+# and project `-Werror` promotes. Silence only that warning for this generated
+# target; project-wide `-Werror` is untouched. MSVC path unaffected (genex is
+# Clang-only, matching `compiler/Clang.cmake` which also serves clang-cl).
+# PUBLIC (not PRIVATE): CMake precompiles a provider's BMI with the importing
+# target's flags, so the suppression must travel on imgui's interface to reach
+# the `imgui@synth_*` BMI compiles. Consumers only gain one extra `-Wno-*`.
+target_compile_options(imgui PUBLIC $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-c++98-compat-extra-semi>)
