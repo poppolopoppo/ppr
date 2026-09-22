@@ -241,14 +241,16 @@ namespace pP {
     void UnitTest::RunImpl::onAssertFailure(const Assertion &condition) const {
         const std::stacktrace backtrace = std::stacktrace::current(9);
 
-        std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
-            "\tin function: {}\n"
-            "\tin test: {}\n\n"
-            "Callstack:\n{}",
-            condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
-            condition.m_site.function_name(), getTestId(),
-            backtrace);
-        std::cerr.flush();
+        if (not m_test.isExpectedToFail()) {
+            std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
+                "\tin function: {}\n"
+                "\tin test: {}\n\n"
+                "Callstack:\n{}",
+                condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
+                condition.m_site.function_name(), getTestId(),
+                backtrace);
+            std::cerr.flush();
+        }
 
         throw std::logic_error(condition.m_message);
     }
