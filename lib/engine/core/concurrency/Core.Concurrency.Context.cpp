@@ -69,7 +69,8 @@ namespace pP::context {
     public:
         explicit CancelContext(SharedContext parent) noexcept
             : m_parent(std::move(parent)),
-              m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))) {
+              m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))),
+              m_error_code(std::error_code{}) {
             PPR_ASSERT(m_parent.get());
         }
 
@@ -82,9 +83,18 @@ namespace pP::context {
         }
 
         void cancelCause(const std::error_code err) noexcept {
-            if (std::error_code expect_no_error{}; m_error_code.compare_exchange_strong(
-                expect_no_error, err, std::memory_order_acq_rel)) {
-                m_done.emitEvent();
+            // std::error_code carries indeterminate padding and
+            // std::atomic<std::error_code> is not lock-free here, so the
+            // 16-byte CAS also compares padding: a fresh expect_no_error{}
+            // never matches bitwise. Failure refreshes expect with the exact
+            // stored bits, so retry while it still reports "no error".
+            std::error_code expect_no_error{};
+            while (not expect_no_error) {
+                if (m_error_code.compare_exchange_strong(
+                        expect_no_error, err, std::memory_order_acq_rel)) {
+                    m_done.emitEvent();
+                    return;
+                }
             }
         }
 
