@@ -289,7 +289,10 @@ namespace pP::tests::detail {
             auto hdr = chan.producerReserve(sizeof(payload));
             PPR_TEST_ASSERT(hdr.has_value());
 
-            PPR_TEST_ASSERT(hdr->size() == alignForward(sizeof(payload), max_align_v));
+            // Available payload equals the requested size: records align to
+            // alignof(RecordHeader), while max_align_v is platform ABI (8 on
+            // MSVC, 16 on Linux) and must not leak into this expectation.
+            PPR_TEST_ASSERT(hdr->size() == sizeof(payload));
             std::memcpy(hdr->data(), payload, sizeof(payload));
 
             const void *data_ptr = hdr->data();
