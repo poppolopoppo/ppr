@@ -54,14 +54,27 @@ foreach(mango_target IN ITEMS mango mango-core mango-image mango-import3d mango-
 
         get_target_property(_mango_iface_opts ${mango_target} INTERFACE_COMPILE_OPTIONS)
         if(_mango_iface_opts)
-            list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX|/Ox")
+            list(FILTER _mango_iface_opts EXCLUDE REGEX "^/MP$|^/arch:AVX|/Ox|^-m(avx512|avx|sse|bmi|fma|sha|aes|pclmul|popcnt|f16c|lzcnt)")
             set_target_properties(${mango_target} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_mango_iface_opts}")
+        endif()
+
+        # Mark each mango target's own includes as SYSTEM to suppress warnings
+        # from external headers. The include dir is carried PUBLIC by mango-core
+        # (and siblings) and inherited transitively by the mango umbrella, so
+        # marking only mango itself is a no-op.
+        get_target_property(_mango_target_inc ${mango_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_mango_target_inc)
+            set_target_properties(${mango_target} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_mango_target_inc}")
+        endif()
+
+        # vcpkg builds mango's deps (fmt, ...) against libstdc++; PPR links
+        # libc++. Propagate the missing DSO on Linux so final links resolve
+        # libstdc++ symbols referenced from those static archives. It must be
+        # a single -Wl, flag: the clang driver silently drops a bare -lstdc++
+        # under -stdlib=libc++. The --no-as-needed guard is also required:
+        # Ubuntu ld drops the DSO otherwise, even with symbols pending.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(${mango_target} INTERFACE "-Wl,--no-as-needed,-lstdc++,--as-needed")
         endif()
     endif()
 endforeach()
-
-# Mark mango includes as SYSTEM to suppress warnings from external headers
-get_target_property(mango_inc mango INTERFACE_INCLUDE_DIRECTORIES)
-if(mango_inc)
-    set_target_properties(mango PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${mango_inc}")
-endif()
