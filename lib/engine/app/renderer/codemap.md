@@ -60,6 +60,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `frame_cursor`, `uploadFrameConstants_` (view/projection/view_projection/invert→inverse, origin promoted via
   `float4{origin,1}`, viewport size as `float4{size,0,0}`), sets viewport + scissor + vertex buffer state,
   `draw(3)` with `vertexCount{3}`.
+  Linux/clang bring-up: the vertex-buffer state explicitly sets `.indexBuffer = {}` — Clang `-Werror=missing-field-initializers` rejects the omitted member that MSVC silently zero-initializes.
   `createRenderPipeline_` accepts exactly one color target, no depth, 1x MSAA (else `operation_not_supported`);
   single non-blended `TriangleList` pipeline. `shutdown()` releases key/pipeline/program/layout/buffer.
 

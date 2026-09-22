@@ -11,6 +11,7 @@ The `engine.app:player` module provides the player service and graph-based state
 - Keyboard players bind **both** keyboard and mouse: `getOrCreateKeyboardPlayer(service, user_id, KeyboardDevice&, MouseDevice&)` pushes both device views into the one player; gamepad players bind a single device via `addGamepadPlayer(service, user_id, GamepadDevice&)`
 - PlayerIds are minted by the backend (`GlfwPlayer`) and passed in; the graph itself performs no RNG
 - Callbacks `whenPlayerAdded`/`whenPlayerRemoved` are `Callback<std::error_code(const IPlayerService&, const Player&)>` — consumers register these to be notified of player lifecycle events
+- Linux/clang bring-up: no player-partition source changed — the bring-up fix is on the backend side (`:platform.glfw.player` now imports `:platform.glfw.input`), which guarantees the `GamepadDevice`/`KeyboardDevice`/`MouseDevice` types consumed here are complete when `GlfwPlayer` mints player ids and binds device views
 
 ## Flow
 1. Application startup: `GlfwPlatform::initialize()` creates `GlfwPlayer::get()`, which lazily creates the keyboard(+mouse) player for the default devices on first access

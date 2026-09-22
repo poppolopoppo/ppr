@@ -28,6 +28,11 @@ integer/float conversion helpers, predicates, and `hashValue`/`opaqueValue` inte
 - `math::details`: `roundHalfAwayFromZero` (scalar `std::round`, vector via `static_iota<u32,DimV>` fold);
   `vectorCast<ToT,FromT,DimV>` (generic `static_cast` fold + 4 specializations: `float4→int4` via
   `mango::truncate`, `int4/uint4→float4` and `float4→uint4` via `mango::convert`); `scalarCast` (`static_cast`).
+  Both take all three template parameters explicitly at every call site (`vectorCast<i32,T,DimV>`,
+  `roundHalfAwayFromZero<T,DimV>`) with inner forwarding (`roundToInt`/`roundToUInt` forward `<T,DimV>`
+  into `roundHalfAwayFromZero`): template-argument deduction does not cross the mango `int`-dim vs engine
+  `u32`-dim boundary under Clang/libc++ (`math::Vector<T,DimV>` aliases `mango::math::Vector<T,int-Dim>`),
+  so deduction is never relied on.
   `TValueGenerator` concept (callable NTTP with `template operator()<T>()`), `PolymorphicConstant` (`operator T`,
   `operator==`, `operator<=>`), `InvalidConstantType` (`N4950 [math.constants]/3` static assert),
   `Number<T,ValueGenerator>` primary + constrained + `void` specializations, `IdentityValue`
@@ -36,12 +41,15 @@ integer/float conversion helpers, predicates, and `hashValue`/`opaqueValue` inte
   `pi_v`, `inv_pi_v`, `inv_sqrtpi_v`, `ln2_v`, `ln10_v`, `sqrt2_v`, `sqrt3_v`, `inv_sqrt3_v`, `egamma_v`, `phi_v`),
   `pi_over_2/3/4_v` (`pi_v<T>/N`), type-relative `epsilon_v` (floats `10×numeric_limits::epsilon` — covers
   `float32` `normalize()` output, `3.58e-7` over 20k-direction sweep — ints `T{0}`), `infinity_v`, `identity_v`.
+  `PPR_POLYMORPHIC_BASIC_NUMBER` ends in `}>::value` with no trailing semicolon: Clang `-Wextra-semi`
+  (promoted by project `-Werror` on the Linux bring-up) flags the macro-site `;` at every instantiation.
 - Engine helpers (all `[[nodiscard]]` `noexcept`; `makeJitterMatrix` plus the cast/convert/predicate
   helpers are `constexpr`, while `makeZeroToOneFrustum`/`quaternionTransform`/`angularVelocity` are runtime
   `noexcept`): `makeJitterMatrix(jitter)` (TAA offset into `result[3][0..1]` over `identity()`); `makeZeroToOneFrustum(viewProjection)` (`viewProjection * depth_transform`
   with `z: 2z−1` remap → `Frustum`); `quaternionTransform(q,v)` (`operator*(v,q)`); `angularVelocity(seconds,from,to)`
   (`PPR_ASSUME(seconds>0)`, shortest-arc `dot<0 ? −to : to`, `normalize(actual_to*conjugate(from))`,
-  `atan2(|v|,w)`, `epsilon_v<>` fallback to `axis_z`, returns `axis*(2·half_angle/seconds)` with MSVC-ADL
+  `atan2(|v|,w)`, `epsilon_v<>` fallback to `axis_z`, returns `axis*(2.0f·half_angle/seconds)` (float literal
+  by policy — no double promotion through the `float`-vector arithmetic) with MSVC-ADL
   `NOLINTNEXTLINE(clang-diagnostic-error)` note); `dot2` overloads (dot-productable `dot(x,x)` vs arithmetic `x*x`);
   `checked_cast<Vector>` (integrals via `static_iota` + core scalar `checked_cast`); `ceil/floor/round/truncToInt`
   and `ToUInt` (scalar + vector; `round*` routes through `roundHalfAwayFromZero`); `toFloat` (integral→`float`
@@ -62,7 +70,9 @@ easing curves, `TArithmetic`/`TValueGenerator`/`PolymorphicConstant`/`Number`/`I
 `epsilon_v`, `infinity_v`, `identity_v`) → runtime helpers (`makeJitterMatrix`, `makeZeroToOneFrustum`,
 `quaternionTransform`, `angularVelocity`) → operator re-exports → `dot2` overloads, `checked_cast<Vector>`,
 `ceil/floor/round/trunc ToInt/ToUInt`, `toFloat`, `saturate`, `isNan`, `isNormalized`, `safeNormalize` →
-`mango::math` `hashValue`/`opaqueValue` injection. Consumers `import engine.math;` and call
+`mango::math` `hashValue`/`opaqueValue` injection. Conversion helpers always spell `<T,DimV>` explicitly
+and forward them inward, so the mango `int`-dim / engine `u32`-dim boundary never depends on deduction.
+Consumers `import engine.math;` and call
 `pP::float4x4`, `pP::math::easeInCubic`, `pP::pi_v<T>`, `pP::epsilon_v<T>`, `pP::roundToInt(v)`,
 `pP::safeNormalize(v, fallback)`. Projection matrices are NOT here — they live in `engine.rhi`
 (`getOrthoMatrix`/`getPerspectiveMatrix` over mango `orthoD3D`/`perspectiveD3D`).
@@ -72,9 +82,11 @@ easing curves, `TArithmetic`/`TValueGenerator`/`PolymorphicConstant`/`Number`/`I
 - Depends on: `engine.core` (public — `u32/i32`, `checked_cast`, `safe_narrowing`, `hash_t`,
   `hash::contiguousRange`, `opaque::Value`, `static_iota`, `PPR_ASSUME`), `mango` headers (private system dep).
 - Consumed by: `engine.rhi` (matrix types for projection helpers), `engine.app` (camera/transform math),
-  `game`, tests.
+  `game`, tests (`Core.Math.Tests.cpp` spells the explicit `<T,DimV>` args, e.g. `ceilToInt<float,2u>`).
 - Build: single `Math.cppm` in `FILE_SET CXX_MODULES`; `setup_ppr_project(engine.math
-  INTERNAL_PUBLIC_DEPS engine.core EXTERNAL_SYSTEM_PRIVATE_DEPS mango)`.
+  INTERNAL_PUBLIC_DEPS engine.core EXTERNAL_SYSTEM_PRIVATE_DEPS mango)`. Mango's SIMD codegen flags
+  (`-m(avx512|avx|sse|bmi|fma|…)` filtered from its `INTERFACE_COMPILE_OPTIONS` alongside `/arch:AVX*`)
+  never leak into this BMI, so every importer shares one AVX-baseline BMI.
 
 ## Key Files
 

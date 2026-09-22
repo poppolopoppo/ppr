@@ -17,6 +17,10 @@ handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
   compile-time-known targets, and `function_ptr` storage holds the erased callable plus its dispatch pointer.
   `constexpr`-constructible from lambdas, function pointers, and nontype wrappers; `operator()` invokes via direct
   dispatch (no heap allocation). Convertible across compatible signatures; comparable for equality.
+- **move_only_function** (in `:function.ref`, `std23::move_only_function` conditional alias): owning callable used by
+  `TimerManager::Callback` and `context::AfterFunc`. MSVC aliases `std::move_only_function`; other toolchains
+  (Clang libc++ without the C++23 owning wrapper) fall back to `std::function` — restores the build where the
+  standard owning type is unavailable without changing call sites.
 - **Delegate** (in `:function.callback`): single-subscriber callback over `details::DelegateImpl<FunctionT, params_tuple>` partial specialization. Holds `std::optional<function_ref<F>>`; `subscribe()` exchanges and returns the previous subscriber, with `nontype<F>` overloads (pointer/object) constrained by `requires` on `function_ref` constructibility; nullary `operator()` returns `default_value_v` for
   non-void signatures when empty; `reset()` clears.
 - **BroadcastCallback** (in `:function.callback`): multi-subscriber callback for `std::error_code`-returning
@@ -68,6 +72,7 @@ handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
 ## Key Files
 
 - `Core.Function.Ref.cppm` — `pP::std23::function_ref`, `callable_object` traits, `static_function_t`,
-  `nontype<F>`, `TCallable`, `FunctionTraits`
+  `nontype<F>`, `TCallable`, `FunctionTraits`, `std23::move_only_function` conditional alias (MSVC owning type vs.
+  `std::function` fallback)
 - `Core.Function.Callback.cppm` — `pP::Delegate<F>`, `pP::BroadcastCallback<F, A>`,
   `pP::CallbackSink<F, A>` (+ `details::ForwardAsLValue`)

@@ -31,7 +31,8 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   OOM→`not_enough_memory`, not-found→`no_such_file_or_directory`, timeout→`timed_out`,
   not-implemented→`function_not_supported`, buffer-too-small→`result_out_of_range` via static
   `slangRhiErrorCondition_`); `make_error_code(Result)` returns success on `SLANG_SUCCEEDED` else
-  `{result, g_slang_rhi_error_category}` (`constexpr` instance in `RHI.cpp`). `export namespace Slang
+  `{result, g_slang_rhi_error_category}` (`static const` instance in `RHI.cpp` — `constexpr` is rejected
+  because `std::error_category` is polymorphic/non-literal under libc++ on the Linux bring-up). `export namespace Slang
   { using pP::shader::make_error_code; }` plus `export namespace pP { using Slang::make_error_code; }`
   re-export the shader error mapper so `PPR_RETURN_ERROR_ON_FAIL` resolves via ADL on `Slang::Result`;
   the `PPR_RETURN_*_ON_FAIL` failure predicate `Slang::hasFailed(Result)` (`SLANG_FAILED`, `constexpr`) is
@@ -69,7 +70,9 @@ frames → `shutdown()` (`m_device.setNull()`) → shader `shutdown()` drops ses
 
 - Depends on: `engine.core` + `engine.math` + `engine.shader` (all public — `IService`/`safe_ptr`/`Log`/
   `safe_narrowing`, `float4x4`, `errc`/session/targets), `slang-rhi` + `slang` (public system deps for downstream
-  `Result`/`ComPtr`/`DeviceType` vocabulary).
+  `Result`/`ComPtr`/`DeviceType` vocabulary). Mango SIMD codegen flags (`-m(avx512|avx|sse|bmi|fma|…)` filtered
+  from mango `INTERFACE_COMPILE_OPTIONS` alongside `/arch:AVX*`) never leak into the `engine.math` BMI this
+  module imports, so all RHI translation units share one AVX-baseline BMI.
 - Consumed by: `engine.app` (renderer, surfaces, pipeline creation), `game` (via `engine.app`).
 - Build: `RHI.cppm` in `FILE_SET CXX_MODULES`, `RHI.cpp` private;
   `setup_ppr_project(engine.rhi INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader

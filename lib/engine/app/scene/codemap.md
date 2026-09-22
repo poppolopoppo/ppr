@@ -22,13 +22,18 @@ location no longer exists.
   pixel offset to NDC (`pixel / (size / 2)`) and composes `projection * makeJitterMatrix`; pins frusta to the unjittered
   D3D `[0,1]`-remapped VP (`makeZeroToOneFrustum`, `RayFrustum` over the same corrected matrix); zeroes velocities on
   cuts/near-zero dt, else derives translational (`Δorigin/dt`) and angular (`angularVelocity`) velocities.
+  Linux/clang bring-up: mango vector helpers take explicit dims at every call site — `isNan<float, 3u>`,
+  `isNormalized<float, 3u>`, `safeNormalize<float, 3u>`, `toFloat<int, 2u>` — because mango deduces `int` where the
+  engine boundary expects `u32`, and Clang `-Werror` rejects the silent narrowing.
 - **Camera modes/extras** — `setCameraMode` and `setJitterSamples` (non-owning `TransformView<float2>` view, empty
   resets) arm `m_has_camera_cut_next_frame`; `signalCameraCutNextFrame()` exposes the same; controller overload
   `updateModel(dt, ICameraController&, viewport)` copies current state, runs `controller.updateCameraModel`, then
   snapshots; full getter surface (pose, basis vectors, matrices, frusta, velocities, jitter).
 - **ICameraController** (`safe_object`) — `provideInputActionKeyMappings(out_mapping)` (const, fills bindings) +
   `updateCameraModel(dt, model)` + `resetInputState()` (noop default; `Basic` clears rate maps, deltas, impulses, and
-  mouse-look for focus-loss/device-reset); `DummyCameraController` is the noop placeholder.
+  mouse-look for focus-loss/device-reset); `DummyCameraController` is the noop placeholder. Linux/clang bring-up: the
+  controller partition imports `:input.action` for the complete `InputAction` type (the old `struct InputAction;`
+  forward declaration is removed); only `InputMapping` stays forward-declared.
 - **BasicCameraController** (`details::`) — owns five `unique_ptr<InputAction>` (`CameraMove` axis_3d, `CameraRotate`
   axis_2d, `CameraSpeed`/`CameraFov` axis_1d, `CameraLook` digital) wired in the ctor: translate accumulates
   `m_delta_position`, rotate accumulates quaternion deltas (absolute for keys/sticks, relative only when RMB

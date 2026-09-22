@@ -37,12 +37,16 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   deps, `.cpp` impl files); `ppr_disable_compiler_cache(target)` clears the launcher per target because ccache
   cannot track BMI content. Pairs with `/Z7` embedded debug info (no shared-PDB contention); live `/ZI` never caches.
 - **`VCPkg.cmake`** (included before `project()`): optional vcpkg — sets `CMAKE_TOOLCHAIN_FILE` from `VCPKG_ROOT`
-  only when no toolchain is preset, otherwise CPM fetches from source. Derives `CMAKE_MSVC_RUNTIME_LIBRARY` from
+  only when no toolchain is preset, otherwise CPM fetches from source. On Linux hosts pins `VCPKG_TARGET_TRIPLET`
+  to `x64-linux` unless the user already selected one (this vcpkg version defaults to an unprovided
+  compiler-aware `x64-linux-clang`; plain `x64-linux` covers the compiler-agnostic C deps `clang-dev` needs;
+  Darwin/Windows keep their own defaults). Derives `CMAKE_MSVC_RUNTIME_LIBRARY` from
   the triplet (`-static` → `/MT`, else DLL `/MDd`) and fails configure under `PPR_EDIT_AND_CONTINUE` on a `-static`
   triplet or non-DLL runtime (EnC requires `/MDd`; `/MT` breaks with `LNK2038`). Appends vcpkg config trees to
   `CMAKE_PREFIX_PATH` and prefers Config packages (`CMAKE_FIND_PACKAGE_PREFER_CONFIG ON`).
 - **Runtime/shader delivery** (`game/CMakeLists.txt`): `POST_BUILD` copies `$<TARGET_RUNTIME_DLLS:app.game>`
-  next to the exe (no hardcoded DLL list) and copies `assets/shaders` → `<exe>/shaders`.
+  next to the exe (no hardcoded DLL list) guarded by `if(WIN32)` — the genex is empty elsewhere and would
+  degrade the copy into a usage error — and unconditionally copies `assets/shaders` → `<exe>/shaders`.
 
 ## Flow
 
