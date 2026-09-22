@@ -6,6 +6,7 @@ module;
 #include <unistd.h>
 
 #include <csignal>
+#include <cstdlib>
 
 #include "pP/Macros.h"
 
@@ -24,12 +25,9 @@ namespace pP::hal {
 #endif
     }
 
-    void outputDebug(const native::char_t *wide_msg) noexcept {
-#if PPR_ENABLE_DEBUG
-        std::string converted = toString<char>(native::string_view(wide_msg));
-        outputDebug(converted.c_str());
-#endif
-    }
+    // NOTE: no outputDebug(native::char_t) definition here — on POSIX
+    // native::char_t is char, so it would redefine the overload above;
+    // native strings route to it directly.
 
     [[nodiscard]] bool isDebuggerPresent() noexcept {
         return false;

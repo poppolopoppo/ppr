@@ -21,6 +21,13 @@ if(PPR_HAL_PLATFORM STREQUAL "windows")
     )
 endif()
 
+if(PPR_HAL_PLATFORM STREQUAL "linux")
+    list(APPEND HAL_PLATFORM_SOURCES
+        hal/linux/Core.HAL.linux.Random.cpp
+        hal/linux/Core.HAL.linux.RingBuffer.cpp
+    )
+endif()
+
 target_sources(engine.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
@@ -95,3 +102,9 @@ endif()
 setup_ppr_project(engine.core
     EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash
 )
+
+# libc++ emits libatomic calls for 16-byte atomics (e.g. atomic<error_code>);
+# clang does not link it implicitly. Consumers inherit it via the interface.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(engine.core PUBLIC atomic)
+endif()

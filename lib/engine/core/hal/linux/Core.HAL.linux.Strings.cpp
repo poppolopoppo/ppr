@@ -37,10 +37,13 @@ namespace pP::hal {
                 cp = ((cp & 0x1F) << 6) | (*it++ & 0x3F);
                 p_dst[count++] = static_cast<wchar_t>(cp);
             } else if ((cp & 0xF0) == 0xE0 && std::distance(it, utf8.end()) >= 2) {
-                cp = ((cp & 0x0F) << 12) | ((*it++ & 0x3F) << 6) | (*it++ & 0x3F);
+                const char32_t hi = static_cast<char32_t>(*it++ & 0x3F);
+                cp = ((cp & 0x0F) << 12) | (hi << 6) | static_cast<char32_t>(*it++ & 0x3F);
                 p_dst[count++] = static_cast<wchar_t>(cp);
             } else if ((cp & 0xF8) == 0xF0 && std::distance(it, utf8.end()) >= 3) {
-                cp = ((cp & 0x07) << 18) | ((*it++ & 0x3F) << 12) | ((*it++ & 0x3F) << 6) | (*it++ & 0x3F);
+                const char32_t hi = static_cast<char32_t>(*it++ & 0x3F);
+                const char32_t mid = static_cast<char32_t>(*it++ & 0x3F);
+                cp = ((cp & 0x07) << 18) | (hi << 12) | (mid << 6) | static_cast<char32_t>(*it++ & 0x3F);
                 p_dst[count++] = static_cast<wchar_t>(cp);
             }
         }

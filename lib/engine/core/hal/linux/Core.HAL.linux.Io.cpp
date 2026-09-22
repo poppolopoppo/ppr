@@ -53,4 +53,8 @@ namespace pP::hal::io {
 
     void wake(const IoHandle) noexcept {
     }
+
+    void cancelIo(const FileHandle, void *) noexcept {
+        // io_uring backend not implemented: nothing in flight to cancel.
+    }
 }
