@@ -66,7 +66,7 @@ namespace pP {
             }
         };
 
-        constexpr SlangRhiErrorCategory g_slang_rhi_error_category{};
+        static const SlangRhiErrorCategory g_slang_rhi_error_category{};
     }
 
     [[nodiscard]] const std::error_category &rhi::error_category() noexcept {
