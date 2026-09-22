@@ -20,6 +20,129 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(TrianglePass, debug, none)
 
     namespace {
+        struct OrmSource final {
+            mem::SharedBufferView m_bytes{};
+            u64 m_row_pitch = 0u;
+        };
+
+        [[nodiscard]] const image::ImageAsset *imageForSlot_(
+            const mesh::MaterialImageSlot &slot, const std::span<const image::ImageAsset> images) noexcept {
+            if (not slot.enabled()) {
+                return nullptr;
+            }
+            const std::size_t index = static_cast<std::size_t>(*slot.m_image);
+            return index < images.size() ? &images[index] : nullptr;
+        }
+
+        [[nodiscard]] Expected<OrmSource> ormSource_(
+            const image::ImageAsset *const asset, const u32 width, const u32 height) noexcept {
+            if (asset == nullptr) {
+                return OrmSource{};
+            }
+            if (asset->m_dimension != image::ImageDimension::image2d or
+                asset->m_format != image::NativeImageFormat::rgba8_linear or
+                asset->m_mip_count != 1u or
+                asset->m_is_block or
+                asset->m_width != width or
+                asset->m_height != height or
+                asset->m_subresources.size() != 1u)
+            [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::function_not_supported)};
+            }
+            const image::ImageSubresource &subresource = asset->m_subresources.front();
+            const mem::SharedBufferView bytes = subresource.m_view.getBufferData();
+            const u64 tight_row_pitch = image::rowPitchFor(width, image::BlockTag::none);
+            const u64 tight_slice_pitch = image::slicePitchFor(width, height, image::BlockTag::none);
+            if (not asset->m_storage.isValid() or
+                not asset->m_storage.isMaterialized() or
+                not subresource.m_view.isValid() or
+                not subresource.m_view.isMaterialized() or
+                subresource.m_row_pitch < tight_row_pitch or
+                subresource.m_slice_pitch < tight_slice_pitch or
+                bytes.size() < subresource.m_slice_pitch)
+            [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            }
+            return OrmSource{.m_bytes = bytes, .m_row_pitch = subresource.m_row_pitch};
+        }
+
+        [[nodiscard]] Expected<image::ImageAsset> composeOrm_(
+            const mesh::MaterialAsset &material, const std::span<const image::ImageAsset> images) {
+            const image::ImageAsset *const source_images[] = {
+                imageForSlot_(material.m_occlusion_map, images),
+                imageForSlot_(material.m_roughness_map, images),
+                imageForSlot_(material.m_metallic_map, images),
+            };
+            const mesh::MaterialImageSlot *const source_slots[] = {
+                &material.m_occlusion_map,
+                &material.m_roughness_map,
+                &material.m_metallic_map,
+            };
+
+            const image::ImageAsset *reference = nullptr;
+            for (u32 i = 0u; i < 3u; ++i) {
+                if (not source_slots[i]->enabled()) {
+                    continue;
+                }
+                if (source_images[i] == nullptr) [[unlikely]] {
+                    return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+                }
+                reference = source_images[i];
+                break;
+            }
+            if (reference == nullptr) [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            }
+
+            OrmSource sources[3]{};
+            for (u32 i = 0u; i < 3u; ++i) {
+                Expected<OrmSource> source = ormSource_(source_images[i], reference->m_width, reference->m_height);
+                if (not source.has_value()) [[unlikely]] {
+                    return std::unexpected{source.error()};
+                }
+                sources[i] = *source;
+            }
+
+            const u64 slice_pitch = image::slicePitchFor(reference->m_width, reference->m_height, image::BlockTag::none);
+            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(safe_narrowing<std::size_t>(slice_pitch));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, storage.materialize());
+            Expected<mem::MutableBufferView> destination = storage.getMutableData();
+            if (not destination.has_value()) [[unlikely]] {
+                return std::unexpected{destination.error()};
+            }
+
+            const auto channel = [](const OrmSource &source, const u32 x, const u32 y, const u32 component, const u8 fallback) {
+                if (source.m_bytes.empty()) {
+                    return fallback;
+                }
+                const std::size_t offset = safe_narrowing<std::size_t>(
+                    static_cast<u64>(y) * source.m_row_pitch + static_cast<u64>(x) * 4u + component);
+                return std::to_integer<u8>(source.m_bytes[offset]);
+            };
+            for (u32 y = 0u; y < reference->m_height; ++y) {
+                for (u32 x = 0u; x < reference->m_width; ++x) {
+                    const std::size_t offset = safe_narrowing<std::size_t>((static_cast<u64>(y) * reference->m_width + x) * 4u);
+                    (*destination)[offset] = std::byte{channel(sources[0], x, y, 0u, 255u)};
+                    (*destination)[offset + 1u] = std::byte{channel(sources[1], x, y, 1u, 255u)};
+                    (*destination)[offset + 2u] = std::byte{channel(sources[2], x, y, 2u, 255u)};
+                    (*destination)[offset + 3u] = std::byte{255u};
+                }
+            }
+
+            mem::SharedBuffer frozen{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, storage.moveToShared(&frozen));
+            image::ImageAsset composite{};
+            composite.m_width = reference->m_width;
+            composite.m_height = reference->m_height;
+            composite.m_storage = frozen;
+            composite.m_subresources.push_back(image::ImageSubresource{
+                .m_view = frozen.subspan(0u, safe_narrowing<std::size_t>(slice_pitch)),
+                .m_row_pitch = image::rowPitchFor(reference->m_width, image::BlockTag::none),
+                .m_slice_pitch = slice_pitch,
+            });
+            return composite;
+        }
+
         // CPU mirror of mesh_bindless.slang PushScalars (vertex entry param):
         // scalars only, 20 B exact on both sides (no arrays/matrices, so no
         // uniform-stride traps). The model matrix rides its own param (64 B).
@@ -152,7 +275,9 @@ namespace pP {
         }
         // GpuTextureRefs order: albedo, metallic-roughness composite, normal,
         // emissive. Invalid handles map to kNoTexture (shader fallback).
-        // ORM compositing (metallic+roughness→one slot) is a P3 uploadScene job.
+        // ORM compositing (occlusion/roughness/metallic→one slot, R=occl,
+        // G=rough, B=metal) happens in uploadScene via composeOrm_; this path
+        // only resolves the already-composited handles.
         if (resolved.size() != 4u) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -252,15 +377,26 @@ namespace pP {
             uploaded.m_textures.push_back(*texture);
         }
 
-        const std::span<const TextureHandle> texture_span(uploaded.m_textures.data(), uploaded.m_textures.size());
         for (const mesh::MaterialAsset &material: scene.m_mats) {
-            // mr slot: metallic image else roughness image (glTF shares one
-            // ORM image for both — the shared case resolves exactly).
-            // Occlusion rides the strength factor; no 5th slot exists.
+            const std::span<const TextureHandle> texture_span(uploaded.m_textures.data(), images.size());
+            TextureHandle orm{};
+            if (material.m_metallic_map.enabled() or material.m_roughness_map.enabled() or material.m_occlusion_map.enabled()) {
+                Expected<image::ImageAsset> composite = composeOrm_(material, images);
+                if (not composite.has_value()) [[unlikely]] {
+                    rollback();
+                    return std::unexpected{composite.error()};
+                }
+                Expected<TextureHandle> texture = m_texture_cache.upload(*composite);
+                if (not texture.has_value()) [[unlikely]] {
+                    rollback();
+                    return std::unexpected{texture.error()};
+                }
+                orm = *texture;
+                uploaded.m_textures.push_back(*texture);
+            }
             const TextureHandle resolved[] = {
                 resolveImageSlot_(material.m_base_color_map, texture_span),
-                resolveImageSlot_(material.m_metallic_map.enabled() ? material.m_metallic_map : material.m_roughness_map,
-                    texture_span),
+                orm,
                 resolveImageSlot_(material.m_normal_map, texture_span),
                 resolveImageSlot_(material.m_emissive_map, texture_span),
             };

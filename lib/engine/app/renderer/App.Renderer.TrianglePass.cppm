@@ -82,9 +82,9 @@ export namespace pP {
         void clearInstances() noexcept;
 
         // §7 scene upload: bag per (mesh, prim) → texture per image (dedup) →
-        // pack per material (metallic else roughness for the mr slot; occlusion
-        // rides the strength factor, no 5th slot). Partial rollback in reverse
-        // order; images[i] joins SceneAsset::m_images[i].
+        // ORM composite per material (R=occlusion-or-1, G=rough, B=metal,
+        // fail-closed on size/format mismatch) → pack per material.
+        // Partial rollback in reverse order; images[i] joins SceneAsset::m_images[i].
         [[nodiscard]] Expected<UploadedScene> uploadScene(
             const mesh::SceneAsset &scene, std::span<const image::ImageAsset> images);
 

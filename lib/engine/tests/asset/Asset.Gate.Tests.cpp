@@ -81,6 +81,24 @@ namespace pP::tests::detail {
             return {};
         }
 
+        [[nodiscard]] Expected<image::ImageAsset> goldenOrmFixture_(
+            const std::string_view name, const std::array<u8, 3u> rgb) {
+            std::array<std::byte, 64u> rgba{};
+            for (std::size_t pixel = 0u; pixel < 16u; ++pixel) {
+                const std::size_t offset = pixel * 4u;
+                rgba[offset] = std::byte{rgb[0]};
+                rgba[offset + 1u] = std::byte{rgb[1]};
+                rgba[offset + 2u] = std::byte{rgb[2]};
+                rgba[offset + 3u] = std::byte{255u};
+            }
+            const mem::SharedBuffer png = gatePngBytes(name, rgba);
+            if (not png.isValid()) [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::io_error)};
+            }
+            return image::decodeToRgba8(
+                png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
+        }
+
         [[nodiscard]] CameraSnapshot gateCamera_(const float3 &eye, const float3 &target, const float2 &extent) {
             CameraSnapshot snapshot{};
             // Mango lookat takes (target, viewer, up) — not the GL order.
@@ -276,6 +294,87 @@ namespace pP::tests::detail {
                 texelDist_(gateTexel_(*pixels, 64u, 192u), gateTexel_(*pixels, 192u, 64u)) > 12u);
 
             PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
+        };
+
+        PPR_UNIT_TEST(orm_golden_distinct_channels) {
+            GateTestApp test_app{"AssetOrmGolden", std::span<const char *const>{}};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER { PPR_TEST_ASSERT(not test_app.teardown()); };
+            const auto rhi = test_app.getServices().get<IRhiService>();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = test_app.getServices().get<IShaderService>();
+            PPR_TEST_ASSERT(shader.isValid());
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER { PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            Expected<mesh::SceneAsset> imported = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
+            PPR_TEST_ASSERT(imported.has_value());
+            mesh::SceneAsset scene = std::move(*imported);
+            PPR_TEST_ASSERT(scene.m_mats.size() == 1u);
+            scene.m_images.clear();
+            scene.m_images.push_back({});
+            scene.m_images.push_back({});
+            scene.m_images.push_back({});
+
+            const Expected<image::ImageAsset> occlusion = goldenOrmFixture_("orm_occlusion_golden.png", {255u, 1u, 2u});
+            const Expected<image::ImageAsset> roughness = goldenOrmFixture_("orm_roughness_golden.png", {3u, 255u, 4u});
+            const Expected<image::ImageAsset> metallic = goldenOrmFixture_("orm_metallic_golden.png", {255u, 255u, 0u});
+            PPR_TEST_ASSERT(occlusion.has_value());
+            PPR_TEST_ASSERT(roughness.has_value());
+            PPR_TEST_ASSERT(metallic.has_value());
+            Array<image::ImageAsset> images{};
+            images.push_back(*occlusion);
+            images.push_back(*roughness);
+            images.push_back(*metallic);
+
+            mesh::MaterialAsset &material = scene.m_mats.front();
+            material.m_base_color = float4{1.0f, 0.5f, 0.25f, 1.0f};
+            material.m_metallic = 1.0f;
+            material.m_roughness = 1.0f;
+            material.m_occlusion_strength = 1.0f;
+            material.m_base_color_map = {};
+            material.m_normal_map = {};
+            material.m_emissive_map = {};
+            material.m_occlusion_map.m_image = mesh::ImageAssetId{0u};
+            material.m_roughness_map.m_image = mesh::ImageAssetId{1u};
+            material.m_metallic_map.m_image = mesh::ImageAssetId{2u};
+
+            const Expected<TrianglePass::UploadedScene> uploaded = pass.uploadScene(scene, images);
+            PPR_TEST_ASSERT(uploaded.has_value());
+            PPR_DEFER { PPR_TEST_ASSERT(not pass.releaseScene(*uploaded)); };
+            PPR_TEST_ASSERT(not submitScene_(pass, scene, *uploaded));
+
+            const mesh::StaticMeshAsset &box = scene.m_meshes.front();
+            const float3 center = box.m_bounds.center();
+            const float3 size = box.m_bounds.size();
+            const float max_dim = std::max({size.x, size.y, size.z});
+            const float3 eye{center.x + 0.25f * max_dim, center.y + 0.2f * max_dim, center.z + 2.2f * max_dim};
+            PPR_TEST_ASSERT(not pass.update(
+                TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
+
+            rhi::IDevice &device = rhi->getDevice();
+            const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
+            PPR_TEST_ASSERT(target.has_value());
+            Renderer &renderer = test_app.getRenderer();
+            PPR_TEST_ASSERT(not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);
+            PPR_TEST_ASSERT(pixels.has_value());
+
+            // Analytic prediction: composite (1,1,0) gives occlusion=1,
+            // roughness=1 (specular killed), metallic=0, so lit =
+            // albedo*(0.35+0.65*d) with d≈0.76 → (215,108,54) (debugger-read).
+            // Bounds bracket that point: occlusion-wrong collapses to black,
+            // metallic-wrong halves every channel, roughness-wrong adds a
+            // specular lift — each breaks at least one bound below.
+            const std::array<u8, 4u> center_texel = gateTexel_(*pixels, 128u, 128u);
+            PPR_TEST_ASSERT(center_texel[0] > 190u and center_texel[0] < 235u);
+            PPR_TEST_ASSERT(center_texel[1] > 90u and center_texel[1] < 130u);
+            PPR_TEST_ASSERT(center_texel[2] > 40u and center_texel[2] < 70u);
+            PPR_TEST_ASSERT(center_texel[1] + 80u < center_texel[0]);
+            PPR_TEST_ASSERT(center_texel[2] + 30u < center_texel[1]);
         };
 
         // Tangent-w arbitration on the render gate: fixtures carry no file
@@ -576,6 +675,7 @@ namespace pP::tests {
     const UnitTest gate = UnitTest::Named("gate") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Gate::bindless_textured_box_gate,
+            detail::Gate::orm_golden_distinct_channels,
             detail::Gate::tangent_w_render_arbitration,
             detail::Gate::editor_scene_flow,
         });
