@@ -377,10 +377,21 @@ namespace pP::tests {
             detail::Gpu::pipeline_variant_key,
             detail::Gpu::bindless_budget_constants,
             detail::Gpu::tangent_w_sign_is_lighting_observable,
-            detail::Gpu::hammer_8way_import_decode,
             detail::Gpu::gpu_caches_upload_resolve_release,
         });
     };
+
+    // Stress tier (Phase 5): the 8-way parallel import/decode storm runs
+    // alone so the hammer/stress CI tier stays independent of GPU/readback.
+    const UnitTest stress = UnitTest::Named("stress") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::Gpu::hammer_8way_import_decode,
+        });
+    };
+
+    const UnitTest &stressTests() noexcept {
+        return stress;
+    }
 
     const UnitTest &gpuTests() noexcept {
         return gpu;

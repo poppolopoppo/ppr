@@ -9,6 +9,10 @@ namespace pP::tests {
 
     const UnitTest &meshTests() noexcept;
 
+    const UnitTest &fuzzTests() noexcept;
+
+    const UnitTest &stressTests() noexcept;
+
     const UnitTest &gpuTests() noexcept;
 
     const UnitTest &gateTests() noexcept;
@@ -21,6 +25,8 @@ namespace pP::tests {
             imageTests(),
             stagingTests(),
             meshTests(),
+            fuzzTests(),
+            stressTests(),
             gpuTests(),
             gateTests(),
         });
