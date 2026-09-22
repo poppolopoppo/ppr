@@ -251,8 +251,10 @@ namespace pP {
             return true;
         };
 
-        for (const auto &[input_mapping, mapped]: std::ranges::views::enumerate(m_mappings)) {
-            for (const auto &[key_mapping, action_keymap]: std::ranges::views::enumerate(mapped.m_value->m_keymap)) {
+        std::size_t input_mapping = 0u;
+        for (const auto &mapped : m_mappings) {
+            std::size_t key_mapping = 0u;
+            for (const auto &action_keymap : mapped.m_value->m_keymap) {
                 const InputBinding binding{
                     .m_input_mapping = InputMappingIndex(safe_narrowing(input_mapping)),
                     .m_key_mapping = KeyMappingIndex(safe_narrowing(key_mapping)),
@@ -269,7 +271,10 @@ namespace pP {
                         return default_value_v;
                     });
                 }
+
+                ++key_mapping;
             }
+            ++input_mapping;
         }
     }
 
@@ -320,6 +325,7 @@ namespace pP {
                     return consumed;
                 case handled:
                     response = handled;
+                    [[fallthrough]];
                 case unhandled:
                     break;
             }
@@ -331,6 +337,7 @@ namespace pP {
                     return consumed;
                 case handled:
                     response = handled;
+                    [[fallthrough]];
                 case unhandled:
                     break;
             }
@@ -349,6 +356,7 @@ namespace pP {
                     return consumed;
                 case handled:
                     response = handled;
+                    [[fallthrough]];
                 case unhandled:
                     break;
             }
@@ -360,6 +368,7 @@ namespace pP {
                     return consumed;
                 case handled:
                     response = handled;
+                    [[fallthrough]];
                 case unhandled:
                     break;
             }

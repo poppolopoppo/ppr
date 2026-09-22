@@ -287,6 +287,10 @@ export namespace pP {
         EMouseButton
     >;
 
+    struct InputKey;
+    [[nodiscard]] hash_t hashValue(const InputKey &value) noexcept;
+    [[nodiscard]] opaque::Value opaqueValue(const InputKey &value) noexcept;
+
     struct InputKey final {
         string_literal m_name;
         InputKeyCode m_code;
@@ -329,9 +333,9 @@ export namespace pP {
             return lhs.m_code <=> rhs.m_code;
         }
 
-        [[nodiscard]] friend hash_t hashValue(const InputKey &value) noexcept;
+        friend hash_t hashValue(const InputKey &value) noexcept;
 
-        [[nodiscard]] friend opaque::Value opaqueValue(const InputKey &value) noexcept;
+        friend opaque::Value opaqueValue(const InputKey &value) noexcept;
 
         static std::error_code enumerateAll(Collector<InputKey> push_back) noexcept;
 
@@ -556,6 +560,10 @@ export namespace pP {
             InputAxis3D>;
     }
 
+    struct InputValue;
+    [[nodiscard]] hash_t hashValue(const InputValue &value) noexcept;
+    [[nodiscard]] opaque::Value opaqueValue(const InputValue &value) noexcept;
+
     struct [[nodiscard]] InputValue final : details::InputValueVariant {
         using details::InputValueVariant::InputValueVariant;
         using details::InputValueVariant::operator=;
@@ -598,9 +606,9 @@ export namespace pP {
             return modulate(static_cast<float>(time::seconds(dt)) * value);
         }
 
-        [[nodiscard]] friend hash_t hashValue(const InputValue &value) noexcept;
+        friend hash_t hashValue(const InputValue &value) noexcept;
 
-        [[nodiscard]] friend opaque::Value opaqueValue(const InputValue &value) noexcept;
+        friend opaque::Value opaqueValue(const InputValue &value) noexcept;
     };
 
     template<>

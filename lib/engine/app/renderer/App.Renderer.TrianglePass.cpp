@@ -757,6 +757,7 @@ namespace pP {
             .viewportCount = 1u,
             .scissorRects = {draw_context.m_scissor},
             .scissorRectCount = 1u,
+            .indexBuffer = {},
         });
 
         draw_context.m_pass.draw({.vertexCount = range->m_count});

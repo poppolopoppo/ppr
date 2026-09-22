@@ -54,13 +54,13 @@ float4 fragmentMain(PsInput input) : SV_Target {
 }
 )";
 
-        void imGuiDebugPrintf(const char *format, const char *buffer) {
+        [[maybe_unused]] void imGuiDebugPrintf(const char *format, const char *buffer) {
             PPR_ASSERT(std::string_view(format) == "%s");
             PPR_ASSERT(buffer != nullptr);
             PPR_LOG_RAW(UI, debug, buffer);
         }
 
-        [[nodiscard]] float2 framebufferScaleFor(const int2 &logical, const int2 &framebuffer) noexcept {
+        [[nodiscard, maybe_unused]] float2 framebufferScaleFor(const int2 &logical, const int2 &framebuffer) noexcept {
             float2 scale{1.0f};
             if (logical.x > 0) {
                 scale.x = static_cast<float>(framebuffer.x) / static_cast<float>(logical.x);
@@ -441,7 +441,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         }
 
                         const float4 clip_rect = (imVec(cmd->ClipRect) - clip_offset) * clip_scale;
-                        const uint4 scissor_rect = roundToUInt(float4(
+                        const uint4 scissor_rect = roundToUInt<float, 4u>(float4(
                             max(clip_rect.xy, float2(0)),
                             min(clip_rect.zw, float2(framebuffer_extent))));
                         if (scissor_rect.z <= scissor_rect.x or scissor_rect.w <= scissor_rect.y) {
@@ -459,14 +459,14 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         draw_arguments.vertexCount = cmd->ElemCount;
                         draw_arguments.instanceCount = 1u;
                         draw_arguments.startIndexLocation = cmd->IdxOffset + global_idx_offset;
-                        draw_arguments.startVertexLocation = static_cast<i32>(cmd->VtxOffset + global_vtx_offset);
+                        draw_arguments.startVertexLocation = static_cast<u32>(cmd->VtxOffset + global_vtx_offset);
                         draw_arguments.startInstanceLocation = 0;
 
                         draw_context.m_pass.drawIndexed(draw_arguments);
                     }
 
-                    global_vtx_offset += cmdList->VtxBuffer.Size;
-                    global_idx_offset += cmdList->IdxBuffer.Size;
+                    global_vtx_offset += checked_cast<u32>(cmdList->VtxBuffer.Size);
+                    global_idx_offset += checked_cast<u32>(cmdList->IdxBuffer.Size);
                 }
 
                 return default_value_v;
@@ -555,7 +555,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             rhi::ComPtr<rhi::ITexture> texture;
             PPR_RETURN_ERROR_ON_FAIL(UI, device.createTexture(texture_desc, nullptr, texture.writeRef()));
 
-            const u64 pixelDataSize = static_cast<u64>(width) * height * 4;
+            const u64 pixelDataSize = static_cast<u64>(width) * static_cast<u64>(height) * 4u;
             rhi::BufferDesc staging_desc{};
             staging_desc.size = pixelDataSize;
             staging_desc.usage = rhi::BufferUsage::CopySource;
@@ -573,7 +573,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             encoder->copyBufferToTexture(
                 texture.get(), 0, 0, dst_offset,
                 staging_buffer.get(), 0, pixelDataSize,
-                static_cast<u32>(pixelDataSize / height),
+                static_cast<u32>(pixelDataSize / static_cast<u64>(height)),
                 {static_cast<u32>(width), static_cast<u32>(height), 1});
 
             encoder->setTextureState(texture.get(), rhi::SubresourceRange{
@@ -646,8 +646,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         std::error_code ImGuiService::uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
-            const u32 total_vtx_count = draw_data.TotalVtxCount;
-            const u32 total_idx_count = draw_data.TotalIdxCount;
+            const u32 total_vtx_count = checked_cast<u32>(draw_data.TotalVtxCount);
+            const u32 total_idx_count = checked_cast<u32>(draw_data.TotalIdxCount);
             if (total_vtx_count == 0 || total_idx_count == 0) {
                 return default_value_v;
             }
@@ -696,8 +696,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             for (int n = 0; n < draw_data.CmdListsCount; n++) {
                 const ImDrawList *cmd_list = draw_data.CmdLists[n];
 
-                std::memcpy(vtx_dst, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
-                std::memcpy(idx_dst, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+                std::memcpy(vtx_dst, cmd_list->VtxBuffer.Data, checked_cast<std::size_t>(cmd_list->VtxBuffer.Size) * sizeof(ImDrawVert));
+                std::memcpy(idx_dst, cmd_list->IdxBuffer.Data, checked_cast<std::size_t>(cmd_list->IdxBuffer.Size) * sizeof(ImDrawIdx));
 
                 vtx_dst += cmd_list->VtxBuffer.Size;
                 idx_dst += cmd_list->IdxBuffer.Size;

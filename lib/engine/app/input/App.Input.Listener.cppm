@@ -27,9 +27,9 @@ export namespace pP {
     // input listener
     // ------------------------------------------------------------------
 
-    using InputActionCallback = std::move_only_function<void(const InputActionEvent &event, const InputKey &trigger) const noexcept>;
-    using InputCharacterInputCallback = std::move_only_function<EInputMessageResponse(hal::native::char_t codepoint) const>;
-    using InputRawKeyCallback = std::move_only_function<EInputMessageResponse(TimeSpan dt, const InputMessage &message)>;
+    using InputActionCallback = std::function<void(const InputActionEvent &event, const InputKey &trigger)>;
+    using InputCharacterInputCallback = std::function<EInputMessageResponse(hal::native::char_t codepoint)>;
+    using InputRawKeyCallback = std::function<EInputMessageResponse(TimeSpan dt, const InputMessage &message)>;
 
     class InputListener final : public safe_object {
         using InputMappingIndex = Numeric<u32, SharedInputMapping>;

@@ -177,13 +177,13 @@ namespace pP {
     }
 
     static void opaqueStruct2D(const InputAxis2D &axis, opaque::StructVisitor &struct_) noexcept {
-        struct_.yield("absolute", opaqueValue(axis.m_absolute));
-        struct_.yield("relative", opaqueValue(axis.m_relative));
+        struct_.yield("absolute", opaqueValue<float, 2u>(axis.m_absolute));
+        struct_.yield("relative", opaqueValue<float, 2u>(axis.m_relative));
     }
 
     static void opaqueStruct3D(const InputAxis3D &axis, opaque::StructVisitor &struct_) noexcept {
-        struct_.yield("absolute", opaqueValue(axis.m_absolute));
-        struct_.yield("relative", opaqueValue(axis.m_relative));
+        struct_.yield("absolute", opaqueValue<float, 3u>(axis.m_absolute));
+        struct_.yield("relative", opaqueValue<float, 3u>(axis.m_relative));
     }
 
     opaque::Value opaqueValue(const InputValue &value) noexcept {
