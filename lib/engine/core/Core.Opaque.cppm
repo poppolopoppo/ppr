@@ -15,6 +15,22 @@ import std;
 export namespace pP {
     namespace opaque {
         struct Value;
+    } // namespace opaque
+
+    namespace details {
+        // ADL-only probe for user-provided opaqueValue() overloads. Ordinary
+        // lookup from here cannot see pP::opaque::opaqueValue (declared later,
+        // in the sibling namespace) nor pP::opaqueValue(span/range), so only
+        // argument-dependent lookup participates and the probe cannot depend
+        // on the Value(TOpaque) constructor it constrains. See TOpaque below.
+        template<typename T>
+        concept HasAdlOpaqueValue = requires(const std::remove_cvref_t<T> &probe)
+        {
+            { opaqueValue(probe) } -> std::same_as<opaque::Value>;
+        };
+    } // namespace details
+
+    namespace opaque {
 
         // --------------------------------------------------------------
         // type erasure helper for text formatting
@@ -126,23 +142,38 @@ export namespace pP {
 
         void opaqueValue(...) = delete;
 
-        [[nodiscard]] constexpr const Value &opaqueValue(const Value &value) noexcept {
+        // Exact-match identity (constrained template, not a plain overload): a
+        // plain const Value& overload would force overload resolution to check
+        // every probe argument for convertibility to Value, which re-enters the
+        // Value(TOpaque) constructor constraint below and makes
+        // HasAdlOpaqueValue depend on itself under Clang ([temp.constr.dep]).
+        template<typename T>
+            requires std::same_as<std::remove_cvref_t<T>, Value>
+        [[nodiscard]] constexpr const Value &opaqueValue(const T &value) noexcept {
             return value;
         }
 
         namespace details {
-            template<typename T>
-            concept TOpaque = requires(T value)
-            {
-                { opaqueValue(value) } -> std::same_as<Value>;
-            };
-
             template<typename RandomRangeT>
             concept TOpaqueRange =
                     std::ranges::random_access_range<RandomRangeT> &&
                     std::convertible_to<std::ranges::range_value_t<RandomRangeT>, Value> &&
                     // avoid promotion of basic_string/_view/_literal
                     not std::convertible_to<RandomRangeT, ValueVariant>;
+
+            // Non-recursive by construction: the ADL probe above never
+            // re-enters this concept (the Value-converting overloads are
+            // invisible to it), so unlike the previous inline requirement this
+            // cannot depend on itself. Clang forbids even terminating concept
+            // self-reference, hence no optional-recursion here: optionals are
+            // covered through std::opaqueValue(optional) below, whose own
+            // constraint only descends into strictly smaller inner types.
+            template<typename T>
+            concept TOpaque =
+                    not std::same_as<std::remove_cvref_t<T>, Value> &&
+                    not std::convertible_to<T, ValueVariant> &&
+                    (pP::details::HasAdlOpaqueValue<T> ||
+                     TOpaqueRange<std::remove_cvref_t<T>>);
         }
 
         // --------------------------------------------------------------
@@ -192,18 +223,8 @@ export namespace pP {
             }
 
             // Allow direct promotion from values with an explicit opaqueValue() overload
-#if 0 // workaround MSVC compiler bug with concepts and ADL through module boundaries
             template<details::TOpaque OpaqueT>
-                requires not std::convertible_to<OpaqueT, details::ValueVariant>
-
-#else
-            template<typename OpaqueT>
-                requires not std::convertible_to<OpaqueT, details::ValueVariant> and
-                         requires(OpaqueT value)
-                         {
-                             { opaqueValue(value) } -> std::same_as<Value>;
-                         }
-#endif
+                requires (not std::convertible_to<OpaqueT, details::ValueVariant>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
             constexpr Value(OpaqueT &&value) noexcept
                 : super_t(opaqueValue(std::forward<OpaqueT>(value))) {
@@ -533,7 +554,7 @@ export namespace pP {
                     [](const opaque::Dict dict) constexpr noexcept -> std::size_t {
                         std::size_t size_bytes = alignForward(dict.size() * sizeof(*dict.data()), max_align_v);
                         for (const auto &[it_key, it_value]: dict) {
-                            size_bytes += alignForward(it_key.size() * sizeOf(*it_key.data()), max_align_v);
+                            size_bytes += alignForward(it_key.size() * sizeof(*it_key.data()), max_align_v);
                             size_bytes += sizeOf(it_value);
                         }
                         return size_bytes;
@@ -980,7 +1001,8 @@ export namespace std {
         }
     };
 
-    template<pP::opaque::details::TOpaque OpaqueT>
+    template<typename OpaqueT>
+        requires pP::opaque::details::TOpaque<OpaqueT>
     [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const optional<OpaqueT> &opt) noexcept {
         if (opt.has_value()) {
             return opaqueValue(opt.value());
