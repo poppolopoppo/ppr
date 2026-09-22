@@ -43,24 +43,65 @@ namespace pP::hal {
         const std::size_t size,
         const bool commit,
         const PageProtection allowed,
-        [[maybe_unused]] std::align_val_t alignment) noexcept(false) {
-        PPR_ASSERT(alignment == page_granularity);
-        const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));
+        const std::align_val_t alignment) noexcept(false) {
+        const std::size_t granularity = static_cast<std::size_t>(page_granularity);
+        const std::size_t align_bytes = static_cast<std::size_t>(alignment);
+        PPR_ASSERT(align_bytes % granularity == 0u);
+        const std::size_t aligned_size = alignForward(size, granularity);
 
         const int prot = pageProtectionFlags_(allowed);
         const int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 
-        void *mapped_ptr = ::mmap(nullptr, aligned_size, prot, flags, -1, 0);
+        if (align_bytes <= granularity) {
+            // fast path: every mmap result already satisfies the alignment
+            void *mapped_ptr = ::mmap(nullptr, aligned_size, prot, flags, -1, 0);
 
-        if (mapped_ptr == MAP_FAILED) [[unlikely]] {
+            if (mapped_ptr == MAP_FAILED) [[unlikely]] {
+                throw std::bad_alloc();
+            }
+
+            if (!commit) {
+                ::madvise(mapped_ptr, aligned_size, MADV_DONTNEED);
+            }
+
+            return {mapped_ptr, aligned_size};
+        }
+
+        // over-aligned request: reserve a window, align up, release the slop
+        const std::size_t reserved_size = aligned_size + align_bytes - granularity;
+        void *const reservation = ::mmap(nullptr, reserved_size, PROT_NONE, flags, -1, 0);
+        if (reservation == MAP_FAILED) [[unlikely]] {
             throw std::bad_alloc();
         }
 
-        if (!commit) {
-            ::madvise(mapped_ptr, aligned_size, MADV_DONTNEED);
+        void *const aligned_ptr = alignForward(reservation, alignment);
+        const std::size_t head_slop = checked_cast<std::size_t>(
+            static_cast<std::byte *>(aligned_ptr) - static_cast<std::byte *>(reservation));
+        const std::size_t tail_slop = reserved_size - head_slop - aligned_size;
+
+        if (::mprotect(aligned_ptr, aligned_size, prot) != 0) [[unlikely]] {
+            ::munmap(reservation, reserved_size);
+            throw std::bad_alloc();
+        }
+        if (head_slop > 0u && ::munmap(reservation, head_slop) != 0) [[unlikely]] {
+            ::munmap(aligned_ptr, aligned_size);
+            throw std::bad_alloc();
+        }
+        if (tail_slop > 0u) {
+            void *const tail = static_cast<std::byte *>(aligned_ptr) + aligned_size;
+            if (::munmap(tail, tail_slop) != 0) [[unlikely]] {
+                ::munmap(aligned_ptr, aligned_size);
+                throw std::bad_alloc();
+            }
         }
 
-        return {mapped_ptr, aligned_size};
+        PPR_ASSERT(alignForward(aligned_ptr, alignment) == aligned_ptr);
+
+        if (!commit) {
+            ::madvise(aligned_ptr, aligned_size, MADV_DONTNEED);
+        }
+
+        return {aligned_ptr, aligned_size};
     }
 
     void pageCommit(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
