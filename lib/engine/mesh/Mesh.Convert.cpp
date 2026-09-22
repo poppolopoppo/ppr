@@ -1,6 +1,7 @@
 module;
 #include "pP/Macros.h"
 #include <mango/core/exception.hpp>
+#include <mango/core/print.hpp>
 #include <mango/import3d/import3d.hpp>
 
 module engine.mesh;
@@ -1199,6 +1200,18 @@ namespace pP {
         }
 
         [[nodiscard]] Expected<SceneAsset> importAndConvert(const std::filesystem::path &dir, const std::string_view file) {
+            // Mango import chatter: the fork dumps every import at
+            // Print::Verbose through a process-global switch (printEnable —
+            // no per-call context). Disable Verbose once here, the single
+            // PPR-side entry point; Error and above stay visible.
+            // Thread-safety is explicit: the switch is global, so per-import
+            // toggling would race restores under parallel imports (the 8-way
+            // hammer). Set-once never restores — concurrent first imports
+            // may redundantly write `false`, and PPR never reads mango
+            // stdout, so that race is noise-only. No own-global added.
+            if (mango::isEnable(mango::Print::Verbose)) {
+                mango::printEnable(mango::Print::Verbose, false);
+            }
             if (dir.empty()
                 or
                 file.empty())
