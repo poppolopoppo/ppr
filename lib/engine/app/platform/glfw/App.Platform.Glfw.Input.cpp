@@ -82,7 +82,7 @@ namespace pP {
     }
 
     const GamepadDevice &GlfwInput::getGamepad(const int controller_index) const noexcept {
-        return m_gamepads[controller_index];
+        return m_gamepads[checked_cast<std::size_t>(controller_index)];
     }
 
     SharedInputDevice GlfwInput::getInputDeviceByID(const InputDeviceID &device_id) const noexcept {
@@ -220,7 +220,7 @@ namespace pP {
         }
 
         GlfwInput &glfw_input = *g_glfw_input;
-        GamepadDevice &gamepad = glfw_input.m_gamepads[jid];
+        GamepadDevice &gamepad = glfw_input.m_gamepads[checked_cast<std::size_t>(jid)];
 
         switch (event) {
             case GLFW_CONNECTED:

@@ -71,7 +71,7 @@ namespace pP {
             monitor_virtual_position,
             ::glfwGetPrimaryMonitor() == p_glfw_monitor);
 
-        return std::move(monitor);
+        return monitor;
     }
 
     // ------------------------------------------------------------------

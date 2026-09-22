@@ -4,6 +4,7 @@ export module engine.app:platform.glfw.player;
 
 import :service.player;
 import :player.graph;
+import :platform.glfw.input;
 
 import engine.core;
 import std;

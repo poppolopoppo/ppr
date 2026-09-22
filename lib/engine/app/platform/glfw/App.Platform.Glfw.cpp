@@ -38,7 +38,7 @@ namespace pP {
             }
         };
 
-        static constexpr GlfwErrorCategory g_glfw_error_category{};
+        static const GlfwErrorCategory g_glfw_error_category{};
 
         [[nodiscard]] const std::error_category &error_category() noexcept {
             return g_glfw_error_category;
