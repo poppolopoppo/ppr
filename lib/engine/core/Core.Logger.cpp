@@ -302,4 +302,65 @@ namespace pP {
             Handler::get().logRaw(emitter, copy_message, params);
         }
     }
+
+    // ------------------------------------------------------------------
+    // first-occurrence gate
+    // ------------------------------------------------------------------
+
+    namespace {
+        [[nodiscard]] u64 onceKey_(const char *file, const unsigned line) noexcept {
+            u64 hash = 1469598103934665603ull;
+            if (file != nullptr) {
+                for (const char *p = file; *p != '\0'; ++p) {
+                    hash ^= static_cast<u64>(static_cast<unsigned char>(*p));
+                    hash *= 1099511628211ull;
+                }
+            }
+            hash ^= static_cast<u64>(line);
+            hash *= 1099511628211ull;
+            return hash == 0u ? 1u : hash;
+        }
+
+        struct OnceState {
+            std::mutex m_mutex{};
+            std::unordered_set<u64> m_seen{};
+        };
+
+        [[nodiscard]] OnceState &onceState() noexcept {
+            static OnceState s_state{};
+            return s_state;
+        }
+
+        [[nodiscard]] bool onceClaimKey_(const u64 key) noexcept {
+            try {
+                OnceState &state = onceState();
+                const std::lock_guard lock{state.m_mutex};
+                return state.m_seen.insert(key).second;
+            } catch (...) {
+                return true;
+            }
+        }
+    } // namespace
+
+    bool Log::Once::claim(const char *file, const unsigned line) noexcept {
+        return onceClaimKey_(onceKey_(file, line));
+    }
+
+    bool Log::Once::claim(const u64 key) noexcept {
+        return onceClaimKey_(key == 0u ? 1u : key);
+    }
+
+    u64 Log::Once::combine(const u64 lhs, const u64 rhs) noexcept {
+        const u64 mixed = (lhs + 0x9E3779B97F4A7C15ull + (rhs << 6u) + (rhs >> 2u)) ^ lhs;
+        return mixed == 0u ? 1u : mixed;
+    }
+
+    void Log::Once::resetForTests() noexcept {
+        try {
+            OnceState &state = onceState();
+            const std::lock_guard lock{state.m_mutex};
+            state.m_seen.clear();
+        } catch (...) {
+        }
+    }
 }

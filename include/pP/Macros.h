@@ -237,12 +237,20 @@ extern "C" void _ReadWriteBarrier();
 #   define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) \
         pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), ## __VA_ARGS__)
 
+#   define PPR_LOG_ONCE(_CATEGORY, _LEVEL, _MESSAGE, ...) \
+        do { if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__))) PPR_LOG(_CATEGORY, _LEVEL, (_MESSAGE), ## __VA_ARGS__); } while (0)
+
+#   define PPR_LOG_ONCE_KEY(_CATEGORY, _LEVEL, _KEY, _MESSAGE, ...) \
+        do { if (::pP::Log::Once::claim(_KEY)) PPR_LOG(_CATEGORY, _LEVEL, (_MESSAGE), ## __VA_ARGS__); } while (0)
+
 #   define PPR_FLUSH_LOG(...) std::ignore = pP::Log::flush(__VA_ARGS__)
 
 #else
 #   define PPR_DECLARE_LOG_CATEGORY(_NAME)
 #   define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)
 #   define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...) (void)0
+#   define PPR_LOG_ONCE(_CATEGORY, _LEVEL, _MESSAGE, ...) (void)0
+#   define PPR_LOG_ONCE_KEY(_CATEGORY, _LEVEL, _KEY, _MESSAGE, ...) (void)0
 #   define PPR_FLUSH_LOG() (void)0
 #endif
 

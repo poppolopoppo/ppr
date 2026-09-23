@@ -93,6 +93,21 @@ export namespace pP {
 
         [[nodiscard]] static std::error_code flush(bool wait = false) noexcept;
 
+        // First-occurrence gate for repetitive lifecycle logging (decode
+        // rejects, dedup hits, empty-scene skips, device-lost busy): one
+        // process-wide claim set keyed by call site (file + line) or an
+        // explicit key. Testable via resetForTests; PPR_LOG_ONCE(_KEY)
+        // macros wrap claim + log so call sites stay one-liners.
+        struct Once {
+            [[nodiscard]] static bool claim(const char *file, unsigned line) noexcept;
+
+            [[nodiscard]] static bool claim(u64 key) noexcept;
+
+            [[nodiscard]] static u64 combine(u64 lhs, u64 rhs) noexcept;
+
+            static void resetForTests() noexcept;
+        };
+
         class Handler;
     };
 
