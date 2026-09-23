@@ -211,6 +211,131 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pP::hashValue(default_handle) == pP::hashValue(copy_handle));
             PPR_TEST_ASSERT(pP::hashValue(default_u32) == pP::hashValue(U32Handle{}));
         };
+
+        PPR_UNIT_TEST (sparse_handle_capabilities) {
+            struct HandleTag {
+            };
+            using Handle64 = pP::Numeric<pP::SparseHandle, HandleTag>;
+
+            static_assert(std::is_standard_layout_v<pP::SparseHandle>);
+            static_assert(std::is_trivially_copyable_v<pP::SparseHandle>);
+            static_assert(sizeof(pP::SparseHandle) == 8u);
+            static_assert(std::is_standard_layout_v<Handle64>);
+            static_assert(sizeof(Handle64) == 8u);
+            static_assert(std::equality_comparable<pP::SparseHandle>);
+            static_assert(std::three_way_comparable<pP::SparseHandle>);
+            static_assert(std::equality_comparable<Handle64>);
+            static_assert(std::three_way_comparable<Handle64>);
+            static_assert(pP::hash::THashable<Handle64>);
+
+            constexpr pP::SparseHandle default_handle{};
+            static_assert(!default_handle.isValid());
+            PPR_TEST_ASSERT(!default_handle.isValid());
+            PPR_TEST_ASSERT(default_handle.m_generation == 0u);
+
+            constexpr pP::SparseHandle live_handle{3u, 7u};
+            static_assert(live_handle.isValid());
+            PPR_TEST_ASSERT(live_handle.isValid());
+            PPR_TEST_ASSERT(live_handle.m_index == 3u);
+            PPR_TEST_ASSERT(live_handle.m_generation == 7u);
+
+            PPR_TEST_ASSERT((live_handle <=> default_handle) == std::strong_ordering::less);
+            PPR_TEST_ASSERT((default_handle <=> live_handle) == std::strong_ordering::greater);
+            PPR_TEST_ASSERT((default_handle <=> pP::SparseHandle{}) == std::strong_ordering::equal);
+            PPR_TEST_ASSERT(hashValue(live_handle) == hashValue(pP::SparseHandle{3u, 7u}));
+            PPR_TEST_ASSERT(hashValue(live_handle) != hashValue(pP::SparseHandle{3u, 8u}));
+
+            constexpr Handle64 default_numeric{};
+            PPR_TEST_ASSERT(!(*default_numeric).isValid());
+            constexpr Handle64 copy_numeric{default_numeric.m_value};
+            PPR_TEST_ASSERT(copy_numeric == default_numeric);
+            PPR_TEST_ASSERT(pP::hashValue(default_numeric) == pP::hashValue(copy_numeric));
+
+            const pP::SparseHandle invalid_from_default = pP::default_value_v;
+            PPR_TEST_ASSERT(!invalid_from_default.isValid());
+        };
+
+        PPR_UNIT_TEST (handle_lifecycle_fail_closed) {
+            pP::SparseVector<int> vec;
+            vec.reserveAssumeEmpty(8u);
+            const auto live = vec.addHandle(42);
+            PPR_TEST_ASSERT(live.isValid());
+            PPR_TEST_ASSERT(live.m_index == 0u);
+            // Fill to capacity so the erased slot below is recycled on next add.
+            while (vec.size() < vec.capacity()) {
+                vec.addHandle(0);
+            }
+            PPR_TEST_ASSERT(vec.contains(live));
+            PPR_TEST_ASSERT(vec.tryGet(live) != nullptr);
+            PPR_TEST_ASSERT(*vec.tryGet(live) == 42);
+            PPR_TEST_ASSERT(vec.get(live) == 42);
+
+            PPR_TEST_ASSERT(vec.handle(0u) == live);
+            auto it = vec.begin();
+            PPR_TEST_ASSERT(it.getHandle() == live);
+            PPR_TEST_ASSERT(pP::SparseVector<int>::handle(it) == live);
+
+            constexpr pP::SparseHandle invalid{};
+            PPR_TEST_ASSERT(!vec.contains(invalid));
+            PPR_TEST_ASSERT(vec.tryGet(invalid) == nullptr);
+            PPR_TEST_ASSERT(!vec.erase(invalid));
+
+            PPR_TEST_ASSERT(vec.erase(live));
+            PPR_TEST_ASSERT(!vec.contains(live));
+            PPR_TEST_ASSERT(vec.tryGet(live) == nullptr);
+            PPR_TEST_ASSERT(!vec.erase(live));
+
+            const auto fresh = vec.addHandle(7);
+            PPR_TEST_ASSERT(fresh.isValid());
+            PPR_TEST_ASSERT(fresh.m_index == live.m_index);
+            PPR_TEST_ASSERT(fresh.m_generation != live.m_generation);
+            PPR_TEST_ASSERT(!vec.contains(live));
+            PPR_TEST_ASSERT(vec.tryGet(live) == nullptr);
+            PPR_TEST_ASSERT(vec.contains(fresh));
+            PPR_TEST_ASSERT(vec[fresh] == 7);
+        };
+
+        PPR_UNIT_TEST (handle_wrap_stress_no_aba) {
+            pP::SparseVector<int> vec;
+            vec.reserveAssumeEmpty(8u);
+            const pP::SparseHandle first = vec.addHandle(0);
+            PPR_TEST_ASSERT(first.m_index == 0u);
+            // Fill to capacity, then free slot 0: every add below recycles the
+            // same logical slot, exercising 100,000 reuse generations there.
+            while (vec.size() < vec.capacity()) {
+                vec.addHandle(-1);
+            }
+            PPR_TEST_ASSERT(vec.erase(first));
+
+            std::vector<pP::SparseHandle> history;
+            history.reserve(100000u);
+
+            for (u32 i = 0u; i < 100000u; ++i) {
+                const pP::SparseHandle live = vec.addHandle(static_cast<int>(i));
+                PPR_TEST_ASSERT(live.isValid());
+                PPR_TEST_ASSERT(live.m_index == 0u);
+                history.push_back(live);
+                PPR_TEST_ASSERT(vec.erase(live));
+            }
+            PPR_TEST_ASSERT(history.size() == 100000u);
+
+            for (u32 i = 1u; i < history.size(); ++i) {
+                PPR_TEST_ASSERT(history[i].m_generation == history[i - 1u].m_generation + 1u);
+            }
+
+            for (u32 i = 0u; i < history.size(); ++i) {
+                PPR_TEST_ASSERT(!vec.contains(history[i]));
+                PPR_TEST_ASSERT(vec.tryGet(history[i]) == nullptr);
+                PPR_TEST_ASSERT(!vec.erase(history[i]));
+            }
+
+            const pP::SparseHandle tail = vec.addHandle(999999);
+            PPR_TEST_ASSERT(tail.isValid());
+            PPR_TEST_ASSERT(tail.m_index == 0u);
+            PPR_TEST_ASSERT(vec.contains(tail));
+            PPR_TEST_ASSERT(vec.tryGet(tail) != nullptr);
+            PPR_TEST_ASSERT(*vec.tryGet(tail) == 999999);
+        };
     }
 } // namespace pP::tests::detail
 
@@ -229,6 +354,9 @@ namespace pP::tests {
             detail::Sparse_vector::seed_reuse_invalidates_stale,
             detail::Sparse_vector::key_ordering_invalid_vs_valid,
             detail::Sparse_vector::numeric_handle_capabilities,
+            detail::Sparse_vector::sparse_handle_capabilities,
+            detail::Sparse_vector::handle_lifecycle_fail_closed,
+            detail::Sparse_vector::handle_wrap_stress_no_aba,
         });
     };
 

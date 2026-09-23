@@ -30,6 +30,7 @@ export namespace pP {
 
         PPR_PRAGMA_WARNING_PUSH()
         PPR_PRAGMA_WARNING_DISABLE_MSVC(4324)
+
         template<typename T>
         struct alignas(T) SparseVectorItem {
             struct FreeList { // NOLINT(*-pro-type-member-init)
@@ -42,6 +43,10 @@ export namespace pP {
             };
 
             SparseVectorPayload m_payload;
+            // Full 32-bit allocation generation for SparseHandle validation.
+            // The 8-bit payload seed stays the lossy GPU-compatible projection;
+            // this counter never wraps in practice, so stale handles stay dead.
+            u32 m_generation = 0u;
 
             [[nodiscard]] PPR_FORCE_INLINE constexpr T *getValuePtr() noexcept {
                 return reinterpret_cast<T *>(&m_storage);
@@ -51,6 +56,7 @@ export namespace pP {
                 return reinterpret_cast<const T *>(&m_storage);
             }
         };
+
         PPR_PRAGMA_WARNING_POP()
     }
 
@@ -85,6 +91,47 @@ export namespace pP {
             return hashValue(std::bit_cast<u32>(key));
         }
     };
+
+    // ------------------------------------------------------------------
+    // cache-local 64-bit sparse handle: full-generation identity for one container.
+    // SparseKeyId stays the 4-byte GPU-compatible key (u24 index + u8 seed, wraps
+    // after 255 reuse cycles); SparseHandle carries the same slot index plus the
+    // full 32-bit allocation generation, which cannot wrap in practice. Handles
+    // are container-local by contract: never validate a handle against a
+    // different container. Default-constructed handles are invalid.
+    // ------------------------------------------------------------------
+
+    struct SparseHandle {
+        // Plain u32 members (no bitfields): the 8-byte image has no padding,
+        // so bit_cast hashing is deterministic for equal handles.
+        u32 m_index = 0xFFFFFFu;
+        u32 m_generation = 0u;
+
+        constexpr SparseHandle() noexcept = default;
+
+        constexpr SparseHandle(const u32 index, const u32 generation) noexcept
+            : m_index(index), m_generation(generation) {
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isValid() const noexcept {
+            return m_generation != 0u;
+        }
+
+        [[nodiscard]] constexpr bool operator ==(const SparseHandle &other) const noexcept = default;
+
+        [[nodiscard]] constexpr std::strong_ordering operator <=>(const SparseHandle other) const noexcept {
+            if (isValid() && other.isValid()) [[likely]] {
+                return m_index <=> other.m_index;
+            }
+            return isValid() ? std::strong_ordering::less : (other.isValid() ? std::strong_ordering::greater : std::strong_ordering::equal);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE friend constexpr hash_t hashValue(const SparseHandle handle) noexcept {
+            return hashValue(std::bit_cast<u64>(handle));
+        }
+    };
+
+    static_assert(sizeof(SparseHandle) == 8u);
 
     // ------------------------------------------------------------------
     // sparse vector iterator
@@ -167,6 +214,13 @@ export namespace pP {
                     return SparseKeyId(m_stable_it->m_payload, m_stable_it.getIndex());
                 }
                 return default_value_v; // invalid key
+            }
+
+            [[nodiscard]] PPR_FORCE_INLINE constexpr SparseHandle getHandle() const noexcept {
+                if (isValid()) [[likely]] {
+                    return SparseHandle(m_stable_it.getIndex(), m_stable_it->m_generation);
+                }
+                return default_value_v; // invalid handle
             }
 
             [[nodiscard]] PPR_FORCE_INLINE constexpr u32 getIndex() const noexcept {
@@ -268,6 +322,13 @@ export namespace pP {
         u32 m_size_alive: 24 = 0u;
         u32 m_seed_alloc: 8 = 0u;
 
+        // Monotonic full-generation source for SparseHandle identity. Never reset
+        // (not even by clear/reset): reuse must always mint a fresh generation so
+        // no historical handle validates again. u32 space (4B reuse cycles per
+        // container lifetime) cannot wrap in practice; the increment still skips
+        // 0 to preserve the invalid sentinel if it ever did.
+        u32 m_generation_alloc = 0u;
+
         [[nodiscard]] constexpr u32 nextAllocationSeed_() noexcept {
             if (m_seed_alloc == 0u) [[unlikely]] {
                 m_seed_alloc = static_cast<u32>(hash::mix(stable_vector::m_slices.m_packed));
@@ -275,6 +336,18 @@ export namespace pP {
             m_seed_alloc = std::max(1u, (m_seed_alloc + 1u) & 0xFFu);
             PPR_ASSERT(m_seed_alloc);
             return m_seed_alloc;
+        }
+
+        [[nodiscard]] constexpr u32 nextHandleGeneration_() noexcept {
+            if (m_generation_alloc == 0u) [[unlikely]] {
+                m_generation_alloc = static_cast<u32>(hash::mix(stable_vector::m_slices.m_packed));
+            }
+            m_generation_alloc += 1u;
+            if (m_generation_alloc == 0u) [[unlikely]] {
+                m_generation_alloc = 1u;
+            }
+            PPR_ASSERT(m_generation_alloc);
+            return m_generation_alloc;
         }
 
         [[nodiscard]] constexpr u32 freePopAssumeNotEmpty_() noexcept {
@@ -339,6 +412,11 @@ export namespace pP {
                 return SparseKeyId{m_item_ptr->m_payload, m_index};
             }
 
+            [[nodiscard]] PPR_FORCE_INLINE SparseHandle getHandle() const noexcept {
+                PPR_ASSERT(m_item_ptr != nullptr);
+                return SparseHandle{m_index, m_item_ptr->m_generation};
+            }
+
             [[nodiscard]] PPR_FORCE_INLINE T *launderValuePtr() const noexcept {
                 PPR_ASSERT(m_item_ptr != nullptr);
                 return std::launder(m_item_ptr->getValuePtr());
@@ -391,6 +469,7 @@ export namespace pP {
 
             new_alloc.m_item_ptr->m_payload.m_seed = nextAllocationSeed_();
             new_alloc.m_item_ptr->m_payload.m_skip = 0u;
+            new_alloc.m_item_ptr->m_generation = nextHandleGeneration_();
 
             m_size_alive++;
             PPR_ASSERT(m_size_alive <= stable_vector::m_size);
@@ -407,12 +486,13 @@ export namespace pP {
             mem::poisonDestroyed(item.getValuePtr());
             mem::unpoisonUninitialized(item.getValuePtr());
 
-            new (std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
+            new(std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
                 .m_next_free = none_v,
             };
 
             item.m_payload.m_seed = 0u;
             item.m_payload.m_skip = 1u;
+            item.m_generation = 0u;
 
             // https://plflib.org/matt_bentley_-_the_low_complexity_jump-counting_pattern.pdf
             const u32 skip_left = (old_alloc_index > 0u ? stable_vector::at(old_alloc_index - 1u).m_payload.m_skip : 0u);
@@ -485,9 +565,9 @@ export namespace pP {
         }
 
         template<typename AllocatorLikeT>
-            requires std::is_constructible_v<stable_vector, AllocatorLikeT&&>
+            requires std::is_constructible_v<stable_vector, AllocatorLikeT &&>
         explicit constexpr SparseVector(AllocatorLikeT &&al_init)
-            noexcept(std::is_nothrow_constructible_v<stable_vector, AllocatorLikeT&&>)
+            noexcept(std::is_nothrow_constructible_v<stable_vector, AllocatorLikeT &&>)
             : stable_vector(std::forward<AllocatorLikeT>(al_init)) {
         }
 
@@ -597,6 +677,24 @@ export namespace pP {
             return default_value_v;
         }
 
+        [[nodiscard]] static constexpr SparseHandle handle(const const_iterator &it) noexcept {
+            // getHandle already maps end iterators to invalid; free slots carry
+            // generation 0 (zeroed at deallocate), so they fail closed here too.
+            if (const SparseHandle probed = it.getHandle();
+                PPR_ENSURE(probed.isValid())) [[likely]] {
+                return probed;
+            }
+            return default_value_v;
+        }
+
+        [[nodiscard]] constexpr SparseHandle handle(const std::size_t index) noexcept {
+            if (const sparse_vector_item &item = stable_vector::at(index);
+                PPR_ENSURE(item.m_payload.m_seed && item.m_payload.m_skip == 0u)) [[likely]] {
+                return SparseHandle(static_cast<u32>(index), item.m_generation);
+            }
+            return default_value_v;
+        }
+
         [[nodiscard]] constexpr auto *tryGet(this auto &&self, const SparseKeyId key) noexcept {
             if (auto &item = self.at(key.m_index);
                 item.m_payload.m_seed == key.m_seed) [[likely]] {
@@ -621,6 +719,43 @@ export namespace pP {
 
         [[nodiscard]] PPR_FORCE_INLINE constexpr bool contains(const SparseKeyId &key) const noexcept {
             return tryGet(key) != nullptr;
+        }
+
+        // Full-generation handle lookup: fail-closed on invalid handles and on
+        // out-of-range slots (unlike the legacy key path, which asserts). A
+        // generation mismatch — including any historical handle for a recycled
+        // slot — misses, never aliases the live occupant.
+        [[nodiscard]] constexpr auto *tryGet(this auto &&self, const SparseHandle handle) noexcept {
+            using item_ptr_t = decltype(self.at(handle.m_index).getValuePtr());
+            if (not handle.isValid()) [[unlikely]] {
+                return static_cast<item_ptr_t>(nullptr);
+            }
+            if (handle.m_index >= self.stable_vector::size()) [[unlikely]] {
+                return static_cast<item_ptr_t>(nullptr);
+            }
+            if (auto &item = self.at(handle.m_index);
+                item.m_generation == handle.m_generation) [[likely]] {
+                PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
+                return item.getValuePtr();
+            } else {
+                return static_cast<item_ptr_t>(nullptr);
+            }
+        }
+
+        [[nodiscard]] constexpr auto &get(this auto &&self, const SparseHandle handle) noexcept {
+            auto &item = self.at(handle.m_index);
+            PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
+            PPR_ASSERT(item.m_generation == handle.m_generation);
+            return *item.getValuePtr();
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &
+        operator [](this auto &&self, const SparseHandle handle) noexcept {
+            return self.get(handle);
+        }
+
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool contains(const SparseHandle &handle) const noexcept {
+            return tryGet(handle) != nullptr;
         }
 
         template<typename ValueT>
@@ -676,6 +811,33 @@ export namespace pP {
             return alloc.getKeyId();
         }
 
+        [[nodiscard]] constexpr std::pair<SparseHandle, T *>
+        addHandleUninitialized() noexcept(std::is_nothrow_move_constructible_v<T>) {
+            const AllocationResult_ alloc = allocateItem_();
+            return std::make_pair(alloc.getHandle(), alloc.launderValuePtr());
+        }
+
+        constexpr std::pair<SparseHandle, T *>
+        addHandleDefault() noexcept(std::is_nothrow_move_constructible_v<T>)
+            requires std::is_default_constructible_v<T> {
+            const AllocationResult_ alloc = allocateItem_();
+            T *const value_ptr = alloc.launderValuePtr();
+            std::construct_at(value_ptr);
+            return std::make_pair(alloc.getHandle(), value_ptr);
+        }
+
+        constexpr SparseHandle addHandle(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>) {
+            const AllocationResult_ alloc = allocateItem_();
+            std::construct_at(alloc.launderValuePtr(), std::move(rvalue));
+            return alloc.getHandle();
+        }
+
+        constexpr SparseHandle addHandle(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>) {
+            const AllocationResult_ alloc = allocateItem_();
+            std::construct_at(alloc.launderValuePtr(), value);
+            return alloc.getHandle();
+        }
+
         template<typename... ArgsT>
         constexpr iterator emplace(ArgsT &&... args)
             noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
@@ -683,6 +845,15 @@ export namespace pP {
             const AllocationResult_ alloc = allocateItem_();
             std::construct_at(alloc.launderValuePtr(), std::forward<ArgsT>(args)...);
             return iterator(*this, alloc.m_index);
+        }
+
+        template<typename... ArgsT>
+        constexpr std::pair<SparseHandle, iterator> emplaceHandle(ArgsT &&... args)
+            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires std::is_constructible_v<T, ArgsT &&...> {
+            const AllocationResult_ alloc = allocateItem_();
+            std::construct_at(alloc.launderValuePtr(), std::forward<ArgsT>(args)...);
+            return std::make_pair(alloc.getHandle(), iterator(*this, alloc.m_index));
         }
 
         template<std::ranges::range RangeT>
@@ -721,6 +892,24 @@ export namespace pP {
 
                 std::destroy_at(item.getValuePtr());
                 deallocateItem_(key.m_index, item);
+                return true;
+            }
+            return false;
+        }
+
+        constexpr bool erase(const SparseHandle handle) noexcept(std::is_nothrow_destructible_v<T>) {
+            if (not handle.isValid()) [[unlikely]] {
+                return false;
+            }
+            if (handle.m_index >= stable_vector::size()) [[unlikely]] {
+                return false;
+            }
+            if (sparse_vector_item &item = stable_vector::at(handle.m_index);
+                item.m_generation == handle.m_generation) [[likely]] {
+                PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
+
+                std::destroy_at(item.getValuePtr());
+                deallocateItem_(handle.m_index, item);
                 return true;
             }
             return false;
@@ -785,10 +974,12 @@ export namespace pP {
             m_free_tail = src.m_free_tail;
             m_size_alive = src.m_size_alive;
             m_seed_alloc = src.m_seed_alloc;
+            m_generation_alloc = src.m_generation_alloc;
 
             src.m_free_tail = none_v;
             src.m_size_alive = 0u;
             src.m_seed_alloc = 0u;
+            src.m_generation_alloc = 0u;
         }
 
         friend void swap(SparseVector &lhs, SparseVector &rhs) noexcept {
@@ -807,6 +998,11 @@ export namespace pP {
                 const u32 tmp = lhs.m_seed_alloc;
                 lhs.m_seed_alloc = rhs.m_seed_alloc;
                 rhs.m_seed_alloc = tmp;
+            }
+            {
+                const u32 tmp = lhs.m_generation_alloc;
+                lhs.m_generation_alloc = rhs.m_generation_alloc;
+                rhs.m_generation_alloc = tmp;
             }
         }
     };
