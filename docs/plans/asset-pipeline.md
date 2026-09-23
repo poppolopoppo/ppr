@@ -513,6 +513,8 @@ C++↔Slang mirror table (hardening: check this, not oral tradition):
 | `GpuMaterial` (3×float4 rows + `uint4 m_textures` @48 + texcoord/flags/pad) | 80 | `GpuMaterial` (float4×3 + uint4 + uint + uint + uint2) | 80 B stride |
 | `PushScalars` (vb_offset/ib_start/index_count/material/base_vertex) | 20 | `PushScalars` (uint×4 + int) vertex entry-param | 20 B entry-param block |
 | `float4x4` model matrix | 64 | `float4x4 g_model` vertex entry-param | 64 B entry-param block |
+| `InstancePayload` (model @0 + scalars @64 + 12 B pad, 16-aligned) | 96 | `InstancePayload` (float4x4 + uint×4 + int + uint3) | 96 B `StructuredBuffer` stride |
+| per-(prim,instance) `IndirectDrawArguments` + u32 draw-count header | 16 + 4 | `IndirectDrawArguments` (D3D12 ExecuteIndirect record) | args buffer, maxCount clamped to payload capacity |
 
 Enforcement: `static_assert`s on `sizeof` (+ `m_textures` @48) in
 `App.Renderer.GpuCaches.cppm`, `sizeof(PushScalars) == 20` in
