@@ -101,6 +101,7 @@ namespace pP {
 
     std::error_code TriangleBagCache::initialize(rhi::IDevice &device) {
         if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            PPR_LOG_ONCE(GpuCaches, warning, "TriangleBagCache initialize while device lost — busy");
             return std::make_error_code(std::errc::device_or_resource_busy);
         }
         if (m_initialized) {
@@ -125,6 +126,9 @@ namespace pP {
         [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "TriangleBagCache shut down", {
+            {"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()},
+            {"index_used", indexUsed()}, {"index_capacity", indexCapacity()}, {"ranges", rangeCount()}});
         for (BagBucket &bucket: m_buckets) {
             bucket.m_vertex_buffer.setNull();
             bucket.m_index_buffer.setNull();
@@ -150,6 +154,9 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "TriangleBagCache device lost", {
+            {"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()},
+            {"index_used", indexUsed()}, {"index_capacity", indexCapacity()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
         return default_value_v;
@@ -324,6 +331,9 @@ namespace pP {
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+        PPR_LOG(GpuCaches, info, "TriangleBagCache released range",
+            {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"ranges", rangeCount()}});
+        PPR_LOG(GpuCaches, debug, "TriangleBagCache evicted range", {{"ranges", rangeCount()}});
         return default_value_v;
     }
 
@@ -384,6 +394,7 @@ namespace pP {
     std::error_code BindlessTextureCache::initialize(
         rhi::IDevice &device, const u32 texture_budget, const rhi::DescriptorHandle fallback_descriptor) {
         if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            PPR_LOG_ONCE(GpuCaches, warning, "BindlessTextureCache initialize while device lost — busy");
             return std::make_error_code(std::errc::device_or_resource_busy);
         }
         if (m_initialized) {
@@ -397,6 +408,7 @@ namespace pP {
             return std::make_error_code(std::errc::function_not_supported);
         }
         if (texture_budget == 0u) [[unlikely]] {
+            PPR_LOG(GpuCaches, error, "BindlessTextureCache needs a non-zero texture budget");
             return std::make_error_code(std::errc::invalid_argument);
         }
         rhi::BufferDesc descriptor_desc{};
@@ -427,6 +439,8 @@ namespace pP {
         [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "BindlessTextureCache shut down",
+            {{"used", textureUsed()}, {"budget", textureBudget()}, {"entries", entryCount()}});
         m_dedup.clear();
         m_entries.clear();
         m_descriptor_buffer.setNull();
@@ -450,6 +464,8 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "BindlessTextureCache device lost",
+            {{"used", textureUsed()}, {"budget", textureBudget()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
         return default_value_v;
@@ -543,6 +559,8 @@ namespace pP {
                 bytesEqual_(entry->m_pinned, asset))
             {
                 ++entry->m_refcount;
+                PPR_LOG(GpuCaches, debug, "texture upload dedup hit",
+                    {{"slot", *entry->m_slot}, {"used", textureUsed()}, {"budget", textureBudget()}});
                 return found->second;
             }
         }
@@ -647,7 +665,10 @@ namespace pP {
             if (--entry->m_refcount == 0u) {
                 std::ignore = m_dedup.erase(entry->m_key);
                 std::ignore = m_entries.erase(key);
+                PPR_LOG(GpuCaches, debug, "texture entry evicted", {{"used", textureUsed()}, {"budget", textureBudget()}});
             }
+            PPR_LOG(GpuCaches, info, "BindlessTextureCache released texture",
+                {{"used", textureUsed()}, {"budget", textureBudget()}});
             return default_value_v;
         }
         return std::make_error_code(std::errc::invalid_argument);
@@ -696,6 +717,7 @@ namespace pP {
 
     std::error_code BindlessMaterialCache::initialize(rhi::IDevice &device, rhi::ISampler *const shared_sampler) {
         if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            PPR_LOG_ONCE(GpuCaches, warning, "BindlessMaterialCache initialize while device lost — busy");
             return std::make_error_code(std::errc::device_or_resource_busy);
         }
         if (m_initialized) {
@@ -703,6 +725,7 @@ namespace pP {
             return default_value_v;
         }
         if (shared_sampler == nullptr) [[unlikely]] {
+            PPR_LOG(GpuCaches, error, "BindlessMaterialCache needs a non-null shared sampler");
             return std::make_error_code(std::errc::invalid_argument);
         }
         if (not
@@ -741,6 +764,8 @@ namespace pP {
         [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "BindlessMaterialCache shut down",
+            {{"used", materialUsed()}, {"capacity", materialCapacity()}, {"entries", entryCount()}});
         m_material_buffer.setNull();
         m_entries.clear();
         m_next_slot = 0u;
@@ -763,6 +788,8 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        PPR_LOG(GpuCaches, info, "BindlessMaterialCache device lost",
+            {{"used", materialUsed()}, {"capacity", materialCapacity()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
         return default_value_v;
@@ -855,6 +882,10 @@ namespace pP {
         {
             const u32 slot = entry->m_slot;
             std::ignore = m_entries.erase(key);
+            PPR_LOG(GpuCaches, info, "BindlessMaterialCache released material",
+                {{"used", materialUsed()}, {"capacity", materialCapacity()}});
+            PPR_LOG(GpuCaches, debug, "material entry evicted",
+                {{"slot", slot}, {"used", materialUsed()}, {"capacity", materialCapacity()}});
             if (m_residency == CacheResidency::device_lost) {
                 return default_value_v;
             }

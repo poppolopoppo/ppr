@@ -592,12 +592,14 @@ namespace pP {
         }
         if (not m_render_pipeline_key.has_value() or
             not(static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) == signature)) {
+            PPR_LOG(TrianglePass, debug, "pipeline cache cleared on signature change");
             m_variant_pipelines.clear();
             m_indirect_pipelines.clear();
             m_render_pipeline_key.reset();
             m_render_pipeline.setNull();
         }
         if (const auto found = pipelines.find(variant); found != pipelines.end()) {
+            PPR_LOG(TrianglePass, debug, "pipeline cache hit");
             return found->second.get();
         }
         if (signature.m_color_formats.size() != 1u or
@@ -834,6 +836,9 @@ namespace pP {
             return std::make_error_code(std::errc::not_connected);
         }
         if (m_instances.empty()) {
+            PPR_LOG_ONCE_KEY(TrianglePass, debug,
+                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                "render skipped: empty scene");
             return default_value_v;
         }
         Expected<Array<StagedDraw> > staged = stageDraws_();
@@ -1042,6 +1047,7 @@ namespace pP {
             if (not entry.m_busy) {
                 entry.m_busy = true;
                 if (++entry.m_version == 0u) [[unlikely]] {
+                    PPR_LOG(TrianglePass, warning, "indirect ring slot version wrapped", {{"slot", slot}});
                     ++entry.m_version;
                 }
                 entry.m_fence_value = m_next_fence_value;
@@ -1049,6 +1055,8 @@ namespace pP {
                 return slot;
             }
         }
+        PPR_LOG(TrianglePass, warning, "indirect ring full — GPU still draining",
+            {{"completed_fence", completed}, {"frames", kIndirectRingFrames}});
         return std::unexpected{std::make_error_code(std::errc::resource_unavailable_try_again)};
     }
 
@@ -1064,6 +1072,9 @@ namespace pP {
         }
         clearPublished_();
         if (m_instances.empty()) {
+            PPR_LOG_ONCE_KEY(TrianglePass, debug,
+                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                "publish skipped: empty scene");
             return default_value_v;
         }
         Expected<Array<StagedDraw> > staged = stageDraws_();
@@ -1096,6 +1107,8 @@ namespace pP {
             return plan.error();
         }
         if (plan->m_total_count == 0u) [[unlikely]] {
+            PPR_LOG(TrianglePass, warning, "publish planned zero draws for a non-empty stage",
+                {{"staged", staged->size()}});
             return std::make_error_code(std::errc::invalid_argument);
         }
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureComputeState_(device));
@@ -1257,6 +1270,9 @@ namespace pP {
         }
         if (m_published_slot >= kIndirectRingFrames or m_published_count == 0u or
             m_published_buckets.empty()) {
+            PPR_LOG_ONCE_KEY(TrianglePass, debug,
+                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                "draw skipped: nothing published");
             return default_value_v;
         }
         m_texture_heap_bound = false;
