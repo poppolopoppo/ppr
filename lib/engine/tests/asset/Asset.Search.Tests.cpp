@@ -14,7 +14,7 @@ namespace pP::tests::detail {
         // Mesh fixtures stage POST_BUILD next to the test executable; CTest
         // runs with WORKING_DIRECTORY == that directory (Ninja single-config),
         // so current_path()/"meshes" is the getContentDir()/"meshes" analogue.
-        // P0c trap: Mango importScene concatenates dir+file VERBATIM, so dir
+        // Path trap: Mango importScene concatenates dir+file VERBATIM, so dir
         // must carry a trailing separator (operator/ with "" appends one).
         [[nodiscard]] std::filesystem::path meshDir() {
             return std::filesystem::current_path() / "meshes" / "";

@@ -135,7 +135,7 @@ namespace pP {
         // ShaderService — singleton implementing IShaderService
         // ------------------------------------------------------------------
 
-        // P3 bindless: program composites link on the session, so a profileless
+        // Bindless: program composites link on the session, so a profileless
         // DXIL target defaults stage profiles to vs_5_1 and DXC rejects them.
         // Pin sm_6_6 (descriptor heaps need it); other formats keep defaults.
         void pinSm66ForDxil_(IGlobalSession *const session, TargetDesc &target_desc, const SlangCompileTarget format) {

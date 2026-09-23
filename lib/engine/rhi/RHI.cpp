@@ -261,7 +261,7 @@ namespace pP {
                 desc.requiredFeatures = required_features;
                 desc.requiredFeatureCount = safe_narrowing(std::size(required_features));
 
-                // P2 bindless budget (§4): create-time only. Feature::Bindless
+                // Bindless budget: create-time only. Feature::Bindless
                 // stays OUT of requiredFeatures (would fail weak hardware);
                 // pass caches check hasFeature(Bindless) at init instead.
                 desc.bindless.textureCount = rhi::kBindlessTextureBudget;
@@ -279,8 +279,7 @@ namespace pP {
                 rhi::ComPtr<rhi::IDevice> device;
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
-                if (not
-                    device->hasFeature(rhi::Feature::Bindless))
+                if (not device->hasFeature(rhi::Feature::Bindless))
                 {
                     PPR_LOG(RHI, warning, "device lacks bindless support; GPU caches will fail at init", {
                         {"device_type", getDeviceTypeName_(device_type)}

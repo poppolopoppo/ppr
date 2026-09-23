@@ -8,7 +8,7 @@ import std;
 
 namespace pP::tests::detail {
     namespace Staging {
-        // P0c trap: Mango importScene concatenates path+filename verbatim, so a
+        // Path trap: Mango importScene concatenates path+filename verbatim, so a
         // directory spelling without trailing separator silently mis-resolves.
         // The staging helpers must join with operator/ (separator-agnostic).
         // Proven behaviorally: the joined file resolves; verbatim concat does not.

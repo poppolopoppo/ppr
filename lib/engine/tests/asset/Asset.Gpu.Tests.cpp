@@ -29,13 +29,10 @@ namespace pP::tests::detail::SharedGpu {
 
 namespace pP::tests::detail {
     namespace Gpu {
-        // GPU rows are plain float arrays (Gate 3 C2); mango float4 is the
+        // GPU rows are plain float arrays; mango float4 is the
         // expected side only (float4 == float4 yields a simd mask, not bool).
         [[nodiscard]] bool float4Equal_(const float (&lhs)[4], const float4 &rhs) noexcept {
-            return lhs[0] == rhs.x
-            and lhs[1] == rhs.y
-            and lhs[2] == rhs.z
-            and lhs[3] == rhs.w;
+            return lhs[0] == rhs.x and lhs[1] == rhs.y and lhs[2] == rhs.z and lhs[3] == rhs.w;
         }
 
         PPR_UNIT_TEST (handles_default_invalid) {
@@ -126,11 +123,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(rhi::kBindlessBufferBudget == 1024u);
         };
 
-        // P2-entry tangent-w probe (Gate 2 C3): file-tangent vs MikkTSpace
-        // lighting compare. P0c mirror math + P1 w=-w stand; this probe proves
-        // the w sign is lighting-observable (mirrored bitangent flips the
-        // perturbation response), so an inversion cannot hide. Final
-        // arbitration is the P3 distinctive-texel render gate.
+        // Tangent-w probe: file-tangent vs MikkTSpace lighting compare. Mirror
+        // math + w=-w stand; this probe proves the w sign is lighting-observable
+        // (mirrored bitangent flips the perturbation response), so an inversion
+        // cannot hide. Final arbitration is the distinctive-texel render gate.
         PPR_UNIT_TEST (tangent_w_sign_is_lighting_observable) {
             // Plain lane math (no mango vector operators): bitangent = w * (n × t).
             const float normal[3]{0.0f, 0.0f, 1.0f};
@@ -159,7 +155,7 @@ namespace pP::tests::detail {
                 lighting[sign] = perturbed[0] * light[0] + perturbed[1] * light[1] + perturbed[2] * light[2];
             }
             PPR_TEST_ASSERT(lighting[0] != lighting[1]);
-            // Converted fixtures keep unit tangents with |w| == 1 (P1 w=-w applied).
+            // Converted fixtures keep unit tangents with |w| == 1 (w=-w applied).
             for (const char *const file: {"textured_quad.glb", "textured_box.gltf"}) {
                 const Expected<mesh::SceneAsset> scene =
                         mesh::importAndConvert(std::filesystem::current_path() / "meshes" / "", file);
@@ -177,12 +173,12 @@ namespace pP::tests::detail {
             }
         };
 
-        // P2-entry hammer (Gate 2 C3): 8-way parallel import/decode after
+        // Hammer: 8-way parallel import/decode after
         // re-verifying the Mango claims on disk — ImageServer has no mutex
         // (read-only post-init: image.cpp:177-280, plain std::map), KTX2
         // single-slot transcode is guarded by our static mutex + immediate
         // clone (Image.Decode.cpp), decode is per-job (no shared decoder).
-        // P0c trap honored: Mango concatenates dir+file verbatim, so the dir
+        // Path trap honored: Mango concatenates dir+file verbatim, so the dir
         // carries a trailing separator.
         [[nodiscard]] std::filesystem::path hammerMeshDir() {
             return std::filesystem::current_path() / "meshes" / "";
@@ -278,7 +274,7 @@ namespace pP::tests::detail {
             return vert;
         }
 
-        // Phase 6 A2 synthetic scenes: one quad mesh, one prim, one
+        // Synthetic scenes: one quad mesh, one prim, one
         // base-color-textured material, one image ref. Distinct solid colors
         // give distinct dedup bytes; equal colors share one cache entry.
         [[nodiscard]] Expected<image::ImageAsset> solidImage_(const u8 r, const u8 g, const u8 b) {
@@ -654,7 +650,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.bagCache().release(*bag));
         };
 
-        // Phase 6 A2: two scenes coexist through ONE pass with independent
+        // Two scenes coexist through ONE pass with independent
         // unload — A stays drawable while B loads/unloads beside it, and
         // unloading A leaves B drawable. Caches stay pass-owned throughout.
         PPR_UNIT_TEST (two_scenes_coexist_and_unload_independently) {
@@ -701,7 +697,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*up_b));
         };
 
-        // Phase 6 A2: identical bytes dedup to one refcounted entry — the
+        // Identical bytes dedup to one refcounted entry — the
         // first unload retires one owner, the survivor keeps its texture.
         PPR_UNIT_TEST (two_scenes_shared_texture_survives_single_unload) {
             const auto rhi = SharedGpu::rhiService();
@@ -741,7 +737,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.textureCache().entryCount() == 0u);
         };
 
-        // Phase 6 A2: scene releases are single-shot — repeats and
+        // Scene releases are single-shot — repeats and
         // never-issued scenes fail closed without touching the caches.
         PPR_UNIT_TEST (scene_double_release_fails_closed) {
             const auto rhi = SharedGpu::rhiService();
@@ -777,8 +773,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*up_b));
         };
 
-        // Phase 6 A3 (single boot: the tier runs 3 loops under 120 s, so
-        // lifecycle + rebase share one device): residency state machine —
+        // Single boot (lifecycle + rebase share one device): residency state machine —
         // uninitialized → ready → device_lost → uninitialized (shutdown;
         // restart is shutdown + initialize) — plus the composed-identity ABA
         // proof (handles carry the full 32-bit generation while SparseVector
@@ -956,8 +951,7 @@ namespace pP::tests {
         });
     };
 
-    // Stress tier (Phase 5): the 8-way parallel import/decode storm runs
-    // alone so the hammer/stress CI tier stays independent of GPU/readback.
+    // The 8-way parallel import/decode storm runs alone, independent of GPU/readback.
     const UnitTest stress = UnitTest::Named("stress") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Gpu::hammer_8way_import_decode,

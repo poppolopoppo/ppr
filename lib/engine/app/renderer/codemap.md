@@ -59,6 +59,15 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   refcount + pin-while-held), `BindlessMaterialCache` (stable `GpuMaterial` slots, 80 B stride),
   `buildGpuMaterial` pack mapping, pipeline-variant key. Render-thread confined; shutdown
   caches → sampler → pipelines before renderer `waitOnHost` (§2.4).
+- Residency/receipt/single-load rules (`TrianglePass` + `GpuCaches`): `uploadScene`
+  issues one receipt nonce per scene and `releaseScene` consumes it first, so copies
+  share the receipt and repeats fail closed (`invalid_argument`) without decrementing
+  a surviving scene's refcounted texture entry. Material slots never recycle and
+  texture heap slot 0 stays pinned to the white fallback; capacity overflow is
+  deterministic fail-closed (`no_buffer_space`), never a partial upload.
+- `hashValue(TrianglePipelineVariant)` seeds the trivial hash with
+  `hash::default_seed_v`, so variant keys are deterministic across runs (stable
+  pipeline-cache lookup, no seed-0 degenerate combine).
 - `initialize(rhi, shader, content_dir)`: bindless program/layout + `caches.initialize(device)`
   with reverse-order rollback; `createShaderProgram_` loads `mesh_bindless.slang`;
   `createRenderPipeline_` keys opaque/mask variants (blend rejected); `update(dt, camera_view)`

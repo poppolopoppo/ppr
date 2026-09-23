@@ -11,7 +11,7 @@ import engine.rhi;
 import engine.mesh;
 import std;
 
-// Phase 7 L1 indirect layouts (CPU-only): InstancePayload stride/pad and the
+// Indirect layouts (CPU-only): InstancePayload stride/pad and the
 // planIndirectDraws contract (per-(prim,instance) records, u32 count header,
 // maxCount clamp, count-0 skip, ≤4 variant buckets). One focused test per TU.
 namespace pP::tests::detail {

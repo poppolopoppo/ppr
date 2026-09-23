@@ -119,7 +119,7 @@ BindlessVertexOutput vertexIndirectMain(
     return output;
 }
 
-// Phase 7 L2a PrepareInstances kernel: one thread per instance ([numthreads(1,1,1)],
+// PrepareInstances kernel: one thread per instance ([numthreads(1,1,1)],
 // dispatch (instanceCount,1,1)). Publishes the same 96 B InstancePayload layout the
 // CPU-staged L1 path writes via Upload scratch: copies g_scratch[i] to the device-local
 // g_device_payloads[i], then appends one indirect-arg record (vertexCount = index_count,
@@ -128,7 +128,7 @@ BindlessVertexOutput vertexIndirectMain(
 // index_count == 0 instances publish their payload but append no record. The draw count is
 // the UAV counter itself (host clears it before dispatch); the count-0 path dispatches
 // nothing, so the cleared counter reads zero. Resources ride entry-point params (NOT
-// globals) per the $Globals note above; Append() uses HLSL casing per the L1 carry.
+// globals) per the note above; Append() uses HLSL casing.
 struct IndirectDrawRecord {
     uint m_vertex_count_per_instance;
     uint m_instance_count;
@@ -175,7 +175,7 @@ float4 fragmentMain(
     GpuMaterial mat = g_materials[input.material];
     float4 albedo = mat.m_base_color;
     albedo *= nonuniform(g_textures[resolveTextureSlot(mat.m_textures.x)]).Sample(g_sampler, input.uv);
-    // Opaque + mask only (plan §7): blend is rejected at pack time.
+    // Opaque + mask only: blend is rejected at pack time.
     if ((mat.m_flags & 0x3u) == 1u && albedo.a < mat.m_rough_alpha_occl_nscale.y) {
         discard;
     }

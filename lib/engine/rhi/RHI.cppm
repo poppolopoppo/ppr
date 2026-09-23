@@ -126,15 +126,14 @@ export namespace pP::rhi {
     using slang_rhi::DebugMessageType;
     using slang_rhi::MarkerColor;
 
-    // P2 descriptor seam (docs/plans/asset-pipeline.md §5, choice (a)): the
-    // pass-owned GPU caches bind through these engine.rhi aliases only — app
-    // code never reaches past engine.rhi into slang-rhi directly.
+    // Descriptor seam: the pass-owned GPU caches bind through these engine.rhi
+    // aliases only — app code never reaches past engine.rhi into slang-rhi directly.
     using slang_rhi::DescriptorHandle;
     using slang_rhi::DescriptorHandleAccess;
     using slang_rhi::DescriptorHandleType;
     using slang_rhi::Feature;
 
-    // Phase 7 L1 indirect seam (plan §6): draw-indirect argument layouts +
+    // Indirect seam: draw-indirect argument layouts +
     // fence descriptor. Additive only; the L0 spike proved the call order
     // (args → barrier → bind → draw → submit → waitOnHost → readback).
     // L2b adds the submit-with-fence descriptor (ComputePipelineDesc rides
@@ -145,8 +144,8 @@ export namespace pP::rhi {
     using slang_rhi::IndirectDrawArguments;
     using slang_rhi::IndirectDrawIndexedArguments;
 
-    // P2 bindless heap budget (docs/plans/asset-pipeline.md §4): create-time
-    // only; changing counts later means device recreation (no update API).
+    // Bindless heap budget: create-time only; changing counts later means
+    // device recreation (no update API).
     inline constexpr u32 kBindlessTextureBudget{4096u};
     inline constexpr u32 kBindlessCombinedBudget{4096u};
     inline constexpr u32 kBindlessSamplerBudget{128u};

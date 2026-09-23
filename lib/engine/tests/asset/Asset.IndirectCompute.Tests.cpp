@@ -18,7 +18,7 @@ import engine.image;
 import engine.mesh;
 import std;
 
-// Phase 7 L2b compute-publish gate: the kernel-published path (dispatch +
+// Compute-publish gate: the kernel-published path (dispatch +
 // UAV counter + ring + barriers) proves (a) the GPU-written count matches
 // the CPU staged count, (b) the compute path stays pixel-exact vs direct,
 // (c) count guards fail closed, (d) the 3-frame ring retires by fence value
@@ -84,8 +84,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or node_index >= scene.m_nodes.size())
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size())
                 {
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }

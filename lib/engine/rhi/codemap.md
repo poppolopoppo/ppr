@@ -40,6 +40,14 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   row-vector `mul(float4, matrix)`, `[0,1]` depth, no per-backend dispatch): `getOrthoMatrix(w,h)` →
   `float4x4::orthoD3D(0,w,0,h,0,1)`; `getPerspectiveMatrix(fov,aspect,near,far)` derives horizontal FOV
   `x_fov = 2·atan(tan(fov/2)·aspect)` then `float4x4::perspectiveD3D(x_fov,fov,near,far)` (`fov` is vertical).
+- Descriptor seam: the pass-owned GPU caches bind only through the `pP::rhi`
+  aliases — app code never reaches past `engine.rhi` into slang-rhi directly.
+- Bindless heap budget (create-time only; changing counts needs device
+  recreation): 4096 textures / 4096 combined / 128 samplers / 1024 buffers.
+  Textures dominate scene content; samplers stay small because materials share
+  one sampler; buffers cover bag/material/payload storage. `Feature::Bindless`
+  stays out of `requiredFeatures` (weak hardware must still create a device);
+  pass caches check `hasFeature(Bindless)` at init instead.
 - `IRhiService : IService` (`pP::`, `safe_ptr` singleton via `get()`): `initialize(DeviceType, IShaderService&)`,
   `shutdown()`, `getInstance()` (`*slang_rhi::getRHI()`), `getDevice()` (`*m_device`), `createRenderPipeline(desc,
   out)` (forwards to `m_device->createRenderPipeline`). `SlangRhiService` (`RHI.cpp`, `ComPtr<IDevice> m_device`):

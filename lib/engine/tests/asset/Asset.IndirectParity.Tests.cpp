@@ -18,10 +18,10 @@ import engine.image;
 import engine.mesh;
 import std;
 
-// Phase 7 L1 parity gate: the identical scene rendered through the direct
+// Parity gate: the identical scene rendered through the direct
 // path (render) and the CPU-staged indirect path (renderIndirect) must be
-// pixel-exact. L1 deletes the L0 hello-indirect spike — this gate is the
-// adopted proof that drawIndirect executes through the engine.rhi seam.
+// pixel-exact. This gate is the adopted proof that drawIndirect executes
+// through the engine.rhi seam.
 // One focused test per TU.
 namespace pP::tests::detail::SharedGpu {
     [[nodiscard]] std::error_code acquire();
@@ -83,8 +83,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or node_index >= scene.m_nodes.size())
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size())
                 {
                     return std::make_error_code(std::errc::invalid_argument);
                 }

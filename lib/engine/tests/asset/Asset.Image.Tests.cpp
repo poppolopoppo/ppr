@@ -411,8 +411,8 @@ namespace pP::tests::detail {
                 workers.emplace_back([&] {
                     const image::ImageAsset local = shared;
                     const mem::SharedBufferView view = local.m_subresources.front().m_view.getBufferData();
-                    if (view.size() != kPixels.size() or image::contentHash(view) != expected or
-                        not bytesEqual_(view, kPixels)) {
+                    if (view.size() != kPixels.size() or image::contentHash(view) != expected or not
+                        bytesEqual_(view, kPixels)) {
                         mismatches.fetch_add(1, std::memory_order_relaxed);
                     }
                 });

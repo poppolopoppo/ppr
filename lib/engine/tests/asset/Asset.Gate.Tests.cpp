@@ -218,7 +218,7 @@ namespace pP::tests::detail {
             return default_value_v;
         }
 
-        // Final gate (plan §8): textured glTF through the bindless pass with
+        // Final gate: textured glTF through the bindless pass with
         // MULTI-pixel DISTINCTIVE texels — the gradient texture is chromatic
         // everywhere a base-color fallback renders grayscale.
         PPR_UNIT_TEST(bindless_textured_box_gate) {
@@ -381,7 +381,7 @@ namespace pP::tests::detail {
         // not a render bug. The (128,255,128) tilt is bitangent-dominant, so
         // the w sign flips the lit component and ref/flip visibly differ;
         // the flat map matches the unmapped path (TBN sanity). Outcome: NO
-        // inversion — file-tangent w=-w (P0c/P1) is kept, negate at convert.
+        // inversion — file-tangent w=-w is kept, negate at convert.
         PPR_UNIT_TEST(tangent_w_render_arbitration) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
@@ -611,7 +611,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plain_lit.has_value());
             PPR_TEST_ASSERT(closeEnough(*flat_lit, *plain_lit, 0.03f));
 
-            // Phase 6 A2: releaseScene only releases uploadScene products
+            // releaseScene only releases uploadScene products
             // (receipt-checked); piecemeal handles release via their caches.
             PPR_TEST_ASSERT(not pass.materialCache().release(*tilt_mat));
             PPR_TEST_ASSERT(not pass.materialCache().release(*flat_mat));

@@ -42,7 +42,7 @@ export namespace pP {
             float4x4 m_model = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
         };
 
-        // Phase 7 L1 per-instance GPU payload (plan §6): today's Instance
+        // Per-instance GPU payload: today's Instance
         // (model + bag/material handles) with the handles resolved to draw
         // scalars (vb_offset/ib_start/index_count/base_vertex) + the resolved
         // material slot. Lives in a StructuredBuffer<g_payloads>; the
@@ -82,7 +82,7 @@ export namespace pP {
 
         static constexpr u32 kMaxIndirectBuckets{4u};
 
-        // L2b compute-publish ring (plan §6): 3 payload/args/counter slots
+        // Compute-publish ring: 3 payload/args/counter slots
         // retiring by completed fence value. SlotVersion/FenceValue semantics
         // (Phase 6 A3) apply to THESE ring slots only — texture heap slot 0
         // stays pinned to the white fallback and material slots never recycle
@@ -122,7 +122,7 @@ export namespace pP {
             Array<UploadedPrimitive> m_prims{};
             Array<TextureHandle> m_textures{};
             Array<MaterialHandle> m_materials{};
-            // Scene receipt (Phase 6 A2): issued by uploadScene, consumed by
+            // Scene receipt: issued by uploadScene, consumed by
             // releaseScene. Copies share the receipt — the first release wins
             // and repeats fail closed (invalid_argument) even when a
             // refcounted texture entry outlives the releasing scene.
@@ -170,14 +170,14 @@ export namespace pP {
 
         [[nodiscard]] std::error_code shutdown();
 
-        // Device-loss hook (Phase 6 A3, editor lifecycle): fans out
+        // Device-loss hook (editor lifecycle): fans out
         // notifyDeviceLost to the three caches in shutdown order, drops
         // per-frame instances, and parks uploads (m_caches_ready = false) so
         // GPU-touching calls fail closed while releaseScene still drains CPU
         // records. Restart is an explicit shutdown + initialize pair.
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
-        // Narrow P2 asset APIs (plan §7): uploadMesh/uploadTexture/packMaterial
+        // Narrow asset APIs: uploadMesh/uploadTexture/packMaterial
         // acquire cache entries (partial rollback in uploadScene, P3);
         // submitInstance validates handles and snapshots {bag, material, model};
         // clearInstances drops the per-frame list (GPU entries stay cached).
@@ -212,7 +212,7 @@ export namespace pP {
 
         std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
-        // Pipeline-variant cache (plan §7): target signature + twosided cull +
+        // Pipeline-variant cache: target signature + twosided cull +
         // opaque/mask alpha. Blend is REJECTED with function_not_supported.
         [[nodiscard]] Expected<rhi::IRenderPipeline *> pipelineFor_(
             rhi::IDevice &device,
@@ -344,7 +344,7 @@ export namespace pP {
 
         Array<Instance> m_instances{};
 
-        // Live-scene receipts (Phase 6 A2): one nonce per successful
+        // Live-scene receipts: one nonce per successful
         // uploadScene; releaseScene consumes it before touching the caches
         // so a double release fails closed without decrementing the
         // refcounted texture entry a surviving scene still holds.

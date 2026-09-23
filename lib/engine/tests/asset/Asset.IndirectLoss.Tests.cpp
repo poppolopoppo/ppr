@@ -18,25 +18,12 @@ import engine.image;
 import engine.mesh;
 import std;
 
-// Phase 7 L3 device-loss injection (indirect path): a loss landing mid-frame
+// Device-loss injection (indirect path): a loss landing mid-frame
 // (published slot live, draw not yet issued) parks every GPU-touching call
 // and discards ring retirement outright; the documented restart (shutdown +
 // initialize, never in place) then reproduces the pre-loss readback hash.
 // One focused test per TU.
-//
-// Vulkan CI note (L3 stance, not a pipeline): SPIR-V compiles of this shader
-// (vertexMain/fragmentMain/vertexIndirectMain/prepareInstancesMain) are
-// already proven alongside the DXIL/sm_6_6 pin, and RHI maps DeviceType to
-// the compile target at runtime (SPIRV for Vulkan/WGPU in RHI.cpp), so a
-// Vulkan job needs no new build config — the same tree configures and
-// builds, and the job boots the suite with DeviceType::Vulkan instead of
-// Default (App.Application.cpp:157 is the only switch). Everything here is
-// already headless (SharedGpu boots a windowless Application; renderToTexture
-// + readback are surface-free), so the cpu tiers (image/staging/mesh/fuzz,
-// indirect_layout) run on any Vulkan CI machine with no GPU, while the gpu
-// tier leaves (caches/gates/indirect_parity/indirect_compute plus the two L3
-// leaves below) need a real bindless-capable device — a software rasterizer
-// (SwiftShader/Lavapipe) or a GPU runner — exactly like the D3D12 job today.
+// Vulkan CI + tier policy lives in lib/engine/tests/asset/codemap.md.
 // CUDA stays out of scope (bindless buffers unsupported, Slang-RHI builds
 // with SLANG_RHI_ENABLE_CUDA OFF) and Metal stays out of scope
 // (SLANG_E_NOT_AVAILABLE on this path) — both stances already recorded and
@@ -110,8 +97,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or node_index >= scene.m_nodes.size())
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size())
                 {
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }

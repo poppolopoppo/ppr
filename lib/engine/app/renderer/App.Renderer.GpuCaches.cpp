@@ -52,8 +52,7 @@ namespace pP {
             &asset.m_emissive_map,
         };
         for (const mesh::MaterialImageSlot *const slot: slots) {
-            if (not
-                slot->enabled())
+            if (not slot->enabled())
             {
                 continue;
             }
@@ -311,8 +310,7 @@ namespace pP {
 
     std::error_code TriangleBagCache::release(const TriangleBagHandle handle) noexcept {
         const SparseHandle key = *handle;
-        if (not
-            key.isValid())
+        if (not key.isValid())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -561,13 +559,23 @@ namespace pP {
 
         Array<rhi::SubresourceData> init_data{};
         init_data.reserve(asset.m_mip_count);
-        for (const image::ImageSubresource &sub: asset.m_subresources) {
+        for (u32 level = 0u; level < asset.m_mip_count; ++level) {
+            const image::ImageSubresource &sub = asset.m_subresources[level];
             if (not sub.m_view.isValid() or not sub.m_view.isMaterialized())
             [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
+            // Tight pitches per chain level: each mip matches its own halved
+            // extent, so a truncated or misaligned chain fails closed here.
+            const u32 level_w = image::mipExtentAt(asset.m_width, level);
+            const u32 level_h = image::mipExtentAt(asset.m_height, level);
+            if (sub.m_row_pitch != image::rowPitchFor(level_w, asset.m_tag) or
+                sub.m_slice_pitch != image::slicePitchFor(level_w, level_h, asset.m_tag))
+            [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            }
             const mem::SharedBufferView bytes = sub.m_view.getBufferData();
-            if (bytes.empty() or sub.m_row_pitch == 0u or sub.m_slice_pitch == 0u)
+            if (bytes.size() != static_cast<std::size_t>(sub.m_slice_pitch))
             [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }

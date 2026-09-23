@@ -156,8 +156,7 @@ namespace pP {
 
         std::optional<AttachmentInfo> reference_attachment;
         const auto validate_attachment = [&](const AttachmentInfo &attachment) -> std::error_code {
-            if (not
-                reference_attachment.has_value())
+            if (not reference_attachment.has_value())
             {
                 reference_attachment = attachment;
                 return default_value_v;
@@ -198,8 +197,7 @@ namespace pP {
             depth_stencil_format = depth_stencil_info.m_format;
         }
 
-        if (not
-            reference_attachment.has_value())
+        if (not reference_attachment.has_value())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -292,8 +290,7 @@ namespace pP {
         [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not
-            window.m_handle)
+        if (not window.m_handle)
         [[unlikely]] {
             return std::make_error_code(std::errc::no_such_device_or_address);
         }

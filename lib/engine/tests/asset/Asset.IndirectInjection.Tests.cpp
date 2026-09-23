@@ -18,13 +18,12 @@ import engine.image;
 import engine.mesh;
 import std;
 
-// Phase 7 L3 failure injection (indirect path): RHI allocation/map failure
+// Failure injection (indirect path): RHI allocation/map failure
 // points must leave no leaked or half-published entry, and the over-count /
-// empty-scene behavior extends the L2b publish guards to the draw level (L2b
-// proves the publish contract; this lane proves the clamped publish still
-// draws and the L1 CPU-staged path draws clear-only when empty). Vulkan CI
-// stance lives on the loss lane (Asset.IndirectLoss.Tests.cpp). One focused
-// test per TU.
+// empty-scene behavior extends the publish guards to the draw level (the
+// publish contract proves the clamped publish still draws and the CPU-staged
+// path draws clear-only when empty). Vulkan CI stance lives on the loss lane
+// (Asset.IndirectLoss.Tests.cpp). One focused test per TU.
 namespace pP::tests::detail::SharedGpu {
     [[nodiscard]] std::error_code acquire();
 
@@ -86,8 +85,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or node_index >= scene.m_nodes.size())
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size())
                 {
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
