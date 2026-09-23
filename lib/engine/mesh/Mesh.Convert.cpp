@@ -26,6 +26,8 @@ namespace pP {
 
             [[nodiscard]] Expected<u32> toU32(const std::size_t value) {
                 if (value > static_cast<std::size_t>(std::numeric_limits<u32>::max())) [[unlikely]] {
+                    PPR_LOG(Mesh, warning, "mesh count exceeds u32 range — rejecting value",
+                        {{"value", static_cast<u64>(value)}});
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 return static_cast<u32>(value);
@@ -33,6 +35,7 @@ namespace pP {
 
             [[nodiscard]] Expected<i32> toI32(const u32 value) {
                 if (value > static_cast<u32>(std::numeric_limits<i32>::max())) [[unlikely]] {
+                    PPR_LOG(Mesh, warning, "mesh index exceeds i32 range — rejecting value", {{"value", value}});
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 return static_cast<i32>(value);
@@ -470,6 +473,7 @@ namespace pP {
                     const std::string key = (dir / source.filename).string();
                     for (const auto &cached: file_cache) {
                         if (cached.first == key) {
+                            PPR_LOG(Mesh, debug, "mesh texture-file dedup hit", {{"key", key}});
                             ref.m_bytes = cached.second;
                             return ref;
                         }
@@ -486,6 +490,7 @@ namespace pP {
                 }
                 // Empty source: never referenced by slots (Mango filters them
                 // in imageIndexOf), but indices must stay 1:1 with Mango.
+                PPR_LOG(Mesh, warning, "mesh image source is empty — keeping 1:1 placeholder", {{"index", image_index}});
                 ref.m_is_file = false;
                 return ref;
             }
@@ -1040,6 +1045,7 @@ namespace pP {
                 // an empty Mango mesh: fail closed, never an empty asset.
                 if (mesh.vertices.empty() or mesh.primitives.empty())
                 [[unlikely]] {
+                    PPR_LOG(Mesh, warning, "mesh has no vertices or primitives — rejecting mesh");
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 // Production allocation caps: reject before reserving or
@@ -1196,6 +1202,7 @@ namespace pP {
                 // Mango returns a silent-empty Scene on parse failure (no
                 // exception): fail closed instead of an empty asset.
                 if (scene.meshes.empty()) [[unlikely]] {
+                    PPR_LOG(Mesh, warning, "scene has no meshes — rejecting scene");
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 // Mango returns a silent-empty Scene on parse failure (no
@@ -1225,6 +1232,8 @@ namespace pP {
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 if (scene.images.size() > static_cast<std::size_t>(std::numeric_limits<u32>::max())) [[unlikely]] {
+                    PPR_LOG(Mesh, warning, "scene image count exceeds u32 range — rejecting scene",
+                        {{"images", static_cast<u64>(scene.images.size())}});
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 out.m_images.reserve(scene.images.size());
@@ -1254,6 +1263,7 @@ namespace pP {
                 out.m_meshes.reserve(scene.meshes.size());
                 for (const std::unique_ptr<m3d::IndexedMesh> &mesh: scene.meshes) {
                     if (not mesh) [[unlikely]] {
+                        PPR_LOG(Mesh, warning, "scene references a null mesh — rejecting scene");
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
                     Expected<StaticMeshAsset> converted = convertMesh(*mesh, scene.materials, limits);
@@ -1476,6 +1486,14 @@ namespace pP {
                 converted.has_value())
             [[unlikely]] {
                 return std::unexpected{converted.error()};
+            }
+            if (details::isGlbFile(filename)) {
+                u64 embed_bytes = 0u;
+                for (const mem::SharedBuffer &embed: glb_embeds) {
+                    embed_bytes += static_cast<u64>(embed.getBufferData().size());
+                }
+                PPR_LOG(Mesh, info, "GLB import succeeded",
+                    {{"embeds", static_cast<u64>(glb_embeds.size())}, {"embed_bytes", embed_bytes}});
             }
             // Scene drops here: every ImageRef owns PPR-mapped bytes or a
             // mapped file. No mango view is ever read, so nothing of Mango can
