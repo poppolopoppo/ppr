@@ -176,8 +176,8 @@ namespace pP::tests::detail {
         // Hammer: 8-way parallel import/decode after
         // re-verifying the Mango claims on disk — ImageServer has no mutex
         // (read-only post-init: image.cpp:177-280, plain std::map), KTX2
-        // single-slot transcode is guarded by our static mutex + immediate
-        // clone (Image.Decode.cpp), decode is per-job (no shared decoder).
+        // single-slot transcode is per-decoder with an immediate clone
+        // (Image.Decode.cpp), decode is per-job (no shared decoder).
         // Path trap honored: Mango concatenates dir+file verbatim, so the dir
         // carries a trailing separator.
         [[nodiscard]] std::filesystem::path hammerMeshDir() {

@@ -14,6 +14,8 @@ import engine.math;
 import std;
 
 namespace pP::image {
+    PPR_DECLARE_LOG_CATEGORY(Image)
+
     namespace {
         // Extensions are normalized to Mango's lowercase dot-form (".png"); the
         // decoder is selected by this hint, sRGB never comes from the filename.
@@ -251,24 +253,32 @@ namespace pP::image {
         const mem::SharedBufferView bytes, const std::string_view ext, const ImageDecodeDesc desc, const ImageUsage usage) {
         const std::string dotted = normalizeExtension_(ext);
         if (not isRgbaSource_(dotted)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unsupported extension", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (bytes.empty()) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: empty input", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         // Parser-safety gates before decoder construction (see above):
         // below-floor inputs and unsound PNG chains would over-read.
         if (bytes.size_bytes() < minInputBytesFor_(dotted)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: input below parser-safety floor",
+                {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"floor", static_cast<u64>(minInputBytesFor_(dotted))}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (dotted == ".png" and
             not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unsound PNG chunk chain",
+                {{"bytes", static_cast<u64>(bytes.size_bytes())}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         // Production limits first: bound header-parse work before the decoder
         // runs, then header claims before any allocation (fail-closed,
         // invalid_argument — never a throw, never a partial asset).
         if (bytes.size_bytes() > desc.m_limits.m_max_input_bytes) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: input exceeds production cap",
+                {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"cap", desc.m_limits.m_max_input_bytes}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
 
@@ -277,26 +287,38 @@ namespace pP::image {
         };
         mango::image::ImageDecoder decoder{mango_mem, "memory" + dotted};
         if (not decoder.isDecoder()) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: no decoder for extension", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         const mango::image::ImageHeader header = decoder.header();
         if (header.width <= 0 or header.height <= 0) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: non-positive header extents",
+                {{"ext", dotted}, {"width", header.width}, {"height", header.height}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (header.depth > 1 or header.faces > 1) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: volume or face array is deferred", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
         if (static_cast<u64>(header.width) > desc.m_limits.m_max_width or
             static_cast<u64>(header.height) > desc.m_limits.m_max_height) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: header exceeds dimension caps",
+                {{"ext", dotted}, {"width", static_cast<u64>(header.width)}, {"height", static_cast<u64>(header.height)}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         // sRGB from the header (!header.linear); usage data forces linear.
         const bool is_srgb = usage == ImageUsage::color ? not header.linear : false;
+        if (usage == ImageUsage::data and not header.linear) {
+            PPR_LOG(Image, info, "decode coerces sRGB source to linear for data usage",
+                {{"ext", dotted}, {"forced_linear", true}});
+        }
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
         const u64 row_pitch = rowPitchFor(width, BlockTag::none);
         // u64 compare before narrowing: closes overflow as well as over-limit.
         if (row_pitch * static_cast<u64>(height) > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unpacked bytes exceed production cap",
+                {{"ext", dotted}, {"bytes", row_pitch * static_cast<u64>(height)}, {"cap", desc.m_limits.m_max_decoded_bytes}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         const auto size_bytes = static_cast<std::size_t>(row_pitch * height);
@@ -325,6 +347,7 @@ namespace pP::image {
             }
         }();
         if (not decoded) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: mango decoder failed", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (desc.m_flip_v) {
@@ -359,6 +382,7 @@ namespace pP::image {
 
         PPR_ASSERT(checkInvariants_(asset));
         if (not checkInvariants_(asset)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: asset invariant failed", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         return asset;
@@ -367,27 +391,37 @@ namespace pP::image {
     [[nodiscard]] Expected<ImageAsset> decodeToBlocks(
         const mem::SharedBufferView bytes, const std::string_view ext, const BlockTag want, const ImageDecodeDesc desc) {
         if (want == BlockTag::none) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block target is none", {{"ext", ext}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         const std::string dotted = normalizeExtension_(ext);
         if (not isRgbaSource_(dotted)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unsupported extension", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         // Passthrough/transcode only: PNG/JPG are never recompressed into blocks.
         if (not isCompressedSource_(dotted)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block target needs a compressed source", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
         if (bytes.empty()) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: empty input", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (bytes.size_bytes() < minInputBytesFor_(dotted)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: input below parser-safety floor",
+                {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"floor", static_cast<u64>(minInputBytesFor_(dotted))}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (dotted == ".png" and
             not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unsound PNG chunk chain",
+                {{"bytes", static_cast<u64>(bytes.size_bytes())}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (bytes.size_bytes() > desc.m_limits.m_max_input_bytes) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: input exceeds production cap",
+                {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"cap", desc.m_limits.m_max_input_bytes}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
 
@@ -396,23 +430,30 @@ namespace pP::image {
         };
         mango::image::ImageDecoder decoder{mango_mem, "memory" + dotted};
         if (not decoder.isDecoder()) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: no decoder for extension", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         const mango::image::ImageHeader header = decoder.header();
         if (header.width <= 0 or header.height <= 0) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: non-positive header extents",
+                {{"ext", dotted}, {"width", header.width}, {"height", header.height}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         if (header.depth > 1 or header.faces > 1) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: volume or face array is deferred", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
         if (static_cast<u64>(header.width) > desc.m_limits.m_max_width or
             static_cast<u64>(header.height) > desc.m_limits.m_max_height) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: header exceeds dimension caps",
+                {{"ext", dotted}, {"width", static_cast<u64>(header.width)}, {"height", static_cast<u64>(header.height)}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
 
         const bool is_srgb = not header.linear;
         const u32 mango_compression = mangoCompressionFor_(want, is_srgb);
         if (mango_compression == mango::image::TextureCompression::NONE) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: no block mapping for target", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
         // Already-blocked sources (DDS natives) only serve their own blocks: DDS
@@ -421,10 +462,12 @@ namespace pP::image {
         // DDS has no blocks to pass through. KTX2 Basis (compression NONE) falls
         // through to the transcode attempt below.
         if (dotted == ".dds" and header.compression == mango::image::TextureCompression::NONE) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: uncompressed DDS has no blocks to serve", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
         if (header.compression != mango::image::TextureCompression::NONE and
             header.compression != mango_compression) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block target differs from native storage", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::function_not_supported)};
         }
 
@@ -433,37 +476,45 @@ namespace pP::image {
         options.multithread = false;
         options.compression = mango_compression;
 
-        // KTX2 keeps a single-slot transcode cache per decoder: query under a
-        // shared mutex and clone immediately while the decoder lives.
-        static std::mutex g_transcode_mutex{};
-        mem::SharedBufferView blob_view{};
-        {
-            const std::lock_guard<std::mutex> lock{g_transcode_mutex};
-            mango::ConstMemory blob_storage{};
-            try {
-                blob_storage = decoder.memory(0, 0, 0, options);
-            } catch (const std::exception &) {
-                return std::unexpected{make_error_code(errc::function_not_supported)};
-            } catch (...) {
-                return std::unexpected{make_error_code(errc::function_not_supported)};
-            }
-            if (blob_storage.size == 0u) [[unlikely]] {
-                return std::unexpected{make_error_code(errc::function_not_supported)};
-            }
-            blob_view = mem::SharedBufferView{
-                reinterpret_cast<const std::byte *>(blob_storage.address), blob_storage.size
-            };
+        // KTX2 single-slot transcode cache is per-decoder (Mango's Interface owns
+        // its transcode buffer; each job owns its decoder) and Mango's only shared
+        // transcode state (basisu one-time init) guards itself: the transcode runs
+        // unlocked so concurrent jobs parallelize. Clone immediately while the
+        // decoder lives; the frozen copy outlives it.
+        mango::ConstMemory blob_storage{};
+        try {
+            blob_storage = decoder.memory(0, 0, 0, options);
+        } catch (const std::exception &) {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block transcode failed", {{"ext", dotted}});
+            return std::unexpected{make_error_code(errc::function_not_supported)};
+        } catch (...) {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block transcode failed", {{"ext", dotted}});
+            return std::unexpected{make_error_code(errc::function_not_supported)};
         }
+        if (blob_storage.size == 0u) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block transcode produced no bytes", {{"ext", dotted}});
+            return std::unexpected{make_error_code(errc::function_not_supported)};
+        }
+        const mem::SharedBufferView blob_view{
+            reinterpret_cast<const std::byte *>(blob_storage.address), blob_storage.size
+        };
 
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
         const u64 row_pitch = rowPitchFor(width, want);
         const u64 slice_bytes = slicePitchFor(width, height, want);
         if (slice_bytes > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: unpacked bytes exceed production cap",
+                {{"ext", dotted}, {"bytes", slice_bytes}, {"cap", desc.m_limits.m_max_decoded_bytes}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         const auto size_bytes = static_cast<std::size_t>(slice_bytes);
-        if (blob_view.size() < size_bytes) [[unlikely]] {
+        // Exact size: a short level is truncated input while a long one is not
+        // the requested blocks (uncompressed sources serve raw bytes here) —
+        // both reject fail-closed, never reinterpreted.
+        if (blob_view.size() != size_bytes) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: block bytes differ from requested size",
+                {{"ext", dotted}, {"bytes", static_cast<u64>(blob_view.size())}, {"want", static_cast<u64>(size_bytes)}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
 
@@ -500,6 +551,7 @@ namespace pP::image {
 
         PPR_ASSERT(checkInvariants_(asset));
         if (not checkInvariants_(asset)) [[unlikely]] {
+            PPR_LOG_ONCE(Image, warning, "decode rejected: asset invariant failed", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         return asset;

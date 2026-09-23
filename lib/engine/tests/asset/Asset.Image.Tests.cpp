@@ -84,6 +84,88 @@ namespace pP::tests::detail {
             return mem::SharedBuffer::clone(mem::SharedBufferView{bytes.data(), bytes.size()});
         }
 
+        void pushU64_(std::vector<std::byte> &out, const u64 value) {
+            for (int i = 0; i < 8; ++i) {
+                out.push_back(static_cast<std::byte>((value >> (i * 8)) & 0xFFu));
+            }
+        }
+
+        // Minimal KTX2 container: 12-byte magic, 9 header fields, zero
+        // DFD/KVD/SGD index, one level entry, then the raw payload. vkFormat 131
+        // is VK_FORMAT_BC1_RGB_UNORM_BLOCK with supercompression NONE, so Mango
+        // serves level bytes straight through memory(); vkFormat 37 is
+        // R8G8B8A8_UNORM (uncompressed, never a valid block source).
+        [[nodiscard]] mem::SharedBuffer makeKtx2Fixture(const u32 width, const u32 height, const u32 vk_format,
+                                                        const std::vector<std::byte> &payload, const u32 supercompression = 0u,
+                                                        const std::size_t uncompressed_size = 0u) {
+            std::vector<std::byte> bytes{};
+            for (const u32 magic: {
+                     0xABu, 0x4Bu, 0x54u, 0x58u, 0x20u, 0x32u, 0x30u, 0xBBu,
+                     0x0Du, 0x0Au, 0x1Au, 0x0Au
+                 }) {
+                bytes.push_back(static_cast<std::byte>(magic));
+            }
+            pushU32_(bytes, vk_format);
+            pushU32_(bytes, 1u);
+            pushU32_(bytes, width);
+            pushU32_(bytes, height);
+            pushU32_(bytes, 0u);
+            pushU32_(bytes, 0u);
+            pushU32_(bytes, 1u);
+            pushU32_(bytes, 1u);
+            pushU32_(bytes, supercompression);
+            pushU32_(bytes, 0u);
+            pushU32_(bytes, 0u);
+            pushU32_(bytes, 0u);
+            pushU32_(bytes, 0u);
+            pushU64_(bytes, 0u);
+            pushU64_(bytes, 0u);
+            pushU64_(bytes, 104u);
+            pushU64_(bytes, static_cast<u64>(payload.size()));
+            const u64 raw_size =
+                    uncompressed_size == 0u ? static_cast<u64>(payload.size()) : static_cast<u64>(uncompressed_size);
+            pushU64_(bytes, raw_size);
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
+            return mem::SharedBuffer::clone(mem::SharedBufferView{bytes.data(), bytes.size()});
+        }
+
+        [[nodiscard]] u32 adler32_(const std::span<const std::byte> data) noexcept {
+            u32 a = 1u;
+            u32 b = 0u;
+            for (const std::byte value: data) {
+                a = (a + static_cast<u32>(static_cast<unsigned char>(value))) % 65521u;
+                b = (b + a) % 65521u;
+            }
+            return (b << 16u) | a;
+        }
+
+        // Minimal zlib stream with stored (uncompressed) deflate blocks: enough
+        // for Mango's KTX2 ZLIB supercompression path, no external compressor.
+        [[nodiscard]] std::vector<std::byte> zlibStored_(const std::span<const std::byte> data) {
+            std::vector<std::byte> out{};
+            out.push_back(static_cast<std::byte>(0x78));
+            out.push_back(static_cast<std::byte>(0x01));
+            std::size_t off = 0u;
+            while (off < data.size()) {
+                const std::size_t chunk = std::min<std::size_t>(65535u, data.size() - off);
+                const bool last = off + chunk == data.size();
+                out.push_back(static_cast<std::byte>(last ? 0x01 : 0x00));
+                const u32 len = static_cast<u32>(chunk);
+                out.push_back(static_cast<std::byte>(len & 0xFFu));
+                out.push_back(static_cast<std::byte>((len >> 8u) & 0xFFu));
+                out.push_back(static_cast<std::byte>(~len & 0xFFu));
+                out.push_back(static_cast<std::byte>((~len >> 8u) & 0xFFu));
+                out.insert(out.end(), data.begin() + static_cast<std::ptrdiff_t>(off),
+                    data.begin() + static_cast<std::ptrdiff_t>(off + chunk));
+                off += chunk;
+            }
+            const u32 adler = adler32_(data);
+            for (int i = 3; i >= 0; --i) {
+                out.push_back(static_cast<std::byte>((adler >> (i * 8)) & 0xFFu));
+            }
+            return out;
+        }
+
         [[nodiscard]] bool bytesEqual_(const mem::SharedBufferView a, const std::span<const std::byte> b) noexcept {
             return a.size() == b.size() and std::ranges::equal(a, b);
         }
@@ -303,6 +385,93 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(decoded.error() == std::errc::function_not_supported);
         };
 
+        PPR_UNIT_TEST(blocks_ktx2_concurrent_transcode_matches_serial) {
+            // 256x256 BC1 is exactly one 32 KiB SmallPage job buffer; the ZLIB
+            // twin keeps the same inflated bytes with real inflate work inside
+            // memory() — the region the old global mutex serialized.
+            constexpr u32 kWidth = 256u;
+            constexpr u32 kHeight = 256u;
+            std::vector<std::byte> payload{};
+            payload.reserve(static_cast<std::size_t>(kWidth / 4u) * (kHeight / 4u) * 8u);
+            for (std::size_t i = 0u; i < payload.capacity(); ++i) {
+                payload.push_back(static_cast<std::byte>((i * 31u + (i >> 8u)) & 0xFFu));
+            }
+            const std::span<const std::byte> payload_view{payload.data(), payload.size()};
+            const mem::SharedBuffer file = makeKtx2Fixture(kWidth, kHeight, 131u, payload);
+            PPR_TEST_ASSERT(file.isValid());
+            const std::vector<std::byte> deflated =
+                    zlibStored_(std::span<const std::byte>{payload.data(), payload.size()});
+            const mem::SharedBuffer packed =
+                    makeKtx2Fixture(kWidth, kHeight, 131u, deflated, 3u, payload.size());
+            PPR_TEST_ASSERT(packed.isValid());
+
+            auto probe = [&](const mem::SharedBuffer &source, const char *label, const int iters) {
+                const Expected<image::ImageAsset> reference = image::decodeToBlocks(source.getBufferData(),
+                    ".ktx2", image::BlockTag::bc1, image::ImageDecodeDesc{});
+                PPR_TEST_ASSERT(reference.has_value());
+                PPR_TEST_ASSERT(reference->m_width == kWidth);
+                PPR_TEST_ASSERT(reference->m_height == kHeight);
+                PPR_TEST_ASSERT(reference->m_is_block);
+                PPR_TEST_ASSERT(reference->m_tag == image::BlockTag::bc1);
+                PPR_TEST_ASSERT(reference->m_format == image::NativeImageFormat::bc1_linear);
+                PPR_TEST_ASSERT(reference->m_storage.getBufferData().size() == payload.size());
+                PPR_TEST_ASSERT(bytesEqual_(reference->m_subresources.front().m_view.getBufferData(), payload_view));
+                const hash_t expected =
+                        image::contentHash(reference->m_subresources.front().m_view.getBufferData());
+
+                // Throughput probe prints even when a later rejection regresses;
+                // byte-identity is asserted (no timing assert, machines vary).
+                constexpr int kThreads = 8;
+                std::atomic<int> failures{0};
+                std::atomic<u64> decoded_bytes{0};
+                const auto start = std::chrono::steady_clock::now();
+                std::vector<std::thread> workers{};
+                for (int t = 0; t < kThreads; ++t) {
+                    workers.emplace_back([&] {
+                        for (int i = 0; i < iters; ++i) {
+                            const Expected<image::ImageAsset> decoded = image::decodeToBlocks(
+                                source.getBufferData(), ".ktx2", image::BlockTag::bc1, image::ImageDecodeDesc{});
+                            if (not decoded.has_value() or
+                                image::contentHash(decoded->m_subresources.front().m_view.getBufferData()) !=
+                                expected) {
+                                failures.fetch_add(1, std::memory_order_relaxed);
+                                return;
+                            }
+                            decoded_bytes.fetch_add(static_cast<u64>(decoded->m_storage.getBufferData().size()),
+                                std::memory_order_relaxed);
+                        }
+                    });
+                }
+                for (std::thread &worker: workers) {
+                    worker.join();
+                }
+                const auto elapsed = std::chrono::steady_clock::now() - start;
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+                const double mb_per_s = ms > 0 ? static_cast<double>(decoded_bytes.load()) / 1048576.0 /
+                        (static_cast<double>(ms) / 1000.0) : 0.0;
+                std::printf("[ktx2-throughput-%s] threads=%d iters=%d bytes=%llu ms=%lld (%.1f MB/s)\n", label,
+                    kThreads, iters, static_cast<unsigned long long>(decoded_bytes.load()),
+                    static_cast<long long>(ms), mb_per_s);
+                PPR_TEST_ASSERT(failures.load(std::memory_order_relaxed) == 0);
+            };
+            probe(file, "plain", 128);
+            probe(packed, "zlib", 128);
+
+            // Mismatched targets and uncompressed sources fail closed, never reinterpreted.
+            const Expected<image::ImageAsset> mismatched = image::decodeToBlocks(
+                file.getBufferData(), ".ktx2", image::BlockTag::bc7, image::ImageDecodeDesc{});
+            PPR_TEST_ASSERT(not mismatched.has_value());
+            PPR_TEST_ASSERT(mismatched.error() == std::errc::function_not_supported);
+
+            const std::vector<std::byte> rgba(4u * 4u * 4u, std::byte{0x7F});
+            const mem::SharedBuffer plain = makeKtx2Fixture(4u, 4u, 37u, rgba);
+            PPR_TEST_ASSERT(plain.isValid());
+            const Expected<image::ImageAsset> reinterpreted = image::decodeToBlocks(
+                plain.getBufferData(), ".ktx2", image::BlockTag::bc1, image::ImageDecodeDesc{});
+            PPR_TEST_ASSERT(not reinterpreted.has_value());
+            PPR_TEST_ASSERT(reinterpreted.error() == std::errc::invalid_argument);
+        };
+
         PPR_UNIT_TEST(block_geometry_math) {
             PPR_TEST_ASSERT(image::rowPitchFor(4u, image::BlockTag::bc1) == 8u);
             PPR_TEST_ASSERT(image::slicePitchFor(4u, 4u, image::BlockTag::bc1) == 8u);
@@ -439,6 +608,7 @@ namespace pP::tests {
             detail::Image::blocks_none_target_is_invalid,
             detail::Image::blocks_dxt1_passthrough,
             detail::Image::blocks_mismatched_target_fails,
+            detail::Image::blocks_ktx2_concurrent_transcode_matches_serial,
             detail::Image::block_geometry_math,
             detail::Image::format_predicate_roundtrip,
             detail::Image::content_hash_is_content_keyed,
