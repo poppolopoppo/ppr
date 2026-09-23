@@ -450,7 +450,13 @@ Embed-lifetime extension: the fetch-cache fork truncates GLB blob lifetime (loca
   BC1/3/4/5/7(UnormSrgb), ASTC4x4/6x6/8x8(UnormSrgb). ETC/PVRTC/other-ASTC/Basis-mismatch → RGBA8.
   Blocks: color→BC7-sRGB (BC1-sRGB opaque / BC3-sRGB alpha fallback), normal→BC5-linear,
   single-channel→BC4. Mips: KTX2 embedded when present; CPU-generate only uncompressed RGBA
-  (color bicubic, data box); never decode→recompress. Samplers: pass owns ONE shared sampler
+  (color bicubic, data box); never decode→recompress. Chain design (§10 M1): float-linear
+  workspace via `stb_image_resize2` (vendored `stb` target, PRIVATE to `engine.image`;
+  Mango has no float resample), halving to 4px (`mipCount = FloorLog2(min)−1`),
+  sRGB→linear before filter with re-encode after, alpha-coverage preserve by binary
+  search (mask materials, upscale-only), chamfer distance-field + color-expand
+  anti-bleed, chain stored in `m_subresources[m_mip_count]` with chain bytes counted
+  against the 256 MiB decode cap, upload path consumes all mips. Samplers: pass owns ONE shared sampler
   (§2.4); no per-texture sampler.
 - Staging recipe (ImGui font-texture template, `App.UI.ImGui.cpp:544-599`): DeviceLocal texture with
   `CopyDestination` usage + `defaultState=CopyDestination` → Upload staging buffer with initData →
@@ -678,3 +684,39 @@ Phases (each phase ends with its gate; re-review only on changed decisions/risks
   KTX2 race→mutex+clone · silent-empty→`invalid_argument` · scope creep→deferred (§2.3 rejections).
   The old `materialize()` no-op / `Numeric`-fallback / `.slim`-pointer risks are retired by
   §2.0/§2.5 and this section respectively.
+
+## 10. Phases 8–9 + standing policies (reduced scope, approved 2026-09-22)
+
+Dropped out of scope (filed as carries, not planned): blend sorting, Vulkan CI,
+CUDA/Metal paths, batching/culling, profiling, cutout-UV hulls.
+
+- **Phase 8 — content + presentation** (one churn over the same files): M1 mips
+  (§4 chain design above; incremental resampling default, HQ-from-top opt-in) +
+  M2 UV transforms/sets + inverse-transpose normals (`KHR_texture_transform`,
+  alternate `TEXCOORD_n`, non-uniform node scales) + F1 formatting sweep (§13
+  sites + rule below) + F2 comment triage (policy below). **Gate 8:** golden mip
+  readbacks (coverage preserved, no bleed), UV/normal fixture asserts,
+  format/comment checklist clean, suite 100% — plus a coverage map in the lane
+  report (every new code path → covering test name; new branches without a test
+  fail the gate even at 100%).
+- **Phase 9 — systems + observability**: M3 KTX2 throughput (per-decoder
+  instances, mutex only around the single-slot cache; comparison numbers) + F3
+  logging gaps (policy below; init/upload/release/shutdown/first-occurrence,
+  never per-draw) + first-occurrence helper (centralized, testable) +
+  `$Globals` re-probe after a slang-rhi upgrade (verdict only, no upgrade work).
+  **Gate 9:** throughput numbers, log-coverage proof, re-probe verdict, 100%.
+
+Standing policies (apply to all later work):
+- Source format: boolean continuations put `and`/`or` at line END, never line
+  start; short conditions join to one line (≤120 columns); longer ones break
+  after the operator. Both active configs (`.idea` Project scheme canonical,
+  `.clang-format` LLVM-after) already mandate this — violations are hand-written,
+  never accepted from the reformatter (hand-fix, never re-run blindly).
+- Comments: no process tags in code (`TODO(`/P0–P3/gates/lanes/plan-§/MVP/probe);
+  invariants live in place in plan-free wording; architecture lives in the
+  module `codemap.md`; missing rationale (hash seeds, budget sizing, errc
+  mappings) gets documented where decided.
+- Logging: every pipeline stage logs lifecycle at init/upload/release/shutdown
+  (`PPR_LOG` categories, `info`/`warning`); errors stay fail-closed with codes;
+  first-occurrence dampening for hot-adjacent paths; nothing per-draw or
+  per-instance.
