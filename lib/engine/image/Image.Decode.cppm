@@ -8,8 +8,8 @@ import engine.math;
 
 import std;
 
-// P1 synchronous thread-safe decode (PNG/JPG/KTX2/DDS via Mango Bitmap;
-// docs/plans/asset-pipeline.md §2.2). Mango stays PRIVATE to the matching .cpp —
+// Synchronous thread-safe decode (PNG/JPG/KTX2/DDS via Mango Bitmap).
+// Mango stays PRIVATE to the matching .cpp —
 // never exported here, so image -> rhi leaks are impossible at the boundary.
 
 export namespace pP::image {

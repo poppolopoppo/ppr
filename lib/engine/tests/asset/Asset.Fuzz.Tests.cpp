@@ -13,7 +13,7 @@ import std;
 
 namespace pP::tests::detail {
     namespace Fuzz {
-        // Seeded deterministic corpus (Phase 5 hardening): the fixed seed makes
+        // Seeded deterministic corpus: the fixed seed makes
         // every mutation identical on every run, so each rejection is a
         // deterministic errc — never a crash, leak, or hang. Bounded by
         // construction: small fixtures, small iteration counts, no loops over
