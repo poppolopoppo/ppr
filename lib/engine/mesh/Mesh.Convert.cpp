@@ -3,6 +3,7 @@ module;
 #include <mango/core/exception.hpp>
 #include <mango/core/print.hpp>
 #include <mango/import3d/import3d.hpp>
+#include <mango/math/matrix4x4.hpp>
 
 module engine.mesh;
 
@@ -37,7 +38,7 @@ namespace pP {
                 return static_cast<i32>(value);
             }
 
-            // GLB-embed lifetime fix (P1 blocker): the fork views blob bytes out
+            // GLB-embed byte lifetime: the fork views blob bytes out
             // of fastgltf locals (GltfDataBuffer copy + Asset-owned sources)
             // that die in the ImportGLTF ctor, so ImageSource.memory dangles
             // while the Scene lives (ASan heap-use-after-free via clone ←
@@ -617,7 +618,7 @@ namespace pP {
             // §3 boundary helpers: plain-float-array vertex ↔ mango vectors.
             // The fork already emits LH (x,y,-z), so this is a verbatim
             // component copy. Tangent-w policy lives at the emission site in
-            // convertMesh: file tangents get w=-w (P0c), MikkTSpace-regened
+            // convertMesh: file tangents get w=-w, MikkTSpace-regened
             // tangents pass through verbatim (computed post-flip).
             [[nodiscard]] StaticMeshVertex storeVertex(const m3d::Vertex &src) noexcept {
                 StaticMeshVertex dst;
@@ -660,9 +661,211 @@ namespace pP {
                 return flags;
             }
 
+            // Phase 8 M2 KHR_texture_transform bake: Mango parses the per-slot
+            // transform, but the single-channel StaticMeshVertex cannot carry
+            // per-slot UVs, so the unanimous scene transform is baked into
+            // m_texcoord once at convert. Unanimous means every enabled slot of
+            // every referenced material shares set 0 and one transform; any
+            // other authored non-identity combination is deferred
+            // (function_not_supported), never silently mis-sampled. Identity
+            // scenes skip the bake entirely. Applied bakes reset the stored
+            // per-slot transforms to identity so a future shader consumer can
+            // never double-apply them.
+            [[nodiscard]] bool isIdentityUvTransform(const m3d::UvTransform &transform) noexcept {
+                return transform.scale.x == 1.0f and transform.scale.y == 1.0f and
+                       transform.offset.x == 0.0f and transform.offset.y == 0.0f and transform.rotation == 0.0f;
+            }
+
+            [[nodiscard]] bool sameUvTransform(const m3d::UvTransform &lhs, const m3d::UvTransform &rhs) noexcept {
+                return lhs.scale.x == rhs.scale.x and lhs.scale.y == rhs.scale.y and lhs.offset.x == rhs.offset.x and
+                       lhs.offset.y == rhs.offset.y and lhs.rotation == rhs.rotation;
+            }
+
+            struct BakedUvTransform {
+                bool m_apply = false;
+                m3d::UvTransform m_transform{};
+            };
+
+            [[nodiscard]] Expected<BakedUvTransform> resolveBakedUvTransform(
+                const m3d::Scene &scene, const SceneAsset &converted) {
+                BakedUvTransform out;
+                bool have_baseline = false;
+                UvSetId baseline_set{};
+                m3d::UvTransform baseline{};
+                // Referenced materials only: an unreferenced authored material
+                // never vetoes the bake.
+                for (const StaticMeshAsset &mesh_asset: converted.m_meshes) {
+                    for (const MeshPrimitiveRange &prim: mesh_asset.m_prims) {
+                        // convertMesh already validated every prim material, so
+                        // the index below is in range by construction.
+                        const m3d::Material &material =
+                                scene.materials[static_cast<std::size_t>(*prim.m_material)];
+                        const m3d::ImageSample *const slots[] = {
+                            &material.baseColor,
+                            &material.metallic,
+                            &material.roughness,
+                            &material.normal,
+                            &material.occlusion,
+                            &material.emissive,
+                        };
+                        for (const m3d::ImageSample *const slot: slots) {
+                            if (not slot->enabled()) {
+                                continue;
+                            }
+                            if (not have_baseline) {
+                                baseline_set = UvSetId{slot->texCoord};
+                                baseline = slot->transform;
+                                have_baseline = true;
+                                continue;
+                            }
+                            if (UvSetId{slot->texCoord} != baseline_set or
+                                not sameUvTransform(slot->transform, baseline)) {
+                                if (not isIdentityUvTransform(slot->transform) or
+                                    not isIdentityUvTransform(baseline)) {
+                                    PPR_LOG(Mesh, error,
+                                        "divergent KHR_texture_transform across slots needs multi-channel UVs — rejecting material");
+                                    return std::unexpected{make_error_code(errc::function_not_supported)};
+                                }
+                            }
+                        }
+                    }
+                }
+                if (have_baseline and not isIdentityUvTransform(baseline)) {
+                    if (baseline_set != UvSetId{0u}) {
+                        PPR_LOG(Mesh, error,
+                            "KHR_texture_transform on a non-zero set needs multi-channel UVs — rejecting material");
+                        return std::unexpected{make_error_code(errc::function_not_supported)};
+                    }
+                    out.m_apply = true;
+                    out.m_transform = baseline;
+                }
+                return out;
+            }
+
+            // glTF KHR_texture_transform column-vector form
+            // (translation * rotation * scale): scale first, then
+            // counter-clockwise rotation, then offset.
+            void bakeUvTransform(SceneAsset &scene_asset, const m3d::UvTransform &transform) noexcept {
+                const float rotation_c = std::cos(transform.rotation);
+                const float rotation_s = std::sin(transform.rotation);
+                for (StaticMeshAsset &mesh_asset: scene_asset.m_meshes) {
+                    for (StaticMeshVertex &vert: mesh_asset.m_verts) {
+                        const float u = vert.m_texcoord[0];
+                        const float v = vert.m_texcoord[1];
+                        vert.m_texcoord[0] = rotation_c * transform.scale.x * u - rotation_s * transform.scale.y * v +
+                                             transform.offset.x;
+                        vert.m_texcoord[1] = rotation_s * transform.scale.x * u + rotation_c * transform.scale.y * v +
+                                             transform.offset.y;
+                    }
+                }
+                for (MaterialAsset &material: scene_asset.m_mats) {
+                    MaterialImageSlot *const slots[] = {
+                        &material.m_base_color_map,
+                        &material.m_metallic_map,
+                        &material.m_roughness_map,
+                        &material.m_normal_map,
+                        &material.m_occlusion_map,
+                        &material.m_emissive_map,
+                    };
+                    for (MaterialImageSlot *const slot: slots) {
+                        if (slot->enabled()) {
+                            slot->m_transform = UvTransformAsset{};
+                        }
+                    }
+                }
+            }
+
+            // Phase 8 M2 non-uniform node-scale bake (CPU, once): shared meshes
+            // stay object-space; an instance whose world carries non-uniform
+            // scale gets a private copy with positions moved by the world and
+            // normals/tangents moved by its inverse-transpose, then its node
+            // world resets to identity so submission cannot double-apply.
+            // Uniform scales skip the bake (shader normalize absorbs them).
+            // Singular worlds (collapsed or flattened basis, including mirrors
+            // with a zero axis) fail closed. Mirrored worlds keep the file
+            // tangent-w negated once more, preserving bitangent handedness.
+            [[nodiscard]] Expected<bool> bakeScaledInstance(
+                SceneAsset &scene_asset, SceneInstance &instance, const MeshLimits &limits) {
+                // Instances are built from validated nodes and meshes just
+                // above, and meshes only append below the original range, so
+                // both indices below are in range by construction.
+                const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
+                const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
+                const float4x4 world = scene_asset.m_nodes[node_index].m_world;
+                const float3 row_x{world[0].x, world[0].y, world[0].z};
+                const float3 row_y{world[1].x, world[1].y, world[1].z};
+                const float3 row_z{world[2].x, world[2].y, world[2].z};
+                const float scale_x = length(row_x);
+                const float scale_y = length(row_y);
+                const float scale_z = length(row_z);
+                const float hi = max(scale_x, max(scale_y, scale_z));
+                const float lo = min(scale_x, min(scale_y, scale_z));
+                // Singular worlds have no inverse-transpose: fail closed
+                // instead of baking NaNs.
+                if (lo <= 1e-9f * hi) [[unlikely]] {
+                    PPR_LOG(Mesh, error, "degenerate node world (singular basis) — rejecting scene");
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
+                if ((hi - lo) <= 1e-6f * hi) {
+                    return false;
+                }
+                if (scene_asset.m_meshes.size() >= limits.m_max_meshes) [[unlikely]] {
+                    PPR_LOG(Mesh, error, "scaled-instance bake exceeds production mesh cap — rejecting scene");
+                    return std::unexpected{make_error_code(errc::invalid_argument)};
+                }
+                // The cap above bounds the size below u32 range, so the
+                // narrowing below is exact with no error branch.
+                const u32 baked_id = static_cast<u32>(scene_asset.m_meshes.size());
+                // Row-vector normal matrix: n' = n * transpose(inverse(world)).
+                // transpose(inverse()) rather than the inverseTranspose()
+                // fast path: the fast path negates the z row (live-verified
+                // against transpose o inverse on diagonal scales, including
+                // identity), which would mirror every baked normal.
+                const float4x4 normal_matrix = mango::math::transpose(mango::math::inverse(world));
+                // Mirror worlds (negative determinant) flip tangent handedness.
+                const float triple = dot(row_x, cross(row_y, row_z));
+                StaticMeshAsset baked = scene_asset.m_meshes[mesh_index];
+                Box bounds{};
+                for (StaticMeshVertex &vert: baked.m_verts) {
+                    const float4 moved =
+                            float4{vert.m_position[0], vert.m_position[1], vert.m_position[2], 1.0f} * world;
+                    vert.m_position[0] = moved.x;
+                    vert.m_position[1] = moved.y;
+                    vert.m_position[2] = moved.z;
+                    const float4 bent =
+                            float4{vert.m_normal[0], vert.m_normal[1], vert.m_normal[2], 0.0f} * normal_matrix;
+                    const float bent_len_sq = bent.x * bent.x + bent.y * bent.y + bent.z * bent.z;
+                    if (bent_len_sq > 1e-12f) {
+                        const float inv_len = 1.0f / std::sqrt(bent_len_sq);
+                        vert.m_normal[0] = bent.x * inv_len;
+                        vert.m_normal[1] = bent.y * inv_len;
+                        vert.m_normal[2] = bent.z * inv_len;
+                    }
+                    const float4 twisted =
+                            float4{vert.m_tangent[0], vert.m_tangent[1], vert.m_tangent[2], 0.0f} * normal_matrix;
+                    const float twisted_len_sq =
+                            twisted.x * twisted.x + twisted.y * twisted.y + twisted.z * twisted.z;
+                    if (twisted_len_sq > 1e-12f) {
+                        const float inv_len = 1.0f / std::sqrt(twisted_len_sq);
+                        vert.m_tangent[0] = twisted.x * inv_len;
+                        vert.m_tangent[1] = twisted.y * inv_len;
+                        vert.m_tangent[2] = twisted.z * inv_len;
+                    }
+                    if (triple < 0.0f) {
+                        vert.m_tangent[3] = -vert.m_tangent[3];
+                    }
+                    bounds.extend(float3{vert.m_position[0], vert.m_position[1], vert.m_position[2]});
+                }
+                baked.m_bounds = bounds;
+                scene_asset.m_meshes.push_back(std::move(baked));
+                instance.m_mesh = MeshAssetId{baked_id};
+                scene_asset.m_nodes[node_index].m_world = float4x4::identity();
+                return true;
+            }
+
             // Expand one strip/fan primitive to a triangle list, mirroring
             // Mango's own strip/fan→triangle winding (mesh.cpp trimesh path).
-            // MeshPrimitiveRange carries no topology, and the §6 shader
+            // MeshPrimitiveRange carries no topology, and the shader
             // consumes flat lists, so expansion is the content-preserving
             // conversion. Restart sentinels split the strip/fan; resolved
             // indices are file-local + base in all cases.
@@ -718,7 +921,7 @@ namespace pP {
                 return default_value_v;
             }
 
-            // Missing-tangent fallback: in-fork MikkTSpace regen (P0c probe 2).
+            // Missing-tangent fallback: in-fork MikkTSpace regen.
             // Mirrors the fork's own needTangent path (import_gltf.cpp:932-940
             // + 1020-1023): per primitive gated on the referenced material's
             // normal map, soup built from already-flipped (x,y,-z) data,
@@ -869,7 +1072,7 @@ namespace pP {
                 for (u32 i = 0u; i < *vert_count; ++i) {
                     StaticMeshVertex dst = storeVertex(mesh.vertices[i]);
                     if (file_tangents) {
-                        // G1 (P0c probe 2): the fork hands file tangents as
+                        // File tangents: the fork hands file tangents as
                         // (x,y,-z,w) with verbatim w, but mirroring z on N and
                         // T flips the handedness of B = w·(N×T) — negate w to
                         // keep the bitangent correct.
@@ -1067,6 +1270,15 @@ namespace pP {
                 [[unlikely]] {
                     return std::unexpected{node_count.error()};
                 }
+                // Phase 8 M2: bake the unanimous KHR_texture_transform into the
+                // shared channels before node work duplicates any mesh.
+                Expected<BakedUvTransform> baked_uv = resolveBakedUvTransform(scene, out);
+                if (not baked_uv.has_value()) [[unlikely]] {
+                    return std::unexpected{baked_uv.error()};
+                }
+                if (baked_uv->m_apply) {
+                    bakeUvTransform(out, baked_uv->m_transform);
+                }
                 out.m_nodes.reserve(scene.nodes.size());
                 Array<NodeId> parents(scene.nodes.size(), kInvalidNode);
                 for (std::size_t i = 0u; i < scene.nodes.size(); ++i) {
@@ -1125,6 +1337,14 @@ namespace pP {
                         instance.m_mesh = MeshAssetId{*scene.nodes[i].mesh};
                         instance.m_node = NodeId{static_cast<u32>(i)};
                         out.m_instances.push_back(instance);
+                    }
+                }
+                // Phase 8 M2: non-uniform node scales bake per instance (CPU,
+                // once); uniform and identity worlds keep the shared mesh.
+                for (SceneInstance &instance: out.m_instances) {
+                    Expected<bool> baked = bakeScaledInstance(out, instance, limits);
+                    if (not baked.has_value()) [[unlikely]] {
+                        return std::unexpected{baked.error()};
                     }
                 }
                 return out;

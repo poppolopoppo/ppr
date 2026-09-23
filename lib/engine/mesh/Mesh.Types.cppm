@@ -57,10 +57,10 @@ export namespace pP::mesh {
     static_assert(std::is_standard_layout_v<UvSetId>);
     static_assert(sizeof(UvSetId) == 4u);
 
-    // Plain-float-array DTO (P1 interim vertex verdict): mango Vector members
-    // carry user-provided copy/dtor, so they can never be trivially copyable —
-    // which §2.4 upload + §3 bitwise-copy require. No math lives here;
-    // conversion happens at the §3 boundary in :convert via load/store helpers.
+    // Plain-float-array DTO: mango Vector members carry user-provided copy/dtor,
+    // so they can never be trivially copyable — which upload + bitwise-copy
+    // require. No math lives here; conversion happens at the convert boundary
+    // via load/store helpers.
     struct StaticMeshVertex {
         float m_position[3];
         float m_normal[3];
@@ -79,7 +79,7 @@ export namespace pP::mesh {
     static_assert(PPR_OFFSETOF(StaticMeshVertex, m_tangent) == 32u);
     static_assert(PPR_OFFSETOF(StaticMeshVertex, m_color) == 48u);
 
-    // PPR-owned typed flags. No joints/weights bits exist in MVP: joint data
+    // PPR-owned typed flags. No joints/weights bits exist: joint data
     // present in the source is rejected with function_not_supported, never stored.
     enum class EMeshAttribute : u32 {
         none = 0u,
@@ -144,7 +144,7 @@ export namespace pP::mesh {
         blend,
     };
 
-    // MVP carries only the metallic-roughness core. Deferred (nothing consumes
+    // Carries only the metallic-roughness core. Deferred (nothing consumes
     // them): clearcoat/sheen/anisotropy. Not carried: per-slot swizzle (implied
     // by semantic) and per-slot color space (base_color/emissive→sRGB, rest→linear).
     struct MaterialAsset {

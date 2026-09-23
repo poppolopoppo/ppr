@@ -12,6 +12,25 @@ one image-source path through `importAndConvert`:
   path: geometry in `.bin`, texture in `.png`, both referenced by relative URI.
   Covers the file path: `ImageRef` records `m_rel_path` and the converter maps
   it with `SharedBuffer::mapFile`.
+- Phase 8 M2 fixtures (hand-authored JSON reusing `textured_box.bin` /
+  `textured_box.png` unless noted; same CC0 grant as above):
+  - `uv_transform_box.gltf` — `KHR_texture_transform` (offset/rotation/scale)
+    on the base-color texture; the convert bakes it into `m_texcoord`.
+  - `second_set_box.gltf` — `TEXCOORD_1` accessor aliasing the set-0 data with
+    `texCoord: 1` on the base-color slot; the selector flows convert into pack.
+  - `mixed_set_box.gltf` — identity transforms on sets 0 (base color) and 1
+    (normal); converts cleanly with per-slot selectors preserved.
+  - `divergent_transform_box.gltf` — conflicting non-identity transforms across
+    slots; the convert rejects with `function_not_supported`.
+  - `transformed_set_box.gltf` — non-identity transform on set 1; rejected with
+    `function_not_supported` (no channel to bake into).
+  - `degenerate_node_box.gltf` — zero node scale; rejected with
+    `invalid_argument` (singular world has no inverse-transpose).
+  - `scaled_twin_tri.gltf` + `scaled_twin_tri.bin` — one triangle (diagonal
+    normals, mixed zero/non-zero normals/tangents) instanced by an identity
+    node and a node scaled `[2.0, 0.5, 1.0]`; the scaled instance bakes via
+    inverse-transpose. `mirror_twin_tri.gltf` reuses the same `.bin` with a
+    `[-2.0, 0.5, 1.0]` node to prove the tangent-w mirror flip.
 
 ## License
 

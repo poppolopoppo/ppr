@@ -25,6 +25,13 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
   material normal map), file-order indices + base honour, V-down no-flip, row-vector
   `S*R*T` / `parent*local`, MR split
   (roughness=g/metallic=b Linear), strip/fan expanded to lists mirroring Mango winding.
+- Draw-range base convention (`MeshPrimitiveRange`): append-path primitives carry
+  base=0 with remapped global indices, direct-glTF primitives carry
+  base=vert_count with file-local indices; the resolved index is always
+  (index + base), so both conventions draw correctly. File tangents are stored
+  with negated `w` (the fork mirrors z on N/T, flipping bitangent handedness);
+  MikkTSpace regens (missing TANGENT only) pass through verbatim as computed
+  post-flip.
   Rejections: silent-empty→`invalid_argument`, missing POSITION/bad indices→`invalid_argument`,
   joints/skins→`function_not_supported`, blend + authored clearcoat/sheen/anisotropy/opacity→
   `function_not_supported`, animations→static snapshot with warning, Mango exceptions→
