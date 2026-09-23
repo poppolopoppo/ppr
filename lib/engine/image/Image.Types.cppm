@@ -28,6 +28,8 @@ namespace pP {
 }
 
 export namespace pP::image {
+    PPR_DECLARE_LOG_CATEGORY(Image);
+
     // P1 frozen contract (docs/plans/asset-pipeline.md §2.2): CPU-only vocabulary.
     // No mango/rhi types cross — native format + plain layout; RHI mapping happens
     // at upload inside engine.app caches.

@@ -15,6 +15,8 @@ import std;
 // inside Mango. Async/worker dispatch lives one level up, never here.
 
 export namespace pP::mesh {
+    PPR_DECLARE_LOG_CATEGORY(Mesh);
+
     // Imports a STATIC glTF/GLB scene and converts it to engine assets.
     // dir is the asset root; file is relative to dir (may include subfolders).
     // Only .gltf/.glb are accepted (OBJ/FBX are deferred entirely).

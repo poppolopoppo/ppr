@@ -7,6 +7,8 @@ import :types;
 import std;
 
 namespace pP::image {
+    PPR_DEFINE_LOG_CATEGORY(Image, debug, none);
+
     class ImageErrorCategory final : public std::error_category {
     public:
         [[nodiscard]] const char *name() const noexcept override {

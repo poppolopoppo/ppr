@@ -48,10 +48,21 @@ struct FrameConstants {
     float4 m_viewport_size;
 };
 
+struct InstancePayload {
+    float4x4 m_model;
+    uint m_vb_offset;
+    uint m_ib_start;
+    uint m_index_count;
+    uint m_material;
+    int m_base_vertex;
+    uint3 m_pad;
+};
+
 ConstantBuffer<FrameConstants> g_frame;
 StructuredBuffer<BagVertex> g_vertices;
 StructuredBuffer<uint> g_indices;
 StructuredBuffer<GpuMaterial> g_materials;
+StructuredBuffer<InstancePayload> g_payloads;
 
 static const uint kNoTexture = 0xFFFFFFFF;
 static const uint kFallbackTextureSlot = 0u;
@@ -87,6 +98,71 @@ BindlessVertexOutput vertexMain(
     output.tangent = float4(mul(float4(v.m_tangent.xyz, 0.0), g_model).xyz, v.m_tangent.w);
     output.material = g_push.m_material;
     return output;
+}
+
+[shader("vertex")]
+BindlessVertexOutput vertexIndirectMain(
+    uint sv_vertex_id : SV_VertexID, uint sv_instance_id : SV_InstanceID) {
+    InstancePayload payload = g_payloads[sv_instance_id];
+    int bag_index = int(g_indices[payload.m_ib_start + sv_vertex_id])
+        + int(payload.m_vb_offset)
+        + payload.m_base_vertex;
+    BagVertex v = g_vertices[bag_index];
+    BindlessVertexOutput output;
+    float4 world = mul(float4(v.m_position, 1.0), payload.m_model);
+    output.position = mul(world, g_frame.m_view_projection);
+    output.world = world.xyz;
+    output.uv = v.m_uv;
+    output.normal = mul(float4(v.m_normal, 0.0), payload.m_model).xyz;
+    output.tangent = float4(mul(float4(v.m_tangent.xyz, 0.0), payload.m_model).xyz, v.m_tangent.w);
+    output.material = payload.m_material;
+    return output;
+}
+
+// Phase 7 L2a PrepareInstances kernel: one thread per instance ([numthreads(1,1,1)],
+// dispatch (instanceCount,1,1)). Publishes the same 96 B InstancePayload layout the
+// CPU-staged L1 path writes via Upload scratch: copies g_scratch[i] to the device-local
+// g_device_payloads[i], then appends one indirect-arg record (vertexCount = index_count,
+// instanceCount = 1, startVertex = 0, startInstance = i, so SV_InstanceID indexes the
+// device payloads directly, exactly like planIndirectDraws). Records clamp to g_max_count;
+// index_count == 0 instances publish their payload but append no record. The draw count is
+// the UAV counter itself (host clears it before dispatch); the count-0 path dispatches
+// nothing, so the cleared counter reads zero. Resources ride entry-point params (NOT
+// globals) per the $Globals note above; Append() uses HLSL casing per the L1 carry.
+struct IndirectDrawRecord {
+    uint m_vertex_count_per_instance;
+    uint m_instance_count;
+    uint m_start_vertex_location;
+    uint m_start_instance_location;
+};
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void prepareInstancesMain(
+    uint3 sv_dispatch_id : SV_DispatchThreadID,
+    uniform StructuredBuffer<InstancePayload> g_scratch,
+    uniform RWStructuredBuffer<InstancePayload> g_device_payloads,
+    uniform AppendStructuredBuffer<IndirectDrawRecord> g_args,
+    uniform uint g_instance_count,
+    uniform uint g_max_count) {
+    uint instance_index = sv_dispatch_id.x;
+    if (instance_index >= g_instance_count) {
+        return;
+    }
+    if (instance_index >= g_max_count) {
+        return;
+    }
+    InstancePayload payload = g_scratch[instance_index];
+    g_device_payloads[instance_index] = payload;
+    if (payload.m_index_count == 0u) {
+        return;
+    }
+    IndirectDrawRecord record;
+    record.m_vertex_count_per_instance = payload.m_index_count;
+    record.m_instance_count = 1u;
+    record.m_start_vertex_location = 0u;
+    record.m_start_instance_location = instance_index;
+    g_args.Append(record);
 }
 
 // The texture heap and shared sampler ride FRAGMENT entry-point params for the

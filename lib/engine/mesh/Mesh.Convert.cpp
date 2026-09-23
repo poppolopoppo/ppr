@@ -14,7 +14,7 @@ import std;
 
 namespace pP {
     namespace mesh {
-        PPR_DEFINE_LOG_CATEGORY(Mesh, info, none)
+        PPR_DEFINE_LOG_CATEGORY(Mesh, debug, none)
 
         namespace details {
             namespace m3d = mango::import3d;
@@ -586,15 +586,13 @@ namespace pP {
                 }
                 out.m_metallic_map = *slot;
                 slot = convertSlot(material.roughness, images);
-                if (not
-                    slot.has_value())
+                if (not slot.has_value())
                 [[unlikely]] {
                     return std::unexpected{slot.error()};
                 }
                 out.m_roughness_map = *slot;
                 slot = convertSlot(material.normal, images);
-                if (not
-                    slot.has_value())
+                if (not slot.has_value())
                 [[unlikely]] {
                     return std::unexpected{slot.error()};
                 }
