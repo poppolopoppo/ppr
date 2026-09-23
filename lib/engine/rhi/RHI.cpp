@@ -292,7 +292,12 @@ namespace pP {
 
                 m_device = std::move(device);
                 PPR_LOG(RHI, info, "RHI device created successfully", {
-                    {"device_type", getDeviceTypeName_(device_type)}
+                    {"device_type", getDeviceTypeName_(device_type)},
+                    {"compile_target", static_cast<int>(compile_target)},
+                    {"bindless_textures", rhi::kBindlessTextureBudget},
+                    {"bindless_combined", rhi::kBindlessCombinedBudget},
+                    {"bindless_samplers", rhi::kBindlessSamplerBudget},
+                    {"bindless_buffers", rhi::kBindlessBufferBudget},
                 });
                 return make_error_code(SLANG_OK);
             }
