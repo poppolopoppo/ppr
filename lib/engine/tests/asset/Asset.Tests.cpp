@@ -49,6 +49,14 @@ namespace pP::tests {
     // hash (one focused test; Vulkan CI + tier policy lives in the asset codemap).
     const UnitTest &indirectLossTests() noexcept;
 
+    // Asset-pipeline logging proofs: first-occurrence helper + CPU-owned
+    // init/upload lines (one focused group, own TU).
+    const UnitTest &loggingTests() noexcept;
+
+    // GPU-owned logging proofs: cache lifecycle, upload dedup, empty publish
+    // skip, shader module success (one focused group, own TU).
+    const UnitTest &loggingGpuTests() noexcept;
+
     // Defined here rather than as an inline constexpr umbrella in Asset.Tests.cppm:
     // same MSVC C1001 shape as engine.tests.core. New groups append their
     // accessor + recurse entry here without touching the image group.
@@ -71,6 +79,8 @@ namespace pP::tests {
             indirectComputeTests(),
             indirectInjectionTests(),
             indirectLossTests(),
+            loggingTests(),
+            loggingGpuTests(),
         });
     };
 } // namespace pP::tests

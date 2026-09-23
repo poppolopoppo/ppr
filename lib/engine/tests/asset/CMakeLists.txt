@@ -32,6 +32,10 @@ target_sources(engine.tests.asset
         # mid-frame device-loss restart hash.
         Asset.IndirectInjection.Tests.cpp
         Asset.IndirectLoss.Tests.cpp
+        # Asset-pipeline logging proofs: CPU-owned lines + helper (own TU) and
+        # GPU-owned lines (own TU, needs the rendering TestApp + fixtures).
+        Asset.Logging.Tests.cpp
+        Asset.LoggingGpu.Tests.cpp
     )
 
 setup_ppr_project(engine.tests.asset
