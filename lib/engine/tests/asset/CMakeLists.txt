@@ -14,7 +14,20 @@ target_sources(engine.tests.asset
         Asset.Staging.Tests.cpp
         Asset.Fuzz.Tests.cpp
         Asset.Gpu.Tests.cpp
+        Asset.GpuFixture.cpp
         Asset.Gate.Tests.cpp
+        # Phase 7 L1: indirect layouts (CPU-only) + direct-vs-indirect parity
+        # gate. L0 spikes deleted — the parity gate is the adopted drawIndirect
+        # proof; UAV-counter/Append/count-buffer ride with L2's kernel.
+        Asset.IndirectLayout.Tests.cpp
+        Asset.IndirectParity.Tests.cpp
+        # Phase 7 L2b: compute-publish gate (count, parity, guards, ring).
+        Asset.IndirectCompute.Tests.cpp
+        # Phase 7 L3: failure injection (no half-publish, clamped draw, empty
+        # staged) + mid-frame device-loss restart hash. Vulkan stance lives as
+        # a CI note in the loss TU — not a pipeline.
+        Asset.IndirectInjection.Tests.cpp
+        Asset.IndirectLoss.Tests.cpp
     )
 
 setup_ppr_project(engine.tests.asset
@@ -61,8 +74,9 @@ add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset WORKING_DIRECTORY 
 set_tests_properties(EngineAssetUnitTests
         PROPERTIES
         # Full run keeps the ASan 3-loop rigor: cpu + stress + gpu + gate no
-        # longer fit the old 120 s budget (gate readbacks alone are ~100 s).
-        TIMEOUT 300
+        # longer fit the old 120 s budget (gate readbacks alone are ~100 s);
+        # the two Phase 7 L3 readback leaves push a 3-loop run past 300 s.
+        TIMEOUT 450
         LABELS "unit;engine;asset"
 )
 
@@ -101,3 +115,13 @@ ppr_asset_tier(EngineAssetTierGpu.gate_box asset/gate/bindless_textured_box_gate
 ppr_asset_tier(EngineAssetTierGpu.gate_orm asset/gate/orm_golden_distinct_channels tier-gpu 90 LOOPS 1)
 ppr_asset_tier(EngineAssetTierGpu.gate_tangent asset/gate/tangent_w_render_arbitration tier-gpu 90 LOOPS 1)
 ppr_asset_tier(EngineAssetTierGpu.gate_editor asset/gate/editor_scene_flow tier-gpu 90 LOOPS 1)
+# Phase 7 L1: indirect layouts are CPU-only; the parity gate is a readback
+# leaf like the other gates (loop 1 for the fast tier signal; the full run
+# keeps the ASan 3-loop rigor).
+ppr_asset_tier(EngineAssetTierCpu.indirect_layout asset/indirect_layout tier-cpu 60)
+ppr_asset_tier(EngineAssetTierGpu.gate_indirect asset/indirect_parity tier-gpu 90 LOOPS 1)
+ppr_asset_tier(EngineAssetTierGpu.gate_indirect_compute asset/indirect_compute tier-gpu 90 LOOPS 1)
+# Phase 7 L3: injection + loss leaves run loop-1 in the fast tier (the full
+# EngineAssetUnitTests run keeps the ASan 3-loop rigor).
+ppr_asset_tier(EngineAssetTierGpu.gate_indirect_injection asset/indirect_injection tier-gpu 90 LOOPS 1)
+ppr_asset_tier(EngineAssetTierGpu.gate_indirect_loss asset/indirect_loss tier-gpu 90 LOOPS 1)

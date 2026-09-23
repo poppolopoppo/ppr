@@ -15,6 +15,18 @@ import engine.image;
 import engine.mesh;
 import std;
 
+namespace pP::tests::detail::SharedGpu {
+    [[nodiscard]] std::error_code acquire();
+
+    [[nodiscard]] std::error_code release();
+
+    [[nodiscard]] safe_ptr<IRhiService> rhiService();
+
+    [[nodiscard]] safe_ptr<IShaderService> shaderService();
+
+    [[nodiscard]] Renderer *renderer();
+} // namespace pP::tests::detail::SharedGpu
+
 namespace pP::tests::detail {
     namespace Gpu {
         // GPU rows are plain float arrays (Gate 3 C2); mango float4 is the
@@ -247,23 +259,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(failures.load(std::memory_order_relaxed) == 0);
         };
 
-        constexpr ApplicationDomain kGpuDomain{
-            .m_is_headless = false,
-            .m_is_interactive = true,
-            .m_needs_presence = false,
-            .m_needs_rendering = true,
-            .m_needs_user_interface = true,
-        };
-
-        struct GpuTestApp : Application {
-            explicit GpuTestApp(const std::string_view name, const std::span<const char *const> argv)
-                : Application(kGpuDomain, name, argv) {
-            }
-
-            [[nodiscard]] std::error_code boot() { return Application::initialize(); }
-            [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
-        };
-
         [[nodiscard]] mesh::StaticMeshVertex quadVert(const float x, const float y) {
             mesh::StaticMeshVertex vert{};
             vert.m_position[0] = x;
@@ -356,12 +351,9 @@ namespace pP::tests::detail {
         }
 
         PPR_UNIT_TEST (gpu_caches_upload_resolve_release) {
-            GpuTestApp test_app{"AssetGpuCaches", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
             PPR_TEST_ASSERT(device.hasFeature(rhi::Feature::Bindless));
@@ -449,12 +441,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (gpu_caches_capacity_telemetry) {
-            GpuTestApp test_app{"AssetGpuTelemetry", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
             PPR_TEST_ASSERT(device.hasFeature(rhi::Feature::Bindless));
@@ -500,12 +489,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (gpu_caches_overflow_is_fail_closed) {
-            GpuTestApp test_app{"AssetGpuOverflow", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
             PPR_TEST_ASSERT(device.hasFeature(rhi::Feature::Bindless));
@@ -605,12 +591,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (gpu_caches_wrong_thread_fails_closed) {
-            GpuTestApp test_app{"AssetGpuAffinity", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
 
@@ -675,12 +658,9 @@ namespace pP::tests::detail {
         // unload — A stays drawable while B loads/unloads beside it, and
         // unloading A leaves B drawable. Caches stay pass-owned throughout.
         PPR_UNIT_TEST (two_scenes_coexist_and_unload_independently) {
-            GpuTestApp test_app{"AssetTwoScenes", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
 
@@ -724,12 +704,9 @@ namespace pP::tests::detail {
         // Phase 6 A2: identical bytes dedup to one refcounted entry — the
         // first unload retires one owner, the survivor keeps its texture.
         PPR_UNIT_TEST (two_scenes_shared_texture_survives_single_unload) {
-            GpuTestApp test_app{"AssetSharedTexture", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
 
@@ -767,12 +744,9 @@ namespace pP::tests::detail {
         // Phase 6 A2: scene releases are single-shot — repeats and
         // never-issued scenes fail closed without touching the caches.
         PPR_UNIT_TEST (scene_double_release_fails_closed) {
-            GpuTestApp test_app{"AssetSceneRelease", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
 
@@ -839,12 +813,9 @@ namespace pP::tests::detail {
                                 std::span<const u32>{quad_idx}).error() == kNotConnected);
             PPR_TEST_ASSERT(not fresh_bag.shutdown());
 
-            GpuTestApp test_app{"AssetResidency", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
             PPR_TEST_ASSERT(device.hasFeature(rhi::Feature::Bindless));
@@ -964,6 +935,8 @@ namespace pP::tests::detail {
 
 namespace pP::tests {
     const UnitTest gpu = UnitTest::Named("gpu") / [](UnitTest::IRun &_) -> void {
+        PPR_TEST_ASSERT(not detail::SharedGpu::acquire());
+        PPR_DEFER{PPR_TEST_ASSERT(not detail::SharedGpu::release()); };
         _.recurse({
             detail::Gpu::handles_default_invalid,
             detail::Gpu::build_material_maps_factors,

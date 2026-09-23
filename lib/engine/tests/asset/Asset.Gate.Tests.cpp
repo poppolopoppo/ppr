@@ -18,25 +18,20 @@ import std;
 
 namespace m3d = mango::import3d;
 
+namespace pP::tests::detail::SharedGpu {
+    [[nodiscard]] std::error_code acquire();
+
+    [[nodiscard]] std::error_code release();
+
+    [[nodiscard]] safe_ptr<IRhiService> rhiService();
+
+    [[nodiscard]] safe_ptr<IShaderService> shaderService();
+
+    [[nodiscard]] Renderer *renderer();
+} // namespace pP::tests::detail::SharedGpu
+
 namespace pP::tests::detail {
     namespace Gate {
-        constexpr ApplicationDomain kGateDomain{
-            .m_is_headless = false,
-            .m_is_interactive = true,
-            .m_needs_presence = false,
-            .m_needs_rendering = true,
-            .m_needs_user_interface = true,
-        };
-
-        struct GateTestApp : Application {
-            explicit GateTestApp(const std::string_view name, const std::span<const char *const> argv)
-                : Application(kGateDomain, name, argv) {
-            }
-
-            [[nodiscard]] std::error_code boot() { return Application::initialize(); }
-            [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
-        };
-
         struct GateEditorApp : ApplicationEditor {
             explicit GateEditorApp(const std::string_view name, const std::span<const char *const> argv)
                 : ApplicationEditor(name, argv) {
@@ -227,12 +222,9 @@ namespace pP::tests::detail {
         // MULTI-pixel DISTINCTIVE texels — the gradient texture is chromatic
         // everywhere a base-color fallback renders grayscale.
         PPR_UNIT_TEST(bindless_textured_box_gate) {
-            GateTestApp test_app{"AssetGate", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER { PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
@@ -263,7 +255,9 @@ namespace pP::tests::detail {
 
             const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
-            Renderer &renderer = test_app.getRenderer();
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
             PPR_TEST_ASSERT(not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
 
@@ -297,12 +291,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST(orm_golden_distinct_channels) {
-            GateTestApp test_app{"AssetOrmGolden", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER { PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
 
             TrianglePass pass{};
@@ -357,7 +348,9 @@ namespace pP::tests::detail {
             rhi::IDevice &device = rhi->getDevice();
             const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
-            Renderer &renderer = test_app.getRenderer();
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
             PPR_TEST_ASSERT(not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
             const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);
@@ -390,12 +383,9 @@ namespace pP::tests::detail {
         // the flat map matches the unmapped path (TBN sanity). Outcome: NO
         // inversion — file-tangent w=-w (P0c/P1) is kept, negate at convert.
         PPR_UNIT_TEST(tangent_w_render_arbitration) {
-            GateTestApp test_app{"AssetTangentGate", std::span<const char *const>{}};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER { PPR_TEST_ASSERT(not test_app.teardown()); };
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
-            const auto shader = test_app.getServices().get<IShaderService>();
+            const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
@@ -497,7 +487,9 @@ namespace pP::tests::detail {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
                 }
-                Renderer &renderer = test_app.getRenderer();
+                Renderer *const p_renderer = SharedGpu::renderer();
+                PPR_TEST_ASSERT(p_renderer != nullptr);
+                Renderer &renderer = *p_renderer;
                 const std::error_code render_err =
                         renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
                 pass.clearInstances();
@@ -677,10 +669,18 @@ namespace pP::tests::detail {
 
 namespace pP::tests {
     const UnitTest gate = UnitTest::Named("gate") / [](UnitTest::IRun &_) -> void {
+        // Shared headless session for the render leaves. The editor flow owns
+        // a second live Application (window + ImGui + its own service
+        // registrations), so it runs after the shared session is torn down —
+        // paths are unchanged, only the shuffle scope narrows.
+        PPR_TEST_ASSERT(not detail::SharedGpu::acquire());
         _.recurse({
             detail::Gate::bindless_textured_box_gate,
             detail::Gate::orm_golden_distinct_channels,
             detail::Gate::tangent_w_render_arbitration,
+        });
+        PPR_TEST_ASSERT(not detail::SharedGpu::release());
+        _.recurse({
             detail::Gate::editor_scene_flow,
         });
     };
