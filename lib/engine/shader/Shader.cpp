@@ -141,6 +141,7 @@ namespace pP {
         void pinSm66ForDxil_(IGlobalSession *const session, TargetDesc &target_desc, const SlangCompileTarget format) {
             if (format == SLANG_DXIL) {
                 target_desc.profile = session->findProfile("sm_6_6");
+                PPR_LOG(Shader, debug, "DXIL target pinned to sm_6_6");
             }
         }
 
@@ -274,6 +275,10 @@ namespace pP {
                 }
 
                 m_modules_loaded = true;
+                PPR_LOG(Shader, info, "shader module loaded from file", {
+                    {"name", module_name},
+                    {"path", path_string}
+                });
                 return errc::ok;
             }
 
@@ -298,6 +303,10 @@ namespace pP {
                 }
 
                 m_modules_loaded = true;
+                PPR_LOG(Shader, info, "shader module loaded from source", {
+                    {"name", module_name},
+                    {"path", path}
+                });
                 return errc::ok;
             }
         };
