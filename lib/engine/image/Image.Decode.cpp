@@ -7,6 +7,7 @@ module engine.image;
 
 import :types;
 import :decode;
+import :mips;
 import engine.core;
 import engine.math;
 
@@ -204,11 +205,16 @@ namespace pP::image {
             if (asset.m_subresources.size() != asset.m_mip_count) {
                 return false;
             }
-            for (const ImageSubresource &sub: asset.m_subresources) {
-                if (sub.m_row_pitch != rowPitchFor(asset.m_width, asset.m_tag)) {
+            // Per-level pitches: single-level decodes check level 0, generated
+            // chains check every halved extent (mip chain design, :mips).
+            for (u32 level = 0u; level < asset.m_mip_count; ++level) {
+                const u32 level_w = mipExtentAt(asset.m_width, level);
+                const u32 level_h = mipExtentAt(asset.m_height, level);
+                const ImageSubresource &sub = asset.m_subresources[level];
+                if (sub.m_row_pitch != rowPitchFor(level_w, asset.m_tag)) {
                     return false;
                 }
-                if (sub.m_slice_pitch != slicePitchFor(asset.m_width, asset.m_height, asset.m_tag)) {
+                if (sub.m_slice_pitch != slicePitchFor(level_w, level_h, asset.m_tag)) {
                     return false;
                 }
                 if (sub.m_view.getBufferData().size() != static_cast<std::size_t>(sub.m_slice_pitch)) {

@@ -27,6 +27,23 @@ render gate + tangent arbitration + editor flow via TestApp boot + readback).
 `main` → `runSuite(cli, asset)` → group accessors → per-leaf asserts
 with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
 
+## Test tiers
+
+- `EngineAssetUnitTests` is the full run (ASan 3-loop rigor, TIMEOUT 450);
+  per-group CTest entries (`ppr_asset_tier`) keep CI tiers under 30 s, run via
+  `ctest -L <tier>`: `tier-cpu` (image/mips/staging/mesh/fuzz/uv/indirect_layout),
+  `tier-stress` (8-way import/decode hammer alone), `tier-gpu` (caches +
+  render-gate/indirect leaves). Gate/readback leaves run `--loop 1` in-tier;
+  the full run keeps the 3-loop rigor.
+- Vulkan CI needs no new build config: RHI maps DeviceType to the compile target
+  at runtime and the suite is headless (windowless Application +
+  renderToTexture/readback), so cpu tiers run GPU-free while gpu-tier leaves need
+  a bindless-capable device (SwiftShader/Lavapipe or a GPU runner).
+- errc mapping the suite pins: malformed/over-limit → `invalid_argument`,
+  deferred content (blend, clearcoat/sheen/anisotropy, joints/skins) →
+  `function_not_supported`, importer throws → `import_failed`. Deterministic
+  rejection never grows a new errc.
+
 ## Integration
 
 - Depends on: `engine.image`, `engine.mesh`, `engine.app`, `engine.rhi`, `engine.shader`,

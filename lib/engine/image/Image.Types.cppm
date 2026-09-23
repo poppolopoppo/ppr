@@ -7,14 +7,8 @@ import engine.math;
 
 import std;
 
-// P1 frozen CPU image asset vocabulary (ImageAsset, ImageDecodeDesc, BlockTag,
-// NativeImageFormat, ImageUsage, ImageDimension, image::errc;
-// docs/plans/asset-pipeline.md §2.2). The engine.core/engine.math imports carry
-// the plan graph edge; no mango/rhi types cross this boundary.
-
 namespace pP {
-    // P0 Gate 1 (docs/plans/asset-pipeline.md §2.1): GPU-resident handles must be
-    // standard-layout and exactly 4 bytes. Local tags only — P1 vocabulary replaces them.
+    // GPU-resident handles must be standard-layout and exactly 4 bytes. Local tags only.
     struct GpuU32TestTag final {
     };
 
@@ -30,8 +24,7 @@ namespace pP {
 export namespace pP::image {
     PPR_DECLARE_LOG_CATEGORY(Image);
 
-    // P1 frozen contract (docs/plans/asset-pipeline.md §2.2): CPU-only vocabulary.
-    // No mango/rhi types cross — native format + plain layout; RHI mapping happens
+    // CPU-only vocabulary. No mango/rhi types cross — native format + plain layout; RHI mapping happens
     // at upload inside engine.app caches.
     enum class errc : int {
         ok = 0,
@@ -68,9 +61,9 @@ export namespace pP::image {
 
     enum class ImageDimension : u8 { image2d };
 
-    // Configurable production limits (Phase 5 hardening): every decode
-    // rejects over-limit inputs fail-closed with invalid_argument (no new
-    // errc — the taxonomy already covers deterministic rejection). Width and
+    // Configurable production limits: every decode rejects over-limit inputs fail-closed
+    // with invalid_argument (no new errc — the taxonomy already covers deterministic
+    // rejection). Width and
     // height bound header claims before any allocation; decoded bytes bound
     // the allocation itself (u64 compare, never narrowed first); input bytes
     // bound header-parse work. Defaults are production: 8K RGBA is exactly
@@ -117,7 +110,7 @@ export namespace pP::image {
     };
 
     // Invariants (checked at decode return; PPR_ASSERT + invalid_argument on violation):
-    // - m_dimension is ALWAYS image2d in MVP; 1D/3D/arrays/cubemaps are REJECTED with
+    // - m_dimension is ALWAYS image2d; 1D/3D/arrays/cubemaps are REJECTED with
     //   function_not_supported (or fully represented if scope widens — never silently treated as 2D).
     // - m_is_block == (m_tag != BlockTag::none); m_is_srgb == isSrgb(m_format).
     // - Unblocked: m_block_w == m_block_h == 1, m_bytes_per_block == 4,

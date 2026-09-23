@@ -5,11 +5,11 @@
 `engine.image` owns CPU-side image assets (decode to native format + plain layout; no GPU/RHI
 types cross — RHI mapping happens at upload inside `engine.app` caches). P1 implements the frozen
 `docs/plans/asset-pipeline.md` §2.2 contract: `:types` vocabulary + `:decode` PNG/JPG/KTX2/DDS
-decode (P1a RGBA first, then P1b blocks).
+decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8 M1).
 
 ## Design
 
-- Partitioned umbrella: `Image.cppm` re-exports `:types` + `:decode` only.
+- Partitioned umbrella: `Image.cppm` re-exports `:types` + `:decode` + `:mips`.
 - `:types` holds `image::errc` (+ category, `function_not_supported`/`invalid_argument` map to
   `std::errc`), `BlockTag`, `NativeImageFormat`, `ImageUsage`, `ImageDimension`, `ImageDecodeDesc`
   (multithread=false policy, flip_v=false), `ImageAsset` (frozen `SharedBuffer` storage +
@@ -20,6 +20,15 @@ decode (P1a RGBA first, then P1b blocks).
   `UniqueBuffer` (materialize → checked view → `moveToShared` freeze, blob cloned immediately
   while the decoder lives — no shared lock; decoders are never shared across jobs), sRGB from
   `!header.linear` (data usage forces linear).
+- `:mips` declares `mipCountFor`/`mipExtentAt`/`generateMipChain` (`MipGenDesc`: incremental
+  default, HQ-from-top opt-in, coverage preserve, alpha cutoff, limits); `Image.Mips.cpp`
+  implements them in a float-linear workspace via `stbir_resize_float_linear` (vendored `stb`
+  target, private — Mango has no float resample), sRGB to linear before the filter with
+  re-encode after, chamfer distance-field color expansion before each level, upscale-only
+  binary-search coverage restore (20 steps, abort-below-1). Blocked assets reject with
+  `function_not_supported` so KTX2-embedded chains pass through untouched; the chain lands in
+  `m_subresources[m_mip_count]` (one frozen storage, tight pitches) with chain bytes counted
+  against the decode cap.
 
 ## Flow
 
@@ -30,13 +39,15 @@ hold) lives. Caches/consumers live in `engine.app`.
 
 ## Integration
 
-- Depends on: `engine.core` + `engine.math` (public), `mango-image` (private).
-- Consumed by: `engine.app` pass caches (upload) + scene ownership; `engine.tests.asset`
-  (image decode/format/block/hash/error tests with runtime-generated fixtures).
-- Build: `Image.cppm`, `Image.Types.cppm`, `Image.Decode.cppm` in `FILE_SET CXX_MODULES`;
-  `Image.Types.cpp` + `Image.Decode.cpp` as PRIVATE sources;
-  `setup_ppr_project(engine.image INTERNAL_PUBLIC_DEPS engine.core engine.math
-  EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image)`.
+- Depends on: `engine.core` + `engine.math` (public), `mango-image` + `stb` (private).
+- Consumed by: `engine.app` pass caches (upload consumes all mips, per-level pitch
+  validated) + scene ownership; `engine.tests.asset` (image decode/format/block/hash/error
+  tests plus `mips_chain`/`mips_coverage`/`mips_bleed`/`mips_quality` goldens with
+  runtime-generated fixtures).
+- Build: `Image.cppm`, `Image.Types.cppm`, `Image.Decode.cppm`, `Image.Mips.cppm` in
+  `FILE_SET CXX_MODULES`; `Image.Types.cpp` + `Image.Decode.cpp` + `Image.Mips.cpp` as PRIVATE
+  sources; `setup_ppr_project(engine.image INTERNAL_PUBLIC_DEPS engine.core engine.math
+  EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image stb)`.
 
 ## Key Files
 
@@ -45,4 +56,7 @@ hold) lives. Caches/consumers live in `engine.app`.
 - `Image.Types.cpp` — `image::errc` category implementation.
 - `Image.Decode.cppm` — `:decode` declarations (no Mango in the interface).
 - `Image.Decode.cpp` — Mango-backed implementation (private dep, never exported).
+- `Image.Mips.cppm` — `:mips` declarations (`mipCountFor`/`mipExtentAt`/`generateMipChain`, no
+  stb types in the interface).
+- `Image.Mips.cpp` — stb-backed implementation (private dep, never exported).
 - `CMakeLists.txt` — `engine.image` target registration (see Integration).

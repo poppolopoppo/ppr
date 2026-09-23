@@ -6,12 +6,14 @@ target_sources(engine.image
       Image.cppm
       Image.Types.cppm
       Image.Decode.cppm
+      Image.Mips.cppm
   PRIVATE
       Image.Types.cpp
       Image.Decode.cpp
+      Image.Mips.cpp
 )
 
 setup_ppr_project(engine.image
   INTERNAL_PUBLIC_DEPS engine.core engine.math
-  EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image
+  EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image stb
 )
