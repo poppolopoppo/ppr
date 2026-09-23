@@ -17,9 +17,8 @@ namespace pP {
     const TextureBindlessIndex kNoTexture { 0xFFFFFFFFu };
 
     namespace {
-        constexpr u64 kBagVertexCapacity = 4u * 1024u * 1024u;
-        constexpr u64 kBagIndexCapacity = 1u * 1024u * 1024u;
-        constexpr u64 kMaterialCapacity = 512u;
+        // Budgets are exported (kTriangleBagVertexCapacity and friends) so
+        // telemetry tests name the same limits the caches enforce.
 
         [[nodiscard]] bool storageBytesEqual_(
             const mem::SharedBuffer &lhs, const mem::SharedBuffer &rhs) noexcept {
@@ -102,6 +101,9 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code TriangleBagCache::initialize(rhi::IDevice &device) {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
         if (m_initialized) {
             PPR_LOG(GpuCaches, warning, "TriangleBagCache already initialized");
             return default_value_v;
@@ -113,11 +115,17 @@ namespace pP {
             return std::make_error_code(std::errc::function_not_supported);
         }
         m_device = &device;
+        m_owner = std::this_thread::get_id();
         m_initialized = true;
+        m_residency = CacheResidency::ready;
         return default_value_v;
     }
 
     std::error_code TriangleBagCache::shutdown() {
+        if (m_initialized and not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
         for (BagBucket &bucket: m_buckets) {
             bucket.m_vertex_buffer.setNull();
             bucket.m_index_buffer.setNull();
@@ -125,25 +133,56 @@ namespace pP {
         m_buckets.clear();
         m_ranges.clear();
         m_layout_to_bucket.clear();
+        m_owner = std::thread::id{};
         m_device = nullptr;
         m_initialized = false;
+        m_residency = CacheResidency::uninitialized;
         return default_value_v;
+    }
+
+    CacheResidency TriangleBagCache::residency() const noexcept {
+        return m_residency;
+    }
+
+    std::error_code TriangleBagCache::notifyDeviceLost() noexcept {
+        if (m_residency != CacheResidency::ready) {
+            return default_value_v;
+        }
+        if (not onRenderThread_()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        dropGpuObjects_();
+        m_residency = CacheResidency::device_lost;
+        return default_value_v;
+    }
+
+    void TriangleBagCache::dropGpuObjects_() noexcept {
+        for (BagBucket &bucket: m_buckets) {
+            bucket.m_vertex_buffer.setNull();
+            bucket.m_index_buffer.setNull();
+        }
+    }
+
+    bool TriangleBagCache::onRenderThread_() const noexcept {
+        return std::this_thread::get_id() == m_owner;
     }
 
     hash_t TriangleBagCache::layoutKey_(const u64 stride) noexcept {
         return hash::combine(hash_t{hash::default_seed_v}, hash::trivial(&stride, hash::default_seed_v));
     }
 
-    const TriangleBagCache::BagRangeRecord *TriangleBagCache::findRecord_(const SparseKeyId key) const noexcept {
-        if (not
-            key.isValid())
+    const TriangleBagCache::BagRangeRecord *TriangleBagCache::findRecord_(const SparseHandle key) const noexcept {
+        if (not key.isValid() or m_residency == CacheResidency::device_lost)
         [[unlikely]] {
             return nullptr;
         }
-        for (auto it = m_ranges.begin(); it != m_ranges.end(); ++it) {
-            if (it.getKey() == key) {
-                return &*it;
-            }
+        // Composed lookup: the container checks the full 32-bit generation
+        // and the record carries the minted identity alongside — a wrapping
+        // 8-bit seed alone never resolves.
+        if (const BagRangeRecord *const record = m_ranges.tryGet(key);
+            record != nullptr and record->m_identity == key)
+        [[likely]] {
+            return record;
         }
         return nullptr;
     }
@@ -156,6 +195,14 @@ namespace pP {
         if (not m_initialized or m_device == nullptr)
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
+        }
+        if (m_residency == CacheResidency::device_lost)
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+        }
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
         if (vert_bytes.empty() or idx.empty() or stride == 0u)
         [[unlikely]] {
@@ -179,7 +226,7 @@ namespace pP {
             bucket_id = found->second;
         } else {
             rhi::BufferDesc vb_desc{};
-            vb_desc.size = kBagVertexCapacity;
+            vb_desc.size = kTriangleBagVertexCapacity;
             vb_desc.elementSize = safe_narrowing(stride);
             vb_desc.memoryType = rhi::MemoryType::Upload;
             vb_desc.usage = rhi::BufferUsage::ShaderResource;
@@ -187,7 +234,7 @@ namespace pP {
             vb_desc.label = "triangle bag vertices";
 
             rhi::BufferDesc ib_desc{};
-            ib_desc.size = kBagIndexCapacity;
+            ib_desc.size = kTriangleBagIndexCapacity;
             ib_desc.elementSize = sizeof(u32);
             ib_desc.memoryType = rhi::MemoryType::Upload;
             ib_desc.usage = rhi::BufferUsage::ShaderResource;
@@ -196,8 +243,8 @@ namespace pP {
 
             BagBucket bucket{};
             bucket.m_stride = safe_narrowing(stride);
-            bucket.m_vertex_capacity = kBagVertexCapacity;
-            bucket.m_index_capacity = kBagIndexCapacity;
+            bucket.m_vertex_capacity = kTriangleBagVertexCapacity;
+            bucket.m_index_capacity = kTriangleBagIndexCapacity;
             PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
                 m_device->createBuffer(vb_desc, nullptr, bucket.m_vertex_buffer.writeRef()));
             PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
@@ -243,8 +290,9 @@ namespace pP {
             .m_count = safe_narrowing(idx.size()),
             .m_base = base,
         };
-        const SparseKeyId key = m_ranges.add(std::move(record));
-        return TriangleBagHandle{key};
+        const auto [identity, it] = m_ranges.emplaceHandle(std::move(record));
+        it->m_identity = identity;
+        return TriangleBagHandle{identity};
     }
 
     Expected<TriangleBagRange> TriangleBagCache::resolve(const TriangleBagHandle handle) const noexcept {
@@ -262,27 +310,73 @@ namespace pP {
     }
 
     std::error_code TriangleBagCache::release(const TriangleBagHandle handle) noexcept {
-        const SparseKeyId key = *handle;
+        const SparseHandle key = *handle;
         if (not
             key.isValid())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        for (auto it = m_ranges.begin(); it != m_ranges.end(); ++it) {
-            if (it.getKey() == key) {
-                std::ignore = m_ranges.erase(it);
-                return default_value_v;
-            }
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
         }
-        return std::make_error_code(std::errc::invalid_argument);
+        // Allowed while device_lost (CPU record only; GPU buffers are gone).
+        if (not
+            m_ranges.erase(key))
+        [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        return default_value_v;
     }
 
     rhi::IBuffer *TriangleBagCache::vertexBuffer(const BagBucketId bucket) const noexcept {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return nullptr;
+        }
         return *bucket < m_buckets.size() ? m_buckets[*bucket].m_vertex_buffer.get() : nullptr;
     }
 
     rhi::IBuffer *TriangleBagCache::indexBuffer(const BagBucketId bucket) const noexcept {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return nullptr;
+        }
         return *bucket < m_buckets.size() ? m_buckets[*bucket].m_index_buffer.get() : nullptr;
+    }
+
+    u64 TriangleBagCache::vertexUsed() const noexcept {
+        u64 used = 0u;
+        for (const BagBucket &bucket: m_buckets) {
+            used += bucket.m_vertex_used;
+        }
+        return used;
+    }
+
+    u64 TriangleBagCache::vertexCapacity() const noexcept {
+        u64 capacity = 0u;
+        for (const BagBucket &bucket: m_buckets) {
+            capacity += bucket.m_vertex_capacity;
+        }
+        return capacity;
+    }
+
+    u64 TriangleBagCache::indexUsed() const noexcept {
+        u64 used = 0u;
+        for (const BagBucket &bucket: m_buckets) {
+            used += bucket.m_index_used;
+        }
+        return used;
+    }
+
+    u64 TriangleBagCache::indexCapacity() const noexcept {
+        u64 capacity = 0u;
+        for (const BagBucket &bucket: m_buckets) {
+            capacity += bucket.m_index_capacity;
+        }
+        return capacity;
+    }
+
+    u64 TriangleBagCache::rangeCount() const noexcept {
+        return static_cast<u64>(m_ranges.size());
     }
 
     // ------------------------------------------------------------------
@@ -291,6 +385,9 @@ namespace pP {
 
     std::error_code BindlessTextureCache::initialize(
         rhi::IDevice &device, const u32 texture_budget, const rhi::DescriptorHandle fallback_descriptor) {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
         if (m_initialized) {
             PPR_LOG(GpuCaches, warning, "BindlessTextureCache already initialized");
             return default_value_v;
@@ -321,19 +418,55 @@ namespace pP {
         m_device = &device;
         m_texture_budget = texture_budget;
         m_next_slot = 1u;
+        m_owner = std::this_thread::get_id();
         m_initialized = true;
+        m_residency = CacheResidency::ready;
         return default_value_v;
     }
 
     std::error_code BindlessTextureCache::shutdown() {
+        if (m_initialized and not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
         m_dedup.clear();
         m_entries.clear();
         m_descriptor_buffer.setNull();
         m_next_slot = 1u;
         m_texture_budget = 0u;
+        m_owner = std::thread::id{};
         m_device = nullptr;
         m_initialized = false;
+        m_residency = CacheResidency::uninitialized;
         return default_value_v;
+    }
+
+    CacheResidency BindlessTextureCache::residency() const noexcept {
+        return m_residency;
+    }
+
+    std::error_code BindlessTextureCache::notifyDeviceLost() noexcept {
+        if (m_residency != CacheResidency::ready) {
+            return default_value_v;
+        }
+        if (not onRenderThread_()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        dropGpuObjects_();
+        m_residency = CacheResidency::device_lost;
+        return default_value_v;
+    }
+
+    void BindlessTextureCache::dropGpuObjects_() noexcept {
+        m_descriptor_buffer.setNull();
+        for (TextureEntry &entry: m_entries) {
+            entry.m_texture.setNull();
+            entry.m_view.setNull();
+        }
+    }
+
+    bool BindlessTextureCache::onRenderThread_() const noexcept {
+        return std::this_thread::get_id() == m_owner;
     }
 
     BindlessTextureCache::DedupKey BindlessTextureCache::dedupKey_(const image::ImageAsset &asset) noexcept {
@@ -358,16 +491,16 @@ namespace pP {
         }
     }
 
-    const BindlessTextureCache::TextureEntry *BindlessTextureCache::findEntry_(const SparseKeyId key) const noexcept {
-        if (not
-            key.isValid())
+    const BindlessTextureCache::TextureEntry *BindlessTextureCache::findEntry_(const SparseHandle key) const noexcept {
+        if (not key.isValid() or m_residency == CacheResidency::device_lost)
         [[unlikely]] {
             return nullptr;
         }
-        for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-            if (it.getKey() == key) {
-                return &*it;
-            }
+        // Composed lookup: full-generation container check plus the minted
+        // identity stored alongside — a wrapping seed alone never resolves.
+        if (const TextureEntry *const entry = m_entries.tryGet(key);
+            entry != nullptr and entry->m_identity == key) [[likely]] {
+            return entry;
         }
         return nullptr;
     }
@@ -376,6 +509,14 @@ namespace pP {
         if (not m_initialized or m_device == nullptr)
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
+        }
+        if (m_residency == CacheResidency::device_lost)
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+        }
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
         if (asset.m_dimension != image::ImageDimension::image2d or
             asset.m_width == 0u or
@@ -395,9 +536,12 @@ namespace pP {
         if (const auto found = m_dedup.find(key); found != m_dedup.end()) {
             // Handle-first: the dedup map names the entry directly, so one
             // generation-checked lookup plus a single confirming byte-compare
-            // replaces the old linear scan (hash alone never decides).
+            // replaces the old linear scan (hash alone never decides). The
+            // composed identity must match as well as the container
+            // generation — a recycled slot with a wrapping seed never aliases.
             if (TextureEntry *const entry = m_entries.tryGet(*found->second);
                 entry != nullptr and
+                entry->m_identity == *found->second and
                 bytesEqual_(entry->m_pinned, asset))
             {
                 ++entry->m_refcount;
@@ -467,30 +611,36 @@ namespace pP {
         entry.m_refcount = 1u;
         entry.m_key = key;
 
-        const SparseKeyId sparse_key = m_entries.add(std::move(entry));
-        const TextureHandle handle{sparse_key};
+        const auto [identity, it] = m_entries.emplaceHandle(std::move(entry));
+        it->m_identity = identity;
+        const TextureHandle handle{identity};
         m_dedup.emplace(key, handle);
         return handle;
     }
 
     std::error_code BindlessTextureCache::release(const TextureHandle handle) noexcept {
-        const SparseKeyId key = *handle;
+        const SparseHandle key = *handle;
         if (not
             key.isValid())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-            if (it.getKey() == key) {
-                if (it->m_refcount == 0u) [[unlikely]] {
-                    return std::make_error_code(std::errc::invalid_argument);
-                }
-                if (--it->m_refcount == 0u) {
-                    std::ignore = m_dedup.erase(it->m_key);
-                    std::ignore = m_entries.erase(it);
-                }
-                return default_value_v;
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        // Allowed while device_lost (CPU record only; GPU objects are gone).
+        if (TextureEntry *const entry = m_entries.tryGet(key);
+            entry != nullptr and entry->m_identity == key)
+        {
+            if (entry->m_refcount == 0u) [[unlikely]] {
+                return std::make_error_code(std::errc::invalid_argument);
             }
+            if (--entry->m_refcount == 0u) {
+                std::ignore = m_dedup.erase(entry->m_key);
+                std::ignore = m_entries.erase(key);
+            }
+            return default_value_v;
         }
         return std::make_error_code(std::errc::invalid_argument);
     }
@@ -510,7 +660,26 @@ namespace pP {
     }
 
     rhi::IBuffer *BindlessTextureCache::descriptorBuffer() const noexcept {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return nullptr;
+        }
         return m_descriptor_buffer.get();
+    }
+
+    u32 BindlessTextureCache::textureUsed() const noexcept {
+        if (not m_initialized or m_next_slot == 0u)
+        [[unlikely]] {
+            return 0u;
+        }
+        return m_next_slot - 1u;
+    }
+
+    u32 BindlessTextureCache::textureBudget() const noexcept {
+        return m_texture_budget;
+    }
+
+    u64 BindlessTextureCache::entryCount() const noexcept {
+        return static_cast<u64>(m_entries.size());
     }
 
     // ------------------------------------------------------------------
@@ -518,6 +687,9 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code BindlessMaterialCache::initialize(rhi::IDevice &device, rhi::ISampler *const shared_sampler) {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
         if (m_initialized) {
             PPR_LOG(GpuCaches, warning, "BindlessMaterialCache already initialized");
             return default_value_v;
@@ -536,7 +708,7 @@ namespace pP {
         // One capacity-sized buffer for the cache lifetime (512×80 B);
         // pack/release rewrite a single slot in place — never re-create.
         rhi::BufferDesc buffer_desc{};
-        buffer_desc.size = kMaterialCapacity * sizeof(GpuMaterial);
+        buffer_desc.size = kBindlessMaterialCapacity * sizeof(GpuMaterial);
         buffer_desc.elementSize = sizeof(GpuMaterial);
         buffer_desc.memoryType = rhi::MemoryType::Upload;
         buffer_desc.usage = rhi::BufferUsage::ShaderResource;
@@ -551,35 +723,68 @@ namespace pP {
             return err;
         }
         m_initialized = true;
+        m_owner = std::this_thread::get_id();
+        m_residency = CacheResidency::ready;
         return default_value_v;
     }
 
     std::error_code BindlessMaterialCache::shutdown() {
+        if (m_initialized and not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
         m_material_buffer.setNull();
         m_entries.clear();
         m_next_slot = 0u;
         m_shared_sampler = nullptr;
+        m_owner = std::thread::id{};
         m_device = nullptr;
         m_initialized = false;
+        m_residency = CacheResidency::uninitialized;
         return default_value_v;
     }
 
-    const BindlessMaterialCache::MaterialEntry *BindlessMaterialCache::findEntry_(const SparseKeyId key) const noexcept {
-        if (not
-            key.isValid())
+    CacheResidency BindlessMaterialCache::residency() const noexcept {
+        return m_residency;
+    }
+
+    std::error_code BindlessMaterialCache::notifyDeviceLost() noexcept {
+        if (m_residency != CacheResidency::ready) {
+            return default_value_v;
+        }
+        if (not onRenderThread_()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        dropGpuObjects_();
+        m_residency = CacheResidency::device_lost;
+        return default_value_v;
+    }
+
+    void BindlessMaterialCache::dropGpuObjects_() noexcept {
+        m_material_buffer.setNull();
+    }
+
+    bool BindlessMaterialCache::onRenderThread_() const noexcept {
+        return std::this_thread::get_id() == m_owner;
+    }
+
+    const BindlessMaterialCache::MaterialEntry *BindlessMaterialCache::findEntry_(const SparseHandle key) const noexcept {
+        if (not key.isValid() or m_residency == CacheResidency::device_lost)
         [[unlikely]] {
             return nullptr;
         }
-        for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-            if (it.getKey() == key) {
-                return &*it;
-            }
+        // Composed lookup: full-generation container check plus the minted
+        // identity stored alongside — a wrapping seed alone never resolves.
+        if (const MaterialEntry *const entry = m_entries.tryGet(key);
+            entry != nullptr and entry->m_identity == key)
+        [[likely]] {
+            return entry;
         }
         return nullptr;
     }
 
     std::error_code BindlessMaterialCache::writeSlot_(const u32 slot, const GpuMaterial &gpu) {
-        if (slot >= kMaterialCapacity or m_material_buffer == nullptr)
+        if (slot >= kBindlessMaterialCapacity or m_material_buffer == nullptr)
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -598,36 +803,54 @@ namespace pP {
         [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
+        if (m_residency == CacheResidency::device_lost)
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+        }
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
         Expected<GpuMaterial> gpu = buildGpuMaterial(asset, resolved);
         if (not
             gpu.has_value())
         [[unlikely]] {
             return std::unexpected{gpu.error()};
         }
-        if (m_next_slot >= kMaterialCapacity) [[unlikely]] {
+        if (m_next_slot >= kBindlessMaterialCapacity) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
         const u32 slot = m_next_slot;
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, writeSlot_(slot, *gpu));
         ++m_next_slot;
         MaterialEntry entry{.m_gpu = *gpu, .m_slot = slot};
-        const SparseKeyId key = m_entries.add(std::move(entry));
-        return MaterialHandle{key};
+        const auto [identity, it] = m_entries.emplaceHandle(std::move(entry));
+        it->m_identity = identity;
+        return MaterialHandle{identity};
     }
 
     std::error_code BindlessMaterialCache::release(const MaterialHandle handle) noexcept {
-        const SparseKeyId key = *handle;
+        const SparseHandle key = *handle;
         if (not
             key.isValid())
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
-            if (it.getKey() == key) {
-                const u32 slot = it->m_slot;
-                std::ignore = m_entries.erase(it);
-                return writeSlot_(slot, GpuMaterial{});
+        if (not onRenderThread_())
+        [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        // Allowed while device_lost (CPU record only); the slot rewrite is
+        // skipped then — the GPU buffer is gone, so there is nothing to zero.
+        if (const MaterialEntry *const entry = m_entries.tryGet(key);
+            entry != nullptr and entry->m_identity == key)
+        {
+            const u32 slot = entry->m_slot;
+            std::ignore = m_entries.erase(key);
+            if (m_residency == CacheResidency::device_lost) {
+                return default_value_v;
             }
+            return writeSlot_(slot, GpuMaterial{});
         }
         return std::make_error_code(std::errc::invalid_argument);
     }
@@ -647,6 +870,21 @@ namespace pP {
     }
 
     rhi::IBuffer *BindlessMaterialCache::materialBuffer() const noexcept {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return nullptr;
+        }
         return m_material_buffer.get();
+    }
+
+    u32 BindlessMaterialCache::materialUsed() const noexcept {
+        return m_next_slot;
+    }
+
+    u32 BindlessMaterialCache::materialCapacity() const noexcept {
+        return kBindlessMaterialCapacity;
+    }
+
+    u64 BindlessMaterialCache::entryCount() const noexcept {
+        return static_cast<u64>(m_entries.size());
     }
 }

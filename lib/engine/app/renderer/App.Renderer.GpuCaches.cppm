@@ -16,20 +16,31 @@ import std;
 // key-scan miss → invalid_argument, never silent success).
 
 export namespace pP {
+    // Composed GPU-data-layer identity (Phase 6 A3): the wide handle is
+    // composed HERE from the container-minted SparseHandle (u32 index + u32
+    // monotonic generation), not by widening SparseVector itself — the
+    // container stays a general-purpose u32-index/u8-seed store with both key
+    // and handle paths intact, and no GPU-protocol field changes size.
+    // ABA proof: generations are container-monotonic, never reset (not even
+    // by clear), skip 0, and start from a nonzero mix — 2^32 reuse cycles per
+    // slot per container lifetime cannot wrap in practice, so no historical
+    // handle revalidates; every lookup goes through the generation-checked
+    // tryGet(SparseHandle) path, never the wrapping 8-bit seed. Handles are
+    // CPU-side only (the GPU sees slots/indices/offsets, all still 4 B).
     struct TextureHandleTag final {
     };
 
-    using TextureHandle = Numeric<SparseKeyId, TextureHandleTag>;
+    using TextureHandle = Numeric<SparseHandle, TextureHandleTag>;
 
     struct MaterialHandleTag final {
     };
 
-    using MaterialHandle = Numeric<SparseKeyId, MaterialHandleTag>;
+    using MaterialHandle = Numeric<SparseHandle, MaterialHandleTag>;
 
     struct TriangleBagHandleTag final {
     };
 
-    using TriangleBagHandle = Numeric<SparseKeyId, TriangleBagHandleTag>;
+    using TriangleBagHandle = Numeric<SparseHandle, TriangleBagHandleTag>;
 
     [[nodiscard]] bool isValid(const TextureHandle handle) noexcept {
         return (*handle).isValid();
@@ -44,11 +55,11 @@ export namespace pP {
     }
 
     static_assert(std::is_standard_layout_v<TextureHandle>);
-    static_assert(sizeof(TextureHandle) == 4u);
+    static_assert(sizeof(TextureHandle) == 8u);
     static_assert(std::is_standard_layout_v<MaterialHandle>);
-    static_assert(sizeof(MaterialHandle) == 4u);
+    static_assert(sizeof(MaterialHandle) == 8u);
     static_assert(std::is_standard_layout_v<TriangleBagHandle>);
-    static_assert(sizeof(TriangleBagHandle) == 4u);
+    static_assert(sizeof(TriangleBagHandle) == 8u);
 
     struct BagBucketIdTag final {
     };
@@ -174,6 +185,30 @@ export namespace pP {
 
     [[nodiscard]] std::error_code checkPipelineVariant(TrianglePipelineVariant variant) noexcept;
 
+    // Capacity telemetry (§2.4 preflight): single-load budgets. Overflow is
+    // deterministic fail-closed (no_buffer_space); the usage accessors on each
+    // cache report against these exact limits. The texture budget lives in
+    // rhi::kBindlessTextureBudget (4096) and is taken as the initialize arg.
+    inline constexpr u64 kTriangleBagVertexCapacity = 4u * 1024u * 1024u;
+    inline constexpr u64 kTriangleBagIndexCapacity = 1u * 1024u * 1024u;
+    inline constexpr u32 kBindlessMaterialCapacity = 512u;
+
+    // Residency state machine (Phase 6 A3, per pass-owned cache):
+    // uninitialized → ready (initialize) → device_lost (notifyDeviceLost) →
+    // uninitialized (shutdown; the only exit from device_lost — restart is an
+    // explicit shutdown + initialize pair, never an in-place recreate).
+    // notifyDeviceLost releases GPU objects only and retains every CPU record
+    // (ranges/entries/dedup/slots/counters), so telemetry and release() keep
+    // working while every GPU-touching op fails closed with no_such_device;
+    // initialize while device_lost fails closed with device_or_resource_busy.
+    // Partial init is uninitialized by definition: a failed initialize leaves
+    // the cache exactly as it found it (rollback before reporting).
+    enum class CacheResidency : u8 {
+        uninitialized,
+        ready,
+        device_lost,
+    };
+
     // ONE class, all vertex types; bucket = hash(stride, index_type). MVP has
     // static buckets only by construction. Bag upload keeps TYPED-span
     // signatures (verts stay typed Arrays) — buffers appear only for staging
@@ -188,6 +223,13 @@ export namespace pP {
         [[nodiscard]] std::error_code initialize(rhi::IDevice &device);
 
         [[nodiscard]] std::error_code shutdown();
+
+        // Residency (Phase 6 A3): current lifecycle state; notifyDeviceLost
+        // drops GPU buffers, retains CPU records, and parks the cache in
+        // device_lost until shutdown (idempotent on uninitialized/device_lost).
+        [[nodiscard]] CacheResidency residency() const noexcept;
+
+        [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
         template<typename V>
         [[nodiscard]] Expected<TriangleBagHandle> upload(
@@ -218,6 +260,17 @@ export namespace pP {
 
         [[nodiscard]] rhi::IBuffer *indexBuffer(BagBucketId bucket) const noexcept;
 
+        // Usage telemetry (bytes summed over buckets; ranges never reclaim).
+        [[nodiscard]] u64 vertexUsed() const noexcept;
+
+        [[nodiscard]] u64 vertexCapacity() const noexcept;
+
+        [[nodiscard]] u64 indexUsed() const noexcept;
+
+        [[nodiscard]] u64 indexCapacity() const noexcept;
+
+        [[nodiscard]] u64 rangeCount() const noexcept;
+
     private:
         struct BagBucket {
             u32 m_stride = 0u;
@@ -232,6 +285,10 @@ export namespace pP {
         struct BagRangeRecord {
             BagBucketId m_bucket{};
             TriangleBagRange m_range{};
+            // Composed identity: full-generation handle minted at upload.
+            // Lookups verify this alongside the container generation, so a
+            // wrapping 8-bit seed can never alias a recycled slot.
+            SparseHandle m_identity{};
         };
 
         [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(
@@ -239,10 +296,24 @@ export namespace pP {
 
         [[nodiscard]] static hash_t layoutKey_(u64 stride) noexcept;
 
-        [[nodiscard]] const BagRangeRecord *findRecord_(SparseKeyId key) const noexcept;
+        [[nodiscard]] const BagRangeRecord *findRecord_(SparseHandle key) const noexcept;
+
+        // Render-thread affinity: initialize captures the calling thread;
+        // every mutating call fails closed (operation_not_permitted) elsewhere.
+        // A plain error return (no PPR_ASSERT): Assertion::onFailure throws,
+        // which cannot cross the noexcept mutators and would make the contract
+        // untestable; determinism is the enforcement.
+        [[nodiscard]] bool onRenderThread_() const noexcept;
+
+        // Device-loss helper (Phase 6 A3): release GPU buffers, retain CPU
+        // records and counters. Called by notifyDeviceLost; shutdown clears
+        // the rest. Render-thread confined like every other mutator.
+        void dropGpuObjects_() noexcept;
 
         bool m_initialized = false;
+        CacheResidency m_residency = CacheResidency::uninitialized;
         rhi::IDevice *m_device = nullptr;
+        std::thread::id m_owner{};
         FlatMap<hash_t, BagBucketId> m_layout_to_bucket{};
         // Append-only: bucket indices (BagBucketId) stay stable for the cache
         // lifetime; buckets are only destroyed at shutdown.
@@ -262,6 +333,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code shutdown();
 
+        // Residency (Phase 6 A3): see TriangleBagCache.
+        [[nodiscard]] CacheResidency residency() const noexcept;
+
+        [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
+
         // NO SamplerDesc: the pass owns one shared sampler.
         [[nodiscard]] Expected<TextureHandle> upload(const image::ImageAsset &asset);
 
@@ -274,6 +350,13 @@ export namespace pP {
         // §6 texture heap: slot 0 is fallback-white; real texture slots begin at 1.
         // The pass binds this container once per render invocation.
         [[nodiscard]] rhi::IBuffer *descriptorBuffer() const noexcept;
+
+        // Usage telemetry (slots are bump-allocated; release never reuses).
+        [[nodiscard]] u32 textureUsed() const noexcept;
+
+        [[nodiscard]] u32 textureBudget() const noexcept;
+
+        [[nodiscard]] u64 entryCount() const noexcept;
 
     private:
         struct DedupKey {
@@ -317,9 +400,12 @@ export namespace pP {
             mem::SharedBuffer m_pinned{};
             u32 m_refcount = 0u;
             DedupKey m_key{};
+            // Composed identity (Phase 6 A3): full-generation handle minted
+            // at upload; verified alongside the container generation.
+            SparseHandle m_identity{};
         };
 
-        [[nodiscard]] const TextureEntry *findEntry_(SparseKeyId key) const noexcept;
+        [[nodiscard]] const TextureEntry *findEntry_(SparseHandle key) const noexcept;
 
         [[nodiscard]] static DedupKey dedupKey_(const image::ImageAsset &asset) noexcept;
 
@@ -327,8 +413,17 @@ export namespace pP {
 
         [[nodiscard]] static Expected<rhi::Format> uploadFormat_(image::NativeImageFormat format) noexcept;
 
+        [[nodiscard]] bool onRenderThread_() const noexcept;
+
+        // Device-loss helper (Phase 6 A3): release GPU objects, retain CPU
+        // records and counters. Called by notifyDeviceLost; shutdown clears
+        // the rest. Render-thread confined like every other mutator.
+        void dropGpuObjects_() noexcept;
+
         bool m_initialized = false;
+        CacheResidency m_residency = CacheResidency::uninitialized;
         rhi::IDevice *m_device = nullptr;
+        std::thread::id m_owner{};
         rhi::ComPtr<rhi::IBuffer> m_descriptor_buffer{};
         u32 m_texture_budget = 0u;
         u32 m_next_slot = 1u;
@@ -349,6 +444,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code shutdown();
 
+        // Residency (Phase 6 A3): see TriangleBagCache.
+        [[nodiscard]] CacheResidency residency() const noexcept;
+
+        [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
+
         [[nodiscard]] Expected<MaterialHandle> pack(
             const mesh::MaterialAsset &asset, GpuTextureRefs resolved);
 
@@ -361,21 +461,72 @@ export namespace pP {
 
         [[nodiscard]] rhi::IBuffer *materialBuffer() const noexcept;
 
+        // Usage telemetry (slots are bump-allocated; release never reuses).
+        [[nodiscard]] u32 materialUsed() const noexcept;
+
+        [[nodiscard]] u32 materialCapacity() const noexcept;
+
+        [[nodiscard]] u64 entryCount() const noexcept;
+
     private:
         struct MaterialEntry {
             GpuMaterial m_gpu{};
             u32 m_slot = 0u;
+            // Composed identity (Phase 6 A3): full-generation handle minted
+            // at pack; verified alongside the container generation.
+            SparseHandle m_identity{};
         };
 
-        [[nodiscard]] const MaterialEntry *findEntry_(SparseKeyId key) const noexcept;
+        [[nodiscard]] const MaterialEntry *findEntry_(SparseHandle key) const noexcept;
 
         [[nodiscard]] std::error_code writeSlot_(u32 slot, const GpuMaterial &gpu);
 
+        [[nodiscard]] bool onRenderThread_() const noexcept;
+
+        // Device-loss helper (Phase 6 A3): release GPU objects, retain CPU
+        // records and counters. Called by notifyDeviceLost; shutdown clears
+        // the rest. Render-thread confined like every other mutator.
+        void dropGpuObjects_() noexcept;
+
         bool m_initialized = false;
+        CacheResidency m_residency = CacheResidency::uninitialized;
         rhi::IDevice *m_device = nullptr;
+        std::thread::id m_owner{};
         rhi::ISampler *m_shared_sampler = nullptr;
         u32 m_next_slot = 0u;
         SparseVector<MaterialEntry> m_entries{};
         rhi::ComPtr<rhi::IBuffer> m_material_buffer{};
     };
+
+    // Phase 7 slot dependency / fence-retirement API (SPECIFICATION ONLY —
+    // no implementation in this phase; shapes the residency/streaming work).
+    //
+    // Motivation: today's release() retires the CPU record immediately while
+    // GPU bytes/slots never reuse (bump-allocated). Phase 7 introduces
+    // fence-delayed free lists, so a released slot must stay unrecycled until
+    // the GPU has drained every submission that references it.
+    //
+    // Planned surface (names indicative, exact spelling decided in Phase 7):
+    // - `SlotVersion` (u32, monotonic per slot): bumped on every recycle so a
+    //   GPU-side slot index alone never names a unique allocation; composed
+    //   with the slot into the container rewrite (see below).
+    // - `FenceValue` (u64, RHI fence counter): captured at release time from
+    //   the submitting queue; a slot is recyclable only once the fence passes
+    //   that value (fence-delayed free list per cache).
+    // - `release(handle, FenceValue retired_at)` overload: moves the record to
+    //   a pending-retirement list instead of erasing it; lookups keep failing
+    //   closed from the moment of release (CPU identity retires eagerly, GPU
+    //   storage retires lazily).
+    // - `reclaimCompleted(FenceValue completed)`: returns pending slots at or
+    //   below the completed fence to the free list; called from the
+    //   render-thread boundary after wait/poll, never from inside encode.
+    // - Container rewrite before publication: the descriptor/material buffer
+    //   rewrite for a recycled slot happens on the render thread BEFORE the
+    //   slot is handed out again, so no in-flight draw ever observes a torn
+    //   slot. Slot 0 stays pinned to the white fallback across all of this.
+    // - Device-loss interaction: notifyDeviceLost discards pending-retirement
+    //   lists outright (GPU objects are gone; nothing is in flight worth
+    //   waiting for); shutdown after device loss needs no fence polling.
+    // Non-goals: cross-queue dependencies, timeline-semaphore abstraction in
+    // the caches (that lives behind the RHI fence seam), CPU-backing spill.
 }

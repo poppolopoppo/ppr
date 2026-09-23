@@ -619,8 +619,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plain_lit.has_value());
             PPR_TEST_ASSERT(closeEnough(*flat_lit, *plain_lit, 0.03f));
 
-            PPR_TEST_ASSERT(not pass.releaseScene(
-                TrianglePass::UploadedScene{.m_prims = {}, .m_textures = {*tilt_tex}, .m_materials = {*tilt_mat, *flat_mat, *plain_mat}}));
+            // Phase 6 A2: releaseScene only releases uploadScene products
+            // (receipt-checked); piecemeal handles release via their caches.
+            PPR_TEST_ASSERT(not pass.materialCache().release(*tilt_mat));
+            PPR_TEST_ASSERT(not pass.materialCache().release(*flat_mat));
+            PPR_TEST_ASSERT(not pass.materialCache().release(*plain_mat));
+            PPR_TEST_ASSERT(not pass.textureCache().release(*tilt_tex));
             PPR_TEST_ASSERT(not pass.bagCache().release(*ref_bag));
             PPR_TEST_ASSERT(not pass.bagCache().release(*flip_bag));
         };

@@ -418,10 +418,24 @@ namespace pP {
                 ++prim_cursor;
             }
         }
+        u64 receipt = m_next_scene_receipt++;
+        if (receipt == 0u) [[unlikely]] {
+            receipt = m_next_scene_receipt++;
+        }
+        uploaded.m_receipt = receipt;
+        m_live_scenes.emplace(receipt);
         return uploaded;
     }
 
     std::error_code TrianglePass::releaseScene(const UploadedScene &uploaded) noexcept {
+        // Receipt first: stale/double releases fail closed here, before the
+        // caches — a shared (deduped, refcounted) texture would otherwise
+        // absorb the repeat release and invalidate the surviving scene.
+        const auto live = m_live_scenes.find(uploaded.m_receipt);
+        if (uploaded.m_receipt == 0u or live == m_live_scenes.end()) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        m_live_scenes.erase(live);
         std::error_code first_err{};
         for (auto it = uploaded.m_materials.rbegin(); it != uploaded.m_materials.rend(); ++it) {
             PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_material_cache.release(*it));
@@ -643,6 +657,7 @@ namespace pP {
         // (retain-first-error, best-effort), BEFORE renderer waitOnHost.
         std::error_code first_err{};
         m_instances.clear();
+        m_live_scenes.clear();
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_material_cache.shutdown());
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_texture_cache.shutdown());
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_bag_cache.shutdown());
@@ -657,6 +672,21 @@ namespace pP {
         m_fallback_texture.setNull();
         m_sampler_handle = rhi::DescriptorHandle{};
         m_texture_heap_bound = false;
+        return first_err;
+    }
+
+    std::error_code TrianglePass::notifyDeviceLost() noexcept {
+        // §2.4 order (material → texture → bag), retain-first-error like
+        // shutdown. Live-scene receipts are kept: releaseScene still drains
+        // the retained CPU records; only GPU-touching calls park.
+        std::error_code first_err{};
+        m_instances.clear();
+        PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_material_cache.notifyDeviceLost());
+        PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_texture_cache.notifyDeviceLost());
+        PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_bag_cache.notifyDeviceLost());
+        if (not first_err) {
+            m_caches_ready = false;
+        }
         return first_err;
     }
 

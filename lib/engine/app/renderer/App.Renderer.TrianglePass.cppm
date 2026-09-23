@@ -54,6 +54,11 @@ export namespace pP {
             Array<UploadedPrimitive> m_prims{};
             Array<TextureHandle> m_textures{};
             Array<MaterialHandle> m_materials{};
+            // Scene receipt (Phase 6 A2): issued by uploadScene, consumed by
+            // releaseScene. Copies share the receipt — the first release wins
+            // and repeats fail closed (invalid_argument) even when a
+            // refcounted texture entry outlives the releasing scene.
+            u64 m_receipt = 0u;
         };
 
         [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
@@ -63,6 +68,13 @@ export namespace pP {
         [[nodiscard]] std::error_code render(const DrawContext &draw_context);
 
         [[nodiscard]] std::error_code shutdown();
+
+        // Device-loss hook (Phase 6 A3, editor lifecycle): fans out
+        // notifyDeviceLost to the three caches in shutdown order, drops
+        // per-frame instances, and parks uploads (m_caches_ready = false) so
+        // GPU-touching calls fail closed while releaseScene still drains CPU
+        // records. Restart is an explicit shutdown + initialize pair.
+        [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
         // Narrow P2 asset APIs (plan §7): uploadMesh/uploadTexture/packMaterial
         // acquire cache entries (partial rollback in uploadScene, P3);
@@ -133,6 +145,13 @@ export namespace pP {
         bool m_caches_ready = false;
 
         Array<Instance> m_instances{};
+
+        // Live-scene receipts (Phase 6 A2): one nonce per successful
+        // uploadScene; releaseScene consumes it before touching the caches
+        // so a double release fails closed without decrementing the
+        // refcounted texture entry a surviving scene still holds.
+        u64 m_next_scene_receipt = 1u;
+        FlatSet<u64> m_live_scenes{};
 
         CameraSnapshot m_camera_view;
     };
