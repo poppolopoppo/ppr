@@ -186,6 +186,20 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(retrieved.isValid());
         };
     }
+
+    namespace Log_once {
+        PPR_UNIT_TEST (once_helper_claims_first_only) {
+            Log::Once::resetForTests();
+            constexpr u64 kSite = 0x10CECA1u;
+            PPR_TEST_ASSERT(Log::Once::claim(kSite));
+            PPR_TEST_ASSERT(not Log::Once::claim(kSite));
+            PPR_TEST_ASSERT(Log::Once::claim(Log::Once::combine(kSite, 1u)));
+            PPR_TEST_ASSERT(not Log::Once::claim(Log::Once::combine(kSite, 1u)));
+            PPR_TEST_ASSERT(Log::Once::combine(kSite, 1u) != Log::Once::combine(kSite, 2u));
+            Log::Once::resetForTests();
+            PPR_TEST_ASSERT(Log::Once::claim(kSite));
+        };
+    } // namespace Log_once
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -218,6 +232,7 @@ namespace pP::tests {
         _.recurse({
             type_uid,
             service_locator,
+            detail::Log_once::once_helper_claims_first_only,
         });
     };
 

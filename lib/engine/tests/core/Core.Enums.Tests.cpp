@@ -4,6 +4,7 @@ module;
 module engine.tests.core;
 
 import engine.core;
+import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
@@ -82,6 +83,17 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(rw == hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
         };
     }
+
+    namespace RhiConstants {
+        // Moved from asset/mesh: bindless budgets are create-time
+        // device constants the pass caches rely on.
+        PPR_UNIT_TEST (bindless_budget_constants) {
+            PPR_TEST_ASSERT(rhi::kBindlessTextureBudget == 4096u);
+            PPR_TEST_ASSERT(rhi::kBindlessCombinedBudget == 4096u);
+            PPR_TEST_ASSERT(rhi::kBindlessSamplerBudget == 128u);
+            PPR_TEST_ASSERT(rhi::kBindlessBufferBudget == 1024u);
+        };
+    } // namespace RhiConstants
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -94,6 +106,7 @@ namespace pP::tests {
             detail::Enum::flags_xor,
             detail::Enum::flags_mixed_operations,
             detail::Enum::open_flags_or,
+            detail::RhiConstants::bindless_budget_constants,
         });
     };
 

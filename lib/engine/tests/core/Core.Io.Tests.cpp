@@ -16,6 +16,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -31,11 +34,44 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not file.isValid());
             };
 
+            // Moved from asset/image (fixture_path_separator): joining with
+            // operator/ is separator-agnostic; verbatim concatenation is not.
+            PPR_UNIT_TEST (fixture_path_separator) {
+                const std::filesystem::path root = std::filesystem::current_path() / "temp_staging_probe";
+                std::error_code ec{};
+                std::filesystem::create_directories(root, ec);
+                PPR_TEST_ASSERT(std::filesystem::exists(root, ec));
+
+                const std::filesystem::path probe = root / "probe.txt";
+                {
+                    std::ofstream out(probe);
+                    PPR_TEST_ASSERT(out.is_open());
+                    out << "separator-probe";
+                }
+
+                const std::string bare = root.string();
+                const std::string slashed = bare + "/";
+                PPR_TEST_ASSERT(not bare.empty() and bare.back() != '/' and bare.back() != '\\');
+
+                // operator/ resolves identically with and without trailing separator.
+                PPR_TEST_ASSERT(std::filesystem::exists(std::filesystem::path(bare) / "probe.txt", ec));
+                PPR_TEST_ASSERT(std::filesystem::exists(std::filesystem::path(slashed) / "probe.txt", ec));
+
+                // Verbatim concatenation (the Mango contract) mis-resolves without it.
+                PPR_TEST_ASSERT(not std::filesystem::exists(bare + "probe.txt", ec));
+                PPR_TEST_ASSERT(std::filesystem::exists(slashed + "probe.txt", ec));
+
+                std::filesystem::remove_all(root, ec);
+            };
+
             PPR_UNIT_TEST (move_semantics) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_move.bin";
                 PPR_DEFER{
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
+
+
+
 
 
                 };
@@ -67,6 +103,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -93,6 +132,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -117,6 +159,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -136,6 +181,9 @@ namespace pP::tests::detail {
                 PPR_DEFER{
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
+
+
+
 
 
                 };
@@ -171,6 +219,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -195,6 +246,15 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(std::memcmp(sp.data(), kWrite.data(), kWrite.size()) == 0);
                     PPR_TEST_ASSERT(sp[kInitial.size() - 1u] == std::byte{'!'});
                 }
+            };
+
+            PPR_UNIT_TEST (map_file_missing_reports_not_found) {
+                // Moved from asset/image: mem::SharedBuffer::mapFile pins
+                // no_such_file_or_directory for a missing fixture path.
+                const auto missing = std::filesystem::temp_directory_path() / "ppr_io_test_does_not_exist.bin";
+                const Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(missing);
+                PPR_TEST_ASSERT(not mapped.has_value());
+                PPR_TEST_ASSERT(mapped.error() == std::errc::no_such_file_or_directory);
             };
         }
 
@@ -223,6 +283,9 @@ namespace pP::tests::detail {
                 PPR_DEFER{
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
+
+
+
 
 
                 };
@@ -267,6 +330,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -307,6 +373,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -338,6 +407,9 @@ namespace pP::tests::detail {
                 PPR_DEFER{
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
+
+
+
 
 
                 };
@@ -373,6 +445,9 @@ namespace pP::tests::detail {
                 PPR_DEFER{
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
+
+
+
 
 
                 };
@@ -423,6 +498,9 @@ namespace pP::tests::detail {
                     std::filesystem::remove(path, ec);
 
 
+
+
+
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -471,6 +549,9 @@ namespace pP::tests::detail {
             });
 
 
+
+
+
         };
 
         PPR_UNIT_TEST (mapped){
@@ -481,6 +562,9 @@ namespace pP::tests::detail {
                 Mapped::default_constructed_invalid,
                 Mapped::write_content,
             });
+
+
+
 
 
         };
@@ -500,6 +584,9 @@ namespace pP::tests::detail {
             });
 
 
+
+
+
         };
 
         PPR_UNIT_TEST (port){
@@ -508,9 +595,13 @@ namespace pP::tests::detail {
             });
 
 
+
+
+
         };
     }
 } // namespace pP::tests::detail
+
 
 namespace pP::tests {
     const UnitTest file = UnitTest::Named("file") / [](UnitTest::IRun &_) -> void {
@@ -519,6 +610,7 @@ namespace pP::tests {
             detail::Io::File::move_semantics,
             detail::Io::File::default_constructed_invalid,
             detail::Io::File::double_close_safe,
+            detail::Io::File::fixture_path_separator,
         });
     };
     const UnitTest mapped = UnitTest::Named("mapped") / [](UnitTest::IRun &_) -> void {
@@ -528,6 +620,7 @@ namespace pP::tests {
             detail::Io::Mapped::move_semantics,
             detail::Io::Mapped::default_constructed_invalid,
             detail::Io::Mapped::write_content,
+            detail::Io::Mapped::map_file_missing_reports_not_found,
         });
     };
     const UnitTest request = UnitTest::Named("request") / [](UnitTest::IRun &_) -> void {
