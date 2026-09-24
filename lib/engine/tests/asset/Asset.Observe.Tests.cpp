@@ -84,18 +84,6 @@ namespace pP::tests::detail {
             return found;
         }
 
-        PPR_UNIT_TEST (once_helper_claims_first_only) {
-            Log::Once::resetForTests();
-            constexpr u64 kSite = 0x10CECA1u;
-            PPR_TEST_ASSERT(Log::Once::claim(kSite));
-            PPR_TEST_ASSERT(not Log::Once::claim(kSite));
-            PPR_TEST_ASSERT(Log::Once::claim(Log::Once::combine(kSite, 1u)));
-            PPR_TEST_ASSERT(not Log::Once::claim(Log::Once::combine(kSite, 1u)));
-            PPR_TEST_ASSERT(Log::Once::combine(kSite, 1u) != Log::Once::combine(kSite, 2u));
-            Log::Once::resetForTests();
-            PPR_TEST_ASSERT(Log::Once::claim(kSite));
-        };
-
         PPR_UNIT_TEST (decode_rejects_warn_once_per_process) {
             CaptureGuard capture{};
             const std::vector<std::byte> tiny(4u, std::byte{0x00});
@@ -252,9 +240,8 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    const UnitTest logging = UnitTest::Named("logging") / [](UnitTest::IRun &_) -> void {
+    const UnitTest observe = UnitTest::Named("observe") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            detail::Logging::once_helper_claims_first_only,
             detail::Logging::decode_rejects_warn_once_per_process,
             detail::Logging::decode_data_usage_coerces_srgb_to_linear,
             detail::Logging::glb_import_logs_success_with_embeds,
@@ -263,7 +250,7 @@ namespace pP::tests {
         });
     };
 
-    const UnitTest &loggingTests() noexcept {
-        return logging;
+    const UnitTest &observeTests() noexcept {
+        return observe;
     }
 } // namespace pP::tests

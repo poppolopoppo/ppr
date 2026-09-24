@@ -19,10 +19,6 @@ import std;
 namespace m3d = mango::import3d;
 
 namespace pP::tests::detail::SharedGpu {
-    [[nodiscard]] std::error_code acquire();
-
-    [[nodiscard]] std::error_code release();
-
     [[nodiscard]] safe_ptr<IRhiService> rhiService();
 
     [[nodiscard]] safe_ptr<IShaderService> shaderService();
@@ -50,7 +46,8 @@ namespace pP::tests::detail {
             Expected<mem::SharedBuffer> mapped =
                     mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
             if (not
-                mapped.has_value()) {
+                mapped.has_value())
+            {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(
@@ -67,7 +64,8 @@ namespace pP::tests::detail {
                 16u, rgba.data()
             };
             if (not
-                static_cast<bool>(surface.save(path.string()))) {
+                static_cast<bool>(surface.save(path.string())))
+            {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -87,7 +85,9 @@ namespace pP::tests::detail {
                 rgba[offset + 3u] = std::byte{255u};
             }
             const mem::SharedBuffer png = gatePngBytes(name, rgba);
-            if (not png.isValid()) [[unlikely]] {
+            if (not
+                png.isValid())
+            [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::io_error)};
             }
             return image::decodeToRgba8(
@@ -142,7 +142,10 @@ namespace pP::tests::detail {
                     make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
+            if (blob.get() == nullptr
+                or
+            blob->getBufferPointer() == nullptr)
+            {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             GatePixels pixels{};
@@ -192,7 +195,9 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size()) {
+                if (mesh_index >= scene.m_meshes.size()
+                    or node_index >= scene.m_nodes.size())
+                {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
                 const float4x4 &world = scene.m_nodes[node_index].m_world;
@@ -221,7 +226,7 @@ namespace pP::tests::detail {
         // Final gate: textured glTF through the bindless pass with
         // MULTI-pixel DISTINCTIVE texels — the gradient texture is chromatic
         // everywhere a base-color fallback renders grayscale.
-        PPR_UNIT_TEST(bindless_textured_box_gate) {
+        PPR_UNIT_TEST (bindless_textured_box_gate) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = SharedGpu::shaderService();
@@ -230,7 +235,7 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER { PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
@@ -290,7 +295,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
         };
 
-        PPR_UNIT_TEST(orm_golden_distinct_channels) {
+        PPR_UNIT_TEST (orm_golden_distinct_channels) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = SharedGpu::shaderService();
@@ -298,7 +303,7 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER { PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
 
             Expected<mesh::SceneAsset> imported = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(imported.has_value());
@@ -334,7 +339,7 @@ namespace pP::tests::detail {
 
             const Expected<TrianglePass::UploadedScene> uploaded = pass.uploadScene(scene, images);
             PPR_TEST_ASSERT(uploaded.has_value());
-            PPR_DEFER { PPR_TEST_ASSERT(not pass.releaseScene(*uploaded)); };
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.releaseScene(*uploaded)); };
             PPR_TEST_ASSERT(not submitScene_(pass, scene, *uploaded));
 
             const mesh::StaticMeshAsset &box = scene.m_meshes.front();
@@ -382,7 +387,7 @@ namespace pP::tests::detail {
         // the w sign flips the lit component and ref/flip visibly differ;
         // the flat map matches the unmapped path (TBN sanity). Outcome: NO
         // inversion — file-tangent w=-w is kept, negate at convert.
-        PPR_UNIT_TEST(tangent_w_render_arbitration) {
+        PPR_UNIT_TEST (tangent_w_render_proof) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = SharedGpu::shaderService();
@@ -391,7 +396,7 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER { PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
@@ -483,7 +488,8 @@ namespace pP::tests::detail {
                 }
                 const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 128u);
                 if (not
-                    target.has_value()) {
+                    target.has_value())
+                {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
                 }
@@ -501,7 +507,8 @@ namespace pP::tests::detail {
                 }
                 const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 128u);
                 if (not
-                    pixels.has_value()) {
+                    pixels.has_value())
+                {
                     return std::unexpected{pixels.error()};
                 }
                 const std::array<u8, 4u> texel = gateTexel_(*pixels, 64u, 64u);
@@ -564,8 +571,9 @@ namespace pP::tests::detail {
             };
 
             const auto closeEnough = [](const float3 &lhs, const float3 &rhs, const float tol) noexcept {
-                return std::abs(lhs.x - rhs.x) < tol and std::abs(lhs.y - rhs.y) < tol and
-                       std::abs(lhs.z - rhs.z) < tol;
+                return std::abs(lhs.x - rhs.x) < tol
+                and std::abs(lhs.y - rhs.y) < tol and
+                std::abs(lhs.z - rhs.z) < tol;
             };
 
             Array<mesh::StaticMeshVertex> ref_verts(quad.m_verts.begin(), quad.m_verts.end());
@@ -623,10 +631,10 @@ namespace pP::tests::detail {
 
         // §7 editor flow end to end: boot editor, loadScene, per-frame submit
         // via update, render the pass offscreen, release on unload/teardown.
-        PPR_UNIT_TEST(editor_scene_flow) {
+        PPR_UNIT_TEST (editor_scene_flow) {
             GateEditorApp test_app{"AssetEditorFlow", std::span<const char *const>{}};
             PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER { PPR_TEST_ASSERT(not test_app.teardown()); };
+            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
 
             PPR_TEST_ASSERT(not test_app.loadScene(gateMeshDir(), "textured_box.gltf"));
             PPR_TEST_ASSERT(not test_app.tick(TimeSpan{}));
@@ -668,24 +676,23 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    const UnitTest gate = UnitTest::Named("gate") / [](UnitTest::IRun &_) -> void {
-        // Shared headless session for the render leaves. The editor flow owns
-        // a second live Application (window + ImGui + its own service
-        // registrations), so it runs after the shared session is torn down —
-        // paths are unchanged, only the shuffle scope narrows.
-        PPR_TEST_ASSERT(not detail::SharedGpu::acquire());
+    // Render gates under the shared render scope (the asset/render parent in
+    // Asset.Tests.cpp owns the single SharedGpu acquire). The editor flow is
+    // quarantined: it boots its private GateEditorApp and is recursed from
+    // asset/render/quarantine, never from here.
+    const UnitTest gates = UnitTest::Named("gates") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Gate::bindless_textured_box_gate,
             detail::Gate::orm_golden_distinct_channels,
-            detail::Gate::tangent_w_render_arbitration,
-        });
-        PPR_TEST_ASSERT(not detail::SharedGpu::release());
-        _.recurse({
-            detail::Gate::editor_scene_flow,
+            detail::Gate::tangent_w_render_proof,
         });
     };
 
-    const UnitTest &gateTests() noexcept {
-        return gate;
+    const UnitTest &renderGatesTests() noexcept {
+        return gates;
+    }
+
+    const UnitTest &gateEditorLeaf() noexcept {
+        return detail::Gate::editor_scene_flow;
     }
 } // namespace pP::tests

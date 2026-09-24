@@ -429,10 +429,99 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(mesh::importAndConvert(meshDir(), "textured_quad.glb").has_value());
         };
     } // namespace Fuzz
+
+    // Resilience storm: 8-way parallel import/decode hammer (moved from
+    // the ex-gpu TU). CPU-only; shares the hammer fixture helpers locally
+    // so this TU stays self-contained.
+    namespace Hammer {
+        // Hammer: 8-way parallel import/decode after
+        // re-verifying the Mango claims on disk — ImageServer has no mutex
+        // (read-only post-init: image.cpp:177-280, plain std::map), KTX2
+        // single-slot transcode is per-decoder with an immediate clone
+        // (Image.Decode.cpp), decode is per-job (no shared decoder).
+        // Path trap honored: Mango concatenates dir+file verbatim, so the dir
+        // carries a trailing separator.
+        [[nodiscard]] std::filesystem::path hammerMeshDir() {
+            return std::filesystem::current_path() / "meshes" / "";
+        }
+
+        [[nodiscard]] mem::SharedBuffer hammerPngBytes(const int tag) {
+            const std::filesystem::path dir = std::filesystem::current_path() / "temp_hammer_fixtures";
+            std::error_code ec{};
+            std::filesystem::create_directories(dir, ec);
+            // NOTE: string concat, not std::format — the MSVC-modules
+            // std::format ICE (C3546) fires on this helper; see Caches TU history.
+            const std::filesystem::path path = dir / ("hammer_" + std::to_string(tag) + ".png");
+            std::array<std::byte, 4u * 4u * 4u> rgba{};
+            for (std::size_t i = 0u; i < rgba.size(); i += 4u) {
+                rgba[i] = static_cast<std::byte>(tag * 31 + i);
+                rgba[i + 1u] = std::byte{128};
+                rgba[i + 2u] = std::byte{64};
+                rgba[i + 3u] = std::byte{255};
+            }
+            const mango::image::Surface surface{
+                4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
+                16u, rgba.data()
+            };
+            if (not
+                static_cast<bool>(surface.save(path.string())))
+            {
+                return {};
+            }
+            if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
+                return *mapped;
+            }
+            return {};
+        }
+
+        PPR_UNIT_TEST (hammer_8way_import_decode) {
+            std::atomic<int> failures{0};
+            std::vector<std::thread> workers{};
+            for (int t = 0; t < 8; ++t) {
+                workers.emplace_back([t, &failures] {
+                    const mem::SharedBuffer png = hammerPngBytes(t);
+                    if (not
+                        png.isValid())
+                    {
+                        failures.fetch_add(1, std::memory_order_relaxed);
+                        return;
+                    }
+                    for (int round = 0; round < 5; ++round) {
+                        const Expected<image::ImageAsset> decoded = image::decodeToRgba8(
+                            png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                        if (not
+                            decoded.has_value()
+                        or
+                        decoded->m_width != 4u
+                        or
+                        decoded->m_height != 4u)
+                        {
+                            failures.fetch_add(1, std::memory_order_relaxed);
+                            return;
+                        }
+                        const char *const file = (t + round) % 2 == 0 ? "textured_quad.glb" : "textured_box.gltf";
+                        const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(hammerMeshDir(), file);
+                        if (not
+                            scene.has_value()
+                        or
+                        scene->m_meshes.empty())
+                        {
+                            failures.fetch_add(1, std::memory_order_relaxed);
+                            return;
+                        }
+                    }
+                });
+            }
+            for (std::thread &worker: workers) {
+                worker.join();
+            }
+            PPR_TEST_ASSERT(failures.load(std::memory_order_relaxed) == 0);
+        };
+    } // namespace Hammer
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    const UnitTest fuzz = UnitTest::Named("fuzz") / [](UnitTest::IRun &_) -> void {
+    const UnitTest resilience = UnitTest::Named("resilience") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Fuzz::fuzz_png_mutations_reject_deterministically,
             detail::Fuzz::fuzz_compressed_ext_rejects_without_recompress,
@@ -440,10 +529,11 @@ namespace pP::tests {
             detail::Fuzz::fuzz_glb_mutations_fail_closed,
             detail::Fuzz::fuzz_gltf_truncations_fail_closed,
             detail::Fuzz::fuzz_mesh_limits_reject_over_limit,
+            detail::Hammer::hammer_8way_import_decode,
         });
     };
 
-    const UnitTest &fuzzTests() noexcept {
-        return fuzz;
+    const UnitTest &resilienceTests() noexcept {
+        return resilience;
     }
 } // namespace pP::tests

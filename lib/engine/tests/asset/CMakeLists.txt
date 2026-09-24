@@ -9,33 +9,23 @@ target_sources(engine.tests.asset
 target_sources(engine.tests.asset
     PRIVATE
         Asset.Tests.cpp
+        # Image: image goldens + mip goldens + fixture path-join (all CPU-only).
         Asset.Image.Tests.cpp
-        # Mip chains: one focused test per TU.
-        Asset.MipsChain.Tests.cpp
-        Asset.MipsCoverage.Tests.cpp
-        Asset.MipsBleed.Tests.cpp
-        Asset.MipsQuality.Tests.cpp
+        Asset.Image.Mips.Tests.cpp
+        # Mesh: mesh import, UV/normal bakes (all CPU-only). Material/pipeline
+        # proofs moved to engine.tests.app (App.RenderView).
         Asset.Search.Tests.cpp
-        Asset.Staging.Tests.cpp
-        # UV transforms/sets + inverse-transpose normals (one focused group, own TU).
-        Asset.UvNormal.Tests.cpp
-        Asset.Fuzz.Tests.cpp
-        Asset.Gpu.Tests.cpp
+        Asset.Search.UvNormal.Tests.cpp
+        # Render: bindless caches, readback gates, indirect draws (shared GPU scope),
+        # plus the device-loss/editor quarantine (private apps).
+        Asset.Render.Caches.Tests.cpp
+        Asset.Render.Gates.Tests.cpp
+        Asset.Render.Indirect.Tests.cpp
+        # Resilience: fuzz corpus + import/decode storm (both CPU-only).
+        Asset.Resilience.Tests.cpp
+        # Observe: asset-pipeline logging proofs (CPU-owned lines).
+        Asset.Observe.Tests.cpp
         Asset.GpuFixture.cpp
-        Asset.Gate.Tests.cpp
-        # Indirect layouts (CPU-only) + direct-vs-indirect parity gate.
-        Asset.IndirectLayout.Tests.cpp
-        Asset.IndirectParity.Tests.cpp
-        # Compute-publish gate (count, parity, guards, ring).
-        Asset.IndirectCompute.Tests.cpp
-        # Failure injection (no half-publish, clamped draw, empty staged) +
-        # mid-frame device-loss restart hash.
-        Asset.IndirectInjection.Tests.cpp
-        Asset.IndirectLoss.Tests.cpp
-        # Asset-pipeline logging proofs: CPU-owned lines + helper (own TU) and
-        # GPU-owned lines (own TU, needs the rendering TestApp + fixtures).
-        Asset.Logging.Tests.cpp
-        Asset.LoggingGpu.Tests.cpp
     )
 
 setup_ppr_project(engine.tests.asset
@@ -106,32 +96,17 @@ function(ppr_asset_tier test_name filter tier timeout_seconds)
     )
 endfunction()
 
-# CPU unit tier: decode/convert/staging/fuzz — no GPU, no stress loops.
+# CPU tiers: decode/convert/resilience/observe hold no SharedGpu refs, so
+# these entries never boot a device. GPU tiers run --loop 1; the full
+# EngineAssetUnitTests run keeps the ASan 3-loop rigor (policy in codemap.md).
 ppr_asset_tier(EngineAssetTierCpu.image asset/image tier-cpu 60)
-# Mip goldens (CPU-only chain generation).
-ppr_asset_tier(EngineAssetTierCpu.mips_chain asset/mips_chain tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.mips_coverage asset/mips_coverage tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.mips_bleed asset/mips_bleed tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.mips_quality asset/mips_quality tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.staging asset/staging tier-cpu 60)
 ppr_asset_tier(EngineAssetTierCpu.mesh asset/mesh tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.fuzz asset/fuzz tier-cpu 60)
-# Hammer/stress tier: the 8-way parallel import/decode storm alone.
-ppr_asset_tier(EngineAssetTierStress.hammer asset/stress tier-stress 60)
-# GPU/readback tier: cache upload/resolve/release as one entry; each render
-# gate leaf separately (single leaves stay well under budget).
-# Gate leaves run --loop 1; the full EngineAssetUnitTests run keeps the
-# ASan 3-loop rigor (policy in codemap.md).
-ppr_asset_tier(EngineAssetTierGpu.caches asset/gpu tier-gpu 120)
-ppr_asset_tier(EngineAssetTierGpu.gate_box asset/gate/bindless_textured_box_gate tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gate_orm asset/gate/orm_golden_distinct_channels tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gate_tangent asset/gate/tangent_w_render_arbitration tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gate_editor asset/gate/editor_scene_flow tier-gpu 90 LOOPS 1)
-# Indirect layouts are CPU-only; the parity gate is a readback leaf like the
-# other gates (loop 1 in tier; full run keeps 3-loop rigor).
-ppr_asset_tier(EngineAssetTierCpu.indirect_layout asset/indirect_layout tier-cpu 60)
-ppr_asset_tier(EngineAssetTierGpu.gate_indirect asset/indirect_parity tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gate_indirect_compute asset/indirect_compute tier-gpu 90 LOOPS 1)
-# Injection + loss leaves run loop-1 in the fast tier (full run keeps 3-loop rigor).
-ppr_asset_tier(EngineAssetTierGpu.gate_indirect_injection asset/indirect_injection tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gate_indirect_loss asset/indirect_loss tier-gpu 90 LOOPS 1)
+ppr_asset_tier(EngineAssetTierCpu.resilience asset/resilience tier-cpu 60)
+ppr_asset_tier(EngineAssetTierCpu.observe asset/observe tier-cpu 60)
+# GPU tiers: caches + readback gates + indirect draws under one shared scope
+# per entry; quarantine (editor flow + device-loss restart) runs its private
+# apps alone.
+ppr_asset_tier(EngineAssetTierGpu.caches asset/render/caches tier-gpu 120 LOOPS 1)
+ppr_asset_tier(EngineAssetTierGpu.gates asset/render/gates tier-gpu 90 LOOPS 1)
+ppr_asset_tier(EngineAssetTierGpu.indirect asset/render/indirect tier-gpu 90 LOOPS 1)
+ppr_asset_tier(EngineAssetTierGpu.quarantine asset/render/quarantine tier-gpu 120 LOOPS 1)

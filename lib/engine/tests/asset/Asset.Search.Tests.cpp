@@ -381,10 +381,61 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pP::mesh::kInvalidMaterial == pP::mesh::MaterialAssetId{0xFFFFFFFFu});
             PPR_TEST_ASSERT(pP::mesh::kInvalidNode == pP::mesh::NodeId{0xFFFFFFFFu});
         };
+        // Tangent-w probe: file-tangent vs MikkTSpace lighting compare. Mirror
+        // math + w=-w stand; this probe proves the w sign is lighting-observable
+        // (mirrored bitangent flips the perturbation response), so an inversion
+        // cannot hide. Final arbitration is the distinctive-texel render gate.
+        PPR_UNIT_TEST (tangent_w_analytic_probe) {
+            // Plain lane math (no mango vector operators): bitangent = w * (n × t).
+            const float normal[3]{0.0f, 0.0f, 1.0f};
+            const float tangent[3]{1.0f, 0.0f, 0.0f};
+            // Nonzero y: the w flip mirrors the bitangent y response, so the
+            // light must observe y or the inversion hides (prior y=0 bug).
+            const float light[3]{0.5f, 0.5f, 0.7071068f};
+            float lighting[2]{};
+            for (int sign = 0; sign < 2; ++sign) {
+                const float w = sign == 0 ? 1.0f : -1.0f;
+                const float bitangent[3] = {
+                    w * (normal[1] * tangent[2] - normal[2] * tangent[1]),
+                    w * (normal[2] * tangent[0] - normal[0] * tangent[2]),
+                    w * (normal[0] * tangent[1] - normal[1] * tangent[0]),
+                };
+                float perturbed[3] = {
+                    normal[0] + (tangent[0] + bitangent[0]) * 0.25f,
+                    normal[1] + (tangent[1] + bitangent[1]) * 0.25f,
+                    normal[2] + (tangent[2] + bitangent[2]) * 0.25f,
+                };
+                const float length =
+                        std::sqrt(perturbed[0] * perturbed[0] + perturbed[1] * perturbed[1] + perturbed[2] * perturbed[2]);
+                perturbed[0] /= length;
+                perturbed[1] /= length;
+                perturbed[2] /= length;
+                lighting[sign] = perturbed[0] * light[0] + perturbed[1] * light[1] + perturbed[2] * light[2];
+            }
+            PPR_TEST_ASSERT(lighting[0] != lighting[1]);
+            // Converted fixtures keep unit tangents with |w| == 1 (w=-w applied).
+            for (const char *const file: {"textured_quad.glb", "textured_box.gltf"}) {
+                const Expected<mesh::SceneAsset> scene =
+                        mesh::importAndConvert(std::filesystem::current_path() / "meshes" / "", file);
+                PPR_TEST_ASSERT(scene.has_value());
+                for (const mesh::StaticMeshAsset &mesh_asset: scene->m_meshes) {
+                    for (const mesh::StaticMeshVertex &vert: mesh_asset.m_verts) {
+                        const float3 tangent_v{vert.m_tangent[0], vert.m_tangent[1], vert.m_tangent[2]};
+                        const float length = std::sqrt(dot(tangent_v, tangent_v));
+                        if (length > 1e-6f) {
+                            PPR_TEST_ASSERT(std::abs(length - 1.0f) < 1e-3f);
+                            PPR_TEST_ASSERT(std::abs(std::abs(vert.m_tangent[3]) - 1.0f) < 1e-6f);
+                        }
+                    }
+                }
+            }
+        };
     } // namespace Mesh
 } // namespace pP::tests::detail
 
 namespace pP::tests {
+    const UnitTest &meshUvTests() noexcept;
+
     const UnitTest mesh = UnitTest::Named("mesh") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Mesh::glb_embed_path_imports,
@@ -400,6 +451,8 @@ namespace pP::tests {
             detail::Mesh::errc_taxonomy,
             detail::Mesh::vertex_layout_64b,
             detail::Mesh::id_layout_and_sentinels,
+            detail::Mesh::tangent_w_analytic_probe,
+            meshUvTests(),
         });
     };
 

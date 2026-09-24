@@ -322,7 +322,7 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
-    const UnitTest uv_normal = UnitTest::Named("uv_normal") / [](UnitTest::IRun &_) -> void {
+    const UnitTest mesh_uv = UnitTest::Named("uv") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::UvNormal::uv_transform_bakes_into_texcoords,
             detail::UvNormal::second_texcoord_set_flows_to_pack,
@@ -336,7 +336,7 @@ namespace pP::tests {
         });
     };
 
-    const UnitTest &uvNormalTests() noexcept {
-        return uv_normal;
+    const UnitTest &meshUvTests() noexcept {
+        return mesh_uv;
     }
 } // namespace pP::tests
