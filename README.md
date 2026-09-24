@@ -59,6 +59,7 @@ ppr/
   presets are non-module and are not supported validation paths.
 - **Vulkan SDK** (for Vulkan backend)
 - **Git** with submodules support
+- Linux clang-dev uses the plain x64-linux triplet (not x64-linux-clang) for compiler-agnostic C deps (cmake/VCPkg.cmake:30-36).
 
 ## Building
 

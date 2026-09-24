@@ -17,7 +17,7 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
   cyclic edges): `engine.app` → core + math + shader + rhi (+ `glfw`, `mango` private, `imgui.base`/`imgui`
   public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public); `engine.shader` → core
   (public) + `slang` (private); `engine.math` → core (public) + `mango` (private); `engine.core` → `rapidhash`
-  (private) + per-platform HAL sources (11 shared areas + windows-only `Random`/`RingBuffer`).
+  (private) + per-platform HAL sources (windows + linux `Random`/`RingBuffer` (11 shared HAL areas + per-platform `Random`/`RingBuffer` pairs)).
 - Module convention: `.cppm` = interface (exports), `.cpp` = implementation; single-module libraries
   (`math`, `shader`, `rhi`) vs partitioned umbrellas (`core`, `app`); implementations use `module engine.<lib>;`
   + `import :partition;`. App umbrella `App.cppm` only re-exports (`:application` + `:application_editor`,

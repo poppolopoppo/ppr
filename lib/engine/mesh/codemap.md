@@ -18,7 +18,11 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
   emissive map, occlusion/normal scalars, opaque/mask only), `ImageRef` (local duplicate —
   no mesh→image dependency), `SceneNodeAsset`/`SceneInstance`/`SceneAsset`, typed index IDs
   (`ImageAssetId`/`MaterialAssetId`/`MeshAssetId`/`NodeId`/`UvSetId` + invalid sentinels),
-  and `mesh::errc` + `make_error_code`.
+  and `mesh::errc` + `make_error_code`. Declare error-category instances as
+  `static const Category g_...{};` — `std::error_category` is polymorphic/non-literal (virtuals +
+  `std::string`, cf. `Image.Types.cpp:12-33`, `Mesh.Convert.cpp:1384-1404`), so `constexpr` (still
+  present at `Image.Types.cpp:37`, `Mesh.Convert.cpp:1406`) is the same non-literal pattern fixed in
+  `Shader.cpp:62`/`RHI.cpp:69`; use `static const` for consistency/portability.
 - `:convert` (`Mesh.Convert.cppm` decl + `Mesh.Convert.cpp` impl) is the synchronous
   thread-safe `importAndConvert(dir, file)`: Mango `importScene` per call, verbatim LH copy
   (file-tangent `w` negated, missing tangents via in-fork MikkTSpace regen gated on the

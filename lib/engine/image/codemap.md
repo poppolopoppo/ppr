@@ -15,6 +15,11 @@ decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8
   (multithread=false policy, flip_v=false), `ImageAsset` (frozen `SharedBuffer` storage +
   `ImageSubresource` views with positive pitches), block-geometry helpers, and `contentHash`
   (`hash::contiguousRange` — never owner identity). P0 Gate-1 `GpuU32TestTag` asserts stay put.
+  Declare error-category instances as `static const Category g_...{};` — `std::error_category` is
+  polymorphic/non-literal (virtuals + `std::string`, cf. `Image.Types.cpp:12-33`,
+  `Mesh.Convert.cpp:1384-1404`), so `constexpr` (still present at `Image.Types.cpp:37`,
+  `Mesh.Convert.cpp:1406`) is the same non-literal pattern fixed in `Shader.cpp:62`/`RHI.cpp:69`;
+  use `static const` for consistency/portability.
 - `:decode` declares `decodeToRgba8`/`decodeToBlocks` (passthrough/transcode only — PNG/JPG are
   never recompressed); `Image.Decode.cpp` implements them on a per-job Mango `ImageDecoder` +
   `UniqueBuffer` (materialize → checked view → `moveToShared` freeze, blob cloned immediately

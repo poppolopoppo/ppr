@@ -33,7 +33,7 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
 - **Clang** (`Clang.cmake`): `-stdlib=libc++`, `-Wall/-Wextra` family, `-Werror` under `PPR_WARNINGS_AS_ERRORS`;
   `-Wno-reserved-module-identifier` so the synthesized `std`/`std.compat` BMI precompiles (which inherit these
   PRIVATE options) succeed under `-Werror` — project code never declares a module named `std`, so no project
-  diagnostic changes. Version-agnostic `libc++.modules.json` probe (no pinned LLVM major): `llvm-config --libdir`,
+  diagnostic changes. Scope is BMI precompiles only; project code never declares `module std`. Version-agnostic `libc++.modules.json` probe (no pinned LLVM major): `llvm-config --libdir`,
   `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known versioned/multiarch fallbacks
   (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`); `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the
   file exists, otherwise left unset for CMake default lookup;
