@@ -286,16 +286,17 @@ namespace pP {
         m_end_time = std::chrono::steady_clock::now();
         const TimeSpan test_duration{m_end_time - m_start_time};
 
-#if PPR_ENABLE_ASSERTIONS
-        if (m_prev_assert_policy.has_value()) [[likely]] {
+        // NOTE: the writer policy must be restored in every configuration. Gating this on
+        // PPR_ENABLE_ASSERTIONS (via the assert policy) left the per-test writer installed in
+        // release builds, so the async log worker later dispatched into a destroyed RunImpl.
+        if (m_prev_logger_policy.has_value()) [[likely]] {
             Log::setWriterPolicy(m_prev_logger_policy.value());
             m_prev_logger_policy.reset();
         }
-#endif
 
         if (m_prev_logger_verbosity.has_value()) [[likely]] {
             Log::setMinimumVerboseLevel(m_prev_logger_verbosity.value());
-            m_prev_logger_policy.reset();
+            m_prev_logger_verbosity.reset();
         }
 
 #if PPR_ENABLE_ASSERTIONS

@@ -27,6 +27,8 @@ namespace pP::tests {
 
     const UnitTest &serviceTests() noexcept;
 
+    const UnitTest &loggerTests() noexcept;
+
     const UnitTest &page_poolTests() noexcept;
 
     const UnitTest &arenaTests() noexcept;
@@ -111,6 +113,7 @@ namespace pP::tests {
             halTests(),
             utilityTests(),
             serviceTests(),
+            loggerTests(),
         });
     };
 } // namespace pP::tests
