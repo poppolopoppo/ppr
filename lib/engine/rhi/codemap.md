@@ -63,15 +63,22 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   for Vulkan/WGPU, `METAL`, `SHADER_HOST_CALLABLE` for CPU, `CUDA_OBJECT_CODE` for CUDA;
   `getDeviceTypeName_` (`#if PPR_ENABLE_LOGGING`-gated alongside `SlangRhiDebugCallback`) logs
   `default/d3d11/d3d12/vulkan/metal/cpu/cuda/wgpu`);
-  `shutdown()` nulls device, `createRenderPipeline` delegates. Both unreachable switches use `std::unreachable()`.
+  A scope guard releases the local device and destroys the process-global instance if initialization fails before
+  `m_device` is stored. `shutdown()` releases the service device when present, then unconditionally calls
+  `slang_rhi::destroyRHI()`, so repeated shutdown is safe and, when upstream returns a destroy error, it can be
+  retried after the last device reference is released. In debug/live builds, upstream may assert on a live device
+  reference instead of returning. `createRenderPipeline` delegates. Both unreachable switches use
+  `std::unreachable()`.
 
 ## Flow
 
 `IShaderService::get()->initialize()` (global + row-major session) →
 `IRhiService::get()->initialize(deviceType, shaderService)` (`getRHI()` → debug layers → `DeviceDesc` with
 shader global session → `createDevice` → `setTargetFormat(toSlangCompileTarget_(device->getDeviceType()))` →
-`m_device` stored + info log) → surfaces/pipelines (`createRenderPipeline` → `IDevice`) → `Renderer` submits
-frames → `shutdown()` (`m_device.setNull()`) → shader `shutdown()` drops session then global session.
+  `m_device` stored + info log) → surfaces/pipelines (`createRenderPipeline` → `IDevice`) → `Renderer` submits
+  frames → `shutdown()` (`m_device.setNull()` then unconditional `slang_rhi::destroyRHI()`) → shader `shutdown()`
+  drops session then global session. The device must be released before the process-global instance teardown;
+  upstream may reject or assert on destruction while any device reference remains live.
 `getOrthoMatrix`/`getPerspectiveMatrix` are pure free functions consumed at pass/scene level.
 
 ## Integration

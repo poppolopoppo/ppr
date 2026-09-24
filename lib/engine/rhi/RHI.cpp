@@ -234,6 +234,22 @@ namespace pP {
                     return rhi::errc::no_interface;
                 }
 
+                rhi::ComPtr<rhi::IDevice> device{};
+                bool initialized = false;
+                PPR_DEFER {
+                    if (not initialized) {
+                        device.setNull();
+                        const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
+                        const std::error_code cleanup_error = make_error_code(result);
+                        if (cleanup_error) {
+                            PPR_LOG(RHI, error, "RHI initialization cleanup failed", {
+                                {"category", cleanup_error.category().name()},
+                                {"cause", cleanup_error.message()}
+                            });
+                        }
+                    }
+                };
+
 #if PPR_ENABLE_DEBUG
                 PPR_LOG(RHI, info, "enabled Slang RHI debug layers", {
                     {"coreValidation", true},
@@ -276,7 +292,6 @@ namespace pP {
                 desc.debugCallback = SlangRhiDebugCallback::get();
 #endif
 
-                rhi::ComPtr<rhi::IDevice> device;
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
                 if (not device->hasFeature(rhi::Feature::Bindless))
@@ -291,6 +306,7 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(RHI, shader_service.setTargetFormat(compile_target));
 
                 m_device = std::move(device);
+                initialized = true;
                 PPR_LOG(RHI, info, "RHI device created successfully", {
                     {"device_type", getDeviceTypeName_(device_type)},
                     {"compile_target", static_cast<int>(compile_target)},
@@ -304,9 +320,16 @@ namespace pP {
 
             [[nodiscard]] std::error_code shutdown() override {
                 if (m_device) {
-                    PPR_LOG(RHI, info, "RHI service shut down");
                     m_device.setNull();
                 }
+
+                const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
+                PPR_LOG(RHI, info, "RHI instance teardown", {
+                    {"result", static_cast<int>(result)}
+                });
+                PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
+
+                PPR_LOG(RHI, info, "RHI service shut down");
                 return default_value_v;
             }
 

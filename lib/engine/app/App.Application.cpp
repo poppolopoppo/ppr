@@ -181,13 +181,21 @@ namespace pP {
 
         if (m_domain.m_needs_rendering) {
             const safe_ptr<IRhiService> rhi_service = IRhiService::get();
-            if (m_services.erase(*rhi_service)) {
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, rhi_service->shutdown());
+            if (m_services.tryGet<IRhiService>() == rhi_service) {
+                const std::error_code shutdown_error = rhi_service->shutdown();
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shutdown_error);
+                if (not shutdown_error) {
+                    PPR_VERIFY(m_services.erase(*rhi_service));
+                }
             }
 
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
-            if (m_services.erase(*shader_service)) {
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shader_service->shutdown());
+            if (m_services.tryGet<IShaderService>() == shader_service) {
+                const std::error_code shutdown_error = shader_service->shutdown();
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shutdown_error);
+                if (not shutdown_error) {
+                    PPR_VERIFY(m_services.erase(*shader_service));
+                }
             }
         }
 
