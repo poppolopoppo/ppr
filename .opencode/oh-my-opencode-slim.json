@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  "preset": "opencode-zen-free-sol",
+  "preset": "opencode-zen-free",
   "companion": {
     "enabled": true,
     "position": "bottom-right",
@@ -13,8 +13,8 @@
   "presets": {
     "openai": {
       "orchestrator": {
-        "model": "openai/gpt-5.6-terra",
-        "variant": "medium",
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "variant": "high",
         "skills": [
           "*"
         ],
@@ -37,7 +37,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "librarian": {
@@ -50,7 +51,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -78,7 +80,7 @@
       },
       "fixer": {
         "model": "openai/gpt-5.6-terra",
-        "variant": "medium",
+        "variant": "high",
         "skills": [
           "build-system",
           "clion-tools",
@@ -90,14 +92,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -144,7 +148,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "librarian": {
@@ -157,7 +162,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -197,14 +203,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -228,7 +236,8 @@
     },
     "opencode-zen-free": {
       "orchestrator": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/space-bunny-free",
+        "variant": "high",
         "temperature": 0.4,
         "skills": [
           "*"
@@ -239,9 +248,9 @@
         ]
       },
       "oracle": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/space-bunny-free",
         "temperature": 0.4,
-        "variant": "xhigh",
+        "variant": "max",
         "skills": [
           "clion-tools",
           "simplify",
@@ -253,12 +262,14 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
         "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.2,
+        "variant": "medium",
         "skills": [
           "clion-tools",
           "git-log-fast-navigation"
@@ -271,13 +282,15 @@
       "librarian": {
         "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.2,
+        "variant": "medium",
         "skills": [],
         "mcps": [
           "context7",
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -292,8 +305,9 @@
         ]
       },
       "fixer": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/space-bunny-free",
         "temperature": 0.2,
+        "variant": "high",
         "skills": [
           "build-system",
           "clion-tools",
@@ -305,13 +319,15 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -361,7 +377,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -385,7 +402,8 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -413,13 +431,15 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -468,7 +488,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -493,7 +514,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -519,14 +541,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -573,7 +597,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -598,7 +623,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -626,14 +652,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -683,7 +711,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -708,7 +737,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -736,14 +766,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -792,7 +824,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -817,7 +850,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -843,14 +877,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -896,7 +932,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -921,7 +958,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "designer": {
@@ -947,14 +985,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -1000,7 +1040,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "librarian": {
@@ -1012,7 +1053,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -1049,14 +1091,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -1102,7 +1146,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "librarian": {
@@ -1114,7 +1159,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -1152,14 +1198,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
@@ -1206,7 +1254,8 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai"
+          "crawl4ai",
+          "windbg-ttd"
         ]
       },
       "librarian": {
@@ -1219,7 +1268,8 @@
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "explorer": {
@@ -1258,14 +1308,16 @@
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer",
-          "plantuml-skill"
+          "plantuml-skill",
+          "windbg-triage"
         ],
         "mcps": [
           "clion",
           "codegraph",
           "searxng",
           "crawl4ai",
-          "headroom"
+          "headroom",
+          "windbg-ttd"
         ]
       },
       "observer": {
