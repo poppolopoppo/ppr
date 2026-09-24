@@ -14,11 +14,12 @@ endif ()
 CPMAddPackage(
     NAME slang-rhi
     GITHUB_REPOSITORY shader-slang/slang-rhi
-    GIT_TAG main
+    GIT_TAG ad1b92f
     CMAKE_ARGS
         "-DCMAKE_CXX_FLAGS=${SLANG_ANNOTATE_STL_FLAG}"
     OPTIONS
         "SLANG_RHI_FETCH_SLANG ON"
+        "SLANG_RHI_FETCH_SLANG_VERSION 2026.17.1"
         "SLANG_RHI_BUILD_SHARED OFF"
         "SLANG_RHI_BUILD_EXAMPLES OFF"
         "SLANG_RHI_BUILD_TESTS OFF"
