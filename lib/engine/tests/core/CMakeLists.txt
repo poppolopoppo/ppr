@@ -33,6 +33,7 @@ target_sources(engine.tests.core
         Core.Utility.Tests.cpp
         Core.Opaque.Tests.cpp
         Core.Service.Tests.cpp
+        Core.Logger.Tests.cpp
 )
 
 setup_ppr_project(engine.tests.core

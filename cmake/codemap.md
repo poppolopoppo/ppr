@@ -32,6 +32,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `imgui` PUBLIC so `import imgui;` resolves from importers. Applies the live-only EnC link contract per target
   (no-op unless `PPR_EDIT_AND_CONTINUE` is ON, so `msvc-rel` static+LTCG is untouched) and opts every PPR
   target out of the compiler-cache launcher via `ppr_disable_compiler_cache()` (module BMIs are uncacheable).
+  It queries the target type and calls `ppr_stage_runtime_dlls()` only for executables, so libraries and the
+  `engine.tests` static library do not receive meaningless runtime-DLL staging.
 - **`Cache.cmake`**: `ENABLE_CACHE` (default OFF; developer mode forces ON, `msvc-live` forces OFF) selects a
   `ccache`/`sccache` launcher applied globally via `CMAKE_CXX_COMPILER_LAUNCHER` for non-module TUs (external
   deps, `.cpp` impl files); `ppr_disable_compiler_cache(target)` clears the launcher per target because ccache
@@ -44,9 +46,10 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   the triplet (`-static` → `/MT`, else DLL `/MDd`) and fails configure under `PPR_EDIT_AND_CONTINUE` on a `-static`
   triplet or non-DLL runtime (EnC requires `/MDd`; `/MT` breaks with `LNK2038`). Appends vcpkg config trees to
   `CMAKE_PREFIX_PATH` and prefers Config packages (`CMAKE_FIND_PACKAGE_PREFER_CONFIG ON`).
-- **Runtime/shader delivery** (`game/CMakeLists.txt`): `POST_BUILD` copies `$<TARGET_RUNTIME_DLLS:app.game>`
-  next to the exe (no hardcoded DLL list) guarded by `if(WIN32)` — the genex is empty elsewhere and would
-  degrade the copy into a usage error — and unconditionally copies `assets/shaders` → `<exe>/shaders`.
+- **Runtime/shader delivery** (`cmake/RuntimeDlls.cmake` and `game/CMakeLists.txt`):
+  `ppr_stage_runtime_dlls()` copies `$<TARGET_RUNTIME_DLLS:...>` next to each executable with a guarded
+  `copy_if_different` command; the gate is Windows-only because the genex is empty elsewhere. Shader, texture,
+  and mesh assets remain separately staged by `game/CMakeLists.txt`.
 
 ## Flow
 
@@ -55,12 +58,13 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `Sanitizers.cmake` applies per-target sanitizer flags via `enable_sanitizers()`; `Cache.cmake` arms the
   ccache/sccache launcher (module targets opt out).
 3. `Dependencies.cmake` + `cmake/external/*` fetch CPM packages / resolve vcpkg manifests.
-4. Engine libs build as C++20 modules; `app.game` links, then POST_BUILD stages DLLs + shaders.
+4. Engine libs build as C++20 modules; `setup_ppr_project()` stages runtime DLLs for executables, then
+   `app.game` stages shaders and other assets.
 
 ## Integration
 
-- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, `VCPkg`, `HAL`, `Compilers`, `Sanitizers`,
-  `StaticAnalyzers`, `Cache`, `Dependencies`.
+- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
+  `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
 - PPR targets opt in to `CXX_MODULE_STD` through `setup_ppr_project()`; external exceptions set it OFF locally.
@@ -72,6 +76,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `clang-cl-dev/rel`, `msvc-live`, `clang-dev/rel`, hidden `windows/unix-like-default`, hidden `gcc-dev/rel`).
 - `vcpkg.json` — vcpkg manifest mode configuration.
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`.
+- `cmake/RuntimeDlls.cmake` — executable-only Windows runtime-DLL staging helper.
 - `cmake/Cache.cmake` — `ENABLE_CACHE`, ccache/sccache launcher, `ppr_disable_compiler_cache()`.
 - `cmake/VCPkg.cmake` — optional vcpkg toolchain, triplet-derived MSVC runtime, EnC triplet guards, prefix path.
 - `cmake/Sanitizers.cmake` — ASAN/UBSAN enable per compiler.

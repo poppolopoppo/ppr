@@ -137,6 +137,7 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(HAL)
 include(Compilers)
+include(RuntimeDlls)
 include(Sanitizers)
 include(StaticAnalyzers)
 include(Cache)

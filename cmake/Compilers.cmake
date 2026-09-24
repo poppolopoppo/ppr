@@ -72,6 +72,12 @@ function(setup_ppr_project project_name)
     endforeach()
   endif()
 
+  get_target_property(_ppr_type ${project_name} TYPE)
+  if(_ppr_type STREQUAL "EXECUTABLE")
+    ppr_stage_runtime_dlls(${project_name})
+  endif()
+  unset(_ppr_type)
+
   # All PPR internal targets use C++20 modules → disable compiler cache
   if(COMMAND ppr_disable_compiler_cache)
     ppr_disable_compiler_cache("${project_name}")
