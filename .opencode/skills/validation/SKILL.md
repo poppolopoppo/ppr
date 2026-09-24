@@ -46,6 +46,30 @@ affected checks are repeated.
 - Config-only changes run syntax/reference checks plus the smallest affected
   configure/build/test command; expand only if they alter wider behavior.
 
+## WinDbg-tool gate (host-native wiring)
+
+Applies only to windbg-tool wiring changes (`install.ps1`,
+`local-services/launch.ps1`, `local-services/uninstall.ps1`, `opencode.json`,
+`local-services/README.md`, `.opencode/skills/windbg-triage/`, `.gitignore`
+triage block). Otherwise record `windbg_gate: not_applicable` and skip.
+
+- Static (fail when wrong): `install.ps1` parses and references
+  `Microsoft.DotNet.SDK.10` with a `dotnet --version >= 10` gate;
+  `launch.ps1` parses and defines `Ensure-WindbgTool` / `Verify-WindbgTool`
+  (`discover`, `daemon ensure`, `--compact --envelope discover` retry,
+  `windbg_tool_*` records); `uninstall.ps1` parses with a best-effort guarded
+  `daemon stop`; `opencode.json` parses with a `windbg-ttd` local
+  `["windbg-tool", "mcp"]` entry; the `windbg-triage` skill and README
+  host-exec section exist; `.gitignore` covers `*.dmp`, `*.run/`, `*.ttd/`.
+- Live (Windows host only): `dotnet --version` major >= 10;
+  `windbg-tool --compact --envelope discover` exits 0;
+  `windbg-tool daemon ensure` healthy. `trace record` probes require inline
+  `sudo windbg-tool trace record ...` (New-Window sudo is rejected).
+- Skip-vs-fail: fail on any file/expectation mismatch above; warn-and-skip the
+  live probe when the tool is absent on non-Windows/CI, recording
+  `windbg_gate_live: skipped (<reason>)`.
+- Redaction: never log dump/trace contents, only statuses and exit codes.
+
 ## Triage
 
 - Build/test failure: preserve the command, exit code, and useful error excerpt;

@@ -44,6 +44,21 @@ if (Get-Command podman -ErrorAction SilentlyContinue) {
     Write-Log 'Podman not found; skipping container cleanup.'
 }
 
+# 1b. Best-effort windbg-tool daemon stop (host-native stdio MCP; no containers).
+# `daemon stop` per wiring spec; `windbg-tool --help` could not be verified here
+# (tool not installed on this host), so this stays best-effort and never fails uninstall.
+if (Get-Command windbg-tool -ErrorAction SilentlyContinue) {
+    try {
+        Write-Log 'Stopping windbg-tool daemon (best-effort)...'
+        & windbg-tool daemon stop 2>$null
+        if ($LASTEXITCODE -ne 0) { Write-Log 'windbg-tool daemon stop reported non-zero; continuing uninstall.' }
+    } catch {
+        Write-Log 'windbg-tool daemon stop failed; continuing uninstall.'
+    }
+} else {
+    Write-Log 'windbg-tool not found; skipping daemon stop.'
+}
+
 # 2. Remove Headroom state after explicit confirmation.
 if (Get-Command podman -ErrorAction SilentlyContinue) {
     & podman --connection $connectionName volume exists $headroomStateVolume

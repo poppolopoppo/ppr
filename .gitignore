@@ -105,6 +105,15 @@ local-services/.env
 local-services/runtime-report.txt
 .venv-podman-compose/
 
+# WinDbg/TTD triage artifacts (host-local, never commit)
+*.dmp
+*.hdmp
+*.mdmp
+*.run/
+*.ttd/
+TTD/
+dumps/
+
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
@@ -619,3 +628,8 @@ http-client.private.env.json
 
 # ImGui runtime state
 imgui.ini
+
+# BEGIN oh-my-opencode-slim worktrees
+.slim/worktrees/
+.slim/worktrees.json
+# END oh-my-opencode-slim worktrees

@@ -244,6 +244,57 @@ function Start-HeadroomMcp {
     Record 'headroom_mcp_started' 'passed'
 }
 
+# Host-native windbg-tool (Devolutions): win-x64/arm64 only, stdio-only MCP, cannot
+# containerize (needs host kernel/TTD driver/elevation/DbgEng/host PIDs/named
+# pipes). No ports or secrets; never log dump/trace contents, only statuses.
+# Elevation note: `trace record` requires elevation via inline sudo
+# (`sudo windbg-tool trace record ...`); New-Window sudo mode is rejected.
+function Refresh-DotnetToolPath {
+    $toolDir = Join-Path $HOME '.dotnet\tools'
+    if ((Test-Path -LiteralPath $toolDir -PathType Container) -and ($env:Path -notlike "*$toolDir*")) {
+        $env:Path = "$toolDir;$env:Path"
+    }
+}
+
+function Ensure-WindbgTool {
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        throw '.NET SDK (dotnet) is required for windbg-tool. Rerun install.ps1, open a new shell, and retry.'
+    }
+    Refresh-DotnetToolPath
+    if (-not (Get-Command windbg-tool -ErrorAction SilentlyContinue)) {
+        Write-Output 'Installing windbg-tool global tool...'
+        & dotnet tool install -g Devolutions.WinDbg.Tool
+        if ($LASTEXITCODE -ne 0) { throw 'dotnet tool install -g Devolutions.WinDbg.Tool failed.' }
+        Refresh-DotnetToolPath
+    } else {
+        & dotnet tool update -g Devolutions.WinDbg.Tool 2>$null
+        Refresh-DotnetToolPath
+    }
+    if (-not (Get-Command windbg-tool -ErrorAction SilentlyContinue)) {
+        throw 'windbg-tool is not on PATH after install/update. Open a new shell and rerun launch.ps1.'
+    }
+    & windbg-tool discover | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'windbg-tool discover failed.' }
+    & windbg-tool daemon ensure | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'windbg-tool daemon ensure failed.' }
+    Record 'windbg_tool_ensure' 'passed'
+}
+
+function Verify-WindbgTool {
+    $deadline = (Get-Date).AddMinutes(2)
+    $healthy = $false
+    do {
+        & windbg-tool --compact --envelope discover 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $healthy = $true
+        } elseif ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+        }
+    } while (-not $healthy -and (Get-Date) -lt $deadline)
+    if (-not $healthy) { throw 'windbg-tool discover health check failed.' }
+    Record 'windbg_tool_discover' 'passed'
+}
+
 function Verify-SearXNG {
     $deadline = (Get-Date).AddMinutes(2)
     $search = $null
@@ -377,6 +428,26 @@ function Verify-HeadroomMcp {
     Record 'headroom_mcp_tools' 'compress_retrieve_stats_present'
 }
 
+function Get-HttpErrorStatus($errorRecord) {
+    # Strict-mode-safe HTTP status extraction: PS7 non-HTTP failures
+    # (DNS/timeout/refused) throw exceptions with no Response property, so a
+    # direct $_.Exception.Response read throws instead of returning 0.
+    try {
+        $exception = $errorRecord.Exception
+        if ($null -eq $exception) { return 0 }
+        if ($null -eq $exception.PSObject.Properties['Response']) { return 0 }
+        $httpResponse = $exception.Response
+        if ($null -eq $httpResponse) { return 0 }
+        if ($null -eq $httpResponse.PSObject.Properties['StatusCode']) { return 0 }
+        $statusCode = $httpResponse.StatusCode
+        if ($null -eq $statusCode) { return 0 }
+        if ($null -ne $statusCode.PSObject.Properties['value__']) { return [int]$statusCode.value__ }
+        return [int]$statusCode
+    } catch {
+        return 0
+    }
+}
+
 function Request-Status([string] $uri, [string] $token, [string] $method = 'Get', [string] $body = '') {
     try {
         $headers = @{}
@@ -384,8 +455,7 @@ function Request-Status([string] $uri, [string] $token, [string] $method = 'Get'
         $response = Invoke-WebRequest -Uri $uri -Method $method -Headers $headers -Body $body -ContentType 'application/json' -TimeoutSec 15
         return [int]$response.StatusCode
     } catch {
-        if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode.value__ }
-        return 0
+        return Get-HttpErrorStatus $_
     }
 }
 
@@ -400,8 +470,7 @@ function Request-SseStatus([string] $uri, [string] $token) {
         $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         return [int]$response.StatusCode
     } catch {
-        if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode.value__ }
-        return 0
+        return Get-HttpErrorStatus $_
     } finally {
         if ($null -ne $response) { $response.Dispose() }
         if ($null -ne $client) { $client.Dispose() }
@@ -436,6 +505,7 @@ Start-SearXNG $secrets
 Start-Crawl4AI $secrets
 Start-Headroom
 Start-HeadroomMcp
+Ensure-WindbgTool
 
 Start-Sleep -Seconds 5
 
@@ -444,6 +514,7 @@ try {
     Verify-Crawl4AI $secrets
     Verify-Headroom
     Verify-HeadroomMcp
+    Verify-WindbgTool
     Assert-HostPorts
 } catch {
     $results | Set-Content -LiteralPath $reportPath -Encoding utf8

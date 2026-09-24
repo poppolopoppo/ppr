@@ -42,6 +42,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\local-services\uninstall.ps1 -Fo
 ```
 
 - Stops and removes `searxng`, `crawl4ai`, `headroom`, and `headroom-mcp` containers on `podman-machine-default`
+- Best-effort `windbg-tool daemon stop`; skipped silently when the tool is absent, never fails uninstall
 - Prompts before removing the `headroom-state` named volume, which permanently deletes Headroom state; `-Force` removes it without prompting
 - Prunes unused networks
 - Clears `CRAWL4AI_API_TOKEN` from the User environment (and current session)
@@ -70,6 +71,17 @@ Invoke-WebRequest http://127.0.0.1:8080/search?q=smoke&format=json -Headers @{'X
 Invoke-WebRequest http://127.0.0.1:11235/health
 Get-Content .\local-services\runtime-report.txt
 ```
+
+## WinDbg/TTD (host-native, not containerized)
+
+`windbg-tool` (Devolutions, Rust + C++, win-x64/arm64 only, stdio-only MCP) cannot run in a container (needs host kernel/TTD driver/elevation/DbgEng/host PIDs/named pipes), so it runs host-exec alongside the four containers: transport stdio, command `["windbg-tool", "mcp"]`.
+
+- Prereqs: .NET 10 SDK. `install.ps1` gates `dotnet --version >= 10` and installs `Microsoft.DotNet.SDK.10` via WinGet unless `-SkipPrerequisiteInstall`.
+- `launch.ps1` runs `dotnet tool install -g Devolutions.WinDbg.Tool` when `windbg-tool` is missing (otherwise `dotnet tool update -g`, tolerating already-current failure), refreshes `%USERPROFILE%\.dotnet\tools` on `PATH`, then `windbg-tool discover` plus `windbg-tool daemon ensure` (named-pipe daemon). Verification is `windbg-tool --compact --envelope discover` with a 2-minute retry loop, recorded as `windbg_tool_ensure` / `windbg_tool_discover` in `runtime-report.txt`. No ports, no secrets, never dump/trace contents.
+- Verify manually: `windbg-tool --compact --envelope discover`.
+- opencode (`opencode.json`): `{"mcp":{"windbg-ttd":{"type":"local","command":["windbg-tool","mcp"],"enabled":true,"timeout":60}}}`.
+- Triage: `windbg-tool dump triage <dmp> --max-frames 32`; `windbg-tool open <trace.run> --binary-path <exe>` then snapshot/disasm/registers/position set/step/replay-to/backtrace/memory dump/exception focus. `trace record` requires elevation via inline `sudo windbg-tool trace record ...` (New-Window sudo mode is rejected). Live managed-break `--allow-runtime-write` is test-VM-only. See `.opencode/skills/windbg-triage/SKILL.md`.
+- Artifacts (never commit, gitignored): `*.dmp`, `*.hdmp`, `*.mdmp`, `*.run/`, `*.ttd/`, `TTD/`, `dumps/`.
 
 ## OpenCode environment
 

@@ -44,6 +44,12 @@
       "type": "remote",
       "url": "https://learn.microsoft.com/api/mcp",
       "enabled": true
+    },
+    "windbg-ttd": {
+      "type": "local",
+      "command": ["windbg-tool", "mcp"],
+      "enabled": true,
+      "timeout": 60000
     }
   }
 }
