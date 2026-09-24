@@ -27,6 +27,8 @@ namespace pP::tests {
 
     const UnitTest &imgui_live_shutdown_idempotentTests() noexcept;
 
+    const UnitTest &imgui_live_same_object_reinitTests() noexcept;
+
     const UnitTest &app_init_rollback_on_window_create_failureTests() noexcept;
 
     const UnitTest &app_init_rollback_on_input_connect_failureTests() noexcept;
@@ -73,6 +75,7 @@ namespace pP::tests {
             pixel_readbackTests(),
             renderer_triangle_reinit_okTests(),
             imgui_live_shutdown_idempotentTests(),
+            imgui_live_same_object_reinitTests(),
             app_init_rollback_on_window_create_failureTests(),
             app_init_rollback_on_input_connect_failureTests(),
             app_teardown_double_shutdown_no_refireTests(),

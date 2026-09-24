@@ -62,7 +62,9 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   with `(ClipRect−DisplayPos) × framebuffer-scale` scissors clamped to the viewport extent (degenerate rects skipped)
   and `UserCallback` passthrough, accumulating global `VtxOffset`/`IdxOffset`. `shutdown()` removes the input listener
   first, releases pipeline/buffers/texture-view/texture/sampler/layout/program, then detaches backend fields
-  (`Backend*Name/UserData=null`, `BackendFlags=None`, `SetTexID(nullptr)`), destroys the context, and nulls pointers.
+   (`Backend*Name/UserData=null`, `BackendFlags=None`, `SetTexID(nullptr)`), clears both the render-pipeline object
+   and its key, destroys the context, and nulls pointers. Same-object reinitialization therefore rebuilds the
+   pipeline when the prior lifecycle used the same key.
   Helpers `keyboardKeyToImGuiKey` / `gamepadButtonToImGuiKey` / `mouseButtonToImGui` (unknown → `None`/`-1`),
    `framebufferScaleFor` (logical→framebuffer ratio, guarded fallback to 1), and `imGuiDebugPrintf` (`%s` assert +
    `PPR_LOG_RAW`). Linux/clang bring-up: both helpers are `[[maybe_unused]]` (Clang warns on the file-local debug-only

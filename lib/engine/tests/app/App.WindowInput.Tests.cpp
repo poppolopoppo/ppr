@@ -130,6 +130,14 @@ namespace pP::tests::detail {
             }
         };
 
+        struct ImGuiDrawable final {
+            IUIService &m_service;
+
+            [[nodiscard]] std::error_code render(const DrawContext &draw_context) {
+                return m_service.render(draw_context);
+            }
+        };
+
         PPR_UNIT_TEST(mouse_keeps_client_space_with_nonzero_window_origin) {
             FakeInputService inputs{};
             Window window{
@@ -988,6 +996,64 @@ namespace pP::tests::detail {
         std::ignore = window.release();
     };
 
+    PPR_UNIT_TEST(imgui_live_same_object_reinit) {
+        const auto shader = IShaderService::get();
+        const auto rhi = IRhiService::get();
+        std::ignore = rhi->shutdown();
+        std::ignore = shader->shutdown();
+        PPR_DEFER {
+            std::ignore = rhi->shutdown();
+            std::ignore = shader->shutdown();
+        };
+        PPR_TEST_ASSERT(not shader->initialize());
+        PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
+
+        WindowInput::FakeInputService inputs{};
+        Window window{
+            WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
+            WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}
+        };
+        window.m_framebuffer_size = int2{800, 600};
+        {
+            WindowInputContext routed{safe_ptr<IInputService>{&inputs}};
+            PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
+            auto ui = ui::createImGuiService();
+            PPR_TEST_ASSERT(ui != nullptr);
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {64u, 64u, 1u};
+            target_desc.arrayLength = 1u;
+            target_desc.mipCount = 1u;
+            target_desc.format = rhi::Format::RGBA8Unorm;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = rhi::TextureUsage::RenderTarget;
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target{};
+            PPR_TEST_ASSERT(not make_error_code(rhi->getDevice().createTexture(target_desc, nullptr, target.writeRef())));
+
+            Renderer renderer{};
+            PPR_TEST_ASSERT(not renderer.initialize(*rhi));
+            WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
+            WindowInput::ImGuiDrawable drawable{*ui};
+
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(not ui->update(TimeSpan{}, viewport));
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {drawable}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not ui->shutdown());
+
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(not ui->update(TimeSpan{}, viewport));
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {drawable}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not ui->shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+            PPR_TEST_ASSERT(not routed.shutdown());
+        }
+        std::ignore = window.release();
+    };
+
     PPR_UNIT_TEST(app_init_rollback_on_window_create_failure) {
         AppLifecycle::WindowCreateFailApp test_app{"WindowCreateRollback"};
         PPR_TEST_ASSERT(test_app.boot() == std::make_error_code(std::errc::no_such_device_or_address));
@@ -1074,6 +1140,12 @@ namespace pP::tests {
 
     const UnitTest &imgui_live_shutdown_idempotentTests() noexcept {
         return imgui_live_shutdown_idempotent;
+    }
+
+    const UnitTest imgui_live_same_object_reinit = detail::imgui_live_same_object_reinit;
+
+    const UnitTest &imgui_live_same_object_reinitTests() noexcept {
+        return imgui_live_same_object_reinit;
     }
 
     const UnitTest app_init_rollback_on_window_create_failure = detail::app_init_rollback_on_window_create_failure;

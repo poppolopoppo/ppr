@@ -310,6 +310,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_input_gamepad_trigger.setConsumeInput(false);
 
                 m_render_pipeline.setNull();
+                m_render_pipeline_key.reset();
 
                 m_font_texture_view.setNull();
                 m_font_texture.setNull();
@@ -540,6 +541,19 @@ float4 fragmentMain(PsInput input) : SV_Target {
             u8 *pixels = nullptr;
             int width = 0, height = 0, bpp = 0;
             io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height, &bpp);
+
+            // NOTE: height feeds an integer division below (staging row pitch); reject a
+            // degenerate atlas with an error instead of faulting on division by zero.
+            if (pixels == nullptr
+                or width <= 0
+            or height <= 0)
+            [[unlikely]] {
+                PPR_LOG(UI, error, "font atlas has no pixels", {
+                    {"width", width},
+                    {"height", height},
+                });
+                return std::make_error_code(std::errc::invalid_argument);
+            }
 
             rhi::TextureDesc texture_desc{};
             texture_desc.type = rhi::TextureType::Texture2D;
