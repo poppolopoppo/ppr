@@ -49,7 +49,8 @@ export namespace pP {
         FlatMultiMap<InputKey, InputBinding> m_keybindings{};
 
         InputActionCallback m_action_callback{};
-        InputCharacterInputCallback m_character_input_callback{};
+        // NOTE: invoked from const postCharacterInput; dispatch does not alter listener state.
+        mutable InputCharacterInputCallback m_character_input_callback{};
         InputRawKeyCallback m_raw_key_callback{};
 
         EInputMessageResponse m_listener_mode;

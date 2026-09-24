@@ -67,13 +67,18 @@ namespace pP {
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
     static void invokeIFP_(const TimeSpan dt, const std::optional<InputModifierEvent> &modifier, InputActionEvent &event, const InputMessage &) noexcept {
         if (modifier.has_value()) {
-            (*modifier)(dt, *event.m_value);
+            // NOTE: actions are client-owned and never originally const (engine holds only a const view);
+            // dispatch invokes the callback without mutating observable action state.
+            auto &callback = const_cast<InputModifierEvent &>(*modifier);
+            callback(dt, *event.m_value);
         }
     }
 
     static void invokeIFP_(const std::optional<InputTriggerEvent> &trigger, const InputActionEvent &event, const InputMessage &message) {
         if (trigger.has_value()) {
-            (*trigger)(event, message.m_key);
+            // NOTE: see above; key mappings live in client-owned mappings viewed as const.
+            auto &callback = const_cast<InputTriggerEvent &>(*trigger);
+            callback(event, message.m_key);
         }
     }
 
