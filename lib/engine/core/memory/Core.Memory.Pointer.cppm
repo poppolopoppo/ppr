@@ -399,7 +399,6 @@ export namespace pP {
         // ReSharper disable once CppNonExplicitConvertingConstructor
         safe_ptr(safe_ptr<U> &&other) noexcept
             : m_ptr(other.m_ptr) {
-            other.m_ptr = nullptr;
         }
 
         safe_ptr &operator=(pointer ptr) noexcept {
@@ -412,6 +411,10 @@ export namespace pP {
             return *this;
         }
 
+        // NOTE: release moves are bit-copies by contract (moved-from stays valid): this keeps the
+        // type trivially copyable and memcpy-relocatable. Debug moves clear their source for
+        // diagnosability instead, so never rely on moved-from state portably; tests assert each
+        // configuration's contract (see Core.SafePtr.Tests).
         safe_ptr(const safe_ptr &) noexcept = default;
 
         safe_ptr(safe_ptr &&) noexcept = default;
@@ -431,7 +434,6 @@ export namespace pP {
             requires std::convertible_to<U *, pointer>
         safe_ptr &operator=(safe_ptr<U> &&other) noexcept {
             m_ptr = other.m_ptr;
-            other.m_ptr = nullptr;
             return *this;
         }
 
@@ -459,7 +461,6 @@ export namespace pP {
             requires std::is_base_of_v<BaseT, T>
         [[nodiscard]] constexpr safe_ptr<BaseT> upcast() && noexcept {
             safe_ptr<BaseT> result{static_cast<BaseT *>(m_ptr)};
-            m_ptr = nullptr;
             return result;
         }
 

@@ -86,8 +86,13 @@ namespace pP::tests::detail {
             TestBase obj{2};
             safe_ptr<TestBase> a{&obj};
             safe_ptr<TestBase> b{std::move(a)};
+#if PPR_ENABLE_DEBUG
+            // Debug safe_ptr has a clearing move; release moves are bit-copies by contract.
             PPR_TEST_ASSERT(a.get() == nullptr);
             PPR_TEST_ASSERT(!a.isValid());
+#else
+            // NOTE: release move-ctor is a bit-copy; only transfer is guaranteed, source stays valid.
+#endif
             PPR_TEST_ASSERT(b.get() == &obj);
             b.reset();
         };
@@ -104,7 +109,9 @@ namespace pP::tests::detail {
             TestDerived obj{3, 4};
             safe_ptr<TestDerived> d{&obj};
             safe_ptr<TestBase> b{std::move(d)};
+#if PPR_ENABLE_DEBUG
             PPR_TEST_ASSERT(d.get() == nullptr);
+#endif
             PPR_TEST_ASSERT(b.get() == &obj);
             b.reset();
         };
@@ -115,6 +122,19 @@ namespace pP::tests::detail {
             safe_ptr<TestBase> b{};
             b = d;
             PPR_TEST_ASSERT(b.get() == &obj);
+            b.reset();
+        };
+
+        PPR_UNIT_TEST (converting_move_assign_derived_to_base) {
+            TestDerived obj{3, 4};
+            safe_ptr<TestDerived> d{&obj};
+            safe_ptr<TestBase> b{};
+            b = std::move(d);
+#if PPR_ENABLE_DEBUG
+            PPR_TEST_ASSERT(d.get() == nullptr);
+#endif
+            PPR_TEST_ASSERT(b.get() == &obj);
+            PPR_TEST_ASSERT(b->value == 3);
             b.reset();
         };
 
@@ -176,8 +196,10 @@ namespace pP::tests::detail {
             TestDerived obj{3, 4};
             safe_ptr<TestDerived> d{&obj};
             safe_ptr<TestBase> b = std::move(d).upcast<TestBase>();
+#if PPR_ENABLE_DEBUG
             PPR_TEST_ASSERT(!d.isValid());
             PPR_TEST_ASSERT(d.get() == nullptr);
+#endif
             PPR_TEST_ASSERT(b.get() == &obj);
             PPR_TEST_ASSERT(b->value == 3);
             b.reset();
@@ -357,6 +379,7 @@ namespace pP::tests {
             detail::SafePtr::converting_derived_to_base_copy,
             detail::SafePtr::converting_move_derived_to_base,
             detail::SafePtr::converting_copy_assign_derived_to_base,
+            detail::SafePtr::converting_move_assign_derived_to_base,
             detail::SafePtr::raw_reassign_releases_old,
             detail::SafePtr::reset_to_null_and_to_new,
             detail::SafePtr::reset_same_pointer_stays_valid,
