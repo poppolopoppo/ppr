@@ -485,7 +485,8 @@ namespace timer {
     };
 
     // Set a one-shot timer; callback is invoked after `ms` milliseconds on a dedicated thread
-    [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std::move_only_function<void()> callback) noexcept(false);
+    // Callback is `std23::move_only_function` (MSVC owning type, `std::function` fallback elsewhere per Core.HAL.cppm:435 + Core.Function.Ref.cppm:940-945); do not write `std::move_only_function` directly.
+    [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std23::move_only_function<void()> callback) noexcept(false);
 
     // Cancel a pending deadline; the callback will not be invoked
     void cancelDeadline(DeadlineHandle &handle) noexcept;
@@ -722,7 +723,7 @@ Uses the Windows API conversion functions:
 
 #### Timer (`Core.HAL.windows.Timer.cpp`)
 
-- **`setDeadline`**: `::CreateTimerQueueTimer` with a callback lambda that atomically checks `m_fired` and invokes the user callback. Wrap in `TimerData { move_only_function, atomic<bool>, HANDLE h_timer }`.
+- **`setDeadline`**: `::CreateTimerQueueTimer` with a callback lambda that atomically checks `m_fired` and invokes the user callback. Wrap in `TimerData { std23::move_only_function (MSVC owning type, std::function fallback elsewhere per Core.HAL.cppm:435 + Core.Function.Ref.cppm:940-945; do not write std::move_only_function directly), atomic<bool>, HANDLE h_timer }`.
 - **`cancelDeadline`**: Set `m_fired = true`, `::DeleteTimerQueueTimer(nullptr, h_timer, INVALID_HANDLE_VALUE)`, null out `handle.m_data`.
 
 #### Random (`Core.HAL.windows.Random.cpp`)
@@ -822,7 +823,7 @@ All implemented directly (no OS calls):
 
 #### Timer (`Core.HAL.linux.Timer.cpp`)
 
-- **`setDeadline`**: `::timer_create(CLOCK_MONOTONIC, &sev, &timer_id)` with `SIGEV_THREAD`, `::timer_settime`. Wrap in `TimerData { move_only_function, atomic<bool>, timer_t }`.
+- **`setDeadline`**: `::timer_create(CLOCK_MONOTONIC, &sev, &timer_id)` with `SIGEV_THREAD`, `::timer_settime`. Wrap in `TimerData { std23::move_only_function (MSVC owning type, std::function fallback elsewhere per Core.HAL.cppm:435 + Core.Function.Ref.cppm:940-945; do not write std::move_only_function directly), atomic<bool>, timer_t }`.
 - **`cancelDeadline`**: `::timer_delete`, atomic flag check, `delete` data.
 
 ### 4.3 Darwin (macOS)
@@ -970,7 +971,7 @@ Simple per-character conversions — no proper UTF-8 handling, lossy at the byte
 
 #### Timer (`Core.HAL.generic.Timer.cpp`)
 
-- **`setDeadline`**: Creates a `std::jthread` that sleeps for `ms`, then invokes the callback. Uses `std::stop_token` for cancellation. Wrap in `TimerData { move_only_function, atomic<bool>, std::jthread }`.
+- **`setDeadline`**: Creates a `std::jthread` that sleeps for `ms`, then invokes the callback. Uses `std::stop_token` for cancellation. Wrap in `TimerData { std23::move_only_function (MSVC owning type, std::function fallback elsewhere per Core.HAL.cppm:435 + Core.Function.Ref.cppm:940-945; do not write std::move_only_function directly), atomic<bool>, std::jthread }`.
 - **`cancelDeadline`**: Sets `m_fired = true`, calls `request_stop()` and `join()` on the thread.
 
 ## 5. Stub Conventions
