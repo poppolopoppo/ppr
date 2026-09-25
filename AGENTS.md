@@ -163,13 +163,22 @@ brace placement as part of a functional patch. Apply these additional rules:
 - Use `const T` and `T *const`/`const T *const` when the callee must not reseat
   a pointer. Put `[[nodiscard]]`/other attributes, then inline-control macros,
   then `constexpr`, return type, name, parameters, `const`, and `noexcept`.
-- Place `[[likely]]`/`[[unlikely]]` between a condition and its opening brace.
-  Use `not` for new boolean negation; match surrounding `and`/`or` style.
+- Place `[[likely]]`/`[[unlikely]]` on the same line as the condition and
+  immediately before its opening brace, for example `if (condition)
+  [[unlikely]] {`. Reserve condition line breaks for conditions that are
+  genuinely too long; do not place the attribute on its own line after a
+  short condition. Use `not` for new boolean negation; match surrounding
+  `and`/`or` style.
 - Order class members: `static_assert`s, data, static traits/constants, default
   constructor, copy/move, other constructors, destructor, accessors, mutators,
   comparisons. Keep private nested types immediately above the data they serve.
 - Use comments only for invariants or non-obvious intent. Use a three-line
   divider only between genuinely separate conceptual regions.
+- In public and module interface files, use a three-line section header to
+  separate genuinely distinct regions. Place the header before the complete
+  related documentation and declaration block; never insert it between a
+  documentation comment and the declaration it documents. Use a concise,
+  descriptive title and avoid redundant headers in short interfaces.
 - Use `#if PPR_ENABLE_*`, not `#ifdef`, for feature values. Keep top-level
   preprocessor directives at column zero.
 
