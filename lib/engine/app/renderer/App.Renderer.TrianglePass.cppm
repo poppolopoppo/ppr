@@ -24,6 +24,10 @@ export namespace pP {
 
     class TrianglePass {
     public:
+        // ------------------------------------------------------------------
+        // frame data
+        // ------------------------------------------------------------------
+
         struct FrameConstants {
             float4x4 m_view = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
             float4x4 m_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
@@ -70,6 +74,10 @@ export namespace pP {
         static_assert(PPR_OFFSETOF(InstancePayload, m_vb_offset) == 64u);
         static_assert(PPR_OFFSETOF(InstancePayload, m_material) == 76u);
 
+        // ------------------------------------------------------------------
+        // indirect draw contracts
+        // ------------------------------------------------------------------
+
         // One indirect range per non-empty variant bucket: at most 4 buckets
         // (opaque/mask × cull), each drawn with one drawIndirect call over its
         // contiguous args slice. Empty buckets are never emitted.
@@ -103,6 +111,10 @@ export namespace pP {
             u32 m_total_count = 0u;
         };
 
+        // ------------------------------------------------------------------
+        // scene upload products
+        // ------------------------------------------------------------------
+
         [[nodiscard]] static Expected<IndirectPlan> planIndirectDraws(
             std::span<const TrianglePipelineVariant> variants,
             std::span<const BagBucketId> bag_buckets,
@@ -128,6 +140,10 @@ export namespace pP {
             // refcounted texture entry outlives the releasing scene.
             u64 m_receipt = 0u;
         };
+
+        // ------------------------------------------------------------------
+        // lifecycle and rendering
+        // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
@@ -177,6 +193,10 @@ export namespace pP {
         // records. Restart is an explicit shutdown + initialize pair.
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
+        // ------------------------------------------------------------------
+        // asset residency and instance submission
+        // ------------------------------------------------------------------
+
         // Narrow asset APIs: uploadMesh/uploadTexture/packMaterial
         // acquire cache entries (partial rollback in uploadScene, P3);
         // submitInstance validates handles and snapshots {bag, material, model};
@@ -208,6 +228,10 @@ export namespace pP {
         [[nodiscard]] BindlessMaterialCache &materialCache() noexcept { return m_material_cache; }
 
     private:
+        // ------------------------------------------------------------------
+        // pipeline and direct encoding
+        // ------------------------------------------------------------------
+
         std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
         std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
@@ -235,6 +259,10 @@ export namespace pP {
             const RenderPipelineSignature &signature,
             TrianglePipelineVariant variant);
 
+        // ------------------------------------------------------------------
+        // indirect draw state
+        // ------------------------------------------------------------------
+
         [[nodiscard]] std::error_code ensureIndirectScratch_(rhi::IDevice &device, u32 payload_count);
 
         [[nodiscard]] std::error_code encodeIndirectBucket_(
@@ -254,7 +282,7 @@ export namespace pP {
             rhi::IBuffer *m_index_buffer = nullptr;
         };
 
-        [[nodiscard]] Expected<Array<StagedDraw> > stageDraws_();
+        [[nodiscard]] Expected<Array<StagedDraw> > stageDraws_() const;
 
         // One published compute bucket: draw geometry resolved at publish
         // time (never re-scanned from m_instances at draw — the instance list
@@ -295,6 +323,10 @@ export namespace pP {
         [[nodiscard]] std::error_code encodeIndirectComputeBucket_(
             const DrawContext &draw_context,
             const PublishedBucket &bucket);
+
+        // ------------------------------------------------------------------
+        // pass-owned GPU resources
+        // ------------------------------------------------------------------
 
         rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_indirect_program{};

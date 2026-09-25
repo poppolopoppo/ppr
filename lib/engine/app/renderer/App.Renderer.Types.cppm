@@ -13,6 +13,10 @@ export namespace pP {
 
     class Renderer;
 
+    // ------------------------------------------------------------------
+    // pipeline signatures
+    // ------------------------------------------------------------------
+
     struct RenderPipelineSignature {
         std::span<const rhi::Format> m_color_formats{};
         std::optional<rhi::Format> m_depth_stencil_format{};
@@ -35,6 +39,10 @@ export namespace pP {
     };
 
     using RenderPipelineKey = hash::Memoizer<RenderPipelineSignature>;
+
+    // ------------------------------------------------------------------
+    // draw submissions
+    // ------------------------------------------------------------------
 
     struct DrawContext final {
         rhi::IDevice &m_device;
@@ -73,6 +81,10 @@ export namespace pP {
                 DrawCallback{std23::nontype<&T::render>, &drawable}) {
         }
     };
+
+    // ------------------------------------------------------------------
+    // attachment descriptions
+    // ------------------------------------------------------------------
 
     struct ColorAttachmentOps {
         float4 m_clear_color{0.1f, 0.1f, 0.2f, 1.0f};

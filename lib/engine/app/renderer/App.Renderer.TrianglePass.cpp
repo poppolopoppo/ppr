@@ -19,6 +19,10 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(TrianglePass, debug, none)
 
+    // ------------------------------------------------------------------
+    // local upload and shader helpers
+    // ------------------------------------------------------------------
+
     namespace {
         struct OrmSource final {
             mem::SharedBufferView m_bytes{};
@@ -30,7 +34,7 @@ namespace pP {
             if (not slot.enabled()) {
                 return nullptr;
             }
-            const std::size_t index = static_cast<std::size_t>(*slot.m_image);
+            const auto index = *slot.m_image;
             return index < images.size() ? &images[index] : nullptr;
         }
 
@@ -45,8 +49,7 @@ namespace pP {
                 asset->m_is_block or
                 asset->m_width != width or
                 asset->m_height != height or
-                asset->m_subresources.size() != 1u)
-            [[unlikely]] {
+                asset->m_subresources.size() != 1u) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::function_not_supported)};
             }
             const image::ImageSubresource &subresource = asset->m_subresources.front();
@@ -59,8 +62,7 @@ namespace pP {
                 not subresource.m_view.isMaterialized() or
                 subresource.m_row_pitch < tight_row_pitch or
                 subresource.m_slice_pitch < tight_slice_pitch or
-                bytes.size() < subresource.m_slice_pitch)
-            [[unlikely]] {
+                bytes.size() < subresource.m_slice_pitch) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             return OrmSource{.m_bytes = bytes, .m_row_pitch = subresource.m_row_pitch};
@@ -80,14 +82,14 @@ namespace pP {
             };
 
             const image::ImageAsset *reference = nullptr;
-            for (u32 i = 0u; i < 3u; ++i) {
-                if (not source_slots[i]->enabled()) {
+            for (const auto [index, slot]: std::views::enumerate(source_slots)) {
+                if (not slot->enabled()) {
                     continue;
                 }
-                if (source_images[i] == nullptr) [[unlikely]] {
+                if (source_images[index] == nullptr) [[unlikely]] {
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
-                reference = source_images[i];
+                reference = source_images[index];
                 break;
             }
             if (reference == nullptr) [[unlikely]] {
@@ -95,16 +97,16 @@ namespace pP {
             }
 
             OrmSource sources[3]{};
-            for (u32 i = 0u; i < 3u; ++i) {
-                Expected<OrmSource> source = ormSource_(source_images[i], reference->m_width, reference->m_height);
+            for (const auto [index, source_image]: std::views::enumerate(source_images)) {
+                Expected<OrmSource> source = ormSource_(source_image, reference->m_width, reference->m_height);
                 if (not source.has_value()) [[unlikely]] {
                     return std::unexpected{source.error()};
                 }
-                sources[i] = *source;
+                sources[index] = *source;
             }
 
             const u64 slice_pitch = image::slicePitchFor(reference->m_width, reference->m_height, image::BlockTag::none);
-            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(safe_narrowing<std::size_t>(slice_pitch));
+            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(safe_narrowing(slice_pitch));
             PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, storage.materialize());
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
             if (not destination.has_value()) [[unlikely]] {
@@ -115,13 +117,14 @@ namespace pP {
                 if (source.m_bytes.empty()) {
                     return fallback;
                 }
-                const std::size_t offset = safe_narrowing<std::size_t>(
+                const std::size_t offset = safe_narrowing(
                     static_cast<u64>(y) * source.m_row_pitch + static_cast<u64>(x) * 4u + component);
                 return std::to_integer<u8>(source.m_bytes[offset]);
             };
+
             for (u32 y = 0u; y < reference->m_height; ++y) {
                 for (u32 x = 0u; x < reference->m_width; ++x) {
-                    const std::size_t offset = safe_narrowing<std::size_t>((static_cast<u64>(y) * reference->m_width + x) * 4u);
+                    const std::size_t offset = safe_narrowing((static_cast<u64>(y) * reference->m_width + x) * 4u);
                     (*destination)[offset] = std::byte{channel(sources[0], x, y, 0u, 255u)};
                     (*destination)[offset + 1u] = std::byte{channel(sources[1], x, y, 1u, 255u)};
                     (*destination)[offset + 2u] = std::byte{channel(sources[2], x, y, 2u, 255u)};
@@ -136,7 +139,7 @@ namespace pP {
             composite.m_height = reference->m_height;
             composite.m_storage = frozen;
             composite.m_subresources.push_back(image::ImageSubresource{
-                .m_view = frozen.subspan(0u, safe_narrowing<std::size_t>(slice_pitch)),
+                .m_view = frozen.subspan(0u, safe_narrowing(slice_pitch)),
                 .m_row_pitch = image::rowPitchFor(reference->m_width, image::BlockTag::none),
                 .m_slice_pitch = slice_pitch,
             });
@@ -163,15 +166,16 @@ namespace pP {
         // boundary (reads {0,0} in this TU), so a default Binding would build
         // empty SRV views. Every setBinding below goes through makeFullRange —
         // bare Binding() is banned at these sites.
-        [[nodiscard]] rhi::BufferRange makeFullRange(rhi::IBuffer * const buffer)
-        noexcept
- {
-            return rhi::BufferRange{0u, buffer->getDesc().size};
+        [[nodiscard]] rhi::BufferRange makeFullRange(rhi::IBuffer *const buffer) noexcept {
+            return rhi::BufferRange{
+                .offset = 0u,
+                .size = buffer->getDesc().size,
+            };
         }
 
         [[nodiscard]] TrianglePipelineVariant variantFor_(const GpuMaterial &gpu) noexcept {
             const u32 alpha_bits = gpu.m_flags.m_bits & kGpuMaterialAlphaModeMask;
-            mesh::AlphaMode alpha = mesh::AlphaMode::opaque;
+            auto alpha = mesh::AlphaMode::opaque;
             if (alpha_bits == enumOrd(mesh::AlphaMode::mask)) {
                 alpha = mesh::AlphaMode::mask;
             } else if (alpha_bits == enumOrd(mesh::AlphaMode::blend)) {
@@ -187,10 +191,57 @@ namespace pP {
 
     namespace fs = std::filesystem;
 
+    // ------------------------------------------------------------------
+    // pass lifecycle and asset APIs
+    // ------------------------------------------------------------------
+
     std::error_code TrianglePass::initialize(IRhiService &rhi_service, IShaderService &shader_service, const fs::path &content_dir) {
         rhi::IDevice &device = rhi_service.getDevice();
 
+        bool invariant_state_started = false;
+        bool shader_state_started = false;
+        bool bag_cache_ready = false;
+        bool texture_cache_ready = false;
+        bool sampler_started = false;
+        bool material_cache_ready = false;
+        bool initialization_complete = false;
+        PPR_DEFER {
+            if (not initialization_complete) {
+                if (material_cache_ready) {
+                    std::ignore = m_material_cache.shutdown();
+                }
+                if (sampler_started) {
+                    m_shared_sampler.setNull();
+                    m_sampler_handle = rhi::DescriptorHandle{};
+                }
+                if (texture_cache_ready) {
+                    std::ignore = m_texture_cache.shutdown();
+                }
+                if (bag_cache_ready) {
+                    std::ignore = m_bag_cache.shutdown();
+                }
+                if (shader_state_started) {
+                    m_variant_pipelines.clear();
+                    m_indirect_pipelines.clear();
+                    m_render_pipeline_key.reset();
+                    m_render_pipeline.setNull();
+                    m_compute_pipeline.setNull();
+                    m_compute_program.setNull();
+                    m_indirect_program.setNull();
+                    m_shader_program.setNull();
+                }
+                if (invariant_state_started) {
+                    m_fallback_view.setNull();
+                    m_fallback_texture.setNull();
+                    m_fallback_descriptor = rhi::DescriptorHandle{};
+                }
+                m_caches_ready = false;
+            }
+        };
+
+        invariant_state_started = true;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, createInvariantRenderState_(device));
+        shader_state_started = true;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, createShaderProgram_(shader_service, device, content_dir));
 
         // Pass-owned GPU caches (§2.4): bag → texture → sampler → material,
@@ -201,14 +252,15 @@ namespace pP {
                 });
             return err;
         }
+        bag_cache_ready = true;
         if (const std::error_code err =
                 m_texture_cache.initialize(device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
             PPR_LOG(TrianglePass, error, "texture cache init failed", {
                 {"message", err.message()},
                 });
-            std::ignore = m_bag_cache.shutdown();
             return err;
         }
+        texture_cache_ready = true;
 
         rhi::SamplerDesc sampler_desc{};
         sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
@@ -218,13 +270,12 @@ namespace pP {
         sampler_desc.addressV = rhi::TextureAddressingMode::Wrap;
         sampler_desc.addressW = rhi::TextureAddressingMode::Wrap;
         sampler_desc.maxAnisotropy = 1;
+        sampler_started = true;
         if (const std::error_code err =
                 make_error_code(device.createSampler(sampler_desc, m_shared_sampler.writeRef()))) {
             PPR_LOG(TrianglePass, error, "shared sampler creation failed", {
                 {"message", err.message()},
                 });
-            std::ignore = m_texture_cache.shutdown();
-            std::ignore = m_bag_cache.shutdown();
             return err;
         }
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
@@ -233,12 +284,11 @@ namespace pP {
             PPR_LOG(TrianglePass, error, "material cache init failed", {
                 {"message", err.message()},
                 });
-            m_shared_sampler.setNull();
-            std::ignore = m_texture_cache.shutdown();
-            std::ignore = m_bag_cache.shutdown();
             return err;
         }
+        material_cache_ready = true;
         m_caches_ready = true;
+        initialization_complete = true;
 
         PPR_LOG(TrianglePass, info, "TrianglePass initialized");
         return default_value_v;
@@ -255,8 +305,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
-        if (verts.empty() or idx.empty())
-        [[unlikely]] {
+        if (verts.empty() or idx.empty()) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
         static_assert(sizeof(mesh::StaticMeshVertex) == 64u);
@@ -283,16 +332,19 @@ namespace pP {
         if (resolved.size() != 4u) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        GpuTextureRefs slots{kNoTexture, kNoTexture, kNoTexture, kNoTexture};
+        GpuTextureRefs slots{
+            .m_albedo = kNoTexture,
+            .m_metallic_roughness = kNoTexture,
+            .m_normal = kNoTexture,
+            .m_emissive = kNoTexture,
+        };
         TextureBindlessIndex *const slot_refs[] = {
             &slots.m_albedo, &slots.m_metallic_roughness, &slots.m_normal, &slots.m_emissive
         };
         for (u32 i = 0u; i < 4u; ++i) {
             if (isValid(resolved[i])) {
                 Expected<TextureBindlessIndex> index = m_texture_cache.residentIndex(resolved[i]);
-                if (not
-                    index.has_value())
-                [[unlikely]] {
+                if (not index.has_value()) [[unlikely]] {
                     return std::unexpected{index.error()};
                 }
                 *slot_refs[i] = *index;
@@ -308,7 +360,7 @@ namespace pP {
             if (not slot.enabled()) {
                 return TextureHandle{};
             }
-            const std::size_t index = static_cast<std::size_t>(*slot.m_image);
+            const auto index = *slot.m_image;
             return index < textures.size() ? textures[index] : TextureHandle{};
         }
     }
@@ -340,9 +392,8 @@ namespace pP {
         // index slice, Mango prim base riding the range into MeshPush.
         for (const mesh::StaticMeshAsset &mesh_asset: scene.m_meshes) {
             for (const mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
-                const u64 end = static_cast<u64>(prim.m_start) + static_cast<u64>(prim.m_count);
-                if (prim.m_count == 0u or end > static_cast<u64>(mesh_asset.m_indices.size()))
-                [[unlikely]] {
+                const u64 end = static_cast<u64>(prim.m_start) + prim.m_count;
+                if (prim.m_count == 0u or end > mesh_asset.m_indices.size()) [[unlikely]] {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
@@ -354,13 +405,11 @@ namespace pP {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
-                const std::span<const u32> slice(mesh_asset.m_indices.data() + prim.m_start, prim.m_count);
-                const std::span<const mesh::StaticMeshVertex> verts(
+                const std::span slice(mesh_asset.m_indices.data() + prim.m_start, prim.m_count);
+                const std::span verts(
                     mesh_asset.m_verts.data(), mesh_asset.m_verts.size());
                 Expected<TriangleBagHandle> bag = m_bag_cache.upload(verts, slice, prim.m_base);
-                if (not
-                    bag.has_value())
-                [[unlikely]] {
+                if (not bag.has_value()) [[unlikely]] {
                     rollback();
                     return std::unexpected{bag.error()};
                 }
@@ -370,9 +419,7 @@ namespace pP {
 
         for (const image::ImageAsset &image: images) {
             Expected<TextureHandle> texture = m_texture_cache.upload(image);
-            if (not
-                texture.has_value())
-            [[unlikely]] {
+            if (not texture.has_value()) [[unlikely]] {
                 rollback();
                 return std::unexpected{texture.error()};
             }
@@ -403,9 +450,7 @@ namespace pP {
                 resolveImageSlot_(material.m_emissive_map, texture_span),
             };
             Expected<MaterialHandle> packed = packMaterial(material, resolved);
-            if (not
-                packed.has_value())
-            [[unlikely]] {
+            if (not packed.has_value()) [[unlikely]] {
                 rollback();
                 return std::unexpected{packed.error()};
             }
@@ -420,6 +465,7 @@ namespace pP {
                 ++prim_cursor;
             }
         }
+
         u64 receipt = m_next_scene_receipt++;
         if (receipt == 0u) [[unlikely]] {
             receipt = m_next_scene_receipt++;
@@ -456,8 +502,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not m_bag_cache.resolve(bag).has_value() or not m_material_cache.materialIndex(material).has_value())
-        [[unlikely]] {
+        if (not m_bag_cache.resolve(bag).has_value() or not m_material_cache.materialIndex(material).has_value()) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
         m_instances.push_back(Instance{.m_bag = bag, .m_material = material, .m_model = model});
@@ -467,6 +512,10 @@ namespace pP {
     void TrianglePass::clearInstances() noexcept {
         m_instances.clear();
     }
+
+    // ------------------------------------------------------------------
+    // indirect planning and pipeline lookup
+    // ------------------------------------------------------------------
 
     // Phase 7 L1 indirect planning (pure, CPU-only — unit-tested without a
     // device): groups per-(prim, instance) draws into one contiguous args
@@ -591,7 +640,7 @@ namespace pP {
             return std::unexpected{err};
         }
         if (not m_render_pipeline_key.has_value() or
-            not(static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) == signature)) {
+            static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) != signature) {
             PPR_LOG(TrianglePass, debug, "pipeline cache cleared on signature change");
             m_variant_pipelines.clear();
             m_indirect_pipelines.clear();
@@ -638,6 +687,10 @@ namespace pP {
         return raw;
     }
 
+    // ------------------------------------------------------------------
+    // direct instance encoding
+    // ------------------------------------------------------------------
+
     // §6 encode per instance (mirrors render:58-71 + ImGui:409-412 idiom):
     // resolve handle → range, ShaderCursor binds (buffers + per-resident-texture
     // setDescriptorHandle via seam (a)), push setData, NO vertex/index-buffer
@@ -654,33 +707,24 @@ namespace pP {
 
     std::error_code TrianglePass::encodeInstance_(const DrawContext &draw_context, const Instance &instance) {
         Expected<TriangleBagRange> range = m_bag_cache.resolve(instance.m_bag);
-        if (not
-            range.has_value())
-        [[unlikely]] {
+        if (not range.has_value()) [[unlikely]] {
             return range.error();
         }
         Expected<BagBucketId> bucket = m_bag_cache.bucketOf(instance.m_bag);
-        if (not
-            bucket.has_value())
-        [[unlikely]] {
+        if (not bucket.has_value()) [[unlikely]] {
             return bucket.error();
         }
         rhi::IBuffer *const vertex_buffer = m_bag_cache.vertexBuffer(*bucket);
         rhi::IBuffer *const index_buffer = m_bag_cache.indexBuffer(*bucket);
-        if (vertex_buffer == nullptr or index_buffer == nullptr)
-        [[unlikely]] {
+        if (vertex_buffer == nullptr or index_buffer == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
         Expected<GpuMaterial> gpu = m_material_cache.material(instance.m_material);
-        if (not
-            gpu.has_value())
-        [[unlikely]] {
+        if (not gpu.has_value()) [[unlikely]] {
             return gpu.error();
         }
         Expected<u32> material_slot = m_material_cache.materialIndex(instance.m_material);
-        if (not
-            material_slot.has_value())
-        [[unlikely]] {
+        if (not material_slot.has_value()) [[unlikely]] {
             return material_slot.error();
         }
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
@@ -704,9 +748,7 @@ namespace pP {
 
         Expected<rhi::IRenderPipeline *> pipeline =
                 pipelineFor_(draw_context.m_device, draw_context.m_render_pipeline_key, variantFor_(*gpu));
-        if (not
-            pipeline.has_value())
-        [[unlikely]] {
+        if (not pipeline.has_value()) [[unlikely]] {
             return pipeline.error();
         }
 
@@ -769,7 +811,7 @@ namespace pP {
     // fail-closed validation as encodeInstance_ (stale handles, stride
     // mismatch → error, no partial staging). Zero-count prims are skipped
     // here, so both paths agree on the staged set.
-    Expected<Array<TrianglePass::StagedDraw> > TrianglePass::stageDraws_() {
+    Expected<Array<TrianglePass::StagedDraw> > TrianglePass::stageDraws_() const {
         Array<StagedDraw> resolved{};
         for (const Instance &instance: m_instances) {
             Expected<TriangleBagRange> range = m_bag_cache.resolve(instance.m_bag);
@@ -828,6 +870,10 @@ namespace pP {
         return resolved;
     }
 
+    // ------------------------------------------------------------------
+    // indirect draw encoding
+    // ------------------------------------------------------------------
+
     // L1 CPU-staged indirect draw: resolve staged instances (same fail-closed
     // validation as encodeInstance_ — no partial staging), plan buckets,
     // rewrite the Upload scratch, one drawIndirect per non-empty bucket.
@@ -838,7 +884,7 @@ namespace pP {
         }
         if (m_instances.empty()) {
             PPR_LOG_ONCE_KEY(TrianglePass, debug,
-                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "render skipped: empty scene");
             return default_value_v;
         }
@@ -858,12 +904,12 @@ namespace pP {
             buckets.push_back(draw.m_bag_bucket);
             counts.push_back(draw.m_count);
         }
-        const safe_narrowing<std::size_t> staged_count{resolved.size()};
+        const auto staged_count = safe_narrowing(resolved.size());
         Expected<IndirectPlan> plan = planIndirectDraws(
             std::span<const TrianglePipelineVariant>{variants.data(), variants.size()},
             std::span<const BagBucketId>{buckets.data(), buckets.size()},
             std::span<const u32>{counts.data(), counts.size()},
-            static_cast<u32>(staged_count));
+            staged_count);
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -924,7 +970,7 @@ namespace pP {
             // default range reaches D3D12 as NumElements 0 and is rejected.
             // The L2 compute kernel itself spells append as Append()
             // (HLSL case), never append().
-            const u32 args_usage = static_cast<u32>(rhi::BufferUsage::IndirectArgument);
+            constexpr u32 args_usage = static_cast<u32>(rhi::BufferUsage::IndirectArgument);
             rhi::BufferDesc args_desc{};
             args_desc.size = args_bytes;
             args_desc.elementSize = sizeof(rhi::IndirectDrawArguments);
@@ -939,7 +985,9 @@ namespace pP {
         return default_value_v;
     }
 
-    // --- Phase 7 L2b compute-publish path (plan §6) ---
+    // ------------------------------------------------------------------
+    // compute-publish indirect path
+    // ------------------------------------------------------------------
 
     u32 TrianglePass::ringSlotVersion(const u32 slot) const noexcept {
         return slot < kIndirectRingFrames ? m_ring[slot].m_version : 0u;
@@ -978,8 +1026,8 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 device.createFence(rhi::FenceDesc{.initialValue = 0u}, m_publish_fence.writeRef()));
         }
-        const u64 payload_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(InstancePayload);
-        const u64 args_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments);
+        constexpr u64 payload_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(InstancePayload);
+        constexpr u64 args_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments);
         for (IndirectRingSlot &entry: m_ring) {
             if (entry.m_scratch == nullptr) {
                 rhi::BufferDesc scratch_desc{};
@@ -1074,7 +1122,7 @@ namespace pP {
         clearPublished_();
         if (m_instances.empty()) {
             PPR_LOG_ONCE_KEY(TrianglePass, debug,
-                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "publish skipped: empty scene");
             return default_value_v;
         }
@@ -1126,7 +1174,7 @@ namespace pP {
         // A publish that fails after acquire must not leak the slot: the
         // fence value was never signaled, so drop it back to reclaimable.
         bool committed = false;
-        PPR_DEFER{
+        PPR_DEFER {
             if (not committed) {
                 entry.m_busy = false;
                 entry.m_fence_value = 0u;
@@ -1148,7 +1196,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, queue->createCommandEncoder(encoder.writeRef()));
         // (B1) UAV-counter host clear: the kernel appends from zero, so a
         // count-0 dispatch (never issued — empty returns above) would read 0.
-        encoder->clearBuffer(entry.m_counter.get(), rhi::BufferRange{0u, kIndirectCounterBytes});
+        encoder->clearBuffer(entry.m_counter.get(), rhi::BufferRange{
+            .offset = 0u,
+            .size = kIndirectCounterBytes,
+        });
         // (B2) declare the UAV write before the compute pass.
         encoder->setBufferState(entry.m_payloads.get(), rhi::ResourceState::UnorderedAccess);
         encoder->setBufferState(entry.m_args.get(), rhi::ResourceState::UnorderedAccess);
@@ -1172,10 +1223,13 @@ namespace pP {
                 compute_cursor["g_args"].setBinding(rhi::Binding(
                     entry.m_args.get(),
                     entry.m_counter.get(),
-                    rhi::BufferRange{0u, static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments)})));
+                    rhi::BufferRange{
+                    .offset = 0u,
+                    .size = static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments),
+                    })));
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_instance_count"].setData(&dispatch_count, sizeof(dispatch_count)));
-            const u32 max_count = kIndirectRingCapacity;
+            constexpr u32 max_count = kIndirectRingCapacity;
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_max_count"].setData(&max_count, sizeof(max_count)));
             compute_pass->dispatchCompute(dispatch_count, 1u, 1u);
@@ -1201,7 +1255,7 @@ namespace pP {
                 .signalFences = &fence_raw,
                 .signalFenceValues = &signal_value,
                 .signalFenceCount = 1u,
-            }));
+                }));
         committed = true;
         m_published_buckets.clear();
         for (const IndirectBucket &bucket: plan->m_buckets) {
@@ -1238,7 +1292,7 @@ namespace pP {
             PPR_LOG(TrianglePass, warning, "publish clamped to ring capacity", {
                 {"staged", staged->size()},
                 {"capacity", kIndirectRingCapacity},
-            });
+                });
             return std::make_error_code(std::errc::invalid_argument);
         }
         return default_value_v;
@@ -1272,7 +1326,7 @@ namespace pP {
         if (m_published_slot >= kIndirectRingFrames or m_published_count == 0u or
             m_published_buckets.empty()) {
             PPR_LOG_ONCE_KEY(TrianglePass, debug,
-                Log::Once::combine(static_cast<u64>(__LINE__), reinterpret_cast<u64>(this)),
+                Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "draw skipped: nothing published");
             return default_value_v;
         }
@@ -1427,6 +1481,10 @@ namespace pP {
         return default_value_v;
     }
 
+    // ------------------------------------------------------------------
+    // teardown and resource initialization
+    // ------------------------------------------------------------------
+
     std::error_code TrianglePass::shutdown() {
         PPR_LOG(TrianglePass, info, "TrianglePass shut down", {
             {"has_pipeline", m_render_pipeline != nullptr},
@@ -1502,7 +1560,11 @@ namespace pP {
 
         rhi::TextureDesc fallback_desc{};
         fallback_desc.type = rhi::TextureType::Texture2D;
-        fallback_desc.size = {1u, 1u, 1u};
+        fallback_desc.size = {
+            .width = 1u,
+            .height = 1u,
+            .depth = 1u,
+        };
         fallback_desc.arrayLength = 1u;
         fallback_desc.mipCount = 1u;
         fallback_desc.format = rhi::Format::RGBA8Unorm;

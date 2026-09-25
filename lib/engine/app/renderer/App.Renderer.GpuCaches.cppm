@@ -16,6 +16,10 @@ import std;
 // key-scan miss → invalid_argument, never silent success).
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // cache handles
+    // ------------------------------------------------------------------
+
     // Composed GPU-data-layer identity (Phase 6 A3): the wide handle is
     // composed HERE from the container-minted SparseHandle (u32 index + u32
     // monotonic generation), not by widening SparseVector itself — the
@@ -82,6 +86,10 @@ export namespace pP {
     static_assert(std::is_standard_layout_v<TextureBindlessIndex>);
     static_assert(sizeof(TextureBindlessIndex) == 4u);
 
+    // ------------------------------------------------------------------
+    // GPU protocol types
+    // ------------------------------------------------------------------
+
     // Plain draw metadata passed by value — carries NO identity and must not
     // be used to release. m_vb_offset is u32: the shader push takes uint and
     // BufferDesc sizes are narrowed with safe_narrowing at upload.
@@ -145,6 +153,10 @@ export namespace pP {
     // §2.4 range layout: offsets/count/base/bounds (4+4+4+4+12+12) = 40 B.
     static_assert(sizeof(TriangleBagRange) == 40u);
 
+    // ------------------------------------------------------------------
+    // material packing and pipeline variants
+    // ------------------------------------------------------------------
+
     // Pure-CPU material packing (plan §2.4 mapping): base_color+alpha →
     // m_base_color; emissive.rgb+metallic → m_emissive_metallic;
     // roughness/alpha_cutoff/occlusion_strength/normal_scale →
@@ -185,6 +197,10 @@ export namespace pP {
 
     [[nodiscard]] std::error_code checkPipelineVariant(TrianglePipelineVariant variant) noexcept;
 
+    // ------------------------------------------------------------------
+    // cache capacity and residency
+    // ------------------------------------------------------------------
+
     // Capacity telemetry (§2.4 preflight): single-load budgets. Overflow is
     // deterministic fail-closed (no_buffer_space); the usage accessors on each
     // cache report against these exact limits. The texture budget lives in
@@ -208,6 +224,10 @@ export namespace pP {
         ready,
         device_lost,
     };
+
+    // ------------------------------------------------------------------
+    // pass-owned caches
+    // ------------------------------------------------------------------
 
     // ONE class, all vertex types; bucket = hash(stride, index_type). MVP has
     // static buckets only by construction. Bag upload keeps TYPED-span
@@ -243,8 +263,7 @@ export namespace pP {
         [[nodiscard]] Expected<TriangleBagHandle> upload(
             const std::span<const V> verts, const std::span<const u32> idx, const i32 base) {
             static_assert(std::is_trivially_copyable_v<V>);
-            if (verts.empty() or idx.empty())
-            [[unlikely]] {
+            if (verts.empty() or idx.empty()) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             return uploadBytes_(std::as_bytes(verts), sizeof(V), idx, base);
@@ -369,10 +388,10 @@ export namespace pP {
             // Hand-written (no defaulted comparisons: MSVC module ICE family).
             [[nodiscard]] bool operator==(const DedupKey &other) const noexcept {
                 return m_hash == other.m_hash and
-                    m_width == other.m_width and
-                    m_height == other.m_height and
-                    m_format == other.m_format and
-                    m_mips == other.m_mips;
+                       m_width == other.m_width and
+                       m_height == other.m_height and
+                       m_format == other.m_format and
+                       m_mips == other.m_mips;
             }
 
             [[nodiscard]] bool operator<(const DedupKey &other) const noexcept {
@@ -497,6 +516,10 @@ export namespace pP {
         SparseVector<MaterialEntry> m_entries{};
         rhi::ComPtr<rhi::IBuffer> m_material_buffer{};
     };
+
+    // ------------------------------------------------------------------
+    // future slot retirement
+    // ------------------------------------------------------------------
 
     // Phase 7 slot dependency / fence-retirement API (SPECIFICATION ONLY —
     // no implementation in this phase; shapes the residency/streaming work).
