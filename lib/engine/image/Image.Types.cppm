@@ -8,20 +8,30 @@ import engine.math;
 import std;
 
 namespace pP {
-    // GPU-resident handles must be standard-layout and exactly 4 bytes. Local tags only.
-    struct GpuU32TestTag final {
-    };
+    // ------------------------------------------------------------------
+    // numeric wrapper layout checks
+    // ------------------------------------------------------------------
 
-    struct GpuKeyTestTag final {
-    };
+    namespace {
+        // GPU-resident handles must be standard-layout and exactly 4 bytes. Local tags only.
+        struct GpuU32TestTag final {
+        };
 
-    static_assert(std::is_standard_layout_v<Numeric<u32, GpuU32TestTag> >);
-    static_assert(sizeof(Numeric<u32, GpuU32TestTag>) == 4u);
-    static_assert(std::is_standard_layout_v<Numeric<SparseKeyId, GpuKeyTestTag> >);
-    static_assert(sizeof(Numeric<SparseKeyId, GpuKeyTestTag>) == 4u);
+        struct GpuKeyTestTag final {
+        };
+
+        static_assert(std::is_standard_layout_v<Numeric<u32, GpuU32TestTag> >);
+        static_assert(sizeof(Numeric<u32, GpuU32TestTag>) == 4u);
+        static_assert(std::is_standard_layout_v<Numeric<SparseKeyId, GpuKeyTestTag> >);
+        static_assert(sizeof(Numeric<SparseKeyId, GpuKeyTestTag>) == 4u);
+    }
 }
 
 export namespace pP::image {
+    // ------------------------------------------------------------------
+    // image errors and formats
+    // ------------------------------------------------------------------
+
     PPR_DECLARE_LOG_CATEGORY(Image);
 
     // CPU-only vocabulary. No mango/rhi types cross — native format + plain layout; RHI mapping happens
@@ -87,6 +97,10 @@ export namespace pP::image {
     // m_multithread=false is engine POLICY (no Mango pool in the RT path), not the Mango default.
     // m_flip_v=false: glTF/Mango V already matches (import_gltf.cpp:740-742).
 
+    // ------------------------------------------------------------------
+    // image asset descriptions and storage
+    // ------------------------------------------------------------------
+
     struct ImageSubresource {
         mem::SharedBuffer m_view{};
         u64 m_row_pitch = 0u;
@@ -117,6 +131,10 @@ export namespace pP::image {
     //   m_subresources.size() == m_mip_count.
     // - Blocked: block extents/bytes match m_tag;
     //   row_pitch == ceil(w/bw)*bytesPerBlock (derive, never duplicate).
+
+    // ------------------------------------------------------------------
+    // format and block geometry
+    // ------------------------------------------------------------------
 
     [[nodiscard]] constexpr bool isSrgb(const NativeImageFormat format) noexcept {
         switch (format) {
@@ -198,11 +216,14 @@ export namespace pP::image {
         return rowPitchFor(width, tag) * blocks_y;
     }
 
+    // ------------------------------------------------------------------
+    // content hashing
+    // ------------------------------------------------------------------
+
+    // Cross-load dedup key; NEVER hashValue(SharedBuffer) (owner identity).
     [[nodiscard]] inline hash_t contentHash(const mem::SharedBufferView view) noexcept {
         return hash::contiguousRange(view);
     }
-
-    // Cross-load dedup key; NEVER hashValue(SharedBuffer) (owner identity).
 }
 
 export template<>

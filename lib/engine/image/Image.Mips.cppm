@@ -1,5 +1,4 @@
 module;
-#include "pP/Macros.h"
 export module engine.image:mips;
 
 import :types;
@@ -19,6 +18,10 @@ import std;
 // reject here, never decode to recompress).
 
 export namespace pP::image {
+    // ------------------------------------------------------------------
+    // mip generation policy
+    // ------------------------------------------------------------------
+
     struct MipGenDesc {
         bool m_high_quality = false;
         bool m_preserve_coverage = false;
@@ -29,6 +32,10 @@ export namespace pP::image {
     // Incremental resampling (false, the default) filters each level from its
     // predecessor; high-quality mode (true, opt-in) filters every level from
     // the top level directly.
+
+    // ------------------------------------------------------------------
+    // chain geometry
+    // ------------------------------------------------------------------
 
     // Halving to 4 px: FloorLog2(min) - 1 clamped to at least one level, so an
     // 8 px minimum yields the pair {8, 4} and anything at or below 4 px stays
@@ -44,8 +51,16 @@ export namespace pP::image {
 
     // Halved extent at a chain level, floored at one pixel.
     [[nodiscard]] constexpr u32 mipExtentAt(const u32 base, const u32 level) noexcept {
-        return (base >> level) > 0u ? base >> level : 1u;
+        if (level >= std::numeric_limits<u32>::digits) {
+            return 1u;
+        }
+        const u32 extent = base >> level;
+        return extent > 0u ? extent : 1u;
     }
+
+    // ------------------------------------------------------------------
+    // chain generation
+    // ------------------------------------------------------------------
 
     // Builds the full chain in place: level 0 bytes are kept verbatim, levels
     // 1..mipCount-1 are appended into one frozen storage with tight pitches.

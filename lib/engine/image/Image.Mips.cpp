@@ -4,6 +4,7 @@ module;
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb_image_resize2.h>
+#include <mango/math/srgb.hpp>
 
 module engine.image;
 
@@ -16,16 +17,12 @@ import std;
 
 namespace pP::image {
     namespace {
-        // Exact sRGB transfer functions: sRGB sources linearize before the
-        // filter and re-encode after, so the resample itself always runs in a
-        // float-linear workspace. Alpha rides unmodified (already linear).
-        [[nodiscard]] float srgbToLinear_(const float c) noexcept {
-            return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-        }
+        // ------------------------------------------------------------------
+        // color transfer
+        // ------------------------------------------------------------------
 
-        [[nodiscard]] float linearToSrgb_(const float c) noexcept {
-            return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
-        }
+        // Mango's float sRGB transfer functions keep the resample in its
+        // linear workspace. Alpha rides unmodified (already linear).
 
         [[nodiscard]] float byteToUnit_(const std::byte b) noexcept {
             return static_cast<float>(std::to_integer<unsigned int>(b)) / 255.0f;
@@ -33,8 +30,12 @@ namespace pP::image {
 
         [[nodiscard]] std::byte unitToByte_(const float v) noexcept {
             const float clamped = std::clamp(v, 0.0f, 1.0f);
-            return static_cast<std::byte>(static_cast<unsigned int>(clamped * 255.0f + 0.5f));
+            return static_cast<std::byte>(static_cast<unsigned int>(std::lround(clamped * 255.0f)));
         }
+
+        // ------------------------------------------------------------------
+        // alpha-aware resampling
+        // ------------------------------------------------------------------
 
         // Chamfer distance-field color expansion: transparent texels borrow the
         // nearest opaque color (two-pass 3x3 chamfer, orthogonal 1 and diagonal
@@ -52,6 +53,7 @@ namespace pP::image {
                 opaque[i] = is_opaque ? 1u : 0u;
                 distance[i] = is_opaque ? 0.0f : kInfinite;
             }
+
             auto relax = [&](const std::size_t at, const std::size_t from, const float step) {
                 const float candidate = distance[from] + step;
                 if (candidate < distance[at]) {
@@ -78,6 +80,7 @@ namespace pP::image {
                     }
                 }
             }
+
             for (u32 y = height; y > 0u; --y) {
                 for (u32 x = width; x > 0u; --x) {
                     const std::size_t at = static_cast<std::size_t>(y - 1u) * width + (x - 1u);
@@ -95,6 +98,7 @@ namespace pP::image {
                     }
                 }
             }
+
             for (std::size_t i = 0u; i < count; ++i) {
                 if (opaque[i] == 0u and distance[i] >= kInfinite) {
                     rgba[i * 4u + 0u] = 0.0f;
@@ -154,6 +158,10 @@ namespace pP::image {
             }
         }
 
+        // ------------------------------------------------------------------
+        // chain invariants
+        // ------------------------------------------------------------------
+
         [[nodiscard]] bool checkChainInvariants_(const ImageAsset &asset) noexcept {
             if (asset.m_dimension != ImageDimension::image2d or asset.m_is_block or asset.m_tag != BlockTag::none) {
                 return false;
@@ -186,7 +194,11 @@ namespace pP::image {
         }
     } // namespace
 
-    [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, const MipGenDesc desc) {
+    // ------------------------------------------------------------------
+    // mip chain generation
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, MipGenDesc desc) {
         if (asset.m_dimension != ImageDimension::image2d or asset.m_width == 0u or
             asset.m_height == 0u) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
@@ -203,7 +215,7 @@ namespace pP::image {
             return make_error_code(errc::invalid_argument);
         }
         if (desc.m_preserve_coverage and
-            (not (desc.m_alpha_cutoff > 0.0f) or not (desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
+            (not(desc.m_alpha_cutoff > 0.0f) or not(desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         const u32 count = mipCountFor(asset.m_width, asset.m_height);
@@ -220,7 +232,7 @@ namespace pP::image {
             return make_error_code(errc::invalid_argument);
         }
         const mem::SharedBufferView top_bytes = asset.m_subresources.front().m_view.getBufferData();
-        const std::size_t top_size = static_cast<std::size_t>(slicePitchFor(asset.m_width, asset.m_height, BlockTag::none));
+        const auto top_size = static_cast<std::size_t>(slicePitchFor(asset.m_width, asset.m_height, BlockTag::none));
         if (top_bytes.size() != top_size) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
@@ -232,9 +244,9 @@ namespace pP::image {
             const float r = byteToUnit_(top_bytes[i * 4u + 0u]);
             const float g = byteToUnit_(top_bytes[i * 4u + 1u]);
             const float b = byteToUnit_(top_bytes[i * 4u + 2u]);
-            top[i * 4u + 0u] = to_linear ? srgbToLinear_(r) : r;
-            top[i * 4u + 1u] = to_linear ? srgbToLinear_(g) : g;
-            top[i * 4u + 2u] = to_linear ? srgbToLinear_(b) : b;
+            top[i * 4u + 0u] = to_linear ? mango::math::srgb_to_linear(r) : r;
+            top[i * 4u + 1u] = to_linear ? mango::math::srgb_to_linear(g) : g;
+            top[i * 4u + 2u] = to_linear ? mango::math::srgb_to_linear(b) : b;
             top[i * 4u + 3u] = byteToUnit_(top_bytes[i * 4u + 3u]);
         }
         const float target_coverage = desc.m_preserve_coverage ? coverageOf_(top, desc.m_alpha_cutoff) : 0.0f;
@@ -246,10 +258,12 @@ namespace pP::image {
         if (not job.isMaterialized()) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
+
         Expected<mem::MutableBufferView> chain = job.getMutableData();
         if (not chain.has_value() or chain->size() != static_cast<std::size_t>(chain_bytes)) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
+
         std::ranges::copy(top_bytes.first(top_size), chain->begin());
         u64 offset = static_cast<u64>(top_size);
 
@@ -288,9 +302,9 @@ namespace pP::image {
             }
             std::byte *const dest = chain->data() + offset;
             for (std::size_t i = 0u; i < static_cast<std::size_t>(level_w) * level_h; ++i) {
-                const float r = to_linear ? linearToSrgb_(next[i * 4u + 0u]) : next[i * 4u + 0u];
-                const float g = to_linear ? linearToSrgb_(next[i * 4u + 1u]) : next[i * 4u + 1u];
-                const float b = to_linear ? linearToSrgb_(next[i * 4u + 2u]) : next[i * 4u + 2u];
+                const float r = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 0u]) : next[i * 4u + 0u];
+                const float g = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 1u]) : next[i * 4u + 1u];
+                const float b = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 2u]) : next[i * 4u + 2u];
                 dest[i * 4u + 0u] = unitToByte_(r);
                 dest[i * 4u + 1u] = unitToByte_(g);
                 dest[i * 4u + 2u] = unitToByte_(b);

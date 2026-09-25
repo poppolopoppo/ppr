@@ -17,6 +17,10 @@ namespace pP::image {
     PPR_DECLARE_LOG_CATEGORY(Image)
 
     namespace {
+        // ------------------------------------------------------------------
+        // source validation
+        // ------------------------------------------------------------------
+
         // Extensions are normalized to Mango's lowercase dot-form (".png"); the
         // decoder is selected by this hint, sRGB never comes from the filename.
         [[nodiscard]] std::string normalizeExtension_(const std::string_view ext) {
@@ -37,6 +41,10 @@ namespace pP::image {
         [[nodiscard]] bool isCompressedSource_(const std::string_view dotted) noexcept {
             return dotted == ".ktx2" or dotted == ".dds";
         }
+
+        // ------------------------------------------------------------------
+        // parser safety
+        // ------------------------------------------------------------------
 
         // Parser-safety floors (Phase 5 hardening): Mango's image parsers do
         // sequential unchecked reads, so a short input over-reads past the end
@@ -110,6 +118,10 @@ namespace pP::image {
             }
         }
 
+        // ------------------------------------------------------------------
+        // mango format mapping
+        // ------------------------------------------------------------------
+
         [[nodiscard]] mango::image::Format rgba8Format_() {
             using mango::image::Format;
             return Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8);
@@ -147,6 +159,10 @@ namespace pP::image {
                 default: return NativeImageFormat::rgba8_linear;
             }
         }
+
+        // ------------------------------------------------------------------
+        // image buffer and invariant helpers
+        // ------------------------------------------------------------------
 
         // Per-job scratch decode target: allocate -> materialize -> checked mutable
         // view. Returns invalid_argument when the buffer traps trip.
@@ -232,12 +248,12 @@ namespace pP::image {
             if (height <= 1u) {
                 return default_value_v;
             }
-            mem::UniqueBuffer row = mem::UniqueBuffer::scratch(static_cast<std::size_t>(row_pitch));
-            Expected<mem::MutableBufferView> tmp = acquireJobBuffer_(row, static_cast<std::size_t>(row_pitch));
+            const auto stride = static_cast<std::size_t>(row_pitch);
+            mem::UniqueBuffer row = mem::UniqueBuffer::scratch(stride);
+            Expected<mem::MutableBufferView> tmp = acquireJobBuffer_(row, stride);
             if (not tmp.has_value()) {
                 return tmp.error();
             }
-            const std::size_t stride = static_cast<std::size_t>(row_pitch);
             for (u32 y = 0u; y < height / 2u; ++y) {
                 std::byte *const top = pixels.data() + static_cast<std::size_t>(y) * stride;
                 std::byte *const bottom = pixels.data() + static_cast<std::size_t>(height - 1u - y) * stride;
@@ -248,6 +264,10 @@ namespace pP::image {
             return default_value_v;
         }
     } // namespace
+
+    // ------------------------------------------------------------------
+    // rgba8 decoding
+    // ------------------------------------------------------------------
 
     [[nodiscard]] Expected<ImageAsset> decodeToRgba8(
         const mem::SharedBufferView bytes, const std::string_view ext, const ImageDecodeDesc desc, const ImageUsage usage) {
@@ -312,15 +332,18 @@ namespace pP::image {
             PPR_LOG(Image, info, "decode coerces sRGB source to linear for data usage",
                 {{"ext", dotted}, {"forced_linear", true}});
         }
+
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
         const u64 row_pitch = rowPitchFor(width, BlockTag::none);
+
         // u64 compare before narrowing: closes overflow as well as over-limit.
         if (row_pitch * static_cast<u64>(height) > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
             PPR_LOG_ONCE(Image, warning, "decode rejected: unpacked bytes exceed production cap",
                 {{"ext", dotted}, {"bytes", row_pitch * static_cast<u64>(height)}, {"cap", desc.m_limits.m_max_decoded_bytes}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
+
         const auto size_bytes = static_cast<std::size_t>(row_pitch * height);
 
         // One Mango decoder AND one UniqueBuffer per job: decode stages are
@@ -387,6 +410,10 @@ namespace pP::image {
         }
         return asset;
     }
+
+    // ------------------------------------------------------------------
+    // block decoding
+    // ------------------------------------------------------------------
 
     [[nodiscard]] Expected<ImageAsset> decodeToBlocks(
         const mem::SharedBufferView bytes, const std::string_view ext, const BlockTag want, const ImageDecodeDesc desc) {
