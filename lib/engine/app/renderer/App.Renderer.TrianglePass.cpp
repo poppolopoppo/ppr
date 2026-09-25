@@ -639,6 +639,7 @@ namespace pP {
                 });
             return std::unexpected{err};
         }
+
         if (not m_render_pipeline_key.has_value() or
             static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) != signature) {
             PPR_LOG(TrianglePass, debug, "pipeline cache cleared on signature change");
@@ -647,10 +648,11 @@ namespace pP {
             m_render_pipeline_key.reset();
             m_render_pipeline.setNull();
         }
+
         if (const auto found = pipelines.find(variant); found != pipelines.end()) {
-            PPR_LOG(TrianglePass, debug, "pipeline cache hit");
             return found->second.get();
         }
+
         if (signature.m_color_formats.size() != 1u or
             signature.m_depth_stencil_format.has_value() or
             signature.m_sample_count != 1u) {
@@ -696,9 +698,6 @@ namespace pP {
     // setDescriptorHandle via seam (a)), push setData, NO vertex/index-buffer
     // bindings, NON-INDEXED draw with sv_vertex_id driving the manual lookup.
     std::error_code TrianglePass::render(const DrawContext &draw_context) {
-        // The descriptor container is stable for one render invocation. Bind it
-        // on the first draw only; subsequent draws only push instance data.
-        m_texture_heap_bound = false;
         for (const Instance &instance: m_instances) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeInstance_(draw_context, instance));
         }
@@ -775,11 +774,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             shader_cursor["g_materials"].setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
 
-        if (not m_texture_heap_bound) {
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-                shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
-            m_texture_heap_bound = true;
-        }
+        // bindPipeline creates a new shader object per draw. The texture
+        // descriptor buffer is stable, but its binding is object-local.
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
         // Entry-point params (found via cursor DWIM): model matrix + packed
@@ -934,7 +932,6 @@ namespace pP {
             static_cast<std::size_t>(plan->m_total_count) * sizeof(rhi::IndirectDrawArguments));
         draw_context.m_device.unmapBuffer(m_indirect_args.get());
 
-        m_texture_heap_bound = false;
         for (const IndirectBucket &bucket: plan->m_buckets) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeIndirectBucket_(draw_context, bucket, plan->m_total_count));
         }
@@ -1330,7 +1327,6 @@ namespace pP {
                 "draw skipped: nothing published");
             return default_value_v;
         }
-        m_texture_heap_bound = false;
         for (const PublishedBucket &bucket: m_published_buckets) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeIndirectComputeBucket_(draw_context, bucket));
         }
@@ -1379,11 +1375,8 @@ namespace pP {
             shader_cursor["g_payloads"].setBinding(
                 rhi::Binding(entry.m_payloads.get(), makeFullRange(entry.m_payloads.get()))));
 
-        if (not m_texture_heap_bound) {
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-                shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
-            m_texture_heap_bound = true;
-        }
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
         draw_context.m_pass.setRenderState({
@@ -1456,11 +1449,8 @@ namespace pP {
             shader_cursor["g_payloads"].setBinding(
                 rhi::Binding(m_indirect_payloads.get(), makeFullRange(m_indirect_payloads.get()))));
 
-        if (not m_texture_heap_bound) {
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-                shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
-            m_texture_heap_bound = true;
-        }
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
         draw_context.m_pass.setRenderState({
@@ -1518,7 +1508,6 @@ namespace pP {
         m_fallback_view.setNull();
         m_fallback_texture.setNull();
         m_sampler_handle = rhi::DescriptorHandle{};
-        m_texture_heap_bound = false;
         return first_err;
     }
 
