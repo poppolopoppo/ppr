@@ -100,9 +100,8 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
-        "variant": "medium",
         "skills": [],
         "mcps": []
       },
@@ -171,9 +170,8 @@
         ]
       },
       "designer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
-        "variant": "medium",
         "skills": [
           "plantuml-skill"
         ],
@@ -206,14 +204,13 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
-        "variant": "medium",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "openai/gpt-5.6-fast",
+        "model": "openai/gpt-5.6-sol-fast",
         "variant": "high",
         "skills": [
           "*"
@@ -226,7 +223,7 @@
     },
     "opencode-zen-free": {
       "orchestrator": {
-        "model": "opencode/space-bunny-free",
+        "model": "opencode/muse-spark-1.3-contributor-free",
         "variant": "high",
         "temperature": 0.4,
         "skills": [
@@ -238,9 +235,9 @@
         ]
       },
       "oracle": {
-        "model": "opencode/space-bunny-free",
+        "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.4,
-        "variant": "max",
+        "variant": "xhigh",
         "skills": [
           "clion-tools",
           "simplify",
@@ -256,7 +253,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/space-bunny-free",
         "temperature": 0.2,
         "variant": "medium",
         "skills": [
@@ -269,7 +266,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/space-bunny-free",
         "temperature": 0.2,
         "variant": "medium",
         "skills": [],
@@ -318,9 +315,8 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/nemotron-3.5-lightning-free",
         "temperature": 0.2,
-        "variant": "low",
         "skills": [],
         "mcps": []
       },
@@ -427,9 +423,8 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
-        "variant": "low",
         "skills": [],
         "mcps": []
       },
@@ -448,7 +443,7 @@
     },
     "opencode-go": {
       "orchestrator": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "high",
         "skills": [
           "*"
@@ -459,7 +454,7 @@
         ]
       },
       "oracle": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "max",
         "skills": [
           "clion-tools",
@@ -476,7 +471,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "clion-tools",
@@ -488,7 +483,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [],
         "mcps": [
@@ -500,7 +495,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/kimi-k2.7-code",
+        "model": "openai/gpt-6-luna",
         "skills": [
           "plantuml-skill"
         ],
@@ -509,7 +504,7 @@
         ]
       },
       "fixer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "build-system",
@@ -533,12 +528,12 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "max",
         "skills": [
           "*"
@@ -562,9 +557,8 @@
         ]
       },
       "oracle": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "clion-tools",
           "simplify",
@@ -604,9 +598,8 @@
         ]
       },
       "designer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
-        "variant": "medium",
         "skills": [
           "plantuml-skill"
         ],
@@ -639,16 +632,14 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
-        "variant": "low",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "*"
         ],
@@ -671,9 +662,8 @@
         ]
       },
       "oracle": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "clion-tools",
           "simplify",
@@ -713,9 +703,8 @@
         ]
       },
       "designer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
-        "variant": "medium",
         "skills": [
           "plantuml-skill"
         ],
@@ -748,16 +737,14 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
-        "variant": "low",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "*"
         ],
@@ -769,7 +756,7 @@
     },
     "ppr-pro": {
       "orchestrator": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "high",
         "skills": [
           "*"
@@ -780,7 +767,7 @@
         ]
       },
       "oracle": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "max",
         "skills": [
           "clion-tools",
@@ -797,7 +784,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "clion-tools",
@@ -809,7 +796,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [],
         "mcps": [
@@ -821,7 +808,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/kimi-k2.7-code",
+        "model": "openai/gpt-6-luna",
         "skills": [
           "plantuml-skill"
         ],
@@ -830,7 +817,7 @@
         ]
       },
       "fixer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "build-system",
@@ -854,12 +841,12 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "high",
         "skills": [
           "*"
@@ -872,7 +859,7 @@
     },
     "ppr-paid": {
       "orchestrator": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "high",
         "skills": [
           "*"
@@ -883,7 +870,7 @@
         ]
       },
       "oracle": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "max",
         "skills": [
           "clion-tools",
@@ -900,7 +887,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "clion-tools",
@@ -912,7 +899,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [],
         "mcps": [
@@ -924,7 +911,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/kimi-k2.7-code",
+        "model": "openai/gpt-6-luna",
         "skills": [
           "plantuml-skill"
         ],
@@ -933,7 +920,7 @@
         ]
       },
       "fixer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "build-system",
@@ -957,12 +944,12 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "high",
         "skills": [
           "*"
@@ -1003,7 +990,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/gemini-3.7-flash",
+        "model": "openai/gpt-6-luna",
         "skills": [],
         "mcps": [
           "context7",
@@ -1014,7 +1001,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "clion-tools",
@@ -1026,7 +1013,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/kimi-k2.7-code",
+        "model": "openai/gpt-6-luna",
         "skills": [
           "plantuml-skill"
         ],
@@ -1035,7 +1022,7 @@
         ]
       },
       "fixer": {
-        "model": "openai/gpt-5.4-fast",
+        "model": "openai/gpt-6-luna-fast",
         "skills": [
           "build-system",
           "clion-tools",
@@ -1058,7 +1045,7 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "skills": [],
         "mcps": []
       },
@@ -1076,7 +1063,7 @@
     },
     "opencode-go-power": {
       "orchestrator": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "high",
         "skills": [
           "*"
@@ -1087,7 +1074,7 @@
         ]
       },
       "oracle": {
-        "model": "opencode/minimax-m3",
+        "model": "openai/gpt-6-sol",
         "variant": "max",
         "skills": [
           "clion-tools",
@@ -1104,7 +1091,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/gemini-3.7-flash",
+        "model": "openai/gpt-6-luna",
         "skills": [],
         "mcps": [
           "context7",
@@ -1115,7 +1102,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "clion-tools",
@@ -1127,7 +1114,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/kimi-k2.7-code",
+        "model": "openai/gpt-6-luna",
         "skills": [
           "plantuml-skill"
         ],
@@ -1136,7 +1123,7 @@
         ]
       },
       "fixer": {
-        "model": "opencode/deepseek-v4-flash",
+        "model": "openai/gpt-6-luna",
         "variant": "high",
         "skills": [
           "build-system",
@@ -1160,12 +1147,12 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "opencode/qwen3.6-plus",
+        "model": "openai/gpt-6-astra",
         "variant": "max",
         "skills": [
           "*"
@@ -1189,9 +1176,8 @@
         ]
       },
       "oracle": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "clion-tools",
           "simplify",
@@ -1231,7 +1217,7 @@
         ]
       },
       "designer": {
-        "model": "openrouter/z-ai/glm-5.2:free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.3,
         "skills": [
           "plantuml-skill"
@@ -1265,16 +1251,14 @@
         ]
       },
       "observer": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
-        "variant": "low",
         "skills": [],
         "mcps": []
       },
       "council": {
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
-        "variant": "max",
         "skills": [
           "*"
         ],
@@ -1293,50 +1277,48 @@
     "presets": {
       "diverse": {
         "alpha": {
-          "model": "opencode/qwen3.6-plus",
+          "model": "openai/gpt-6-astra",
           "variant": "max",
           "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
         },
         "beta": {
-          "model": "opencode/deepseek-v4-flash",
+          "model": "openai/gpt-6-luna",
           "variant": "high",
           "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
         },
         "gamma": {
-          "model": "opencode/kimi-k2.7-code",
+          "model": "openai/gpt-6-luna",
           "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
         },
         "delta": {
-          "model": "opencode/mimo-v2.5-free",
+          "model": "opencode/mimo-v2.6-flash-free",
           "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
         }
       },
       "free": {
         "alpha": {
-          "model": "opencode/muse-spark-1.3-contributor-free",
+          "model": "opencode/space-bunny-free",
           "variant": "max",
           "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
         },
         "beta": {
           "model": "opencode/muse-spark-1.3-contributor-free",
-          "variant": "max",
+          "variant": "xhigh",
           "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
         },
         "gamma": {
-          "model": "opencode/muse-spark-1.3-contributor-free",
-          "variant": "max",
+          "model": "opencode/mimo-v2.6-flash-free",
           "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
         },
         "delta": {
-          "model": "opencode/muse-spark-1.3-contributor-free",
-          "variant": "max",
+          "model": "opencode/nemotron-3-ultra-free",
           "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
         }
       },
       "mixed": {
         "alpha": {
           "model": "opencode/muse-spark-1.3-contributor-free",
-          "variant": "max",
+          "variant": "xhigh",
           "prompt": "Focus on architectural soundness, module partition design, and long-term maintainability for C++23 engine code."
         },
         "beta": {
@@ -1349,17 +1331,17 @@
           "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
         },
         "delta": {
-          "model": "opencode/mimo-v2.5-free",
+          "model": "opencode/mimo-v2.6-flash-free",
           "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
         }
       },
       "fast": {
         "alpha": {
-          "model": "opencode/deepseek-v4-flash",
+          "model": "openai/gpt-6-luna",
           "variant": "high"
         },
         "beta": {
-          "model": "opencode/kimi-k2.7-code"
+          "model": "openai/gpt-6-luna"
         }
       }
     }
