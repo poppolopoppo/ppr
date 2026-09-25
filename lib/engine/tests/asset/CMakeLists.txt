@@ -67,7 +67,7 @@ add_custom_command(TARGET engine.tests.asset POST_BUILD
         COMMENT "Copying shader assets"
 )
 
-add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset)
 
 set_tests_properties(EngineAssetUnitTests
         PROPERTIES
@@ -76,37 +76,6 @@ set_tests_properties(EngineAssetUnitTests
         # (gate readbacks alone are ~100 s).
         TIMEOUT 450
         LABELS "unit;engine;asset"
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.asset>"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.asset>"
 )
-
-# Tier split: one CTest entry per group with a tier label, so each CI
-# tier runs in <30 s (policy in codemap.md). The full run stays a single
-# command (ctest -R EngineAssetUnitTests); tiers run via ctest -L <tier>.
-function(ppr_asset_tier test_name filter tier timeout_seconds)
-    cmake_parse_arguments(TIER "" "LOOPS" "" ${ARGN})
-    set(tier_loops "")
-    if(DEFINED TIER_LOOPS)
-        set(tier_loops --loop ${TIER_LOOPS})
-    endif()
-    add_test(NAME ${test_name} COMMAND engine.tests.asset --run-test ${filter} --no-shuffle ${tier_loops}
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-    set_tests_properties(${test_name}
-            PROPERTIES
-            TIMEOUT ${timeout_seconds}
-            LABELS "unit;engine;asset;${tier}"
-    )
-endfunction()
-
-# CPU tiers: decode/convert/resilience/observe hold no SharedGpu refs, so
-# these entries never boot a device. GPU tiers run --loop 1; the full
-# EngineAssetUnitTests run keeps the ASan 3-loop rigor (policy in codemap.md).
-ppr_asset_tier(EngineAssetTierCpu.image asset/image tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.mesh asset/mesh tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.resilience asset/resilience tier-cpu 60)
-ppr_asset_tier(EngineAssetTierCpu.observe asset/observe tier-cpu 60)
-# GPU tiers: caches + readback gates + indirect draws under one shared scope
-# per entry; quarantine (editor flow + device-loss restart) runs its private
-# apps alone.
-ppr_asset_tier(EngineAssetTierGpu.caches asset/render/caches tier-gpu 120 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.gates asset/render/gates tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.indirect asset/render/indirect tier-gpu 90 LOOPS 1)
-ppr_asset_tier(EngineAssetTierGpu.quarantine asset/render/quarantine tier-gpu 120 LOOPS 1)

@@ -47,10 +47,12 @@ add_custom_command(TARGET engine.tests.app POST_BUILD
         COMMENT "Copying shader assets"
 )
 
-add_test(NAME EngineAppUnitTests COMMAND engine.tests.app WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME EngineAppUnitTests COMMAND engine.tests.app)
 
 set_tests_properties(EngineAppUnitTests
     PROPERTIES
         TIMEOUT 120
         LABELS "unit;engine;app"
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.app>"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.app>"
 )

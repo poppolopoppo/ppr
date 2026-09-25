@@ -59,10 +59,12 @@ if (MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.core PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif ()
 
-add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core)
 
 set_tests_properties(EngineCoreUnitTests
         PROPERTIES
         TIMEOUT 120
         LABELS "unit;engine;core"
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.core>"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.core>"
 )
