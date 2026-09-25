@@ -14,12 +14,13 @@ path-separator proofs live in engine.tests.core),
 `asset/mesh` (23: GLB-embed + external-URI import, verbatim LH values, MR split,
 rejections, malformed-GLB fail-closed, 64 B layout, ID sentinels, analytic
 tangent-w probe, plus `asset/mesh/uv` bakes/sets + inverse-transpose normals;
-material pack factors, pipeline variants, and the indirect plan contract live
+material pack factors, pipeline variants, and the draw plan contract live
 in engine.tests.app),
 `asset/render/caches` (9: upload/resolve/release, capacity telemetry,
 overflow/wrong-thread fail-closed, scene coexistence, residency, cache lifecycle logs),
 `asset/render/gates` (3: textured box, ORM goldens, tangent-w render proof),
-`asset/render/indirect` (3: compute publish, injection fail-closed, parity),
+`asset/render/draws` (5: payload-base binding, instancing differentiation, empty-scene +
+shutdown idempotency, stale-handle and bucket-stride fail-closed through `render()`),
 `asset/render/quarantine` (2: editor scene flow + device-loss restart, private apps),
 `asset/resilience` (7: fuzz corpus, 8-way import/decode storm),
 `asset/observe` (5: CPU-owned logging lines + helper; the Once helper proof
@@ -46,7 +47,7 @@ with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
 - `EngineAssetUnitTests` is the full run (ASan 3-loop rigor, TIMEOUT 450);
   per-top CTest entries (`ppr_asset_tier`) run via `ctest -L <tier>`:
   `tier-cpu` (image/mesh/resilience/observe — hold no SharedGpu refs, never
-  boot a device), `tier-gpu` (render/caches, render/gates, render/indirect,
+  boot a device), `tier-gpu` (render/caches, render/gates, render/draws,
   render/quarantine). GPU tiers run `--loop 1` in-tier; the full run keeps the
   3-loop rigor. The runner loop lives in `engine.tests::runSuite` (shared
   infra, outside the tree), so the render scope re-boots once per `--loop`
@@ -54,8 +55,8 @@ with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
   infra and is intentionally not done. No tier aliases: the ora-1 names are gone.
 - Sharing lifetime (three phases, Asset.Tests.cpp root):
   phase 1 recurses CPU-only tops holding no SharedGpu refs; phase 2 is the
-  `render` parent holding one `SharedGpu::acquire()` across caches + gates +
-  indirect (first acquire boots the headless app once per loop; teardown is
+  ender parent holding one `SharedGpu::acquire()` across caches + gates +
+  draws (first acquire boots the headless app once per loop; teardown is
   inverse — per-leaf `TrianglePass::shutdown`, then the render release);
   phase 3 runs `render/quarantine` (editor flow with its private GateEditorApp,
   loss restart with its private LossTestApp — never shared refs, after the
@@ -105,7 +106,7 @@ with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
 - `Asset.Search.UvNormal.Tests.cpp` — `asset/mesh/uv` bakes (9 leaves, nested under mesh).
 - `Asset.Render.Caches.Tests.cpp` — `asset/render/caches` (9 leaves, incl. lifecycle logs).
 - `Asset.Render.Gates.Tests.cpp` — `asset/render/gates` (3 shared) + editor leaf for quarantine.
-- `Asset.Render.Indirect.Tests.cpp` — `asset/render/indirect` (3 shared) + `asset/render/quarantine` parent.
+- `Asset.Render.Draws.Tests.cpp` — `asset/render/draws` (5 shared) + `asset/render/quarantine` parent.
 - `Asset.Resilience.Tests.cpp` — `asset/resilience` fuzz + storm (7 leaves).
 - `Asset.Observe.Tests.cpp` — `asset/observe` logging proofs (5 leaves).
 - `main.cpp` — runner entry.
@@ -113,4 +114,4 @@ with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
 - Cross-program homes (mesh/image-agnostic proofs, moved here from asset):
   `core/io` (mapFile-missing errc, path separator), `core/service`
   (Log::Once helper), `core/enums` (bindless budgets),
-  `app/render_view` (material pack, pipeline variants, indirect plan).
+  `app/render_view` (material pack, pipeline variants, draw plan).

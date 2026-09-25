@@ -1,5 +1,25 @@
 # Asset Pipeline — Deep Work Plan (draft, NOT approved)
 
+> **SUPERSEDED BY THE IMPLEMENTATION.** This document is retained as a historical
+> design record only; it was never executed as written, and several of its
+> decisions were reversed during implementation. In particular, the following
+> passages **no longer describe the code**:
+> - **`triangle.slang` / the `PushScalars` vertex entry-param mirror** — the shader
+>   is `assets/shaders/mesh_bindless.slang`; `triangle.slang` was deleted, its
+>   `vertexMain` entry point and the CPU-side `PushScalars` mirror went with it,
+>   and the payload now travels through a `StructuredBuffer` (`g_payloads`).
+> - **A public `BagBucketId`** — bucket identity is now private to
+>   `TriangleBagCache`. The only draw-facing resolve is
+>   `resolveForDraw(handle) -> Expected<ResolvedBag>`, which returns the range
+>   together with its vertex/index buffers. See
+>   `lib/engine/app/renderer/codemap.md` for the shipped contract.
+> - **The L1 CPU-staged and L2b compute-publish indirect draw paths**
+>   (`IndirectPlan`, `drawIndirect`, the publish ring, `prepareInstancesMain`) —
+>   both lanes were deleted; `TrianglePass` has one CPU-staged
+>   `drawInstanced` path.
+> Treat this file as an artifact, not a specification. The authoritative
+> contracts live in the module `codemap.md` files next to the code.
+
 > Status: PLAN ONLY — no implementation performed. NOT approved and NOT ready to execute
 > until every gate below passes. Execution by a fresh session starts at Phase 0.
 > Vision (XNA-style): an asset = path + importer + processor. Mango owns import/conversion,

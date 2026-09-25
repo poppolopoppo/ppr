@@ -142,10 +142,11 @@ export namespace pP {
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
 
         // The one draw path: resolve → plan → upload payloads → one
-        // drawInstanced per group. Failure is fail-closed but not all-or-
-        // nothing: staging and payload upload are all-or-nothing, while
-        // encoding stops at the first group that cannot be encoded and the
-        // groups already encoded into the pass stand.
+        // drawInstanced per group. Failure is fail-closed but NOT an atomic
+        // frame: resolve and payload upload are all-or-nothing, while encoding
+        // stops at the first group that cannot be encoded and the groups
+        // already encoded into the pass stand, so the command list may hold a
+        // prefix of the plan. uploadScene has its own all-or-none rollback.
         [[nodiscard]] std::error_code render(const DrawContext &draw_context);
 
         [[nodiscard]] std::error_code shutdown();

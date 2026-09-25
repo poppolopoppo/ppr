@@ -32,6 +32,56 @@ namespace pP::tests::detail::SharedGpu {
 } // namespace pP::tests::detail::SharedGpu
 
 namespace pP::tests::detail {
+    // Deliberate-error-path support. The unit-test harness fails any case that
+    // emits an error-level log, and BOTH Renderer::renderDraws_ and
+    // TrianglePass log at error level when a draw callback fails. A test that is
+    // SUPPOSED to fail closed must therefore divert the log, or it is reported
+    // as a failure for the very behaviour it asserts. Same pattern as
+    // Asset.Render.Caches.Tests.cpp / Asset.Observe.Tests.cpp.
+    namespace LogRedirect {
+        struct Captured {
+            Log::ELevel m_level = Log::ELevel::debug;
+            std::string m_message{};
+        };
+
+        struct Sink {
+            static inline std::vector<Captured> s_entries{};
+
+            static void push_(const Log::Entry &entry) noexcept {
+                try {
+                    s_entries.push_back(Captured{
+                        entry.m_site.m_verbosity,
+                        std::string(entry.m_message),
+                    });
+                } catch (...) {
+                }
+            }
+        };
+
+        class CaptureGuard final {
+            Log::Policy m_previous_policy;
+            Log::ELevel m_previous_level;
+
+        public:
+            CaptureGuard() noexcept
+                : m_previous_policy(Log::setWriterPolicy(Sink::push_)),
+                  m_previous_level(Log::setMinimumVerboseLevel(Log::ELevel::debug)) {
+                Sink::s_entries.clear();
+                Log::Once::resetForTests();
+            }
+
+            ~CaptureGuard() noexcept {
+                std::ignore = Log::flush(true);
+                Log::setWriterPolicy(m_previous_policy);
+                Log::setMinimumVerboseLevel(m_previous_level);
+            }
+
+            CaptureGuard(const CaptureGuard &) = delete;
+
+            CaptureGuard &operator=(const CaptureGuard &) = delete;
+        };
+    } // namespace LogRedirect
+
     namespace Draws {
         // ------------------------------------------------------------------
         // shared helpers (pixel tests)
@@ -74,12 +124,15 @@ namespace pP::tests::detail {
             return {vertex(-half, -half), vertex(half, -half), vertex(half, half), vertex(-half, half)};
         }
 
-        // Winded CLOCKWISE as seen by the camera, which is the front face this
-        // pipeline configuration accepts. pipelineFor_ leaves the rasterizer's
-        // front-face mode at its default and sets CullMode::Back, so the
-        // opposite winding is back-facing and is culled: the quad rasterizes
-        // nothing at all and the frame stays a flat clear. Verified empirically,
-        // not derived — do not "simplify" this back to 0,1,2 / 0,2,3.
+        // Winded CLOCKWISE as seen by the camera, which is the front face
+        // accepted by THIS pipeline configuration: pipelineFor_ sets
+        // CullMode::Back and never sets a front-face mode, so the backend
+        // default applies (on D3D that default makes clockwise front-facing).
+        // The opposite winding is back-facing and culled, so the quad
+        // rasterizes nothing and the frame stays a flat clear. There is no
+        // FrontFace knob in lib/engine/rhi, so this is a property of the
+        // configuration, not a portable engine-wide constant. Verified
+        // empirically — do not "simplify" this back to 0,1,2 / 0,2,3.
         [[nodiscard]] Array<u32> drawsQuadIndices_() {
             return {0u, 3u, 2u, 0u, 2u, 1u};
         }
@@ -229,14 +282,11 @@ namespace pP::tests::detail {
             const Expected<MaterialHandle> green = drawsColorMaterial_(pass, float4{0.0f, 1.0f, 0.0f, 1.0f});
             PPR_TEST_ASSERT(green.has_value());
 
-            // Interleaved red/green/red → the plan must be two groups with
-            // bases 0 and 2. Asserted on the planner so the test fails with a
-            // clear reason if the grouping itself regresses.
-            // Interleaved red/green/red. The bags share a vertex layout, so
-            // they share a bucket and its buffers — the groups split on the
-            // resolved RANGE instead, and the plan must still be two groups
-            // with bases 0 and 2. Asserted on the planner so the test fails
-            // with a clear reason if the grouping itself regresses.
+            // The real submission is red/green/red. The two bags share a
+            // vertex layout, so they share a bucket and its buffers — the groups
+            // split on the resolved RANGE, and the plan must still be two
+            // groups with bases 0 and 2. Asserted on the planner so the test
+            // fails with a clear reason if the grouping itself regresses.
             const TrianglePipelineVariant opaque{};
             const TrianglePipelineVariant variants[3] = {opaque, opaque, opaque};
             rhi::IBuffer *const vertex_buffers[3] = {nullptr, nullptr, nullptr};
@@ -257,6 +307,43 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plan->m_groups[0].m_instance_count == 2u);
             PPR_TEST_ASSERT(plan->m_groups[1].m_first_payload == 2u);
             PPR_TEST_ASSERT(plan->m_groups[1].m_instance_count == 1u);
+
+            // The other half of the grouping key: an IDENTICAL range reached
+            // through a different resolved buffer pair must still split, or a
+            // group could bind one bag's geometry to another bag's payloads.
+            // Opaque non-null sentinels are enough — the planner only ever
+            // compares buffer identity and never dereferences it.
+            {
+                rhi::IBuffer *const bucket_a_v = reinterpret_cast<rhi::IBuffer *>(0x1000);
+                rhi::IBuffer *const bucket_a_i = reinterpret_cast<rhi::IBuffer *>(0x2000);
+                rhi::IBuffer *const bucket_b_v = reinterpret_cast<rhi::IBuffer *>(0x3000);
+                rhi::IBuffer *const bucket_b_i = reinterpret_cast<rhi::IBuffer *>(0x4000);
+                const TrianglePipelineVariant same[2] = {opaque, opaque};
+                rhi::IBuffer *const mixed_vertices[2] = {bucket_a_v, bucket_b_v};
+                rhi::IBuffer *const mixed_indices[2] = {bucket_a_i, bucket_b_i};
+                const TriangleBagRange same_range[2] = {{.m_count = 6u}, {.m_count = 6u}};
+                const Expected<TrianglePass::DrawPlan> split = TrianglePass::planDraws(
+                    std::span<const TrianglePipelineVariant>{same, 2u},
+                    std::span<rhi::IBuffer *const>{mixed_vertices, 2u},
+                    std::span<rhi::IBuffer *const>{mixed_indices, 2u},
+                    std::span<const TriangleBagRange>{same_range, 2u});
+                PPR_TEST_ASSERT(split.has_value());
+                PPR_TEST_ASSERT(split->m_groups.size() == 2u);
+                PPR_TEST_ASSERT(split->m_groups[0].m_vertex_buffer == bucket_a_v);
+                PPR_TEST_ASSERT(split->m_groups[1].m_vertex_buffer == bucket_b_v);
+                // The same two inputs batch when the buffers agree, which is
+                // what makes the split above attributable to the buffer pair.
+                rhi::IBuffer *const shared_vertices[2] = {bucket_a_v, bucket_a_v};
+                rhi::IBuffer *const shared_indices[2] = {bucket_a_i, bucket_a_i};
+                const Expected<TrianglePass::DrawPlan> batched = TrianglePass::planDraws(
+                    std::span<const TrianglePipelineVariant>{same, 2u},
+                    std::span<rhi::IBuffer *const>{shared_vertices, 2u},
+                    std::span<rhi::IBuffer *const>{shared_indices, 2u},
+                    std::span<const TriangleBagRange>{same_range, 2u});
+                PPR_TEST_ASSERT(batched.has_value());
+                PPR_TEST_ASSERT(batched->m_groups.size() == 1u);
+                PPR_TEST_ASSERT(batched->m_groups[0].m_instance_count == 2u);
+            }
 
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.submitInstance(*red_bag, *red, drawsPlace_(-0.8f, 0.0f, 0.0f)));
@@ -393,6 +480,155 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
             PPR_TEST_ASSERT(not pass.shutdown());
         };
+        // F4: render() is fail-closed, and staging is all-or-nothing. A live
+        // instance and a doomed one are submitted, then the doomed bag is
+        // retired directly on the cache, behind the pass's back.
+        // resolveInstances_ resolves EVERY instance before any encode, so the
+        // whole call fails invalid_argument and the still-valid live instance
+        // must not reach the GPU.
+        //
+        // The frame is not asserted to be a flat clear: the renderer returns
+        // from the draw callback before finish()/submit(), so nothing is ever
+        // submitted and the target keeps its uninitialised contents. The
+        // decidable evidence is the propagated error plus a healthy control on
+        // the same pass, same geometry, and same material — only the stale
+        // handle differs.
+        PPR_UNIT_TEST (render_fails_closed_on_a_stale_bag_handle) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            const std::error_code kInvalid = std::make_error_code(std::errc::invalid_argument);
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.3f);
+            const Array<u32> indices = drawsQuadIndices_();
+            const Expected<TriangleBagHandle> live_bag = pass.uploadMesh(quad, indices);
+            PPR_TEST_ASSERT(live_bag.has_value());
+            const Expected<TriangleBagHandle> doomed_bag = pass.uploadMesh(quad, indices);
+            PPR_TEST_ASSERT(doomed_bag.has_value());
+            const Expected<MaterialHandle> material = drawsColorMaterial_(pass, float4{1.0f, 0.0f, 1.0f, 1.0f});
+            PPR_TEST_ASSERT(material.has_value());
+
+            const float3 eye{0.0f, 0.0f, 3.0f};
+            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+
+            // Control: the healthy instance really does draw through this
+            // pass, so a later failure is attributable to the stale handle and
+            // not to a setup that never draws anything.
+            pass.clearInstances();
+            PPR_TEST_ASSERT(not pass.submitInstance(*live_bag, *material, drawsPlace_(0.0f, 0.0f, 0.0f)));
+            rhi::ComPtr<rhi::ITexture> control{};
+            PPR_TEST_ASSERT(not drawsTarget_(device, "stale bag control", control));
+            PPR_TEST_ASSERT(not p_renderer->renderToTexture(*control, {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not p_renderer->waitOnHost());
+            const Expected<DrawsPixels> control_pixels = drawsReadback_(device, *control);
+            PPR_TEST_ASSERT(control_pixels.has_value());
+            const std::array<u8, 4u> control_centre = drawsWindow_(*control_pixels, 128u, 128u, 4u);
+            PPR_TEST_ASSERT(control_centre[0u] > control_centre[1u] + 20u);
+            PPR_TEST_ASSERT(control_centre[2u] > control_centre[1u] + 20u);
+
+            // Now add the instance whose bag is about to be retired.
+            PPR_TEST_ASSERT(not pass.submitInstance(*doomed_bag, *material, drawsPlace_(0.0f, 0.0f, 0.4f)));
+            PPR_TEST_ASSERT(not pass.bagCache().release(*doomed_bag));
+
+            rhi::ComPtr<rhi::ITexture> target{};
+            PPR_TEST_ASSERT(not drawsTarget_(device, "stale bag", target));
+            {
+                // Divert the error log for the expected failure only.
+                LogRedirect::CaptureGuard capture{};
+                PPR_TEST_ASSERT(
+                    p_renderer->renderToTexture(*target, {DrawSubmission{pass}}, ColorAttachmentOps{}) == kInvalid);
+            }
+            PPR_TEST_ASSERT(not p_renderer->waitOnHost());
+        };
+
+        // F4: the CPU<->Slang stride guard. The bag cache keys its buckets by
+        // vertex stride and upload<V> is a template, so a differently sized POD
+        // lands in its own bucket while the shader still reads BagVertex
+        // (64 B). submitInstance cannot see that — the bag and the material both
+        // resolve — so render() is the only place that can catch it, and it
+        // must fail closed rather than reinterpret the buffer.
+        struct NarrowVertex {
+            float m_position[3]{};
+            float m_normal[3]{};
+            float m_uv[2]{};
+        };
+
+        static_assert(sizeof(NarrowVertex) != sizeof(mesh::StaticMeshVertex));
+        static_assert(std::is_trivially_copyable_v<NarrowVertex>);
+
+        PPR_UNIT_TEST (render_fails_closed_on_a_bucket_stride_mismatch) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            const std::error_code kInvalid = std::make_error_code(std::errc::invalid_argument);
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.3f);
+            const Array<u32> indices = drawsQuadIndices_();
+            const Expected<TriangleBagHandle> good_bag = pass.uploadMesh(quad, indices);
+            PPR_TEST_ASSERT(good_bag.has_value());
+
+            const NarrowVertex narrow[4] = {
+                NarrowVertex{{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+                NarrowVertex{{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+                NarrowVertex{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+                NarrowVertex{{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+            };
+            const u32 narrow_idx[] = {0u, 3u, 2u, 0u, 2u, 1u};
+            const Expected<TriangleBagHandle> narrow_bag = pass.bagCache().upload(
+                std::span<const NarrowVertex>{narrow}, std::span<const u32>{narrow_idx});
+            PPR_TEST_ASSERT(narrow_bag.has_value());
+
+            const Expected<MaterialHandle> material = drawsColorMaterial_(pass, float4{0.0f, 1.0f, 1.0f, 1.0f});
+            PPR_TEST_ASSERT(material.has_value());
+
+            const float3 eye{0.0f, 0.0f, 3.0f};
+            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+
+            // Control: a 64 B-stride bucket on the same pass draws normally.
+            pass.clearInstances();
+            PPR_TEST_ASSERT(not pass.submitInstance(*good_bag, *material, drawsPlace_(0.0f, 0.0f, 0.0f)));
+            rhi::ComPtr<rhi::ITexture> control{};
+            PPR_TEST_ASSERT(not drawsTarget_(device, "stride control", control));
+            PPR_TEST_ASSERT(not p_renderer->renderToTexture(*control, {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not p_renderer->waitOnHost());
+            const Expected<DrawsPixels> control_pixels = drawsReadback_(device, *control);
+            PPR_TEST_ASSERT(control_pixels.has_value());
+            const std::array<u8, 4u> control_centre = drawsWindow_(*control_pixels, 128u, 128u, 4u);
+            PPR_TEST_ASSERT(control_centre[1u] > control_centre[0u] + 20u);
+            PPR_TEST_ASSERT(control_centre[2u] > control_centre[0u] + 20u);
+
+            // submitInstance only proves the handle resolves; the bucket stride
+            // is not knowable from there, so the draw is where it must fail.
+            pass.clearInstances();
+            PPR_TEST_ASSERT(not pass.submitInstance(*narrow_bag, *material, float4x4::identity()));
+
+            rhi::ComPtr<rhi::ITexture> target{};
+            PPR_TEST_ASSERT(not drawsTarget_(device, "stride mismatch", target));
+            {
+                // The stride guard logs at error level; divert it so the case
+                // is judged on the returned code, not on the diagnostic.
+                LogRedirect::CaptureGuard capture{};
+                PPR_TEST_ASSERT(
+                    p_renderer->renderToTexture(*target, {DrawSubmission{pass}}, ColorAttachmentOps{}) == kInvalid);
+            }
+            PPR_TEST_ASSERT(not p_renderer->waitOnHost());
+        };
     } // namespace Draws
 
     namespace DrawLoss {
@@ -415,78 +651,24 @@ namespace pP::tests::detail {
             [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
         };
 
-        [[nodiscard]] CameraSnapshot lossCamera_(
-            const float3 &eye, const float3 &target, const float2 &extent) {
-            CameraSnapshot snapshot{};
-            snapshot.m_view = float4x4::lookat(target, eye, math::axis_y);
-            snapshot.m_projection = rhi::getPerspectiveMatrix(
-                pi_v<float> / 3.0f, extent.x / extent.y, 0.05f, 100.0f);
-            snapshot.m_view_projection = snapshot.m_view * snapshot.m_projection;
-            snapshot.m_origin = eye;
-            snapshot.m_viewport_size = extent;
-            return snapshot;
-        }
+        // Geometry, camera, readback, and target helpers are shared with the
+        // Draws group above. The loss leaf used to carry private copies, and
+        // its copy of the quad indices kept the culled winding after the shared
+        // one was fixed, so the restart compared two empty frames and passed
+        // vacuously. One copy means the winding cannot diverge again.
 
-        [[nodiscard]] float4x4 lossPlace_(const float x, const float y, const float z) noexcept {
-            return float4x4{
-                float4{1.0f, 0.0f, 0.0f, 0.0f},
-                float4{0.0f, 1.0f, 0.0f, 0.0f},
-                float4{0.0f, 0.0f, 1.0f, 0.0f},
-                float4{x, y, z, 1.0f},
-            };
-        }
+        using Draws::drawsCamera_;
+        using Draws::drawsDist_;
+        using Draws::drawsPlace_;
+        using Draws::drawsQuad_;
+        using Draws::drawsQuadIndices_;
+        using Draws::drawsReadback_;
+        using Draws::drawsScreenX_;
+        using Draws::drawsTarget_;
+        using Draws::drawsWindow_;
+        using Draws::DrawsPixels;
 
-        [[nodiscard]] mesh::StaticMeshVertex lossVertex_(const float x, const float y) {
-            return mesh::StaticMeshVertex{
-                .m_position = {x, y, 0.0f},
-                .m_normal = {0.0f, 0.0f, 1.0f},
-                .m_texcoord = {x + 0.5f, y + 0.5f},
-                .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
-                .m_color = {1.0f, 1.0f, 1.0f, 1.0f},
-            };
-        }
-
-        struct LossPixels {
-            Array<std::byte> m_bytes{};
-            u64 m_row_pitch = 0u;
-        };
-
-        [[nodiscard]] Expected<LossPixels> lossReadback_(rhi::IDevice &device, rhi::ITexture &target) {
-            shader::ComPtr<ISlangBlob> blob{};
-            rhi::SubresourceLayout layout{};
-            if (const std::error_code err =
-                make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
-                return std::unexpected{err};
-            }
-            if (blob.get() == nullptr
-                or
-            blob->getBufferPointer() == nullptr)
-            {
-                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-            }
-            LossPixels pixels{};
-            pixels.m_row_pitch = layout.rowPitch;
-            const auto *src = static_cast<const std::byte *>(blob->getBufferPointer());
-            pixels.m_bytes.assign(src, src + blob->getBufferSize());
-            return pixels;
-        }
-
-        [[nodiscard]] std::error_code lossTarget_(
-            rhi::IDevice &device, const char *label, rhi::ComPtr<rhi::ITexture> &out_target) {
-            rhi::TextureDesc desc{};
-            desc.type = rhi::TextureType::Texture2D;
-            desc.size = {256u, 256u, 1u};
-            desc.arrayLength = 1u;
-            desc.mipCount = 1u;
-            desc.format = rhi::Format::RGBA8Unorm;
-            desc.memoryType = rhi::MemoryType::DeviceLocal;
-            desc.usage = rhi::TextureUsage::RenderTarget;
-            desc.defaultState = rhi::ResourceState::RenderTarget;
-            desc.label = label;
-            return make_error_code(device.createTexture(desc, nullptr, out_target.writeRef()));
-        }
-
-        [[nodiscard]] u64 lossHash_(const LossPixels &pixels) noexcept {
+        [[nodiscard]] u64 lossHash_(const DrawsPixels &pixels) noexcept {
             u64 hash = 0xcbf29ce484222325ULL;
             for (std::size_t i = 0u; i < pixels.m_bytes.size(); ++i) {
                 hash ^= static_cast<u64>(pixels.m_bytes[i]);
@@ -514,13 +696,10 @@ namespace pP::tests::detail {
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
 
-            const mesh::StaticMeshVertex quad[] = {
-                lossVertex_(-0.5f, -0.5f),
-                lossVertex_(0.5f, -0.5f),
-                lossVertex_(0.5f, 0.5f),
-                lossVertex_(-0.5f, 0.5f),
-            };
-            const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
+            // Shared quad geometry, so the winding is the one the Draws group
+            // proves rasterizes.
+            const Array<mesh::StaticMeshVertex> quad = Draws::drawsQuad_(0.4f);
+            const Array<u32> quad_idx = Draws::drawsQuadIndices_();
             const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag.has_value());
             mesh::MaterialAsset material{};
@@ -532,21 +711,33 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(packed.has_value());
 
             // Two instances, so the restart compares a real instanced draw.
-            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *packed, lossPlace_(-0.6f, 0.0f, 0.0f)));
-            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *packed, lossPlace_(0.6f, 0.0f, 0.0f)));
+            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *packed, drawsPlace_(-0.6f, 0.0f, 0.0f)));
+            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *packed, drawsPlace_(0.6f, 0.0f, 0.0f)));
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            const CameraSnapshot camera = lossCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f});
+            const CameraSnapshot camera = drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f});
             PPR_TEST_ASSERT(not pass.update(TimeSpan{}, camera));
 
             Renderer &renderer = loss_app.getRenderer();
             rhi::ComPtr<rhi::ITexture> pre_target{};
-            PPR_TEST_ASSERT(not lossTarget_(device, "loss pre-loss", pre_target));
+            PPR_TEST_ASSERT(not drawsTarget_(device, "loss pre-loss", pre_target));
             PPR_TEST_ASSERT(not renderer.renderToTexture(*pre_target, {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
-            const Expected<LossPixels> pre = lossReadback_(device, *pre_target);
+            const Expected<DrawsPixels> pre = drawsReadback_(device, *pre_target);
             PPR_TEST_ASSERT(pre.has_value());
             PPR_TEST_ASSERT(not pre->m_bytes.empty());
+
+            // The frame really drew, at BOTH instance columns. Without this
+            // the byte-equality below would compare two flat clears and pass
+            // without proving that the restart reproduces anything.
+            const std::array<u8, 4u> left = drawsWindow_(*pre, drawsScreenX_(-0.6f), 128u, 3u);
+            const std::array<u8, 4u> right = drawsWindow_(*pre, drawsScreenX_(0.6f), 128u, 3u);
+            const std::array<u8, 4u> background = drawsWindow_(*pre, 8u, 8u, 4u);
+            PPR_TEST_ASSERT(drawsDist_(left, background) > 20u);
+            PPR_TEST_ASSERT(drawsDist_(right, background) > 20u);
+            // The material's blue, so the draw is this instance and not a clear.
+            PPR_TEST_ASSERT(left[2u] > left[0u] + 20u);
+            PPR_TEST_ASSERT(right[2u] > right[0u] + 20u);
             const u64 pre_hash = lossHash_(*pre);
 
             PPR_TEST_ASSERT(not pass.notifyDeviceLost());
@@ -568,15 +759,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(rebag.has_value());
             const Expected<MaterialHandle> repacked = pass.packMaterial(material, none);
             PPR_TEST_ASSERT(repacked.has_value());
-            PPR_TEST_ASSERT(not pass.submitInstance(*rebag, *repacked, lossPlace_(-0.6f, 0.0f, 0.0f)));
-            PPR_TEST_ASSERT(not pass.submitInstance(*rebag, *repacked, lossPlace_(0.6f, 0.0f, 0.0f)));
+            PPR_TEST_ASSERT(not pass.submitInstance(*rebag, *repacked, drawsPlace_(-0.6f, 0.0f, 0.0f)));
+            PPR_TEST_ASSERT(not pass.submitInstance(*rebag, *repacked, drawsPlace_(0.6f, 0.0f, 0.0f)));
             PPR_TEST_ASSERT(not pass.update(TimeSpan{}, camera));
 
             rhi::ComPtr<rhi::ITexture> post_target{};
-            PPR_TEST_ASSERT(not lossTarget_(device, "loss post-restart", post_target));
+            PPR_TEST_ASSERT(not drawsTarget_(device, "loss post-restart", post_target));
             PPR_TEST_ASSERT(not renderer.renderToTexture(*post_target, {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
-            const Expected<LossPixels> post = lossReadback_(device, *post_target);
+            const Expected<DrawsPixels> post = drawsReadback_(device, *post_target);
             PPR_TEST_ASSERT(post.has_value());
             PPR_TEST_ASSERT(post->m_bytes.size() == pre->m_bytes.size());
             PPR_TEST_ASSERT(lossHash_(*post) == pre_hash);
@@ -597,6 +788,8 @@ namespace pP::tests {
             detail::Draws::group_binds_its_own_payload_base,
             detail::Draws::instanced_draw_differentiates_instances,
             detail::Draws::empty_scene_draws_and_shutdown_is_idempotent,
+            detail::Draws::render_fails_closed_on_a_stale_bag_handle,
+            detail::Draws::render_fails_closed_on_a_bucket_stride_mismatch,
         });
     };
 

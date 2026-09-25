@@ -624,14 +624,18 @@ namespace pP {
     // direct instance encoding
     // ------------------------------------------------------------------
 
-    // Failure contract, phase by phase — never a whole-frame guarantee:
-    //   staging  all-or-nothing (resolveInstances_ resolves every submitted
-    //            instance before any encode, so no group is half-built);
-    //   upload   all-or-nothing (uploadPayloads_ writes the whole payload
-    //            interval or fails before any draw is encoded);
-    //   encoding fail-closed per group: a group that cannot be encoded returns
-    //            its error and stops the loop, and the groups already encoded
-    //            into the pass stand. uploadScene keeps its own named rollback.
+    // Failure contract, phase by phase. This is NOT an atomic-frame guarantee:
+    //   staging  all-or-nothing. resolveInstances_ resolves every submitted
+    //            instance before any encode, so a group is never half-built and
+    //            one stale handle or stride mismatch fails the whole call.
+    //   upload   all-or-nothing. uploadPayloads_ writes the entire compacted
+    //            payload interval, or fails before any draw is encoded.
+    //   encoding fail-closed PER GROUP, and a partial frame is possible. The
+    //            loop returns the first group that cannot be encoded; the groups
+    //            already encoded into the pass are not undone, so the submitted
+    //            command list may contain a prefix of the plan. A caller that
+    //            needs whole-frame atomicity must discard the pass.
+    //            uploadScene keeps its own named rollback, which IS all-or-none.
     std::error_code TrianglePass::render(const DrawContext &draw_context) {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
@@ -1021,8 +1025,10 @@ namespace pP {
             triangle_shader->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
 
         // One program: the payload-indexed vertex entry reads
-        // g_payloads[g_payload_base + SV_InstanceID], so the group's payload
-        // base arrives as a global rather than through the draw arguments.
+        // g_payloads[g_payload_base + SV_InstanceID]. The group's payload base
+        // arrives as that entry's `uniform uint g_payload_base` parameter, bound
+        // per draw via shader_cursor["g_payload_base"].setData(...), and never
+        // through the draw arguments.
         slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
 
         rhi::ShaderProgramDesc program_desc{};
