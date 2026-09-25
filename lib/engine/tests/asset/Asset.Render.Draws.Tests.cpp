@@ -74,8 +74,14 @@ namespace pP::tests::detail {
             return {vertex(-half, -half), vertex(half, -half), vertex(half, half), vertex(-half, half)};
         }
 
+        // Winded CLOCKWISE as seen by the camera, which is the front face this
+        // pipeline configuration accepts. pipelineFor_ leaves the rasterizer's
+        // front-face mode at its default and sets CullMode::Back, so the
+        // opposite winding is back-facing and is culled: the quad rasterizes
+        // nothing at all and the frame stays a flat clear. Verified empirically,
+        // not derived — do not "simplify" this back to 0,1,2 / 0,2,3.
         [[nodiscard]] Array<u32> drawsQuadIndices_() {
-            return {0u, 1u, 2u, 0u, 2u, 3u};
+            return {0u, 3u, 2u, 0u, 2u, 1u};
         }
 
         struct DrawsPixels {

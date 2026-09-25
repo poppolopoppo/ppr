@@ -817,8 +817,9 @@ namespace pP {
 
         // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
         // startInstanceLocation never reaches the shader. The group's payload
-        // base rides this global instead and the draw starts at instance 0;
-        // binding both would double-count the offset for any non-zero base.
+        // base rides the vertex entry's uniform param instead and the draw
+        // starts at instance 0; binding both would double-count the offset for
+        // any non-zero base.
         const u32 payload_base = group.m_first_payload;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             shader_cursor["g_payload_base"].setData(&payload_base, sizeof(payload_base)));
