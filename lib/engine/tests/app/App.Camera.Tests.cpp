@@ -638,10 +638,14 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(std::abs(fwd_e.y) < 1e-3f);
     };
 
-    // Heading/pitch wiring: pure-heading input yaws (moves X, not Y) and
-    // pure-pitch input pitches (moves Y, not X). Pins the
-    // rotateXYZ(pitch, heading, roll) argument order: swapped arguments
-    // would turn E-key input into pitch and pointer-Y input into yaw.
+    // Heading/pitch wiring: pure-heading input yaws (moves forward X, not Y)
+    // and pure-pitch input pitches (moves forward Y, not X). Pins the
+    // rotateXYZ(pitch, heading, roll) argument order: heading drives yaw/X
+    // motion, pitch drives pitch/Y motion. Rx(t) * fwd = (0, -sin t, cos t)
+    // moves Y, while Rz(t) * fwd = (0, 0, 1) leaves forward untouched, so a
+    // roll-axis wiring swap would show up here as missing/extra motion.
+    // NOTE: starts from identity, where pre/post-multiply composition
+    // coincide, so composition itself is pinned by the level tests below.
     PPR_UNIT_TEST (free_camera_heading_pitch_wiring) {
         const auto driveKey = [](const InputKey key) {
             FreeCameraController ctrl;
@@ -681,6 +685,194 @@ namespace pP::tests::detail {
         const float3 pitch_fwd = quaternionTransform(pitch_model.m_basis, math::axis_z);
         PPR_TEST_ASSERT(std::abs(pitch_fwd.y) > 1e-2f);
         PPR_TEST_ASSERT(std::abs(pitch_fwd.x) < 1e-3f);
+    };
+
+    // Yaw-then-pitch stays level: after an E-key yaw, a pure pointer-Y pitch
+    // must not roll the horizon. Fails on premultiplied composition, where
+    // pitch about world X tilts camera-right out of horizontal.
+    PPR_UNIT_TEST (free_camera_look_stays_level_after_yaw) {
+        FreeCameraController ctrl;
+        ctrl.setRotationInertia(100000.0f);
+        InputMapping mapping{"FreeCameraLevelAfterYaw"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+
+        // Frame 1: E-key yaw for 250ms -> heading 1.8 * 0.25 = 0.45 rad.
+        const InputMessage yaw{InputKey::e, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, yaw);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
+
+        // Frame 2: release yaw, then RMB-gated pointer-Y pitch of 100px ->
+        // pitch 100 * 0.0025 * 1.2 = 0.3 rad.
+        const InputMessage yaw_release{InputKey::e, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, yaw_release);
+        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
+        const InputMessage mouse{
+            InputKey::mouse_2d,
+            InputValue{InputAxis2D{.m_absolute = float2{0.0f, 100.0f}, .m_relative = float2{0.0f, 100.0f}}},
+            InputDeviceID{0u},
+            EInputMessageEvent::axis
+        };
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+
+        constexpr float kExpectedPitch = 100.0f * 0.0025f * 1.2f;
+        const float3 right = quaternionTransform(model.m_basis, math::axis_x);
+        const float3 fwd = quaternionTransform(model.m_basis, math::axis_z);
+        // Horizon level: camera-right stays in the world XZ plane.
+        PPR_TEST_ASSERT(std::abs(dot(right, math::axis_y)) < 1e-3f);
+        // Elevation all reaches pitch: fwd.y is -sin(pitch), untouched by yaw.
+        PPR_TEST_ASSERT(std::abs(fwd.y + std::sin(kExpectedPitch)) < 1e-2f);
+    };
+
+    // Mixed heading+pitch frames stay level and regroup exactly: two
+    // consecutive diagonal-look frames must equal rotateXYZ(sum pitch, sum
+    // heading, 0). Fails on premultiplied composition and on naive
+    // postmultiply (raw * delta), which both leave degrees of roll.
+    PPR_UNIT_TEST (free_camera_look_mixed_input_stays_level) {
+        FreeCameraController ctrl;
+        ctrl.setRotationInertia(100000.0f);
+        InputMapping mapping{"FreeCameraMixedLevel"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
+        CameraModel model{};
+        constexpr float kPx = 100.0f;
+        constexpr float kPy = 100.0f;
+        for (int i = 0; i < 2; ++i) {
+            const InputMessage mouse{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{kPx, kPy}, .m_relative = float2{kPx, kPy}}},
+                InputDeviceID{0u},
+                EInputMessageEvent::axis
+            };
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        }
+
+        constexpr float kSumHeading = 2.0f * kPx * 0.0025f * 1.8f;
+        constexpr float kSumPitch = 2.0f * kPy * 0.0025f * 1.2f;
+        const Quaternion expected = Quaternion::rotateXYZ(kSumPitch, kSumHeading, 0.0f);
+        const float3 right = quaternionTransform(model.m_basis, math::axis_x);
+        PPR_TEST_ASSERT(std::abs(dot(right, math::axis_y)) < 1e-3f);
+        PPR_TEST_ASSERT(dot(model.m_basis, expected) > 1.0f - 1e-3f);
+    };
+
+    // Incremental look matches the absolute setter: N small diagonal frames
+    // accumulate to the same basis as lookAt(eye, sum heading, sum pitch).
+    PPR_UNIT_TEST (free_camera_look_incremental_matches_absolute) {
+        FreeCameraController ctrl;
+        ctrl.setRotationInertia(100000.0f);
+        InputMapping mapping{"FreeCameraIncrementalAbsolute"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
+        CameraModel model{};
+        constexpr int kFrames = 4;
+        constexpr float kPx = 50.0f;
+        constexpr float kPy = 50.0f;
+        for (int i = 0; i < kFrames; ++i) {
+            const InputMessage mouse{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{kPx, kPy}, .m_relative = float2{kPx, kPy}}},
+                InputDeviceID{0u},
+                EInputMessageEvent::axis
+            };
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        }
+
+        constexpr float kSumHeading = static_cast<float>(kFrames) * kPx * 0.0025f * 1.8f;
+        constexpr float kSumPitch = static_cast<float>(kFrames) * kPy * 0.0025f * 1.2f;
+        FreeCameraController absolute;
+        absolute.lookAt(float3{zero_v}, kSumHeading, kSumPitch, true);
+        CameraModel absolute_model{};
+        absolute.updateCameraModel(std::chrono::milliseconds{16}, absolute_model);
+        PPR_TEST_ASSERT(dot(model.m_basis, absolute_model.m_basis) > 1.0f - 1e-3f);
+        const float3 right = quaternionTransform(model.m_basis, math::axis_x);
+        PPR_TEST_ASSERT(std::abs(dot(right, math::axis_y)) < 1e-3f);
+    };
+
+    // Pitch clamps at +-89 degrees on the incremental look path: sustained
+    // pointer-Y drive pins at the limit with a level horizon, and a single
+    // ~344-degree flick lands on the limit instead of crossing the pole
+    // inverted (the rejected asin form folds past 90 degrees).
+    PPR_UNIT_TEST (free_camera_pitch_clamped) {
+        constexpr float kMaxPitch = 89.0f * std::numbers::pi_v<float> / 180.0f;
+        const auto pitchOf = [](const Quaternion &basis) {
+            const float3 fwd = quaternionTransform(basis, math::axis_z);
+            const float3 up = quaternionTransform(basis, math::axis_y);
+            return std::atan2(-fwd.y, up.y);
+        };
+        const auto postMouseY = [](InputListener &listener, const float pixels_y) {
+            const InputMessage mouse{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{0.0f, pixels_y}, .m_relative = float2{0.0f, pixels_y}}},
+                InputDeviceID{0u},
+                EInputMessageEvent::axis
+            };
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
+        };
+
+        // Sustained drive up pins at +89 deg, then sustained drive down
+        // traverses through zero and pins at -89 deg.
+        FreeCameraController ctrl;
+        ctrl.setRotationInertia(100000.0f);
+        InputMapping mapping{"FreeCameraPitchClamp"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
+        CameraModel model{};
+        for (int i = 0; i < 6; ++i) {
+            // 200px -> 0.6 rad per frame; the limit binds from frame 3 on.
+            postMouseY(listener, 200.0f);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            PPR_TEST_ASSERT(std::abs(pitchOf(model.m_basis)) <= kMaxPitch + 1e-2f);
+        }
+        // Limit actually reached: within ~1 deg of 89, horizon level.
+        PPR_TEST_ASSERT(std::abs(pitchOf(model.m_basis) - kMaxPitch) < 2e-2f);
+        PPR_TEST_ASSERT(std::abs(dot(quaternionTransform(model.m_basis, math::axis_x), math::axis_y)) < 1e-3f);
+        for (int i = 0; i < 12; ++i) {
+            postMouseY(listener, -200.0f);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            PPR_TEST_ASSERT(std::abs(pitchOf(model.m_basis)) <= kMaxPitch + 1e-2f);
+        }
+        PPR_TEST_ASSERT(std::abs(pitchOf(model.m_basis) + kMaxPitch) < 2e-2f);
+        PPR_TEST_ASSERT(std::abs(dot(quaternionTransform(model.m_basis, math::axis_x), math::axis_y)) < 1e-3f);
+
+        // Single-frame ~103 deg flick (600px * 0.0025 * 1.2 = 1.8 rad) pins
+        // at +89 deg instead of crossing the pole inverted (asin would fold
+        // it to ~77 deg with a flipped up vector).
+        // NOTE: kept under 180 deg on purpose: a larger sweep (e.g. 344 deg)
+        // is rotation-identical to its mod-360 counterpart (-16 deg), so no
+        // basis-level clamp can distinguish them; the clamp sees wound angles.
+        FreeCameraController flick_ctrl;
+        flick_ctrl.setRotationInertia(100000.0f);
+        InputMapping flick_mapping{"FreeCameraPitchClampFlick"};
+        flick_ctrl.provideInputActionKeyMappings(flick_mapping);
+        InputListener flick_listener;
+        flick_listener.addInputMapping(SharedInputMapping{&flick_mapping}, 0);
+        (void) flick_listener.postKeyEvent(std::chrono::milliseconds{1}, look);
+        postMouseY(flick_listener, 600.0f);
+        CameraModel flick_model{};
+        flick_ctrl.updateCameraModel(std::chrono::milliseconds{16}, flick_model);
+        PPR_TEST_ASSERT(std::abs(pitchOf(flick_model.m_basis) - kMaxPitch) < 2e-2f);
+        const float3 flick_fwd = quaternionTransform(flick_model.m_basis, math::axis_z);
+        const float3 flick_up = quaternionTransform(flick_model.m_basis, math::axis_y);
+        // Correct side of the pole: forward keeps the input's pitch sign,
+        // not flipped past the pole.
+        PPR_TEST_ASSERT(flick_fwd.y < -0.9f);
+        PPR_TEST_ASSERT(flick_up.y > 0.0f);
+        PPR_TEST_ASSERT(std::abs(dot(quaternionTransform(flick_model.m_basis, math::axis_x), math::axis_y)) < 1e-3f);
     };
 
     // Real controller accessors return the configured values.
@@ -909,6 +1101,10 @@ namespace pP::tests {
             detail::free_camera_mouse_look_gate,
             detail::free_camera_qe_oppose,
             detail::free_camera_heading_pitch_wiring,
+            detail::free_camera_look_stays_level_after_yaw,
+            detail::free_camera_look_mixed_input_stays_level,
+            detail::free_camera_look_incremental_matches_absolute,
+            detail::free_camera_pitch_clamped,
             detail::free_camera_accessors,
             detail::free_camera_retuned_rates,
             detail::pan_camera_key_directions,

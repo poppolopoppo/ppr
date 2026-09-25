@@ -92,6 +92,8 @@ export namespace pP {
             void provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept override;
 
         protected:
+            static constexpr float kMaxPitch = 89.0f * pi_v<float> / 180.0f;
+
             BasicCameraController();
 
             virtual void updateCameraPose_(TimeSpan dt, CameraModel &model) noexcept;
@@ -108,9 +110,10 @@ export namespace pP {
 
             void rotateCamera_(float heading, float pitch, float roll = zero_v) noexcept;
 
-            void rotateCamera_(const Quaternion &delta) noexcept { m_delta_rotation *= delta; }
+            Quaternion advanceLook_(std::optional<float> max_pitch) noexcept;
 
-            Quaternion m_delta_rotation{identity_v};
+            Quaternion m_delta_heading{identity_v};
+            Quaternion m_delta_pitch_roll{identity_v};
             float3 m_delta_position{zero_v};
 
             FlatMap<InputKey, float3> m_translate_rates{};

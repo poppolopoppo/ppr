@@ -4,6 +4,7 @@ module engine.app;
 
 import :scene.camera.controller;
 import :input.action;
+import :input.filtered_analog;
 import :input.key;
 
 import engine.core;
@@ -11,6 +12,25 @@ import engine.math;
 import std;
 
 namespace pP {
+    namespace {
+        [[nodiscard]] bool isIdentityRotation_(const Quaternion &q) noexcept {
+            return std::abs(dot(q, Quaternion::identity())) > 1.0f - 1e-6f;
+        }
+
+        [[nodiscard]] Quaternion normalizedOrIdentity_(const Quaternion &q) noexcept {
+            return dot(q, q) > epsilon_v<float> ? normalize(q) : Quaternion::identity();
+        }
+
+        [[nodiscard]] Quaternion clampPitch_(const Quaternion &basis, const float max_pitch) noexcept {
+            const float pitch = static_cast<float>(
+                std::atan2(-quaternionTransform(basis, math::forward).y, quaternionTransform(basis, math::axis_y).y));
+            if (std::abs(pitch) > max_pitch) {
+                return normalize(basis * Quaternion::rotateX(std::copysign(max_pitch, pitch) - pitch));
+            }
+            return basis;
+        }
+    }
+
     // ------------------------------------------------------------------
     // BasicCameraController — abstract with common controls for all others
     // ------------------------------------------------------------------
@@ -77,7 +97,8 @@ namespace pP {
         m_speed_rates.clear();
         m_fov_rates.clear();
 
-        m_delta_rotation = Quaternion::identity();
+        m_delta_heading = Quaternion::identity();
+        m_delta_pitch_roll = Quaternion::identity();
         m_delta_position = float3{zero_v};
         m_translate_impulse = float3{zero_v};
         m_rotate_impulse = float2{zero_v};
@@ -87,7 +108,22 @@ namespace pP {
     }
 
     void details::BasicCameraController::rotateCamera_(const float heading, const float pitch, const float roll) noexcept {
-        rotateCamera_(Quaternion::rotateXYZ(pitch, heading, roll));
+        // Heading is a world-Y pre-multiply; pitch/roll are body-local post-multiplies.
+        // Exact regrouping into Ry(sum H) * q * Rx(sum P) * Rz(sum R) holds because roll
+        // is unused today, keeping every pitch factor adjacent to the raw basis.
+        m_delta_heading = Quaternion::rotateY(heading) * m_delta_heading;
+        m_delta_pitch_roll = m_delta_pitch_roll * Quaternion::rotateX(pitch) * Quaternion::rotateZ(roll);
+    }
+
+    Quaternion details::BasicCameraController::advanceLook_(const std::optional<float> max_pitch) noexcept {
+        if (isIdentityRotation_(m_delta_heading) and isIdentityRotation_(m_delta_pitch_roll)) {
+            return m_rotation_analog.raw();
+        }
+        const Quaternion combined = normalizedOrIdentity_(m_delta_heading * m_rotation_analog.raw() * m_delta_pitch_roll);
+        if (max_pitch.has_value()) {
+            return clampPitch_(combined, *max_pitch);
+        }
+        return combined;
     }
 
     void details::BasicCameraController::setTranslateRate_(const InputKey &key, const float3 &rate) noexcept {
@@ -158,7 +194,8 @@ namespace pP {
         model.m_fov = m_fov_analog.filtered();
         model.m_has_camera_cut = m_has_teleported;
 
-        m_delta_rotation = Quaternion::identity();
+        m_delta_heading = Quaternion::identity();
+        m_delta_pitch_roll = Quaternion::identity();
         m_delta_position = float3{zero_v};
         m_translate_impulse = float3{zero_v};
         m_rotate_impulse = float2{zero_v};
@@ -168,8 +205,8 @@ namespace pP {
     }
 
     void details::BasicCameraController::updateCameraPose_(const TimeSpan dt, CameraModel &model) noexcept {
-        if (not m_has_teleported and dot2(m_delta_rotation) > 0.0f) {
-            m_rotation_analog.setRaw(m_delta_rotation * m_rotation_analog.raw());
+        if (not m_has_teleported) {
+            m_rotation_analog.setRaw(advanceLook_(kMaxPitch));
         }
         m_rotation_analog.update(dt);
 
@@ -479,7 +516,7 @@ namespace pP {
 
     void OrbitCameraController::updateCameraPose_(const TimeSpan dt, CameraModel &model) noexcept {
         if (not m_has_teleported) {
-            m_rotation_analog.setRaw(m_delta_rotation * m_rotation_analog.raw());
+            m_rotation_analog.setRaw(advanceLook_(std::nullopt));
 
             if (dot(m_delta_position, m_delta_position) > 0.0f) {
                 const float3 local_delta = m_delta_position * float3(m_speed_analog.filtered());

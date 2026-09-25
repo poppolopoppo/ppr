@@ -36,14 +36,17 @@ location no longer exists.
   forward declaration is removed); only `InputMapping` stays forward-declared.
 - **BasicCameraController** (`details::`) — owns five `unique_ptr<InputAction>` (`CameraMove` axis_3d, `CameraRotate`
   axis_2d, `CameraSpeed`/`CameraFov` axis_1d, `CameraLook` digital) wired in the ctor: translate accumulates
-  `m_delta_position`, rotate accumulates quaternion deltas (absolute for keys/sticks, relative only when RMB
-  `m_has_mouse_look` for `mouse_2d`), speed/fov `addClamp` into `FilteredAnalog<float>` ranges, look started/completed
-  toggles mouse-look; `FilteredAnalog` pose state (rotation `Quaternion`, position `float3`, fov, speed multiplier) plus
-   sensitivity/speed tuning (`m_mouse_sensitivity`, `m_gamepad_sensitivity`, translate/rotate speeds, fov/speed ranges);
+  `m_delta_position`, rotate accumulates split-sided look deltas (`m_delta_heading` world-Y pre-multiply,
+  `m_delta_pitch_roll` body-local post-multiply; shared `advanceLook_` composes `Ry(dH) * raw * Rx(dP) * Rz(dR)`
+  roll-free, exact regroup of `Ry(sum H) * Rx(sum P)` while roll stays unused), speed/fov `addClamp` into
+  `FilteredAnalog<float>` ranges, look started/completed toggles mouse-look; `FilteredAnalog` pose state (rotation
+  `Quaternion`, position `float3`, fov, speed multiplier) plus sensitivity/speed tuning (`m_mouse_sensitivity`,
+  `m_gamepad_sensitivity`, translate/rotate speeds, fov/speed ranges);
    convergence rates follow the `FilteredAnalog` first-order-lag contract (`alpha = 1−exp(−λ·dt)`): position/rotation
    `8.0` (~125 ms), fov `0.8`, speed `2.5`;
    `updateCameraModel` ticks fov/speed filters, calls virtual `updateCameraPose_`, publishes `m_fov`/`m_has_camera_cut`,
-  then clears deltas/teleport; base `updateCameraPose_` blends rotation deltas, world-transforms position deltas by
+  then clears deltas/teleport; base `updateCameraPose_` applies `advanceLook_(kMaxPitch)` (89° atan2 pitch clamp,
+  incremental path only — teleport/absolute setters stay unclamped), world-transforms position deltas by
   speed × orientation, and publishes filtered origin/basis; base `provideInputActionKeyMappings` binds RMB look,
   Shift/Ctrl + shoulder speed modifiers and `+/-` fov modifiers via `InputAction::modulate` range-scaled samplers.
 - **FreeCameraController** — free-flight: `lookAt(eye,target,up)` / `lookAt(eye,heading,pitch)` with teleport
@@ -61,7 +64,7 @@ location no longer exists.
 
 1. Client builds a `CameraModel` directly, or owns an `ICameraController` whose actions are published via
    `provideInputActionKeyMappings` into an `InputMapping` consumed by an `InputListener`.
-2. Per-frame input callbacks accumulate `m_delta_position`/`m_delta_rotation` (speed/fov filters update inline);
+2. Per-frame input callbacks accumulate `m_delta_position`/`m_delta_heading`+`m_delta_pitch_roll` (speed/fov filters update inline);
    `Camera::updateModel(dt, controller, viewport)` runs `controller.updateCameraModel` → `updateCameraPose_` then
    snapshots view/projection/jitter/frusta/velocities (degenerate viewports skip in place).
 3. Snapshot pairs with a target-local `RenderView` as `SceneView` (`:renderer.types`).
