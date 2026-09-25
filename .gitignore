@@ -101,9 +101,7 @@ Testing/
 *.userosscache
 *.sln.docstates
 *.env
-local-services/.env
 local-services/runtime-report.txt
-.venv-podman-compose/
 
 # WinDbg/TTD triage artifacts (host-local, never commit)
 *.dmp

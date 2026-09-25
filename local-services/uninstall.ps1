@@ -9,8 +9,7 @@ Set-StrictMode -Version Latest
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $machineName = 'podman-machine-default'
 $connectionName = 'podman-machine-default'
-$containerNames = @('searxng', 'crawl4ai', 'headroom', 'headroom-mcp')
-$headroomStateVolume = 'headroom-state'
+$containerNames = @('searxng')
 
 function Write-Log([string] $message) {
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $message"
@@ -59,53 +58,21 @@ if (Get-Command windbg-tool -ErrorAction SilentlyContinue) {
     Write-Log 'windbg-tool not found; skipping daemon stop.'
 }
 
-# 2. Remove Headroom state after explicit confirmation.
-if (Get-Command podman -ErrorAction SilentlyContinue) {
-    & podman --connection $connectionName volume exists $headroomStateVolume
-    if ($LASTEXITCODE -eq 0) {
-        if (Confirm-Action "Remove $headroomStateVolume? This permanently deletes Headroom state.") {
-            Write-Log "Removing $headroomStateVolume..."
-            & podman --connection $connectionName volume rm $headroomStateVolume | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Failed to remove $headroomStateVolume." }
-            Write-Log 'Headroom state volume removed.'
-        } else {
-            Write-Log "Preserving $headroomStateVolume."
-        }
-    } elseif ($LASTEXITCODE -eq 1) {
-        Write-Log 'Headroom state volume does not exist.'
-    } else {
-        throw "Failed to inspect $headroomStateVolume."
-    }
-}
-
-# 3. Prune networks (optional, safe)
+# 2. Prune networks (optional, safe)
 if (Get-Command podman -ErrorAction SilentlyContinue) {
     Write-Log 'Pruning unused networks...'
     & podman --connection $connectionName network prune -f | Out-Null
     Write-Log 'Networks pruned.'
 }
 
-# 4. Clear User environment variable
-Write-Log 'Clearing CRAWL4AI_API_TOKEN from User environment...'
-[Environment]::SetEnvironmentVariable('CRAWL4AI_API_TOKEN', $null, 'User')
-$env:CRAWL4AI_API_TOKEN = $null
-Write-Log 'Environment variable cleared.'
-
-# 5. Delete local-services/.env and runtime-report.txt
-$envPath = Join-Path $projectRoot 'local-services\.env'
+# 3. Delete local-services/runtime-report.txt
 $reportPath = Join-Path $projectRoot 'local-services\runtime-report.txt'
-if (Test-Path -LiteralPath $envPath -PathType Leaf) {
-    if (Confirm-Action "Delete $envPath?") {
-        Remove-Item -LiteralPath $envPath -Force
-        Write-Log 'Deleted local-services/.env'
-    }
-}
 if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
     Remove-Item -LiteralPath $reportPath -Force
     Write-Log 'Deleted local-services/runtime-report.txt'
 }
 
-# 6. Optionally stop the default machine (only if no other containers running)
+# 4. Optionally stop the default machine (only if no other containers running)
 if (Get-Command podman -ErrorAction SilentlyContinue) {
     $otherContainers = "$(& podman --connection $connectionName ps -a --format '{{.Names}}' 2>$null)".Trim()
     if (-not $otherContainers) {

@@ -65,7 +65,6 @@ function Assert-Layout {
     $required = @(
         'local-services\launch.ps1',
         'local-services\uninstall.ps1',
-        'local-services\crawl4ai\config.yml',
         'local-services\searxng\settings.yml',
         '.opencode\package.json',
         '.opencode\package-lock.json'

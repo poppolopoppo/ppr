@@ -1,55 +1,65 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
-  "skills": { "paths": [".opencode/skills"] },
-  "permission": {
-    "read": { "*": "allow" },
-    "edit": { "*": "allow" },
-    "bash": { "*": "allow", "rm -rf *": "deny", "sudo *": "deny" },
-    "clion_*": { "*": "allow" },
-    "doom_loop": "deny",
-    "external_directory": {
-      "*": "ask",
-      "C:\\Users\\bek4b\\AppData\\Local\\Temp\\opencode": "allow",
-      "C:\\Users\\bek4b\\AppData\\Local\\Temp\\opencode/**": "allow"
+  "skills": [".opencode/skills"],
+  "permissions": [
+    { "action": "read", "resource": "*", "effect": "allow" },
+    { "action": "edit", "resource": "*", "effect": "allow" },
+    { "action": "shell", "resource": "*", "effect": "allow" },
+    { "action": "shell", "resource": "rm -rf *", "effect": "deny" },
+    { "action": "shell", "resource": "sudo *", "effect": "deny" },
+    { "action": "clion_*", "resource": "*", "effect": "allow" },
+    { "action": "external_directory", "resource": "*", "effect": "ask" },
+    {
+      "action": "external_directory",
+      "resource": "C:\\Users\\bek4b\\AppData\\Local\\Temp\\opencode",
+      "effect": "allow"
+    },
+    {
+      "action": "external_directory",
+      "resource": "C:\\Users\\bek4b\\AppData\\Local\\Temp\\opencode/**",
+      "effect": "allow"
     }
-  },
+  ],
   "mcp": {
-    "clion": {
-      "type": "remote",
-      "url": "http://127.0.0.1:64362/stream",
-      "enabled": true,
-      "timeout": 30000
-    },
-    "crawl4ai": {
-      "type": "remote",
-      "url": "http://127.0.0.1:11235/mcp/sse",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:CRAWL4AI_API_TOKEN}"
+    "servers": {
+      "clion": {
+        "type": "remote",
+        "url": "http://127.0.0.1:64362/stream",
+        "disabled": false,
+        "timeout": {
+          "catalog": 30000,
+          "execution": 30000
+        }
+      },
+      "searxng": {
+        "type": "local",
+        "command": [
+          "node",
+          ".opencode/node_modules/mcp-searxng/dist/cli.js"
+        ],
+        "disabled": false,
+        "environment": {
+          "SEARXNG_URL": "http://127.0.0.1:8080"
+        }
+      },
+      "microsoft-learn": {
+        "type": "remote",
+        "url": "https://learn.microsoft.com/api/mcp",
+        "disabled": false
+      },
+      "windbg-ttd": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\bek4b\\.dotnet\\tools\\.store\\devolutions.windbg.tool\\0.2.0\\devolutions.windbg.tool.win-x64\\0.2.0\\tools\\net10.0\\win-x64\\Devolutions.WinDbg.Tool.exe",
+          "mcp"
+        ],
+        "disabled": false,
+        "timeout": {
+          "catalog": 60000,
+          "execution": 60000
+        }
       }
-    },
-    "searxng": {
-      "type": "local",
-      "command": [
-        "node",
-        ".opencode/node_modules/mcp-searxng/dist/cli.js"
-      ],
-      "enabled": true,
-      "environment": {
-        "SEARXNG_URL": "http://127.0.0.1:8080"
-      }
-    },
-    "microsoft-learn": {
-      "type": "remote",
-      "url": "https://learn.microsoft.com/api/mcp",
-      "enabled": true
-    },
-    "windbg-ttd": {
-      "type": "local",
-      "command": ["windbg-tool", "mcp"],
-      "enabled": true,
-      "timeout": 60000
     }
   }
 }

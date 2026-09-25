@@ -37,7 +37,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -50,8 +49,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -99,8 +96,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -148,7 +143,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -161,8 +155,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -210,8 +202,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -262,7 +252,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -289,7 +278,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -326,7 +314,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -377,7 +364,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -402,7 +388,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -438,7 +423,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -488,7 +472,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -513,8 +496,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -548,8 +529,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -597,7 +576,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -622,8 +600,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -659,8 +635,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -711,7 +685,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -736,8 +709,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -773,8 +744,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -824,7 +793,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -849,8 +817,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -884,8 +850,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -932,7 +896,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -957,8 +920,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -992,8 +953,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1040,7 +999,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -1052,8 +1010,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1098,8 +1054,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1146,7 +1100,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -1158,8 +1111,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1205,8 +1156,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1254,7 +1203,6 @@
         "mcps": [
           "clion",
           "codegraph",
-          "crawl4ai",
           "windbg-ttd"
         ]
       },
@@ -1267,8 +1215,6 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },
@@ -1315,8 +1261,6 @@
           "clion",
           "codegraph",
           "searxng",
-          "crawl4ai",
-          "headroom",
           "windbg-ttd"
         ]
       },

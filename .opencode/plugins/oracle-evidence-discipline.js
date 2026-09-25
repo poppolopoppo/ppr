@@ -1,8 +1,13 @@
 // Local opencode plugin: injects cost-aware Oracle/orchestrator evidence rules.
-// Auto-discovered from .opencode/plugin/ — no opencode.json plugin entry needed.
+// Auto-discovered from .opencode/plugins/ — no opencode.json plugin entry needed.
 //
 // This stays repository-local and avoids broad preset rewrites by appending only
 // the narrow guidance requested for Oracle and the orchestrator.
+//
+// V1 -> V2: the V1 `experimental.chat.system.transform` hook became
+// `ctx.session.hook("context", ...)`, and system content is now a list of typed
+// blocks rather than an array of plain strings. `Plugin.define` is an identity
+// function, so the definition is exported as a plain object.
 
 const ORCHESTRATOR_EVIDENCE_RULE = `
 # Oracle evidence brief discipline (injected)
@@ -42,26 +47,32 @@ function isOrchestratorPrompt(systemText) {
   return systemText.includes(ORCHESTRATOR_MARKER);
 }
 
-export default async () => ({
-  "experimental.chat.system.transform": async (input, output) => {
-    if (!output || !Array.isArray(output.system)) {
-      return;
-    }
+// The V2 system list holds typed content blocks; tolerate plain strings too.
+function systemTextOf(system) {
+  if (!Array.isArray(system)) return "";
+  return system
+    .map((block) =>
+      typeof block === "string" ? block : (block?.text ?? ""),
+    )
+    .join("\n");
+}
 
-    const systemText = output.system.join("\n");
+export default {
+  id: "ppr.oracle-evidence-discipline",
+  async setup(ctx) {
+    await ctx.session.hook("context", (event) => {
+      const systemText = systemTextOf(event.system);
 
-    if (
-      isOrchestratorPrompt(systemText) &&
-      !systemText.includes(ORCHESTRATOR_GUARD)
-    ) {
-      output.system.push(ORCHESTRATOR_EVIDENCE_RULE);
-    }
+      if (
+        isOrchestratorPrompt(systemText) &&
+        !systemText.includes(ORCHESTRATOR_GUARD)
+      ) {
+        event.system.push({ type: "text", text: ORCHESTRATOR_EVIDENCE_RULE });
+      }
 
-    if (
-      isOraclePrompt(systemText) &&
-      !systemText.includes(ORACLE_GUARD)
-    ) {
-      output.system.push(ORACLE_EVIDENCE_RULE);
-    }
+      if (isOraclePrompt(systemText) && !systemText.includes(ORACLE_GUARD)) {
+        event.system.push({ type: "text", text: ORACLE_EVIDENCE_RULE });
+      }
+    });
   },
-});
+};
