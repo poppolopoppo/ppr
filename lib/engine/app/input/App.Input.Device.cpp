@@ -147,7 +147,7 @@ namespace pP {
             PPR_LOG(InputDevice, verbose, "unbound keyboard key received", {
                 {"device_id", m_device_id},
                 {"keyboard_key", enumOrd(key)},
-                });
+            });
         }
     }
 
@@ -182,13 +182,11 @@ namespace pP {
     }
 
     void MouseDevice::postMouseButtonPressed(TimeSpan dt, const InputContext &context, EMouseButton button, bool pressed) {
-        if (not
-            m_buttons.postInputMessages(dt, context, m_device_id, button, pressed))
-        [[unlikely]] {
+        if (not m_buttons.postInputMessages(dt, context, m_device_id, button, pressed)) [[unlikely]] {
             PPR_LOG(InputDevice, verbose, "unbound mouse button received", {
                 {"device_id", m_device_id},
                 {"mouse_button", enumOrd(button)},
-                });
+            });
         }
     }
 
@@ -273,13 +271,11 @@ namespace pP {
     }
 
     void GamepadDevice::postGamepadButtonPressed(TimeSpan dt, const InputContext &context, EGamepadButton button, bool pressed) {
-        if (not
-            m_buttons.postInputMessages(dt, context, m_device_id, button, pressed))
-        [[unlikely]] {
+        if (not m_buttons.postInputMessages(dt, context, m_device_id, button, pressed)) [[unlikely]] {
             PPR_LOG(InputDevice, verbose, "unbound gamepad button received", {
                 {"device_id", m_device_id},
                 {"gamepad_button", enumOrd(button)},
-                });
+            });
         }
     }
 

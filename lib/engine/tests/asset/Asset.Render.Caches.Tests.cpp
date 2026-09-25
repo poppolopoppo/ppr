@@ -60,9 +60,7 @@ namespace pP::tests::detail {
                 return std::unexpected{err};
             }
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
-            if (not
-                destination.has_value())
-            [[unlikely]] {
+            if (not destination.has_value()) [[unlikely]] {
                 return std::unexpected{destination.error()};
             }
             for (std::size_t i = 0u; i < 16u; i += 4u) {
@@ -94,9 +92,7 @@ namespace pP::tests::detail {
 
         [[nodiscard]] Expected<SyntheticScene> singleQuadScene_(const u8 r, const u8 g, const u8 b) {
             Expected<image::ImageAsset> image = solidImage_(r, g, b);
-            if (not
-                image.has_value())
-            [[unlikely]] {
+            if (not image.has_value()) [[unlikely]] {
                 return std::unexpected{image.error()};
             }
             SyntheticScene out{};
@@ -748,10 +744,7 @@ namespace pP::tests::detail {
             u64 found = 0u;
             try {
                 for (const Captured &entry: LogCapture::s_entries) {
-                    if (entry.m_level == level
-                        and
-                    entry.m_message.find(needle) != std::string::npos)
-                    {
+                    if (entry.m_level == level and entry.m_message.find(needle) != std::string::npos) {
                         ++found;
                     }
                 }
@@ -763,9 +756,7 @@ namespace pP::tests::detail {
         [[nodiscard]] Expected<image::ImageAsset> decodeBoxPng_() {
             Expected<mem::SharedBuffer> mapped =
                     mem::SharedBuffer::mapFile(std::filesystem::current_path() / "meshes" / "textured_box.png");
-            if (not
-                mapped.has_value())
-            {
+            if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(

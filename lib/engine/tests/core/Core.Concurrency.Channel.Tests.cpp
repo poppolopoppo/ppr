@@ -882,9 +882,7 @@ namespace pP::tests::detail {
                 // Drain ALL messages in the channel
                 while (true) {
                     const auto recv = event.consumerAcquire(RawChannel::peek_without_blocking);
-                    if (not
-                        recv.has_value())
-                    {
+                    if (not recv.has_value()) {
                         break;
                     }
                     PPR_TEST_ASSERT(*static_cast<const int *>(recv->data()) == static_cast<int>(received));
@@ -934,9 +932,7 @@ namespace pP::tests::detail {
                 RawChannel *const p_chan = std::visit([](RawChannel *p) { return p; }, event);
                 while (true) {
                     const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
-                    if (not
-                        recv.has_value())
-                    {
+                    if (not recv.has_value()) {
                         break;
                     }
                     seed_recv += *static_cast<const int *>(recv->data());

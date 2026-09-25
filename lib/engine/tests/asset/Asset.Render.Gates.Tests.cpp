@@ -45,9 +45,7 @@ namespace pP::tests::detail {
         [[nodiscard]] Expected<image::ImageAsset> decodeFilePng(const std::string_view name) {
             Expected<mem::SharedBuffer> mapped =
                     mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
-            if (not
-                mapped.has_value())
-            {
+            if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(
@@ -63,9 +61,7 @@ namespace pP::tests::detail {
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 16u, rgba.data()
             };
-            if (not
-                static_cast<bool>(surface.save(path.string())))
-            {
+            if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -85,9 +81,7 @@ namespace pP::tests::detail {
                 rgba[offset + 3u] = std::byte{255u};
             }
             const mem::SharedBuffer png = gatePngBytes(name, rgba);
-            if (not
-                png.isValid())
-            [[unlikely]] {
+            if (not png.isValid()) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::io_error)};
             }
             return image::decodeToRgba8(
@@ -142,10 +136,7 @@ namespace pP::tests::detail {
                     make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr
-                or
-            blob->getBufferPointer() == nullptr)
-            {
+            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             GatePixels pixels{};
@@ -487,9 +478,7 @@ namespace pP::tests::detail {
                     return std::unexpected{submit_err};
                 }
                 const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 128u);
-                if (not
-                    target.has_value())
-                {
+                if (not target.has_value()) {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
                 }
@@ -506,9 +495,7 @@ namespace pP::tests::detail {
                     return std::unexpected{wait_err};
                 }
                 const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 128u);
-                if (not
-                    pixels.has_value())
-                {
+                if (not pixels.has_value()) {
                     return std::unexpected{pixels.error()};
                 }
                 const std::array<u8, 4u> texel = gateTexel_(*pixels, 64u, 64u);

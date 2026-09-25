@@ -35,8 +35,7 @@ namespace pP::tests::detail {
                 w.poll(ec);
                 if (ec && ec != std::errc::result_out_of_range)
                     return false;
-                if (not
-                    w.changes().empty()) return true;
+                if (not w.changes().empty()) return true;
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
             }
             return false;

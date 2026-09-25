@@ -60,10 +60,7 @@ namespace pP::tests::detail {
         // GPU rows are plain float arrays; mango float4 is the
         // expected side only (float4 == float4 yields a simd mask, not bool).
         [[nodiscard]] bool float4Equal_(const float (&lhs)[4], const float4 &rhs) noexcept {
-            return lhs[0] == rhs.x
-            and lhs[1] == rhs.y
-            and lhs[2] == rhs.z
-            and lhs[3] == rhs.w;
+            return lhs[0] == rhs.x and lhs[1] == rhs.y and lhs[2] == rhs.z and lhs[3] == rhs.w;
         }
 
         PPR_UNIT_TEST (handles_default_invalid) {

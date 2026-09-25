@@ -225,8 +225,7 @@ export namespace pP {
         }
 
         [[nodiscard]] bool operator==(const Viewport &other) const noexcept {
-            return m_window_rect == other.m_window_rect
-            and m_client_rect == other.m_client_rect;
+            return m_window_rect == other.m_window_rect and m_client_rect == other.m_client_rect;
         }
     };
 

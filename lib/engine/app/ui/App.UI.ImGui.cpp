@@ -544,10 +544,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // NOTE: height feeds an integer division below (staging row pitch); reject a
             // degenerate atlas with an error instead of faulting on division by zero.
-            if (pixels == nullptr
-                or width <= 0
-            or height <= 0)
-            [[unlikely]] {
+            if (pixels == nullptr or width <= 0 or height <= 0) [[unlikely]] {
                 PPR_LOG(UI, error, "font atlas has no pixels", {
                     {"width", width},
                     {"height", height},
@@ -615,7 +612,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG(UI, info, "font texture created", {
                 {"width", width},
                 {"height", height},
-                });
+            });
             return default_value_v;
         }
 
@@ -627,7 +624,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     {"color_format_count", signature.m_color_formats.size()},
                     {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
                     {"sample_count", signature.m_sample_count},
-                    });
+                });
                 return make_error_code(std::errc::operation_not_supported);
             }
 
