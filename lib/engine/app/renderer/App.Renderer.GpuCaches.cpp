@@ -330,9 +330,11 @@ namespace pP {
             return std::make_error_code(std::errc::invalid_argument);
         }
         std::ignore = m_ranges.erase(key);
+        // Single-load contract: the CPU range record retires, but the bucket
+        // bytes and the slot are never reclaimed or reused (documented; a
+        // free-list waits for a streaming phase that needs one).
         PPR_LOG(GpuCaches, info, "TriangleBagCache released range",
             {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"ranges", rangeCount()}});
-        PPR_LOG(GpuCaches, debug, "TriangleBagCache evicted range", {{"ranges", rangeCount()}});
         return default_value_v;
     }
 
@@ -624,7 +626,13 @@ namespace pP {
         const auto [identity, it] = m_entries.emplaceHandle(std::move(entry));
         it->m_identity = identity;
         const TextureHandle handle{identity};
-        m_dedup.emplace(key, handle);
+        // std::flat_map::emplace never overwrites. A dedup key whose pinned
+        // bytes failed bytesEqual_ above (a hash collision) is therefore still
+        // mapped to the earlier handle, and this texture would be
+        // unreachable by dedup while still consuming a slot. Keep the first
+        // winner and say so: a hash collision must not silently change which
+        // texture an identical upload dedups to.
+        std::ignore = m_dedup.emplace(key, handle);
         return handle;
     }
 
@@ -643,9 +651,12 @@ namespace pP {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             if (--entry->m_refcount == 0u) {
+                // The last holder retires the entry: its heap slot and the
+                // GPU texture stay allocated (slots never reuse under the
+                // single-load contract), it just stops being reachable.
                 std::ignore = m_dedup.erase(entry->m_key);
                 std::ignore = m_entries.erase(key);
-                PPR_LOG(GpuCaches, debug, "texture entry evicted", {{"used", textureUsed()}, {"budget", textureBudget()}});
+                PPR_LOG(GpuCaches, debug, "texture entry retired", {{"used", textureUsed()}, {"budget", textureBudget()}});
             }
             PPR_LOG(GpuCaches, info, "BindlessTextureCache released texture",
                 {{"used", textureUsed()}, {"budget", textureBudget()}});
@@ -659,13 +670,6 @@ namespace pP {
             return entry->m_slot;
         }
         return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-    }
-
-    rhi::ITextureView *BindlessTextureCache::view(const TextureHandle handle) const noexcept {
-        if (const TextureEntry *const entry = findEntry_(*handle)) [[likely]] {
-            return entry->m_view.get();
-        }
-        return nullptr;
     }
 
     rhi::IBuffer *BindlessTextureCache::descriptorBuffer() const noexcept {
@@ -848,12 +852,24 @@ namespace pP {
             std::ignore = m_entries.erase(key);
             PPR_LOG(GpuCaches, info, "BindlessMaterialCache released material",
                 {{"used", materialUsed()}, {"capacity", materialCapacity()}});
-            PPR_LOG(GpuCaches, debug, "material entry evicted",
+            PPR_LOG(GpuCaches, debug, "material entry retired",
                 {{"slot", slot}, {"used", materialUsed()}, {"capacity", materialCapacity()}});
             if (m_residency == CacheResidency::device_lost) {
                 return default_value_v;
             }
-            return writeSlot_(slot, GpuMaterial{});
+            // Explicit tombstone rather than a zeroed GpuMaterial: material
+            // slots start at 0, so a zeroed m_textures would name four REAL
+            // materials and a released slot would read as a valid textured
+            // one. kNoTexture is the honest released state. (The slot is never
+            // reissued, so this is defence in depth, not a live path.)
+            GpuMaterial tombstone{};
+            tombstone.m_textures = GpuTextureRefs{
+                .m_albedo = kNoTexture,
+                .m_metallic_roughness = kNoTexture,
+                .m_normal = kNoTexture,
+                .m_emissive = kNoTexture,
+            };
+            return writeSlot_(slot, tombstone);
         }
         return std::make_error_code(std::errc::invalid_argument);
     }
@@ -880,6 +896,9 @@ namespace pP {
     }
 
     u32 BindlessMaterialCache::materialUsed() const noexcept {
+        if (not m_initialized) [[unlikely]] {
+            return 0u;
+        }
         return m_next_slot;
     }
 

@@ -171,12 +171,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(tex1.has_value());
             PPR_TEST_ASSERT(*tex1 == *tex0);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0) == pass.textureCache().residentIndex(*tex1));
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex0) != nullptr);
-            PPR_TEST_ASSERT(pass.textureCache().view(TextureHandle{}) == nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).has_value());
+            PPR_TEST_ASSERT(not pass.textureCache().residentIndex(TextureHandle{}).has_value());
             PPR_TEST_ASSERT(not pass.textureCache().release(*tex0));
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex0) != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).has_value());
             PPR_TEST_ASSERT(not pass.textureCache().release(*tex0));
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex0) == nullptr);
+            PPR_TEST_ASSERT(not pass.textureCache().residentIndex(*tex0).has_value());
             PPR_TEST_ASSERT(pass.textureCache().release(*tex0) == std::make_error_code(std::errc::invalid_argument));
 
             const Expected<TextureHandle> tex2 = pass.uploadTexture(*decoded);
@@ -416,7 +416,7 @@ namespace pP::tests::detail {
 
             // Fail-closed: the worker retired nothing; owner-thread state intact.
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag).has_value());
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex) != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex).has_value());
             PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 1u);
             PPR_TEST_ASSERT(pass.textureCache().entryCount() == 1u);
             PPR_TEST_ASSERT(not pass.textureCache().release(*tex));
@@ -460,7 +460,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*up_a));
             PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(up_a->m_prims[0].m_bag).has_value());
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
-            PPR_TEST_ASSERT(pass.textureCache().view(up_b->m_textures[0]) != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.submitInstance(
@@ -497,7 +497,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 2u);
 
             PPR_TEST_ASSERT(not pass.releaseScene(*up_a));
-            PPR_TEST_ASSERT(pass.textureCache().view(up_b->m_textures[0]) != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
             pass.clearInstances();
@@ -506,7 +506,7 @@ namespace pP::tests::detail {
             pass.clearInstances();
 
             PPR_TEST_ASSERT(not pass.releaseScene(*up_b));
-            PPR_TEST_ASSERT(pass.textureCache().view(up_b->m_textures[0]) == nullptr);
+            PPR_TEST_ASSERT(not pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             PPR_TEST_ASSERT(pass.textureCache().entryCount() == 0u);
         };
 
@@ -630,7 +630,7 @@ namespace pP::tests::detail {
             const Expected<MaterialHandle> mat0 = pass.packMaterial(mesh::MaterialAsset{}, no_slots);
             PPR_TEST_ASSERT(mat0.has_value());
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag0).has_value());
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex0) != nullptr);
+            PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).has_value());
             PPR_TEST_ASSERT(pass.materialCache().materialIndex(*mat0).has_value());
             const Expected<ResolvedBag> bag0_draw = pass.bagCache().resolveForDraw(*bag0);
             PPR_TEST_ASSERT(bag0_draw.has_value());
@@ -651,7 +651,7 @@ namespace pP::tests::detail {
                                 {kNoTexture, kNoTexture, kNoTexture, kNoTexture}).error() == kNoDevice);
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag0).error() == kNoDevice);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).error() == kInvalid);
-            PPR_TEST_ASSERT(pass.textureCache().view(*tex0) == nullptr);
+            PPR_TEST_ASSERT(not pass.textureCache().residentIndex(*tex0).has_value());
             PPR_TEST_ASSERT(pass.materialCache().materialIndex(*mat0).error() == kInvalid);
             PPR_TEST_ASSERT(pass.textureCache().descriptorBuffer() == nullptr);
             PPR_TEST_ASSERT(pass.materialCache().materialBuffer() == nullptr);
@@ -776,7 +776,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = SharedGpu::shaderService();
             PPR_TEST_ASSERT(shader.isValid());
-            rhi::IDevice &device = rhi->getDevice();
 
             CaptureGuard capture{};
             TrianglePass pass{};
@@ -793,9 +792,35 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.textureCache().release(*first));
             PPR_TEST_ASSERT(not pass.textureCache().release(*second));
 
-            // Empty scene publishes nothing: two calls still log once.
-            PPR_TEST_ASSERT(not pass.publishIndirectCompute(device));
-            PPR_TEST_ASSERT(not pass.publishIndirectCompute(device));
+            // Bag release logs exactly ONE line per event and calls it a
+            // release, not an eviction: nothing is evicted under the
+            // single-load contract.
+            const mesh::StaticMeshVertex bag_quad[] = {
+                {
+                    .m_position = {-0.5f, -0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {0.0f, 0.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
+                },
+                {
+                    .m_position = {0.5f, -0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {1.0f, 0.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
+                },
+                {
+                    .m_position = {0.5f, 0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {1.0f, 1.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
+                },
+                {
+                    .m_position = {-0.5f, 0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {0.0f, 1.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
+                },
+            };
+            const u32 bag_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
+            const Expected<TriangleBagHandle> bag = pass.uploadMesh(bag_quad, bag_idx);
+            PPR_TEST_ASSERT(bag.has_value());
+            PPR_TEST_ASSERT(not pass.bagCache().release(*bag));
 
             PPR_TEST_ASSERT(not pass.shutdown());
             std::ignore = Log::flush(true);
@@ -803,8 +828,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "shader module loaded from file") >= 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture upload dedup hit") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "released texture") == 2u);
-            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture entry evicted") == 1u);
-            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "publish skipped: empty scene") == 1u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture entry retired") == 1u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache released range") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache shut down") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessTextureCache shut down") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessMaterialCache shut down") == 1u);

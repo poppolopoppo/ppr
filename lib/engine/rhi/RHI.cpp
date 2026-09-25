@@ -38,7 +38,7 @@ namespace pP {
                     case SLANG_E_BUFFER_TOO_SMALL: return "supplied buffer is too small to be able to complete";
                     case SLANG_E_UNINITIALIZED: return "used to identify a Result that has yet to be initialized";
                     case SLANG_E_PENDING: return
-                                "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
+                            "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
                     case SLANG_E_CANNOT_OPEN: return "indicates a file/resource could not be opened";
                     case SLANG_E_NOT_FOUND: return "indicates that a file/resource could not be found";
                     case SLANG_E_INTERNAL_FAIL: return "an unhandled internal failure (typically from unhandled exception)";
@@ -245,7 +245,7 @@ namespace pP {
                             PPR_LOG(RHI, error, "RHI initialization cleanup failed", {
                                 {"category", cleanup_error.category().name()},
                                 {"cause", cleanup_error.message()}
-                            });
+                                });
                         }
                     }
                 };
@@ -254,13 +254,13 @@ namespace pP {
                 PPR_LOG(RHI, info, "enabled Slang RHI debug layers", {
                     {"coreValidation", true},
                     {"GPUAssistedValidation", true}
-                });
+                    });
 
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->setDebugLayerOptions({
                     .required = true,
                     .coreValidation = true,
                     .GPUAssistedValidation = true
-                }));
+                    }));
 
                 p_instance->enableDebugLayers();
 #endif
@@ -294,11 +294,10 @@ namespace pP {
 
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
-                if (not device->hasFeature(rhi::Feature::Bindless))
-                {
+                if (not device->hasFeature(rhi::Feature::Bindless)) {
                     PPR_LOG(RHI, warning, "device lacks bindless support; GPU caches will fail at init", {
                         {"device_type", getDeviceTypeName_(device_type)}
-                    });
+                        });
                 }
 
                 const SlangCompileTarget compile_target = toSlangCompileTarget_(device->getDeviceType());
@@ -314,7 +313,7 @@ namespace pP {
                     {"bindless_combined", rhi::kBindlessCombinedBudget},
                     {"bindless_samplers", rhi::kBindlessSamplerBudget},
                     {"bindless_buffers", rhi::kBindlessBufferBudget},
-                });
+                    });
                 return make_error_code(SLANG_OK);
             }
 
@@ -323,7 +322,11 @@ namespace pP {
                     m_device.setNull();
                 }
 
-                PPR_RETURN_ERROR_ON_FAIL(RHI, ::slang_rhi::destroyRHI());
+                const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
+                PPR_LOG(RHI, info, "RHI instance teardown", {
+                    {"result", static_cast<int>(result)}
+                    });
+                PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
 
                 PPR_LOG(RHI, info, "RHI service shut down");
                 return default_value_v;

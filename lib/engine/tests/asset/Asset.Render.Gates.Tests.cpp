@@ -40,22 +40,16 @@ namespace pP::tests::detail {
             [[nodiscard]] std::error_code draw() { return ApplicationEditor::render(); }
         };
 
-        struct IndirectDepthProbe final {
-            TrianglePass *m_pass = nullptr;
-
-            [[nodiscard]] std::error_code render(const DrawContext &draw_context) {
-                return m_pass->renderIndirect(draw_context);
-            }
-        };
-
         [[nodiscard]] std::filesystem::path gateMeshDir() {
             return std::filesystem::current_path() / "meshes" / "";
         }
 
         [[nodiscard]] Expected<image::ImageAsset> decodeFilePng(const std::string_view name) {
             Expected<mem::SharedBuffer> mapped =
-                    mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
-            if (not mapped.has_value()) {
+                mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
+            if (not
+                mapped.has_value())
+            {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(
@@ -71,7 +65,9 @@ namespace pP::tests::detail {
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 16u, rgba.data()
             };
-            if (not static_cast<bool>(surface.save(path.string()))) {
+            if (not
+                static_cast<bool>(surface.save(path.string())))
+            {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -91,7 +87,9 @@ namespace pP::tests::detail {
                 rgba[offset + 3u] = std::byte{255u};
             }
             const mem::SharedBuffer png = gatePngBytes(name, rgba);
-            if (not png.isValid()) [[unlikely]] {
+            if (not
+                png.isValid())
+            [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::io_error)};
             }
             return image::decodeToRgba8(
@@ -132,7 +130,7 @@ namespace pP::tests::detail {
             return target;
         }
 
-        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeDepthTarget_(rhi::IDevice &device, const u32 size) {
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeDepthTarget_(rhi::IDevice &device, const u32 size) {
             rhi::TextureDesc desc{};
             desc.type = rhi::TextureType::Texture2D;
             desc.size = {size, size, 1u};
@@ -162,10 +160,13 @@ namespace pP::tests::detail {
             shader::ComPtr<ISlangBlob> blob{};
             rhi::SubresourceLayout layout{};
             if (const std::error_code err =
-                    make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
+                make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
+            if (blob.get() == nullptr
+                or
+            blob->getBufferPointer() == nullptr)
+            {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             GatePixels pixels{};
@@ -215,7 +216,9 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size()) {
+                if (mesh_index >= scene.m_meshes.size()
+                    or node_index >= scene.m_nodes.size())
+                {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
                 const float4x4 &world = scene.m_nodes[node_index].m_world;
@@ -227,7 +230,7 @@ namespace pP::tests::detail {
                     MaterialHandle material = up.m_material;
                     if (instance.m_material_override != mesh::kInvalidMaterial) {
                         const std::size_t override_index =
-                                static_cast<std::size_t>(*instance.m_material_override);
+                            static_cast<std::size_t>(*instance.m_material_override);
                         if (override_index >= uploaded.m_materials.size()) {
                             return std::make_error_code(std::errc::invalid_argument);
                         }
@@ -313,7 +316,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
         };
 
-        PPR_UNIT_TEST(triangle_depth_occlusion_gate) {
+        PPR_UNIT_TEST (triangle_depth_occlusion_gate) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = SharedGpu::shaderService();
@@ -322,7 +325,7 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER { PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
@@ -343,10 +346,10 @@ namespace pP::tests::detail {
             mesh::MaterialAsset red_material = green_material;
             red_material.m_base_color = float4{1.0f, 0.0f, 0.0f, 1.0f};
             const TextureHandle no_texture[] = {
-                    TextureHandle{},
-                    TextureHandle{},
-                    TextureHandle{},
-                    TextureHandle{},
+                TextureHandle{},
+                TextureHandle{},
+                TextureHandle{},
+                TextureHandle{},
             };
             const Expected<MaterialHandle> green_gpu_material = pass.packMaterial(green_material, no_texture);
             PPR_TEST_ASSERT(green_gpu_material.has_value());
@@ -356,30 +359,30 @@ namespace pP::tests::detail {
             const mesh::StaticMeshAsset &mesh_asset = scene->m_meshes.front();
             const float3 center = mesh_asset.m_bounds.center();
             const float max_dim = std::max(
-                    {mesh_asset.m_bounds.size().x, mesh_asset.m_bounds.size().y, mesh_asset.m_bounds.size().z});
+                {mesh_asset.m_bounds.size().x, mesh_asset.m_bounds.size().y, mesh_asset.m_bounds.size().z});
             const float3 eye{center.x, center.y, center.z + 2.5f * max_dim};
             PPR_TEST_ASSERT(not pass.update(TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
 
             pass.clearInstances();
             const TrianglePass::UploadedPrimitive &primitive = uploaded->m_prims.front();
             const float4x4 green_transform{
-                    float4{1.0f, 0.0f, 0.0f, 0.0f},
-                    float4{0.0f, 1.0f, 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, 1.0f, 0.0f},
-                    float4{0.0f, 0.0f, -0.6f * max_dim, 1.0f},
+                float4{1.0f, 0.0f, 0.0f, 0.0f},
+                float4{0.0f, 1.0f, 0.0f, 0.0f},
+                float4{0.0f, 0.0f, 1.0f, 0.0f},
+                float4{0.0f, 0.0f, -0.6f * max_dim, 1.0f},
             };
             const float4x4 red_transform{
-                    float4{1.0f, 0.0f, 0.0f, 0.0f},
-                    float4{0.0f, 1.0f, 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, 1.0f, 0.0f},
-                    float4{0.0f, 0.0f, 0.6f * max_dim, 1.0f},
+                float4{1.0f, 0.0f, 0.0f, 0.0f},
+                float4{0.0f, 1.0f, 0.0f, 0.0f},
+                float4{0.0f, 0.0f, 1.0f, 0.0f},
+                float4{0.0f, 0.0f, 0.6f * max_dim, 1.0f},
             };
             PPR_TEST_ASSERT(not pass.submitInstance(primitive.m_bag, *red_gpu_material, red_transform));
             PPR_TEST_ASSERT(not pass.submitInstance(primitive.m_bag, *green_gpu_material, green_transform));
 
-            const Expected<rhi::ComPtr<rhi::ITexture>> color_target = makeRenderTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture> > color_target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(color_target.has_value());
-            const Expected<rhi::ComPtr<rhi::ITexture>> depth_target = makeDepthTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture> > depth_target = makeDepthTarget_(device, 256u);
             PPR_TEST_ASSERT(depth_target.has_value());
             const rhi::ComPtr<rhi::ITextureView> color_view = targetRef_(*color_target).getDefaultView();
             const rhi::ComPtr<rhi::ITextureView> depth_view = targetRef_(*depth_target).getDefaultView();
@@ -391,12 +394,12 @@ namespace pP::tests::detail {
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
             PPR_TEST_ASSERT(not p_renderer->render(string_literal{std::in_place, "triangle depth gate"},
-                                                   rhi::RenderPassDesc{
-                                                           .colorAttachments = &color_attachment,
-                                                           .colorAttachmentCount = 1u,
-                                                           .depthStencilAttachment = &depth_attachment,
-                                                   },
-                                                   {DrawSubmission{pass}}));
+                rhi::RenderPassDesc{
+                    .colorAttachments = &color_attachment,
+                    .colorAttachmentCount = 1u,
+                    .depthStencilAttachment = &depth_attachment,
+                },
+                {DrawSubmission{pass}}));
             PPR_TEST_ASSERT(not p_renderer->waitOnHost());
 
             const Expected<GatePixels> pixels = readback_(device, targetRef_(*color_target), 256u);
@@ -404,21 +407,6 @@ namespace pP::tests::detail {
             const std::array<u8, 4u> center_texel = gateTexel_(*pixels, 128u, 128u);
             PPR_TEST_ASSERT(center_texel[0u] > center_texel[1u] + 20u);
             PPR_TEST_ASSERT(center_texel[0u] > center_texel[2u] + 20u);
-
-            IndirectDepthProbe indirect_probe{.m_pass = &pass};
-            PPR_TEST_ASSERT(not p_renderer->render(string_literal{std::in_place, "triangle indirect depth gate"},
-                                                   rhi::RenderPassDesc{
-                                                           .colorAttachments = &color_attachment,
-                                                           .colorAttachmentCount = 1u,
-                                                           .depthStencilAttachment = &depth_attachment,
-                                                   },
-                                                   {DrawSubmission{indirect_probe}}));
-            PPR_TEST_ASSERT(not p_renderer->waitOnHost());
-            const Expected<GatePixels> indirect_pixels = readback_(device, targetRef_(*color_target), 256u);
-            PPR_TEST_ASSERT(indirect_pixels.has_value());
-            const std::array<u8, 4u> indirect_center_texel = gateTexel_(*indirect_pixels, 128u, 128u);
-            PPR_TEST_ASSERT(indirect_center_texel[0u] > indirect_center_texel[1u] + 20u);
-            PPR_TEST_ASSERT(indirect_center_texel[0u] > indirect_center_texel[2u] + 20u);
 
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
@@ -548,7 +536,7 @@ namespace pP::tests::detail {
                     const mesh::StaticMeshVertex &src = quad.m_vertices[quad.m_indices[t + c]];
                     m3d::Vertex corner{};
                     corner.position =
-                            m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
+                        m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
                     corner.normal = m3d::float32x3{src.m_normal[0], src.m_normal[1], src.m_normal[2]};
                     corner.texcoord = m3d::float32x2{src.m_texcoord[0], src.m_texcoord[1]};
                     tri.vertex[c] = corner;
@@ -602,7 +590,7 @@ namespace pP::tests::detail {
                 quad.m_vertices.front().m_normal[2]
             };
             const float normal_len =
-                    std::sqrt(face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
+                std::sqrt(face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
             face_normal.x /= normal_len;
             face_normal.y /= normal_len;
             face_normal.z /= normal_len;
@@ -618,7 +606,9 @@ namespace pP::tests::detail {
                     return std::unexpected{submit_err};
                 }
                 const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 128u);
-                if (not target.has_value()) {
+                if (not
+                    target.has_value())
+                {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
                 }
@@ -626,7 +616,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(p_renderer != nullptr);
                 Renderer &renderer = *p_renderer;
                 const std::error_code render_err =
-                        renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
+                    renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
                 pass.clearInstances();
                 if (render_err) {
                     return std::unexpected{render_err};
@@ -635,7 +625,9 @@ namespace pP::tests::detail {
                     return std::unexpected{wait_err};
                 }
                 const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 128u);
-                if (not pixels.has_value()) {
+                if (not
+                    pixels.has_value())
+                {
                     return std::unexpected{pixels.error()};
                 }
                 const std::array<u8, 4u> texel = gateTexel_(*pixels, 64u, 64u);
@@ -676,7 +668,7 @@ namespace pP::tests::detail {
                 shaded[2] /= len;
                 constexpr float kLight[3] = {-0.35f, 0.55f, 0.76f};
                 const float light_len =
-                        std::sqrt(kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
+                    std::sqrt(kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
                 const float diff = std::max(0.0f,
                     (shaded[0] * kLight[0] + shaded[1] * kLight[1] + shaded[2] * kLight[2]) / light_len);
                 float view[3] = {eye.x - center.x, eye.y - center.y, eye.z - center.z};
@@ -688,7 +680,7 @@ namespace pP::tests::detail {
                     kLight[0] / light_len + view[0], kLight[1] / light_len + view[1], kLight[2] / light_len + view[2]
                 };
                 const float half_len =
-                        std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
+                    std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
                 const float spec = std::pow(
                     std::max(0.0f, (shaded[0] * half_v[0] + shaded[1] * half_v[1] + shaded[2] * half_v[2]) / half_len),
                     64.0f + (8.0f - 64.0f) * quad_mat.m_roughness);
@@ -816,10 +808,10 @@ namespace pP::tests {
     // asset/render/quarantine, never from here.
     const UnitTest gates = UnitTest::Named("gates") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-                detail::Gate::bindless_textured_box_gate,
-                detail::Gate::triangle_depth_occlusion_gate,
-                detail::Gate::orm_golden_distinct_channels,
-                detail::Gate::tangent_w_render_proof,
+            detail::Gate::bindless_textured_box_gate,
+            detail::Gate::triangle_depth_occlusion_gate,
+            detail::Gate::orm_golden_distinct_channels,
+            detail::Gate::tangent_w_render_proof,
         });
     };
 

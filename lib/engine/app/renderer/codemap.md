@@ -5,8 +5,9 @@
 The `engine.app:renderer` module provides the content-free generic `Renderer` (multi-window surfaces + graphics
 queue + validated submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
 camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
-`ColorAttachmentOps`, `SurfaceRenderPass`, `SurfaceDrawPass`) live header-only in `engine.app:renderer.types`. There is no
-`App.Renderer.Types.cpp` — the partition is fully inline in `App.Renderer.Types.cppm`.
+`ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
+`engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
+`App.Renderer.Types.cppm`.
 
 ## Design
 
@@ -30,13 +31,15 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
   `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
   Offscreen callers must `waitOnHost()` before readback.
-- `renderAndPresent(window, draws, surface_pass)` preserves the single-pass convenience API.
-  `renderAndPresentPasses(window, passes)` acquires one surface image, then renders each explicit
-  `SurfaceDrawPass` in order before one present. Each pass independently selects no depth, the renderer's
-  resize-matched shared depth view, or an external depth descriptor. Policy/descriptor mismatches and empty
-  pass lists fail before image acquisition. This permits the 3D pass to use depth while the following ImGui
-  pass loads color without any depth attachment, or later a compatible pass to select a different external
-  view/format without pretending the backend supports different depth views inside one native pass.
+- `renderAndPresent(window, passes)` is the single-pass convenience API: it acquires one surface image and renders
+  the draws carried by each `SurfaceRenderPass` in order before one present. `SurfaceRenderPass` holds its own
+  `m_draws` (`std::initializer_list<const DrawSubmission>`) plus its color/additional-color attachments and depth
+  policy, so each pass independently selects no depth, the renderer's resize-matched shared depth view
+  (`ESurfaceDepthPolicy::renderer_owned`), or an external depth descriptor (`external`). This permits the 3D pass
+  to use depth while a following ImGui pass loads color without any depth attachment, or a later compatible pass to
+  select a different external view/format without pretending the backend supports different depth views inside one
+  native pass. Policy/descriptor mismatches and empty pass lists fail before image acquisition. There is no
+  `renderAndPresentPasses` and no `SurfaceDrawPass` type.
 - `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
   `resizeWindowSurface_` to the current framebuffer size, `insert_or_assign`. `resizeWindowSurface_`: zero/negative
   extent unconfigures and releases depth (keeps the record); otherwise waits when already configured, creates
@@ -53,19 +56,27 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
   `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`;
   `ESurfaceDepthPolicy{none, renderer_owned, external}`;
-  `SurfaceRenderPass{surface_color, additional_colors span, depth policy, external depth optional}`;
-  `SurfaceDrawPass{render pass, draw-submission span}`.
-- **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): pass-owned GPU caches +
-  shared sampler + narrow upload APIs (`uploadMesh/uploadTexture/packMaterial/submitInstance`)
-  +   per-instance list + pipeline-variant map (+ kept `CameraSnapshot`). Binds the scalar-handle
-  `mesh_bindless.slang` program (StructuredBuffer fetch, no fixed-function geometry) and encodes
-  per-instance pushes/resolved slots/descriptors with fail-closed handle resolution.
-  `FrameConstants` keeps its `sizeof == 288` HLSL mirror assert (4×float4x4 + 2×float4).
-- **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic
-  bump buckets, stable `TriangleBagRange`), `BindlessTextureCache` (content-hash dedup +
-  refcount + pin-while-held), `BindlessMaterialCache` (stable `GpuMaterial` slots, 80 B stride),
-  `buildGpuMaterial` pack mapping, pipeline-variant key. Render-thread confined; shutdown
-  caches → sampler → pipelines before renderer `waitOnHost` (§2.4).
+  `SurfaceRenderPass{surface_color, additional_colors span, depth policy, external depth optional, draws}`.
+- **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): pass-owned GPU caches + shared sampler + narrow
+  upload APIs (`uploadMesh/uploadTexture/packMaterial/submitInstance`) + a per-frame submitted-instance list +
+  pipeline-variant map (kept `CameraSnapshot`). Binds the scalar-handle `mesh_bindless.slang` program
+  (StructuredBuffer fetch, no fixed-function geometry). `FrameConstants` keeps its `sizeof == 288` HLSL mirror
+  assert (4×float4x4 + 2×float4).
+  **One draw path**: `render()` is resolve → plan → upload payloads → `drawInstanced` per group, where
+  `planDraws` (static, pure, unit-testable without a device) batches the instances sharing a pipeline variant, a
+  resolved buffer pair, and an identical geometry range, and assigns each group a contiguous payload interval.
+  `g_payload_base` is bound per group and `startInstanceLocation` is 0, because `SV_InstanceID` is draw-local on
+  D3D12, SPIR-V, and Metal alike. Failure is fail-closed but not all-or-nothing: resolve and payload upload are
+  all-or-nothing, while encoding stops at the first group that cannot be encoded and prior groups stand.
+  There is no indirect or compute-publish lane.
+- **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic bump buckets,
+  stable `TriangleBagRange`, **no dedup** — one range per upload), `BindlessTextureCache` (**content-hash dedup
+  + refcount + pin-while-held**, heap slot 0 pinned to the white fallback and host slots start at 1),
+  `BindlessMaterialCache` (stable `GpuMaterial` slots, 80 B stride, **slots start at 0 so slot 0 is a real
+  material and there is no material fallback entry**), `buildGpuMaterial` pack mapping, pipeline-variant key.
+  The bag cache's only draw-facing resolve is `resolveForDraw(handle) -> Expected<ResolvedBag>`, which returns
+  the range TOGETHER with its vertex/index buffers; bucket identity is cache-internal. Render-thread confined;
+  shutdown order is caches → shared sampler → pipelines before renderer `waitOnHost`.
 - Residency/receipt/single-load rules (`TrianglePass` + `GpuCaches`): `uploadScene`
   issues one receipt nonce per scene and `releaseScene` consumes it first, so copies
   share the receipt and repeats fail closed (`invalid_argument`) without decrementing
@@ -75,18 +86,22 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `hashValue(TrianglePipelineVariant)` seeds the trivial hash with
   `hash::default_seed_v`, so variant keys are deterministic across runs (stable
   pipeline-cache lookup, no seed-0 degenerate combine).
-- `initialize(rhi, shader, content_dir)`: bindless program/layout + `caches.initialize(device)`
-  with reverse-order rollback; `createShaderProgram_` loads `mesh_bindless.slang`;
-  `createRenderPipeline_` keys opaque/mask variants (blend rejected); `update(dt, camera_view)`
-  caches the snapshot; `render(ctx)` encodes per instance (§6).
-  Linux/clang bring-up: Every setRenderState literal sets `.indexBuffer={}` (TrianglePass.cpp:755/760,1335/1340,1413/1418; App.Renderer.cpp:248 is a forwarder, not a literal); Clang via -Wextra+-Werror (Clang.cmake has only -Wall/-Wextra + -Werror, no explicit -Werror=missing-field-initializers flag) rejects the omission MSVC zero-inits; bindless NON-INDEXED fetch uses no index buffer.
+- `initialize(rhi, shader, content_dir)`: the single bindless program + `caches.initialize(device)` with
+  reverse-order rollback; `createShaderProgram_` loads `mesh_bindless.slang` and links `vertexIndirectMain` +
+  `fragmentMain`; `pipelineFor_` keys opaque/mask variants (blend rejected) and drops the whole cache on a target
+  signature change; `update(dt, camera_view)` caches the snapshot; `render(ctx)` encodes one instanced draw per
+  planned group.
+  Linux/clang bring-up: the single `setRenderState` literal in `TrianglePass::render` sets `.indexBuffer={}`
+  (App.Renderer.cpp:248 is a forwarder, not a literal); Clang via -Wextra+-Werror (Clang.cmake has only
+  -Wall/-Wextra + -Werror, no explicit -Werror=missing-field-initializers flag) rejects the omission MSVC
+  zero-inits; bindless NON-INDEXED fetch uses no index buffer.
 
 ## Flow
 
 1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
    lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
-2. Per-frame → stack 3D and UI `DrawSubmission` arrays → two `SurfaceDrawPass` records →
-   `renderAndPresentPasses` (resize on drift → acquire → depth-enabled 3D render pass → color-load/no-depth UI
+2. Per-frame → stack 3D and UI `DrawSubmission` arrays → two `SurfaceRenderPass` records →
+   `renderAndPresent` (resize on drift → acquire → depth-enabled 3D render pass → color-load/no-depth UI
    render pass → present); `TrianglePass::update(snapshot)` then `TrianglePass::render` inside the 3D callback.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
@@ -108,7 +123,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `App.Renderer.cppm` — generic `Renderer` declaration (config, multi-surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
 - `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
 - `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, caches, pipeline helpers)
-- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, §6 encode, frame-constant upload)
-- `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `GpuMaterial`, caches)
+- `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)
+- `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
-- `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`, `SurfaceDrawPass`); header-only, no matching `.cpp`
+- `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`

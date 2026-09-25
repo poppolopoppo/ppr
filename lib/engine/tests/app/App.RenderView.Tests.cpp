@@ -152,146 +152,27 @@ namespace pP::tests::detail {
         rhi::IBuffer *const kBucketBVertices = reinterpret_cast<rhi::IBuffer *>(0x3000);
         rhi::IBuffer *const kBucketBIndices = reinterpret_cast<rhi::IBuffer *>(0x4000);
 
-        PPR_UNIT_TEST(indirect_plan_contract) {
-            // Stride: 96 B = 64 model + 20 scalars + 12 pad, 16-aligned.
+        // GPU payload layout, shared with mesh_bindless.slang: 96 B = 64 model
+        // + 20 scalars + 12 pad, 16-aligned. A field-width or order change on
+        // either side silently reinterprets every draw, so the contract is
+        // pinned here rather than left to a draw that would look plausible.
+        PPR_UNIT_TEST(instance_payload_layout_matches_the_shader) {
             PPR_TEST_ASSERT(sizeof(TrianglePass::InstancePayload) == 96u);
             PPR_TEST_ASSERT(alignof(TrianglePass::InstancePayload) == 16u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_model) == 0u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_vb_offset) == 64u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_ib_start) == 68u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_index_count) == 72u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_material) == 76u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_base_vertex) == 80u);
             PPR_TEST_ASSERT(std::is_trivially_copyable_v<TrianglePass::InstancePayload>);
             PPR_TEST_ASSERT(std::is_standard_layout_v<TrianglePass::InstancePayload>);
-            // Seam records: 16 B D3D12 ExecuteIndirect draw records.
-            PPR_TEST_ASSERT(sizeof(rhi::IndirectDrawArguments) == 16u);
-            PPR_TEST_ASSERT(sizeof(rhi::IndirectDrawIndexedArguments) == 20u);
-            PPR_TEST_ASSERT(sizeof(rhi::IndirectDispatchArguments) == 12u);
 
-            const TrianglePipelineVariant opaque{};
-            const TrianglePipelineVariant masked{.m_twosided = false, .m_alpha = mesh::AlphaMode::mask};
-            const TrianglePipelineVariant sided{.m_twosided = true, .m_alpha = mesh::AlphaMode::opaque};
-
-            // Empty plan draws nothing (count-0 skips draw at the plan level).
-            {
-                const Expected<TrianglePass::IndirectPlan> plan = TrianglePass::planIndirectDraws(
-                    std::span<const TrianglePipelineVariant>{},
-                    std::span<rhi::IBuffer *const>{},
-                    std::span<rhi::IBuffer *const>{},
-                    std::span<const u32>{},
-                    16u);
-                PPR_TEST_ASSERT(plan.has_value());
-                PPR_TEST_ASSERT(plan->m_total_count == 0u);
-                PPR_TEST_ASSERT(plan->m_args.empty());
-                PPR_TEST_ASSERT(plan->m_buckets.empty());
-            }
-
-            // Buckets: mixed variants group into one contiguous range each;
-            // count-0 prims emit no record; payload indices ride
-            // startInstanceLocation in emission order.
-            {
-                const TrianglePipelineVariant variants[] = {opaque, masked, opaque, sided, masked};
-                rhi::IBuffer *const vertex_buffers[] = {
-                    kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices
-                };
-                rhi::IBuffer *const index_buffers[] = {
-                    kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices
-                };
-                const u32 counts[] = {36u, 0u, 12u, 24u, 6u};
-                const Expected<TrianglePass::IndirectPlan> plan = TrianglePass::planIndirectDraws(
-                    variants, vertex_buffers, index_buffers, counts, 16u);
-                PPR_TEST_ASSERT(plan.has_value());
-                PPR_TEST_ASSERT(plan->m_total_count == 4u);
-                PPR_TEST_ASSERT(plan->m_args.size() == 4u);
-                PPR_TEST_ASSERT(plan->m_buckets.size() == 3u);
-                // Opaque bucket: records 0-1 (36 + 12 verts), masked skipped
-                // the count-0 prim and holds record 3, sided holds record 2.
-                PPR_TEST_ASSERT(plan->m_args[0].vertexCountPerInstance == 36u);
-                PPR_TEST_ASSERT(plan->m_args[0].instanceCount == 1u);
-                PPR_TEST_ASSERT(plan->m_args[0].startInstanceLocation == 0u);
-                PPR_TEST_ASSERT(plan->m_args[1].vertexCountPerInstance == 12u);
-                PPR_TEST_ASSERT(plan->m_args[1].startInstanceLocation == 1u);
-                PPR_TEST_ASSERT(plan->m_args[2].vertexCountPerInstance == 24u);
-                PPR_TEST_ASSERT(plan->m_args[3].vertexCountPerInstance == 6u);
-                PPR_TEST_ASSERT(plan->m_buckets[0].m_arg_count == 2u);
-                PPR_TEST_ASSERT(plan->m_buckets[0].m_first_arg == 0u);
-            }
-
-            // Interleaved buffer pairs group into contiguous slices: args
-            // reorder by (variant, buffer pair) while startInstanceLocation
-            // keeps the payload index, so no bucket's drawIndirect range leaks
-            // a foreign record.
-            {
-                const TrianglePipelineVariant variants[] = {opaque, opaque, opaque};
-                rhi::IBuffer *const vertex_buffers[] = {kBucketAVertices, kBucketBVertices, kBucketAVertices};
-                rhi::IBuffer *const index_buffers[] = {kBucketAIndices, kBucketBIndices, kBucketAIndices};
-                const u32 counts[] = {3u, 4u, 5u};
-                const Expected<TrianglePass::IndirectPlan> plan = TrianglePass::planIndirectDraws(
-                    variants, vertex_buffers, index_buffers, counts, 16u);
-                PPR_TEST_ASSERT(plan.has_value());
-                PPR_TEST_ASSERT(plan->m_total_count == 3u);
-                PPR_TEST_ASSERT(plan->m_buckets.size() == 2u);
-                PPR_TEST_ASSERT(plan->m_buckets[0].m_first_arg == 0u);
-                PPR_TEST_ASSERT(plan->m_buckets[0].m_arg_count == 2u);
-                PPR_TEST_ASSERT(plan->m_buckets[1].m_first_arg == 2u);
-                PPR_TEST_ASSERT(plan->m_buckets[1].m_arg_count == 1u);
-                PPR_TEST_ASSERT(plan->m_args[0].vertexCountPerInstance == 3u);
-                PPR_TEST_ASSERT(plan->m_args[0].startInstanceLocation == 0u);
-                PPR_TEST_ASSERT(plan->m_args[1].vertexCountPerInstance == 5u);
-                PPR_TEST_ASSERT(plan->m_args[1].startInstanceLocation == 2u);
-                PPR_TEST_ASSERT(plan->m_args[2].vertexCountPerInstance == 4u);
-                PPR_TEST_ASSERT(plan->m_args[2].startInstanceLocation == 1u);
-            }
-
-            // Clamp: maxCount clamps to the payload capacity (first-N wins).
-            {
-                const TrianglePipelineVariant variants[] = {opaque, opaque, opaque, opaque, opaque};
-                rhi::IBuffer *const vertex_buffers[] = {
-                    kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices
-                };
-                rhi::IBuffer *const index_buffers[] = {
-                    kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices
-                };
-                const u32 counts[] = {3u, 3u, 3u, 3u, 3u};
-                const Expected<TrianglePass::IndirectPlan> plan = TrianglePass::planIndirectDraws(
-                    variants, vertex_buffers, index_buffers, counts, 2u);
-                PPR_TEST_ASSERT(plan.has_value());
-                PPR_TEST_ASSERT(plan->m_total_count == 2u);
-                PPR_TEST_ASSERT(plan->m_args.size() == 2u);
-                PPR_TEST_ASSERT(plan->m_buckets.size() == 1u);
-                PPR_TEST_ASSERT(plan->m_buckets[0].m_arg_count == 2u);
-            }
-
-            // Fifth distinct variant fails closed (only opaque/mask × cull
-            // exist — a fifth key is a caller bug, never a silent bucket).
-            {
-                const TrianglePipelineVariant variants[] = {
-                    opaque,
-                    masked,
-                    sided,
-                    TrianglePipelineVariant{.m_twosided = true, .m_alpha = mesh::AlphaMode::mask},
-                    TrianglePipelineVariant{.m_twosided = false, .m_alpha = mesh::AlphaMode::blend},
-                };
-                rhi::IBuffer *const vertex_buffers[] = {
-                    kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices, kBucketAVertices
-                };
-                rhi::IBuffer *const index_buffers[] = {
-                    kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices, kBucketAIndices
-                };
-                const u32 counts[] = {3u, 3u, 3u, 3u, 3u};
-                const Expected<TrianglePass::IndirectPlan> plan = TrianglePass::planIndirectDraws(
-                    variants, vertex_buffers, index_buffers, counts, 16u);
-                PPR_TEST_ASSERT(not plan.has_value());
-                PPR_TEST_ASSERT(plan.error() == std::make_error_code(std::errc::invalid_argument));
-            }
-
-            // Ragged spans fail closed.
-            {
-                const TrianglePipelineVariant variants[] = {opaque};
-                rhi::IBuffer *const vertex_buffers[] = {kBucketAVertices};
-                rhi::IBuffer *const index_buffers[] = {kBucketAIndices};
-                const u32 counts[] = {3u, 3u};
-                PPR_TEST_ASSERT(not TrianglePass::planIndirectDraws(
-                    variants, vertex_buffers, index_buffers, counts, 16u).has_value());
-            }
+            // FrameConstants is uploaded as one 288-byte blob into g_frame and
+            // is not layout-adaptive: 4 matrices + 2 float4.
+            PPR_TEST_ASSERT(sizeof(TrianglePass::FrameConstants) == 288u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::FrameConstants, m_view_projection) == 128u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::FrameConstants, m_camera_position) == 256u);
         };
 
         PPR_UNIT_TEST(draw_plan_contract) {
@@ -435,7 +316,7 @@ namespace pP::tests {
             detail::RendererBoundary::build_material_texcoord_agreement,
             detail::RendererBoundary::build_material_alpha_flags,
             detail::RendererBoundary::pipeline_variant_key,
-            detail::RendererBoundary::indirect_plan_contract,
+            detail::RendererBoundary::instance_payload_layout_matches_the_shader,
             detail::RendererBoundary::draw_plan_contract,
             detail::RendererBoundary::perspective_uses_d3d_depth_zero_to_one,
             detail::RendererBoundary::ortho_uses_d3d_convention_without_y_flip,

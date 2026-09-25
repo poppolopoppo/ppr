@@ -22,7 +22,7 @@ namespace pP::tests {
 
     const UnitTest &renderGatesTests() noexcept;
 
-    const UnitTest &renderIndirectTests() noexcept;
+    const UnitTest &renderDrawsTests() noexcept;
 
     const UnitTest &renderQuarantineTests() noexcept;
 
@@ -38,12 +38,12 @@ namespace pP::tests {
     // --run-test filter matches asset/render, so CPU-only filtered runs
     // (decode/convert/resilience/observe) never boot a device here.
     const UnitTest render = UnitTest::Named("render") / [](UnitTest::IRun &_) -> void {
-        // Phase 2: shared scope over caches + gates + indirect.
+        // Phase 2: shared scope over caches + gates + draws.
         PPR_TEST_ASSERT(not detail::SharedGpu::acquire());
         _.recurse({
             renderCachesTests(),
             renderGatesTests(),
-            renderIndirectTests(),
+            renderDrawsTests(),
         });
         PPR_TEST_ASSERT(not detail::SharedGpu::release());
         // Phase 3: quarantine (private app/device only, shared session gone).

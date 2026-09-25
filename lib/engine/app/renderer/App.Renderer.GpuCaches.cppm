@@ -255,7 +255,8 @@ export namespace pP {
         }
 
         // Prim-slice upload: indices stay file-order while the Mango prim base
-        // (file-local + base in all cases) rides the range into MeshPush.
+        // (file-local + base in all cases) rides the range into
+        // TriangleBagRange::m_base.
         template<typename V>
         [[nodiscard]] Expected<TriangleBagHandle> upload(const std::span<const V> verts, const std::span<const u32> idx,
                                                          const i32 base) {
@@ -365,15 +366,18 @@ export namespace pP {
 
         [[nodiscard]] std::error_code release(TextureHandle handle) noexcept;
 
+        // Residency probe: the heap slot of a live entry. A stale handle, a
+        // released one, or a device-lost cache fails closed
+        // (invalid_argument) rather than reporting a slot.
         [[nodiscard]] Expected<TextureBindlessIndex> residentIndex(TextureHandle handle) const noexcept;
-
-        [[nodiscard]] rhi::ITextureView *view(TextureHandle handle) const noexcept;
 
         // §6 texture heap: slot 0 is fallback-white; real texture slots begin at 1.
         // The pass binds this container once per render invocation.
         [[nodiscard]] rhi::IBuffer *descriptorBuffer() const noexcept;
 
-        // Usage telemetry (slots are bump-allocated; release never reuses).
+        // High-water slot count, not a live count: slots are bump-allocated and
+        // release() never recycles one, so used() only falls back on
+        // initialize/shutdown. Compare against entryCount() for live entries.
         [[nodiscard]] u32 textureUsed() const noexcept;
 
         [[nodiscard]] u32 textureBudget() const noexcept;
@@ -479,7 +483,9 @@ export namespace pP {
 
         [[nodiscard]] rhi::IBuffer *materialBuffer() const noexcept;
 
-        // Usage telemetry (slots are bump-allocated; release never reuses).
+        // High-water slot count, not a live count: slots are bump-allocated and
+        // release() never recycles one. Compare against entryCount() for live
+        // entries.
         [[nodiscard]] u32 materialUsed() const noexcept;
 
         [[nodiscard]] u32 materialCapacity() const noexcept;
