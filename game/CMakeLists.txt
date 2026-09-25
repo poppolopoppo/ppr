@@ -13,8 +13,8 @@ add_custom_command(TARGET app.game POST_BUILD
         COMMENT "Copying shader assets"
 )
 
-# Stage texture/mesh fixtures next to the demo executable (same POST_BUILD shape
-# as shaders). The meshes tree is owned by Lane B: stage it once it exists.
+# Stage texture and mesh fixtures next to the demo executable using the same
+# POST_BUILD shape as shaders.
 add_custom_command(TARGET app.game POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/assets/textures"

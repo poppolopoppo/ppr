@@ -16,12 +16,13 @@ Slang-based shader compilation, and a Slang-RHI GPU abstraction. Slim
 `Application` owns the run loop + platform/services/shader-RHI-`Renderer`
 bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
 player, camera, viewport, input-context, triangle pass, and UI state. The `game/`
-demo hosts only a thin `TurboLarbin : ApplicationEditor` subclass with
-lifecycle-hook overrides and a debug-only ImGui demo window.
+demo hosts `TurboLarbin : ApplicationEditor`, which privately loads a committed
+Kenney static-colony fixture through `engine.mesh`, `engine.image`, and the GPU
+triangle-pass caches, then submits a 21-placement cutaway habitat.
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span) with `initialize()` / `update(TimeSpan)` / `shutdown()` hook overrides and a debug-only ImGui demo window (timed-shutdown debug hook present but disabled behind `#if 0`); `main()` returns `app.run().value()`.
+- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span), owns 16 imported Kenney scenes with decoded image assets and GPU upload receipts, submits a 21-placement cutaway habitat, releases receipts in reverse during shutdown, and retains a debug-only ImGui demo window; `main()` returns `app.run().value()`.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
   include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
   `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; live-only `/MDd`; LNK4075 validators fail
@@ -100,7 +101,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Thin demo exe (`app.game`): `TurboLarbin : ApplicationEditor` + `main()`; POST_BUILD stages DLLs + `shaders/` + `textures/` + `meshes/`. | [View Map](game/codemap.md)                         |
+| `game/`                         | Demo exe (`app.game`): `TurboLarbin : ApplicationEditor` owns the static Kenney colony fixture, authored submissions, and normal editor bootstrap; POST_BUILD stages DLLs + `shaders/` + `textures/` + `meshes/`. | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime asset root: shaders + textures + meshes; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources (including `mesh_bindless.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
@@ -147,4 +148,3 @@ Keep this document focused on finding code. Update links and summaries with
 their corresponding source changes; put durable rules in `AGENTS.md` instead.
 
 - Diagrams: rendered PlantUML galleries under `docs/diagrams/` (e.g. `docs/diagrams/engine.app/`).
-
