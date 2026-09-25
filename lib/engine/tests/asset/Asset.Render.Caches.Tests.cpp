@@ -60,7 +60,9 @@ namespace pP::tests::detail {
                 return std::unexpected{err};
             }
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
-            if (not destination.has_value()) [[unlikely]] {
+            if (not
+                destination.has_value())
+            [[unlikely]] {
                 return std::unexpected{destination.error()};
             }
             for (std::size_t i = 0u; i < 16u; i += 4u) {
@@ -92,15 +94,17 @@ namespace pP::tests::detail {
 
         [[nodiscard]] Expected<SyntheticScene> singleQuadScene_(const u8 r, const u8 g, const u8 b) {
             Expected<image::ImageAsset> image = solidImage_(r, g, b);
-            if (not image.has_value()) [[unlikely]] {
+            if (not
+                image.has_value())
+            [[unlikely]] {
                 return std::unexpected{image.error()};
             }
             SyntheticScene out{};
             mesh::StaticMeshAsset mesh_asset{};
-            mesh_asset.m_verts.push_back(quadVert(-0.5f, -0.5f));
-            mesh_asset.m_verts.push_back(quadVert(0.5f, -0.5f));
-            mesh_asset.m_verts.push_back(quadVert(0.5f, 0.5f));
-            mesh_asset.m_verts.push_back(quadVert(-0.5f, 0.5f));
+            mesh_asset.m_vertices.push_back(quadVert(-0.5f, -0.5f));
+            mesh_asset.m_vertices.push_back(quadVert(0.5f, -0.5f));
+            mesh_asset.m_vertices.push_back(quadVert(0.5f, 0.5f));
+            mesh_asset.m_vertices.push_back(quadVert(-0.5f, 0.5f));
             for (const u32 index: {0u, 1u, 2u, 0u, 2u, 3u}) {
                 mesh_asset.m_indices.push_back(index);
             }
@@ -113,7 +117,7 @@ namespace pP::tests::detail {
             material.m_base_color_map.m_image = mesh::ImageAssetId{0u};
             material.m_base_color_map.m_texcoord = mesh::UvSetId{0u};
             out.m_scene.m_meshes.push_back(std::move(mesh_asset));
-            out.m_scene.m_mats.push_back(material);
+            out.m_scene.m_materials.push_back(material);
             out.m_scene.m_images.push_back(mesh::ImageRef{});
             out.m_images.push_back(*image);
             return out;
@@ -139,23 +143,24 @@ namespace pP::tests::detail {
             const Expected<TriangleBagHandle> bag0 = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag0.has_value());
             PPR_TEST_ASSERT(isValid(*bag0));
-            const Expected<TriangleBagRange> range0 = pass.bagCache().resolve(*bag0);
-            PPR_TEST_ASSERT(range0.has_value());
-            PPR_TEST_ASSERT(range0->m_count == 6u);
-            PPR_TEST_ASSERT(range0->m_vb_offset == 0u);
-            PPR_TEST_ASSERT(pass.bagCache().vertexBuffer(*pass.bagCache().bucketOf(*bag0)) != nullptr);
+            const Expected<ResolvedBag> bag0_draw = pass.bagCache().resolveForDraw(*bag0);
+            PPR_TEST_ASSERT(bag0_draw.has_value());
+            PPR_TEST_ASSERT(bag0_draw->m_range.m_count == 6u);
+            PPR_TEST_ASSERT(bag0_draw->m_range.m_vb_offset == 0u);
+            PPR_TEST_ASSERT(bag0_draw->m_vertex_buffer != nullptr);
+            PPR_TEST_ASSERT(bag0_draw->m_index_buffer != nullptr);
 
             const Expected<TriangleBagHandle> bag1 = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag1.has_value());
             PPR_TEST_ASSERT(*bag1 != *bag0);
-            PPR_TEST_ASSERT(pass.bagCache().resolve(*bag1)->m_vb_offset == 4u);
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag1)->m_range.m_vb_offset == 4u);
 
-            PPR_TEST_ASSERT(not pass.bagCache().resolve(TriangleBagHandle{}).has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolve(TriangleBagHandle{}).error() ==
+            PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(TriangleBagHandle{}).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(TriangleBagHandle{}).error() ==
                             std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(not pass.bagCache().release(*bag0));
             PPR_TEST_ASSERT(pass.bagCache().release(*bag0) == std::make_error_code(std::errc::invalid_argument));
-            PPR_TEST_ASSERT(not pass.bagCache().resolve(*bag0).has_value());
+            PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(*bag0).has_value());
 
             const Expected<image::ImageAsset> decoded = LoggingGpu::decodeBoxPng_();
             PPR_TEST_ASSERT(decoded.has_value());
@@ -182,7 +187,7 @@ namespace pP::tests::detail {
             const TextureHandle invalid_tex{};
             const TextureHandle resolved_slots[] = {*tex2, invalid_tex, invalid_tex, invalid_tex};
             const Expected<MaterialHandle> mat0 =
-                    pass.packMaterial(mesh::MaterialAsset{}, resolved_slots);
+                pass.packMaterial(mesh::MaterialAsset{}, resolved_slots);
             PPR_TEST_ASSERT(mat0.has_value());
             const Expected<u32> slot0 = pass.materialCache().materialIndex(*mat0);
             PPR_TEST_ASSERT(slot0.has_value());
@@ -282,7 +287,7 @@ namespace pP::tests::detail {
             const mesh::StaticMeshVertex one = quadVert(0.0f, 0.0f);
             const std::vector<u32> many_idx(kTriangleBagIndexCapacity / sizeof(u32) + 16u, 0u);
             const Expected<TriangleBagHandle> idx_overflow =
-                    pass.uploadMesh(std::span<const mesh::StaticMeshVertex>{&one, 1u}, many_idx);
+                pass.uploadMesh(std::span<const mesh::StaticMeshVertex>{&one, 1u}, many_idx);
             PPR_TEST_ASSERT(not idx_overflow.has_value());
             PPR_TEST_ASSERT(idx_overflow.error() == kNoSpace);
             PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 0u);
@@ -410,7 +415,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(outcome.m_mat_pack == kNotPermitted);
 
             // Fail-closed: the worker retired nothing; owner-thread state intact.
-            PPR_TEST_ASSERT(pass.bagCache().resolve(*bag).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag).has_value());
             PPR_TEST_ASSERT(pass.textureCache().view(*tex) != nullptr);
             PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 1u);
             PPR_TEST_ASSERT(pass.textureCache().entryCount() == 1u);
@@ -448,13 +453,13 @@ namespace pP::tests::detail {
             // Scene A renders while scene B sits beside it in the same pass.
             PPR_TEST_ASSERT(not pass.submitInstance(
                 up_a->m_prims[0].m_bag, up_a->m_prims[0].m_material, float4x4::identity()));
-            PPR_TEST_ASSERT(pass.bagCache().resolve(up_b->m_prims[0].m_bag).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
             PPR_TEST_ASSERT(pass.materialCache().material(up_b->m_prims[0].m_material).has_value());
 
             // Unloading A leaves B drawable; stale A handles fail closed.
             PPR_TEST_ASSERT(not pass.releaseScene(*up_a));
-            PPR_TEST_ASSERT(not pass.bagCache().resolve(up_a->m_prims[0].m_bag).has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolve(up_b->m_prims[0].m_bag).has_value());
+            PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(up_a->m_prims[0].m_bag).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
             PPR_TEST_ASSERT(pass.textureCache().view(up_b->m_textures[0]) != nullptr);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
             pass.clearInstances();
@@ -494,7 +499,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*up_a));
             PPR_TEST_ASSERT(pass.textureCache().view(up_b->m_textures[0]) != nullptr);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(up_b->m_textures[0]).has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolve(up_b->m_prims[0].m_bag).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.submitInstance(
                 up_b->m_prims[0].m_bag, up_b->m_prims[0].m_material, float4x4::identity()));
@@ -534,7 +539,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scene_b.has_value());
             const Expected<TrianglePass::UploadedScene> up_b = pass.uploadScene(scene_b->m_scene, scene_b->m_images);
             PPR_TEST_ASSERT(up_b.has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolve(up_b->m_prims[0].m_bag).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(up_b->m_prims[0].m_bag).has_value());
             PPR_TEST_ASSERT(not pass.submitInstance(
                 up_b->m_prims[0].m_bag, up_b->m_prims[0].m_material, float4x4::identity()));
             pass.clearInstances();
@@ -554,7 +559,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sizeof(TriangleBagHandle) == 8u);
             PPR_TEST_ASSERT(sizeof(TextureHandle) == 8u);
             PPR_TEST_ASSERT(sizeof(MaterialHandle) == 8u);
-            PPR_TEST_ASSERT(sizeof(BagBucketId) == 4u);
             PPR_TEST_ASSERT(sizeof(TextureBindlessIndex) == 4u);
 
             const std::error_code kNotConnected = std::make_error_code(std::errc::not_connected);
@@ -608,7 +612,7 @@ namespace pP::tests::detail {
                 last_generation = identity.m_generation;
                 // The stale handle never revalidates, even past the 255-cycle
                 // seed wrap — generations are 32-bit monotonic, not 8-bit.
-                PPR_TEST_ASSERT(pass.bagCache().resolve(stale).error() == kInvalid);
+                PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(stale).error() == kInvalid);
                 PPR_TEST_ASSERT(pass.bagCache().release(stale) == kInvalid);
                 PPR_TEST_ASSERT(not pass.bagCache().release(*cycled));
             }
@@ -625,12 +629,12 @@ namespace pP::tests::detail {
             const TextureHandle no_slots[] = {TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
             const Expected<MaterialHandle> mat0 = pass.packMaterial(mesh::MaterialAsset{}, no_slots);
             PPR_TEST_ASSERT(mat0.has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolve(*bag0).has_value());
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag0).has_value());
             PPR_TEST_ASSERT(pass.textureCache().view(*tex0) != nullptr);
             PPR_TEST_ASSERT(pass.materialCache().materialIndex(*mat0).has_value());
-            const Expected<BagBucketId> bag0_bucket = pass.bagCache().bucketOf(*bag0);
-            PPR_TEST_ASSERT(bag0_bucket.has_value());
-            PPR_TEST_ASSERT(pass.bagCache().vertexBuffer(*bag0_bucket) != nullptr);
+            const Expected<ResolvedBag> bag0_draw = pass.bagCache().resolveForDraw(*bag0);
+            PPR_TEST_ASSERT(bag0_draw.has_value());
+            PPR_TEST_ASSERT(bag0_draw->m_vertex_buffer != nullptr);
 
             PPR_TEST_ASSERT(not pass.notifyDeviceLost());
             PPR_TEST_ASSERT(pass.bagCache().residency() == CacheResidency::device_lost);
@@ -645,11 +649,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.textureCache().upload(*picture).error() == kNoDevice);
             PPR_TEST_ASSERT(pass.materialCache().pack(mesh::MaterialAsset{},
                                 {kNoTexture, kNoTexture, kNoTexture, kNoTexture}).error() == kNoDevice);
-            PPR_TEST_ASSERT(pass.bagCache().resolve(*bag0).error() == kInvalid);
+            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag0).error() == kNoDevice);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).error() == kInvalid);
             PPR_TEST_ASSERT(pass.textureCache().view(*tex0) == nullptr);
             PPR_TEST_ASSERT(pass.materialCache().materialIndex(*mat0).error() == kInvalid);
-            PPR_TEST_ASSERT(pass.bagCache().vertexBuffer(*bag0_bucket) == nullptr);
             PPR_TEST_ASSERT(pass.textureCache().descriptorBuffer() == nullptr);
             PPR_TEST_ASSERT(pass.materialCache().materialBuffer() == nullptr);
 
@@ -688,7 +691,7 @@ namespace pP::tests::detail {
             const Expected<TriangleBagHandle> bag1 = restarted.upload(
                 std::span<const mesh::StaticMeshVertex>{quad}, std::span<const u32>{quad_idx});
             PPR_TEST_ASSERT(bag1.has_value());
-            PPR_TEST_ASSERT(restarted.resolve(*bag1).has_value());
+            PPR_TEST_ASSERT(restarted.resolveForDraw(*bag1).has_value());
             PPR_TEST_ASSERT(not restarted.release(*bag1));
             PPR_TEST_ASSERT(not restarted.shutdown());
             PPR_TEST_ASSERT(restarted.residency() == CacheResidency::uninitialized);
@@ -744,7 +747,10 @@ namespace pP::tests::detail {
             u64 found = 0u;
             try {
                 for (const Captured &entry: LogCapture::s_entries) {
-                    if (entry.m_level == level and entry.m_message.find(needle) != std::string::npos) {
+                    if (entry.m_level == level
+                        and
+                    entry.m_message.find(needle) != std::string::npos)
+                    {
                         ++found;
                     }
                 }
@@ -755,8 +761,10 @@ namespace pP::tests::detail {
 
         [[nodiscard]] Expected<image::ImageAsset> decodeBoxPng_() {
             Expected<mem::SharedBuffer> mapped =
-                    mem::SharedBuffer::mapFile(std::filesystem::current_path() / "meshes" / "textured_box.png");
-            if (not mapped.has_value()) {
+                mem::SharedBuffer::mapFile(std::filesystem::current_path() / "meshes" / "textured_box.png");
+            if (not
+                mapped.has_value())
+            {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(

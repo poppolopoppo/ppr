@@ -92,9 +92,17 @@ export namespace pP {
         rhi::StoreOp m_store_op{rhi::StoreOp::Store};
     };
 
+    enum class ESurfaceDepthPolicy : u8 {
+        none,
+        renderer_owned,
+        external,
+    };
+
     struct SurfaceRenderPass {
         ColorAttachmentOps m_surface_color{};
-        std::span<const rhi::RenderPassColorAttachment> m_additional_colors{};
+        std::initializer_list<rhi::RenderPassColorAttachment> m_additional_colors;
+        ESurfaceDepthPolicy m_depth_policy{ESurfaceDepthPolicy::none};
         std::optional<rhi::RenderPassDepthStencilAttachment> m_depth_stencil{};
+        std::initializer_list<const DrawSubmission> m_draws;
     };
 }

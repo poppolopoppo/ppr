@@ -59,6 +59,7 @@ export namespace pP::rhi {
     using slang_rhi::BufferUsage;
     using slang_rhi::ColorClearValue;
     using slang_rhi::ColorTargetDesc;
+    using slang_rhi::ComparisonFunc;
     using slang_rhi::ComputePipelineDesc;
     using slang_rhi::DeviceAddress;
     using slang_rhi::DeviceDesc;

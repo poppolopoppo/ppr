@@ -86,7 +86,7 @@ namespace pP {
         gpu.m_textures = resolved;
         gpu.m_texcoord = shared_set;
         gpu.m_flags.m_bits = enumOrd(asset.m_alpha_mode) & kGpuMaterialAlphaModeMask;
-        if (asset.m_twosided) {
+        if (asset.m_is_two_sided) {
             gpu.m_flags.m_bits |= kGpuMaterialDoubleSidedBit;
         }
         return gpu;
@@ -294,18 +294,26 @@ namespace pP {
         return TriangleBagHandle{identity};
     }
 
-    Expected<TriangleBagRange> TriangleBagCache::resolve(const TriangleBagHandle handle) const noexcept {
-        if (const BagRangeRecord *const record = findRecord_(*handle)) [[likely]] {
-            return record->m_range;
+    Expected<ResolvedBag> TriangleBagCache::resolveForDraw(
+        const TriangleBagHandle handle) const noexcept {
+        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
         }
-        return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-    }
-
-    Expected<BagBucketId> TriangleBagCache::bucketOf(const TriangleBagHandle handle) const noexcept {
-        if (const BagRangeRecord *const record = findRecord_(*handle)) [[likely]] {
-            return record->m_bucket;
+        const BagRangeRecord *const record = findRecord_(*handle);
+        if (record == nullptr) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        const BagBucket &bucket = m_buckets[*record->m_bucket];
+        rhi::IBuffer *const vertex_buffer = bucket.m_vertex_buffer.get();
+        rhi::IBuffer *const index_buffer = bucket.m_index_buffer.get();
+        if (vertex_buffer == nullptr or index_buffer == nullptr) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+        }
+        return ResolvedBag{
+            .m_vertex_buffer = vertex_buffer,
+            .m_index_buffer = index_buffer,
+            .m_range = record->m_range,
+        };
     }
 
     std::error_code TriangleBagCache::release(const TriangleBagHandle handle) noexcept {
@@ -326,20 +334,6 @@ namespace pP {
             {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"ranges", rangeCount()}});
         PPR_LOG(GpuCaches, debug, "TriangleBagCache evicted range", {{"ranges", rangeCount()}});
         return default_value_v;
-    }
-
-    rhi::IBuffer *TriangleBagCache::vertexBuffer(const BagBucketId bucket) const noexcept {
-        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
-            return nullptr;
-        }
-        return *bucket < m_buckets.size() ? m_buckets[*bucket].m_vertex_buffer.get() : nullptr;
-    }
-
-    rhi::IBuffer *TriangleBagCache::indexBuffer(const BagBucketId bucket) const noexcept {
-        if (m_residency == CacheResidency::device_lost) [[unlikely]] {
-            return nullptr;
-        }
-        return *bucket < m_buckets.size() ? m_buckets[*bucket].m_index_buffer.get() : nullptr;
     }
 
     u64 TriangleBagCache::vertexUsed() const noexcept {

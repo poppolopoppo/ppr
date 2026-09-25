@@ -17,30 +17,15 @@ import std;
 export namespace pP::mesh {
     // Index-ID vocabulary (§2.1): every index into SceneAsset storage is a
     // Numeric<u32, Tag> alias. Raw u32/u64 indices are banned at API boundaries.
-    struct ImageAssetIdTag final {
-    };
+    using ImageAssetId = Numeric<u32, struct ImageAssetIdTag>;
 
-    using ImageAssetId = Numeric<u32, ImageAssetIdTag>;
+    using MaterialAssetId = Numeric<u32, struct MaterialAssetIdTag>;
 
-    struct MaterialAssetIdTag final {
-    };
+    using MeshAssetId = Numeric<u32, struct MeshAssetIdTag>;
 
-    using MaterialAssetId = Numeric<u32, MaterialAssetIdTag>;
+    using NodeId = Numeric<u32, struct NodeIdTag>;
 
-    struct MeshAssetIdTag final {
-    };
-
-    using MeshAssetId = Numeric<u32, MeshAssetIdTag>;
-
-    struct NodeIdTag final {
-    };
-
-    using NodeId = Numeric<u32, NodeIdTag>;
-
-    struct UvSetIdTag final {
-    };
-
-    using UvSetId = Numeric<u32, UvSetIdTag>;
+    using UvSetId = Numeric<u32, struct UvSetIdTag>;
 
     inline constexpr ImageAssetId kInvalidImage{0xFFFFFFFFu};
     inline constexpr MaterialAssetId kInvalidMaterial{0xFFFFFFFFu};
@@ -62,11 +47,11 @@ export namespace pP::mesh {
     // require. No math lives here; conversion happens at the convert boundary
     // via load/store helpers.
     struct StaticMeshVertex {
-        float m_position[3];
-        float m_normal[3];
-        float m_texcoord[2];
-        float m_tangent[4];
-        float m_color[4];
+        float m_position[3]{};
+        float m_normal[3]{};
+        float m_texcoord[2]{};
+        float m_tangent[4]{};
+        float m_color[4]{};
     };
 
     static_assert(std::is_trivially_copyable_v<StaticMeshVertex>);
@@ -107,21 +92,21 @@ export namespace pP::mesh {
     // primitives carry base=vert_count with file-local indices. Resolved index
     // is always (index + base), so both conventions draw correctly.
     struct MeshPrimitiveRange {
-        u32 m_start;
-        u32 m_count;
-        i32 m_base;
-        MaterialAssetId m_material;
+        u32 m_start{};
+        u32 m_count{};
+        i32 m_base{};
+        MaterialAssetId m_material{};
     };
 
     static_assert(std::is_trivially_copyable_v<MeshPrimitiveRange>);
     static_assert(sizeof(MeshPrimitiveRange) == 16u);
 
     struct StaticMeshAsset {
-        Array<StaticMeshVertex> m_verts;
-        Array<u32> m_indices;
-        Array<MeshPrimitiveRange> m_prims;
-        Box m_bounds;
-        EMeshAttribute m_flags;
+        Array<StaticMeshVertex> m_vertices{};
+        Array<u32> m_indices{};
+        Array<MeshPrimitiveRange> m_prims{};
+        Box m_bounds{};
+        EMeshAttribute m_flags{};
     };
 
     struct UvTransformAsset {
@@ -156,13 +141,13 @@ export namespace pP::mesh {
         float m_occlusion_strength = 1.0f;
         float m_normal_scale = 1.0f;
         AlphaMode m_alpha_mode = AlphaMode::opaque;
-        bool m_twosided = false;
-        MaterialImageSlot m_base_color_map;
-        MaterialImageSlot m_metallic_map;
-        MaterialImageSlot m_roughness_map;
-        MaterialImageSlot m_normal_map;
-        MaterialImageSlot m_occlusion_map;
-        MaterialImageSlot m_emissive_map;
+        bool m_is_two_sided = false;
+        MaterialImageSlot m_base_color_map{};
+        MaterialImageSlot m_metallic_map{};
+        MaterialImageSlot m_roughness_map{};
+        MaterialImageSlot m_normal_map{};
+        MaterialImageSlot m_occlusion_map{};
+        MaterialImageSlot m_emissive_map{};
     };
 
     // Local duplicate of the image reference (mesh→image type dependency is
@@ -188,7 +173,7 @@ export namespace pP::mesh {
     struct SceneInstance {
         MeshAssetId m_mesh;
         NodeId m_node;
-        MaterialAssetId m_materialOverride = kInvalidMaterial;
+        MaterialAssetId m_material_override = kInvalidMaterial;
     };
 
     // SceneAsset owns meshes + materials + image refs + nodes; instances
@@ -196,7 +181,7 @@ export namespace pP::mesh {
     // glTF binds materials per primitive, never per instance.
     struct SceneAsset {
         Array<StaticMeshAsset> m_meshes;
-        Array<MaterialAsset> m_mats;
+        Array<MaterialAsset> m_materials;
         Array<ImageRef> m_images;
         Array<SceneNodeAsset> m_nodes;
         Array<SceneInstance> m_instances;

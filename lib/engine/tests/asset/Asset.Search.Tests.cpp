@@ -41,7 +41,7 @@ namespace pP::tests::detail {
         };
 
         [[nodiscard]] bool allResolvedInRange_(const pP::mesh::StaticMeshAsset &mesh_asset) noexcept {
-            const i64 vert_count = static_cast<i64>(mesh_asset.m_verts.size());
+            const i64 vert_count = static_cast<i64>(mesh_asset.m_vertices.size());
             for (const pP::mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
                 const u64 end = static_cast<u64>(prim.m_start) + static_cast<u64>(prim.m_count);
                 if (end > mesh_asset.m_indices.size()) {
@@ -68,13 +68,13 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not scene->m_instances.empty());
 
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
-            PPR_TEST_ASSERT(not mesh.m_verts.empty());
+            PPR_TEST_ASSERT(not mesh.m_vertices.empty());
             PPR_TEST_ASSERT(mesh.m_indices.size() % 3u == 0u);
             PPR_TEST_ASSERT(not mesh.m_prims.empty());
             PPR_TEST_ASSERT(
                 (mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
             for (const pP::mesh::MeshPrimitiveRange &prim: mesh.m_prims) {
-                PPR_TEST_ASSERT(*prim.m_material < scene->m_mats.size());
+                PPR_TEST_ASSERT(*prim.m_material < scene->m_materials.size());
             }
             PPR_TEST_ASSERT(allResolvedInRange_(mesh));
 
@@ -93,7 +93,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scene->m_meshes.size() == 1u);
 
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
-            PPR_TEST_ASSERT(mesh.m_verts.size() == 24u);
+            PPR_TEST_ASSERT(mesh.m_vertices.size() == 24u);
             PPR_TEST_ASSERT(mesh.m_indices.size() == 36u);
             PPR_TEST_ASSERT(mesh.m_prims.size() == 1u);
             const pP::mesh::MeshPrimitiveRange &prim = mesh.m_prims.front();
@@ -126,7 +126,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scene->m_instances.front().m_mesh == pP::mesh::MeshAssetId{0u});
             PPR_TEST_ASSERT(scene->m_instances.front().m_node == pP::mesh::NodeId{0u});
             PPR_TEST_ASSERT(
-                scene->m_instances.front().m_materialOverride == pP::mesh::kInvalidMaterial);
+                scene->m_instances.front().m_material_override == pP::mesh::kInvalidMaterial);
         };
 
         PPR_UNIT_TEST (verbatim_lh_box_values) {
@@ -136,7 +136,7 @@ namespace pP::tests::detail {
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
 
             // Unit-cube corners verbatim: every component is exactly ±0.5.
-            for (const pP::mesh::StaticMeshVertex &vert: mesh.m_verts) {
+            for (const pP::mesh::StaticMeshVertex &vert: mesh.m_vertices) {
                 PPR_TEST_ASSERT(vert.m_position[0] == 0.5f or vert.m_position[0] == -0.5f);
                 PPR_TEST_ASSERT(vert.m_position[1] == 0.5f or vert.m_position[1] == -0.5f);
                 PPR_TEST_ASSERT(vert.m_position[2] == 0.5f or vert.m_position[2] == -0.5f);
@@ -150,7 +150,7 @@ namespace pP::tests::detail {
 
             // First-vertex spot check against the decoded .bin (order kept,
             // RH→LH fork flip applied: (x, y, -z)).
-            const pP::mesh::StaticMeshVertex &first = mesh.m_verts.front();
+            const pP::mesh::StaticMeshVertex &first = mesh.m_vertices.front();
             PPR_TEST_ASSERT(first.m_position[0] == -0.5f);
             PPR_TEST_ASSERT(first.m_position[1] == -0.5f);
             PPR_TEST_ASSERT(first.m_position[2] == -0.5f);
@@ -173,14 +173,14 @@ namespace pP::tests::detail {
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
 
             // XY-plane quad verbatim: 4 corners, z == 0 throughout.
-            PPR_TEST_ASSERT(mesh.m_verts.size() == 4u);
+            PPR_TEST_ASSERT(mesh.m_vertices.size() == 4u);
             PPR_TEST_ASSERT(mesh.m_indices.size() == 6u);
-            for (const pP::mesh::StaticMeshVertex &vert: mesh.m_verts) {
+            for (const pP::mesh::StaticMeshVertex &vert: mesh.m_vertices) {
                 PPR_TEST_ASSERT(vert.m_position[0] == 0.5f or vert.m_position[0] == -0.5f);
                 PPR_TEST_ASSERT(vert.m_position[1] == 0.5f or vert.m_position[1] == -0.5f);
                 PPR_TEST_ASSERT(vert.m_position[2] == 0.0f);
             }
-            const pP::mesh::StaticMeshVertex &first = mesh.m_verts.front();
+            const pP::mesh::StaticMeshVertex &first = mesh.m_vertices.front();
             PPR_TEST_ASSERT(first.m_position[0] == -0.5f);
             PPR_TEST_ASSERT(first.m_position[1] == -0.5f);
             PPR_TEST_ASSERT(first.m_position[2] == 0.0f);
@@ -190,8 +190,8 @@ namespace pP::tests::detail {
             const Expected<pP::mesh::SceneAsset> scene =
                     pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
-            PPR_TEST_ASSERT(scene->m_mats.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_mats.front();
+            PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
+            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
 
             // Factors verbatim from the glTF JSON.
             PPR_TEST_ASSERT(material.m_metallic == 0.0f);
@@ -200,7 +200,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(material.m_alpha_cutoff == 0.5f);
             PPR_TEST_ASSERT(material.m_normal_scale == 1.0f);
             PPR_TEST_ASSERT(material.m_occlusion_strength == 1.0f);
-            PPR_TEST_ASSERT(not material.m_twosided);
+            PPR_TEST_ASSERT(not material.m_is_two_sided);
 
             // MR split: no shared ORM texture authored, so metallic and
             // roughness stay SEPARATE disabled slots (glTF sharing is the
@@ -419,7 +419,7 @@ namespace pP::tests::detail {
                         mesh::importAndConvert(std::filesystem::current_path() / "meshes" / "", file);
                 PPR_TEST_ASSERT(scene.has_value());
                 for (const mesh::StaticMeshAsset &mesh_asset: scene->m_meshes) {
-                    for (const mesh::StaticMeshVertex &vert: mesh_asset.m_verts) {
+                    for (const mesh::StaticMeshVertex &vert: mesh_asset.m_vertices) {
                         const float3 tangent_v{vert.m_tangent[0], vert.m_tangent[1], vert.m_tangent[2]};
                         const float length = std::sqrt(dot(tangent_v, tangent_v));
                         if (length > 1e-6f) {

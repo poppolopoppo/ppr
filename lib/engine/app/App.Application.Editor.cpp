@@ -240,8 +240,8 @@ namespace pP {
                 }
                 const TrianglePass::UploadedPrimitive &uploaded = m_uploaded_scene.m_prims[prim_cursor++];
                 MaterialHandle material = uploaded.m_material;
-                if (instance.m_materialOverride != mesh::kInvalidMaterial) {
-                    const std::size_t override_index = static_cast<std::size_t>(*instance.m_materialOverride);
+                if (instance.m_material_override != mesh::kInvalidMaterial) {
+                    const std::size_t override_index = static_cast<std::size_t>(*instance.m_material_override);
                     if (override_index >= m_uploaded_scene.m_materials.size()) [[unlikely]] {
                         return make_error_code(std::errc::invalid_argument);
                     }
@@ -373,10 +373,21 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::render());
 
         Renderer &renderer = getRenderer();
-        PPR_RETURN_ERROR_ON_FAIL(Editor, renderer.renderAndPresent(m_main_viewport->getWindow(), {
-            *m_triangle_pass,
-            *m_ui_service
-            }));
+
+        const std::initializer_list<SurfaceRenderPass> surface_passes{
+            {
+                .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
+                .m_draws = {DrawSubmission(*m_triangle_pass)},
+            },
+            {
+                .m_surface_color = ColorAttachmentOps{
+                    .m_load_op = rhi::LoadOp::Load,
+                },
+                .m_draws = {DrawSubmission(*m_ui_service)},
+            },
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(Editor, renderer.renderAndPresent(m_main_viewport->getWindow(), surface_passes));
 
         return default_value_v;
     }

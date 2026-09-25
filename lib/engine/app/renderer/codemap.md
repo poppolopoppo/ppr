@@ -5,14 +5,16 @@
 The `engine.app:renderer` module provides the content-free generic `Renderer` (multi-window surfaces + graphics
 queue + validated submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
 camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
-`ColorAttachmentOps`, `SurfaceRenderPass`) live header-only in `engine.app:renderer.types`. There is no
+`ColorAttachmentOps`, `SurfaceRenderPass`, `SurfaceDrawPass`) live header-only in `engine.app:renderer.types`. There is no
 `App.Renderer.Types.cpp` — the partition is fully inline in `App.Renderer.Types.cppm`.
 
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): config `m_preferred_surface_format` (default Undefined → backend
   preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}`; state `FlatMap<WindowHandle, SurfaceRecord>` +
-  `m_graphics_queue` + `safe_ptr<IRhiService>`. `SurfaceRecord` holds `ISurface`, last `m_extent`, `m_configured`.
+  `m_graphics_queue` + `safe_ptr<IRhiService>`. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
+  depth texture/view, last `m_extent`, and `m_configured`. The depth pair is shared only by passes that explicitly
+  select `ESurfaceDepthPolicy::renderer_owned`; it is not globally attached to presentation.
 - `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only; `shutdown()` retain-first-error teardown:
   `waitOnHost`, unconfigure every configured surface, clear map/queue/service refs. `waitOnHost()` forwards when
   a queue exists, else success.
@@ -28,15 +30,18 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
   `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
   Offscreen callers must `waitOnHost()` before readback.
-- `renderAndPresent(window, draws, surface_pass)`: rejects uninitialized backend (`not_connected`) and null window
-  handle (`no_such_device_or_address`); lazily `createWindowSurface_` on first use, otherwise
-  `resizeWindowSurface_` when `m_framebuffer_size` drifts; unconfigured record (minimized/zero extent) returns
-  `resource_unavailable_try_again` without drawing; otherwise `acquireNextImage`, assembles surface color + `m_additional_colors` +
-  optional `m_depth_stencil`, `render()` under the window-title debug group, then `present()`, retain-first-error.
+- `renderAndPresent(window, draws, surface_pass)` preserves the single-pass convenience API.
+  `renderAndPresentPasses(window, passes)` acquires one surface image, then renders each explicit
+  `SurfaceDrawPass` in order before one present. Each pass independently selects no depth, the renderer's
+  resize-matched shared depth view, or an external depth descriptor. Policy/descriptor mismatches and empty
+  pass lists fail before image acquisition. This permits the 3D pass to use depth while the following ImGui
+  pass loads color without any depth attachment, or later a compatible pass to select a different external
+  view/format without pretending the backend supports different depth views inside one native pass.
 - `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
   `resizeWindowSurface_` to the current framebuffer size, `insert_or_assign`. `resizeWindowSurface_`: zero/negative
-  extent unconfigures (keeps the record); otherwise waits when already configured, then `configure()` with
-  width/height + preferred format + image count + vsync. `destroyWindowSurface(window)` rejects null handle
+  extent unconfigures and releases depth (keeps the record); otherwise waits when already configured, creates
+  the D32Float depth texture/view, then `configure()` with width/height + preferred format + image count + vsync.
+  `destroyWindowSurface(window)` rejects null handle
   (`invalid_argument`) and forwards to `destroyWindowSurface_(handle)` (unknown handle → `invalid_argument`;
   else move-out, erase, unconfigure).
 - **Types** (`App.Renderer.Types.cppm`, header-only): `RenderPipelineSignature{color_formats span,
@@ -46,8 +51,10 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `DrawCallback = function_ref<error_code(DrawContext)>`; `TDrawable` concept (`render(DrawContext) →
   error_code`); `DrawSubmission{description, encode_draws, optional viewport/scissor}` with direct and drawable
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
-  `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`; `SurfaceRenderPass{surface_color,
-  additional_colors span, depth_stencil optional}`.
+  `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`;
+  `ESurfaceDepthPolicy{none, renderer_owned, external}`;
+  `SurfaceRenderPass{surface_color, additional_colors span, depth policy, external depth optional}`;
+  `SurfaceDrawPass{render pass, draw-submission span}`.
 - **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): pass-owned GPU caches +
   shared sampler + narrow upload APIs (`uploadMesh/uploadTexture/packMaterial/submitInstance`)
   +   per-instance list + pipeline-variant map (+ kept `CameraSnapshot`). Binds the scalar-handle
@@ -78,9 +85,9 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
    lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
-2. Per-frame → stack `DrawSubmission`s (named lambdas/`function_ref` or `TDrawable` refs) → `renderAndPresent`
-   (resize on drift → acquire → `render` → present); `TrianglePass::update(snapshot)` then `TrianglePass::render`
-   inside a submission's encode callback
+2. Per-frame → stack 3D and UI `DrawSubmission` arrays → two `SurfaceDrawPass` records →
+   `renderAndPresentPasses` (resize on drift → acquire → depth-enabled 3D render pass → color-load/no-depth UI
+   render pass → present); `TrianglePass::update(snapshot)` then `TrianglePass::render` inside the 3D callback.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
 5. Shutdown → `triangle.shutdown()` → `destroyWindowSurface(window)` per window → `renderer.shutdown()`
@@ -104,4 +111,4 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, §6 encode, frame-constant upload)
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
-- `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, `SurfaceRenderPass`); header-only, no matching `.cpp`
+- `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`, `SurfaceDrawPass`); header-only, no matching `.cpp`

@@ -51,8 +51,8 @@ namespace pP::tests::detail {
             const Expected<pP::mesh::SceneAsset> scene =
                     pP::mesh::importAndConvert(meshDir(), "uv_transform_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
-            PPR_TEST_ASSERT(scene->m_mats.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_mats.front();
+            PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
+            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{0u});
             PPR_TEST_ASSERT(material.m_base_color_map.m_transform.m_scale.x == 1.0f);
@@ -64,21 +64,21 @@ namespace pP::tests::detail {
             // Same geometry: baked UVs follow the spec formula from raw UVs.
             const pP::mesh::StaticMeshAsset &raw_mesh = raw->m_meshes.front();
             const pP::mesh::StaticMeshAsset &baked_mesh = scene->m_meshes.front();
-            PPR_TEST_ASSERT(baked_mesh.m_verts.size() == raw_mesh.m_verts.size());
+            PPR_TEST_ASSERT(baked_mesh.m_vertices.size() == raw_mesh.m_vertices.size());
             const float rotation_c = std::cos(0.5f);
             const float rotation_s = std::sin(0.5f);
             u32 origin_count = 0u;
-            for (std::size_t i = 0u; i < baked_mesh.m_verts.size(); ++i) {
-                const float u = raw_mesh.m_verts[i].m_texcoord[0];
-                const float v = raw_mesh.m_verts[i].m_texcoord[1];
+            for (std::size_t i = 0u; i < baked_mesh.m_vertices.size(); ++i) {
+                const float u = raw_mesh.m_vertices[i].m_texcoord[0];
+                const float v = raw_mesh.m_vertices[i].m_texcoord[1];
                 const float want_u = rotation_c * 2.0f * u - rotation_s * 0.5f * v + 0.25f;
                 const float want_v = rotation_s * 2.0f * u + rotation_c * 0.5f * v + 0.5f;
-                PPR_TEST_ASSERT(std::abs(baked_mesh.m_verts[i].m_texcoord[0] - want_u) < 1e-5f);
-                PPR_TEST_ASSERT(std::abs(baked_mesh.m_verts[i].m_texcoord[1] - want_v) < 1e-5f);
+                PPR_TEST_ASSERT(std::abs(baked_mesh.m_vertices[i].m_texcoord[0] - want_u) < 1e-5f);
+                PPR_TEST_ASSERT(std::abs(baked_mesh.m_vertices[i].m_texcoord[1] - want_v) < 1e-5f);
                 if (u == 0.0f and v == 0.0f) {
                     // Exact spot check: zero UVs bake to exactly the offset.
-                    PPR_TEST_ASSERT(baked_mesh.m_verts[i].m_texcoord[0] == 0.25f);
-                    PPR_TEST_ASSERT(baked_mesh.m_verts[i].m_texcoord[1] == 0.5f);
+                    PPR_TEST_ASSERT(baked_mesh.m_vertices[i].m_texcoord[0] == 0.25f);
+                    PPR_TEST_ASSERT(baked_mesh.m_vertices[i].m_texcoord[1] == 0.5f);
                     ++origin_count;
                 }
             }
@@ -93,8 +93,8 @@ namespace pP::tests::detail {
             const Expected<pP::mesh::SceneAsset> scene =
                     pP::mesh::importAndConvert(meshDir(), "second_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
-            PPR_TEST_ASSERT(scene->m_mats.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_mats.front();
+            PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
+            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{1u});
 
@@ -103,10 +103,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(box.has_value());
             const pP::mesh::StaticMeshAsset &box_mesh = box->m_meshes.front();
             const pP::mesh::StaticMeshAsset &second_mesh = scene->m_meshes.front();
-            PPR_TEST_ASSERT(second_mesh.m_verts.size() == box_mesh.m_verts.size());
-            for (std::size_t i = 0u; i < second_mesh.m_verts.size(); ++i) {
-                PPR_TEST_ASSERT(second_mesh.m_verts[i].m_texcoord[0] == box_mesh.m_verts[i].m_texcoord[0]);
-                PPR_TEST_ASSERT(second_mesh.m_verts[i].m_texcoord[1] == box_mesh.m_verts[i].m_texcoord[1]);
+            PPR_TEST_ASSERT(second_mesh.m_vertices.size() == box_mesh.m_vertices.size());
+            for (std::size_t i = 0u; i < second_mesh.m_vertices.size(); ++i) {
+                PPR_TEST_ASSERT(second_mesh.m_vertices[i].m_texcoord[0] == box_mesh.m_vertices[i].m_texcoord[0]);
+                PPR_TEST_ASSERT(second_mesh.m_vertices[i].m_texcoord[1] == box_mesh.m_vertices[i].m_texcoord[1]);
             }
 
             // Pack carries the selector to the GPU struct (CPU-only, no device).
@@ -122,8 +122,8 @@ namespace pP::tests::detail {
             const Expected<pP::mesh::SceneAsset> scene =
                     pP::mesh::importAndConvert(meshDir(), "mixed_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
-            PPR_TEST_ASSERT(scene->m_mats.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_mats.front();
+            PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
+            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{0u});
             PPR_TEST_ASSERT(material.m_normal_map.enabled());
@@ -168,7 +168,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(twin.m_mesh == pP::mesh::MeshAssetId{0u});
             PPR_TEST_ASSERT(twin.m_node == pP::mesh::NodeId{0u});
             const pP::mesh::StaticMeshAsset &twin_mesh = scene->m_meshes[0];
-            PPR_TEST_ASSERT(twin_mesh.m_verts.size() == 3u);
+            PPR_TEST_ASSERT(twin_mesh.m_vertices.size() == 3u);
             PPR_TEST_ASSERT(twin_mesh.m_indices.size() == 3u);
 
             // Scaled instance owns the baked copy; its node world is identity.
@@ -184,7 +184,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scaled_world[3].z == 0.0f);
 
             const pP::mesh::StaticMeshAsset &baked = scene->m_meshes[1];
-            PPR_TEST_ASSERT(baked.m_verts.size() == 3u);
+            PPR_TEST_ASSERT(baked.m_vertices.size() == 3u);
             PPR_TEST_ASSERT(baked.m_flags == twin_mesh.m_flags);
             PPR_TEST_ASSERT(baked.m_prims.size() == twin_mesh.m_prims.size());
             PPR_TEST_ASSERT(baked.m_indices == twin_mesh.m_indices);
@@ -193,8 +193,8 @@ namespace pP::tests::detail {
             // normals/tangents take the diagonal inverse-transpose (1/2, 2, 1).
             const float3 light = normalize(float3{-0.35f, 0.55f, 0.76f});
             for (std::size_t i = 0u; i < 3u; ++i) {
-                const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_verts[i];
-                const pP::mesh::StaticMeshVertex &baked_vert = baked.m_verts[i];
+                const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[i];
+                const pP::mesh::StaticMeshVertex &baked_vert = baked.m_vertices[i];
                 PPR_TEST_ASSERT(baked_vert.m_position[0] == twin_vert.m_position[0] * 2.0f);
                 PPR_TEST_ASSERT(baked_vert.m_position[1] == twin_vert.m_position[1] * 0.5f);
                 PPR_TEST_ASSERT(baked_vert.m_position[2] == twin_vert.m_position[2]);
@@ -271,12 +271,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scene->m_instances.size() == 2u);
             const pP::mesh::StaticMeshAsset &twin_mesh = scene->m_meshes.front();
             const pP::mesh::StaticMeshAsset &baked = scene->m_meshes.back();
-            PPR_TEST_ASSERT(baked.m_verts.size() == 3u);
+            PPR_TEST_ASSERT(baked.m_vertices.size() == 3u);
 
             // Scale is (-2, 0.5, 1): positions mirror, tangents take the
             // diagonal inverse-transpose (-1/2, 2, 1), w negates.
-            const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_verts[0];
-            const pP::mesh::StaticMeshVertex &baked_vert = baked.m_verts[0];
+            const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[0];
+            const pP::mesh::StaticMeshVertex &baked_vert = baked.m_vertices[0];
             PPR_TEST_ASSERT(baked_vert.m_position[0] == twin_vert.m_position[0] * -2.0f);
             PPR_TEST_ASSERT(baked_vert.m_position[1] == twin_vert.m_position[1] * 0.5f);
             PPR_TEST_ASSERT(baked_vert.m_position[2] == twin_vert.m_position[2]);

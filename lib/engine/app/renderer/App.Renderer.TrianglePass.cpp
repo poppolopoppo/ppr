@@ -254,7 +254,7 @@ namespace pP {
         }
         bag_cache_ready = true;
         if (const std::error_code err =
-                m_texture_cache.initialize(device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
+            m_texture_cache.initialize(device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
             PPR_LOG(TrianglePass, error, "texture cache init failed", {
                 {"message", err.message()},
                 });
@@ -272,7 +272,7 @@ namespace pP {
         sampler_desc.maxAnisotropy = 1;
         sampler_started = true;
         if (const std::error_code err =
-                make_error_code(device.createSampler(sampler_desc, m_shared_sampler.writeRef()))) {
+            make_error_code(device.createSampler(sampler_desc, m_shared_sampler.writeRef()))) {
             PPR_LOG(TrianglePass, error, "shared sampler creation failed", {
                 {"message", err.message()},
                 });
@@ -397,17 +397,17 @@ namespace pP {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
-                if (static_cast<std::size_t>(*prim.m_material) >= scene.m_mats.size()) [[unlikely]] {
+                if (static_cast<std::size_t>(*prim.m_material) >= scene.m_materials.size()) [[unlikely]] {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
-                if (mesh_asset.m_verts.empty()) [[unlikely]] {
+                if (mesh_asset.m_vertices.empty()) [[unlikely]] {
                     rollback();
                     return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
                 }
                 const std::span slice(mesh_asset.m_indices.data() + prim.m_start, prim.m_count);
                 const std::span verts(
-                    mesh_asset.m_verts.data(), mesh_asset.m_verts.size());
+                    mesh_asset.m_vertices.data(), mesh_asset.m_vertices.size());
                 Expected<TriangleBagHandle> bag = m_bag_cache.upload(verts, slice, prim.m_base);
                 if (not bag.has_value()) [[unlikely]] {
                     rollback();
@@ -426,7 +426,7 @@ namespace pP {
             uploaded.m_textures.push_back(*texture);
         }
 
-        for (const mesh::MaterialAsset &material: scene.m_mats) {
+        for (const mesh::MaterialAsset &material: scene.m_materials) {
             const std::span<const TextureHandle> texture_span(uploaded.m_textures.data(), images.size());
             TextureHandle orm{};
             if (material.m_metallic_map.enabled() or material.m_roughness_map.enabled() or material.m_occlusion_map.enabled()) {
@@ -502,15 +502,16 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not m_bag_cache.resolve(bag).has_value() or not m_material_cache.materialIndex(material).has_value()) [[unlikely]] {
+        if (not m_bag_cache.resolveForDraw(bag).has_value() or
+            not m_material_cache.materialIndex(material).has_value()) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        m_instances.push_back(Instance{.m_bag = bag, .m_material = material, .m_model = model});
+        m_submitted_instances.push_back(SubmittedInstance{.m_bag = bag, .m_material = material, .m_model = model});
         return default_value_v;
     }
 
     void TrianglePass::clearInstances() noexcept {
-        m_instances.clear();
+        m_submitted_instances.clear();
     }
 
     // ------------------------------------------------------------------
@@ -526,17 +527,21 @@ namespace pP {
     // g_payloads directly.
     Expected<TrianglePass::IndirectPlan> TrianglePass::planIndirectDraws(
         const std::span<const TrianglePipelineVariant> variants,
-        const std::span<const BagBucketId> bag_buckets,
+        const std::span<rhi::IBuffer *const> vertex_buffers,
+        const std::span<rhi::IBuffer *const> index_buffers,
         const std::span<const u32> vertex_counts,
         const u32 payload_capacity) {
-        if (variants.size() != bag_buckets.size() or variants.size() != vertex_counts.size()) [[unlikely]] {
+        if (variants.size() != vertex_buffers.size() or
+            variants.size() != index_buffers.size() or
+            variants.size() != vertex_counts.size()) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
         IndirectPlan plan{};
         Array<TrianglePipelineVariant> seen_variants{};
         struct PendingDraw {
             TrianglePipelineVariant m_variant{};
-            BagBucketId m_bag_bucket{};
+            rhi::IBuffer *m_vertex_buffer = nullptr;
+            rhi::IBuffer *m_index_buffer = nullptr;
             u32 m_count = 0u;
             u32 m_payload_index = 0u;
         };
@@ -564,13 +569,14 @@ namespace pP {
             }
             pending.push_back(PendingDraw{
                 .m_variant = variant,
-                .m_bag_bucket = bag_buckets[i],
+                .m_vertex_buffer = vertex_buffers[i],
+                .m_index_buffer = index_buffers[i],
                 .m_count = vertex_counts[i],
                 .m_payload_index = plan.m_total_count,
             });
             ++plan.m_total_count;
         }
-        // Group args by (variant, bag-bucket) in first-seen order so each
+        // Group args by (variant, buffer pair) in first-seen order so each
         // bucket's [first, first+count) slice is contiguous: drawIndirect
         // draws the whole slice with one pipeline, so interleaved emission
         // order must not leak a foreign record into a bucket's range.
@@ -579,7 +585,9 @@ namespace pP {
         for (const PendingDraw &first: pending) {
             bool emitted_group = false;
             for (const IndirectBucket &bucket: plan.m_buckets) {
-                if (bucket.m_variant == first.m_variant and bucket.m_bag_bucket == first.m_bag_bucket) {
+                if (bucket.m_variant == first.m_variant and
+                    bucket.m_vertex_buffer == first.m_vertex_buffer and
+                    bucket.m_index_buffer == first.m_index_buffer) {
                     emitted_group = true;
                     break;
                 }
@@ -590,7 +598,9 @@ namespace pP {
             const u32 first_arg = static_cast<u32>(plan.m_args.size());
             u32 group_count = 0u;
             for (const PendingDraw &draw: pending) {
-                if (draw.m_variant == first.m_variant and draw.m_bag_bucket == first.m_bag_bucket) {
+                if (draw.m_variant == first.m_variant and
+                    draw.m_vertex_buffer == first.m_vertex_buffer and
+                    draw.m_index_buffer == first.m_index_buffer) {
                     plan.m_args.push_back(rhi::IndirectDrawArguments{
                         .vertexCountPerInstance = draw.m_count,
                         .instanceCount = 1u,
@@ -602,10 +612,65 @@ namespace pP {
             }
             plan.m_buckets.push_back(IndirectBucket{
                 .m_variant = first.m_variant,
-                .m_bag_bucket = first.m_bag_bucket,
+                .m_vertex_buffer = first.m_vertex_buffer,
+                .m_index_buffer = first.m_index_buffer,
                 .m_first_arg = first_arg,
                 .m_arg_count = group_count,
             });
+        }
+        return plan;
+    }
+
+    Expected<TrianglePass::DrawPlan> TrianglePass::planDraws(
+        const std::span<const TrianglePipelineVariant> variants,
+        const std::span<rhi::IBuffer *const> vertex_buffers,
+        const std::span<rhi::IBuffer *const> index_buffers,
+        const std::span<const TriangleBagRange> ranges) {
+        if (variants.size() != vertex_buffers.size() or
+            variants.size() != index_buffers.size() or
+            variants.size() != ranges.size()) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+
+        DrawPlan plan{};
+        for (std::size_t index = 0u; index < variants.size(); ++index) {
+            const TriangleBagRange &range = ranges[index];
+            if (range.m_count == 0u) {
+                continue;
+            }
+
+            DrawGroup *group = nullptr;
+            for (DrawGroup &candidate: plan.m_groups) {
+                if (candidate.m_variant == variants[index] and
+                    candidate.m_vertex_buffer == vertex_buffers[index] and
+                    candidate.m_index_buffer == index_buffers[index] and
+                    candidate.m_vb_offset == range.m_vb_offset and
+                    candidate.m_ib_start == range.m_ib_start and
+                    candidate.m_count == range.m_count and
+                    candidate.m_base_vertex == range.m_base) {
+                    group = &candidate;
+                    break;
+                }
+            }
+            if (group == nullptr) {
+                plan.m_groups.push_back(DrawGroup{
+                    .m_variant = variants[index],
+                    .m_vertex_buffer = vertex_buffers[index],
+                    .m_index_buffer = index_buffers[index],
+                    .m_vb_offset = range.m_vb_offset,
+                    .m_ib_start = range.m_ib_start,
+                    .m_count = range.m_count,
+                    .m_base_vertex = range.m_base,
+                    .m_instance_count = 0u,
+                });
+                group = &plan.m_groups.back();
+            }
+            group->m_source_indices.push_back(static_cast<u32>(index));
+            ++group->m_instance_count;
+        }
+        for (DrawGroup &group: plan.m_groups) {
+            group.m_first_payload = plan.m_payload_count;
+            plan.m_payload_count += group.m_instance_count;
         }
         return plan;
     }
@@ -653,9 +718,7 @@ namespace pP {
             return found->second.get();
         }
 
-        if (signature.m_color_formats.size() != 1u or
-            signature.m_depth_stencil_format.has_value() or
-            signature.m_sample_count != 1u) {
+        if (signature.m_color_formats.size() != 1u or signature.m_sample_count != 1u) {
             PPR_LOG(TrianglePass, error, "unsupported render pipeline signature", {
                 {"color_format_count", signature.m_color_formats.size()},
                 {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
@@ -675,8 +738,14 @@ namespace pP {
         pipeline_desc.targets = &color_target;
         pipeline_desc.targetCount = 1u;
         pipeline_desc.multisample.sampleCount = signature.m_sample_count;
+        pipeline_desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
+        // Slang RHI's RenderState only carries vertex/scissor state. Depth
+        // testing and writes therefore belong to the bound pipeline object.
+        pipeline_desc.depthStencil.depthTestEnable = signature.m_depth_stencil_format.has_value();
+        pipeline_desc.depthStencil.depthWriteEnable = signature.m_depth_stencil_format.has_value();
+        pipeline_desc.depthStencil.depthFunc = rhi::ComparisonFunc::LessEqual;
         pipeline_desc.rasterizer.cullMode =
-                variant.m_twosided ? rhi::CullMode::None : rhi::CullMode::Back;
+            variant.m_twosided ? rhi::CullMode::None : rhi::CullMode::Back;
         pipeline_desc.label = "mesh bindless pipeline";
 
         rhi::ComPtr<rhi::IRenderPipeline> pipeline{};
@@ -693,66 +762,184 @@ namespace pP {
     // direct instance encoding
     // ------------------------------------------------------------------
 
-    // §6 encode per instance (mirrors render:58-71 + ImGui:409-412 idiom):
-    // resolve handle → range, ShaderCursor binds (buffers + per-resident-texture
-    // setDescriptorHandle via seam (a)), push setData, NO vertex/index-buffer
-    // bindings, NON-INDEXED draw with sv_vertex_id driving the manual lookup.
+    // Failure contract, phase by phase — never a whole-frame guarantee:
+    //   staging  all-or-nothing (resolveInstances_ resolves every submitted
+    //            instance before any encode, so no group is half-built);
+    //   upload   all-or-nothing (uploadPayloads_ writes the whole payload
+    //            interval or fails before any draw is encoded);
+    //   encoding fail-closed per group: a group that cannot be encoded returns
+    //            its error and stops the loop, and the groups already encoded
+    //            into the pass stand. uploadScene keeps its own named rollback.
     std::error_code TrianglePass::render(const DrawContext &draw_context) {
-        for (const Instance &instance: m_instances) {
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeInstance_(draw_context, instance));
+        if (not m_caches_ready) [[unlikely]] {
+            return std::make_error_code(std::errc::not_connected);
+        }
+
+        Expected<Array<ResolvedInstance, mem::ScratchPad> > resolved_instances = resolveInstances_();
+        if (not resolved_instances.has_value()) [[unlikely]] {
+            return resolved_instances.error();
+        }
+        if (resolved_instances->empty()) {
+            return default_value_v;
+        }
+
+        Expected<DrawPlan> plan = buildPlan_(*resolved_instances);
+        if (not plan.has_value()) [[unlikely]] {
+            return plan.error();
+        }
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            uploadPayloads_(draw_context.m_device, *resolved_instances, *plan));
+
+        // Per-frame state, identical for every group: uploaded and applied
+        // once, not re-done per draw.
+        draw_context.m_pass.setRenderState({
+            .viewports = {draw_context.m_viewport},
+            .viewportCount = 1u,
+            .scissorRects = {draw_context.m_scissor},
+            .scissorRectCount = 1u,
+            .indexBuffer = {},
+        });
+
+        for (const DrawGroup &group: plan->m_groups) {
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+                encodeGroup_(draw_context, *resolved_instances, group));
         }
         return default_value_v;
     }
 
-    std::error_code TrianglePass::encodeInstance_(const DrawContext &draw_context, const Instance &instance) {
-        Expected<TriangleBagRange> range = m_bag_cache.resolve(instance.m_bag);
-        if (not range.has_value()) [[unlikely]] {
-            return range.error();
+    // Project resolved instances onto the planner's four parallel spans. The
+    // planner itself stays a pure static function so it is unit-testable
+    // without a device; this is the only place that knows the projection.
+    Expected<TrianglePass::DrawPlan> TrianglePass::buildPlan_(
+        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances) {
+        Array<TrianglePipelineVariant, mem::ScratchPad> variants{};
+        Array<rhi::IBuffer *, mem::ScratchPad> vertex_buffers{};
+        Array<rhi::IBuffer *, mem::ScratchPad> index_buffers{};
+        Array<TriangleBagRange, mem::ScratchPad> ranges{};
+        for (const ResolvedInstance &instance: resolved_instances) {
+            variants.push_back(instance.m_variant);
+            vertex_buffers.push_back(instance.m_vertex_buffer);
+            index_buffers.push_back(instance.m_index_buffer);
+            ranges.push_back(TriangleBagRange{
+                .m_vb_offset = instance.m_payload.m_vb_offset,
+                .m_ib_start = instance.m_payload.m_ib_start,
+                .m_count = instance.m_payload.m_index_count,
+                .m_base = instance.m_payload.m_base_vertex,
+            });
         }
-        Expected<BagBucketId> bucket = m_bag_cache.bucketOf(instance.m_bag);
-        if (not bucket.has_value()) [[unlikely]] {
-            return bucket.error();
+
+        return planDraws(
+            std::span<const TrianglePipelineVariant>{variants.data(), variants.size()},
+            std::span<rhi::IBuffer *const>{vertex_buffers.data(), vertex_buffers.size()},
+            std::span<rhi::IBuffer *const>{index_buffers.data(), index_buffers.size()},
+            std::span<const TriangleBagRange>{ranges.data(), ranges.size()});
+    }
+
+    std::error_code TrianglePass::uploadPayloads_(
+        rhi::IDevice &device,
+        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+        const DrawPlan &plan) {
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureDirectPayloads_(device, plan.m_payload_count));
+
+        void *mapped_payloads = nullptr;
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            device.mapBuffer(m_direct_payloads.get(), rhi::CpuAccessMode::Write, &mapped_payloads));
+
+        // Compaction: each group owns a contiguous payload interval, and its
+        // source indices name the resolved instances copied into it. Any source
+        // index out of range is a planner bug — fail closed and unmap.
+        for (const DrawGroup &group: plan.m_groups) {
+            for (u32 offset = 0u; offset < group.m_instance_count; ++offset) {
+                const u32 source_index = group.m_source_indices[offset];
+                if (source_index >= resolved_instances.size()) [[unlikely]] {
+                    device.unmapBuffer(m_direct_payloads.get());
+                    return make_error_code(std::errc::invalid_argument);
+                }
+
+                std::memcpy(
+                    static_cast<std::byte *>(mapped_payloads) +
+                    static_cast<u64>(group.m_first_payload + offset) * sizeof(InstancePayload),
+                    &resolved_instances[source_index].m_payload,
+                    sizeof(InstancePayload));
+            }
         }
-        rhi::IBuffer *const vertex_buffer = m_bag_cache.vertexBuffer(*bucket);
-        rhi::IBuffer *const index_buffer = m_bag_cache.indexBuffer(*bucket);
-        if (vertex_buffer == nullptr or index_buffer == nullptr) [[unlikely]] {
+        device.unmapBuffer(m_direct_payloads.get());
+        return default_value_v;
+    }
+
+    std::error_code TrianglePass::ensureDirectPayloads_(rhi::IDevice &device, const u32 payload_count) {
+        if (payload_count == 0u) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        const u64 payload_bytes = static_cast<u64>(payload_count) * sizeof(InstancePayload);
+        if (m_direct_payloads != nullptr and m_direct_payload_capacity >= payload_bytes) {
+            return default_value_v;
+        }
+
+        rhi::BufferDesc payload_desc{};
+        payload_desc.size = payload_bytes;
+        payload_desc.elementSize = sizeof(InstancePayload);
+        payload_desc.memoryType = rhi::MemoryType::Upload;
+        payload_desc.usage = rhi::BufferUsage::ShaderResource;
+        payload_desc.defaultState = rhi::ResourceState::ShaderResource;
+        payload_desc.label = "direct instance payloads";
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, device.createBuffer(payload_desc, nullptr, m_direct_payloads.writeRef()));
+        m_direct_payload_capacity = payload_bytes;
+        return default_value_v;
+    }
+
+    std::error_code TrianglePass::encodeGroup_(
+        const DrawContext &draw_context,
+        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+        const DrawGroup &group) {
+        if (group.m_instance_count == 0u or
+            group.m_source_indices.empty() or
+            group.m_source_indices.size() != group.m_instance_count) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
-        Expected<GpuMaterial> gpu = m_material_cache.material(instance.m_material);
-        if (not gpu.has_value()) [[unlikely]] {
-            return gpu.error();
+        for (const u32 source_index: group.m_source_indices) {
+            if (source_index >= resolved_instances.size()) [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
+            }
         }
-        Expected<u32> material_slot = m_material_cache.materialIndex(instance.m_material);
-        if (not material_slot.has_value()) [[unlikely]] {
-            return material_slot.error();
-        }
+
+        rhi::IBuffer *const vertex_buffer = group.m_vertex_buffer;
+        rhi::IBuffer *const index_buffer = group.m_index_buffer;
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
         rhi::IBuffer *const texture_buffer = m_texture_cache.descriptorBuffer();
-        if (material_buffer == nullptr or texture_buffer == nullptr) [[unlikely]] {
+        if (vertex_buffer == nullptr or index_buffer == nullptr or material_buffer == nullptr or
+            texture_buffer == nullptr or m_direct_payloads == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 
-        // CPU↔Slang stride agreement (plan §6 mirror table): the bucket stride
-        // recorded at upload and the material stride must match the
+        // CPU↔Slang stride agreement: the bucket strides recorded at upload, the
+        // payload stride, and the material stride must match the
         // StructuredBuffer element strides the shader was compiled against.
         // Fail closed — never draw with a reinterpreted buffer.
         if (vertex_buffer->getDesc().elementSize != sizeof(mesh::StaticMeshVertex) or
+            index_buffer->getDesc().elementSize != sizeof(u32) or
+            m_direct_payloads->getDesc().elementSize != sizeof(InstancePayload) or
             material_buffer->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
-            PPR_LOG(TrianglePass, error, "bag/material stride mismatch vs shader expectation", {
+            PPR_LOG(TrianglePass, error, "bag/payload/material stride mismatch vs shader expectation", {
                 {"vertex_stride", vertex_buffer->getDesc().elementSize},
+                {"index_stride", index_buffer->getDesc().elementSize},
+                {"payload_stride", m_direct_payloads->getDesc().elementSize},
                 {"material_stride", material_buffer->getDesc().elementSize},
                 });
             return make_error_code(std::errc::invalid_argument);
         }
 
-        Expected<rhi::IRenderPipeline *> pipeline =
-                pipelineFor_(draw_context.m_device, draw_context.m_render_pipeline_key, variantFor_(*gpu));
+        Expected<rhi::IRenderPipeline *> pipeline = pipelineForIndirect_(
+            draw_context.m_device,
+            draw_context.m_render_pipeline_key,
+            group.m_variant);
         if (not pipeline.has_value()) [[unlikely]] {
             return pipeline.error();
         }
 
         rhi::ShaderCursor shader_cursor{};
-        if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(*pipeline); PPR_ENSURE(shader_object)) {
+        if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(*pipeline);
+            PPR_ENSURE(shader_object)) {
             shader_cursor = rhi::ShaderCursor(shader_object);
         } else {
             return make_error_code(std::errc::broken_pipe);
@@ -766,41 +953,35 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, uploadFrameConstants_(frame_cursor));
 
+        // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
+        // startInstanceLocation never reaches the shader. The group's payload
+        // base rides this global instead and the draw starts at instance 0;
+        // binding both would double-count the offset for any non-zero base.
+        const u32 payload_base = group.m_first_payload;
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+            shader_cursor["g_payload_base"].setData(&payload_base, sizeof(payload_base)));
+
         // Full-buffer ranges via makeFullRange (never bare Binding()).
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            shader_cursor["g_vertices"].setBinding(rhi::Binding(vertex_buffer, makeFullRange(vertex_buffer))));
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            shader_cursor["g_indices"].setBinding(rhi::Binding(index_buffer, makeFullRange(index_buffer))));
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            shader_cursor["g_materials"].setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_vertices"].setBinding(
+            rhi::Binding(vertex_buffer, makeFullRange(vertex_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_indices"].setBinding(
+            rhi::Binding(index_buffer, makeFullRange(index_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_materials"].setBinding(
+            rhi::Binding(material_buffer, makeFullRange(material_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_payloads"].setBinding(
+            rhi::Binding(m_direct_payloads.get(), makeFullRange(m_direct_payloads.get()))));
 
         // bindPipeline creates a new shader object per draw. The texture
         // descriptor buffer is stable, but its binding is object-local.
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            shader_cursor["g_textures"].setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_textures"].setBinding(
+            rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
-        // Entry-point params (found via cursor DWIM): model matrix + packed
-        // scalars land in per-entry ordinary data, no dereference needed.
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_model"].setData(&instance.m_model, sizeof(float4x4)));
-        const PushScalars scalars{
-            .m_vb_offset = range->m_vb_offset,
-            .m_ib_start = range->m_ib_start,
-            .m_index_count = range->m_count,
-            .m_material = *material_slot,
-            .m_base_vertex = range->m_base,
-        };
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_push"].setData(&scalars, sizeof(scalars)));
-
-        draw_context.m_pass.setRenderState({
-            .viewports = {draw_context.m_viewport},
-            .viewportCount = 1u,
-            .scissorRects = {draw_context.m_scissor},
-            .scissorRectCount = 1u,
-            .indexBuffer = {},
+        draw_context.m_pass.draw({
+            .vertexCount = group.m_count,
+            .instanceCount = group.m_instance_count,
+            .startInstanceLocation = 0u,
         });
-
-        draw_context.m_pass.draw({.vertexCount = range->m_count});
 
         return default_value_v;
     }
@@ -809,63 +990,66 @@ namespace pP {
     // fail-closed validation as encodeInstance_ (stale handles, stride
     // mismatch → error, no partial staging). Zero-count prims are skipped
     // here, so both paths agree on the staged set.
-    Expected<Array<TrianglePass::StagedDraw> > TrianglePass::stageDraws_() const {
-        Array<StagedDraw> resolved{};
-        for (const Instance &instance: m_instances) {
-            Expected<TriangleBagRange> range = m_bag_cache.resolve(instance.m_bag);
-            if (not range.has_value()) [[unlikely]] {
-                return std::unexpected{range.error()};
+    Expected<Array<TrianglePass::ResolvedInstance, mem::ScratchPad> > TrianglePass::resolveInstances_() const {
+        Array<ResolvedInstance, mem::ScratchPad> resolved{};
+
+        for (const SubmittedInstance &instance: m_submitted_instances) {
+            Expected<ResolvedInstance> resolved_instance = resolveOne_(instance);
+            if (not resolved_instance.has_value()) [[unlikely]] {
+                return std::unexpected{resolved_instance.error()};
             }
-            if (range->m_count == 0u) {
+            if (resolved_instance->m_count == 0u) {
                 continue;
             }
-            Expected<BagBucketId> bucket = m_bag_cache.bucketOf(instance.m_bag);
-            if (not bucket.has_value()) [[unlikely]] {
-                return std::unexpected{bucket.error()};
-            }
-            rhi::IBuffer *const vertex_buffer = m_bag_cache.vertexBuffer(*bucket);
-            rhi::IBuffer *const index_buffer = m_bag_cache.indexBuffer(*bucket);
-            if (vertex_buffer == nullptr or index_buffer == nullptr) [[unlikely]] {
-                return std::unexpected{make_error_code(std::errc::invalid_argument)};
-            }
-            Expected<GpuMaterial> gpu = m_material_cache.material(instance.m_material);
-            if (not gpu.has_value()) [[unlikely]] {
-                return std::unexpected{gpu.error()};
-            }
-            Expected<u32> material_slot = m_material_cache.materialIndex(instance.m_material);
-            if (not material_slot.has_value()) [[unlikely]] {
-                return std::unexpected{material_slot.error()};
-            }
-            if (vertex_buffer->getDesc().elementSize != sizeof(mesh::StaticMeshVertex) or
-                m_material_cache.materialBuffer() == nullptr or
-                m_material_cache.materialBuffer()->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
-                PPR_LOG(TrianglePass, error, "bag/material stride mismatch vs shader expectation", {});
-                return std::unexpected{make_error_code(std::errc::invalid_argument)};
-            }
-            // Plain-array boundary copy (P1 verdict): mango float4x4 is
-            // never trivially copyable, so the model crosses into the POD
-            // payload component-wise; the 64 bytes match the direct path's
-            // setData(&model) upload exactly (row-major, translation row 3).
-            InstancePayload payload{};
-            payload.m_vb_offset = range->m_vb_offset;
-            payload.m_ib_start = range->m_ib_start;
-            payload.m_index_count = range->m_count;
-            payload.m_material = *material_slot;
-            payload.m_base_vertex = range->m_base;
-            const float *const model_data = instance.m_model.data();
-            for (u32 component = 0u; component < 16u; ++component) {
-                payload.m_model[component] = model_data[component];
-            }
-            resolved.push_back(StagedDraw{
-                .m_payload = payload,
-                .m_variant = variantFor_(*gpu),
-                .m_bag_bucket = *bucket,
-                .m_count = range->m_count,
-                .m_vertex_buffer = vertex_buffer,
-                .m_index_buffer = index_buffer,
-            });
+            resolved.push_back(*resolved_instance);
         }
         return resolved;
+    }
+
+    Expected<TrianglePass::ResolvedInstance> TrianglePass::resolveOne_(const SubmittedInstance &instance) const {
+        Expected<ResolvedBag> bag = m_bag_cache.resolveForDraw(instance.m_bag);
+        if (not bag.has_value()) [[unlikely]] {
+            return std::unexpected{bag.error()};
+        }
+
+        Expected<GpuMaterial> gpu = m_material_cache.material(instance.m_material);
+        if (not gpu.has_value()) [[unlikely]] {
+            return std::unexpected{gpu.error()};
+        }
+
+        Expected<u32> material_slot = m_material_cache.materialIndex(instance.m_material);
+        if (not material_slot.has_value()) [[unlikely]] {
+            return std::unexpected{material_slot.error()};
+        }
+        if (bag->m_vertex_buffer->getDesc().elementSize != sizeof(mesh::StaticMeshVertex) or
+            m_material_cache.materialBuffer() == nullptr or
+            m_material_cache.materialBuffer()->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
+            PPR_LOG(TrianglePass, error, "bag/material stride mismatch vs shader expectation", {});
+            return std::unexpected{make_error_code(std::errc::invalid_argument)};
+        }
+
+        // Plain-array boundary copy (P1 verdict): mango float4x4 is
+        // never trivially copyable, so the model crosses into the POD
+        // payload component-wise; the 64 bytes match the direct path's
+        // setData(&model) upload exactly (row-major, translation row 3).
+        InstancePayload payload{};
+        payload.m_vb_offset = bag->m_range.m_vb_offset;
+        payload.m_ib_start = bag->m_range.m_ib_start;
+        payload.m_index_count = bag->m_range.m_count;
+        payload.m_material = *material_slot;
+        payload.m_base_vertex = bag->m_range.m_base;
+        const float *const model_data = instance.m_model.data();
+        for (u32 component = 0u; component < 16u; ++component) {
+            payload.m_model[component] = model_data[component];
+        }
+
+        return ResolvedInstance{
+            .m_payload = payload,
+            .m_variant = variantFor_(*gpu),
+            .m_count = bag->m_range.m_count,
+            .m_vertex_buffer = bag->m_vertex_buffer,
+            .m_index_buffer = bag->m_index_buffer,
+        };
     }
 
     // ------------------------------------------------------------------
@@ -880,61 +1064,75 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (m_instances.empty()) {
+        if (m_submitted_instances.empty()) {
             PPR_LOG_ONCE_KEY(TrianglePass, debug,
                 Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "render skipped: empty scene");
             return default_value_v;
         }
-        Expected<Array<StagedDraw> > staged = stageDraws_();
+
+        Expected<Array<ResolvedInstance, mem::ScratchPad> > staged = resolveInstances_();
         if (not staged.has_value()) [[unlikely]] {
             return staged.error();
         }
-        Array<StagedDraw> &resolved = *staged;
+
+        Array<ResolvedInstance, mem::ScratchPad> &resolved = *staged;
         if (resolved.empty()) {
             return default_value_v;
         }
-        Array<TrianglePipelineVariant> variants{};
-        Array<BagBucketId> buckets{};
-        Array<u32> counts{};
-        for (const StagedDraw &draw: resolved) {
+
+        Array<TrianglePipelineVariant, mem::ScratchPad> variants{};
+        Array<rhi::IBuffer *, mem::ScratchPad> vertex_buffers{};
+        Array<rhi::IBuffer *, mem::ScratchPad> index_buffers{};
+        Array<u32, mem::ScratchPad> counts{};
+        for (const ResolvedInstance &draw: resolved) {
             variants.push_back(draw.m_variant);
-            buckets.push_back(draw.m_bag_bucket);
+            vertex_buffers.push_back(draw.m_vertex_buffer);
+            index_buffers.push_back(draw.m_index_buffer);
             counts.push_back(draw.m_count);
         }
         const auto staged_count = safe_narrowing(resolved.size());
         Expected<IndirectPlan> plan = planIndirectDraws(
             std::span<const TrianglePipelineVariant>{variants.data(), variants.size()},
-            std::span<const BagBucketId>{buckets.data(), buckets.size()},
+            std::span<rhi::IBuffer *const>{vertex_buffers.data(), vertex_buffers.size()},
+            std::span<rhi::IBuffer *const>{index_buffers.data(), index_buffers.size()},
             std::span<const u32>{counts.data(), counts.size()},
             staged_count);
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
+
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             ensureIndirectScratch_(draw_context.m_device, plan->m_total_count));
+
         void *mapped_payloads = nullptr;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             draw_context.m_device.mapBuffer(m_indirect_payloads.get(), rhi::CpuAccessMode::Write, &mapped_payloads));
+
         for (u32 i = 0u; i < plan->m_total_count; ++i) {
             std::memcpy(
                 static_cast<std::byte *>(mapped_payloads) + static_cast<u64>(i) * sizeof(InstancePayload),
                 &resolved[i].m_payload,
                 sizeof(InstancePayload));
         }
+
         draw_context.m_device.unmapBuffer(m_indirect_payloads.get());
+
         void *mapped_args = nullptr;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             draw_context.m_device.mapBuffer(m_indirect_args.get(), rhi::CpuAccessMode::Write, &mapped_args));
+
         std::memcpy(
             mapped_args,
             plan->m_args.data(),
             static_cast<std::size_t>(plan->m_total_count) * sizeof(rhi::IndirectDrawArguments));
+
         draw_context.m_device.unmapBuffer(m_indirect_args.get());
 
         for (const IndirectBucket &bucket: plan->m_buckets) {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeIndirectBucket_(draw_context, bucket, plan->m_total_count));
         }
+
         return default_value_v;
     }
 
@@ -945,6 +1143,7 @@ namespace pP {
         if (payload_count == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+
         const u64 payload_bytes = static_cast<u64>(payload_count) * sizeof(InstancePayload);
         if (m_indirect_payloads == nullptr or m_indirect_payload_capacity < payload_bytes) {
             rhi::BufferDesc payload_desc{};
@@ -958,6 +1157,7 @@ namespace pP {
                 device.createBuffer(payload_desc, nullptr, m_indirect_payloads.writeRef()));
             m_indirect_payload_capacity = payload_bytes;
         }
+
         const u64 args_bytes = static_cast<u64>(payload_count) * sizeof(rhi::IndirectDrawArguments);
         if (m_indirect_args == nullptr or m_indirect_arg_capacity < args_bytes) {
             // L0 carry: BufferUsage operator| does not cross the module
@@ -979,6 +1179,7 @@ namespace pP {
                 device.createBuffer(args_desc, nullptr, m_indirect_args.writeRef()));
             m_indirect_arg_capacity = args_bytes;
         }
+
         return default_value_v;
     }
 
@@ -1010,6 +1211,7 @@ namespace pP {
             entry.m_fence_value = 0u;
             entry.m_busy = false;
         }
+
         m_publish_fence.setNull();
         m_next_fence_value = 1u;
         clearPublished_();
@@ -1023,6 +1225,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 device.createFence(rhi::FenceDesc{.initialValue = 0u}, m_publish_fence.writeRef()));
         }
+
         constexpr u64 payload_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(InstancePayload);
         constexpr u64 args_bytes = static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments);
         for (IndirectRingSlot &entry: m_ring) {
@@ -1034,30 +1237,33 @@ namespace pP {
                 scratch_desc.usage = rhi::BufferUsage::ShaderResource;
                 scratch_desc.defaultState = rhi::ResourceState::ShaderResource;
                 scratch_desc.label = "indirect compute scratch";
+
                 PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                     device.createBuffer(scratch_desc, nullptr, entry.m_scratch.writeRef()));
             }
+
             if (entry.m_payloads == nullptr) {
                 rhi::BufferDesc payload_desc{};
                 payload_desc.size = payload_bytes;
                 payload_desc.elementSize = sizeof(InstancePayload);
                 payload_desc.memoryType = rhi::MemoryType::DeviceLocal;
-                payload_desc.usage =
-                        enumCombine(rhi::BufferUsage::ShaderResource, rhi::BufferUsage::UnorderedAccess);
+                payload_desc.usage = enumCombine(rhi::BufferUsage::ShaderResource, rhi::BufferUsage::UnorderedAccess);
                 payload_desc.defaultState = rhi::ResourceState::ShaderResource;
                 payload_desc.label = "indirect device payloads";
+
                 PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                     device.createBuffer(payload_desc, nullptr, entry.m_payloads.writeRef()));
             }
+
             if (entry.m_args == nullptr) {
                 rhi::BufferDesc args_desc{};
                 args_desc.size = args_bytes;
                 args_desc.elementSize = sizeof(rhi::IndirectDrawArguments);
                 args_desc.memoryType = rhi::MemoryType::DeviceLocal;
-                args_desc.usage =
-                        enumCombine(rhi::BufferUsage::IndirectArgument, rhi::BufferUsage::UnorderedAccess);
+                args_desc.usage = enumCombine(rhi::BufferUsage::IndirectArgument, rhi::BufferUsage::UnorderedAccess);
                 args_desc.defaultState = rhi::ResourceState::IndirectArgument;
                 args_desc.label = "indirect device args";
+
                 PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                     device.createBuffer(args_desc, nullptr, entry.m_args.writeRef()));
             }
@@ -1072,6 +1278,7 @@ namespace pP {
                 // touched buffer to its default state at close).
                 counter_desc.defaultState = rhi::ResourceState::CopySource;
                 counter_desc.label = "indirect args counter";
+
                 PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                     device.createBuffer(counter_desc, nullptr, entry.m_counter.writeRef()));
             }
@@ -1088,21 +1295,25 @@ namespace pP {
                 entry.m_busy = false;
             }
         }
+
         for (u32 slot = 0u; slot < kIndirectRingFrames; ++slot) {
-            IndirectRingSlot &entry = m_ring[slot];
-            if (not entry.m_busy) {
+            if (IndirectRingSlot &entry = m_ring[slot]; not entry.m_busy) {
                 entry.m_busy = true;
                 if (++entry.m_version == 0u) [[unlikely]] {
                     PPR_LOG(TrianglePass, warning, "indirect ring slot version wrapped", {{"slot", slot}});
                     ++entry.m_version;
                 }
+
                 entry.m_fence_value = m_next_fence_value;
                 ++m_next_fence_value;
                 return slot;
             }
         }
-        PPR_LOG(TrianglePass, warning, "indirect ring full — GPU still draining",
-            {{"completed_fence", completed}, {"frames", kIndirectRingFrames}});
+
+        PPR_LOG(TrianglePass, warning, "indirect ring full — GPU still draining", {
+            {"completed_fence", completed},
+            {"frames", kIndirectRingFrames}
+            });
         return std::unexpected{std::make_error_code(std::errc::resource_unavailable_try_again)};
     }
 
@@ -1116,57 +1327,70 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
+
         clearPublished_();
-        if (m_instances.empty()) {
+
+        if (m_submitted_instances.empty()) {
             PPR_LOG_ONCE_KEY(TrianglePass, debug,
                 Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "publish skipped: empty scene");
             return default_value_v;
         }
-        Expected<Array<StagedDraw> > staged = stageDraws_();
+
+        Expected<Array<ResolvedInstance, mem::ScratchPad> > staged = resolveInstances_();
         if (not staged.has_value()) [[unlikely]] {
             return staged.error();
         }
         if (staged->empty()) {
             return default_value_v;
         }
+
         u32 dispatch_count = static_cast<u32>(staged->size());
         bool over_count = false;
         if (dispatch_count > kIndirectRingCapacity) {
             dispatch_count = kIndirectRingCapacity;
             over_count = true;
         }
-        Array<TrianglePipelineVariant> variants{};
-        Array<BagBucketId> buckets{};
-        Array<u32> counts{};
+
+        Array<TrianglePipelineVariant, mem::ScratchPad> variants{};
+        Array<rhi::IBuffer *, mem::ScratchPad> vertex_buffers{};
+        Array<rhi::IBuffer *, mem::ScratchPad> index_buffers{};
+        Array<u32, mem::ScratchPad> counts{};
         for (u32 i = 0u; i < dispatch_count; ++i) {
             variants.push_back((*staged)[i].m_variant);
-            buckets.push_back((*staged)[i].m_bag_bucket);
+            vertex_buffers.push_back((*staged)[i].m_vertex_buffer);
+            index_buffers.push_back((*staged)[i].m_index_buffer);
             counts.push_back((*staged)[i].m_count);
         }
+
         Expected<IndirectPlan> plan = planIndirectDraws(
             std::span<const TrianglePipelineVariant>{variants.data(), variants.size()},
-            std::span<const BagBucketId>{buckets.data(), buckets.size()},
+            std::span<rhi::IBuffer *const>{vertex_buffers.data(), vertex_buffers.size()},
+            std::span<rhi::IBuffer *const>{index_buffers.data(), index_buffers.size()},
             std::span<const u32>{counts.data(), counts.size()},
             kIndirectRingCapacity);
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
         if (plan->m_total_count == 0u) [[unlikely]] {
-            PPR_LOG(TrianglePass, warning, "publish planned zero draws for a non-empty stage",
-                {{"staged", staged->size()}});
+            PPR_LOG(TrianglePass, warning, "publish planned zero draws for a non-empty stage", {
+                {"staged", staged->size()}
+                });
             return std::make_error_code(std::errc::invalid_argument);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureComputeState_(device));
         if (m_compute_pipeline == nullptr) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+
         u64 completed = 0u;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, m_publish_fence->getCurrentValue(&completed));
         Expected<u32> acquired = acquireRingSlot_(completed);
         if (not acquired.has_value()) [[unlikely]] {
             return acquired.error();
         }
+
         IndirectRingSlot &entry = m_ring[*acquired];
         // A publish that fails after acquire must not leak the slot: the
         // fence value was never signaled, so drop it back to reclaimable.
@@ -1177,42 +1401,54 @@ namespace pP {
                 entry.m_fence_value = 0u;
             }
         };
+
         void *mapped_scratch = nullptr;
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
             device.mapBuffer(entry.m_scratch.get(), rhi::CpuAccessMode::Write, &mapped_scratch));
+
         for (u32 i = 0u; i < dispatch_count; ++i) {
             std::memcpy(
                 static_cast<std::byte *>(mapped_scratch) + static_cast<u64>(i) * sizeof(InstancePayload),
                 &(*staged)[i].m_payload,
                 sizeof(InstancePayload));
         }
+
         device.unmapBuffer(entry.m_scratch.get());
+
         rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, device.getQueue(rhi::QueueType::Graphics, queue.writeRef()));
+
         rhi::ComPtr<rhi::ICommandEncoder> encoder{};
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, queue->createCommandEncoder(encoder.writeRef()));
+
         // (B1) UAV-counter host clear: the kernel appends from zero, so a
         // count-0 dispatch (never issued — empty returns above) would read 0.
         encoder->clearBuffer(entry.m_counter.get(), rhi::BufferRange{
             .offset = 0u,
             .size = kIndirectCounterBytes,
         });
+
         // (B2) declare the UAV write before the compute pass.
         encoder->setBufferState(entry.m_payloads.get(), rhi::ResourceState::UnorderedAccess);
         encoder->setBufferState(entry.m_args.get(), rhi::ResourceState::UnorderedAccess);
+
         rhi::IComputePassEncoder *const compute_pass = encoder->beginComputePass();
         if (compute_pass == nullptr) [[unlikely]] {
             return std::make_error_code(std::errc::io_error);
         }
+
         if (rhi::IShaderObject *const shader_object = compute_pass->bindPipeline(m_compute_pipeline.get());
             PPR_ENSURE(shader_object)) {
             const rhi::ShaderCursor compute_cursor{shader_object};
+
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_scratch"].setBinding(
                     rhi::Binding(entry.m_scratch.get(), makeFullRange(entry.m_scratch.get()))));
+
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_device_payloads"].setBinding(
                     rhi::Binding(entry.m_payloads.get(), makeFullRange(entry.m_payloads.get()))));
+
             // Counter-UAV: explicit full-args range (a default Binding reads
             // {0,0} across the module boundary and D3D12 rejects NumElements
             // 0); the counter resource itself rides resource2.
@@ -1224,16 +1460,20 @@ namespace pP {
                     .offset = 0u,
                     .size = static_cast<u64>(kIndirectRingCapacity) * sizeof(rhi::IndirectDrawArguments),
                     })));
+
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_instance_count"].setData(&dispatch_count, sizeof(dispatch_count)));
+
             constexpr u32 max_count = kIndirectRingCapacity;
             PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
                 compute_cursor["g_max_count"].setData(&max_count, sizeof(max_count)));
+
             compute_pass->dispatchCompute(dispatch_count, 1u, 1u);
         } else {
             return std::make_error_code(std::errc::broken_pipe);
         }
         compute_pass->end();
+
         // (B3) UAV barrier: scratch→payloads/args publish completes before
         // any later read. (B4) args/payload read states declared before draw
         // (the submit close returns them to default = read states anyway).
@@ -1242,6 +1482,7 @@ namespace pP {
         encoder->setBufferState(entry.m_payloads.get(), rhi::ResourceState::ShaderResource);
         rhi::ComPtr<rhi::ICommandBuffer> commands{};
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encoder->finish(commands.writeRef()));
+
         rhi::ICommandBuffer *commands_raw = commands.get();
         rhi::IFence *fence_raw = m_publish_fence.get();
         u64 signal_value = entry.m_fence_value;
@@ -1255,31 +1496,35 @@ namespace pP {
                 }));
         committed = true;
         m_published_buckets.clear();
+
         for (const IndirectBucket &bucket: plan->m_buckets) {
             rhi::IBuffer *vertex_buffer = nullptr;
             rhi::IBuffer *index_buffer = nullptr;
             for (u32 i = 0u; i < dispatch_count; ++i) {
-                if ((*staged)[i].m_bag_bucket == bucket.m_bag_bucket) {
+                if ((*staged)[i].m_vertex_buffer == bucket.m_vertex_buffer and
+                    (*staged)[i].m_index_buffer == bucket.m_index_buffer) {
                     vertex_buffer = (*staged)[i].m_vertex_buffer;
                     index_buffer = (*staged)[i].m_index_buffer;
                     break;
                 }
             }
+
             if (vertex_buffer == nullptr or index_buffer == nullptr) [[unlikely]] {
                 clearPublished_();
                 entry.m_busy = false;
                 entry.m_fence_value = 0u;
                 return std::make_error_code(std::errc::invalid_argument);
             }
+
             m_published_buckets.push_back(PublishedBucket{
                 .m_variant = bucket.m_variant,
-                .m_bag_bucket = bucket.m_bag_bucket,
                 .m_vertex_buffer = vertex_buffer,
                 .m_index_buffer = index_buffer,
                 .m_first_arg = bucket.m_first_arg,
                 .m_arg_count = bucket.m_arg_count,
             });
         }
+
         m_published_count = plan->m_total_count;
         m_published_slot = *acquired;
         if (over_count) {
@@ -1320,10 +1565,8 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (m_published_slot >= kIndirectRingFrames or m_published_count == 0u or
-            m_published_buckets.empty()) {
-            PPR_LOG_ONCE_KEY(TrianglePass, debug,
-                Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
+        if (m_published_slot >= kIndirectRingFrames or m_published_count == 0u or m_published_buckets.empty()) {
+            PPR_LOG_ONCE_KEY(TrianglePass, debug, Log::Once::combine(__LINE__, reinterpret_cast<u64>(this)),
                 "draw skipped: nothing published");
             return default_value_v;
         }
@@ -1347,7 +1590,7 @@ namespace pP {
         }
 
         Expected<rhi::IRenderPipeline *> pipeline =
-                pipelineForIndirect_(draw_context.m_device, draw_context.m_render_pipeline_key, bucket.m_variant);
+            pipelineForIndirect_(draw_context.m_device, draw_context.m_render_pipeline_key, bucket.m_variant);
         if (not pipeline.has_value()) [[unlikely]] {
             return pipeline.error();
         }
@@ -1407,11 +1650,13 @@ namespace pP {
         }
         rhi::IBuffer *vertex_buffer = nullptr;
         rhi::IBuffer *index_buffer = nullptr;
-        for (const Instance &instance: m_instances) {
-            Expected<BagBucketId> instance_bucket = m_bag_cache.bucketOf(instance.m_bag);
-            if (instance_bucket.has_value() and *instance_bucket == bucket.m_bag_bucket) {
-                vertex_buffer = m_bag_cache.vertexBuffer(*instance_bucket);
-                index_buffer = m_bag_cache.indexBuffer(*instance_bucket);
+        for (const SubmittedInstance &instance: m_submitted_instances) {
+            const Expected<ResolvedBag> bag = m_bag_cache.resolveForDraw(instance.m_bag);
+            if (bag.has_value() and
+                bag->m_vertex_buffer == bucket.m_vertex_buffer and
+                bag->m_index_buffer == bucket.m_index_buffer) {
+                vertex_buffer = bag->m_vertex_buffer;
+                index_buffer = bag->m_index_buffer;
                 break;
             }
         }
@@ -1423,7 +1668,7 @@ namespace pP {
         }
 
         Expected<rhi::IRenderPipeline *> pipeline =
-                pipelineForIndirect_(draw_context.m_device, draw_context.m_render_pipeline_key, bucket.m_variant);
+            pipelineForIndirect_(draw_context.m_device, draw_context.m_render_pipeline_key, bucket.m_variant);
         if (not pipeline.has_value()) [[unlikely]] {
             return pipeline.error();
         }
@@ -1478,13 +1723,13 @@ namespace pP {
     std::error_code TrianglePass::shutdown() {
         PPR_LOG(TrianglePass, info, "TrianglePass shut down", {
             {"has_pipeline", m_render_pipeline != nullptr},
-            {"instances", m_instances.size()},
+            {"instances", m_submitted_instances.size()},
             });
 
         // §2.4 teardown: caches → sampler → pipeline/program/layout/buffers
         // (retain-first-error, best-effort), BEFORE renderer waitOnHost.
         std::error_code first_err{};
-        m_instances.clear();
+        m_submitted_instances.clear();
         m_live_scenes.clear();
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_material_cache.shutdown());
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_texture_cache.shutdown());
@@ -1500,11 +1745,15 @@ namespace pP {
         m_compute_program.setNull();
         m_indirect_program.setNull();
         m_shader_program.setNull();
+        m_direct_payloads.setNull();
+        m_direct_payload_capacity = 0u;
         clearRing_();
         m_indirect_payloads.setNull();
         m_indirect_payload_capacity = 0u;
         m_indirect_args.setNull();
         m_indirect_arg_capacity = 0u;
+        m_direct_payloads.setNull();
+        m_direct_payload_capacity = 0u;
         m_fallback_view.setNull();
         m_fallback_texture.setNull();
         m_sampler_handle = rhi::DescriptorHandle{};
@@ -1516,7 +1765,7 @@ namespace pP {
         // shutdown. Live-scene receipts are kept: releaseScene still drains
         // the retained CPU records; only GPU-touching calls park.
         std::error_code first_err{};
-        m_instances.clear();
+        m_submitted_instances.clear();
         m_indirect_pipelines.clear();
         // Device loss discards ring retirement outright (GPU objects are
         // gone; nothing in flight is worth waiting for) — programs survive

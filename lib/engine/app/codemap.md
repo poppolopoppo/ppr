@@ -93,8 +93,9 @@ application.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
    `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("<name> - CPU = <ms> ms")` →
    `triangle_pass->update(dt, camera->getSnapshot())` →
-   `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` →
-   `renderer.renderAndPresent(viewport->getWindow(), { *m_triangle_pass, *m_ui_service })`. `shutdown()` detaches the
+   `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` → two explicit surface passes:
+   TrianglePass selects the renderer-owned depth view, then ImGui selects no depth and loads the existing color
+   attachment; both render before one present. `shutdown()` detaches the
    device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
    erases + shuts down UI, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
    resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then

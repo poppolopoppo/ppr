@@ -40,7 +40,7 @@ export namespace pP {
 
         static_assert(sizeof(FrameConstants) == 288, "FrameConstants must match the HLSL layout (4 * float4x4 + 2 * float4)");
 
-        struct Instance {
+        struct SubmittedInstance {
             TriangleBagHandle m_bag{};
             MaterialHandle m_material{};
             float4x4 m_model = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
@@ -83,7 +83,8 @@ export namespace pP {
         // contiguous args slice. Empty buckets are never emitted.
         struct IndirectBucket {
             TrianglePipelineVariant m_variant{};
-            BagBucketId m_bag_bucket{};
+            rhi::IBuffer *m_vertex_buffer = nullptr;
+            rhi::IBuffer *m_index_buffer = nullptr;
             u32 m_first_arg = 0u;
             u32 m_arg_count = 0u;
         };
@@ -111,15 +112,46 @@ export namespace pP {
             u32 m_total_count = 0u;
         };
 
+        // Direct draw planning: each group has one fixed geometry range and
+        // pipeline variant, while its contiguous payload interval carries the
+        // per-instance model, material, and resolved range. The payload start
+        // is the group's payload base; the group count is its instanceCount.
+        // The vertex/index buffers ride the group, resolved once at plan time,
+        // so encoding never re-derives them from a payload index.
+        struct DrawGroup {
+            TrianglePipelineVariant m_variant{};
+            rhi::IBuffer *m_vertex_buffer = nullptr;
+            rhi::IBuffer *m_index_buffer = nullptr;
+            u32 m_vb_offset = 0u;
+            u32 m_ib_start = 0u;
+            u32 m_count = 0u;
+            i32 m_base_vertex = 0;
+            u32 m_first_payload = 0u;
+            u32 m_instance_count = 0u;
+            Array<u32> m_source_indices{};
+        };
+
+        struct DrawPlan {
+            Array<DrawGroup> m_groups{};
+            u32 m_payload_count = 0u;
+        };
+
         // ------------------------------------------------------------------
         // scene upload products
         // ------------------------------------------------------------------
 
         [[nodiscard]] static Expected<IndirectPlan> planIndirectDraws(
             std::span<const TrianglePipelineVariant> variants,
-            std::span<const BagBucketId> bag_buckets,
+            std::span<rhi::IBuffer *const> vertex_buffers,
+            std::span<rhi::IBuffer *const> index_buffers,
             std::span<const u32> vertex_counts,
             u32 payload_capacity);
+
+        [[nodiscard]] static Expected<DrawPlan> planDraws(
+            std::span<const TrianglePipelineVariant> variants,
+            std::span<rhi::IBuffer *const> vertex_buffers,
+            std::span<rhi::IBuffer *const> index_buffers,
+            std::span<const TriangleBagRange> ranges);
 
         // §7 uploadScene product: one bag per (mesh, prim) — full mesh verts
         // plus the prim index slice, Mango prim base riding the range —
@@ -149,6 +181,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
 
+        // The one draw path: resolve → plan → upload payloads → one
+        // drawInstanced per group. Failure is fail-closed but not all-or-
+        // nothing: staging and payload upload are all-or-nothing, while
+        // encoding stops at the first group that cannot be encoded and the
+        // groups already encoded into the pass stand.
         [[nodiscard]] std::error_code render(const DrawContext &draw_context);
 
         // Phase 7 L1 CPU-staged indirect path: stages submitInstance data
@@ -229,8 +266,19 @@ export namespace pP {
 
     private:
         // ------------------------------------------------------------------
-        // pipeline and direct encoding
+        // resolve, plan, and encode
         // ------------------------------------------------------------------
+
+        // One submitted instance with its bag and material handles resolved to
+        // drawable state: the GPU payload plus the geometry it draws from. The
+        // buffers are raw and non-owning views of the bag cache's buckets.
+        struct ResolvedInstance {
+            InstancePayload m_payload{};
+            TrianglePipelineVariant m_variant{};
+            u32 m_count = 0u;
+            rhi::IBuffer *m_vertex_buffer = nullptr;
+            rhi::IBuffer *m_index_buffer = nullptr;
+        };
 
         std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
@@ -245,7 +293,29 @@ export namespace pP {
 
         [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
 
-        [[nodiscard]] std::error_code encodeInstance_(const DrawContext &draw_context, const Instance &instance);
+        // Fail-closed resolve of every submitted instance, all-or-nothing: one
+        // stale handle or stride mismatch fails the whole frame before any
+        // encode. Zero-count bags resolve but are dropped by the caller.
+        [[nodiscard]] Expected<Array<ResolvedInstance, mem::ScratchPad> > resolveInstances_() const;
+
+        [[nodiscard]] Expected<ResolvedInstance> resolveOne_(const SubmittedInstance &instance) const;
+
+        // Project resolved instances onto the planner's parallel spans.
+        [[nodiscard]] Expected<DrawPlan> buildPlan_(
+            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances);
+
+        // All-or-nothing payload upload: the whole compacted interval or fail.
+        [[nodiscard]] std::error_code uploadPayloads_(
+            rhi::IDevice &device,
+            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const DrawPlan &plan);
+
+        [[nodiscard]] std::error_code encodeGroup_(
+            const DrawContext &draw_context,
+            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const DrawGroup &group);
+
+        [[nodiscard]] std::error_code ensureDirectPayloads_(rhi::IDevice &device, u32 payload_count);
 
         [[nodiscard]] Expected<rhi::IRenderPipeline *> pipelineForImpl_(
             rhi::IDevice &device,
@@ -260,7 +330,7 @@ export namespace pP {
             TrianglePipelineVariant variant);
 
         // ------------------------------------------------------------------
-        // indirect draw state
+        // indirect draw state (transitional; deleted with the indirect lanes)
         // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code ensureIndirectScratch_(rhi::IDevice &device, u32 payload_count);
@@ -270,26 +340,11 @@ export namespace pP {
             const IndirectBucket &bucket,
             u32 payload_count);
 
-        // L2b compute-publish staging (shared resolve for the CPU L1 path and
-        // the compute L2b path — identical fail-closed validation, no partial
-        // staging in either).
-        struct StagedDraw {
-            InstancePayload m_payload{};
-            TrianglePipelineVariant m_variant{};
-            BagBucketId m_bag_bucket{};
-            u32 m_count = 0u;
-            rhi::IBuffer *m_vertex_buffer = nullptr;
-            rhi::IBuffer *m_index_buffer = nullptr;
-        };
-
-        [[nodiscard]] Expected<Array<StagedDraw> > stageDraws_() const;
-
         // One published compute bucket: draw geometry resolved at publish
-        // time (never re-scanned from m_instances at draw — the instance list
+        // time (never re-scanned from m_submitted_instances at draw — the instance list
         // may change between publish and draw).
         struct PublishedBucket {
             TrianglePipelineVariant m_variant{};
-            BagBucketId m_bag_bucket{};
             rhi::IBuffer *m_vertex_buffer = nullptr;
             rhi::IBuffer *m_index_buffer = nullptr;
             u32 m_first_arg = 0u;
@@ -338,6 +393,9 @@ export namespace pP {
         FlatMap<TrianglePipelineVariant, rhi::ComPtr<rhi::IRenderPipeline> > m_variant_pipelines{};
         FlatMap<TrianglePipelineVariant, rhi::ComPtr<rhi::IRenderPipeline> > m_indirect_pipelines{};
 
+        rhi::ComPtr<rhi::IBuffer> m_direct_payloads{};
+        u64 m_direct_payload_capacity = 0u;
+
         // L1 CPU-staged indirect scratch (Upload ring of one): payloads at
         // 96 B stride + args at 16 B stride, rewritten every renderIndirect
         // via mapBuffer. Pass-owned like the caches, so the buffers outlive
@@ -358,11 +416,15 @@ export namespace pP {
         u32 m_published_count = 0u;
         u32 m_published_slot = kInvalidIndirectSlot;
 
-        // Pass-owned GPU caches + ONE shared sampler lent to the material
-        // cache (non-owning view; destroyed AFTER the material cache).
-        // m_fallback_* is the 1x1 white texture bound to kNoTexture slots so
-        // every scalar handle uniform stays valid; the shader takes the factor
-        // path for those slots.
+        // Pass-owned GPU caches + the ONE shared sampler. m_shared_sampler is a
+        // raw non-owning view lent to BindlessMaterialCache, so the teardown
+        // ORDER below is the ownership contract between the two members:
+        // m_material_cache must be shut down (which nulls its view) BEFORE
+        // m_shared_sampler is released. Both shutdown and notifyDeviceLost
+        // perform exactly that order; the initialize rollback does too.
+        // m_fallback_* is the 1x1 white texture bound to kNoTexture slots in
+        // the TEXTURE heap only (heap slot 0); material slots start at 0 and
+        // are real materials, so they have no fallback entry.
         TriangleBagCache m_bag_cache{};
         BindlessTextureCache m_texture_cache{};
         BindlessMaterialCache m_material_cache{};
@@ -373,7 +435,7 @@ export namespace pP {
         rhi::DescriptorHandle m_fallback_descriptor{};
         bool m_caches_ready = false;
 
-        Array<Instance> m_instances{};
+        Array<SubmittedInstance> m_submitted_instances{};
 
         // Live-scene receipts: one nonce per successful
         // uploadScene; releaseScene consumes it before touching the caches

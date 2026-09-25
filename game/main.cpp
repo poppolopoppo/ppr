@@ -6,8 +6,9 @@ import engine.math;
 import engine.mesh;
 import engine.rhi;
 import engine.app;
-import imgui_internal;
 import std;
+
+import imgui_internal;
 
 namespace demo {
     using namespace pP;
@@ -38,6 +39,8 @@ namespace demo {
             ESceneZone m_zone;
             std::size_t m_asset;
             float m_position[3];
+            float m_scale;
+            u8 m_quarter_turns;
         };
 
         static constexpr std::size_t kNoAsset = std::numeric_limits<std::size_t>::max();
@@ -62,34 +65,104 @@ namespace demo {
         };
         static_assert(std::size(kAssetSpecs) == 16u);
 
-        static constexpr float kFixtureScale = 1.0f;
-        // Kepler-9 Cutaway Waystation: shell and gate frame a compact route
-        // from ground-level services to the catwalk and domestic room.
-        static constexpr std::array<Placement, 21u> kHabitatLayout{
+        // Kepler-9 Cutaway Waystation: a 20-unit shell establishes the
+        // footprint while the entrance, stairs, ladder, catwalk, and raised
+        // habitat remain concentrated around the inherited central camera.
+        static constexpr std::array<Placement, 53u> kHabitatLayout{
             {
-                {ESceneZone::shell, 0u, {-1.0f, 0.0f, 0.0f}},
-                {ESceneZone::shell, 0u, {0.0f, 0.0f, 0.0f}},
-                {ESceneZone::shell, 0u, {1.0f, 0.0f, 0.0f}},
-                {ESceneZone::shell, 1u, {-1.0f, 0.0f, -0.45f}},
-                {ESceneZone::shell, 2u, {0.0f, 0.0f, -0.45f}},
-                {ESceneZone::shell, 3u, {1.0f, 0.0f, -0.45f}},
-                {ESceneZone::shell, 4u, {1.0f, 0.0f, -0.25f}},
-                {ESceneZone::circulation, 5u, {-0.75f, 0.0f, 0.25f}},
-                {ESceneZone::circulation, 10u, {0.0f, 0.55f, -0.1f}},
-                {ESceneZone::circulation, 10u, {1.0f, 0.55f, -0.1f}},
-                {ESceneZone::circulation, 14u, {0.75f, 0.0f, 0.3f}},
-                {ESceneZone::services, 8u, {-1.6f, 0.0f, 0.1f}},
-                {ESceneZone::services, 11u, {-0.65f, 0.0f, 0.1f}},
-                {ESceneZone::services, 12u, {0.2f, 0.0f, 0.3f}},
-                {ESceneZone::services, 13u, {-0.8f, 0.3f, -0.15f}},
-                {ESceneZone::services, 6u, {-0.3f, 0.7f, -0.15f}},
-                {ESceneZone::services, 6u, {0.3f, 0.7f, -0.15f}},
-                {ESceneZone::services, 6u, {0.9f, 0.7f, -0.15f}},
-                {ESceneZone::habitat, 7u, {0.8f, 0.0f, 0.3f}},
-                {ESceneZone::habitat, 9u, {1.55f, 0.0f, 0.15f}},
-                {ESceneZone::habitat, 15u, {1.55f, 0.4f, 0.15f}},
+                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 2u, {-7.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {-5.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 2u, {-3.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {-1.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 2u, {1.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {3.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 2u, {5.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {7.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {9.0f, 0.0f, 15.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 8.0f}, 2.0f, 1u},
+                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 11.5f}, 2.0f, 1u},
+                {ESceneZone::shell, 2u, {-9.0f, 0.0f, 15.0f}, 2.0f, 1u},
+                {ESceneZone::shell, 1u, {9.0f, 0.0f, 8.0f}, 2.0f, 1u},
+                {ESceneZone::shell, 1u, {9.0f, 0.0f, 11.5f}, 2.0f, 1u},
+                {ESceneZone::shell, 2u, {9.0f, 0.0f, 15.0f}, 2.0f, 1u},
+                {ESceneZone::shell, 3u, {0.0f, 0.0f, 6.0f}, 1.5f, 0u},
+                {ESceneZone::shell, 4u, {0.0f, 0.0f, 6.2f}, 1.5f, 0u},
+                {ESceneZone::shell, 0u, {-8.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {-6.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {-4.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {-2.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {0.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {2.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {4.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {6.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::shell, 0u, {8.0f, -0.3f, 8.0f}, 2.0f, 0u},
+                {ESceneZone::circulation, 5u, {-1.5f, 0.0f, 6.5f}, 1.0f, 0u},
+                {ESceneZone::circulation, 5u, {-0.5f, 0.3f, 6.5f}, 1.0f, 0u},
+                {ESceneZone::circulation, 5u, {0.5f, 0.6f, 6.5f}, 1.0f, 0u},
+                {ESceneZone::circulation, 5u, {1.5f, 0.9f, 6.5f}, 1.0f, 0u},
+                {ESceneZone::circulation, 14u, {2.2f, 0.9f, 6.8f}, 1.8f, 0u},
+                {ESceneZone::circulation, 10u, {-1.0f, 1.8f, 6.8f}, 1.5f, 1u},
+                {ESceneZone::circulation, 10u, {1.0f, 1.8f, 6.8f}, 1.5f, 1u},
+                {ESceneZone::circulation, 10u, {3.0f, 1.8f, 6.8f}, 1.5f, 1u},
+                {ESceneZone::circulation, 10u, {5.0f, 1.8f, 6.8f}, 1.5f, 1u},
+                {ESceneZone::circulation, 0u, {0.0f, 1.8f, 7.0f}, 2.0f, 0u},
+                {ESceneZone::circulation, 0u, {2.0f, 1.8f, 7.0f}, 2.0f, 0u},
+                {ESceneZone::circulation, 0u, {4.0f, 1.8f, 7.0f}, 2.0f, 0u},
+                {ESceneZone::services, 11u, {-2.5f, 0.0f, 6.0f}, 1.2f, 0u},
+                {ESceneZone::services, 12u, {0.0f, 0.0f, 6.2f}, 1.5f, 0u},
+                {ESceneZone::services, 12u, {-2.0f, 0.0f, 9.0f}, 2.0f, 0u},
+                {ESceneZone::services, 12u, {2.0f, 0.0f, 9.0f}, 2.0f, 0u},
+                {ESceneZone::services, 13u, {-3.5f, 0.9f, 9.0f}, 1.2f, 0u},
+                {ESceneZone::services, 8u, {-6.0f, 0.0f, 8.0f}, 1.5f, 0u},
+                {ESceneZone::services, 8u, {6.0f, 0.0f, 8.0f}, 1.5f, 0u},
+                {ESceneZone::services, 6u, {-5.0f, 2.3f, 14.6f}, 1.5f, 0u},
+                {ESceneZone::services, 6u, {-2.5f, 2.3f, 14.6f}, 1.5f, 0u},
+                {ESceneZone::services, 6u, {0.0f, 2.3f, 14.6f}, 1.5f, 0u},
+                {ESceneZone::services, 6u, {2.5f, 2.3f, 14.6f}, 1.5f, 0u},
+                {ESceneZone::habitat, 7u, {0.5f, 2.1f, 7.3f}, 1.2f, 0u},
+                {ESceneZone::habitat, 9u, {-0.2f, 2.1f, 7.3f}, 1.2f, 0u},
+                {ESceneZone::habitat, 15u, {-0.2f, 2.58f, 7.3f}, 1.0f, 0u},
             }
         };
+
+        [[nodiscard]] static float4x4 placementTransform(const Placement &placement) noexcept {
+            const float scale_x = placement.m_scale;
+            const float scale_y = placement.m_scale;
+            const float scale_z = placement.m_scale;
+            switch (placement.m_quarter_turns) {
+                case 0u:
+                    return float4x4{
+                        float4{scale_x, 0.0f, 0.0f, 0.0f},
+                        float4{0.0f, scale_y, 0.0f, 0.0f},
+                        float4{0.0f, 0.0f, scale_z, 0.0f},
+                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
+                    };
+                case 1u:
+                    return float4x4{
+                        float4{0.0f, 0.0f, scale_x, 0.0f},
+                        float4{0.0f, scale_y, 0.0f, 0.0f},
+                        float4{-scale_z, 0.0f, 0.0f, 0.0f},
+                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
+                    };
+                case 2u:
+                    return float4x4{
+                        float4{-scale_x, 0.0f, 0.0f, 0.0f},
+                        float4{0.0f, scale_y, 0.0f, 0.0f},
+                        float4{0.0f, 0.0f, -scale_z, 0.0f},
+                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
+                    };
+                case 3u:
+                    return float4x4{
+                        float4{0.0f, 0.0f, -scale_x, 0.0f},
+                        float4{0.0f, scale_y, 0.0f, 0.0f},
+                        float4{scale_z, 0.0f, 0.0f, 0.0f},
+                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
+                    };
+                default:
+                    return float4x4::identity();
+            }
+        }
 
     public:
         using super_t = ApplicationEditor;
@@ -112,9 +185,7 @@ namespace demo {
                 const AssetSpec &spec = kAssetSpecs[spec_index];
                 const std::filesystem::path model_dir = asset_root / spec.m_pack / "Models" / spec.m_format / "";
                 Expected<mesh::SceneAsset> scene = mesh::importAndConvert(model_dir, spec.m_file);
-                if (not
-                    scene.has_value())
-                [[unlikely]] {
+                if (not scene.has_value()) [[unlikely]] {
                     PPR_LOG(Demo, warning, "colony asset import failed", {
                         {"file", std::string{spec.m_file}},
                         {"pack", std::string{spec.m_pack}},
@@ -122,15 +193,31 @@ namespace demo {
                         });
                     continue;
                 }
+
+                for (std::size_t mesh_index = 0u; mesh_index < scene->m_meshes.size(); ++mesh_index) {
+                    const mesh::StaticMeshAsset &mesh_asset = scene->m_meshes[mesh_index];
+                    const float3 bounds_center = mesh_asset.m_bounds.center();
+                    const float3 bounds_size = mesh_asset.m_bounds.size();
+                    PPR_LOG(Demo, info, "colony source bounds",
+                        {
+                        {"file", std::string{spec.m_file}},
+                        {"mesh", static_cast<u32>(mesh_index)},
+                        {"center_x", bounds_center.x},
+                        {"center_y", bounds_center.y},
+                        {"center_z", bounds_center.z},
+                        {"size_x", bounds_size.x},
+                        {"size_y", bounds_size.y},
+                        {"size_z", bounds_size.z},
+                        });
+                }
+
                 Array<image::ImageAsset> images{};
                 bool decoded_all = true;
                 for (const mesh::ImageRef &ref: scene->m_images) {
                     mem::SharedBuffer bytes{};
                     if (ref.m_is_file) {
                         Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(model_dir / ref.m_rel_path);
-                        if (not
-                            mapped.has_value())
-                        [[unlikely]] {
+                        if (not mapped.has_value()) [[unlikely]] {
                             PPR_LOG(Demo, warning, "colony texture mapping failed", {
                                 {"file", std::string{spec.m_file}},
                                 {"texture", ref.m_rel_path},
@@ -143,9 +230,8 @@ namespace demo {
                     } else {
                         bytes = ref.m_bytes;
                     }
-                    if (not
-                        bytes.isValid())
-                    [[unlikely]] {
+
+                    if (not bytes.isValid()) [[unlikely]] {
                         PPR_LOG(Demo, warning, "colony texture bytes are invalid", {
                             {"file", std::string{spec.m_file}},
                             {"texture", ref.m_name},
@@ -153,11 +239,11 @@ namespace demo {
                         decoded_all = false;
                         break;
                     }
+
                     Expected<image::ImageAsset> decoded = image::decodeToRgba8(
                         bytes.getBufferData(), ref.m_ext, image::ImageDecodeDesc{}, image::ImageUsage::color);
-                    if (not
-                        decoded.has_value())
-                    [[unlikely]] {
+
+                    if (not decoded.has_value()) [[unlikely]] {
                         PPR_LOG(Demo, warning, "colony asset decode failed", {
                             {"file", std::string{spec.m_file}},
                             {"texture", ref.m_name},
@@ -166,16 +252,16 @@ namespace demo {
                         decoded_all = false;
                         break;
                     }
+
                     images.push_back(*decoded);
                 }
+
                 if (not decoded_all) {
                     continue;
                 }
 
                 Expected<TrianglePass::UploadedScene> uploaded = trianglePass().uploadScene(*scene, images);
-                if (not
-                    uploaded.has_value())
-                [[unlikely]] {
+                if (not uploaded.has_value()) [[unlikely]] {
                     PPR_LOG(Demo, warning, "colony asset upload failed", {
                         {"file", std::string{spec.m_file}},
                         {"error", uploaded.error().message()},
@@ -188,21 +274,24 @@ namespace demo {
                     .m_images = std::move(images),
                     .m_uploaded = std::move(*uploaded),
                 };
+
                 PPR_LOG(Demo, info, "colony asset ready", {
                     {"file", std::string{spec.m_file}},
                     {"images", entry.m_images.size()},
                     {"primitives", entry.m_uploaded.m_prims.size()},
                     });
+
                 m_asset_indices[spec_index] = m_assets.size();
                 m_assets.push_back(std::move(entry));
             }
 
-            m_load_succeeded = not
-                    m_assets.empty();
+            m_load_succeeded = not m_assets.empty();
+
             PPR_LOG(Demo, info, "colony fixture loaded", {
                 {"loaded", static_cast<u32>(m_assets.size())},
                 {"candidates", static_cast<u32>(std::size(kAssetSpecs))},
                 });
+
             if (not m_load_succeeded) [[unlikely]] {
                 return make_error_code(std::errc::no_such_file_or_directory);
             }
@@ -213,12 +302,20 @@ namespace demo {
         std::error_code update(const TimeSpan dt) override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
 
+#if 0
+            ImGui::ShowDemoWindow();
+            ImGui::ShowDebugLogWindow();
+#endif
+
             trianglePass().clearInstances();
             std::size_t submitted = 0u;
             std::size_t active_placements = 0u;
             std::array<u32, 5u> zone_counts{};
             for (const Placement &placement: kHabitatLayout) {
                 if (placement.m_asset >= m_asset_indices.size()) [[unlikely]] {
+                    return make_error_code(std::errc::invalid_argument);
+                }
+                if (placement.m_scale <= 0.0f or placement.m_quarter_turns > 3u) [[unlikely]] {
                     return make_error_code(std::errc::invalid_argument);
                 }
                 const std::size_t asset_index = m_asset_indices[placement.m_asset];
@@ -228,19 +325,12 @@ namespace demo {
                 ++active_placements;
                 ++zone_counts[enumOrd(placement.m_zone)];
                 const LoadedAsset &asset = m_assets[asset_index];
-                const float4x4 placement_transform{
-                    float4{kFixtureScale, 0.0f, 0.0f, 0.0f},
-                    float4{0.0f, kFixtureScale, 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, kFixtureScale, 0.0f},
-                    float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
-                };
+                const float4x4 placement_transform = placementTransform(placement);
                 std::size_t primitive_cursor = 0u;
                 for (const mesh::SceneInstance &instance: asset.m_scene.m_instances) {
                     const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                     const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                    if (mesh_index >= asset.m_scene.m_meshes.size()
-                        or
-                        node_index >= asset.m_scene.m_nodes.size())
+                    if (mesh_index >= asset.m_scene.m_meshes.size() or node_index >= asset.m_scene.m_nodes.size())
                     [[unlikely]] {
                         return make_error_code(std::errc::invalid_argument);
                     }
@@ -252,8 +342,8 @@ namespace demo {
                         }
                         const TrianglePass::UploadedPrimitive &source = asset.m_uploaded.m_prims[primitive_cursor++];
                         MaterialHandle material = source.m_material;
-                        if (instance.m_materialOverride != mesh::kInvalidMaterial) {
-                            const std::size_t material_index = static_cast<std::size_t>(*instance.m_materialOverride);
+                        if (instance.m_material_override != mesh::kInvalidMaterial) {
+                            const std::size_t material_index = static_cast<std::size_t>(*instance.m_material_override);
                             if (material_index >= asset.m_uploaded.m_materials.size()) [[unlikely]] {
                                 return make_error_code(std::errc::invalid_argument);
                             }
@@ -277,14 +367,6 @@ namespace demo {
                     {"nature", zone_counts[enumOrd(ESceneZone::nature)]},
                     });
             }
-
-#if PPR_ENABLE_DEBUG
-            if (const auto ui = getServices().get<IUIService>(); ui.isValid()) {
-                ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui->getContext()));
-                static bool g_show_demo_window{true};
-                ImGui::ShowDemoWindow(&g_show_demo_window);
-            }
-#endif
 
             return default_value_v;
         }

@@ -559,7 +559,7 @@ namespace pP::mesh {
                 out.m_roughness = material.roughnessFactor;
                 out.m_emissive = material.emissiveFactor;
                 out.m_alpha_cutoff = material.alphaCutoff;
-                out.m_twosided = material.twosided;
+                out.m_is_two_sided = material.twosided;
                 // Only scalars Mango populates: normal.scale and
                 // occlusion.scale (ImageSample.scale defaults to 1.0).
                 out.m_normal_scale = material.normal.scale;
@@ -735,7 +735,7 @@ namespace pP::mesh {
                 const float rotation_c = std::cos(transform.rotation);
                 const float rotation_s = std::sin(transform.rotation);
                 for (StaticMeshAsset &mesh_asset: scene_asset.m_meshes) {
-                    for (StaticMeshVertex &vert: mesh_asset.m_verts) {
+                    for (StaticMeshVertex &vert: mesh_asset.m_vertices) {
                         const float u = vert.m_texcoord[0];
                         const float v = vert.m_texcoord[1];
                         vert.m_texcoord[0] = rotation_c * transform.scale.x * u - rotation_s * transform.scale.y * v +
@@ -744,7 +744,7 @@ namespace pP::mesh {
                                              transform.offset.y;
                     }
                 }
-                for (MaterialAsset &material: scene_asset.m_mats) {
+                for (MaterialAsset &material: scene_asset.m_materials) {
                     MaterialImageSlot *const slots[] = {
                         &material.m_base_color_map,
                         &material.m_metallic_map,
@@ -812,7 +812,7 @@ namespace pP::mesh {
                 const float triple = dot(row_x, cross(row_y, row_z));
                 StaticMeshAsset baked = scene_asset.m_meshes[mesh_index];
                 Box bounds{};
-                for (StaticMeshVertex &vert: baked.m_verts) {
+                for (StaticMeshVertex &vert: baked.m_vertices) {
                     const float4 moved =
                             float4{vert.m_position[0], vert.m_position[1], vert.m_position[2], 1.0f} * world;
                     vert.m_position[0] = moved.x;
@@ -1050,7 +1050,7 @@ namespace pP::mesh {
                 const bool file_tangents = (mesh.flags & m3d::Vertex::Tangent) != 0u;
                 Array<float4> regen_tangents;
                 const bool regen_ok = not file_tangents and regenTangents(mesh, materials, regen_tangents);
-                out.m_verts.reserve(mesh.vertices.size());
+                out.m_vertices.reserve(mesh.vertices.size());
                 for (u32 i = 0u; i < *vert_count; ++i) {
                     StaticMeshVertex dst = storeVertex(mesh.vertices[i]);
                     if (file_tangents) {
@@ -1067,7 +1067,7 @@ namespace pP::mesh {
                         dst.m_tangent[2] = regen_tangents[i].z;
                         dst.m_tangent[3] = regen_tangents[i].w;
                     }
-                    out.m_verts.push_back(dst);
+                    out.m_vertices.push_back(dst);
                 }
                 if (regen_ok) {
                     out.m_flags |= EMeshAttribute::tangent;
@@ -1208,13 +1208,13 @@ namespace pP::mesh {
                     }
                     out.m_images.push_back(std::move(*ref));
                 }
-                out.m_mats.reserve(scene.materials.size());
+                out.m_materials.reserve(scene.materials.size());
                 for (const m3d::Material &material: scene.materials) {
                     Expected<MaterialAsset> converted = convertMaterial(material, out.m_images);
                     if (not converted.has_value()) [[unlikely]] {
                         return std::unexpected{converted.error()};
                     }
-                    out.m_mats.push_back(std::move(*converted));
+                    out.m_materials.push_back(std::move(*converted));
                 }
                 out.m_meshes.reserve(scene.meshes.size());
                 for (const std::unique_ptr<m3d::IndexedMesh> &mesh: scene.meshes) {

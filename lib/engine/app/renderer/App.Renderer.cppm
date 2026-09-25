@@ -38,8 +38,7 @@ export namespace pP {
 
         [[nodiscard]] std::error_code renderAndPresent(
             const Window &window,
-            std::initializer_list<DrawSubmission> draws,
-            const SurfaceRenderPass &surface_pass = {});
+            std::initializer_list<SurfaceRenderPass> passes);
 
         [[nodiscard]] std::error_code waitOnHost();
 
@@ -48,6 +47,8 @@ export namespace pP {
     private:
         struct SurfaceRecord final {
             rhi::ComPtr<rhi::ISurface> m_surface{};
+            rhi::ComPtr<rhi::ITexture> m_depth_texture{};
+            rhi::ComPtr<rhi::ITextureView> m_depth_view{};
             int2 m_extent{zero_v};
             bool m_configured: 1 {false};
         };
@@ -55,6 +56,12 @@ export namespace pP {
         [[nodiscard]] std::error_code createWindowSurface_(const Window &window, SurfaceRecord **out_record);
 
         [[nodiscard]] std::error_code resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent);
+
+        [[nodiscard]] std::error_code createSurfaceDepth_(const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
+                                                          rhi::ComPtr<rhi::ITextureView> &out_view) const;
+
+        [[nodiscard]] std::error_code renderDraws_(string_literal description, const rhi::RenderPassDesc &render_pass,
+                                                   std::span<const DrawSubmission> draws);
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 

@@ -30,8 +30,7 @@ namespace pP {
         [[nodiscard]] std::error_code inspectAttachment_(
             rhi::ITextureView *const view,
             AttachmentInfo *const out_info) noexcept {
-            if (view == nullptr or
-                out_info == nullptr) [[unlikely]] {
+            if (view == nullptr or out_info == nullptr) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -54,8 +53,7 @@ namespace pP {
                         ? texture_desc.format
                         : view_desc.format;
 
-            if (format == rhi::Format::Undefined or
-                texture_desc.sampleCount == 0u) [[unlikely]] {
+            if (format == rhi::Format::Undefined or texture_desc.sampleCount == 0u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -73,8 +71,7 @@ namespace pP {
         [[nodiscard]] std::error_code validateMatchingAttachment_(
             const AttachmentInfo &reference,
             const AttachmentInfo &candidate) noexcept {
-            if (reference.m_extent.x != candidate.m_extent.x or
-                reference.m_extent.y != candidate.m_extent.y or
+            if (reference.m_extent.x != candidate.m_extent.x or reference.m_extent.y != candidate.m_extent.y or
                 reference.m_sample_count != candidate.m_sample_count) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -144,6 +141,11 @@ namespace pP {
         string_literal description,
         const rhi::RenderPassDesc &render_pass,
         const std::initializer_list<DrawSubmission> draws) {
+        return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()});
+    }
+
+    std::error_code Renderer::renderDraws_(string_literal description, const rhi::RenderPassDesc &render_pass,
+                                           const std::span<const DrawSubmission> draws) {
         if (not m_graphics_queue or not m_rhi_service) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
@@ -232,8 +234,16 @@ namespace pP {
                 safe_narrowing(reference_attachment->m_extent.x),
                 safe_narrowing(reference_attachment->m_extent.y));
 
+            rhi::MarkerColor submission_color{.r = 0.9f, .g = 0.3f, .b = 0.6f};
             for (const DrawSubmission &submission: draws) {
-                pass->insertDebugMarker(submission.m_description.data(), rhi::MarkerColor{.r = 0.9f, .g = 0.3f, .b = 0.6f});
+                pass->pushDebugGroup(submission.m_description.data(), submission_color);
+                PPR_DEFER {
+                    pass->popDebugGroup();
+
+                    submission_color.r = fract(submission_color.r + phi_v<float>);
+                    submission_color.g = fract(submission_color.g + phi_v<float>);
+                    submission_color.b = fract(submission_color.b + phi_v<float>);
+                };
 
                 const rhi::Viewport viewport = submission.m_viewport.value_or(default_viewport);
                 const rhi::ScissorRect scissor = submission.m_scissor.value_or(default_scissor);
@@ -286,8 +296,7 @@ namespace pP {
 
     std::error_code Renderer::renderAndPresent(
         const Window &window,
-        const std::initializer_list<DrawSubmission> draws,
-        const SurfaceRenderPass &surface_pass) {
+        const std::initializer_list<SurfaceRenderPass> passes) {
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
@@ -309,33 +318,65 @@ namespace pP {
             return make_error_code(std::errc::resource_unavailable_try_again);
         }
 
+        if (passes.empty()) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        for (const SurfaceRenderPass &surface_pass: passes) {
+            const bool invalid_depth_policy =
+                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::none and surface_pass.m_depth_stencil) or
+                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::renderer_owned and (
+                         surface_pass.m_depth_stencil or not record->m_depth_texture or not record->m_depth_view)) or
+                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::external and not surface_pass.m_depth_stencil);
+            if (invalid_depth_policy) [[unlikely]] {
+                return std::make_error_code(std::errc::invalid_argument);
+            }
+        }
+
         rhi::ComPtr<rhi::ITexture> image;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, record->m_surface->acquireNextImage(image.writeRef()));
         const rhi::ComPtr<rhi::ITextureView> image_view = image->getDefaultView();
 
-        Array<rhi::RenderPassColorAttachment, mem::ScratchPad> color_attachments;
-        color_attachments.reserve(1u + surface_pass.m_additional_colors.size());
-
-        rhi::RenderPassColorAttachment surface_color{};
-        surface_color.view = image_view.get();
-        applyColorAttachmentOps_(surface_color, surface_pass.m_surface_color);
-        color_attachments.push_back(surface_color);
-
-        for (const rhi::RenderPassColorAttachment &attachment: surface_pass.m_additional_colors) {
-            color_attachments.push_back(attachment);
-        }
-
-        const rhi::RenderPassDesc render_pass{
-            .colorAttachments = color_attachments.data(),
-            .colorAttachmentCount = safe_narrowing(color_attachments.size()),
-            .depthStencilAttachment = surface_pass.m_depth_stencil
-                                          ? std::addressof(*surface_pass.m_depth_stencil)
-                                          : nullptr,
-        };
-
         std::error_code first_err{};
         const string_literal description{std::in_place, window.m_title.data()};
-        PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, render(description, render_pass, draws));
+        for (const SurfaceRenderPass &surface_pass: passes) {
+            if (first_err) {
+                break;
+            }
+
+            Array<rhi::RenderPassColorAttachment, mem::ScratchPad> color_attachments;
+            color_attachments.reserve(1u + surface_pass.m_additional_colors.size());
+
+            rhi::RenderPassColorAttachment surface_color{};
+            surface_color.view = image_view.get();
+            applyColorAttachmentOps_(surface_color, surface_pass.m_surface_color);
+            color_attachments.push_back(surface_color);
+
+            for (const rhi::RenderPassColorAttachment &attachment: surface_pass.m_additional_colors) {
+                color_attachments.push_back(attachment);
+            }
+
+            std::optional<rhi::RenderPassDepthStencilAttachment> depth_stencil;
+            switch (surface_pass.m_depth_policy) {
+                case ESurfaceDepthPolicy::none:
+                    break;
+                case ESurfaceDepthPolicy::renderer_owned:
+                    depth_stencil = rhi::RenderPassDepthStencilAttachment{};
+                    depth_stencil->view = record->m_depth_view.get();
+                    break;
+                case ESurfaceDepthPolicy::external:
+                    depth_stencil = *surface_pass.m_depth_stencil;
+                    break;
+            }
+
+            const rhi::RenderPassDesc render_pass{
+                .colorAttachments = color_attachments.data(),
+                .colorAttachmentCount = safe_narrowing(color_attachments.size()),
+                .depthStencilAttachment = depth_stencil ? std::addressof(*depth_stencil) : nullptr,
+            };
+            first_err = renderDraws_(description, render_pass, surface_pass.m_draws);
+        }
+
         PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, record->m_surface->present());
         return first_err;
     }
@@ -386,6 +427,8 @@ namespace pP {
                 record.m_configured = false;
             }
 
+            record.m_depth_view.setNull();
+            record.m_depth_texture.setNull();
             record.m_extent = new_extent;
             return default_value_v;
         }
@@ -401,8 +444,13 @@ namespace pP {
         surface_config.desiredImageCount = m_desired_image_count;
         surface_config.vsync = m_enable_vsync;
 
+        rhi::ComPtr<rhi::ITexture> depth_texture;
+        rhi::ComPtr<rhi::ITextureView> depth_view;
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, createSurfaceDepth_(new_extent, depth_texture, depth_view));
         PPR_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->configure(surface_config));
 
+        record.m_depth_texture = std::move(depth_texture);
+        record.m_depth_view = std::move(depth_view);
         record.m_extent = new_extent;
         record.m_configured = true;
 
@@ -411,6 +459,30 @@ namespace pP {
             {"width", record.m_extent.x},
             {"height", record.m_extent.y},
             });
+        return default_value_v;
+    }
+
+    std::error_code Renderer::createSurfaceDepth_(const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
+                                                  rhi::ComPtr<rhi::ITextureView> &out_view) const {
+        rhi::TextureDesc depth_desc{};
+        depth_desc.type = rhi::TextureType::Texture2D;
+        depth_desc.size = {safe_narrowing<u32>(extent.x), safe_narrowing<u32>(extent.y), 1u};
+        depth_desc.arrayLength = 1u;
+        depth_desc.mipCount = 1u;
+        depth_desc.format = rhi::Format::D32Float;
+        depth_desc.sampleCount = 1u;
+        depth_desc.memoryType = rhi::MemoryType::DeviceLocal;
+        depth_desc.usage = rhi::TextureUsage::DepthStencil;
+        depth_desc.defaultState = rhi::ResourceState::DepthWrite;
+        depth_desc.label = "window surface depth";
+
+        PPR_RETURN_ERROR_ON_FAIL(Renderer,
+            m_rhi_service->getDevice().createTexture(depth_desc, nullptr, out_texture.writeRef()));
+        out_view = out_texture->getDefaultView();
+        if (not out_view) [[unlikely]] {
+            out_texture.setNull();
+            return make_error_code(std::errc::resource_unavailable_try_again);
+        }
         return default_value_v;
     }
 
@@ -424,11 +496,16 @@ namespace pP {
         m_surfaces.erase(it);
 
         std::error_code first_error{};
+        if (record.m_configured) {
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_error, waitOnHost());
+        }
         if (record.m_configured and record.m_surface) {
             PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_error, record.m_surface->unconfigure());
             record.m_configured = false;
         }
 
+        record.m_depth_view.setNull();
+        record.m_depth_texture.setNull();
         record.m_surface.setNull();
         return first_error;
     }

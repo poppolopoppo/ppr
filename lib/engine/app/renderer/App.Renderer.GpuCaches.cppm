@@ -46,17 +46,11 @@ export namespace pP {
 
     using TriangleBagHandle = Numeric<SparseHandle, TriangleBagHandleTag>;
 
-    [[nodiscard]] bool isValid(const TextureHandle handle) noexcept {
-        return (*handle).isValid();
-    }
+    [[nodiscard]] bool isValid(const TextureHandle handle) noexcept { return (*handle).isValid(); }
 
-    [[nodiscard]] bool isValid(const MaterialHandle handle) noexcept {
-        return (*handle).isValid();
-    }
+    [[nodiscard]] bool isValid(const MaterialHandle handle) noexcept { return (*handle).isValid(); }
 
-    [[nodiscard]] bool isValid(const TriangleBagHandle handle) noexcept {
-        return (*handle).isValid();
-    }
+    [[nodiscard]] bool isValid(const TriangleBagHandle handle) noexcept { return (*handle).isValid(); }
 
     static_assert(std::is_standard_layout_v<TextureHandle>);
     static_assert(sizeof(TextureHandle) == 8u);
@@ -64,11 +58,6 @@ export namespace pP {
     static_assert(sizeof(MaterialHandle) == 8u);
     static_assert(std::is_standard_layout_v<TriangleBagHandle>);
     static_assert(sizeof(TriangleBagHandle) == 8u);
-
-    struct BagBucketIdTag final {
-    };
-
-    using BagBucketId = Numeric<u32, BagBucketIdTag>;
 
     struct TextureBindlessIndexTag final {
     };
@@ -81,8 +70,6 @@ export namespace pP {
     // the extern-umbrella workaround in engine.tests suites).
     extern const TextureBindlessIndex kNoTexture;
 
-    static_assert(std::is_standard_layout_v<BagBucketId>);
-    static_assert(sizeof(BagBucketId) == 4u);
     static_assert(std::is_standard_layout_v<TextureBindlessIndex>);
     static_assert(sizeof(TextureBindlessIndex) == 4u);
 
@@ -153,6 +140,18 @@ export namespace pP {
     // §2.4 range layout: offsets/count/base/bounds (4+4+4+4+12+12) = 40 B.
     static_assert(sizeof(TriangleBagRange) == 40u);
 
+    // One bag fully resolved for drawing: the range plus the vertex and index
+    // buffers of the layout bucket that owns it, as ONE value. The pointers
+    // are raw and non-owning — the bag cache owns the buffers and device loss
+    // clears them, so a resolved binding never outlives the cache's residency.
+    // The cache hands out nothing weaker: bucket identity, the buffers, and the
+    // range can no longer be recombined or mixed across bags by a caller.
+    struct ResolvedBag final {
+        rhi::IBuffer *m_vertex_buffer = nullptr;
+        rhi::IBuffer *m_index_buffer = nullptr;
+        TriangleBagRange m_range{};
+    };
+
     // ------------------------------------------------------------------
     // material packing and pipeline variants
     // ------------------------------------------------------------------
@@ -166,9 +165,8 @@ export namespace pP {
     // on the texcoord set; blend is REJECTED with function_not_supported.
     // Shader fallbacks when slot = kNoTexture: albedo→m_base_color, mr→factors,
     // normal→geometric normal, emissive→m_emissive factor over black.
-    [[nodiscard]] Expected<GpuMaterial> buildGpuMaterial(
-        const mesh::MaterialAsset &asset,
-        GpuTextureRefs resolved) noexcept;
+    [[nodiscard]] Expected<GpuMaterial> buildGpuMaterial(const mesh::MaterialAsset &asset,
+                                                         GpuTextureRefs resolved) noexcept;
 
     // Pipeline-variant key (plan §7): target signature + twosided cull +
     // opaque/mask alpha. BLEND is deferred: rejected with
@@ -191,8 +189,7 @@ export namespace pP {
     };
 
     [[nodiscard]] inline hash_t hashValue(const TrianglePipelineVariant variant) noexcept {
-        return hash::combine(hash::trivial(&variant.m_twosided, hash::default_seed_v),
-            enumOrd(variant.m_alpha));
+        return hash::combine(hash::trivial(&variant.m_twosided, hash::default_seed_v), enumOrd(variant.m_alpha));
     }
 
     [[nodiscard]] std::error_code checkPipelineVariant(TrianglePipelineVariant variant) noexcept;
@@ -252,16 +249,16 @@ export namespace pP {
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
         template<typename V>
-        [[nodiscard]] Expected<TriangleBagHandle> upload(
-            const std::span<const V> verts, const std::span<const u32> idx) {
+        [[nodiscard]] Expected<TriangleBagHandle> upload(const std::span<const V> verts,
+                                                         const std::span<const u32> idx) {
             return upload(verts, idx, 0);
         }
 
         // Prim-slice upload: indices stay file-order while the Mango prim base
         // (file-local + base in all cases) rides the range into MeshPush.
         template<typename V>
-        [[nodiscard]] Expected<TriangleBagHandle> upload(
-            const std::span<const V> verts, const std::span<const u32> idx, const i32 base) {
+        [[nodiscard]] Expected<TriangleBagHandle> upload(const std::span<const V> verts, const std::span<const u32> idx,
+                                                         const i32 base) {
             static_assert(std::is_trivially_copyable_v<V>);
             if (verts.empty() or idx.empty()) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
@@ -269,15 +266,14 @@ export namespace pP {
             return uploadBytes_(std::as_bytes(verts), sizeof(V), idx, base);
         }
 
-        [[nodiscard]] Expected<TriangleBagRange> resolve(TriangleBagHandle handle) const noexcept;
-
-        [[nodiscard]] Expected<BagBucketId> bucketOf(TriangleBagHandle handle) const noexcept;
+        // The single draw-facing resolve: one generation- and identity-checked
+        // lookup returns the bag's range TOGETHER with the vertex/index buffers
+        // of its layout bucket. Stale or released handle → invalid_argument;
+        // device_lost → no_such_device. No dedup by design: every upload owns
+        // its own range, and the buffers are shared per layout bucket.
+        [[nodiscard]] Expected<ResolvedBag> resolveForDraw(TriangleBagHandle handle) const noexcept;
 
         [[nodiscard]] std::error_code release(TriangleBagHandle handle) noexcept;
-
-        [[nodiscard]] rhi::IBuffer *vertexBuffer(BagBucketId bucket) const noexcept;
-
-        [[nodiscard]] rhi::IBuffer *indexBuffer(BagBucketId bucket) const noexcept;
 
         // Usage telemetry (bytes summed over buckets; ranges never reclaim).
         [[nodiscard]] u64 vertexUsed() const noexcept;
@@ -291,6 +287,13 @@ export namespace pP {
         [[nodiscard]] u64 rangeCount() const noexcept;
 
     private:
+        // Bucket identity is cache-internal: the only way out is resolveForDraw,
+        // which hands back resolved buffers rather than a bag index.
+        struct BagBucketIdTag final {
+        };
+
+        using BagBucketId = Numeric<u32, BagBucketIdTag>;
+
         struct BagBucket {
             u32 m_stride = 0u;
             u64 m_vertex_capacity = 0u;
@@ -310,8 +313,8 @@ export namespace pP {
             SparseHandle m_identity{};
         };
 
-        [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(
-            std::span<const std::byte> vert_bytes, u64 stride, std::span<const u32> idx, i32 base);
+        [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(std::span<const std::byte> vert_bytes, u64 stride,
+                                                               std::span<const u32> idx, i32 base);
 
         [[nodiscard]] static hash_t layoutKey_(u64 stride) noexcept;
 
@@ -347,8 +350,8 @@ export namespace pP {
     // ONE shared sampler.
     class BindlessTextureCache {
     public:
-        [[nodiscard]] std::error_code initialize(
-            rhi::IDevice &device, u32 texture_budget, rhi::DescriptorHandle fallback_descriptor);
+        [[nodiscard]] std::error_code initialize(rhi::IDevice &device, u32 texture_budget,
+                                                 rhi::DescriptorHandle fallback_descriptor);
 
         [[nodiscard]] std::error_code shutdown();
 
@@ -387,11 +390,8 @@ export namespace pP {
 
             // Hand-written (no defaulted comparisons: MSVC module ICE family).
             [[nodiscard]] bool operator==(const DedupKey &other) const noexcept {
-                return m_hash == other.m_hash and
-                       m_width == other.m_width and
-                       m_height == other.m_height and
-                       m_format == other.m_format and
-                       m_mips == other.m_mips;
+                return m_hash == other.m_hash and m_width == other.m_width and m_height == other.m_height and
+                       m_format == other.m_format and m_mips == other.m_mips;
             }
 
             [[nodiscard]] bool operator<(const DedupKey &other) const noexcept {
@@ -468,8 +468,7 @@ export namespace pP {
 
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
-        [[nodiscard]] Expected<MaterialHandle> pack(
-            const mesh::MaterialAsset &asset, GpuTextureRefs resolved);
+        [[nodiscard]] Expected<MaterialHandle> pack(const mesh::MaterialAsset &asset, GpuTextureRefs resolved);
 
         [[nodiscard]] std::error_code release(MaterialHandle handle) noexcept;
 
@@ -552,4 +551,4 @@ export namespace pP {
     //   waiting for); shutdown after device loss needs no fence polling.
     // Non-goals: cross-queue dependencies, timeline-semaphore abstraction in
     // the caches (that lives behind the RHI fence seam), CPU-backing spill.
-}
+} // namespace pP

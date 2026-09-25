@@ -18,7 +18,8 @@ bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
 player, camera, viewport, input-context, triangle pass, and UI state. The `game/`
 demo hosts `TurboLarbin : ApplicationEditor`, which privately loads a committed
 Kenney static-colony fixture through `engine.mesh`, `engine.image`, and the GPU
-triangle-pass caches, then submits a 21-placement cutaway habitat.
+triangle-pass caches, then submits a measured 53-placement, roughly 20-unit-wide
+cutaway habitat with explicit foreground/midground/background depth layers.
 
 ## System Entry Points
 

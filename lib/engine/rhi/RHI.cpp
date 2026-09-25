@@ -323,11 +323,7 @@ namespace pP {
                     m_device.setNull();
                 }
 
-                const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
-                PPR_LOG(RHI, info, "RHI instance teardown", {
-                    {"result", static_cast<int>(result)}
-                });
-                PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
+                PPR_RETURN_ERROR_ON_FAIL(RHI, ::slang_rhi::destroyRHI());
 
                 PPR_LOG(RHI, info, "RHI service shut down");
                 return default_value_v;

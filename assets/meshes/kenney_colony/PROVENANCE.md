@@ -5,14 +5,13 @@ This directory contains temporary, committed static content sourced from
 `getContentDir() / "meshes" / "kenney_colony"` and never reads the original `D:`
 source path.
 
-The fixture is a compact cutaway side-view colony habitat composed around the
+The fixture is a measured cutaway side-view colony habitat composed around the
 editor's default camera at `(0, 0, -2)` looking toward positive Z. The visual
-concept is **Kepler-9 Cutaway Waystation**: a three-module shell and central gate
-anchor the silhouette; stairs, a catwalk, and a ladder establish vertical
-circulation; storage and production occupy the left/center; the bed, table, and
-food establish the domestic right side. The layout intentionally stays within
-roughly four world units so it fits the inherited establishing shot without a new
-camera API.
+concept is **Kepler-9 Cutaway Waystation**: a roughly 20-unit-wide shell
+establishes the full silhouette while the entrance, stairs, ladder, catwalk, and
+raised domestic room stay concentrated near the inherited central view. Services
+and storage occupy the outer bands; three deliberate Z layers separate foreground
+traffic, the central room, and the background shell without a new camera API.
 
 ## Runtime-verified static GLBs (16)
 
@@ -25,9 +24,35 @@ camera API.
 - Food Kit / Models / GLB format (1): `bread.glb`
 
 A production-path runtime probe imported all 16 GLBs, resolved and decoded every
-image reference, uploaded all 16 scene receipts, and submitted 21 active
-placements / 22 primitive draws. Four 128×64 texture siblings are shared by the
+image reference, uploaded all 16 scene receipts, and submitted 53 active
+placements / 55 primitive draws. Four 128×64 texture siblings are shared by the
 texture cache across pack uploads; no mip chain is generated.
+
+## Measured source bounds and anchors
+
+The following values were read from every staged GLB's transformed scene bounds
+and are also emitted by the production-path `colony source bounds` log after
+PPR mesh conversion. Bounds are `(X, Y, Z)` in source world units. Except for
+the two noted pieces, the source anchor is the local `Y=0` base.
+
+| Asset | Size | Source anchor / orientation evidence |
+|---|---:|---|
+| `catwalk-straight.glb` | `(1.000, 0.601, 1.255)` | Y spans `-0.147..0.454`; long axis is Z, so side-catwalk placements use a quarter turn. |
+| `conveyor.glb` | `(1.000, 0.400, 1.000)` | Y `0..0.400`; long axis is X. |
+| `machine.glb` | `(1.200, 1.300, 1.500)` | Y `0..1.300`; freestanding base. |
+| `pipe-large-valve.glb` | `(1.000, 1.000, 1.016)` | Y `0..1.000`; upright service part. |
+| `bread.glb` | `(0.442, 0.040, 0.366)` | Y `0..0.040`; rests on the measured table top. |
+| `ladder.glb` | `(0.150, 1.000, 0.550)` | Y `0..1.000`; upright along Y. |
+| `bed-single.glb` | `(0.500, 0.350, 1.000)` | Y `0..0.350`; long axis is Z. |
+| `container-tall.glb` | `(0.800, 0.900, 0.800)` | Y `0..0.900`; upright storage volume. |
+| `door-single.glb` | `(0.400, 0.700, 0.100)` | Y `0..0.700`; upright in the XY entrance plane. |
+| `floor.glb` | `(1.000, 0.300, 1.000)` | Y `0..0.300`; X/Z tile module. |
+| `pipe.glb` | `(0.246, 0.500, 0.285)` | Y `0..0.500`; upright utility run. |
+| `stairs.glb` | `(1.000, 0.300, 1.000)` | Y `0..0.300`; four Y bands rise along local X, so repeated stairs advance +X. |
+| `table.glb` | `(1.100, 0.400, 0.600)` | Y `0..0.400`; long axis is X. |
+| `wall-door-center.glb` | `(1.000, 0.300, 0.300)` | Y `0.700..1.000`; this is a header/lintel, not a full wall. |
+| `wall-window.glb` | `(1.000, 1.000, 0.300)` | Y `0..1.000`; upright in the XY wall plane. |
+| `wall.glb` | `(1.000, 1.000, 0.300)` | Y `0..1.000`; upright in the XY wall plane. |
 
 ## Texture normalization
 
@@ -44,24 +69,27 @@ Upstream `License.txt` files are retained for all four staged packs. Pack-relati
 
 ## Scene composition
 
-- **Shell (7 placements):** three floor modules and a three-piece rear wall with
-  window, doorway header, and inset door create the readable cutaway silhouette.
-- **Circulation (4):** stairs at the left transition, two catwalk modules across
-  the upper plane, and a ladder near the gate create a legible route into the
-  main room.
-- **Services/storage (7):** a tall container, machine, conveyor, valve, and three
-  overhead pipe modules form a dense but separated utility band.
-- **Habitat/domestic (3):** bed, table, and bread form a right-side living area;
-  the bread rests on the table rather than floating.
+- **Shell (27 placements):** ten scale-2 rear wall/window modules form a measured
+  20-unit shell; six side modules close the cutaway; a header/door pair establishes
+  the entrance; nine floor modules establish the inhabited platform.
+- **Circulation (12):** four measured stair repeats rise along +X, a ladder reaches
+  the upper floor, four quarter-turned catwalk modules run across X, and three
+  raised floor modules form the habitat deck.
+- **Services/storage (11):** foreground machine/conveyor traffic, midground
+  conveyors/valve, two storage containers, and four background pipe runs form
+  separated utility bands.
+- **Habitat/domestic (3):** bed, table, and bread form the raised central living
+  area; the bread is placed at the scaled table's measured top height.
 
-All transforms use row-major row-vector multiplication, the shared positive
-uniform scale `1.0`, and deliberate front-plane offsets. No random rotations are
-used.
+All transforms use row-major row-vector multiplication, validated positive
+per-placement uniform scale, and explicit quarter turns. No random rotations or
+mirroring are used. The shell spans X `[-10, 10]`; active content uses three
+foreground/midground/background Z bands.
 
 `ApplicationEditor` exposes no safe startup camera setter: the inherited editor
-fixes its controller at `(0, 0, -2)` looking toward positive Z. The compact
-layout is therefore composed around that default establishing shot rather than
-adding a camera API.
+fixes its controller at `(0, 0, -2)` looking toward positive Z. The full shell
+establishes scale, while the entrance, circulation, and habitat are deliberately
+kept near that view rather than adding a camera API.
 
 ## Runtime validation status
 
@@ -71,11 +99,17 @@ The D3D12 null-SRV validation spam was traced to `TrianglePass` binding
 retained a null `g_textures` SRV. The direct, CPU-indirect, and compute-indirect
 paths now bind the shared descriptor buffer on every root object.
 
-A post-fix 15-second debug run completed 16 loads, 21 placements, 22 draws, and
-16 reverse releases with zero D3D12 GPU-validation messages. A preview capture
-is still visually inconclusive (white client), leaving camera/presentation or
-content visibility as a separate actionable follow-up rather than a descriptor
-validation failure.
+The editor now presents two explicit native passes for the same acquired surface
+image: TrianglePass selects the renderer's resize-matched D32Float depth view;
+ImGui then runs in a color-load pass with no depth attachment. The focused
+`triangle_depth_occlusion_gate` proves the 3D pipeline rejects a farther fragment
+drawn after the nearer fragment. The quarantined `editor_scene_flow` exercises
+the real depth-enabled 3D pass followed by the no-depth ImGui pass. Both passed
+three shuffled loops with no D3D12 GPU-validation errors. The debug layer did emit
+a non-fatal ImGui font-atlas barrier-efficiency message during the UI path; it is
+not a depth/pipeline validation error. A fresh 1296×759 debug-build window capture
+showed the separated shell, services, circulation, and habitat bands with no white
+or blank client.
 
 ## Omitted candidates and concrete reasons
 

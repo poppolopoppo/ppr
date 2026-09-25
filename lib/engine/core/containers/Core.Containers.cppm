@@ -1462,11 +1462,13 @@ export namespace pP {
         using iterator = IndexIterator<RingBuffer, T, i32>;
         using const_iterator = IndexIterator<const RingBuffer, const T, i32>;
 
-        [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, m_front_pos); }
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, m_back_pos); }
+        [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, 0); }
+        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, m_back_pos - m_front_pos); }
 
-        [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, m_front_pos); }
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, m_back_pos); }
+        [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0); }
+        [[nodiscard]] constexpr const_iterator end() const noexcept {
+            return const_iterator(*this, m_back_pos - m_front_pos);
+        }
     };
 
     template<typename T, std::size_t N> requires std::is_trivial_v<T>
