@@ -68,7 +68,7 @@ jobs:
         run: git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
 
       - name: Cache vcpkg artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ env.VCPKG_ROOT }}/downloads
@@ -78,7 +78,7 @@ jobs:
             vcpkg-${{ runner.os }}-${{ matrix.preset }}-
 
       - name: Cache CPM source cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/out/cpm_cache
           key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CPM.cmake', 'cmake/external/*.cmake') }}
