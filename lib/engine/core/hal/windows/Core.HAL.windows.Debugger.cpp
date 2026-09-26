@@ -135,10 +135,12 @@ namespace pP::hal {
 
     void installDebugAssertHooks() noexcept {
 #if PPR_ENABLE_ASSERTIONS
-        ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
-        ::_set_invalid_parameter_handler(&invalidParamHandler);
-        ::_set_purecall_handler(&purecallHandler);
-        std::set_terminate(&terminateHandler);
+        if (::IsDebuggerPresent()) {
+            ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
+            ::_set_invalid_parameter_handler(&invalidParamHandler);
+            ::_set_purecall_handler(&purecallHandler);
+            std::set_terminate(&terminateHandler);
+        }
 #endif
     }
 
