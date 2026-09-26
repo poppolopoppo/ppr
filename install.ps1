@@ -13,7 +13,8 @@ $wingetPackages = @(
     @{ Id = 'RedHat.Podman'; Name = 'Podman' },
     @{ Id = 'OpenJS.NodeJS.22'; Name = 'Node.js 22' },
     @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12' },
-    @{ Id = 'Microsoft.DotNet.SDK.10'; Name = '.NET 10 SDK' }
+    @{ Id = 'Microsoft.DotNet.SDK.10'; Name = '.NET 10 SDK' },
+    @{ Id = 'Microsoft.PIX'; Name = 'Microsoft PIX' }
 )
 
 function Stop-Setup([string] $message) {
@@ -48,6 +49,19 @@ function Assert-MinimumVersion([string] $name, [string] $command, [string[]] $ar
     Write-Output "$name $version detected."
 }
 
+function Test-PixtoolAvailable {
+    if (-not [string]::IsNullOrWhiteSpace($env:PIXTOOL_PATH)) {
+        if (Test-Path -LiteralPath $env:PIXTOOL_PATH -PathType Leaf) { return $true }
+        return $false
+    }
+    $pixRoot = 'C:\Program Files\Microsoft PIX'
+    if (Test-Path -LiteralPath $pixRoot -PathType Container) {
+        $hit = @(Get-ChildItem -LiteralPath $pixRoot -Filter 'pixtool.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($hit.Count -gt 0) { return $true }
+    }
+    return $false
+}
+
 function Install-MissingWingetPackages([string[]] $missingIds) {
     if ($missingIds.Count -eq 0) { return }
     if ($SkipPrerequisiteInstall) {
@@ -66,6 +80,7 @@ function Assert-Layout {
         'local-services\launch.ps1',
         'local-services\uninstall.ps1',
         'local-services\searxng\settings.yml',
+        'local-services\pix\version.txt',
         '.opencode\package.json',
         '.opencode\package-lock.json'
     )
@@ -94,6 +109,7 @@ function Assert-WindowsAndPrerequisites {
     $dotnet = Get-CommandPath 'dotnet'
     $dotnetVersion = if ($null -ne $dotnet) { Get-Version $dotnet @('--version') } else { $null }
     if ($null -eq $dotnetVersion -or $dotnetVersion.Major -lt 10) { $missing.Add('Microsoft.DotNet.SDK.10') }
+    if (-not (Test-PixtoolAvailable)) { $missing.Add('Microsoft.PIX') }
     Install-MissingWingetPackages $missing.ToArray()
 
     Refresh-ProcessPath
@@ -103,6 +119,9 @@ function Assert-WindowsAndPrerequisites {
     $dotnet = Get-CommandPath 'dotnet'
     if ($null -eq $podman -or $null -eq $node -or $null -eq $python -or $null -eq $dotnet) {
         Stop-Setup 'A newly installed prerequisite is not on PATH. Open a new PowerShell shell and rerun install.ps1.'
+    }
+    if (-not (Test-PixtoolAvailable)) {
+        Stop-Setup 'Microsoft PIX (pixtool.exe) was not found after install. Install PIX from https://devblogs.microsoft.com/pix/download/ or set PIXTOOL_PATH, open a new shell, and rerun install.ps1.'
     }
     Assert-MinimumVersion 'Node.js' $node @('--version') ([version]'22.0')
     Assert-MinimumVersion 'Python' $python @('--version') ([version]'3.12')

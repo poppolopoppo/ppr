@@ -59,6 +59,17 @@
           "catalog": 60000,
           "execution": 60000
         }
+      },
+      "pix-mcp": {
+        "type": "local",
+        "command": [
+          "local-services/pix/pix-mcp.exe"
+        ],
+        "disabled": false,
+        "timeout": {
+          "catalog": 60000,
+          "execution": 60000
+        }
       }
     }
   }

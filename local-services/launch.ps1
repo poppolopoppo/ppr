@@ -170,8 +170,10 @@ function Ensure-WindbgTool {
     if (-not (Get-Command windbg-tool -ErrorAction SilentlyContinue)) {
         throw 'windbg-tool is not on PATH after install/update. Open a new shell and rerun launch.ps1.'
     }
+    Write-Output 'Running windbg-tool discover...'
     & windbg-tool discover | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'windbg-tool discover failed.' }
+    Write-Output 'Ensuring windbg-tool daemon...'
     & windbg-tool daemon ensure | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'windbg-tool daemon ensure failed.' }
     Record 'windbg_tool_ensure' 'passed'
@@ -190,6 +192,110 @@ function Verify-WindbgTool {
     } while (-not $healthy -and (Get-Date) -lt $deadline)
     if (-not $healthy) { throw 'windbg-tool discover health check failed.' }
     Record 'windbg_tool_discover' 'passed'
+}
+
+# Host-native pix-mcp (PozLabs, Rust, win-x64/arm64 only, stdio-only MCP): PIX
+# needs host D3D12/pixtool.exe and cannot containerize, so the pinned prebuilt
+# binary is downloaded to local-services/pix and runs host-exec. No ports or
+# secrets; never log capture contents, only statuses.
+# Prereq note: requires Microsoft PIX installed
+# (https://devblogs.microsoft.com/pix/download/, tested 2603.25); Developer
+# Mode for analysis verbs, admin only for pix_timing_capture.
+function Get-PixMcpPin {
+    $pinPath = Join-Path $PSScriptRoot 'pix\version.txt'
+    if (-not (Test-Path -LiteralPath $pinPath -PathType Leaf)) {
+        throw "PIX MCP pin file is missing: $pinPath."
+    }
+    $pin = @{}
+    foreach ($line in (Get-Content -LiteralPath $pinPath -Encoding utf8)) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) { continue }
+        $parts = $trimmed.Split('=', 2)
+        if ($parts.Count -ne 2) { throw "Invalid line in PIX MCP pin file: $line." }
+        $pin[$parts[0].Trim()] = $parts[1].Trim()
+    }
+    foreach ($key in @('VERSION', 'X64_URL', 'X64_SHA256', 'ARM64_URL', 'ARM64_SHA256')) {
+        if (-not $pin.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($pin[$key])) {
+            throw "PIX MCP pin file is missing required key: $key."
+        }
+    }
+    return $pin
+}
+
+function Find-Pixtool {
+    if (-not [string]::IsNullOrWhiteSpace($env:PIXTOOL_PATH)) {
+        if (Test-Path -LiteralPath $env:PIXTOOL_PATH -PathType Leaf) { return $env:PIXTOOL_PATH }
+        throw "PIXTOOL_PATH is set but not found: $($env:PIXTOOL_PATH)."
+    }
+    $pixRoot = 'C:\Program Files\Microsoft PIX'
+    if (Test-Path -LiteralPath $pixRoot -PathType Container) {
+        $hit = @(Get-ChildItem -LiteralPath $pixRoot -Filter 'pixtool.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($hit.Count -gt 0) { return $hit[0].FullName }
+    }
+    return $null
+}
+
+function Ensure-PixMcp {
+    $pin = Get-PixMcpPin
+    $pixDir = Join-Path $PSScriptRoot 'pix'
+    $pixExe = Join-Path $pixDir 'pix-mcp.exe'
+    New-Item -ItemType Directory -Path $pixDir -Force | Out-Null
+    if (Test-Path -LiteralPath $pixExe -PathType Leaf) {
+        $size = (Get-Item -LiteralPath $pixExe).Length
+        if ($size -lt 1MB) { throw 'Existing pix-mcp.exe looks corrupt (suspiciously small); delete local-services\pix\pix-mcp.exe and rerun launch.ps1.' }
+        Write-Output "pix-mcp.exe already present ($([math]::Round($size / 1MB, 1)) MB), skipping download..."
+    } else {
+        $arch = $env:PROCESSOR_ARCHITECTURE
+        if ($arch -eq 'ARM64') {
+            $url = $pin['ARM64_URL']
+            $expected = $pin['ARM64_SHA256']
+        } elseif ($arch -eq 'AMD64') {
+            $url = $pin['X64_URL']
+            $expected = $pin['X64_SHA256']
+        } else {
+            throw "Unsupported processor architecture for pix-mcp: $arch."
+        }
+        $zipPath = Join-Path $pixDir ('pix-mcp-' + $pin['VERSION'] + '-' + $arch + '.zip')
+        $staging = Join-Path $pixDir '_staging'
+        try {
+            Write-Output "Downloading pix-mcp $($pin['VERSION']) ($arch)..."
+            $prevProgress = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+            } finally {
+                $ProgressPreference = $prevProgress
+            }
+            $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected.ToLowerInvariant()) { throw 'pix-mcp zip SHA256 mismatch; delete local-services\pix\*.zip and rerun launch.ps1.' }
+            if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $staging -Force
+            $candidate = @(Get-ChildItem -LiteralPath $staging -Filter 'pix-mcp.exe' -Recurse | Select-Object -First 1)
+            if ($candidate.Count -eq 0) { throw 'pix-mcp.exe was not found in the downloaded archive.' }
+            Copy-Item -LiteralPath $candidate[0].FullName -Destination $pixExe -Force
+        } finally {
+            if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+            if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+        }
+        $size = (Get-Item -LiteralPath $pixExe).Length
+        if ($size -lt 1MB) { throw 'Downloaded pix-mcp.exe looks corrupt (suspiciously small); delete local-services\pix\pix-mcp.exe and rerun launch.ps1.' }
+    }
+    $pixtool = Find-Pixtool
+    if ($null -eq $pixtool) {
+        throw 'Microsoft PIX (pixtool.exe) was not found. Install PIX from https://devblogs.microsoft.com/pix/download/ (tested 2603.25) or set PIXTOOL_PATH, then rerun launch.ps1.'
+    }
+    Write-Output "pix-mcp ready (pixtool: $pixtool)."
+    Record 'pix_mcp_ensure' 'passed'
+}
+
+function Verify-PixMcp {
+    $pixExe = Join-Path $PSScriptRoot 'pix\pix-mcp.exe'
+    if (-not (Test-Path -LiteralPath $pixExe -PathType Leaf)) { throw 'pix-mcp.exe is missing at verify time.' }
+    # stdio-only server blocks on stdin waiting for JSON-RPC, so never execute
+    # it here: SHA256 was verified at download time, size check guards corruption.
+    $size = (Get-Item -LiteralPath $pixExe).Length
+    if ($size -lt 1MB) { throw 'pix-mcp.exe looks corrupt (suspiciously small).' }
+    Record 'pix_mcp_verify' 'passed'
 }
 
 function Verify-SearXNG {
@@ -231,13 +337,17 @@ Assert-Machine
 $secrets = Generate-Secrets
 
 Start-SearXNG $secrets
+Write-Output 'Stage: Ensure-WindbgTool...'
 Ensure-WindbgTool
+Write-Output 'Stage: Ensure-PixMcp...'
+Ensure-PixMcp
 
 Start-Sleep -Seconds 5
 
 try {
     Verify-SearXNG
     Verify-WindbgTool
+    Verify-PixMcp
     Assert-HostPorts
 } catch {
     $results | Set-Content -LiteralPath $reportPath -Encoding utf8

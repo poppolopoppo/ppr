@@ -112,6 +112,12 @@ local-services/runtime-report.txt
 TTD/
 dumps/
 
+# PIX MCP (PozLabs pix-mcp) host-local artifacts (never commit; *.exe already covered above)
+local-services/pix/*.exe
+local-services/pix/*.zip
+local-services/pix/_staging/
+local-services/pix/captures/
+
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 

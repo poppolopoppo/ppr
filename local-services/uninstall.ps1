@@ -58,6 +58,35 @@ if (Get-Command windbg-tool -ErrorAction SilentlyContinue) {
     Write-Log 'windbg-tool not found; skipping daemon stop.'
 }
 
+# 1c. Best-effort pix-mcp binary cache removal (host-native stdio MCP; no containers, no daemon).
+# Removes the downloaded exe/zip/staging only; the version.txt pin is committed
+# config and captures/ is user data, so both are preserved. Never fails uninstall.
+try {
+    $pixDir = Join-Path $projectRoot 'local-services\pix'
+    if (-not (Test-Path -LiteralPath $pixDir -PathType Container)) {
+        Write-Log 'local-services\pix not found; skipping pix-mcp cleanup.'
+    } else {
+        $pixExe = Join-Path $pixDir 'pix-mcp.exe'
+        $pixStaging = Join-Path $pixDir '_staging'
+        if (Test-Path -LiteralPath $pixExe -PathType Leaf) {
+            Write-Log 'Removing pix-mcp.exe binary cache (best-effort)...'
+            Remove-Item -LiteralPath $pixExe -Force
+        } else {
+            Write-Log 'pix-mcp.exe not found; skipping binary removal.'
+        }
+        foreach ($leftover in @(Get-ChildItem -LiteralPath $pixDir -Filter 'pix-mcp-*.zip' -ErrorAction SilentlyContinue)) {
+            Write-Log "  Removing stale archive $($leftover.Name)..."
+            Remove-Item -LiteralPath $leftover.FullName -Force
+        }
+        if (Test-Path -LiteralPath $pixStaging) {
+            Write-Log '  Removing pix staging directory...'
+            Remove-Item -LiteralPath $pixStaging -Recurse -Force
+        }
+    }
+} catch {
+    Write-Log 'pix-mcp cache cleanup failed; continuing uninstall.'
+}
+
 # 2. Prune networks (optional, safe)
 if (Get-Command podman -ErrorAction SilentlyContinue) {
     Write-Log 'Pruning unused networks...'

@@ -40,6 +40,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\local-services\uninstall.ps1 -Fo
 
 - Stops and removes the `searxng` container on `podman-machine-default`
 - Best-effort `windbg-tool daemon stop`; skipped silently when the tool is absent, never fails uninstall
+- Best-effort `pix-mcp.exe` binary cache removal (plus stale `pix-mcp-*.zip` archives and `_staging/`); `version.txt` pin and `captures/` are preserved, never fails uninstall
 - Prunes unused networks
 - Deletes `local-services/.env` and `local-services/runtime-report.txt` if present
 - Leaves `podman-machine-default` and the `podman-net-usermode` helper intact; prompts to stop the machine only if no other containers remain
@@ -74,6 +75,16 @@ Get-Content .\local-services\runtime-report.txt
 - opencode (`opencode.json`, native V2 shape): `{"mcp":{"servers":{"windbg-ttd":{"type":"local","command":["windbg-tool","mcp"],"disabled":false,"timeout":{"catalog":60000,"execution":60000}}}}}`.
 - Triage: `windbg-tool dump triage <dmp> --max-frames 32`; `windbg-tool open <trace.run> --binary-path <exe>` then snapshot/disasm/registers/position set/step/replay-to/backtrace/memory dump/exception focus. `trace record` requires elevation via inline `sudo windbg-tool trace record ...` (New-Window sudo mode is rejected). Live managed-break `--allow-runtime-write` is test-VM-only. See `.opencode/skills/windbg-triage/SKILL.md`.
 - Artifacts (never commit, gitignored): `*.dmp`, `*.hdmp`, `*.mdmp`, `*.run/`, `*.ttd/`, `TTD/`, `dumps/`.
+
+## PIX MCP (host-native, not containerized)
+
+`pix-mcp` (PozLabs, MIT, Rust, win-x64/arm64 only, stdio-only MCP, https://github.com/PozLabs/pix-mcp) cannot run in a container (needs host D3D12/`pixtool.exe`), so it runs host-exec alongside the containers: transport stdio, command `["local-services/pix/pix-mcp.exe"]`.
+
+- Prereqs: Microsoft PIX installed (auto-discovers `C:\Program Files\Microsoft PIX\*\pixtool.exe`, override via `PIXTOOL_PATH`; tested 2603.25, https://devblogs.microsoft.com/pix/download/). `install.ps1` winget-installs `Microsoft.PIX` automatically when no `pixtool.exe` is found (manual fallback: install from https://devblogs.microsoft.com/pix/download/ or set `PIXTOOL_PATH`). Developer Mode for analysis verbs; admin only for `pix_timing_capture`.
+- `launch.ps1` reads the pin in `local-services/pix/version.txt` (currently v0.1.1), selects the x86_64/aarch64 zip via `$env:PROCESSOR_ARCHITECTURE`, downloads it idempotently to `local-services/pix/`, verifies SHA256, extracts `pix-mcp.exe`, fails with an actionable message when no `pixtool.exe` is found, then smoke-tests the CLI (`--help`). Verification is a `--help` health check (a stdio server would block on stdin; `--help` exercises binary load without opening captures), recorded as `pix_mcp_ensure` / `pix_mcp_verify` in `runtime-report.txt`. No ports, no secrets, never capture contents. All `pix-mcp` env vars are optional (`PIXTOOL_PATH`, `PIX_MCP_CAPTURES_DIR`, `PIX_MCP_INPUT_ROOTS`, `PIX_MCP_OUTPUT_ROOTS`, `PIX_MCP_EXECUTABLE_ROOTS`, `PIX_MCP_MAX_CONCURRENT_TOOLS`, `RUST_LOG`); none are set by default.
+- Verify manually: `.\local-services\pix\pix-mcp.exe --help`.
+- opencode (`opencode.json`, native V2 shape): `{"mcp":{"servers":{"pix-mcp":{"type":"local","command":["local-services/pix/pix-mcp.exe"],"disabled":false,"timeout":{"catalog":60000,"execution":60000}}}}}`.
+- Artifacts (never commit, gitignored): `local-services/pix/pix-mcp.exe`, `local-services/pix/*.zip`, `local-services/pix/_staging/`, `local-services/pix/captures/`.
 
 ## OpenCode environment
 
