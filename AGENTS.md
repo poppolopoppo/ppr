@@ -38,8 +38,9 @@ construction. Client/editor code owns
 scene, player, camera, viewport, and UI state; it submits work to the renderer
 rather than transferring that ownership to it.
 
-Tests are split between GLFW-free `engine.tests.core` and GLFW-dependent
-`engine.tests.app`; shared test support is `engine.tests`. Tests use the
+Tests are split across GLFW-free `engine.tests.core`, GLFW-dependent
+`engine.tests.app`, and `engine.tests.asset` (asset-pipeline: CPU-only tiers
+plus headless-GPU tiers); shared test support is `engine.tests`. Tests use the
 test-only `"pP/UnitTest.h"` header and `PPR_UNIT_TEST`/`PPR_TEST_ASSERT`.
 
 Read the root `codemap.md` before working; read a directory's `codemap.md` for
@@ -126,9 +127,10 @@ normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
 
 - Test externally observable behavior, contracts, error paths, lifetime and
   teardown effects—not private implementation structure.
-- Keep core tests GLFW-free; put platform/window behavior in app tests. Add or
-  update focused tests with a behavior/API change. Use `PPR_TEST_ASSERT`, which
-  remains functional in release builds.
+- Keep core tests GLFW-free; put platform/window behavior in app tests. Keep
+  asset CPU tiers GLFW-free; use the headless fixture for asset GPU tiers. Add
+  or update focused tests with a behavior/API change. Use `PPR_TEST_ASSERT`,
+  which remains functional in release builds.
 - Use **`unit-test-updater`** for test changes and **`validation`** for the
   post-change build, test, inspection, and diff checklist.
 

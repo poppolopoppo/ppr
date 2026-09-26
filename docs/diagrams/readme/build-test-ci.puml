@@ -1,0 +1,35 @@
+@startuml
+!theme toy
+title Build, Test, and CI Pipeline
+
+start
+:Prerequisites\nCMake 4.3+ / Ninja / MSVC 17.8+ or Clang 18+\nVulkan SDK / Git;
+note right
+  First configure needs network access
+  (vcpkg manifest + CPM source fetches)
+end note
+:Configure\ncmake --preset msvc-dev;
+note right
+  clang-cl-dev / clang-dev equivalents exist
+  No build or test presets
+end note
+:Build\ncmake --build out/build/msvc-dev;
+:Outputs land in out/build/msvc-dev/;
+note right
+  game/app.game next to staged
+  shaders / textures / meshes
+  plus 3 test binaries
+end note
+fork
+  :Run the demo\nout/build/msvc-dev/game/app.game;
+fork again
+  :Run the suites\nctest --test-dir out/build/msvc-dev;
+end fork
+group CI - two jobs, same shape {
+  :windows-msvc-dev\nmsvc-dev build + ctest;
+  :linux-clang-dev\nclang-dev build + ctest\nunder xvfb + mesa;
+}
+stop
+
+footer msvc-live (Edit and Continue) and msvc-rel (shipping, tests off) build the same way
+@enduml

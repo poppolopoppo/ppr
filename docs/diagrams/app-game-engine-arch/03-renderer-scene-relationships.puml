@@ -1,0 +1,39 @@
+@startuml
+!theme toy
+title 03 - Renderer / Scene Relationships (sequence)
+
+participant "ApplicationEditor\n(Client)" as Client #6CB4EE
+participant "Renderer\n(content-free surfaces+queue)" as Renderer #77DD77
+participant "TrianglePass\n(owns shaders/pipelines/caches)" as Pass #77DD77
+participant "CameraSnapshot\n(value copy)" as Snap #FDFD96
+participant "GPU/Shader\n(mesh_bindless.slang)" as GPU #FFB347
+
+Client -> Client : update viewport
+Client -> Client : updateModel
+Client -> Snap : getSnapshot
+Client -> Pass : update(snapshot copy)\nTrianglePass.cpp:278
+note right of Pass : Pass stores value copy\nnever mutable Camera
+Pass -> Pass : submitInstance loop
+Client -> Renderer : render two SurfaceRenderPasses
+Client -> Renderer : renderAndPresent
+Renderer -> Renderer : lazy surface / resize / acquire
+Renderer -> Pass : per-pass encode renderDraws
+Pass -> GPU : encodeGroup stride checks\nheaps 4096/4096/128/1024
+Pass -> GPU : uploadFrameConstants\n288-byte FrameConstants
+Renderer -> GPU : queue submit + present
+
+note over Client, GPU #B0B0B0
+SceneView / RenderView NOT implemented
+(only comments in sources)
+end note
+
+legend
+<font color="#6CB4EE">■</font> entry / actors
+<font color="#77DD77">■</font> app / services / processing
+<font color="#FDFD96">■</font> data stores / value snapshots
+<font color="#FFB347">■</font> external / infra (GPU, shader)
+<font color="#B0B0B0">■</font> legacy / optional (not implemented)
+endlegend
+
+footer Verification: passes consume snapshot copy, never mutable Camera\nTrianglePass.cpp:278 + TrianglePass.cppm:22 contract comment
+@enduml

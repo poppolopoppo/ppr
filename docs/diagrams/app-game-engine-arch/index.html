@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>app.game lifecycle + engine architecture — diagram gallery</title>
+<style>
+body{background:#1a1d21;color:#e8e8e8;font-family:sans-serif;max-width:1100px;margin:2em auto;padding:0 1.5em}
+h1{color:#fff}h2{color:#6CB4EE;border-bottom:1px solid #444;padding-bottom:.3em}
+a{color:#77DD77}ul{line-height:1.6}
+figure{background:#fff;border-radius:8px;padding:1em;margin:1em 0}
+figure img,figure object{width:100%;height:auto}
+code{color:#FDFD96}
+.sw{font-weight:bold}
+</style>
+</head>
+<body>
+<h1>app.game lifecycle &amp; global engine architecture</h1>
+<p>4 diagrams. Theme <code>!theme toy</code>, backend <code>https://kroki.io</code> (plantuml 1.2026.6, public — source left the machine). Colors:
+<span class="sw" style="color:#6CB4EE">■</span> entry/actors,
+<span class="sw" style="color:#77DD77">■</span> app/services,
+<span class="sw" style="color:#FFB347">■</span> external/infra,
+<span class="sw" style="color:#FF6961">■</span> errors,
+<span class="sw" style="color:#FDFD96">■</span> data stores,
+<span class="sw" style="color:#CF9FFF">■</span> shared libs,
+<span class="sw" style="color:#B0B0B0">■</span> legacy/optional.</p>
+
+<h2 id="01">01 — Application lifecycle</h2>
+<ul>
+<li>What it shows: activity flow Construct TurboLarbin → run → initialize → platform/editor/game init → per-frame loop → reverse-order shutdown.</li>
+<li>Flow summary: <code>run()</code> defers <code>shutdown()</code>; init order platform → RHI/shader/Renderer → player/camera/input/TrianglePass/ImGui/window; frame = tick → poll → update → render two SurfaceRenderPasses → present; shutdown reverses it with first-error-wins.</li>
+<li>Verification: run() defers shutdown + calls initialize → <a href="../../../game/main.cpp">game/main.cpp:17</a>, <a href="../../../lib/engine/app/App.Application.cpp">App.Application.cpp:73</a>, <a href="../../../lib/engine/app/App.Application.cpp">App.Application.cpp:123</a>.</li>
+<li>Files: <a href="01-application-lifecycle.svg">01-application-lifecycle.svg</a> · <a href="01-application-lifecycle.puml">01-application-lifecycle.puml</a></li>
+</ul>
+<figure><object data="01-application-lifecycle.svg" type="image/svg+xml"><img src="01-application-lifecycle.svg" alt="application lifecycle"></object></figure>
+
+<h2 id="02">02 — Global engine architecture</h2>
+<ul>
+<li>What it shows: component map app.game → engine.app → core/math/shader/rhi/image/mesh, HAL node, external infra cloud, test boxes.</li>
+<li>Flow summary: acyclic downward deps; engine.app fans out to all six engine libs; rhi → core/math/shader; image/mesh → core/math(+PRIVATE vendors); core has no engine deps.</li>
+<li>Verification: fan-out acyclical → AGENTS.md dependency graph, <a href="../../../lib/engine/app/CMakeLists.txt">app/CMakeLists.txt:84</a>, <a href="../../../lib/engine/app/App.cppm">App.cppm:3</a>.</li>
+<li>Files: <a href="02-global-engine-architecture.svg">02-global-engine-architecture.svg</a> · <a href="02-global-engine-architecture.puml">02-global-engine-architecture.puml</a></li>
+</ul>
+<figure><object data="02-global-engine-architecture.svg" type="image/svg+xml"><img src="02-global-engine-architecture.svg" alt="global engine architecture"></object></figure>
+
+<h2 id="03">03 — Renderer / scene relationships</h2>
+<ul>
+<li>What it shows: sequence ApplicationEditor → Renderer (content-free) → TrianglePass (owns content) → CameraSnapshot value → GPU/shader; SceneView/RenderView flagged NOT implemented.</li>
+<li>Flow summary: updateModel → getSnapshot → pass.update(snapshot copy) → submitInstance loop → two SurfaceRenderPasses → renderAndPresent → encodeGroup stride checks + 288-byte FrameConstants → present.</li>
+<li>Verification: passes consume snapshot copy, never mutable Camera → <a href="../../../lib/engine/app/renderer/App.Renderer.TrianglePass.cpp">TrianglePass.cpp:278</a>, <a href="../../../lib/engine/app/renderer/App.Renderer.TrianglePass.cppm">TrianglePass.cppm:22</a>, <a href="../../../lib/engine/app/scene/App.Scene.Camera.cppm">Camera.cppm:39</a>.</li>
+<li>Files: <a href="03-renderer-scene-relationships.svg">03-renderer-scene-relationships.svg</a> · <a href="03-renderer-scene-relationships.puml">03-renderer-scene-relationships.puml</a></li>
+</ul>
+<figure><object data="03-renderer-scene-relationships.svg" type="image/svg+xml"><img src="03-renderer-scene-relationships.svg" alt="renderer scene relationships"></object></figure>
+
+<h2 id="04">04 — Services ownership &amp; dataflow</h2>
+<ul>
+<li>What it shows: component ownership Application/Editor → ServicesStore → shader/RHI services → pass → Renderer → Window, plus lifecycle context, channels, ScratchPad.</li>
+<li>Flow summary: shader global session (ROW_MAJOR) feeds RHI device creation; RHI device+program feeds TrianglePass; pass draw submissions feed Renderer; Renderer presents to Window; per-frame transient via ScratchPad.</li>
+<li>Verification: ROW_MAJOR session feeds RHI device → <a href="../../../lib/engine/shader/Shader.cpp">Shader.cpp:182</a>, <a href="../../../lib/engine/rhi/RHI.cppm">RHI.cppm:166</a>, <a href="../../../lib/engine/core/Core.Service.cppm">Core.Service.cppm:27</a>.</li>
+<li>Files: <a href="04-services-ownership-dataflow.svg">04-services-ownership-dataflow.svg</a> · <a href="04-services-ownership-dataflow.puml">04-services-ownership-dataflow.puml</a></li>
+</ul>
+<figure><object data="04-services-ownership-dataflow.svg" type="image/svg+xml"><img src="04-services-ownership-dataflow.svg" alt="services ownership dataflow"></object></figure>
+</body>
+</html>

@@ -1,0 +1,45 @@
+@startuml
+!theme toy
+title 01 - Application Lifecycle (Construct to Shutdown)
+
+start
+:Construct TurboLarbin game main.cpp 17;<<#6CB4EE>>
+note right: domain headless false interactive true rendering true ui true (Editor.cpp 26)
+:Application run defers shutdown App.Application.cpp 73;<<#77DD77>>
+:Application initialize clock platform dirs App.Application.cpp 123;<<#77DD77>>
+:Create shader plus RHI plus Renderer;<<#CF9FFF>>
+:GlfwPlatform initialize window input player services;<<#FFB347>>
+:ApplicationEditor initialize player camera input-context latch Editor.cpp 70;<<#77DD77>>
+:ApplicationEditor setup TrianglePass ImGui window viewport;<<#CF9FFF>>
+:TurboLarbin initialize import GLBs decode uploadScene main.cpp 172;<<#77DD77>>
+:Scene data ready in UploadedScene store;<<#FDFD96>>
+
+repeat
+:Background tick 5fps optional poll;<<#B0B0B0>>
+:Poll input and poll events;<<#77DD77>>
+:Editor update viewport to camera to pass to UI;<<#77DD77>>
+:TurboLarbin update submitInstance;<<#77DD77>>
+:Editor render two SurfaceRenderPasses plus renderAndPresent;<<#77DD77>>
+repeat while (More frames?) is (yes) not (no)
+
+if (First error seen?) then (yes)
+:Record first error and requestExit;<<#FF6961>>
+else (no)
+endif
+
+:TurboLarbin shutdown releaseScene main.cpp 374;<<#77DD77>>
+:Editor shutdown detach plus UI plus pass plus viewport plus window Editor.cpp 256;<<#77DD77>>
+:Application shutdown renderer to RHI to shader to platform App.Application.cpp 169;<<#77DD77>>
+:GlfwPlatform shutdown;<<#FFB347>>
+stop
+
+legend
+<font color="#6CB4EE">■</font> entry and actors and client
+<font color="#77DD77">■</font> app and services and processing
+<font color="#FFB347">■</font> external and infra and platform
+<font color="#FF6961">■</font> errors and first-error-wins
+<font color="#FDFD96">■</font> data stores and scene state
+<font color="#CF9FFF">■</font> shared libs and passes
+<font color="#B0B0B0">■</font> legacy and optional polling
+endlegend
+@enduml

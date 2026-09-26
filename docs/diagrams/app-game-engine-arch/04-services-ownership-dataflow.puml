@@ -1,0 +1,47 @@
+@startuml
+!theme toy
+title 04 - Services Ownership & Dataflow (component)
+
+left to right direction
+
+component "Application\n(owns platform/services/Renderer)" as App #77DD77
+component "ApplicationEditor\n(owns player/camera/viewport/input/UI/pass)" as Editor #77DD77
+component "ServicesStore\n(FlatMap type_index -> safe_ptr)" as Store #CF9FFF
+component "IShaderService\n(ROW_MAJOR session)" as ShaderSvc #CF9FFF
+component "IRhiService\n(device via global session)" as RhiSvc #CF9FFF
+component "SharedContext\n(m_lifecycle + requestExit)" as Ctx #FF6961
+component "ScratchPad/Allocators\n(per-frame transient)" as Scratch #FDFD96
+component "RawChannel/Signal\n(MPSC + select)" as Chan #FFB347
+component "TrianglePass\n(owns shaders/pipelines/caches)" as Pass #77DD77
+component "Renderer\n(surfaces + queue + present)" as Renderer #77DD77
+component "Window\n(present target)" as Window #FFB347
+
+App --> Store : owns
+Editor --> Store : resolves
+Store --> ShaderSvc : holds
+Store --> RhiSvc : holds
+App --> Ctx : lifecycle
+App --> Renderer : owns
+Editor --> Pass : owns
+Renderer --> Scratch : per-frame renderDraws_
+App --> Chan : async IO events
+Editor --> Chan : input events
+
+ShaderSvc --> RhiSvc : global session
+RhiSvc --> Pass : device + program
+Pass --> Renderer : draw submissions
+Renderer --> Window : present
+
+note right of ShaderSvc : Shader.cpp:182 ROW_MAJOR\nsession feeds RHI
+note right of RhiSvc : RHI.cppm:166 IRhiService\ndevice creation
+
+legend
+<font color="#77DD77">■</font> app / services / processing
+<font color="#CF9FFF">■</font> shared libs / services
+<font color="#FDFD96">■</font> data stores / transient memory
+<font color="#FFB347">■</font> external / infra
+<font color="#FF6961">■</font> errors / critical lifecycle
+endlegend
+
+footer Verification: shader session ROW_MAJOR feeds RHI device creation\nShader.cpp:182 + RHI.cppm:166 (codemap.md:52-71)
+@enduml

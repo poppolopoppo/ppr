@@ -1,234 +1,168 @@
 # PPR Game Engine
 
-A modern C++23 game engine built with C++20 Modules, leveraging [Slang-RHI](https://github.com/shader-slang/slang-rhi) for cross-platform rendering and [Mango](https://github.com/t0rak/mango) for math.
+[![CI](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/poppolopoppo/ppr)](https://github.com/poppolopoppo/ppr/blob/main/LICENSE) [![CMake](https://img.shields.io/badge/CMake-4.3%2B-064F8C?logo=cmake&logoColor=white)](https://cmake.org/) [![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](https://en.cppreference.com/w/cpp) [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-4c4c4c)](#features)
+
+A real-time C++23 game engine built with C++20 modules. Seven libraries, one demo, no game yet.
+
+`Architecture · Build · Demo · Tests · Status · Docs`
+
+## Purpose
+
+PPR exists to answer a concrete question: what does a from-scratch engine look like when it uses modern C++ throughout — modules instead of headers, ownership visible in the type system, errors returned as values instead of thrown or hidden? The engine is the product. The demo application is the reference client that exercises it, the way samples serve for sokol or Diligent: proof the engine runs real frames on real machines.
+
+What PPR is not: not a game, not an editor, not a framework with shipped titles behind it. There is no gameplay code in this repo.
+
+## Platform support
+
+| Platform | Compiler presets | CI |
+|---|---|---|
+| Windows | `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-dev`, `clang-cl-rel` | `windows-msvc-dev` |
+| Linux | `clang-dev`, `clang-rel` | `linux-clang-dev` (Xvfb + Mesa) |
+| macOS | `clang-dev`, `clang-rel` | — |
+
+GPU backends go through a single abstraction over Slang-RHI (D3D12 on Windows, Vulkan elsewhere). The hidden `gcc-*` presets do not support C++ modules and are not usable builds.
 
 ## Features
 
-- **C++23 Modules** - Clean module-based architecture with `.cppm` interface files
-- **Cross-Platform Rendering** - Hardware abstraction via Slang-RHI supporting Vulkan, DirectX 12, and more
-- **Advanced Math Library** - Vector, matrix, and quaternion math
-- **Custom Memory Management** - Tiered allocators (Arena/ScopedArena/ScratchPad, Pooling/LocalCache, Fallback/Threshold/InSitu) with PMR/STL wrappers
-- **Type-Safe Containers** - `StableVector`, `SparseVector`, `HashMap`, `HashSet`, `Stack`, `RingBuffer`
-- **Platform Abstraction Layer** - Unified HAL for filesystem, memory, async I/O, and OS interactions
-- **Shader Compilation** - Slang shader compilation
-- **Dear ImGui Integration** - UI service with listener-based input dispatch
-- **Built-in Testing** - Lightweight unit test framework with `PPR_UNIT_TEST` and CTest integration
-- **Assertions System** - Tiered assertions (`PPR_ASSERT`, `PPR_VERIFY`, `PPR_ENSURE`)
-- **error_code Lifecycle** - Consistent error propagation across all services and APIs
+- C++20 modules throughout; one public header (`Macros.h`), everything else imported
+- Tiered memory management: OS page allocation, page pools, arenas with watermark restore, composable pool/fallback allocators, PMR/STL adapters
+- Non-owning lifetime-checked pointers in debug builds that compile to raw pointers in release
+- Lock-free message channel, compile-time event multiplexing, structured cancellation for async work
+- Platform layer with Windows, Linux, macOS, and stub backends: memory, timers, processes, file watching, async I/O
+- Slang shaders compiled at startup; one GPU abstraction for devices, buffers, and command lists
+- Content-free renderer: it owns frame orchestration and presentation only; each render pass owns its own pipelines and GPU caches and draws from an immutable per-frame camera snapshot
+- Recoverable failures returned as `std::error_code` / `std::expected`, consistently; teardown releases in reverse and keeps the first error
+- Three test suites wired into CTest, running on CI
 
-## Project Structure
+## Build
 
-For a navigable repository map, see [codemap.md](codemap.md). Contributors
-should follow the engineering contract in [AGENTS.md](AGENTS.md).
-
-```
-ppr/
-├── assets/            # Game assets (shaders, etc.)
-├── lib/engine/
-│   ├── core/          # Core utilities
-│   │   ├── memory/    #   Allocators (GPA, Arena, PagePool, ...)
-│   │   ├── containers/#   Containers (HashMap, StableVector, ...)
-│   │   ├── concurrency/#  Concurrency (channels, events, contexts)
-│   │   ├── io/        #   Async I/O, file watchers
-│   │   ├── hal/       #   Platform abstraction (windows, linux, darwin, generic)
-│   │   └── function/  #   Function wrappers (Callback, function_ref)
-│   ├── math/          # Math module (wraps mango::math)
-│   ├── shader/        # Shader compilation
-│   ├── rhi/           # Rendering hardware interface (wraps slang-rhi)
-│   ├── app/           # Application layer (slim Application + ApplicationEditor)
-│   │   ├── input/     #   Input actions, keys, listeners, devices
-│   │   ├── platform/  #   IPlatform interface
-│   │   │   └── glfw/  #     GLFW backend
-│   │   ├── player/    #   Player identity store + state graph
-│   │   ├── renderer/  #   Content-free Renderer + TrianglePass (Types header-only)
-│   │   ├── scene/     #   Camera + controller
-│   │   ├── service/   #   Service contracts (client/input/player/ui/window)
-│   │   ├── ui/        #   ImGui overlay service
-│   │   └── window/    #   Window service + viewport geometry
-│   └── tests/         # Unit tests (core, app, shared)
-├── game/              # Game application entry point
-├── cmake/             # CMake modules and toolchain files
-└── include/           # pP/Macros.h only
-```
-
-## Prerequisites
-
-- **CMake** 4.3 or later
-- **C++23 compiler**: MSVC 17.8+ or Clang 18+ for supported PPR module-build
-  presets. GCC 14+ may meet the language prerequisite, but the hidden `gcc-*`
-  presets are non-module and are not supported validation paths.
-- **Vulkan SDK** (for Vulkan backend)
-- **Git** with submodules support
-- Linux clang-dev uses the plain x64-linux triplet (not x64-linux-clang) for compiler-agnostic C deps (cmake/VCPkg.cmake:30-36).
-
-## Building
+Prerequisites: CMake 4.3+, Ninja, MSVC 17.8+ or Clang 18+, Vulkan SDK, Git. First configure needs network access (dependencies are fetched via vcpkg and CPM).
 
 ```bash
-# Clone the repository
 git clone https://github.com/poppolopoppo/ppr.git
 cd ppr
 
-# Configure with CMake presets (recommended)
-cmake --preset msvc-dev
-
-# Build
-cmake --build out/build/msvc-dev
+cmake --preset msvc-dev            # or clang-cl-dev / clang-dev
+cmake --build out/build/msvc-dev --parallel
 ```
 
-Common presets are `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-dev`,
-`clang-cl-rel`, `clang-dev`, and `clang-rel`. The hidden `gcc-*` presets do not
-support C++ modules. `msvc-live` is the Edit & Continue preset (`/ZI` + `/DEBUG:FULL` +
-`/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, live-only `/MDd`;
-misconfigurations fail at configure time). `msvc-rel` is the shipping preset (pinned
-`/O2` + `/Ob2`, `/GL` + `/LTCG`, `/OPT:REF,ICF`, `/INCREMENTAL:NO`, `/DEBUG` with a stripped
-`app.game.stripped.pdb` beside the full `app.game.pdb`; Release `/Zi`, dev `/Z7`) and sets
-`BUILD_TESTING=OFF`.
+`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). There are no build or test presets — build and test paths are passed explicitly.
 
-### Developer Mode
+## Demo
 
-Enable additional checks and sanitizers:
+`game/main.cpp` defines the demo application. On startup it loads 16 glTF models, decodes their textures to RGBA8, and uploads them to the GPU; if nothing loads, startup fails with a filesystem error rather than an empty window. Every frame it re-submits a static 53-piece cutaway habitat (~20 units wide, five zones) through the renderer and presents it in a 1280×720 vsync'd window with a free camera. The window title shows per-frame CPU time (`"<name> - CPU = <ms> ms"`); one submission summary is logged once, not per frame. Shutdown releases GPU resources in reverse order.
+
+```bash
+cmake --build out/build/msvc-dev --parallel
+out/build/msvc-dev/game/app.game   # .exe on Windows; shaders, textures, meshes are staged beside it
+```
+
+The whole scene draws through a single Slang shader program (`assets/shaders/mesh_bindless.slang`). That is deliberate: one direct draw path, currently no indirect lanes.
+
+![Frame flow — the app snapshots the camera, the render pass encodes its own draws, the renderer submits and presents](docs/diagrams/app-game-engine-arch/03-renderer-scene-relationships.svg)
+
+Startup, frame loop, and shutdown follow the same shape every run — initialize services, load and upload the scene, re-submit each frame, release everything in reverse on the way out:
+
+![Application lifecycle — initialize, run frames, shut down in reverse](docs/diagrams/app-game-engine-arch/01-application-lifecycle.svg)
+
+## Tests
+
+```bash
+ctest --test-dir out/build/msvc-dev --output-on-failure
+```
+
+| Suite | What it covers | Needs a window |
+|---|---|---|
+| `EngineCoreUnitTests` | Memory, containers, concurrency, I/O | No |
+| `EngineAppUnitTests` | Platform-dependent behavior | Yes (GLFW) |
+| `EngineAssetUnitTests` | Image decode, mesh import, GPU caches, render gate | Headless GPU tiers |
+
+Extra checks for a development configure:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPPR_ENABLE_DEVELOPER_MODE=ON
 cmake --build build
 ```
 
-### Available CMake Options
+![Build, test, and CI pipeline](docs/diagrams/readme/build-test-ci.svg)
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `PPR_ENABLE_DEVELOPER_MODE` | Enable warnings-as-errors and sanitizers | OFF |
-| `PPR_ENABLE_COVERAGE` | Coverage reporting (gcc/clang) | OFF |
-| `PPR_ENABLE_SANITIZER_ADDRESS` | Address sanitizer | OFF |
-| `PPR_ENABLE_SANITIZER_UNDEFINED` | Undefined behavior sanitizer | OFF |
-| `PPR_ENABLE_CLANG_TIDY` | Run clang-tidy | OFF |
-| `PPR_ENABLE_CPPCHECK` | Run cppcheck | OFF |
-| `PPR_ENABLE_UNITY_BUILD` | Unity build for faster compilation | OFF |
-| `PPR_WARNINGS_AS_ERRORS` | Treat warnings as errors | OFF |
-| `PPR_RELEASE_PERF_FLAGS` | Release `/O2` + `/Ob2` + `/GL` + `/Gw` + `/Zc:checkGwOdr` | ON |
-| `PPR_ENABLE_AVX2` | Opt-in AVX2 codegen (`/arch:AVX2`, 2013+ CPU); default min-spec unchanged | OFF |
-| `PPR_EDIT_AND_CONTINUE` | MSVC Edit & Continue (Debug, `/ZI` + live link set) | OFF |
-| `ENABLE_CACHE` | Enable compiler cache (ccache) for non-module TUs | OFF (ON in dev mode) |
-| `PPR_HAL_PLATFORM` | HAL platform override (windows, linux, darwin, generic) | auto-detected |
+## Architecture
 
-## Dependencies
+```
+game/main.cpp → engine.app → engine.core / engine.math / engine.shader /
+                                engine.rhi / engine.image / engine.mesh
+                  engine.rhi   → engine.core / engine.math / engine.shader
+                  engine.shader → engine.core
+                  engine.math   → engine.core
+                  engine.image  → engine.core / engine.math
+                  engine.mesh   → engine.core / engine.math
+```
 
-Managed via [vcpkg](https://github.com/microsoft/vcpkg) and [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) (see `vcpkg.json` for the manifest and `cmake/external/` for resolution):
-
-### Vcpkg Packages
-- `fmt` - Formatting library
-- `zlib`, `libdeflate`, `zstd` - Compression
-- `lcms` - Color management
-- `simdjson` - Fast JSON parsing
-- `glfw3` - Windowing and input
-- `vulkan-headers` - Vulkan API headers
-
-### CPM Packages
-- `slang-rhi` - Rendering hardware interface
-- `mango` - Math library
-- `rapidhash` - Fast hashing
-- `stb` - Image loading (stb_image)
-- `imgui` - Dear ImGui UI library
-
-## Usage
-
-Snippets below are illustrative; the module codemaps own the API contracts.
-
-### Using Math Module
+One rule: dependencies point down. Nothing below the application layer knows about windows, cameras, or game objects. The shape of every program using the engine is the same:
 
 ```cpp
-import engine.math;
-
-pP::float3 position{1.0f, 2.0f, 3.0f};
-pP::float4x4 view = pP::lookAt(position, target, up);
-auto projected = pP::perspective(60.0f, aspect, 0.1f, 1000.0f);
+demo::TurboLarbin app("ppr", argv_span);
+const std::error_code err = app.run();
+return err.value();
 ```
 
-### Container Usage
+![Module dependencies point down only — lower layers never know about windows, cameras, or game objects](docs/diagrams/app-game-engine-arch/02-global-engine-architecture.svg)
 
-```cpp
-import engine.core;
+Ownership follows the same shape. The application owns the platform, the services, and the renderer; the editor layer owns the scene, the camera, and the render passes; the renderer itself only presents what it is given:
 
-pP::StableVector<int> vec = {1, 2, 3, 4, 5};
-pP::HashMap<int, std::string> map{{1, "one"}, {2, "two"}};
-pP::SparseVector<float> sparse;
-auto handle = sparse.add(42.0f);
-```
+![Ownership — who holds the services, the passes, and the frame](docs/diagrams/app-game-engine-arch/04-services-ownership-dataflow.svg)
 
-## Module Structure
+| Directory | Responsibility |
+|---|---|
+| `game/` | Demo entry point and scene |
+| `assets/` | Shaders, textures, meshes staged next to the executable |
+| `lib/engine/core/` | Types, allocators, containers, concurrency, I/O, platform layer |
+| `lib/engine/math/` | Vector / matrix / quaternion math |
+| `lib/engine/image/` | CPU image decoding (PNG, JPG, KTX2, DDS) |
+| `lib/engine/mesh/` | CPU mesh import (glTF / GLB) |
+| `lib/engine/shader/` | Slang shader compilation service |
+| `lib/engine/rhi/` | GPU abstraction (devices, buffers, command lists) |
+| `lib/engine/app/` | Application lifecycle, window, input, scene, UI, renderer |
+| `lib/engine/tests/` | Test suites plus the shared harness |
+| `cmake/` | Presets, toolchain flags, dependency resolution |
+| `include/pP/` | The single public header |
 
-| Module | Description |
-|--------|-------------|
-| `engine.core` | Core foundation (types, memory, containers, concurrency, IO, services, opaque, HAL, function) |
-| `engine.math` | Math types and functions (float2-4, float3x3, float4x4, Quaternion, easing) |
-| `engine.image` | CPU image assets (decode to native format + plain layout) |
-| `engine.mesh` | CPU static mesh assets (glTF/GLB conversion) |
-| `engine.shader` | Shader compilation and `IShaderService` |
-| `engine.rhi` | Rendering interface (device, buffers, shaders, command buffers) |
-| `engine.app` | Application framework (slim lifecycle + editor client, services, renderer, UI) |
+## Status
 
-## Testing
+What the demo exercises today vs. what is still ahead. No dates; the checked items have tests behind them.
 
-Two separate test executables are provided:
+- [x] Allocators, containers, concurrency primitives, async I/O
+- [x] Platform layer on Windows / Linux / macOS (+ stub)
+- [x] Image decode and mesh import on the CPU
+- [x] Shader compilation at startup, GPU abstraction over D3D12 / Vulkan
+- [x] Renderer with pass-owned resources, immutable camera snapshots
+- [x] Demo scene loading, submitting, presenting, and tearing down cleanly
+- [ ] Frame pacing from platform timers with per-stage diagnostics
+- [ ] Dedicated render thread
+- [ ] Deterministic fixed-timestep simulation substrate
+- [ ] Asset content pipeline (cooked packages)
+- [ ] Shading: PBR-style materials, global illumination, temporal upscaling, post-processing
+- [ ] Editor tooling beyond the debug overlay (picking, gizmos, asset browser)
 
-- **`engine.tests.core`** — GLFW-free; tests memory, containers, concurrency, IO, strings, services
-- **`engine.tests.app`** — Links GLFW; tests platform-dependent features
-- **`engine.tests.asset`** — Asset pipeline; tests image decode, mesh convert, GPU caches, render gate
+## Troubleshooting
 
-They share a common test infrastructure library (`engine.tests`) in `lib/engine/tests/shared/`.
-Test targets and the `Core.UnitTest` partition (`PPR_ENABLE_UNIT_TEST`, conditional
-`export import :unit_test`) are present unless `BUILD_TESTING` is explicitly `OFF`
-(`msvc-rel` sets it `OFF`). The editor partition is not gated — `game/main.cpp` imports
-`ApplicationEditor` unconditionally.
+- `gcc-*` presets fail on modules. They are hidden for a reason; use MSVC or Clang presets.
+- Configure fails looking for Ninja. Module builds require it; install Ninja and re-configure.
+- First configure fails on dependencies. It needs network for vcpkg/CPM fetches (CI clones vcpkg itself); `VCPKG_ROOT` is optional if you already have one.
+- "Where is the exe?" It lands in `out/build/<preset>/game/`, not `out/build/<preset>/`. DLLs and asset directories are copied beside it by post-build steps.
+- Demo exits at startup with a filesystem error. It found no loadable models under the staged `meshes/` directory — check the log lines for which assets failed and why.
 
-### Via CTest
+## Docs
 
-```bash
-ctest --test-dir out/build/msvc-dev --output-on-failure
-```
-
-### Direct Execution
-
-```bash
-out/build/msvc-dev/engine.tests.core --shuffle
-out/build/msvc-dev/engine.tests.app --run-test app/player
-```
-
-### Options
-
-Full flag list lives with the shared test infrastructure (`lib/engine/tests/shared/`, `parseCli()`).
-
-### Defining Tests
-
-Each suite keeps one exported root (`core` / `app`, decl-only `.cppm` +
-out-of-line def is the MSVC C1001 workaround) and a set of thematic
-private group files (`lib/engine/tests/core/Core.Allocator.Tests.cpp`, …):
-a `module engine.tests.<suite>;` impl unit holding non-exported `detail::`
-leaves plus one TU-local `const UnitTest` and one non-exported
-`const UnitTest &<node>Tests() noexcept` accessor per root-visible node
-(file-local sub-groups need no accessor; `memory`/`containers` assembled in
-`Core.Tests.cpp`). Direct-root singleton leaves use a TU-local copy plus
-accessor (`const UnitTest <leaf> = detail::<leaf>;` +
-`const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`, called as
-`<leaf>Tests()` — never a new `Named`; see `module-architect`). Add a
-new leaf to the existing thematic file; add a new group file (CMake PRIVATE
-SOURCES in the same change) plus one accessor forward-declare and one recurse
-call in the suite root only for a new thematic area:
-
-```cpp
-PPR_UNIT_TEST(my_test) {
-    PPR_TEST_ASSERT(condition);
-};
-```
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- [codemap.md](codemap.md) — navigable repository map; start here for any area of the code
+- [AGENTS.md](AGENTS.md) — engineering contract and conventions (required reading before large changes)
+- `docs/diagrams/` — rendered architecture diagrams
+- `docs/plans/` — design notes; these describe intent, not implemented code
 
 ## Contributing
 
-Contributions are welcome! Please ensure:
-- Code follows [AGENTS.md](AGENTS.md)
-- New features include unit tests
-- CMake builds cleanly with `PPR_ENABLE_DEVELOPER_MODE=ON`
+Focused changes, tests for behavior changes, a clean developer-mode build. See [AGENTS.md](AGENTS.md) before anything structural.
 
+## License
+
+MIT — see [LICENSE](LICENSE).

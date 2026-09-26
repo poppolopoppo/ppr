@@ -1,0 +1,56 @@
+@startuml
+!theme toy
+title 02 - Global Engine Architecture (Acyclic Dependencies)
+left to right direction
+
+actor "Client" as client #6CB4EE
+component "app.game executable\nTurboLarbin extends ApplicationEditor" as appgame #77DD77
+note right of appgame
+  game main.cpp
+  game CMakeLists.txt 2
+end note
+component "engine.app umbrella" as eapp #77DD77
+note right of eapp
+  lib engine app App.cppm 3
+  fans out acyclically
+  AGENTS.md graph plus CMakeLists 84
+end note
+component "engine.rhi" as rhi #CF9FFF
+component "engine.shader" as shader #CF9FFF
+component "engine.math" as math #CF9FFF
+component "engine.image" as image #CF9FFF
+component "engine.mesh" as mesh #CF9FFF
+component "engine.core foundation" as core #CF9FFF
+node "HAL windows linux darwin generic\ncmake HAL.cmake 3" as hal #FFB347
+cloud "external infra\nglfw slang slang-rhi mango stb rapidhash imgui" as infra #FFB347
+component "engine.tests\ncore GLFW-free, app GLFW, asset" as tests #B0B0B0
+
+appgame --> eapp
+eapp --> core
+eapp --> math
+eapp --> shader
+eapp --> rhi
+eapp --> image
+eapp --> mesh
+rhi --> core
+rhi --> math
+rhi --> shader
+shader --> core
+math --> core
+image --> core
+image --> math
+mesh --> core
+mesh --> math
+core ..> hal
+eapp ..> infra
+tests ..> eapp
+
+legend
+<font color="#6CB4EE">■</font> entry and actors and client
+<font color="#77DD77">■</font> app and services and processing
+<font color="#CF9FFF">■</font> shared libs and engine layers
+<font color="#FFB347">■</font> external and infra and HAL
+<font color="#B0B0B0">■</font> legacy and optional tests
+<font color="#FDFD96">■</font> data stores and assets
+endlegend
+@enduml

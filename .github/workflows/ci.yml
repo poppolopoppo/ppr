@@ -1,0 +1,111 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Excluded on purpose: hidden gcc-* presets do not build C++ modules, and
+        # msvc-live is a local-only Edit & Continue preset (not a CI validation path).
+        include:
+          - name: windows-msvc-dev
+            os: windows-latest
+            preset: msvc-dev
+            msvc_dev_cmd: true
+
+          - name: linux-clang-dev
+            os: ubuntu-latest
+            preset: clang-dev
+            msvc_dev_cmd: false
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/_vcpkg
+      VCPKG_DISABLE_METRICS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable MSVC developer command prompt
+        if: matrix.msvc_dev_cmd
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Linux build and test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            pkg-config \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            xvfb xauth \
+            libvulkan1 mesa-vulkan-drivers
+
+      - name: Setup CMake 4.3 and Ninja
+        uses: lukka/get-cmake@v4
+        with:
+          cmakeVersion: 4.3.0
+          ninjaVersion: latest
+
+      - name: Clone vcpkg
+        shell: bash
+        run: git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+
+      - name: Cache vcpkg artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}/downloads
+            ${{ github.workspace }}/out/build/${{ matrix.preset }}/vcpkg_installed
+          key: vcpkg-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.preset }}-
+
+      - name: Cache CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/out/cpm_cache
+          key: cpm-${{ runner.os }}-${{ hashFiles('cmake/CPM.cmake', 'cmake/external/*.cmake') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics'
+
+      - name: Bootstrap vcpkg on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build out/build/${{ matrix.preset }} --parallel
+
+      - name: Test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run --auto-servernum -- ctest --test-dir "out/build/${{ matrix.preset }}" --output-on-failure
+          else
+            ctest --test-dir "out/build/${{ matrix.preset }}" --output-on-failure
+          fi

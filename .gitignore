@@ -637,3 +637,6 @@ imgui.ini
 .slim/worktrees/
 .slim/worktrees.json
 # END oh-my-opencode-slim worktrees
+
+# PIX MCP host-local version marker (sibling of the ignored pix-mcp artifacts above)
+local-services/pix/version.txt
