@@ -2,7 +2,7 @@
   "name": "ppr",
   "version-string": "0.1.0",
   "description": "C++ Video Game with Slang, GLFW, and C++20 Modules",
-  "builtin-baseline": "544a4c5c297e60e4ac4a5a1810df66748d908869",
+  "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
   "dependencies": [
     "fmt",
     "zlib",
@@ -14,7 +14,3 @@
     "vulkan-headers"
   ]
 }
-
-
-
-
