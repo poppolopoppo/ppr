@@ -18,7 +18,7 @@ The dependency graph is directional and must remain acyclic:
 
 ```
 app.game -> engine.app
-engine.app -> engine.core, engine.math, engine.shader, engine.rhi
+engine.app -> engine.core, engine.math, engine.shader, engine.rhi, engine.image, engine.mesh
 engine.rhi -> engine.core, engine.math, engine.shader
 engine.shader -> engine.core
 engine.math -> engine.core
@@ -150,25 +150,57 @@ normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
 - Framework hooks (`main`, application hooks, listeners) are thin glue that
   delegates to engine logic.
 
+### Semantic control flow
+
+After mechanical formatting, perform a semantic readability pass on touched C++
+when a function mixes setup, validation, nested iteration, material/resource
+resolution, submission, counters, and logging, or has deeply nested control flow
+or repeated early exits. Do not use an arbitrary function length as the trigger.
+
+- Keep validation guards together at the start of the relevant helper, then keep
+  the successful path as one contiguous fall-through sequence.
+- Use blank lines between distinct logical phases such as setup, validation,
+  iteration, submission, and final logging. Keep related declarations and guards
+  grouped, and do not insert a blank line between every statement. Separate
+  independent phases and nested loops when that clarifies the flow.
+- Extract a named helper when a block expresses a distinct domain operation or
+  is reused; keep side effects and submissions in the caller. Do not create a
+  helper solely to satisfy an arbitrary line-count threshold.
+- Keep structured logging fields grouped as one logical block; do not flatten
+  surrounding control flow merely to accommodate a logging call.
+
+Mechanical `clion_reformat_file` does not satisfy this semantic readability
+requirement. It only handles indentation, wrapping, spacing, and braces.
+
 ## Source format
 
 The active project CLion C/C++ Code Style is canonical for mechanical
 formatting; invoke it manually through Reformat Code and through
-`clion_reformat_file` as an agent. Every `clion_reformat_file` call MUST pass
-`projectPath="E:/Code/ppr"` so the Project scheme resolves; the final diff
-review rejects any whitespace-only hunks outside the functional edit. Agents must
-not manually alter whitespace, line wrapping, indentation, blank lines, or
-brace placement as part of a functional patch. Apply these additional rules:
+`clion_reformat_file` as an agent. The repository-root `.clang-format` is a
+tracked reference/configuration only; it is not the agent formatting authority.
+`clion_reformat_file` is required for every touched C++ file after functional
+writes and before final read-only diff inspection. Every `clion_reformat_file`
+call MUST pass `projectPath="E:/Code/ppr"` so the Project scheme resolves. Direct
+`clang-format`, `git-clang-format`, `clang-format --lines`, and native/manual
+whitespace alternatives are not the normal formatter path and must not replace
+it. Agents must not manually alter whitespace, line wrapping, indentation,
+blank lines, or brace placement as part of a functional patch. A failed,
+timed-out, or unknown reformat result leaves the edit lifecycle incomplete:
+diagnose and retry the CLion operation, and do not substitute manual
+formatting. The final diff review rejects any whitespace-only hunks outside the
+functional edit. Apply these additional rules:
 
 - Use `const T` and `T *const`/`const T *const` when the callee must not reseat
   a pointer. Put `[[nodiscard]]`/other attributes, then inline-control macros,
   then `constexpr`, return type, name, parameters, `const`, and `noexcept`.
-- Place `[[likely]]`/`[[unlikely]]` on the same line as the condition and
-  immediately before its opening brace, for example `if (condition)
-  [[unlikely]] {`. Reserve condition line breaks for conditions that are
-  genuinely too long; do not place the attribute on its own line after a
-  short condition. Use `not` for new boolean negation; match surrounding
-  `and`/`or` style.
+- Place `[[likely]]`/`[[unlikely]]` on the same line as the complete condition
+  and immediately before its opening brace. The canonical forms are
+  `if (not mapped.has_value()) [[unlikely]] {` and
+  `if (not bytes.isValid()) [[unlikely]] {`. Do not split immediately after
+  `not`; forbidden form: place `not` at the end of a line before its predicate.
+  Reserve condition line breaks for conditions that are genuinely too long, and
+  do not place the attribute on its own line after a short condition. Use `not`
+  for new boolean negation; match surrounding `and`/`or` style.
 - Order class members: `static_assert`s, data, static traits/constants, default
   constructor, copy/move, other constructors, destructor, accessors, mutators,
   comparisons. Keep private nested types immediately above the data they serve.

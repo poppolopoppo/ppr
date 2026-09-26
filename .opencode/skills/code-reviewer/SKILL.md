@@ -82,6 +82,18 @@ verdict.
   service, and HAL boundaries retain their documented roles.
 - Framework hooks and callbacks are thin glue that delegates to engine logic;
   functions do not mix orchestration with unrelated low-level work.
+- In touched C++, check the post-format control flow for mixed setup,
+  validation, iteration, material/resource resolution, submission, counter, and
+  logging phases, excessive nesting, and repeated early exits that obscure the
+  successful path. Validation guards should remain grouped at the start of the
+  relevant helper, followed by contiguous fall-through, with coherent separation
+  between logical phases.
+- Flag only material mixed responsibilities, unreadable nesting, or missing
+  logical separation; do not flag ordinary personal blank-line preferences.
+  Named helpers should express a distinct domain operation or reuse rather than
+  an arbitrary line-count threshold, and side effects and submissions stay in
+  the caller. Structured logging fields remain one logical block and do not
+  justify flattening surrounding control flow.
 
 #### Application and rendering boundary checks
 - A platform/application client owns application-facing window, viewport, and

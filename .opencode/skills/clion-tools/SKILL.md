@@ -240,11 +240,17 @@ Parameters: `pathInProject` (required), `text` (optional), `overwrite` (optional
 default false).
 
 ### Reformat files (`clion_reformat_file`)
-Reformats the specified files in the JetBrains IDE using the project's code
-formatting rules. Supports **batch** (multiple files in one call) and **line
-ranges** (format only a portion of a single file).
+Reformats the specified files in the JetBrains IDE using the active project CLion
+C/C++ Code Style. This is the required formatter path for every touched C++
+file. The repository-root `.clang-format` is a tracked reference/configuration
+only; it is not the agent formatting authority. Direct `clang-format`,
+`git-clang-format`, `clang-format --lines`, and native/manual whitespace
+alternatives are not the normal formatter path and must not replace it.
 
-```
+Supports **batch** (multiple files in one call) and **line ranges** (format only
+a portion of a single file):
+
+```text
 clion_reformat_file(files=["lib/engine/core/Core.Memory.cppm"], projectPath="E:/Code/ppr")
 clion_reformat_file(files=["lib/engine/core/Core.Memory.cppm"], startLine=42, endLine=80, projectPath="E:/Code/ppr")
 ```
@@ -252,6 +258,9 @@ clion_reformat_file(files=["lib/engine/core/Core.Memory.cppm"], startLine=42, en
 Parameters: `files` (required, array of project-relative paths), `startLine`
 (optional, 1-based inclusive), `endLine` (optional, 1-based inclusive),
 `projectPath` (required).
+
+A failed, timed-out, or unknown reformat result blocks the edit lifecycle:
+diagnose and retry the CLion operation, and never substitute manual formatting.
 
 ### Required C++ edit lifecycle
 1. Complete all functional writes.
@@ -406,22 +415,71 @@ clion_xdebug_run_to_line(filePath="lib/engine/core/Core.Memory.cppm", line=150, 
 
 ## 6. Diagnostics
 
-### Check a file for errors/warnings
+### 6.1 Staged file-inspection policy
+
+`clion_get_file_problems` is the primary CLion/JetBrains/ReSharper inspection
+gate. Direct `clang-tidy` is not a replacement in this repository because its
+module jobs fail with the current MSVC/C++23 module setup. Do not disable the
+broad CLion profile or clang-tidy as the first response; profile reduction is
+only a later fallback when clean, settled inspections remain slow.
+
+Use this staged policy for every file inspected:
+
+1. **Preflight and readiness:** before `clion_get_file_problems`, open the exact
+   target file with `clion_open_file_in_editor`. Inspect files sequentially; do
+   not batch or issue concurrent inspection calls. Wait for CLion indexing,
+   project-model, and resolve-configuration activity to settle before querying.
+   There is no MCP index-ready endpoint; the IDE indexing indicator is
+   authoritative. Do not inspect during an active project scan or model update.
+2. **Attempt bounds:** use a bounded timeout and exactly one attempt per
+   inspection mode per file. Never loop on timeouts. The planned allowance is one
+   fast pass and one final pass for that file.
+3. **Fast pass:** once the file is open and the model is ready, run one
+   `errorsOnly=true` inspection.
+4. **Final pass:** after all edits and formatting are complete, run one
+   `errorsOnly=false` inspection per touched C++ file. This warnings-inclusive
+   result is authoritative. Zero errors and zero warnings on changed files is
+   the pass criterion; advisory-only Suggestions do not block it. Exception:
+   Gate 0 allowlist errors suppressed in the IDE but proxy-visible do not fail
+   the gate — verify by 5-part comment presence and an IDE-side visual check.
+5. **Triage confirmed findings:** fix Errors before Warnings, then confirm
+   through the hierarchy: `clion_get_file_problems` →
+   `clion_get_compiler_info` → `clion_get_diagnostic_info` → MSVC `/WX` build as
+   ground truth. CLion findings that do not reproduce in the `/WX` build are
+   advisory; do not churn code for them.
+
+```text
+clion_open_file_in_editor(filePath="<project-relative path>", projectPath="E:/Code/ppr")
+# Wait for the IDE indexing indicator to become idle.
+clion_get_file_problems(filePath="<project-relative path>", errorsOnly=true, timeout=<bounded>, projectPath="E:/Code/ppr")
+# Complete all edits and formatting.
+clion_get_file_problems(filePath="<project-relative path>", errorsOnly=false, timeout=<bounded>, projectPath="E:/Code/ppr")
 ```
-clion_get_file_problems(filePath="lib/engine/core/Core.Memory.cppm", errorsOnly=false, projectPath="E:/Code/ppr")
-```
 
-Parameters: `filePath` (required, project-relative), `errorsOnly` (optional,
-default false — set true to filter to errors only), `timeout` (optional),
-`projectPath` (required).
+A `timedOut=true` result means inspection was unavailable. It is not a clean
+result, not a zero-problem result, and not a clean bill of health.
 
-Returns a list of problems with severity, description, and location (1-based
-line/column). Use this as the inspection gate after edits: zero errors and
-zero warnings on changed files is the pass criterion. Exception: Gate 0 allowlist
-errors suppressed-in-IDE but proxy-visible do not fail the gate — verify by
-5-part comment presence + IDE-side visual check.
+### 6.2 Timeout recovery
 
-### Inspect compiler configuration
+- Do not immediately retry a timed-out inspection. Wait for indexing and
+  project-model readiness, then perform the single final warnings-inclusive
+  pass.
+- If analyzer exceptions or other inspection instability recur, restart CLion;
+  after restart, wait for indexing and the project scan to settle before the one
+  permitted retry. This recovery retry is the same final-pass allowance, not a
+  new attempt or a retry loop.
+- Use reindex or invalidate-caches actions only when restart does not stabilize
+  the project model.
+- If the final warnings-inclusive pass still times out, report the file as
+  inspection-unavailable/skipped with the `timedOut=true` evidence. Do not claim
+  that the file passed and do not substitute direct clang-tidy automatically.
+
+Parameters for `clion_get_file_problems` are `filePath` (required,
+project-relative), `errorsOnly` (optional, default false), `timeout` (optional),
+and the required `projectPath`. Results contain severity, description, and
+1-based line/column when available.
+
+### 6.3 Inspect compiler configuration
 ```
 clion_get_compiler_info(filePath="lib/engine/core/Core.Memory.cppm", projectPath="E:/Code/ppr")
 ```
@@ -431,36 +489,18 @@ clion_get_compiler_info(filePath="lib/engine/core/Core.Memory.cppm", projectPath
 clion_get_diagnostic_info(includeToolchains=true, includeBuildSystemWorkspaces=true, projectPath="E:/Code/ppr")
 ```
 
-### 6.1 Diagnostic workflow (focus, triage, confirm)
-
-1. **Focus the file first:** open it with `clion_open_file_in_editor`, then query
-   `clion_get_file_problems` (open-before-query keeps results anchored to the
-   active editor model).
-2. **Triage by severity:** fix Errors first, then Warnings; treat Suggestions as
-   optional unless they clarify a real defect. Re-query with `errorsOnly=true`
-   to isolate build-breaking findings.
-3. **Confirm through the hierarchy before editing:** `clion_get_file_problems` →
-   `clion_get_compiler_info` (flags, language standard, includes for the file's
-   target) → `clion_get_diagnostic_info` (toolchain / workspace state) → MSVC
-   `/WX` build as ground truth. CLion findings that do not reproduce in the
-   `/WX` build are advisory — do not churn code for them.
-4. **Gate:** zero errors and zero warnings on changed files remains the pass
-   criterion (see above); advisory-only Suggestions never block it. Exception:
-   Gate 0 allowlist errors suppressed-in-IDE but proxy-visible do not fail the
-   gate — verify by 5-part comment presence + IDE-side visual check.
-
-### 6.2 Known module/BMI false-positive patterns
+### 6.4 Known module/BMI false-positive patterns
 
 - `std::start_lifetime_as` / implicit-lifetime findings in custom containers and
   channel headers — analyzer lags the MSVC STL model; confirm via `/WX` build.
 - Scalar-vector `operator*` / `operator*=` resolution through `using
   mango::math::operator*;` re-exports — unverified overload-set complaints are
   typically index staleness, not real ambiguity.
-- Stale-index ghosts after partition renames or BMI rebuilds — re-open the file
-  and re-query; if the finding vanishes or never appears in the `/WX` build,
-  close it as stale without editing.
+- Stale-index ghosts after partition renames or BMI rebuilds — let indexing and
+  model updates settle before inspection. If a settled finding never appears in
+  the `/WX` build, close it as stale without code churn.
 
-### 6.3 Narrow suppression recipe
+### 6.5 Narrow suppression recipe
 
 Prefer the smallest scope that silences only the confirmed false positive
 (single line > single file > directory; never a global rule). Record every
@@ -468,7 +508,7 @@ suppression with this justification template:
 
 1. Location (file:line + inspection ID)
 2. Confirm trail (`compiler_info` / `diagnostic_info` / `/WX` result)
-3. Why it is a false positive (pattern from §6.2 or new, with evidence)
+3. Why it is a false positive (pattern from §6.4 or new, with evidence)
 4. Scope chosen and why nothing narrower works
 5. Expiry / re-check condition (e.g. re-verify after toolchain or BMI refresh;
    orchestrator-owned periodic check, e.g. on CLion or MSVC toolchain update)
@@ -508,10 +548,10 @@ clion_open_file_in_editor(filePath="lib/engine/core/Core.Memory.cppm", projectPa
 - **Search:** Always use `clion_search_symbol` for finding types/functions. Use `clion_search_text` for content search. Use `clion_search_file` for file discovery.
 - **Build:** Always use CLion run configurations instead of raw `cmake --build` bash commands when possible. After edits, validate touched files with `clion_get_file_problems` during the required C++ edit lifecycle.
 - **Debug:** ALWAYS use `clion_xdebug_*` tools for debugging. Never use printf/logging for debugging when the debugger is available.
-- **Diagnose:** Use `clion_get_file_problems` to check for errors before and after edits.
+- **Diagnose:** Use the staged policy in §6.1 for fast and final inspections; never treat `timedOut=true` as clean.
 - **Edit:** Use `clion_apply_patch` for structured multi-file edits and `clion_create_new_file` for new files. Follow the required C++ edit lifecycle above; use `clion_reformat_file` in batch for all touched C++ files.
 - **VCS:** Use `clion_git_status` for precise changed-file enumeration; `clion_get_repositories` for multi-root detection.
 - **Dynamic dispatch:** Use `clion_execute_tool` when a tool you need is not directly exposed in your function list. Unknown tool names dump the full registry — use as a drift detector.
-- **Batch:** When multiple independent CLion calls are needed, batch them in parallel (e.g. `clion_search_symbol` + `clion_get_run_configurations` in the same message).
+- **Batch:** When multiple independent CLion calls are needed, batch them in parallel (e.g. `clion_search_symbol` + `clion_get_run_configurations` in the same message). File inspections are the exception: inspect sequentially as required by §6.1.
 - **projectPath:** ALWAYS pass `projectPath="E:/Code/ppr"` in every `clion_*` call except `clion_get_all_open_file_paths`, `clion_xdebug_get_debugger_status`, and `clion_xdebug_list_breakpoints` (which auto-detect).
 

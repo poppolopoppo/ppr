@@ -117,16 +117,20 @@ float4 fragmentMain(VertexOutput input) : SV_Target { ... }
 
 - PPR normally discovers `vertexMain` and `fragmentMain` with
   `IModule::findEntryPointByName()`. Renaming an entry point requires changing
-  every C++ lookup and relevant test.
+  every C++ lookup and relevant test. Asset shaders may use a domain-specific
+  name instead: the bindless mesh asset's only vertex entry point is
+  `vertexIndirectMain`, so do not assume a `vertexMain` lookup will resolve for
+  it.
 - Keep matching cross-stage fields in the same order and with matching types and
   semantics. Some targets match by location/index and others retain semantic
   names; satisfying both is the portable rule.
 - Use `SV_Position`, `SV_VertexID`, `SV_Target`, and other `SV_*` semantics only
   for their defined stage roles. User varyings use explicit, matching semantics
   such as `TEXCOORD0`, `NORMAL`, or `COLOR0`.
-- Entry-point parameters are varying unless marked `uniform`. PPR uses `uniform`
-  entry-point parameters for per-draw ordinary data and descriptor handles in
-  the mesh pass.
+- Entry-point parameters are varying unless marked `uniform`. The mesh pass uses
+  `uniform` entry-point parameters for its bindless texture-heap buffer and its
+  shared sampler handle; per-draw ordinary data is a module-scope global there
+  (see "Current bindless mesh seam").
 - A pass using fixed-function vertex buffers must keep its input layout and
   shader vertex input synchronized. A pass using `SV_VertexID` plus
   `StructuredBuffer` fetch must not also add fixed-function geometry bindings.
@@ -157,8 +161,11 @@ Current examples worth inspecting, not blindly copying:
   offsets of position, normal, UV, tangent, and color.
 - `GpuMaterial` mirrors five 16-byte rows for an 80-byte structured-buffer
   stride and uses an explicit integer mask instead of C++ bitfields.
-- `PushScalars` is a scalar-only, 20-byte per-draw entry-point parameter; the
-  model matrix is uploaded separately.
+- `InstancePayload` mirrors a 16-byte-aligned model matrix plus seven 4-byte
+  fields for a 96-byte structured-buffer stride. It is a structured-buffer
+  element, not an entry-point parameter: the deleted per-draw `PushScalars`
+  entry-point parameter and its separately uploaded model matrix are no longer
+  part of the seam.
 
 ## Parameters and ShaderCursor
 
@@ -173,7 +180,7 @@ Use the binding operation that matches the reflected parameter kind:
 | `ConstantBuffer<T>` | get the dereferenced cursor, then `setData(...)` |
 | texture, sampler, or buffer resource | `setBinding(...)` |
 | full structured buffer in the mesh pass | `setBinding(Binding(buffer, makeFullRange(buffer)))` |
-| bindless `.Handle` value | `setDescriptorHandle(...)` in the current mesh seam |
+| bindless `.Handle` in a `StructuredBuffer` heap | `setBinding(...)` on the heap buffer; the shader indexes the `DescriptorHandle<T>` element |
 
 Rules:
 
@@ -197,25 +204,101 @@ Rules:
 
 ## Current bindless mesh seam
 
-The bindless mesh path contains deliberate, dependency-version-specific rules:
+`assets/shaders/mesh_bindless.slang` is the live bindless mesh program; loaded by
+`TrianglePass::createShaderProgram_` from
+`<content_dir>/shaders/mesh_bindless.slang`. It contains deliberate,
+dependency-version-specific rules:
 
-- Global scope contains one `ConstantBuffer` (`g_frame`), structured buffers,
-  and no ordinary scalar data.
-- Per-instance model/push data is carried as vertex entry-point `uniform`
-  parameters.
-- Texture and sampler handles are fragment entry-point `uniform` parameters.
-- The current vendored Slang-RHI path uses one scalar
-  `Texture2D<float4>.Handle` per material slot and one scalar
-  `SamplerState.Handle`. Do not replace these with handle arrays until current
-  Slang-RHI array support is verified on PPR's required backends.
-- Missing texture slots use `0xFFFFFFFF` in `GpuMaterial`; C++ still binds the
-  white fallback descriptor so every handle parameter is valid.
+- Global scope contains one `ConstantBuffer` (`g_frame`) plus structured buffers
+  (`g_vertices`, `g_indices`, `g_materials`, `g_payloads`) and NO ordinary data.
+  This is not stylistic: a module-scope ordinary global makes
+  `D3D12SerializeRootSignature` fail, because Slang emits it into a generated
+  `globalParams` CBV at b0 that overlaps the shifted `g_frame` at b1, and program
+  creation fails for every D3D12 test. Verified with the vendored slangc
+  2026.17.1: the base-as-global form emitted `globalParams`@b0 + `g_frame`@b1;
+  the base-as-entry-point form emits `g_frame`@b0 + `entryPointParams`@b1 with no
+  collision. Never promote per-draw ordinary data to a global to "clean up" the
+  entry point — that reintroduces this failure.
+- Per-instance payload data rides `StructuredBuffer<InstancePayload> g_payloads`.
+  The deleted `vertexMain` seam used `uniform float4x4 g_model` plus a scalar
+  `PushScalars` entry-point parameter; both are gone.
+- `g_payload_base` is the one per-draw uniform, and it is a `uniform` parameter on
+  the `vertexIndirectMain` entry point — not a global. Globals and entry-point
+  `uniform` params resolve through the SAME flat cursor, so the binding call is
+  identical either way and did not change when this moved:
+  `shader_cursor["g_payload_base"].setData(&base, sizeof(base))`. Precedent is
+  the deleted `g_model`/`g_push` pair, bound identically at
+  `shader_cursor["g_model"].setData(&m_model, sizeof(float4x4))` and
+  `shader_cursor["g_push"].setData(&scalars, sizeof(scalars))` (commit
+  `5d65612`, `App.Renderer.TrianglePass.cpp`). The cursor is one
+  `rhi::ShaderCursor(shader_object)` over the bound pipeline's shader object, not
+  a per-entry-point cursor. Plain data needs bare `setData`; only a container such
+  as `g_frame` needs `getDereferenced` first.
+- `g_payload_base` is mandatory, not an optimization. `SV_InstanceID` is
+  draw-local on D3D12, SPIR-V, and Metal alike, so the CPU's
+  `startInstanceLocation` never reaches the shader. Indexing
+  `g_payloads[sv_instance_id]` therefore makes every instanced draw read
+  payload 0, and makes a single-instance indirect draw (always instance 0)
+  render payload 0 for the whole scene. C++ encodes `startInstanceLocation = 0`
+  and sets `g_payload_base` per draw group to the group's first payload index;
+  the shader computes `g_payloads[g_payload_base + sv_instance_id]` with a plain
+  `u32` addition, which matches the payload index domain exactly. If C++ ever
+  reinstates a nonzero `startInstanceLocation`, these two must change together.
+- The texture heap and the shared sampler are FRAGMENT entry-point `uniform`
+  parameters: `StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures`
+  and one scalar `SamplerState.Handle g_sampler`. Textures are a heap in one
+  `StructuredBuffer`, not one `Texture2D<float4>.Handle` parameter per material
+  slot. Do not "simplify" this back to per-slot handle parameters or to a
+  handle array without checking current Slang-RHI support on every required
+  backend.
+- Missing texture slots use `0xFFFFFFFF` in `GpuMaterial`. The white fallback is
+  in-heap slot 0: `resolveTextureSlot` maps `0xFFFFFFFF` to slot 0, and C++
+  writes the fallback descriptor into heap slot 0 at cache initialization and
+  allocates host texture slots from 1. C++ does not bind a fallback per material
+  slot. Because albedo, ORM, and emissive MULTIPLY the factor values, an absent
+  map must read as white (1.0), not black.
+- Heap residency is not one-slot-per-load, and the caches differ here. Texture
+  slots ARE content-deduped and refcounted, so one heap slot serves many loads.
+  Material slots are NOT deduped: one slot per `pack` call, allocated from slot 0
+  (material slot 0 is a real material, not a fallback), and `release` rewrites the
+  slot to a zeroed `GpuMaterial` so a stale index still samples the fallback.
+  Mesh bags are never content-deduped either, so a `vb_offset`/`ib_start` pair
+  always identifies exactly one bag region.
+- Draw grouping, and therefore payload layout: C++ groups staged draws by
+  `(variant, bag bucket, vb_offset, ib_start, count, base_vertex)` and lays each
+  group's payloads out contiguously in first-group-first order, so one draw's
+  instances are `base .. base + count - 1`. That grouping key is the contract the
+  shader's `g_payload_base + sv_instance_id` arithmetic relies on.
+- The heap buffer is created with a null init payload and holds
+  `rhi::kBindlessTextureBudget` (4096) entries, so a never-written slot reads
+  back a garbage handle. `resolveTextureSlot` therefore maps any out-of-bounds
+  slot — anything other than a valid resident slot or the `0xFFFFFFFF` sentinel —
+  to slot 0, so a bad index degrades to defined factor-only rendering instead of
+  aliasing the last heap slot. That fallback is an explicit fail-safe decision,
+  not silent clamping, and it is unreachable today because host slots are
+  bump-allocated below the budget.
 - The material's metallic/roughness texture is ORM: R is occlusion, G is
-  roughness, and B is metallic.
+  roughness, and B is metallic. Albedo, ORM, and emissive all MULTIPLY the
+  factor values, so an absent texture must read as white (1.0), not black.
 - Descriptor handles and classic resource arrays indexed with
   `NonUniformResourceIndex` are different bindless models. Do not mix their
-  rules. If a classic resource array is indexed divergently, use the required
-  non-uniform annotation and validate generated code on the target backend.
+  rules. They are also not symmetric in support, which is easy to get backwards:
+  `nonuniform()` is a function over `DescriptorHandle<T>` ONLY, so it cannot
+  wrap a `StructuredBuffer` element read at all; the classic-SRV counterpart is
+  `NonUniformResourceIndex`. But with the vendored Slang 2026.17.1 that
+  counterpart FAILS to compile in the fragment stage for the `metal` and `wgsl`
+  targets ("uses features that are not available in 'fragment' stage"), while
+  the plain index compiles for `spirv`, `hlsl`, `metal`, and `wgsl`. Since
+  `input.material` indexes a `StructuredBuffer` — which tolerates a divergent
+  index on every backend — the mesh seam deliberately leaves `g_materials`
+  unannotated. Do not "make it consistent" with the heap reads: doing so with
+  `nonuniform()` is a type error, and doing so with `NonUniformResourceIndex`
+  trades a working shader on Metal/WGSL for a D3D12/SPIR-V-only build. Re-verify
+  across backends before changing either form.
+- `mul(vector, model)` for directions is exact for a rigid transform or a
+  uniform scale only. The shader states that contract in a comment; do not add
+  an inverse-transpose without also changing `InstancePayload`'s size and the
+  CPU-side `static_assert`s that lock it.
 
 Treat comments naming a Slang-RHI revision or upstream bug as evidence of a
 workaround, not a permanent language rule. Reproduce the problem before
@@ -265,6 +348,7 @@ different revision.
 | geometry clipped or behind camera | `mul(vector, matrix)`, `view * projection`, point `w`, no transpose/Y flip |
 | parameter silently unchanged | exact reflected name, cursor level, `uniform`, `getDereferenced` for constant buffer |
 | corrupted vertices/materials | CPU offsets, signedness, `elementSize`, structured-buffer stride |
+| every instance draws the first instance's model/material | `g_payload_base` bound per draw group, `startInstanceLocation` (must be 0), `SV_InstanceID` assumed draw-local |
 | pipeline creation failure | diagnostics blob, entry-point names/stages, target compatibility, attachment signature |
 | works on one backend only | explicit bindings, unsupported feature, target profile, non-uniform indexing, layout assumption |
 | wrong texture sampled | material slot mapping, fallback sentinel, descriptor handle, sampler, ORM channel convention |
