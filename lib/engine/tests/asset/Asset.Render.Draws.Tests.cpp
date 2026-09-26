@@ -288,19 +288,13 @@ namespace pP::tests::detail {
             // groups with bases 0 and 2. Asserted on the planner so the test
             // fails with a clear reason if the grouping itself regresses.
             const TrianglePipelineVariant opaque{};
-            const TrianglePipelineVariant variants[3] = {opaque, opaque, opaque};
-            rhi::IBuffer *const vertex_buffers[3] = {nullptr, nullptr, nullptr};
-            rhi::IBuffer *const index_buffers[3] = {nullptr, nullptr, nullptr};
-            const TriangleBagRange ranges[3] = {
-                {.m_vb_offset = 0u, .m_count = 6u},
-                {.m_vb_offset = 4u, .m_count = 6u},
-                {.m_vb_offset = 0u, .m_count = 6u},
+            const TrianglePass::ResolvedInstance planner_instances[] = {
+                {.m_payload = {.m_vb_offset = 0u, .m_index_count = 6u}, .m_variant = opaque, .m_count = 6u},
+                {.m_payload = {.m_vb_offset = 4u, .m_index_count = 6u}, .m_variant = opaque, .m_count = 6u},
+                {.m_payload = {.m_vb_offset = 0u, .m_index_count = 6u}, .m_variant = opaque, .m_count = 6u},
             };
             const Expected<TrianglePass::DrawPlan> plan = TrianglePass::planDraws(
-                std::span<const TrianglePipelineVariant>{variants, 3u},
-                std::span<rhi::IBuffer *const>{vertex_buffers, 3u},
-                std::span<rhi::IBuffer *const>{index_buffers, 3u},
-                std::span<const TriangleBagRange>{ranges, 3u});
+                planner_instances);
             PPR_TEST_ASSERT(plan.has_value());
             PPR_TEST_ASSERT(plan->m_groups.size() == 2u);
             PPR_TEST_ASSERT(plan->m_groups[0].m_first_payload == 0u);
@@ -318,28 +312,24 @@ namespace pP::tests::detail {
                 rhi::IBuffer *const bucket_a_i = reinterpret_cast<rhi::IBuffer *>(0x2000);
                 rhi::IBuffer *const bucket_b_v = reinterpret_cast<rhi::IBuffer *>(0x3000);
                 rhi::IBuffer *const bucket_b_i = reinterpret_cast<rhi::IBuffer *>(0x4000);
-                const TrianglePipelineVariant same[2] = {opaque, opaque};
-                rhi::IBuffer *const mixed_vertices[2] = {bucket_a_v, bucket_b_v};
-                rhi::IBuffer *const mixed_indices[2] = {bucket_a_i, bucket_b_i};
-                const TriangleBagRange same_range[2] = {{.m_count = 6u}, {.m_count = 6u}};
+                const TrianglePass::ResolvedInstance mixed_instances[] = {
+                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
+                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_b_v, .m_index_buffer = bucket_b_i},
+                };
                 const Expected<TrianglePass::DrawPlan> split = TrianglePass::planDraws(
-                    std::span<const TrianglePipelineVariant>{same, 2u},
-                    std::span<rhi::IBuffer *const>{mixed_vertices, 2u},
-                    std::span<rhi::IBuffer *const>{mixed_indices, 2u},
-                    std::span<const TriangleBagRange>{same_range, 2u});
+                    mixed_instances);
                 PPR_TEST_ASSERT(split.has_value());
                 PPR_TEST_ASSERT(split->m_groups.size() == 2u);
                 PPR_TEST_ASSERT(split->m_groups[0].m_vertex_buffer == bucket_a_v);
                 PPR_TEST_ASSERT(split->m_groups[1].m_vertex_buffer == bucket_b_v);
                 // The same two inputs batch when the buffers agree, which is
                 // what makes the split above attributable to the buffer pair.
-                rhi::IBuffer *const shared_vertices[2] = {bucket_a_v, bucket_a_v};
-                rhi::IBuffer *const shared_indices[2] = {bucket_a_i, bucket_a_i};
+                const TrianglePass::ResolvedInstance shared_instances[] = {
+                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
+                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
+                };
                 const Expected<TrianglePass::DrawPlan> batched = TrianglePass::planDraws(
-                    std::span<const TrianglePipelineVariant>{same, 2u},
-                    std::span<rhi::IBuffer *const>{shared_vertices, 2u},
-                    std::span<rhi::IBuffer *const>{shared_indices, 2u},
-                    std::span<const TriangleBagRange>{same_range, 2u});
+                    shared_instances);
                 PPR_TEST_ASSERT(batched.has_value());
                 PPR_TEST_ASSERT(batched->m_groups.size() == 1u);
                 PPR_TEST_ASSERT(batched->m_groups[0].m_instance_count == 2u);

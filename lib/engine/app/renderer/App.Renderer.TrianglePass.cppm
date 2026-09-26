@@ -99,6 +99,17 @@ export namespace pP {
             u32 m_payload_count = 0u;
         };
 
+        // One submitted instance with its bag and material handles resolved to
+        // drawable state: the GPU payload plus the geometry it draws from. The
+        // buffers are raw and non-owning views of the bag cache's buckets.
+        struct ResolvedInstance {
+            InstancePayload m_payload{};
+            TrianglePipelineVariant m_variant{};
+            u32 m_count = 0u;
+            rhi::IBuffer *m_vertex_buffer = nullptr;
+            rhi::IBuffer *m_index_buffer = nullptr;
+        };
+
         // ------------------------------------------------------------------
         // scene upload products
         // ------------------------------------------------------------------
@@ -108,10 +119,7 @@ export namespace pP {
         // then assigns each group a contiguous payload interval. Renders
         // nothing, so it is unit-testable without a device.
         [[nodiscard]] static Expected<DrawPlan> planDraws(
-            std::span<const TrianglePipelineVariant> variants,
-            std::span<rhi::IBuffer *const> vertex_buffers,
-            std::span<rhi::IBuffer *const> index_buffers,
-            std::span<const TriangleBagRange> ranges);
+            std::span<const ResolvedInstance> instances);
 
         // §7 uploadScene product: one bag per (mesh, prim) — full mesh verts
         // plus the prim index slice, Mango prim base riding the range —
@@ -167,7 +175,8 @@ export namespace pP {
         // submitInstance validates handles and snapshots {bag, material, model};
         // clearInstances drops the per-frame list (GPU entries stay cached).
         [[nodiscard]] Expected<TriangleBagHandle> uploadMesh(
-            std::span<const mesh::StaticMeshVertex> verts, std::span<const u32> idx);
+            std::span<const mesh::StaticMeshVertex> vertices,
+            std::span<const u32> indices);
 
         [[nodiscard]] Expected<TextureHandle> uploadTexture(const image::ImageAsset &asset);
 
@@ -197,24 +206,27 @@ export namespace pP {
         // resolve, plan, and encode
         // ------------------------------------------------------------------
 
-        // One submitted instance with its bag and material handles resolved to
-        // drawable state: the GPU payload plus the geometry it draws from. The
-        // buffers are raw and non-owning views of the bag cache's buckets.
-        struct ResolvedInstance {
-            InstancePayload m_payload{};
-            TrianglePipelineVariant m_variant{};
-            u32 m_count = 0u;
-            rhi::IBuffer *m_vertex_buffer = nullptr;
-            rhi::IBuffer *m_index_buffer = nullptr;
-        };
-
         std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
         std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
         // Pipeline-variant cache: target signature + twosided cull +
         // opaque/mask alpha. Blend is REJECTED with function_not_supported.
-        [[nodiscard]] Expected<rhi::IRenderPipeline *> pipelineFor_(
+        // Each entry pairs the pipeline with its persistent ROOT shader object
+        // (bound through the 2-arg bindPipeline overload) carrying the
+        // cache-lifetime bindings — materials, textures, sampler — plus the
+        // resolved g_frame cursor, all fixed at creation. encodeGroup_ writes
+        // only what varies: geometry, the payload ring slot, g_payload_base,
+        // and FrameConstants.
+        struct CachedVariantPipeline {
+            rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
+            rhi::ComPtr<rhi::IShaderObject> m_root_object{};
+            // g_frame's dereferenced ConstantBuffer cursor, resolved once so
+            // the per-frame path skips the field lookup and sub-object walk.
+            rhi::ShaderCursor m_frame_cursor{};
+        };
+
+        [[nodiscard]] Expected<CachedVariantPipeline *> pipelineFor_(
             rhi::IDevice &device,
             const RenderPipelineSignature &signature,
             TrianglePipelineVariant variant);
@@ -228,9 +240,26 @@ export namespace pP {
 
         [[nodiscard]] Expected<ResolvedInstance> resolveOne_(const SubmittedInstance &instance) const;
 
-        // Project resolved instances onto the planner's parallel spans.
         [[nodiscard]] Expected<DrawPlan> buildPlan_(
             const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances);
+
+        // Revision-stamped plan cache: the plan is camera-independent, so the
+        // key is the submitted-sequence CONTENT (count + exact compare over
+        // the SubmittedInstance array, handles and model included) plus the
+        // resolved plan inputs it produced. A per-frame submit bump would
+        // never hit under clear + resubmit, so no counter is kept. Any
+        // difference in either key means a full replan; a hit reuses the
+        // cached groups, whose source indices still name the same order.
+        // Resolve still runs every frame ahead of the lookup, so a stale
+        // handle or stride mismatch fails closed even on a key hit.
+        [[nodiscard]] bool planCacheHit_(
+            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances) const noexcept;
+
+        void updatePlanCache_(
+            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const DrawPlan &plan);
+
+        void invalidatePlanCache_() noexcept;
 
         // All-or-nothing payload upload: the whole compacted interval or fail.
         [[nodiscard]] std::error_code uploadPayloads_(
@@ -245,21 +274,38 @@ export namespace pP {
 
         [[nodiscard]] std::error_code ensureDirectPayloads_(rhi::IDevice &device, u32 payload_count);
 
+        // Drops the whole payload ring without touching a device: unmap only
+        // runs when one is supplied (the growth/replacement path), while
+        // shutdown and device loss release still-mapped buffers as-is.
+        void releaseDirectPayloads_(rhi::IDevice *device) noexcept;
+
         // ------------------------------------------------------------------
         // pass-owned GPU resources
         // ------------------------------------------------------------------
 
         // The one render program: mesh_bindless's payload-indexed vertex entry
         // plus the fragment entry. The pipeline-variant cache is keyed on the
-        // render pipeline signature, so a signature change drops every variant.
+        // render pipeline signature, so a signature change drops every variant
+        // (pipelines and their persistent root objects alike).
         rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
-        FlatMap<TrianglePipelineVariant, rhi::ComPtr<rhi::IRenderPipeline> > m_variant_pipelines{};
+        FlatMap<TrianglePipelineVariant, CachedVariantPipeline> m_variant_pipelines{};
 
-        // Upload payload buffer at InstancePayload (96 B) stride, rewritten
-        // every frame by mapBuffer and grown on demand. Pass-owned so it
+        // The payload ring: kPayloadRingSize upload buffers at InstancePayload
+        // (96 B) stride, each created and mapped ONCE and kept mapped for its
+        // whole life — uploadPayloads_ only advances the cursor, so a frame's
+        // writes land in a buffer no in-flight frame is still reading. Sized
+        // like the swapchain image count (m_desired_image_count) so one submit
+        // per frame never revisits a slot still on the GPU. Rotation is per
+        // render() submit and assumes a SINGLE render per frame (backpressured
+        // by acquireNextImage); a second per-frame render (e.g. a future TSR
+        // velocity/depth prepass) must revisit this — move rotation to the
+        // frame boundary or grow the ring. Pass-owned, so it
         // outlives the encoded draws; released in shutdown before waitOnHost.
-        rhi::ComPtr<rhi::IBuffer> m_direct_payloads{};
+        static constexpr u32 kPayloadRingSize{3u};
+        std::array<rhi::ComPtr<rhi::IBuffer>, kPayloadRingSize> m_direct_payloads{};
+        std::array<void *, kPayloadRingSize> m_direct_payload_mapped{};
+        u32 m_payload_ring_cursor{0u};
         u64 m_direct_payload_capacity = 0u;
 
         // Pass-owned GPU caches + the ONE shared sampler. m_shared_sampler is a
@@ -282,6 +328,14 @@ export namespace pP {
         bool m_caches_ready = false;
 
         Array<SubmittedInstance> m_submitted_instances{};
+
+        // Revision-stamped plan cache (see planCacheHit_): retained content
+        // keys plus the built plan. N x ~80 B is trivial; exact retained
+        // copies keep the cache conservative by construction.
+        Array<SubmittedInstance> m_plan_submitted_key{};
+        Array<ResolvedInstance> m_plan_resolved_key{};
+        DrawPlan m_cached_plan{};
+        bool m_plan_cache_valid = false;
 
         // Live-scene receipts: one nonce per successful
         // uploadScene; releaseScene consumes it before touching the caches
