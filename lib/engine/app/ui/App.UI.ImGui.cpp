@@ -617,19 +617,21 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         std::error_code ImGuiService::createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature) {
-            if (signature.m_color_formats.size() != 1u ||
-                signature.m_depth_stencil_format.has_value() ||
-                signature.m_sample_count != 1u) {
+            // The sample count is a SampleCount by construction — all four
+            // enumerators are accepted — so only the color shape and the
+            // absent depth attachment are checked.
+            if (signature.colorFormats().size() != 1u ||
+                signature.m_depth_stencil_format.has_value()) {
                 PPR_LOG(UI, error, "unsupported render pipeline signature", {
-                    {"color_format_count", signature.m_color_formats.size()},
+                    {"color_format_count", signature.colorFormats().size()},
                     {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
-                    {"sample_count", signature.m_sample_count},
-                });
-                return make_error_code(std::errc::operation_not_supported);
+                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
+                    });
+                return make_error_code(std::errc::invalid_argument);
             }
 
             rhi::ColorTargetDesc color_target{};
-            color_target.format = signature.m_color_formats.front();
+            color_target.format = signature.colorFormats().front();
             color_target.enableBlend = true;
             color_target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
             color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
@@ -650,7 +652,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             pipeline_desc.depthStencil.depthTestEnable = false;
             pipeline_desc.depthStencil.depthWriteEnable = false;
             pipeline_desc.label = "render_imgui";
-            pipeline_desc.multisample.sampleCount = signature.m_sample_count;
+            pipeline_desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
 
             PPR_RETURN_ERROR_ON_FAIL(UI, device.createRenderPipeline(pipeline_desc, m_render_pipeline.writeRef()));
             return default_value_v;

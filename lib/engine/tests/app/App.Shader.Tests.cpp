@@ -148,6 +148,25 @@ namespace pP::tests::detail {
     // D. Shader Compilation & Reflection
     // ------------------------------------------------------------------
     namespace ShaderComp {
+        void discardExpectedFailureLog_(const Log::Entry &) noexcept {
+        }
+
+        class ExpectedFailureLogGuard final {
+            Log::Policy m_previous;
+
+        public:
+            ExpectedFailureLogGuard() noexcept : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
+            }
+
+            ~ExpectedFailureLogGuard() noexcept {
+                // Drain under the discard policy (see Asset.Search.Tests.cpp):
+                // the logger is async, and an unrestored queue would fail a
+                // later test nondeterministically.
+                std::ignore = Log::flush(true);
+                Log::setWriterPolicy(m_previous);
+            }
+        };
+
         constexpr string_literal kTriangleShader = R"(
 struct VSOutput {
     float4 position : SV_Position;
@@ -340,7 +359,10 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             std::ignore = svc->shutdown();
             PPR_TEST_ASSERT(!svc->initialize());
             shader::SharedModule handle;
-            PPR_TEST_ASSERT(!!svc->loadModuleFromFile("nonexistent/shaders/missing.slang", "missing", handle.writeRef()));
+            {
+                ExpectedFailureLogGuard expected_failure_log{};
+                PPR_TEST_ASSERT(!!svc->loadModuleFromFile("nonexistent/shaders/missing.slang", "missing", handle.writeRef()));
+            }
             PPR_TEST_ASSERT(!svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef()));
             PPR_TEST_ASSERT(handle.get() != nullptr);
             PPR_TEST_ASSERT(!svc->shutdown());

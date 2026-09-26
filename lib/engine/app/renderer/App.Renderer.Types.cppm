@@ -14,25 +14,74 @@ export namespace pP {
     class Renderer;
 
     // ------------------------------------------------------------------
+    // sample counts
+    // ------------------------------------------------------------------
+
+    // The accepted multisample counts as a CLOSED set: the power-of-two values
+    // {1, 2, 4, 8}. No other value is representable, so a signature can only
+    // carry an accepted count and every pass accepts by construction — there
+    // is no runtime allowlist left for passes to drift from.
+    enum class SampleCount : u8 {
+        x1 = 1u,
+        x2 = 2u,
+        x4 = 4u,
+        x8 = 8u,
+    };
+
+    // The single u32 -> SampleCount mapping: the RHI already rejects a
+    // non-power-of-two count when the texture is created, but a value that
+    // ever reaches this seam fails closed instead of narrowing into a
+    // signature.
+    [[nodiscard]] constexpr Expected<SampleCount> makeSampleCount(const u32 sample_count) noexcept {
+        switch (sample_count) {
+            case 1u:
+                return SampleCount::x1;
+            case 2u:
+                return SampleCount::x2;
+            case 4u:
+                return SampleCount::x4;
+            case 8u:
+                return SampleCount::x8;
+            default:
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+    }
+
+    // ------------------------------------------------------------------
     // pipeline signatures
     // ------------------------------------------------------------------
 
+    // Pipeline identity ONLY: the color formats, the sample count, and the
+    // depth-stencil format. Temporal jitter (TAA/JBS offsets, a jittered
+    // projection) must NEVER enter this type — a jittered signature compares
+    // unequal every frame and would drop every cached pipeline on every frame.
     struct RenderPipelineSignature {
-        std::span<const rhi::Format> m_color_formats{};
+        static constexpr u32 kMaxColorFormats{4u};
+
+        std::array<rhi::Format, kMaxColorFormats> m_color_formats{};
+        u8 m_color_format_count{0u};
         std::optional<rhi::Format> m_depth_stencil_format{};
-        u32 m_sample_count{1u};
+        SampleCount m_sample_count{SampleCount::x1};
+
+        // Fail-safe view: the count is a public field, so clamp it — a stale
+        // or out-of-range count can never build an out-of-bounds span.
+        [[nodiscard]] std::span<const rhi::Format> colorFormats() const noexcept {
+            const u32 count = std::min<u32>(m_color_format_count, kMaxColorFormats);
+            return {m_color_formats.data(), count};
+        }
 
         [[nodiscard]] bool operator==(const RenderPipelineSignature &other) const noexcept {
             return m_sample_count == other.m_sample_count and
                    m_depth_stencil_format == other.m_depth_stencil_format and
-                   std::ranges::equal(m_color_formats, other.m_color_formats);
+                   m_color_format_count == other.m_color_format_count and
+                   std::ranges::equal(colorFormats(), other.colorFormats());
         }
 
         [[nodiscard]] friend hash_t hashValue(
             const RenderPipelineSignature &value,
             const hash_t seed = {hash::default_seed_v}) noexcept {
             return hash::combine(seed,
-                value.m_color_formats,
+                hash::sizedRange(value.colorFormats()),
                 value.m_depth_stencil_format,
                 value.m_sample_count);
         }
