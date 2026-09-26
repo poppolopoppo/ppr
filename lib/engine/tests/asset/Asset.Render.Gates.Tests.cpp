@@ -130,6 +130,68 @@ namespace pP::tests::detail {
             return target;
         }
 
+        // MSAA variant of makeRenderTarget_: sampleCount (and the matching
+        // Texture2DMS type — a non-MS type with sampleCount > 1 is rejected as
+        // invalid by the RHI's texture validation) is the only difference, so
+        // a multisampled pass with a single-sample resolve target can be built
+        // without touching the pipeline path.
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeMsaaTarget_(
+            rhi::IDevice &device, const u32 size, const u32 sample_count, const char *const label) {
+            rhi::TextureDesc desc{};
+            desc.type = sample_count > 1u ? rhi::TextureType::Texture2DMS : rhi::TextureType::Texture2D;
+            desc.size = {size, size, 1u};
+            desc.arrayLength = 1u;
+            desc.mipCount = 1u;
+            desc.format = rhi::Format::RGBA8Unorm;
+            desc.sampleCount = sample_count;
+            desc.memoryType = rhi::MemoryType::DeviceLocal;
+            desc.usage = rhi::TextureUsage::RenderTarget;
+            desc.defaultState = rhi::ResourceState::RenderTarget;
+            desc.label = label;
+            rhi::ComPtr<rhi::ITexture> target{};
+            if (const std::error_code err = make_error_code(device.createTexture(desc, nullptr, target.writeRef()))) {
+                return std::unexpected{err};
+            }
+            return target;
+        }
+
+        // Axis-aligned quad facing +Z for the MSAA accept-path gate below —
+        // the same geometry shape Draws::drawsQuad_ draws (that helper lives
+        // in a different translation unit of this module).
+        [[nodiscard]] Array<mesh::StaticMeshVertex> msaaQuad_(const float half) {
+            const auto vertex = [half](const float x, const float y) {
+                return mesh::StaticMeshVertex{
+                    .m_position = {x, y, 0.0f},
+                    .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {(x / half) * 0.5f + 0.5f, (y / half) * 0.5f + 0.5f},
+                    .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f},
+                };
+            };
+            return {vertex(-half, -half), vertex(half, -half), vertex(half, half), vertex(-half, half)};
+        }
+
+        // Wound CLOCKWISE as seen from the camera — the front face this
+        // pipeline's CullMode::Back accepts (see Draws::drawsQuadIndices_).
+        [[nodiscard]] Array<u32> msaaQuadIndices_() {
+            return {0u, 3u, 2u, 0u, 2u, 1u};
+        }
+
+        // Untextured flat-colour material: the shader multiplies the albedo by
+        // the fallback white texture, so the drawn colour is this colour under
+        // the fixed light rig (see Draws::drawsColorMaterial_).
+        [[nodiscard]] Expected<MaterialHandle> msaaColorMaterial_(
+            TrianglePass &pass, const float4 &rgb) {
+            mesh::MaterialAsset material{};
+            material.m_base_color = float4{rgb.x, rgb.y, rgb.z, 1.0f};
+            material.m_roughness = 1.0f;
+            material.m_metallic = 0.0f;
+            const TextureHandle none[4] = {
+                TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}
+            };
+            return pass.packMaterial(material, none);
+        }
+
         [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeDepthTarget_(rhi::IDevice &device, const u32 size) {
             rhi::TextureDesc desc{};
             desc.type = rhi::TextureType::Texture2D;
@@ -748,6 +810,293 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.bagCache().release(*flip_bag));
         };
 
+        // RenderPipelineSignature is count-sensitive but tail-insensitive:
+        // only the first m_color_format_count entries participate in
+        // equality and hashing, and colorFormats() clamps a stale count so
+        // the public u8 can never build an out-of-bounds span.
+        PPR_UNIT_TEST (pipeline_signature_count_sensitivity) {
+            RenderPipelineSignature one{};
+            one.m_color_formats[0] = rhi::Format::RGBA8Unorm;
+            one.m_color_format_count = 1u;
+            RenderPipelineSignature two = one;
+            two.m_color_formats[1] = rhi::Format::RGBA8Unorm;
+            two.m_color_format_count = 2u;
+            PPR_TEST_ASSERT(one.colorFormats().size() == 1u);
+            PPR_TEST_ASSERT(two.colorFormats().size() == 2u);
+            PPR_TEST_ASSERT(not(one == two));
+            PPR_TEST_ASSERT(not(two == one));
+        };
+
+        PPR_UNIT_TEST (pipeline_signature_tail_insensitivity) {
+            RenderPipelineSignature lhs{};
+            lhs.m_color_formats[0] = rhi::Format::RGBA8Unorm;
+            lhs.m_color_format_count = 1u;
+            RenderPipelineSignature rhs = lhs;
+            rhs.m_color_formats[1] = rhi::Format::D32Float;
+            rhs.m_color_formats[2] = rhi::Format::RG32Float;
+            rhs.m_color_formats[3] = rhi::Format::RGBA8UnormSrgb;
+            PPR_TEST_ASSERT(lhs == rhs);
+            PPR_TEST_ASSERT(rhs == lhs);
+            PPR_TEST_ASSERT(hashValue(lhs) == hashValue(rhs));
+        };
+
+        PPR_UNIT_TEST (pipeline_signature_hash_consistent_with_equality) {
+            RenderPipelineSignature base{};
+            base.m_color_formats[0] = rhi::Format::RGBA8Unorm;
+            base.m_color_format_count = 1u;
+            base.m_depth_stencil_format = rhi::Format::D32Float;
+            base.m_sample_count = SampleCount::x1;
+            const RenderPipelineSignature copy = base;
+            PPR_TEST_ASSERT(base == copy);
+            PPR_TEST_ASSERT(hashValue(base) == hashValue(copy));
+            RenderPipelineSignature resampled = base;
+            resampled.m_sample_count = SampleCount::x4;
+            PPR_TEST_ASSERT(not(base == resampled));
+            // The sample count is part of the key: a resampled signature must
+            // not collide with the single-sampled one it came from.
+            PPR_TEST_ASSERT(hashValue(base) != hashValue(resampled));
+        };
+
+        // Fail closed: more color attachments than kMaxColorFormats is
+        // rejected before any attachment is inspected — never truncated.
+        PPR_UNIT_TEST (render_rejects_color_attachments_beyond_capacity) {
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
+            std::array<rhi::RenderPassColorAttachment, 5u> attachments{};
+            const std::error_code err = renderer.render(
+                string_literal{std::in_place, "over-capacity color attachments"},
+                rhi::RenderPassDesc{
+                    .colorAttachments = attachments.data(),
+                    .colorAttachmentCount = 5u,
+                },
+                {});
+            PPR_TEST_ASSERT(err == std::make_error_code(std::errc::invalid_argument));
+        };
+
+        void discardExpectedFailureLog_(const Log::Entry &) noexcept {
+        }
+
+        class ExpectedFailureLogGuard final {
+            Log::Policy m_previous;
+
+        public:
+            ExpectedFailureLogGuard() noexcept : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
+            }
+
+            ~ExpectedFailureLogGuard() noexcept {
+                // Drain under the discard policy (see Asset.Search.Tests.cpp):
+                // the logger is async, and an unrestored queue would fail a
+                // later test nondeterministically.
+                std::ignore = Log::flush(true);
+                Log::setWriterPolicy(m_previous);
+            }
+        };
+
+        // Fail closed: default views spanning multiple layers or mips are
+        // rejected as color attachments — never silently narrowed to one slice.
+        PPR_UNIT_TEST (render_rejects_multilayer_multimip_color_attachment) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
+
+            {
+                rhi::TextureDesc desc{};
+                desc.type = rhi::TextureType::Texture2DArray;
+                desc.size = {64u, 64u, 1u};
+                desc.arrayLength = 2u;
+                desc.mipCount = 1u;
+                desc.format = rhi::Format::RGBA8Unorm;
+                desc.memoryType = rhi::MemoryType::DeviceLocal;
+                desc.usage = rhi::TextureUsage::RenderTarget;
+                desc.defaultState = rhi::ResourceState::RenderTarget;
+                desc.label = "gate array render target";
+                rhi::ComPtr<rhi::ITexture> target{};
+                PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, target.writeRef())));
+                const rhi::ComPtr<rhi::ITextureView> view = target->getDefaultView();
+                PPR_TEST_ASSERT(view.get() != nullptr);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = view.get();
+                ExpectedFailureLogGuard expected_failure_log{};
+                const std::error_code err = renderer.render(
+                    string_literal{std::in_place, "array-spanning color attachment"},
+                    rhi::RenderPassDesc{
+                        .colorAttachments = &attachment,
+                        .colorAttachmentCount = 1u,
+                    },
+                    {});
+                PPR_TEST_ASSERT(err == std::make_error_code(std::errc::invalid_argument));
+            }
+
+            {
+                rhi::TextureDesc desc{};
+                desc.type = rhi::TextureType::Texture2D;
+                desc.size = {64u, 64u, 1u};
+                desc.arrayLength = 1u;
+                desc.mipCount = 2u;
+                desc.format = rhi::Format::RGBA8Unorm;
+                desc.memoryType = rhi::MemoryType::DeviceLocal;
+                desc.usage = rhi::TextureUsage::RenderTarget;
+                desc.defaultState = rhi::ResourceState::RenderTarget;
+                desc.label = "gate mipped render target";
+                rhi::ComPtr<rhi::ITexture> target{};
+                PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, target.writeRef())));
+                const rhi::ComPtr<rhi::ITextureView> view = target->getDefaultView();
+                PPR_TEST_ASSERT(view.get() != nullptr);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = view.get();
+                ExpectedFailureLogGuard expected_failure_log{};
+                const std::error_code err = renderer.render(
+                    string_literal{std::in_place, "mip-spanning color attachment"},
+                    rhi::RenderPassDesc{
+                        .colorAttachments = &attachment,
+                        .colorAttachmentCount = 1u,
+                    },
+                    {});
+                PPR_TEST_ASSERT(err == std::make_error_code(std::errc::invalid_argument));
+            }
+        };
+
+        // Acceptance: a multisampled color attachment with a single-sample
+        // resolve target is a valid render-pass shape. There are no draws —
+        // the clear alone must survive the multisampled pass and land in the
+        // 1x target, which is what the pixel readback checks.
+        PPR_UNIT_TEST (render_resolves_msaa_color_attachment) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
+
+            constexpr u32 kSize = 64u;
+            const Expected<rhi::ComPtr<rhi::ITexture> > msaa_target =
+                    makeMsaaTarget_(device, kSize, 4u, "gate msaa target");
+            PPR_TEST_ASSERT(msaa_target.has_value());
+            const Expected<rhi::ComPtr<rhi::ITexture> > resolve_target =
+                    makeMsaaTarget_(device, kSize, 1u, "gate resolve target");
+            PPR_TEST_ASSERT(resolve_target.has_value());
+
+            const rhi::ComPtr<rhi::ITextureView> msaa_view = targetRef_(msaa_target).getDefaultView();
+            const rhi::ComPtr<rhi::ITextureView> resolve_view = targetRef_(resolve_target).getDefaultView();
+            PPR_TEST_ASSERT(msaa_view.get() != nullptr);
+            PPR_TEST_ASSERT(resolve_view.get() != nullptr);
+
+            rhi::RenderPassColorAttachment attachment{};
+            attachment.view = msaa_view.get();
+            attachment.resolveTarget = resolve_view.get();
+            attachment.loadOp = rhi::LoadOp::Clear;
+            attachment.storeOp = rhi::StoreOp::Store;
+            attachment.clearValue[0] = 0.0f;
+            attachment.clearValue[1] = 1.0f;
+            attachment.clearValue[2] = 0.0f;
+            attachment.clearValue[3] = 1.0f;
+
+            PPR_TEST_ASSERT(not renderer.render(
+                string_literal{std::in_place, "msaa resolve"},
+                rhi::RenderPassDesc{
+                    .colorAttachments = &attachment,
+                    .colorAttachmentCount = 1u,
+                },
+                {}));
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+
+            const Expected<GatePixels> pixels = readback_(device, targetRef_(resolve_target), kSize);
+            PPR_TEST_ASSERT(pixels.has_value());
+            const std::array<u8, 4u> clear_texel{0u, 255u, 0u, 255u};
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(*pixels, 32u, 32u), clear_texel) <= 1u);
+        };
+
+        // Accept path for the closed SampleCount set: 2x and 4x are the two
+        // non-1x enumerators a multisampled pass can carry, so both must build
+        // a pipeline (the pass rejects nothing by count any more) and land the
+        // drawn quad in the 1x resolve target. Enum exhaustiveness is by
+        // construction — a signature cannot hold a count outside {1,2,4,8} —
+        // so there is no invalid sample count left to build a negative test
+        // against; the fail-closed mapping from the raw u32 is unreachable per
+        // RHI validation and therefore covered by the mapping itself, not here.
+        PPR_UNIT_TEST (render_accepts_msaa_sample_counts) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            Renderer *const p_renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(p_renderer != nullptr);
+            Renderer &renderer = *p_renderer;
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            constexpr u32 kSize = 256u;
+
+            const Array<mesh::StaticMeshVertex> quad = msaaQuad_(0.5f);
+            const Array<u32> indices = msaaQuadIndices_();
+            const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, indices);
+            PPR_TEST_ASSERT(bag.has_value());
+            const Expected<MaterialHandle> material = msaaColorMaterial_(
+                pass, float4{0.0f, 0.0f, 1.0f, 1.0f});
+            PPR_TEST_ASSERT(material.has_value());
+
+            // Camera faces the quad head-on: its centre lands mid-frame.
+            pass.clearInstances();
+            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *material, float4x4::identity()));
+            const float3 eye{0.0f, 0.0f, 3.0f};
+            PPR_TEST_ASSERT(not pass.update(
+                TimeSpan{}, gateCamera_(eye, float3{zero_v}, float2{256.0f, 256.0f})));
+
+            for (const u32 sample_count: {2u, 4u}) {
+                const Expected<rhi::ComPtr<rhi::ITexture> > msaa_target =
+                        makeMsaaTarget_(device, kSize, sample_count, "gate msaa draw target");
+                PPR_TEST_ASSERT(msaa_target.has_value());
+                const Expected<rhi::ComPtr<rhi::ITexture> > resolve_target =
+                        makeMsaaTarget_(device, kSize, 1u, "gate msaa draw resolve");
+                PPR_TEST_ASSERT(resolve_target.has_value());
+
+                const rhi::ComPtr<rhi::ITextureView> msaa_view = targetRef_(msaa_target).getDefaultView();
+                const rhi::ComPtr<rhi::ITextureView> resolve_view = targetRef_(resolve_target).getDefaultView();
+                PPR_TEST_ASSERT(msaa_view.get() != nullptr);
+                PPR_TEST_ASSERT(resolve_view.get() != nullptr);
+
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = msaa_view.get();
+                attachment.resolveTarget = resolve_view.get();
+                attachment.loadOp = rhi::LoadOp::Clear;
+                attachment.storeOp = rhi::StoreOp::Store;
+                attachment.clearValue[0] = 0.0f;
+                attachment.clearValue[1] = 0.0f;
+                attachment.clearValue[2] = 0.0f;
+                attachment.clearValue[3] = 1.0f;
+
+                PPR_TEST_ASSERT(not renderer.render(
+                    string_literal{std::in_place, "msaa quad resolve"},
+                    rhi::RenderPassDesc{
+                        .colorAttachments = &attachment,
+                        .colorAttachmentCount = 1u,
+                    },
+                    {DrawSubmission{pass}}));
+                PPR_TEST_ASSERT(not renderer.waitOnHost());
+
+                const Expected<GatePixels> pixels = readback_(device, targetRef_(resolve_target), kSize);
+                PPR_TEST_ASSERT(pixels.has_value());
+
+                // The quad drew and resolved: the centre is no longer the flat
+                // black clear, and the flat blue material keeps blue dominant
+                // over red and green (the clear is neutral, so it cannot).
+                const std::array<u8, 4u> background = gateTexel_(*pixels, 4u, 4u);
+                const std::array<u8, 4u> centre = gateTexel_(*pixels, kSize / 2u, kSize / 2u);
+                PPR_TEST_ASSERT(texelDist_(centre, background) > 20u);
+                PPR_TEST_ASSERT(centre[2] > centre[0] + 20u);
+                PPR_TEST_ASSERT(centre[2] > centre[1] + 20u);
+            }
+
+            pass.clearInstances();
+        };
+
         // §7 editor flow end to end: boot editor, loadScene, per-frame submit
         // via update, render the pass offscreen, release on unload/teardown.
         PPR_UNIT_TEST (editor_scene_flow) {
@@ -812,6 +1161,13 @@ namespace pP::tests {
             detail::Gate::triangle_depth_occlusion_gate,
             detail::Gate::orm_golden_distinct_channels,
             detail::Gate::tangent_w_render_proof,
+            detail::Gate::pipeline_signature_count_sensitivity,
+            detail::Gate::pipeline_signature_tail_insensitivity,
+            detail::Gate::pipeline_signature_hash_consistent_with_equality,
+            detail::Gate::render_rejects_color_attachments_beyond_capacity,
+            detail::Gate::render_rejects_multilayer_multimip_color_attachment,
+            detail::Gate::render_resolves_msaa_color_attachment,
+            detail::Gate::render_accepts_msaa_sample_counts,
         });
     };
 

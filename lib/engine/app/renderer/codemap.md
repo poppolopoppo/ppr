@@ -2,8 +2,8 @@
 
 ## Responsibility
 
-The `engine.app:renderer` module provides the content-free generic `Renderer` (multi-window surfaces + graphics
-queue + validated submission only). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
+The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
+queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
 camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
 `engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
@@ -13,12 +13,16 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): config `m_preferred_surface_format` (default Undefined → backend
   preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}`; state `FlatMap<WindowHandle, SurfaceRecord>` +
-  `m_graphics_queue` + `safe_ptr<IRhiService>`. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
+  `m_graphics_queue` + `safe_ptr<IRhiService>` + `m_owner` thread id. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
   depth texture/view, last `m_extent`, and `m_configured`. The depth pair is shared only by passes that explicitly
-  select `ESurfaceDepthPolicy::renderer_owned`; it is not globally attached to presentation.
-- `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only; `shutdown()` retain-first-error teardown:
-  `waitOnHost`, unconfigure every configured surface, clear map/queue/service refs. `waitOnHost()` forwards when
-  a queue exists, else success.
+  select `ESurfaceDepthPolicy::renderer_owned`; it is not globally attached to presentation. The renderer is
+  render-thread confined like the pass caches: `initialize` captures the owner thread, surface and presentation
+  paths fail closed (`operation_not_permitted`) off-thread, and `shutdown` clears the owner.
+- `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only and captures the owner thread;
+  `shutdown()` retain-first-error teardown: off-thread call fails closed (`operation_not_permitted`), else
+  `waitOnHost`, unconfigure every configured surface, clear map/queue/service refs and the owner.
+  `waitOnHost()` forwards when a queue exists, else success. RHI-service validity is always checked as
+  `m_rhi_service.isValid()`.
 - `render(description, render_pass, draws)`: rejects uninitialized queue/service (`not_connected`) and empty/null
   attachment descriptors (`invalid_argument`); `inspectAttachment_` resolves each color/depth view to
   format + mip-aware extent + sample count (null/missing/out-of-range/Undefined/0-sample → `invalid_argument`);
@@ -38,17 +42,36 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   (`ESurfaceDepthPolicy::renderer_owned`), or an external depth descriptor (`external`). This permits the 3D pass
   to use depth while a following ImGui pass loads color without any depth attachment, or a later compatible pass to
   select a different external view/format without pretending the backend supports different depth views inside one
-  native pass. Policy/descriptor mismatches and empty pass lists fail before image acquisition. There is no
-  `renderAndPresentPasses` and no `SurfaceDrawPass` type.
+  native pass. Policy/descriptor mismatches and empty pass lists fail before image acquisition; an acquired
+  backbuffer whose extent no longer matches the resize-matched depth view fails (`invalid_argument`) before
+  pass building. There is no
+  `renderAndPresentPasses` and no `SurfaceDrawPass` type. Recording is **two-phase over one shared ScratchPad
+  scope**: phase 1 builds every `BuiltSurfacePass` (color attachments, depth attachment, `RenderPassDesc`, then
+  `surfaceSignature_` → signature + reference extent) into a reserved `Array`, and the first failure stops the
+  build; phase 2 runs only on success, creating one encoder, encoding the already-built passes, then one
+  finish + submit — every failure is retained so the acquired image still presents, and a failed pass abandons the
+  encoder without finish/submit while `present()` still runs.
+- `surfaceSignature_(record, pass, desc, out_signature, out_extent)` is the surface-hoisted signature build. The
+  depth policy picks one of two `SurfaceRecord::m_signatures` slots (`none` = 0, `renderer_owned` = 1); external
+  depth and any pass with `m_additional_colors` is caller-shaped and never cached. A hit reuses the stored
+  signature only when the slot is valid, the depth policy still matches, and the stored extent equals the record's
+  current extent (compared componentwise); otherwise `buildRenderSignature_` runs and repopulates the slot.
+  `resizeWindowSurface_` clears both slots right after its thread check, so a resize always rebuilds.
 - `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
-  `resizeWindowSurface_` to the current framebuffer size, `insert_or_assign`. `resizeWindowSurface_`: zero/negative
-  extent unconfigures and releases depth (keeps the record); otherwise waits when already configured, creates
-  the D32Float depth texture/view, then `configure()` with width/height + preferred format + image count + vsync.
-  `destroyWindowSurface(window)` rejects null handle
+  `resizeWindowSurface_` to the current framebuffer size, `try_emplace` (duplicate handle: no clobber,
+  transient released, `invalid_argument`; dead path — `renderAndPresent` checks first). `resizeWindowSurface_`: GPU-fences via `waitOnHost` whenever already configured
+  (including the minimize path), then zero/negative extent unconfigures and releases depth (keeps the record,
+  clears the configured claim even when unconfigure fails so the gate below cannot see a stale claim);
+  otherwise creates the D32Float depth texture/view, clears the configured claim, then `configure()` with
+  width/height + preferred format + image count + vsync (only success re-sets configured, so a failed
+  configure cannot leave a stale claim). `destroyWindowSurface(window)` rejects null handle
   (`invalid_argument`) and forwards to `destroyWindowSurface_(handle)` (unknown handle → `invalid_argument`;
-  else move-out, erase, unconfigure).
-- **Types** (`App.Renderer.Types.cppm`, header-only): `RenderPipelineSignature{color_formats span,
-  depth_stencil_format optional, sample_count}` with `operator==` + `hashValue` combine, memoized as
+  else move-out, erase, unconfigure). Per-window teardown runs in `ApplicationEditor::shutdown`
+  (`destroyWindowSurface(*main_window)` before `destroyWindow` while the renderer is alive);
+  `renderer.shutdown()` remains the backstop for any surviving surface (single-window-shutdown-only).
+- **Types** (`App.Renderer.Types.cppm`, header-only): `RenderPipelineSignature{array<Format,4> +
+  count (kMaxColorFormats) + clamped colorFormats() view, depth_stencil_format optional, sample_count}`
+  with count-sensitive `operator==` + `hashValue` combine over the clamped view, memoized as
   `RenderPipelineKey`; `DrawContext{IDevice&, IRenderPassEncoder&, pipeline_key, viewport, scissor,
   target_extent}`;
   `DrawCallback = function_ref<error_code(DrawContext)>`; `TDrawable` concept (`render(DrawContext) →
@@ -56,7 +79,11 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
   `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`;
   `ESurfaceDepthPolicy{none, renderer_owned, external}`;
-  `SurfaceRenderPass{surface_color, additional_colors span, depth policy, external depth optional, draws}`.
+  `SurfaceRenderPass{surface_color, additional_colors span, depth policy, external depth optional, draws}`;
+  `SampleCount{x1=1, x2=2, x4=4, x8=8}` is the closed power-of-two acceptance set (no other value is
+  representable), plus `makeSampleCount(u32) -> Expected<SampleCount>` as the single fail-closed u32 mapping
+  (non-power-of-two → `invalid_argument`); `RenderPipelineSignature` documents that temporal jitter must never enter it, since a jittered signature would
+  invalidate every cached pipeline each frame.
 - **TrianglePass** (`App.Renderer.TrianglePass.cppm/.cpp`): pass-owned GPU caches + shared sampler + narrow
   upload APIs (`uploadMesh/uploadTexture/packMaterial/submitInstance`) + a per-frame submitted-instance list +
   pipeline-variant map (kept `CameraSnapshot`). Binds the scalar-handle `mesh_bindless.slang` program
@@ -69,6 +96,15 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   D3D12, SPIR-V, and Metal alike. Failure is fail-closed but not all-or-nothing: resolve and payload upload are
   all-or-nothing, while encoding stops at the first group that cannot be encoded and prior groups stand.
   There is no indirect or compute-publish lane.
+  **Payload ring**: `kPayloadRingSize{3}` (mirrors `m_desired_image_count`) upload buffers at `InstancePayload`
+  stride, each created and mapped once in `ensureDirectPayloads_` and kept mapped for its whole life;
+  `uploadPayloads_` rotates `m_payload_ring_cursor` once per submit and writes through the persistent mapping
+  (no per-frame map/unmap), and `encodeGroup_` binds the current slot. `releaseDirectPayloads_(device)` drops the
+  whole ring — unmap only when a device is supplied (growth/replacement), `nullptr` from `shutdown()`/
+  `notifyDeviceLost()`, which is safe because `SLANG_RHI_DEBUG_ENABLE_BUFFER_MAP_VALIDATION` defaults to 0.
+  `pipelineFor_` validates the signature shape (one color format — the sample count is a `SampleCount`, so every
+  value is accepted by construction) BEFORE the cache clear,
+  so an unsupported signature can never drop the pipelines built for the last good one.
 - **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic bump buckets,
   stable `TriangleBagRange`, **no dedup** — one range per upload), `BindlessTextureCache` (**content-hash dedup
   + refcount + pin-while-held**, heap slot 0 pinned to the white fallback and host slots start at 1),
@@ -105,8 +141,8 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
    render pass → present); `TrianglePass::update(snapshot)` then `TrianglePass::render` inside the 3D callback.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
-5. Shutdown → `triangle.shutdown()` → `destroyWindowSurface(window)` per window → `renderer.shutdown()`
-   (wait, unconfigure all, release)
+5. Shutdown → `triangle.shutdown()` → `destroyWindowSurface(*main_window)` → window destroyed via the window
+   service → `renderer.shutdown()` (wait, unconfigure any survivor, release)
 
 ## Integration
 
@@ -120,7 +156,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 ## Key Files
 
-- `App.Renderer.cppm` — generic `Renderer` declaration (config, multi-surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
+- `App.Renderer.cppm` — generic `Renderer` declaration (config, surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
 - `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
 - `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, caches, pipeline helpers)
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)

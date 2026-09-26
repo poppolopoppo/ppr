@@ -308,6 +308,10 @@ namespace pP {
             // Drop blur subscription alongside detector detach.
             main_window->m_when_focused.reset();
 
+            // Release the surface while the renderer still owns the queue;
+            // the window handle dies in destroyWindow below.
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, getRenderer().destroyWindowSurface(*main_window));
+
             IWindowService &window_service = *getPlatform().getWindowService();
             std::ignore = window_service.setMainWindow(nullptr);
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, window_service.destroyWindow(std::move(main_window)));

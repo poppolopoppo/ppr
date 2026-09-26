@@ -25,6 +25,8 @@ namespace pP::tests {
 
     const UnitTest &renderer_triangle_reinit_okTests() noexcept;
 
+    const UnitTest &renderer_off_thread_fails_closedTests() noexcept;
+
     const UnitTest &imgui_live_shutdown_idempotentTests() noexcept;
 
     const UnitTest &imgui_live_same_object_reinitTests() noexcept;
@@ -74,6 +76,7 @@ namespace pP::tests {
             render_viewTests(),
             pixel_readbackTests(),
             renderer_triangle_reinit_okTests(),
+            renderer_off_thread_fails_closedTests(),
             imgui_live_shutdown_idempotentTests(),
             imgui_live_same_object_reinitTests(),
             app_init_rollback_on_window_create_failureTests(),

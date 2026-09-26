@@ -960,6 +960,79 @@ namespace pP::tests::detail {
         }
     };
 
+    PPR_UNIT_TEST(renderer_off_thread_fails_closed) {
+        const auto shader = IShaderService::get();
+        const auto rhi = IRhiService::get();
+        std::ignore = rhi->shutdown();
+        std::ignore = shader->shutdown();
+        PPR_DEFER {
+            std::ignore = rhi->shutdown();
+            std::ignore = shader->shutdown();
+        };
+        PPR_TEST_ASSERT(not shader->initialize());
+        PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
+
+        Window window{
+            WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
+            WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}
+        };
+        window.m_framebuffer_size = int2{800, 600};
+
+        rhi::TextureDesc target_desc{};
+        target_desc.type = rhi::TextureType::Texture2D;
+        target_desc.size = {64u, 64u, 1u};
+        target_desc.arrayLength = 1u;
+        target_desc.mipCount = 1u;
+        target_desc.format = rhi::Format::RGBA8Unorm;
+        target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+        target_desc.usage = rhi::TextureUsage::RenderTarget;
+        target_desc.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(not make_error_code(rhi->getDevice().createTexture(target_desc, nullptr, target.writeRef())));
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*rhi));
+
+        const std::error_code kNotPermitted = std::make_error_code(std::errc::operation_not_permitted);
+        std::error_code render_ec{};
+        std::error_code to_texture_ec{};
+        std::error_code wait_ec{};
+        std::error_code present_ec{};
+        std::error_code destroy_ec{};
+        std::error_code shutdown_ec{};
+        std::jthread worker([&](std::stop_token) {
+            render_ec = renderer.render(
+                string_literal{std::in_place, "off-thread render"},
+                rhi::RenderPassDesc{},
+                {});
+            to_texture_ec = renderer.renderToTexture(*target, {});
+            wait_ec = renderer.waitOnHost();
+            present_ec = renderer.renderAndPresent(window, {});
+            destroy_ec = renderer.destroyWindowSurface(window);
+            shutdown_ec = renderer.shutdown();
+        });
+        worker.join();
+        PPR_TEST_ASSERT(render_ec == kNotPermitted);
+        PPR_TEST_ASSERT(to_texture_ec == kNotPermitted);
+        PPR_TEST_ASSERT(wait_ec == kNotPermitted);
+        PPR_TEST_ASSERT(present_ec == kNotPermitted);
+        PPR_TEST_ASSERT(destroy_ec == kNotPermitted);
+        PPR_TEST_ASSERT(shutdown_ec == kNotPermitted);
+        PPR_TEST_ASSERT(not renderer.shutdown());
+
+        // Uninitialized renderer never captures an owner, so off-thread
+        // shutdown succeeds instead of locking itself out.
+        Renderer fresh{};
+        std::error_code fresh_ec{std::make_error_code(std::errc::state_not_recoverable)};
+        std::jthread drifter([&](std::stop_token) {
+            fresh_ec = fresh.shutdown();
+        });
+        drifter.join();
+        PPR_TEST_ASSERT(not fresh_ec);
+
+        std::ignore = window.release();
+    };
+
     PPR_UNIT_TEST(imgui_live_shutdown_idempotent) {
         const auto shader = IShaderService::get();
         const auto rhi = IRhiService::get();
@@ -1134,6 +1207,12 @@ namespace pP::tests {
 
     const UnitTest &renderer_triangle_reinit_okTests() noexcept {
         return renderer_triangle_reinit_ok;
+    }
+
+    const UnitTest renderer_off_thread_fails_closed = detail::renderer_off_thread_fails_closed;
+
+    const UnitTest &renderer_off_thread_fails_closedTests() noexcept {
+        return renderer_off_thread_fails_closed;
     }
 
     const UnitTest imgui_live_shutdown_idempotent = detail::imgui_live_shutdown_idempotent;

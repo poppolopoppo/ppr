@@ -179,27 +179,16 @@ namespace pP::tests::detail {
             constexpr TrianglePipelineVariant opaque{};
             constexpr TrianglePipelineVariant masked{.m_twosided = false, .m_alpha = mesh::AlphaMode::mask};
 
-            constexpr TrianglePipelineVariant variants[] = {
-                opaque, opaque, opaque, masked, opaque, opaque
-            };
-            rhi::IBuffer *const vertex_buffers[] = {
-                kBucketAVertices, kBucketAVertices, kBucketAVertices,
-                kBucketAVertices, kBucketAVertices, kBucketBVertices
-            };
-            rhi::IBuffer *const index_buffers[] = {
-                kBucketAIndices, kBucketAIndices, kBucketAIndices,
-                kBucketAIndices, kBucketAIndices, kBucketBIndices
-            };
-            constexpr TriangleBagRange ranges[] = {
-                {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
-                {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
-                {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 12u, .m_base = 0},
-                {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
-                {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 0u, .m_base = 0},
-                {.m_vb_offset = 0u, .m_ib_start = 12u, .m_count = 36u, .m_base = 0},
+            const TrianglePass::ResolvedInstance instances[] = {
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 12u}, .m_variant = opaque, .m_count = 12u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = masked, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_variant = opaque, .m_count = 0u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 12u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
             };
             const Expected<TrianglePass::DrawPlan> plan =
-                TrianglePass::planDraws(variants, vertex_buffers, index_buffers, ranges);
+                TrianglePass::planDraws(instances);
             PPR_TEST_ASSERT(plan.has_value());
             PPR_TEST_ASSERT(plan->m_payload_count == 5u);
             PPR_TEST_ASSERT(plan->m_groups.size() == 4u);
@@ -222,18 +211,13 @@ namespace pP::tests::detail {
 
             // Interleaved compatible inputs are compacted into a contiguous
             // payload interval while retaining their original source order.
-            constexpr TrianglePipelineVariant interleaved_variants[] = {opaque, masked, opaque};
-            rhi::IBuffer *const interleaved_vertices[] = {
-                kBucketAVertices, kBucketAVertices, kBucketAVertices
-            };
-            rhi::IBuffer *const interleaved_indices[] = {
-                kBucketAIndices, kBucketAIndices, kBucketAIndices
-            };
-            constexpr TriangleBagRange interleaved_ranges[] = {
-                {.m_count = 36u}, {.m_count = 36u}, {.m_count = 36u}
+            const TrianglePass::ResolvedInstance interleaved_instances[] = {
+                {.m_payload = {.m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 36u}, .m_variant = masked, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
             };
             const Expected<TrianglePass::DrawPlan> interleaved = TrianglePass::planDraws(
-                interleaved_variants, interleaved_vertices, interleaved_indices, interleaved_ranges);
+                interleaved_instances);
             PPR_TEST_ASSERT(interleaved.has_value());
             PPR_TEST_ASSERT(interleaved->m_groups.size() == 2u);
             PPR_TEST_ASSERT(interleaved->m_groups[0].m_first_payload == 0u);
@@ -248,24 +232,15 @@ namespace pP::tests::detail {
             // buffers (A occupies staged 0/2/4) while its payloads carry B's.
             // The group must carry B's buffers and B's source indices.
             {
-                constexpr TrianglePipelineVariant ab_variants[] = {
-                    opaque, opaque, opaque, opaque, opaque
-                };
-                rhi::IBuffer *const ab_vertices[] = {
-                    kBucketAVertices, kBucketBVertices, kBucketAVertices, kBucketBVertices, kBucketAVertices
-                };
-                rhi::IBuffer *const ab_indices[] = {
-                    kBucketAIndices, kBucketBIndices, kBucketAIndices, kBucketBIndices, kBucketAIndices
-                };
-                constexpr TriangleBagRange ab_ranges[] = {
-                    {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
-                    {.m_vb_offset = 0u, .m_ib_start = 6u, .m_count = 36u, .m_base = 0},
-                    {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
-                    {.m_vb_offset = 0u, .m_ib_start = 6u, .m_count = 36u, .m_base = 0},
-                    {.m_vb_offset = 0u, .m_ib_start = 0u, .m_count = 36u, .m_base = 0},
+                const TrianglePass::ResolvedInstance ab_instances[] = {
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
                 };
                 const Expected<TrianglePass::DrawPlan> ab =
-                    TrianglePass::planDraws(ab_variants, ab_vertices, ab_indices, ab_ranges);
+                    TrianglePass::planDraws(ab_instances);
                 PPR_TEST_ASSERT(ab.has_value());
                 PPR_TEST_ASSERT(ab->m_payload_count == 5u);
                 PPR_TEST_ASSERT(ab->m_groups.size() == 2u);
@@ -292,15 +267,18 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(ab->m_groups[1].m_source_indices[1] == 3u);
             }
 
-            constexpr TrianglePipelineVariant one_variant[] = {opaque};
-            rhi::IBuffer *const one_vertices[] = {kBucketAVertices};
-            rhi::IBuffer *const one_indices[] = {kBucketAIndices};
-            constexpr TriangleBagRange one_range[] = {{.m_count = 3u}};
-            constexpr TriangleBagRange two_ranges[] = {{.m_count = 3u}, {.m_count = 3u}};
-            PPR_TEST_ASSERT(not TrianglePass::planDraws(
-                one_variant, one_vertices, one_indices, two_ranges).has_value());
-            PPR_TEST_ASSERT(TrianglePass::planDraws(
-                one_variant, one_vertices, one_indices, one_range).has_value());
+            // Degenerate inputs stay valid: an empty span plans no groups, and a
+            // single instance plans one group. The old four-span length
+            // mismatch has no counterpart in the single-span signature.
+            const TrianglePass::ResolvedInstance one[] = {
+                {.m_payload = {.m_index_count = 3u}, .m_variant = opaque, .m_count = 3u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+            };
+            const Expected<TrianglePass::DrawPlan> empty_plan =
+                TrianglePass::planDraws(std::span<const TrianglePass::ResolvedInstance>{});
+            PPR_TEST_ASSERT(empty_plan.has_value());
+            PPR_TEST_ASSERT(empty_plan->m_groups.empty());
+            PPR_TEST_ASSERT(empty_plan->m_payload_count == 0u);
+            PPR_TEST_ASSERT(TrianglePass::planDraws(one).has_value());
         };
     }
 } // namespace pP::tests::detail
