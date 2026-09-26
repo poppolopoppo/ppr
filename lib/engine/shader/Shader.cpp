@@ -253,6 +253,12 @@ namespace pP {
                 IModule **out_module) override {
                 auto mapped = io::mapFile(path);
                 if (not mapped) {
+                    PPR_LOG(Shader, error, "failed to map shader file", {
+                        {"path", path.generic_string()},
+                        {"category", mapped.error().category().name()},
+                        {"value", mapped.error().value()},
+                        {"message", mapped.error().message()}
+                    });
                     return mapped.error();
                 }
 
@@ -267,6 +273,8 @@ namespace pP {
                     diagnostics.writeRef());
 
                 if (not * out_module) {
+                    diagnoseIfNeeded(diagnostics.m_diagnostics.get());
+                    diagnostics.m_diagnostics.setNull();
                     PPR_LOG(Shader, error, "failed to compile shader module from file", {
                         {"name", module_name},
                         {"path", path_string}
