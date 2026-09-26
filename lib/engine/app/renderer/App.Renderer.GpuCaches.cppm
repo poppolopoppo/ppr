@@ -226,7 +226,7 @@ export namespace pP {
     // pass-owned caches
     // ------------------------------------------------------------------
 
-    // ONE class, all vertex types; bucket = hash(stride, index_type). MVP has
+    // ONE class, all vertex types; bucket = exact u32 stride. MVP has
     // static buckets only by construction. Bag upload keeps TYPED-span
     // signatures (verts stay typed Arrays) — buffers appear only for staging
     // copies. GPU memory is bump-allocated per bucket; free-list deferred.
@@ -296,7 +296,6 @@ export namespace pP {
         using BagBucketId = Numeric<u32, BagBucketIdTag>;
 
         struct BagBucket {
-            u32 m_stride = 0u;
             u64 m_vertex_capacity = 0u;
             u64 m_vertex_used = 0u;
             u64 m_index_capacity = 0u;
@@ -317,8 +316,6 @@ export namespace pP {
         [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(std::span<const std::byte> vert_bytes, u64 stride,
                                                                std::span<const u32> idx, i32 base);
 
-        [[nodiscard]] static hash_t layoutKey_(u64 stride) noexcept;
-
         [[nodiscard]] const BagRangeRecord *findRecord_(SparseHandle key) const noexcept;
 
         // Render-thread affinity: initialize captures the calling thread;
@@ -337,7 +334,7 @@ export namespace pP {
         CacheResidency m_residency = CacheResidency::uninitialized;
         rhi::IDevice *m_device = nullptr;
         std::thread::id m_owner{};
-        FlatMap<hash_t, BagBucketId> m_layout_to_bucket{};
+        FlatMap<u32, BagBucketId> m_layout_to_bucket{};
         // Append-only: bucket indices (BagBucketId) stay stable for the cache
         // lifetime; buckets are only destroyed at shutdown.
         Array<BagBucket> m_buckets{};

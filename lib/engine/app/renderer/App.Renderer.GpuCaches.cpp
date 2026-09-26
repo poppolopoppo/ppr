@@ -174,10 +174,6 @@ namespace pP {
         return std::this_thread::get_id() == m_owner;
     }
 
-    hash_t TriangleBagCache::layoutKey_(const u64 stride) noexcept {
-        return hash::combine(hash_t{hash::default_seed_v}, hash::trivial(&stride, hash::default_seed_v));
-    }
-
     const TriangleBagCache::BagRangeRecord *TriangleBagCache::findRecord_(const SparseHandle key) const noexcept {
         if (not key.isValid() or m_residency == CacheResidency::device_lost) [[unlikely]] {
             return nullptr;
@@ -212,6 +208,12 @@ namespace pP {
         if (vert_bytes.size() % stride != 0u) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
+        // Exact stride key: buckets are keyed on the narrowed u32 stride, so
+        // reject unrepresentable strides up front rather than hashing.
+        if (stride > static_cast<u64>(std::numeric_limits<u32>::max())) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+        const u32 stride32 = safe_narrowing(stride);
         const u64 vert_count = vert_bytes.size() / stride;
         const u64 vert_bytes_size = vert_bytes.size();
         const u64 index_bytes_size = idx.size_bytes();
@@ -220,14 +222,13 @@ namespace pP {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
-        const hash_t layout = layoutKey_(stride);
         BagBucketId bucket_id{0u};
-        if (const auto found = m_layout_to_bucket.find(layout); found != m_layout_to_bucket.end()) {
+        if (const auto found = m_layout_to_bucket.find(stride32); found != m_layout_to_bucket.end()) {
             bucket_id = found->second;
         } else {
             rhi::BufferDesc vb_desc{};
             vb_desc.size = kTriangleBagVertexCapacity;
-            vb_desc.elementSize = safe_narrowing(stride);
+            vb_desc.elementSize = stride32;
             vb_desc.memoryType = rhi::MemoryType::Upload;
             vb_desc.usage = rhi::BufferUsage::ShaderResource;
             vb_desc.defaultState = rhi::ResourceState::ShaderResource;
@@ -242,7 +243,6 @@ namespace pP {
             ib_desc.label = "triangle bag indices";
 
             BagBucket bucket{};
-            bucket.m_stride = safe_narrowing(stride);
             bucket.m_vertex_capacity = kTriangleBagVertexCapacity;
             bucket.m_index_capacity = kTriangleBagIndexCapacity;
             PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
@@ -252,13 +252,10 @@ namespace pP {
 
             bucket_id = BagBucketId{safe_narrowing(m_buckets.size())};
             m_buckets.push_back(std::move(bucket));
-            m_layout_to_bucket.emplace(layout, bucket_id);
+            m_layout_to_bucket.emplace(stride32, bucket_id);
         }
 
         BagBucket &bucket = m_buckets[*bucket_id];
-        if (static_cast<u64>(bucket.m_stride) != stride) [[unlikely]] {
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-        }
         if (bucket.m_vertex_used + vert_bytes_size > bucket.m_vertex_capacity or
             bucket.m_index_used + index_bytes_size > bucket.m_index_capacity) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
@@ -268,13 +265,15 @@ namespace pP {
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
             m_device->mapBuffer(bucket.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_verts));
         std::memcpy(static_cast<std::byte *>(mapped_verts) + bucket.m_vertex_used, vert_bytes.data(), vert_bytes_size);
-        m_device->unmapBuffer(bucket.m_vertex_buffer.get());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
+            m_device->unmapBuffer(bucket.m_vertex_buffer.get()));
 
         void *mapped_idx = nullptr;
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
             m_device->mapBuffer(bucket.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
         std::memcpy(static_cast<std::byte *>(mapped_idx) + bucket.m_index_used, idx.data(), index_bytes_size);
-        m_device->unmapBuffer(bucket.m_index_buffer.get());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
+            m_device->unmapBuffer(bucket.m_index_buffer.get()));
 
         const u64 vb_offset = bucket.m_vertex_used / stride;
         const u64 ib_start = bucket.m_index_used / sizeof(u32);
@@ -412,7 +411,11 @@ namespace pP {
             return err;
         }
         std::memcpy(mapped, &packed_fallback, sizeof(packed_fallback));
-        device.unmapBuffer(m_descriptor_buffer.get());
+        const std::error_code unmap_err = make_error_code(device.unmapBuffer(m_descriptor_buffer.get()));
+        if (unmap_err) [[unlikely]] {
+            m_descriptor_buffer.setNull();
+        }
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches, unmap_err);
 
         m_device = &device;
         m_texture_budget = texture_budget;
@@ -526,7 +529,9 @@ namespace pP {
         if (not asset.m_storage.isValid() or not asset.m_storage.isMaterialized()) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, uploadFormat_(asset.m_format));
+        // Validated once here and reused below — never recomputed.
+        const Expected<rhi::Format> upload_format = uploadFormat_(asset.m_format);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, upload_format);
 
         const DedupKey key = dedupKey_(asset);
         if (const auto found = m_dedup.find(key); found != m_dedup.end()) {
@@ -544,13 +549,21 @@ namespace pP {
                     {{"slot", *entry->m_slot}, {"used", textureUsed()}, {"budget", textureBudget()}});
                 return found->second;
             }
+            // A present key that confirms neither by identity nor by byte
+            // equality is a hash collision (or a stale map entry): refuse the
+            // upload rather than consuming a slot for a texture dedup could
+            // never reach. Byte equality alone confirms a hit — a hash match
+            // never does.
+            PPR_LOG(GpuCaches, error, "texture upload refused: dedup key without byte equality",
+                {{"used", textureUsed()}, {"budget", textureBudget()}});
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
         if (m_next_slot >= m_texture_budget) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
 
-        const rhi::Format format = *uploadFormat_(asset.m_format);
+        const rhi::Format format = *upload_format;
         rhi::FormatSupport support{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, m_device->getFormatSupport(format, &support));
         if ((static_cast<u32>(support) & static_cast<u32>(rhi::FormatSupport::ShaderSample)) == 0u) [[unlikely]] {
@@ -617,7 +630,8 @@ namespace pP {
             static_cast<std::byte *>(mapped) + static_cast<u64>(*entry.m_slot) * sizeof(u64),
             &packed_descriptor,
             sizeof(packed_descriptor));
-        m_device->unmapBuffer(m_descriptor_buffer.get());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
+            m_device->unmapBuffer(m_descriptor_buffer.get()));
         ++m_next_slot;
         entry.m_pinned = asset.m_storage;
         entry.m_refcount = 1u;
@@ -626,12 +640,8 @@ namespace pP {
         const auto [identity, it] = m_entries.emplaceHandle(std::move(entry));
         it->m_identity = identity;
         const TextureHandle handle{identity};
-        // std::flat_map::emplace never overwrites. A dedup key whose pinned
-        // bytes failed bytesEqual_ above (a hash collision) is therefore still
-        // mapped to the earlier handle, and this texture would be
-        // unreachable by dedup while still consuming a slot. Keep the first
-        // winner and say so: a hash collision must not silently change which
-        // texture an identical upload dedups to.
+        // The collision path above returns early, so the key is known-absent
+        // here and this emplace always inserts.
         std::ignore = m_dedup.emplace(key, handle);
         return handle;
     }
@@ -805,7 +815,8 @@ namespace pP {
             m_device->mapBuffer(m_material_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
         std::memcpy(static_cast<std::byte *>(mapped) + static_cast<std::size_t>(slot) * sizeof(GpuMaterial),
             &gpu, sizeof(GpuMaterial));
-        m_device->unmapBuffer(m_material_buffer.get());
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches,
+            m_device->unmapBuffer(m_material_buffer.get()));
         return default_value_v;
     }
 
@@ -857,9 +868,10 @@ namespace pP {
             if (m_residency == CacheResidency::device_lost) {
                 return default_value_v;
             }
-            // Explicit tombstone rather than a zeroed GpuMaterial: material
-            // slots start at 0, so a zeroed m_textures would name four REAL
-            // materials and a released slot would read as a valid textured
+            // Explicit tombstone rather than a zeroed GpuMaterial: texture
+            // slots start at 1 with slot 0 pinned to fallback-white, so a
+            // zeroed m_textures would name that white texture four times
+            // and a released slot would read as a valid white-textured
             // one. kNoTexture is the honest released state. (The slot is never
             // reissued, so this is defence in depth, not a live path.)
             GpuMaterial tombstone{};

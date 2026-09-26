@@ -546,6 +546,99 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.releaseScene(*up_b));
         };
 
+        // Exact stride buckets: two adjacent strides coexist in separate
+        // buckets with independent offsets (no hash aliasing between
+        // layouts, no shared cursor).
+        PPR_UNIT_TEST (gpu_caches_close_strides_coexist_in_exact_buckets) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            struct Stride63 {
+                std::array<u8, 63> m_data{};
+            };
+            struct Stride64 {
+                std::array<u8, 64> m_data{};
+            };
+            static_assert(std::is_trivially_copyable_v<Stride63>);
+            static_assert(std::is_trivially_copyable_v<Stride64>);
+            static_assert(sizeof(Stride63) == 63u);
+            static_assert(sizeof(Stride64) == 64u);
+
+            const std::array<Stride63, 4> verts63{};
+            const std::array<Stride64, 4> verts64{};
+            const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
+            const Expected<TriangleBagHandle> bag63 = pass.bagCache().upload(
+                std::span<const Stride63>{verts63}, std::span<const u32>{quad_idx});
+            const Expected<TriangleBagHandle> bag64 = pass.bagCache().upload(
+                std::span<const Stride64>{verts64}, std::span<const u32>{quad_idx});
+            PPR_TEST_ASSERT(bag63.has_value());
+            PPR_TEST_ASSERT(bag64.has_value());
+            PPR_TEST_ASSERT(*bag63 != *bag64);
+            PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 2u);
+
+            const Expected<ResolvedBag> draw63 = pass.bagCache().resolveForDraw(*bag63);
+            const Expected<ResolvedBag> draw64 = pass.bagCache().resolveForDraw(*bag64);
+            PPR_TEST_ASSERT(draw63.has_value());
+            PPR_TEST_ASSERT(draw64.has_value());
+            PPR_TEST_ASSERT(draw63->m_vertex_buffer != draw64->m_vertex_buffer);
+            PPR_TEST_ASSERT(draw63->m_index_buffer != draw64->m_index_buffer);
+            PPR_TEST_ASSERT(draw63->m_range.m_vb_offset == 0u);
+            PPR_TEST_ASSERT(draw64->m_range.m_vb_offset == 0u);
+            PPR_TEST_ASSERT(pass.bagCache().vertexUsed() == 4u * 63u + 4u * 64u);
+
+            PPR_TEST_ASSERT(not pass.bagCache().release(*bag63));
+            PPR_TEST_ASSERT(not pass.bagCache().release(*bag64));
+        };
+
+        // Dedup confirms by byte equality only: same dimensions with distinct
+        // pixels never alias (a hash match alone never decides), while
+        // identical bytes still share one refcounted entry. The outright
+        // refusal branch needs a genuine 64-bit content-hash collision and is
+        // not constructible here — this pins the observable half of that
+        // contract.
+        PPR_UNIT_TEST (gpu_caches_dedup_never_aliases_distinct_bytes) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            PPR_TEST_ASSERT(rhi->getDevice().hasFeature(rhi::Feature::Bindless));
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+
+            const Expected<image::ImageAsset> red = solidImage_(200u, 30u, 30u);
+            const Expected<image::ImageAsset> green = solidImage_(30u, 200u, 30u);
+            PPR_TEST_ASSERT(red.has_value());
+            PPR_TEST_ASSERT(green.has_value());
+
+            const Expected<TextureHandle> tex_red = pass.uploadTexture(*red);
+            const Expected<TextureHandle> tex_green = pass.uploadTexture(*green);
+            PPR_TEST_ASSERT(tex_red.has_value());
+            PPR_TEST_ASSERT(tex_green.has_value());
+            PPR_TEST_ASSERT(*tex_red != *tex_green);
+            PPR_TEST_ASSERT(pass.textureCache().entryCount() == 2u);
+            PPR_TEST_ASSERT(*pass.textureCache().residentIndex(*tex_red) !=
+                            *pass.textureCache().residentIndex(*tex_green));
+
+            const Expected<TextureHandle> tex_red_again = pass.uploadTexture(*red);
+            PPR_TEST_ASSERT(tex_red_again.has_value());
+            PPR_TEST_ASSERT(*tex_red_again == *tex_red);
+            PPR_TEST_ASSERT(pass.textureCache().entryCount() == 2u);
+
+            PPR_TEST_ASSERT(not pass.textureCache().release(*tex_red));
+            PPR_TEST_ASSERT(not pass.textureCache().release(*tex_red_again));
+            PPR_TEST_ASSERT(not pass.textureCache().release(*tex_green));
+            PPR_TEST_ASSERT(pass.textureCache().entryCount() == 0u);
+        };
+
         // Single boot (lifecycle + rebase share one device): residency state machine —
         // uninitialized → ready → device_lost → uninitialized (shutdown;
         // restart is shutdown + initialize) — plus the composed-identity ABA
@@ -847,6 +940,8 @@ namespace pP::tests {
             detail::Gpu::two_scenes_coexist_and_unload_independently,
             detail::Gpu::two_scenes_shared_texture_survives_single_unload,
             detail::Gpu::scene_double_release_fails_closed,
+            detail::Gpu::gpu_caches_close_strides_coexist_in_exact_buckets,
+            detail::Gpu::gpu_caches_dedup_never_aliases_distinct_bytes,
             detail::Gpu::cache_residency_and_composed_identity,
             detail::LoggingGpu::gpu_cache_lifecycle_logs,
         });
