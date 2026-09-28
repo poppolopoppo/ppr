@@ -181,13 +181,34 @@ tree level and change its path); see `module-architect`.
 
 Build and run the test executable to confirm all tests pass.
 
-Prefer CLion MCP tools (see `clion-tools` skill and AGENTS.md §Debugging):
+Tool carve-outs (authorities: `build-system` for builds, `AGENTS.md` for tool
+access):
+
+- **Builds:** the agent path is the `build-system` authority, and it is
+  cmake-direct inside the one persistent Insiders `vcvars64` shell, not
+  `build_project`: the live `clion_execute_tool` registry probe (2026-09-28)
+  returned 47 tools with no `build_project`, and no router invocation can
+  reach it, so execution routes through the `build-system`-owned
+  persistent-shell `cmake --preset` / `cmake --build ... --target` path (or
+  an allow-listed run configuration, which implicitly builds). The shell
+  `cmake --build` form below is **human-fallback only** — agents never invoke
+  it directly, only through that `build-system`-owned path.
+- **Runs:** `clion_execute_run_configuration` is IDE-side only — documented
+  run-only, but it implicitly builds the configured run target first
+  (IJPL-217679 / IJPL-218400) — and is cross-referenced to the 5-executable
+  allow-list in `build-system`
+  (`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`,
+  `engine.tests.asset`, `app.game`) — never a library target and never a
+  library source path via `filePath`+`line`.
+
+Prefer CLion MCP run tools (tool access per `AGENTS.md`):
 
 ```
 clion_execute_run_configuration(configurationName="engine.tests.core", programArguments="--shuffle")
 ```
 
-If CLion is unavailable, use CMake presets directly:
+If CLion is unavailable, a human may fall back to CMake presets directly
+(human-fallback only — agents stay on the `build-system` path above):
 
 ```powershell
 cmake --build --preset msvc-dev --target engine.tests.core

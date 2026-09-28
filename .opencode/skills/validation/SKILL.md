@@ -19,26 +19,39 @@ to `@fixer` or `@oracle`, then only affected checks are repeated.
 
 1. Determine scope and platform. Honor explicitly requested presets/targets;
    otherwise use the standard platform matrix from `build-system`.
-2. Enumerate changed C++ files and run `clion_reformat_file` on every one of
-   them before builds or other validation checks.
-3. Configure selected presets sequentially to avoid shared dependency-cache
-   races: `cmake --preset <preset>`.
-4. Build the full project for each selected preset in parallel workers:
-   `cmake --build out/build/<preset>`.
-5. Run `engine.tests.core --shuffle` and `engine.tests.app --shuffle` from the
-   corresponding build directory, or use
-   `ctest --test-dir out/build/<preset> --output-on-failure` when CTest is the
-   requested runner. This repository has no CTest test presets.
-6. Perform the post-format semantic readability check for touched C++ before
+2. Enumerate changed C++ files and run `reformat_file` via the single
+   `execute_tool` router on every one of them before builds or other
+   validation checks.
+3. Configure, build, and test through the `build-system` authority, not from
+   this skill: target/preset/test selection, command form, ordering, and
+   runner rules all come from the `build-system` table. Execution is
+   cmake-direct inside the one persistent Insiders `vcvars64` shell owned by
+   the builder lane — `cmake --preset`, `cmake --build ... --target`, and
+   `ctest` all run in that same long-lived shell (`build-system` §0), so
+   vcvars is paid once and `VSINSTALLDIR` reaches every configure. There is no
+   `build_project`: the live `clion_execute_tool` registry probe (2026-09-28)
+   returned 47 tools with no `build_project`, and no router invocation can
+   reach it. The orchestrator/builder lane owns project-wide builds (there is
+   no per-target IDE selector) and batches them rather than building per edit.
+   - A fresh per-invocation shell that skips Insiders `vcvars64.bat` is NEVER
+     a build path — it silently resolves Community 14.44 plus a bad vcpkg
+     path, and an ad-hoc terminal stays separate from the
+     `build-system`-owned persistent-shell route above.
+   - `clion_execute_run_configuration` is documented run-only, but it
+     implicitly builds the configured run target first (IJPL-217679 /
+     IJPL-218400); it is restricted to allow-listed executables, never
+     libraries.
+4. Perform the post-format semantic readability check for touched C++ before
    inspection, and block validation on any material finding.
-7. Run the staged CLion inspection workflow from `clion-tools` for touched C++
-   files when the IDE is available. A final inspection timeout must be disclosed
-   as inspection-unavailable/skipped with timeout evidence, never silently
+5. Run the staged CLion inspection workflow for touched C++ files when the IDE
+   is available (tool access follows the `AGENTS.md` guard; procedure is
+   below). A final inspection timeout must be disclosed as
+   inspection-unavailable/skipped with timeout evidence, never silently
    skipped and never reported as passed.
-8. Invoke `code-reviewer` and incorporate its verdict and findings without
+6. Invoke `code-reviewer` and incorporate its verdict and findings without
    repeating its taxonomy. A failed or unresolved finding leaves validation
    incomplete even when commands pass.
-9. Summarize each command/check as passed, failed, or skipped with its reason.
+7. Summarize each command/check as passed, failed, or skipped with its reason.
 
 ## Scope rules
 
@@ -56,15 +69,18 @@ to `@fixer` or `@oracle`, then only affected checks are repeated.
 
 Applies whenever the change set includes a C++ file. The active project CLion
 C/C++ Code Style is canonical for mechanical formatting and is applied through
-`clion_reformat_file`. The repository-root `.clang-format` is a tracked
-reference/configuration only; it is not the agent formatting authority. Direct
+`reformat_file` via the single `execute_tool` router. The repository-root
+`.clang-format` is a tracked reference/configuration only; it is not the agent
+formatting authority. Direct
 `clang-format`, `git-clang-format`, `clang-format --lines`, and native/manual
 whitespace alternatives are not the normal formatter path and must not replace
 this gate.
 
 - Enumerate every changed C++ file and call
-  `clion_reformat_file(files=["<project-relative path>"], projectPath="E:/Code/ppr")`
-  on each one. Every call MUST pass `projectPath="E:/Code/ppr"`.
+  `execute_tool(command="reformat_file --files
+  '["E:/Code/ppr/<project-relative path>"]'", projectPath="E:/Code/ppr")`
+  on each one. Every call MUST pass `projectPath="E:/Code/ppr"`, and the
+  `--files` arg MUST be a single-quoted JSON array string.
 - Require a successful result for every file. A failed, timed-out, or unknown
   reformat result blocks validation: diagnose and retry the CLion operation,
   and never substitute manual formatting.
@@ -97,14 +113,16 @@ it does not satisfy this gate.
 
 ## CLion inspection gate
 
-Applies to touched C++ files when CLion is available. Follow `clion-tools` §6.1
-and §6.2 exactly; this section states how those results enter the validation
-record.
+Applies to touched C++ files when CLion is available. Tool access follows the
+`AGENTS.md` guard and the CLion facts recorded in `build-system`; this section
+states the procedure and how those results enter the validation record.
 
-- Before every `clion_get_file_problems` call, open the exact target file with
-  `clion_open_file_in_editor`. Inspect files sequentially; never batch or run
-  inspections concurrently. Every CLion call must retain
-  `projectPath="E:/Code/ppr"` except the documented auto-detecting tools.
+- Before every `get_file_problems` router call, open the exact target file with
+  `execute_tool(command="open_file_in_editor ...")`. Inspect files
+  sequentially; never batch or run inspections concurrently. Every
+  `execute_tool` call (e.g. `command="open_file_in_editor ..."` /
+  `command="get_file_problems ..."`) must retain
+  `projectPath="E:/Code/ppr"`.
 - Wait for CLion indexing, project-model, and resolve-configuration activity to
   settle. There is no MCP index-ready endpoint; the IDE indexing indicator is
   authoritative. Do not inspect during active scans or model updates.

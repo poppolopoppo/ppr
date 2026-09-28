@@ -1246,6 +1246,20 @@ PPR_UNIT_TEST(mapped_file_read) {
 
 ### Test execution
 
+Builds and runs follow the `build-system` authority: cmake-direct inside the
+one persistent Insiders `vcvars64` shell (`build-system` §0) — configure once
+with `cmake --preset`, then `cmake --build ... --target` in that same shell,
+so vcvars is paid once and `VSINSTALLDIR` reaches every configure. There is no
+`build_project`: the live `clion_execute_tool` registry probe (2026-09-28)
+returned 47 tools with no `build_project`, and no router invocation can reach
+it. Runs use `clion_execute_run_configuration` (IDE-side
+only, documented run-only but implicitly building the configured run target
+first — IJPL-217679 / IJPL-218400 — and restricted to the 5-executable
+allow-list in `build-system`); CLion tool access follows the `AGENTS.md`
+guard. The `cmake --build` shell lines below are **human-fallback only** —
+agents never invoke them directly, only through that `build-system`-owned
+persistent-shell path.
+
 ```bash
 # Build and run (engine.tests.core is GLFW-free; engine.tests.app links GLFW)
 cmake --build out/build/msvc-dev --target engine.tests.core
@@ -1257,8 +1271,9 @@ out/build/msvc-dev/bin/engine.tests.core --run-test core/hal/thread_id
 out/build/msvc-dev/bin/engine.tests.core --shuffle --loop 10
 ```
 
-The aggregate target `run-engine-tests` runs both `engine.tests.core` and
-`engine.tests.app`. Fork/crash tests spawn child processes via
+The aggregate target `run-engine-tests` runs all four test executables:
+`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`, and
+`engine.tests.asset`. Fork/crash tests spawn child processes via
 `hal::process::spawnAndWait`; assertions are intercepted by the test framework
 (converted to failures, not terminations).
 
@@ -1342,7 +1357,13 @@ and build system in this skill as a reference.
 
 9. **Add at least one test per area** (see Section 6).
 
-10. **Verify the full API compiles and links**:
+10. **Verify the full API compiles and links** (human-fallback only — agents
+    route builds through the `build-system` authority's persistent Insiders
+    `vcvars64` shell (cmake-direct `cmake --preset` / `cmake --build`);
+    `build_project` is verified absent (live
+    `clion_execute_tool` registry probe, 2026-09-28: 47 tools, none
+    `build_project`, unreachable via the router), so these `cmake` shell lines
+    are for humans):
     ```bash
     cmake --preset freebsd-dev
     cmake --build --preset freebsd-dev --target engine.core
