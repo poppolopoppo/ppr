@@ -1,7 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
-  "skills": [".opencode/skills"],
+  "skills": [
+    ".opencode/skills",
+    "C:/Users/bek4b/AppData/Local/JetBrains/CLion2026.2/aia/agents/.agents/skills"
+  ],
   "permissions": [
     { "action": "read", "resource": "*", "effect": "allow" },
     { "action": "edit", "resource": "*", "effect": "allow" },
