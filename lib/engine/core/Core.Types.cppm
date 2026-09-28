@@ -267,6 +267,10 @@ export namespace pP {
             return m_value;
         }
 
+        [[nodiscard]] constexpr const T *operator->() const noexcept requires std::is_object_v<T> {
+            return &m_value;
+        }
+
         // ReSharper disable once CppNonExplicitConversionOperator
         [[nodiscard]] constexpr operator T() const noexcept {
             return m_value;

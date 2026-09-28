@@ -31,6 +31,9 @@ export namespace pP {
             { EnumT::none } -> std::convertible_to<EnumT>;
             { EnumT::all } -> std::convertible_to<EnumT>;
         } && std::is_enum_v<EnumT>;
+
+        template<typename EnumT>
+        constexpr bool is_enum_flags_v = TEnumFlags<EnumT>;
     }
 
     template<details::TEnumFlags EnumT>
