@@ -19,11 +19,15 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 - **`CMakePresets.json`** (single-config Ninja throughout — avoids the CMake 4.4 multi-config genex leak into
   C++ module BMIs): `default` (Debug + CPM/vcpkg cache vars), `developer` (+ `PPR_ENABLE_DEVELOPER_MODE`),
   `vcpkg` (toolchain from `$VCPKG_ROOT`), hidden `windows-default` (MSVC/Clang: `VS_SEGMENT_HEAP_ALLOWLIST`
-  for game+tests, `SegmentHeap.cmake`, `x64-windows` triplet) and `unix-like-default` (inherits `vcpkg`),
+  for game+tests, `SegmentHeap.cmake`, `x64-windows` triplet), hidden `windows-msvc-toolchain` (native VS 18
+  Insiders x64 `cl`/`link`/`lib` and vcpkg VS selection, inherited only by `msvc-*`), and `unix-like-default` (inherits `vcpkg`),
   `msvc-dev`/`msvc-rel` (rel: shipping link set + `BUILD_TESTING OFF`, tests excluded), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
   `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
   `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
   hidden `gcc-dev`/`gcc-rel` (**no modules**).
+- **`MSVCToolchain.cmake`** (included before `VCPkg.cmake` and `project()` for native `msvc-*` only): validates
+  VS 18 Insiders x64 vcvars, MSVC 14.51+, segment heap, and pinned compiler/linker/librarian paths; checks
+  vcpkg's VS selection matches the activated installation and removes its trailing slash before manifest install.
 - **`setup_ppr_project(target INTERNAL_PUBLIC_DEPS … EXTERNAL_SYSTEM_PRIVATE_DEPS … EXTERNAL_SYSTEM_PUBLIC_DEPS …)`**
   (`cmake/Compilers.cmake`): the single helper every PPR target uses — applies target-local
   `cxx_std_23`/`CXX_MODULE_STD` opt-in (never global, per contract),
@@ -63,7 +67,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Integration
 
-- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
+- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
   `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
@@ -73,8 +77,9 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 - `CMakeLists.txt` — root configuration, options, option guards, module setup.
 - `CMakePresets.json` — curated preset set above (`default`, `developer`, `vcpkg`, `msvc-dev/rel`,
-  `clang-cl-dev/rel`, `msvc-live`, `clang-dev/rel`, hidden `windows/unix-like-default`, hidden `gcc-dev/rel`).
+  `clang-cl-dev/rel`, `msvc-live`, `clang-dev/rel`, hidden `windows-default/windows-msvc-toolchain/unix-like-default`, hidden `gcc-dev/rel`).
 - `vcpkg.json` — vcpkg manifest mode configuration.
+- `cmake/MSVCToolchain.cmake` — native MSVC pre-project guard and vcpkg VS path normalization.
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`.
 - `cmake/RuntimeDlls.cmake` — executable-only Windows runtime-DLL staging helper.
 - `cmake/Cache.cmake` — `ENABLE_CACHE`, ccache/sccache launcher, `ppr_disable_compiler_cache()`.

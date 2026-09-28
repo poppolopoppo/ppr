@@ -38,6 +38,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Directory for pP/Macros.h - available to module scanning and all targets
 set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include")
 
+if(PPR_REQUIRE_MSVC_TOOLCHAIN)
+    include(cmake/MSVCToolchain.cmake)
+endif()
+
 include(cmake/VCPkg.cmake)
 
 project(
