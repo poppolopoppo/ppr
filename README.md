@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/poppolopoppo/ppr)](https://github.com/poppolopoppo/ppr/blob/main/LICENSE) [![CMake](https://img.shields.io/badge/CMake-4.3%2B-064F8C?logo=cmake&logoColor=white)](https://cmake.org/) [![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](https://en.cppreference.com/w/cpp) [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-4c4c4c)](#features)
 
-A real-time C++23 game engine built with C++20 modules. Seven libraries, one demo, no game yet.
+A real-time C++23 game engine built with C++20 modules. Eight libraries, one demo, no game yet.
 
 `Architecture · Build · Demo · Tests · Status · Docs`
 
@@ -32,21 +32,36 @@ GPU backends go through a single abstraction over Slang-RHI (D3D12 on Windows, V
 - Slang shaders compiled at startup; one GPU abstraction for devices, buffers, and command lists
 - Content-free renderer: it owns frame orchestration and presentation only; each render pass owns its own pipelines and GPU caches and draws from an immutable per-frame camera snapshot
 - Recoverable failures returned as `std::error_code` / `std::expected`, consistently; teardown releases in reverse and keeps the first error
-- Three test suites wired into CTest, running on CI
+- Four test suites wired into CTest, running on CI
 
 ## Build
 
-Prerequisites: CMake 4.3+, Ninja, MSVC 17.8+ or Clang 18+, Vulkan SDK, Git. First configure needs network access (dependencies are fetched via vcpkg and CPM).
+Prerequisites: CMake 4.3+, Ninja, Vulkan SDK, Git, and a C++23 toolchain — VS 18 Insiders (MSVC 14.51) required for `import std` / `CXX_MODULE_STD` on Windows, Clang 18+ elsewhere. First configure needs network access (dependencies are fetched via vcpkg and CPM).
 
 ```bash
 git clone https://github.com/poppolopoppo/ppr.git
 cd ppr
-
-cmake --preset msvc-dev            # or clang-cl-dev / clang-dev
-cmake --build out/build/msvc-dev --parallel
 ```
 
-`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). There are no build or test presets — build and test paths are passed explicitly.
+Windows builds run in one long-lived `vcvars64` shell: pay vcvars once, then configure, build, and test inside that same shell for the whole session.
+
+```bat
+REM Windows - VS 18 Insiders vcvars, paid once per shell/session
+call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat"
+
+REM Configure (or choose clang-cl-dev instead on Windows)
+cmake --preset msvc-dev
+REM Build
+cmake --build out/build/msvc-dev --parallel
+REM Run the four test suites
+ctest --test-dir out/build/msvc-dev --output-on-failure
+```
+
+A shell that skips the Insiders `vcvars64.bat` now fails fast in the MSVC pre-project guard instead of configuring; repeat the `call` in every new shell. (Before the guard, this silently resolved VS 2022 Community 14.44 plus a bad vcpkg toolchain path and yielded an unusable build tree.) On Linux/macOS, skip the `call` and use the `clang-*` presets.
+
+For MSVC-only presets, first configure pins `cl`, `link`, and `lib`, but vcvars alone cannot undo LLVM-MinGW `ld`/`ar` selected by an inherited `PATH` or cached CMake values. Check `CMAKE_CXX_COMPILER`, `CMAKE_LINKER`, and `CMAKE_AR` in `out/build/msvc-dev/CMakeCache.txt` and the generated archive rule for MSVC tools. Vcpkg detects its compiler separately and can pick installed VS 2022 even when CMake uses VS 18; MSVC-only presets set `VCPKG_VISUAL_STUDIO_PATH` from the active `VSINSTALLDIR` for initial configure. Ninja auto-regeneration during a separate `cmake --build` omits preset environment; vcvars supplies `VSINSTALLDIR` but not `VCPKG_VISUAL_STUDIO_PATH`, so the helper restores its normalized value from `VSINSTALLDIR` when the override is absent. Vcpkg rejected `.../18/Insiders/` despite detecting `.../18/Insiders`. On the first fresh configure, check vcpkg's `Compiler found:` output points to VS 18. If an existing `msvc-dev` tree is contaminated, run `cmake --fresh --preset msvc-dev` once in that same VS 18 Insiders vcvars shell and recheck. Otherwise use normal `cmake --preset msvc-dev`; source-refactor compilation errors are a separate issue.
+
+`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). The `*-dev` presets configure with developer mode (warnings as errors and sanitizers). There are no build or test presets — build and test paths are passed explicitly.
 
 ## Demo
 
@@ -74,15 +89,9 @@ ctest --test-dir out/build/msvc-dev --output-on-failure
 | Suite | What it covers | Needs a window |
 |---|---|---|
 | `EngineCoreUnitTests` | Memory, containers, concurrency, I/O | No |
+| `EngineSimUnitTests` | Chunk grid, fixed-timestep tick, snapshots | No |
 | `EngineAppUnitTests` | Platform-dependent behavior | Yes (GLFW) |
 | `EngineAssetUnitTests` | Image decode, mesh import, GPU caches, render gate | Headless GPU tiers |
-
-Extra checks for a development configure:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPPR_ENABLE_DEVELOPER_MODE=ON
-cmake --build build
-```
 
 ![Build, test, and CI pipeline](docs/diagrams/readme/build-test-ci.svg)
 
@@ -92,6 +101,7 @@ cmake --build build
 game/main.cpp → engine.app → engine.core / engine.math / engine.shader /
                                 engine.rhi / engine.image / engine.mesh
                   engine.rhi   → engine.core / engine.math / engine.shader
+                  engine.sim   → engine.core / engine.math
                   engine.shader → engine.core
                   engine.math   → engine.core
                   engine.image  → engine.core / engine.math
@@ -122,6 +132,7 @@ Ownership follows the same shape. The application owns the platform, the service
 | `lib/engine/mesh/` | CPU mesh import (glTF / GLB) |
 | `lib/engine/shader/` | Slang shader compilation service |
 | `lib/engine/rhi/` | GPU abstraction (devices, buffers, command lists) |
+| `lib/engine/sim/` | Deterministic simulation: chunk grid, fixed-timestep tick, snapshot |
 | `lib/engine/app/` | Application lifecycle, window, input, scene, UI, renderer |
 | `lib/engine/tests/` | Test suites plus the shared harness |
 | `cmake/` | Presets, toolchain flags, dependency resolution |

@@ -20,6 +20,7 @@ The dependency graph is directional and must remain acyclic:
 app.game -> engine.app
 engine.app -> engine.core, engine.math, engine.shader, engine.rhi, engine.image, engine.mesh
 engine.rhi -> engine.core, engine.math, engine.shader
+engine.sim -> engine.core, engine.math
 engine.shader -> engine.core
 engine.math -> engine.core
 engine.image -> engine.core, engine.math (+ PRIVATE mango-image)
@@ -28,9 +29,11 @@ engine.mesh -> engine.core, engine.math (+ PRIVATE mango-import3d)
 
 `engine.core` supplies types, allocators, containers, concurrency, services,
 I/O, and HAL. `engine.math` wraps Mango math. `engine.shader` compiles Slang
-shaders; `engine.rhi` wraps Slang-RHI; `engine.app` supplies application,
-platform, input, window, player, scene, UI, and renderer integration. HAL
-platforms are Windows, Linux, Darwin, and Generic.
+shaders; `engine.rhi` wraps Slang-RHI; `engine.sim` provides
+renderer-independent simulation state (chunk grid, fixed-timestep tick,
+snapshot); `engine.app` supplies application, platform, input, window, player,
+scene, UI, and renderer integration. HAL platforms are Windows, Linux, Darwin,
+and Generic.
 
 `ApplicationDomain` explicitly declares whether an application is headless,
 interactive, presence-aware, rendering, and UI-capable; it is immutable after
@@ -38,7 +41,8 @@ construction. Client/editor code owns
 scene, player, camera, viewport, and UI state; it submits work to the renderer
 rather than transferring that ownership to it.
 
-Tests are split across GLFW-free `engine.tests.core`, GLFW-dependent
+Tests are split across GLFW-free `engine.tests.core`, GLFW-free `engine.tests.sim`
+(simulation: chunk grid, tick, snapshot), GLFW-dependent
 `engine.tests.app`, and `engine.tests.asset` (asset-pipeline: CPU-only tiers
 plus headless-GPU tiers); shared test support is `engine.tests`. Tests use the
 test-only `"pP/UnitTest.h"` header and `PPR_UNIT_TEST`/`PPR_TEST_ASSERT`.
@@ -171,18 +175,23 @@ or repeated early exits. Do not use an arbitrary function length as the trigger.
 - Keep structured logging fields grouped as one logical block; do not flatten
   surrounding control flow merely to accommodate a logging call.
 
-Mechanical `clion_reformat_file` does not satisfy this semantic readability
-requirement. It only handles indentation, wrapping, spacing, and braces.
+Mechanical `reformat_file` (via the single `execute_tool` router) does not satisfy
+this semantic readability requirement. It only handles indentation, wrapping,
+spacing, and braces.
 
 ## Source format
 
 The active project CLion C/C++ Code Style is canonical for mechanical
 formatting; invoke it manually through Reformat Code and through
-`clion_reformat_file` as an agent. The repository-root `.clang-format` is a
-tracked reference/configuration only; it is not the agent formatting authority.
-`clion_reformat_file` is required for every touched C++ file after functional
-writes and before final read-only diff inspection. Every `clion_reformat_file`
-call MUST pass `projectPath="E:/Code/ppr"` so the Project scheme resolves. Direct
+`execute_tool` with `command="reformat_file --files '...'"` as an agent. The
+repository-root `.clang-format` is a tracked reference/configuration only; it
+is not the agent formatting authority. `reformat_file` via `execute_tool` is
+required for every touched C++ file after functional writes and before final
+read-only diff inspection. Every `execute_tool` reformat call MUST pass
+`projectPath="E:/Code/ppr"` so the Project scheme resolves. The verified form
+is `execute_tool(command="reformat_file --files
+'["E:/Code/ppr/<project-relative path>"]'", projectPath="E:/Code/ppr")`; the
+`--files` arg MUST be a single-quoted JSON array string. Direct
 `clang-format`, `git-clang-format`, `clang-format --lines`, and native/manual
 whitespace alternatives are not the normal formatter path and must not replace
 it. Agents must not manually alter whitespace, line wrapping, indentation,
@@ -222,9 +231,9 @@ Use the named skill instead of reproducing its procedure here:
 
 | Need | Authority |
 |---|---|
-| Code search, IDE build/run/debug/diagnostics | `clion-tools` |
+| Builds, run-only allow-list, and IDE diagnostics | `build-system`; `validation`; debugging via vendored `clion-debugger` skill |
 | Modules, exports, partitions, `import std` | `module-architect` |
-| CMake, presets, dependencies, sanitizers | `build-system` |
+| CMake, presets, dependencies, sanitizers, fixer build/test procedure | `build-system` |
 | Slang shaders, reflection, CPU/GPU layouts, and Slang-RHI bindings | `slang-shader-developer` |
 | HAL changes | `hal-developer` |
 | Allocators and `safe_ptr` mechanics | `memory-allocator` |
@@ -233,14 +242,23 @@ Use the named skill instead of reproducing its procedure here:
 | Validation | `validation` |
 | Reviews, commits, pushes, deep work, worktrees | Their named OMO skills/commands |
 
-Use CodeGraph first when the repository is indexed; otherwise use the
-CLion-first fallback described by `clion-tools`. When dispatching work that
-uses `clion_*` tools, spell out `projectPath="E:/Code/ppr"` in the dispatch
-prompt; the MCP server does not infer it (only the three auto-detect tools
-listed in `clion-tools` are exempt). Use PowerShell on Windows for
-shell work. Temporary artifacts belong in `.slim/tmp/` (repo-scoped) or
-`C:\Users\bek4b\AppData\Local\Temp\opencode\` (external). Do not commit,
-push, or change generated/configuration files unless explicitly requested.
+The `fixer` agent is edit-only: it makes no builds and runs no commands;
+build and test execution is owned by the orchestrator and builder lane.
+
+Use CodeGraph first when the repository is indexed; otherwise use CLion.
+The `clion` MCP server exposes exactly one tool, the `execute_tool` router:
+agents call it with `projectPath="E:/Code/ppr"` and the `<tool>` name inside
+`command` (e.g. `reformat_file`, `get_file_problems`), never as direct
+`clion_*` tools — the MCP server does not infer `projectPath`. Empirical, not JetBrains-documented: never run or
+debug a library target or a library source path — the IDE raises an
+undismissable modal; the run-only allow-list
+(5 executables) lives in `build-system`. Reserve CLion for debugging
+(vendored `clion-debugger` skill) and code search, and build through the
+persistent-shell cmake path documented in `build-system`. Use PowerShell on
+Windows for shell work. Temporary artifacts belong in `.slim/tmp/`
+(repo-scoped) or `C:\Users\bek4b\AppData\Local\Temp\opencode\` (external). Do
+not commit, push, or change generated/configuration files unless explicitly
+requested.
 
 ## Repository Map
 
