@@ -27,10 +27,6 @@ export namespace pP::mesh {
 
     using UvSetId = Numeric<u32, struct UvSetIdTag>;
 
-    inline constexpr ImageAssetId kInvalidImage{0xFFFFFFFFu};
-    inline constexpr MaterialAssetId kInvalidMaterial{0xFFFFFFFFu};
-    inline constexpr NodeId kInvalidNode{0xFFFFFFFFu};
-
     static_assert(std::is_standard_layout_v<ImageAssetId>);
     static_assert(sizeof(ImageAssetId) == 4u);
     static_assert(std::is_standard_layout_v<MaterialAssetId>);
@@ -68,24 +64,17 @@ export namespace pP::mesh {
     // present in the source is rejected with function_not_supported, never stored.
     enum class EMeshAttribute : u32 {
         none = 0u,
+
         position = 0x1u,
         normal = 0x2u,
         texcoord = 0x4u,
         tangent = 0x8u,
         color = 0x10u,
+
+        all = position | normal | texcoord | tangent | color
     };
 
-    [[nodiscard]] constexpr EMeshAttribute operator|(const EMeshAttribute lhs, const EMeshAttribute rhs) noexcept {
-        return static_cast<EMeshAttribute>(enumOrd(lhs) | enumOrd(rhs));
-    }
-
-    constexpr EMeshAttribute &operator|=(EMeshAttribute &lhs, const EMeshAttribute rhs) noexcept {
-        return lhs = lhs | rhs;
-    }
-
-    [[nodiscard]] constexpr EMeshAttribute operator&(const EMeshAttribute lhs, const EMeshAttribute rhs) noexcept {
-        return static_cast<EMeshAttribute>(enumOrd(lhs) & enumOrd(rhs));
-    }
+    static_assert(details::is_enum_flags_v<EMeshAttribute>);
 
     // Draw range with the stored Mango base honoured verbatim: append-path
     // primitives carry base=0 with remapped global indices, direct-glTF
@@ -104,7 +93,7 @@ export namespace pP::mesh {
     struct StaticMeshAsset {
         Array<StaticMeshVertex> m_vertices{};
         Array<u32> m_indices{};
-        Array<MeshPrimitiveRange> m_prims{};
+        Array<MeshPrimitiveRange> m_primitives{};
         Box m_bounds{};
         EMeshAttribute m_flags{};
     };
@@ -116,14 +105,14 @@ export namespace pP::mesh {
     };
 
     struct MaterialImageSlot {
-        ImageAssetId m_image = kInvalidImage;
-        UvSetId m_texcoord{};
+        ImageAssetId m_image{none_v};
+        UvSetId m_texcoord{none_v};
         UvTransformAsset m_transform;
 
-        [[nodiscard]] constexpr bool enabled() const noexcept { return m_image != kInvalidImage; }
+        [[nodiscard]] constexpr bool enabled() const noexcept { return m_image != none_v; }
     };
 
-    enum class AlphaMode : u8 {
+    enum class EAlphaMode : u8 {
         opaque,
         mask,
         blend,
@@ -134,20 +123,23 @@ export namespace pP::mesh {
     // by semantic) and per-slot color space (base_color/emissive→sRGB, rest→linear).
     struct MaterialAsset {
         float4 m_base_color{1.0f, 1.0f, 1.0f, 1.0f};
+        float3 m_emissive{0.0f, 0.0f, 0.0f};
+
         float m_metallic = 1.0f;
         float m_roughness = 1.0f;
-        float3 m_emissive{0.0f, 0.0f, 0.0f};
         float m_alpha_cutoff = 0.5f;
         float m_occlusion_strength = 1.0f;
         float m_normal_scale = 1.0f;
-        AlphaMode m_alpha_mode = AlphaMode::opaque;
-        bool m_is_two_sided = false;
+
         MaterialImageSlot m_base_color_map{};
         MaterialImageSlot m_metallic_map{};
         MaterialImageSlot m_roughness_map{};
         MaterialImageSlot m_normal_map{};
         MaterialImageSlot m_occlusion_map{};
         MaterialImageSlot m_emissive_map{};
+
+        EAlphaMode m_alpha_mode = EAlphaMode::opaque;
+        bool m_is_two_sided = false;
     };
 
     // Local duplicate of the image reference (mesh→image type dependency is
@@ -165,26 +157,26 @@ export namespace pP::mesh {
     };
 
     struct SceneNodeAsset {
-        NodeId m_parent = kInvalidNode;
-        float4x4 m_local{float4x4::identity()};
-        float4x4 m_world{float4x4::identity()};
+        math::Transform m_local{};
+        math::Transform m_world{};
+        NodeId m_parent{none_v};
     };
 
     struct SceneInstance {
-        MeshAssetId m_mesh;
-        NodeId m_node;
-        MaterialAssetId m_material_override = kInvalidMaterial;
+        MeshAssetId m_mesh{};
+        NodeId m_node{};
+        MaterialAssetId m_material_override{none_v};
     };
 
     // SceneAsset owns meshes + materials + image refs + nodes; instances
     // reference them by typed ID. m_materialOverride stays kInvalidMaterial:
     // glTF binds materials per primitive, never per instance.
     struct SceneAsset {
-        Array<StaticMeshAsset> m_meshes;
-        Array<MaterialAsset> m_materials;
-        Array<ImageRef> m_images;
-        Array<SceneNodeAsset> m_nodes;
-        Array<SceneInstance> m_instances;
+        Array<StaticMeshAsset> m_meshes{};
+        Array<MaterialAsset> m_materials{};
+        Array<ImageRef> m_images{};
+        Array<SceneNodeAsset> m_nodes{};
+        Array<SceneInstance> m_instances{};
     };
 
     // Configurable production limits (Phase 5 hardening): GLB container

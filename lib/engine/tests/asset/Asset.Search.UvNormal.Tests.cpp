@@ -44,15 +44,15 @@ namespace pP::tests::detail {
         // KHR_texture_transform bake: the unanimous scene transform
         // lands in m_texcoord at convert, and the stored per-slot transforms
         // reset to identity so no later stage can double-apply them.
-        PPR_UNIT_TEST (uv_transform_bakes_into_texcoords) {
-            const Expected<pP::mesh::SceneAsset> raw =
-                    pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
+        PPR_UNIT_TEST(uv_transform_bakes_into_texcoords) {
+            const Expected<mesh::SceneAsset> raw =
+                    mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(raw.has_value());
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "uv_transform_box.gltf");
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "uv_transform_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
+            const mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{0u});
             PPR_TEST_ASSERT(material.m_base_color_map.m_transform.m_scale.x == 1.0f);
@@ -62,8 +62,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(material.m_base_color_map.m_transform.m_rotation == 0.0f);
 
             // Same geometry: baked UVs follow the spec formula from raw UVs.
-            const pP::mesh::StaticMeshAsset &raw_mesh = raw->m_meshes.front();
-            const pP::mesh::StaticMeshAsset &baked_mesh = scene->m_meshes.front();
+            const mesh::StaticMeshAsset &raw_mesh = raw->m_meshes.front();
+            const mesh::StaticMeshAsset &baked_mesh = scene->m_meshes.front();
             PPR_TEST_ASSERT(baked_mesh.m_vertices.size() == raw_mesh.m_vertices.size());
             const float rotation_c = std::cos(0.5f);
             const float rotation_s = std::sin(0.5f);
@@ -89,20 +89,20 @@ namespace pP::tests::detail {
         // pack. The single-channel verts keep the authored set-0 data verbatim
         // (Mango imports TEXCOORD_0 only), so set-1 fetch stays deferred and
         // the pack agreement rule still guards mixed sets.
-        PPR_UNIT_TEST (second_texcoord_set_flows_to_pack) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "second_set_box.gltf");
+        PPR_UNIT_TEST(second_texcoord_set_flows_to_pack) {
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "second_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
+            const mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{1u});
 
-            const Expected<pP::mesh::SceneAsset> box =
-                    pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
+            const Expected<mesh::SceneAsset> box =
+                    mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(box.has_value());
-            const pP::mesh::StaticMeshAsset &box_mesh = box->m_meshes.front();
-            const pP::mesh::StaticMeshAsset &second_mesh = scene->m_meshes.front();
+            const mesh::StaticMeshAsset &box_mesh = box->m_meshes.front();
+            const mesh::StaticMeshAsset &second_mesh = scene->m_meshes.front();
             PPR_TEST_ASSERT(second_mesh.m_vertices.size() == box_mesh.m_vertices.size());
             for (std::size_t i = 0u; i < second_mesh.m_vertices.size(); ++i) {
                 PPR_TEST_ASSERT(second_mesh.m_vertices[i].m_texcoord[0] == box_mesh.m_vertices[i].m_texcoord[0]);
@@ -111,19 +111,19 @@ namespace pP::tests::detail {
 
             // Pack carries the selector to the GPU struct (CPU-only, no device).
             const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                material, {kNoTexture, kNoTexture, kNoTexture, kNoTexture});
+                material, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
             PPR_TEST_ASSERT(*gpu->m_texcoord == 1u);
         };
 
         // Mixed sets with identity transforms convert cleanly: only authored
         // non-identity divergence is deferred, never silent agreement.
-        PPR_UNIT_TEST (mixed_identity_sets_convert_cleanly) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "mixed_set_box.gltf");
+        PPR_UNIT_TEST(mixed_identity_sets_convert_cleanly) {
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "mixed_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
-            const pP::mesh::MaterialAsset &material = scene->m_materials.front();
+            const mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{0u});
             PPR_TEST_ASSERT(material.m_normal_map.enabled());
@@ -132,19 +132,19 @@ namespace pP::tests::detail {
 
         // Divergent authored transforms cannot share the single UV channel:
         // deferred with function_not_supported, never silently mis-sampled.
-        PPR_UNIT_TEST (divergent_uv_transforms_rejected) {
+        PPR_UNIT_TEST(divergent_uv_transforms_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "divergent_transform_box.gltf");
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "divergent_transform_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::function_not_supported);
         };
 
         // A transform on a non-zero set has no channel to bake into: deferred.
-        PPR_UNIT_TEST (transformed_nonzero_set_rejected) {
+        PPR_UNIT_TEST(transformed_nonzero_set_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "transformed_set_box.gltf");
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "transformed_set_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::function_not_supported);
         };
@@ -155,27 +155,27 @@ namespace pP::tests::detail {
         // resets to identity. Expectations derive from the unscaled twin's
         // converted values with a hand-rolled diagonal inverse-transpose, so
         // the convert path itself is what the test proves.
-        PPR_UNIT_TEST (scaled_node_bakes_with_inverse_transpose) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf");
+        PPR_UNIT_TEST(scaled_node_bakes_with_inverse_transpose) {
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_nodes.size() == 2u);
             PPR_TEST_ASSERT(scene->m_meshes.size() == 2u);
             PPR_TEST_ASSERT(scene->m_instances.size() == 2u);
 
             // Identity twin keeps the shared authored mesh verbatim.
-            const pP::mesh::SceneInstance &twin = scene->m_instances[0];
+            const mesh::SceneInstance &twin = scene->m_instances[0];
             PPR_TEST_ASSERT(twin.m_mesh == pP::mesh::MeshAssetId{0u});
             PPR_TEST_ASSERT(twin.m_node == pP::mesh::NodeId{0u});
-            const pP::mesh::StaticMeshAsset &twin_mesh = scene->m_meshes[0];
+            const mesh::StaticMeshAsset &twin_mesh = scene->m_meshes[0];
             PPR_TEST_ASSERT(twin_mesh.m_vertices.size() == 3u);
             PPR_TEST_ASSERT(twin_mesh.m_indices.size() == 3u);
 
             // Scaled instance owns the baked copy; its node world is identity.
-            const pP::mesh::SceneInstance &scaled = scene->m_instances[1];
+            const mesh::SceneInstance &scaled = scene->m_instances[1];
             PPR_TEST_ASSERT(scaled.m_mesh == pP::mesh::MeshAssetId{1u});
             PPR_TEST_ASSERT(scaled.m_node == pP::mesh::NodeId{1u});
-            const float4x4 &scaled_world = scene->m_nodes[1].m_world;
+            const float4x4 &scaled_world = scene->m_nodes[1].m_world.toMatrix();
             PPR_TEST_ASSERT(scaled_world[0].x == 1.0f);
             PPR_TEST_ASSERT(scaled_world[1].y == 1.0f);
             PPR_TEST_ASSERT(scaled_world[2].z == 1.0f);
@@ -183,18 +183,19 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scaled_world[3].y == 0.0f);
             PPR_TEST_ASSERT(scaled_world[3].z == 0.0f);
 
-            const pP::mesh::StaticMeshAsset &baked = scene->m_meshes[1];
+            const mesh::StaticMeshAsset &baked = scene->m_meshes[1];
             PPR_TEST_ASSERT(baked.m_vertices.size() == 3u);
             PPR_TEST_ASSERT(baked.m_flags == twin_mesh.m_flags);
-            PPR_TEST_ASSERT(baked.m_prims.size() == twin_mesh.m_prims.size());
+            PPR_TEST_ASSERT(baked.m_primitives.size() == twin_mesh.m_primitives.size());
             PPR_TEST_ASSERT(baked.m_indices == twin_mesh.m_indices);
 
             // Node scale is exactly (2, 0.5, 1): positions bake exactly,
-            // normals/tangents take the diagonal inverse-transpose (1/2, 2, 1).
+            // normals take the diagonal inverse-transpose (1/2, 2, 1),
+            // tangents take the forward scale orthonormalized vs the normal.
             const float3 light = normalize(float3{-0.35f, 0.55f, 0.76f});
             for (std::size_t i = 0u; i < 3u; ++i) {
-                const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[i];
-                const pP::mesh::StaticMeshVertex &baked_vert = baked.m_vertices[i];
+                const mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[i];
+                const mesh::StaticMeshVertex &baked_vert = baked.m_vertices[i];
                 PPR_TEST_ASSERT(baked_vert.m_position[0] == twin_vert.m_position[0] * 2.0f);
                 PPR_TEST_ASSERT(baked_vert.m_position[1] == twin_vert.m_position[1] * 0.5f);
                 PPR_TEST_ASSERT(baked_vert.m_position[2] == twin_vert.m_position[2]);
@@ -206,16 +207,22 @@ namespace pP::tests::detail {
                 const float inv_ny = twin_ny * 2.0f;
                 const float inv_nz = twin_nz;
                 const float inv_len_sq = inv_nx * inv_nx + inv_ny * inv_ny + inv_nz * inv_nz;
+                float want_nx = 0.0f;
+                float want_ny = 0.0f;
+                float want_nz = 0.0f;
                 if (inv_len_sq < 1e-12f) {
-                    // Degenerate authored normal stays zero (no NaN bake).
+                    // Degenerate authored normal: the inverse-transpose has no
+                    // direction to preserve, so the bake saturates it to the
+                    // deterministic +Y axis — the same fallback the tangent
+                    // path's orthonormalize guard substitutes — never NaN.
                     PPR_TEST_ASSERT(baked_vert.m_normal[0] == 0.0f);
-                    PPR_TEST_ASSERT(baked_vert.m_normal[1] == 0.0f);
+                    PPR_TEST_ASSERT(baked_vert.m_normal[1] == 1.0f);
                     PPR_TEST_ASSERT(baked_vert.m_normal[2] == 0.0f);
                 } else {
                     const float inv_len = 1.0f / std::sqrt(inv_len_sq);
-                    const float want_nx = inv_nx * inv_len;
-                    const float want_ny = inv_ny * inv_len;
-                    const float want_nz = inv_nz * inv_len;
+                    want_nx = inv_nx * inv_len;
+                    want_ny = inv_ny * inv_len;
+                    want_nz = inv_nz * inv_len;
                     PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[0] - want_nx) < 1e-5f);
                     PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[1] - want_ny) < 1e-5f);
                     PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[2] - want_nz) < 1e-5f);
@@ -223,31 +230,51 @@ namespace pP::tests::detail {
                     // Shading parity with the hand-transformed twin, and proof the
                     // correction is lighting-observable (naive mul differs).
                     const float shade_baked = baked_vert.m_normal[0] * light.x + baked_vert.m_normal[1] * light.y +
-                        baked_vert.m_normal[2] * light.z;
+                                              baked_vert.m_normal[2] * light.z;
                     const float shade_hand = want_nx * light.x + want_ny * light.y + want_nz * light.z;
                     PPR_TEST_ASSERT(std::abs(shade_baked - shade_hand) < 1e-5f);
                     const float naive_len_sq =
-                        twin_nx * twin_nx * 4.0f + twin_ny * twin_ny * 0.25f + twin_nz * twin_nz;
+                            twin_nx * twin_nx * 4.0f + twin_ny * twin_ny * 0.25f + twin_nz * twin_nz;
                     const float naive_inv_len = 1.0f / std::sqrt(naive_len_sq);
                     const float shade_naive = twin_nx * 2.0f * naive_inv_len * light.x +
-                        twin_ny * 0.5f * naive_inv_len * light.y + twin_nz * naive_inv_len * light.z;
+                                              twin_ny * 0.5f * naive_inv_len * light.y + twin_nz * naive_inv_len * light.z;
                     PPR_TEST_ASSERT(std::abs(shade_baked - shade_naive) > 1e-3f);
                 }
 
-                // Tangents take the same inverse-transpose; w is preserved.
-                const float inv_tx = twin_vert.m_tangent[0] / 2.0f;
-                const float inv_ty = twin_vert.m_tangent[1] * 2.0f;
-                const float inv_tz = twin_vert.m_tangent[2];
-                const float inv_t_len_sq = inv_tx * inv_tx + inv_ty * inv_ty + inv_tz * inv_tz;
-                if (inv_t_len_sq < 1e-12f) {
+                // Tangents take the forward world scale, orthonormalized against
+                // the baked normal (Gram-Schmidt); w is preserved.
+                const float fwd_tx = twin_vert.m_tangent[0] * 2.0f;
+                const float fwd_ty = twin_vert.m_tangent[1] * 0.5f;
+                const float fwd_tz = twin_vert.m_tangent[2];
+                const float fwd_len_sq = fwd_tx * fwd_tx + fwd_ty * fwd_ty + fwd_tz * fwd_tz;
+                if (fwd_len_sq < 1e-12f) {
+                    // Zero authored tangent orthonormalizes to a perpendicular
+                    // of the baked normal, never to zero.
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - 0.0f) < 1e-5f);
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] + 0.4472136f) < 1e-5f);
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] + 0.8944272f) < 1e-5f);
+                } else if (inv_len_sq < 1e-12f) {
+                    // Degenerate baked normal (v1): the orthonormalize guard
+                    // substitutes +Y, killing the forward tangent, so the
+                    // perpendicular fallback of (0, 1, 0) survives.
                     PPR_TEST_ASSERT(baked_vert.m_tangent[0] == 0.0f);
                     PPR_TEST_ASSERT(baked_vert.m_tangent[1] == 0.0f);
-                    PPR_TEST_ASSERT(baked_vert.m_tangent[2] == 0.0f);
+                    PPR_TEST_ASSERT(baked_vert.m_tangent[2] == -1.0f);
                 } else {
-                    const float inv_t_len = 1.0f / std::sqrt(inv_t_len_sq);
-                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - inv_tx * inv_t_len) < 1e-5f);
-                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] - inv_ty * inv_t_len) < 1e-5f);
-                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] - inv_tz * inv_t_len) < 1e-5f);
+                    const float ortho_d = fwd_tx * want_nx + fwd_ty * want_ny + fwd_tz * want_nz;
+                    const float ortho_x = fwd_tx - ortho_d * want_nx;
+                    const float ortho_y = fwd_ty - ortho_d * want_ny;
+                    const float ortho_z = fwd_tz - ortho_d * want_nz;
+                    const float ortho_len = 1.0f / std::sqrt(ortho_x * ortho_x + ortho_y * ortho_y + ortho_z * ortho_z);
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - ortho_x * ortho_len) < 1e-5f);
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] - ortho_y * ortho_len) < 1e-5f);
+                    PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] - ortho_z * ortho_len) < 1e-5f);
+                    if (i == 0u) {
+                        // Cross-check: hand-rolled forward-M + Gram-Schmidt.
+                        PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - 0.9759006f) < 1e-5f);
+                        PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] + 0.1951801f) < 1e-5f);
+                        PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] - 0.0975901f) < 1e-5f);
+                    }
                 }
                 PPR_TEST_ASSERT(baked_vert.m_tangent[3] == twin_vert.m_tangent[3]);
             }
@@ -263,28 +290,24 @@ namespace pP::tests::detail {
 
         // Mirrored (negative-determinant) worlds flip tangent-w so the
         // bitangent handedness survives the reflection.
-        PPR_UNIT_TEST (mirrored_node_flips_tangent_w) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "mirror_twin_tri.gltf");
+        PPR_UNIT_TEST(mirrored_node_flips_tangent_w) {
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "mirror_twin_tri.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_meshes.size() == 2u);
             PPR_TEST_ASSERT(scene->m_instances.size() == 2u);
-            const pP::mesh::StaticMeshAsset &twin_mesh = scene->m_meshes.front();
-            const pP::mesh::StaticMeshAsset &baked = scene->m_meshes.back();
+            const mesh::StaticMeshAsset &twin_mesh = scene->m_meshes.front();
+            const mesh::StaticMeshAsset &baked = scene->m_meshes.back();
             PPR_TEST_ASSERT(baked.m_vertices.size() == 3u);
 
-            // Scale is (-2, 0.5, 1): positions mirror, tangents take the
-            // diagonal inverse-transpose (-1/2, 2, 1), w negates.
-            const pP::mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[0];
-            const pP::mesh::StaticMeshVertex &baked_vert = baked.m_vertices[0];
+            // Scale is (-2, 0.5, 1): positions mirror, normals take the
+            // diagonal inverse-transpose (-1/2, 2, 1), tangents take the
+            // forward scale orthonormalized vs the normal, w negates.
+            const mesh::StaticMeshVertex &twin_vert = twin_mesh.m_vertices[0];
+            const mesh::StaticMeshVertex &baked_vert = baked.m_vertices[0];
             PPR_TEST_ASSERT(baked_vert.m_position[0] == twin_vert.m_position[0] * -2.0f);
             PPR_TEST_ASSERT(baked_vert.m_position[1] == twin_vert.m_position[1] * 0.5f);
             PPR_TEST_ASSERT(baked_vert.m_position[2] == twin_vert.m_position[2]);
-            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - -1.0f) < 1e-6f);
-            PPR_TEST_ASSERT(baked_vert.m_tangent[1] == 0.0f);
-            PPR_TEST_ASSERT(baked_vert.m_tangent[2] == 0.0f);
-            PPR_TEST_ASSERT(baked_vert.m_tangent[3] == -twin_vert.m_tangent[3]);
-            PPR_TEST_ASSERT(baked_vert.m_tangent[3] == 1.0f);
 
             const float twin_nx = twin_vert.m_normal[0];
             const float twin_ny = twin_vert.m_normal[1];
@@ -293,27 +316,47 @@ namespace pP::tests::detail {
             const float inv_ny = twin_ny * 2.0f;
             const float inv_nz = twin_nz;
             const float inv_len = 1.0f / std::sqrt(inv_nx * inv_nx + inv_ny * inv_ny + inv_nz * inv_nz);
-            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[0] - inv_nx * inv_len) < 1e-5f);
-            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[1] - inv_ny * inv_len) < 1e-5f);
-            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[2] - inv_nz * inv_len) < 1e-5f);
+            const float bent_x = inv_nx * inv_len;
+            const float bent_y = inv_ny * inv_len;
+            const float bent_z = inv_nz * inv_len;
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[0] - bent_x) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[1] - bent_y) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_normal[2] - bent_z) < 1e-5f);
+
+            const float fwd_tx = twin_vert.m_tangent[0] * -2.0f;
+            const float fwd_ty = twin_vert.m_tangent[1] * 0.5f;
+            const float fwd_tz = twin_vert.m_tangent[2];
+            const float ortho_d = fwd_tx * bent_x + fwd_ty * bent_y + fwd_tz * bent_z;
+            const float ortho_x = fwd_tx - ortho_d * bent_x;
+            const float ortho_y = fwd_ty - ortho_d * bent_y;
+            const float ortho_z = fwd_tz - ortho_d * bent_z;
+            const float ortho_len = 1.0f / std::sqrt(ortho_x * ortho_x + ortho_y * ortho_y + ortho_z * ortho_z);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] - ortho_x * ortho_len) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] - ortho_y * ortho_len) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] - ortho_z * ortho_len) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[0] + 0.9759006f) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[1] + 0.1951801f) < 1e-5f);
+            PPR_TEST_ASSERT(std::abs(baked_vert.m_tangent[2] - 0.0975901f) < 1e-5f);
+            PPR_TEST_ASSERT(baked_vert.m_tangent[3] == -twin_vert.m_tangent[3]);
+            PPR_TEST_ASSERT(baked_vert.m_tangent[3] == 1.0f);
         };
 
         // Singular worlds (collapsed basis) have no inverse-transpose: the
         // scene fails closed instead of baking NaN normals.
-        PPR_UNIT_TEST (degenerate_node_world_rejected) {
+        PPR_UNIT_TEST(degenerate_node_world_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "degenerate_node_box.gltf");
+            const Expected<mesh::SceneAsset> scene =
+                    mesh::importAndConvert(meshDir(), "degenerate_node_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::invalid_argument);
         };
 
         // The per-instance bake honors the production mesh cap.
-        PPR_UNIT_TEST (scaled_bake_respects_mesh_cap) {
+        PPR_UNIT_TEST(scaled_bake_respects_mesh_cap) {
             ExpectedFailureLogGuard expected_failure_log;
-            pP::mesh::MeshLimits tight = pP::mesh::kDefaultMeshLimits;
+            mesh::MeshLimits tight = mesh::kDefaultMeshLimits;
             tight.m_max_meshes = 1u;
-            const Expected<pP::mesh::SceneAsset> scene =
+            const Expected<mesh::SceneAsset> scene =
                     pP::mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf", tight);
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::invalid_argument);

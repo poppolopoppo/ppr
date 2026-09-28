@@ -42,7 +42,7 @@ namespace pP::tests::detail {
 
         [[nodiscard]] bool allResolvedInRange_(const pP::mesh::StaticMeshAsset &mesh_asset) noexcept {
             const i64 vert_count = static_cast<i64>(mesh_asset.m_vertices.size());
-            for (const pP::mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
+            for (const pP::mesh::MeshPrimitiveRange &prim: mesh_asset.m_primitives) {
                 const u64 end = static_cast<u64>(prim.m_start) + static_cast<u64>(prim.m_count);
                 if (end > mesh_asset.m_indices.size()) {
                     return false;
@@ -70,10 +70,10 @@ namespace pP::tests::detail {
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
             PPR_TEST_ASSERT(not mesh.m_vertices.empty());
             PPR_TEST_ASSERT(mesh.m_indices.size() % 3u == 0u);
-            PPR_TEST_ASSERT(not mesh.m_prims.empty());
+            PPR_TEST_ASSERT(not mesh.m_primitives.empty());
             PPR_TEST_ASSERT(
                 (mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
-            for (const pP::mesh::MeshPrimitiveRange &prim: mesh.m_prims) {
+            for (const pP::mesh::MeshPrimitiveRange &prim: mesh.m_primitives) {
                 PPR_TEST_ASSERT(*prim.m_material < scene->m_materials.size());
             }
             PPR_TEST_ASSERT(allResolvedInRange_(mesh));
@@ -95,8 +95,8 @@ namespace pP::tests::detail {
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
             PPR_TEST_ASSERT(mesh.m_vertices.size() == 24u);
             PPR_TEST_ASSERT(mesh.m_indices.size() == 36u);
-            PPR_TEST_ASSERT(mesh.m_prims.size() == 1u);
-            const pP::mesh::MeshPrimitiveRange &prim = mesh.m_prims.front();
+            PPR_TEST_ASSERT(mesh.m_primitives.size() == 1u);
+            const pP::mesh::MeshPrimitiveRange &prim = mesh.m_primitives.front();
             PPR_TEST_ASSERT(prim.m_start == 0u);
             PPR_TEST_ASSERT(prim.m_count == 36u);
             PPR_TEST_ASSERT(prim.m_material == pP::mesh::MaterialAssetId{0u});
@@ -121,12 +121,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not image.m_bytes.getBufferData().empty());
 
             PPR_TEST_ASSERT(scene->m_nodes.size() == 1u);
-            PPR_TEST_ASSERT(scene->m_nodes.front().m_parent == pP::mesh::kInvalidNode);
+            PPR_TEST_ASSERT(scene->m_nodes.front().m_parent == none_v);
             PPR_TEST_ASSERT(scene->m_instances.size() == 1u);
             PPR_TEST_ASSERT(scene->m_instances.front().m_mesh == pP::mesh::MeshAssetId{0u});
             PPR_TEST_ASSERT(scene->m_instances.front().m_node == pP::mesh::NodeId{0u});
             PPR_TEST_ASSERT(
-                scene->m_instances.front().m_material_override == pP::mesh::kInvalidMaterial);
+                scene->m_instances.front().m_material_override == none_v);
         };
 
         PPR_UNIT_TEST (verbatim_lh_box_values) {
@@ -196,7 +196,7 @@ namespace pP::tests::detail {
             // Factors verbatim from the glTF JSON.
             PPR_TEST_ASSERT(material.m_metallic == 0.0f);
             PPR_TEST_ASSERT(material.m_roughness > 0.9f - 1e-6f and material.m_roughness < 0.9f + 1e-6f);
-            PPR_TEST_ASSERT(material.m_alpha_mode == pP::mesh::AlphaMode::opaque);
+            PPR_TEST_ASSERT(material.m_alpha_mode == pP::mesh::EAlphaMode::opaque);
             PPR_TEST_ASSERT(material.m_alpha_cutoff == 0.5f);
             PPR_TEST_ASSERT(material.m_normal_scale == 1.0f);
             PPR_TEST_ASSERT(material.m_occlusion_strength == 1.0f);
@@ -217,7 +217,7 @@ namespace pP::tests::detail {
             // Defaults: slots start disabled, IDs start at set 0.
             const pP::mesh::MaterialImageSlot fresh;
             PPR_TEST_ASSERT(not fresh.enabled());
-            PPR_TEST_ASSERT(fresh.m_image == pP::mesh::kInvalidImage);
+            PPR_TEST_ASSERT(fresh.m_image == none_v);
         };
 
         PPR_UNIT_TEST (rejects_non_gltf_extension) {
@@ -377,9 +377,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::is_standard_layout_v<pP::mesh::UvSetId>);
             PPR_TEST_ASSERT(sizeof(pP::mesh::UvSetId) == 4u);
 
-            PPR_TEST_ASSERT(pP::mesh::kInvalidImage == pP::mesh::ImageAssetId{0xFFFFFFFFu});
-            PPR_TEST_ASSERT(pP::mesh::kInvalidMaterial == pP::mesh::MaterialAssetId{0xFFFFFFFFu});
-            PPR_TEST_ASSERT(pP::mesh::kInvalidNode == pP::mesh::NodeId{0xFFFFFFFFu});
+            PPR_TEST_ASSERT(none_v == pP::mesh::ImageAssetId{0xFFFFFFFFu});
+            PPR_TEST_ASSERT(none_v == pP::mesh::MaterialAssetId{0xFFFFFFFFu});
+            PPR_TEST_ASSERT(none_v == pP::mesh::NodeId{0xFFFFFFFFu});
         };
         // Tangent-w probe: file-tangent vs MikkTSpace lighting compare. Mirror
         // math + w=-w stand; this probe proves the w sign is lighting-observable
