@@ -102,8 +102,9 @@ verdict.
 - Renderer orchestration remains content-free and device-facing. A content pass
   owns its shader, pipeline, buffers, and draw encoding rather than moving that
   responsibility into `Renderer`.
-- Submitted rendering consumes a `SceneView`/`CameraSnapshot` paired with a
-  `RenderView`; draw code must not read a mutable `Camera` during encoding.
+- Submitted rendering consumes a `CameraSnapshot`; viewport and scissor travel
+  per-draw on `DrawSubmission`/`DrawContext`, and draw code must not read a
+  mutable `Camera` during encoding.
 - `ApplicationDomain` is immutable after construction; application-boundary
   changes must not mutate it to alter runtime capabilities.
 
