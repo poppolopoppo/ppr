@@ -67,7 +67,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pP::isValid(TextureHandle{}));
             PPR_TEST_ASSERT(not pP::isValid(MaterialHandle{}));
             PPR_TEST_ASSERT(not pP::isValid(TriangleBagHandle{}));
-            PPR_TEST_ASSERT(*kNoTexture == 0xFFFFFFFFu);
+            PPR_TEST_ASSERT(none_v == 0xFFFFFFFFu);
             PPR_TEST_ASSERT(sizeof(GpuMaterial) == 80u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GpuMaterial, m_textures) == 48u);
             PPR_TEST_ASSERT(sizeof(GpuTextureRefs) == 16u);
@@ -76,15 +76,15 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST(build_material_maps_factors) {
             const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                mesh::MaterialAsset{}, {kNoTexture, kNoTexture, kNoTexture, kNoTexture});
+                mesh::MaterialAsset{}, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
             PPR_TEST_ASSERT(float4Equal_(gpu->m_base_color, float4{1.0f, 1.0f, 1.0f, 1.0f}));
             PPR_TEST_ASSERT(float4Equal_(gpu->m_emissive_metallic, float4{0.0f, 0.0f, 0.0f, 1.0f}));
             PPR_TEST_ASSERT(float4Equal_(gpu->m_rough_alpha_occl_nscale, float4{1.0f, 0.5f, 1.0f, 1.0f}));
-            PPR_TEST_ASSERT(gpu->m_textures.m_albedo == kNoTexture);
-            PPR_TEST_ASSERT(gpu->m_textures.m_metallic_roughness == kNoTexture);
-            PPR_TEST_ASSERT(gpu->m_textures.m_normal == kNoTexture);
-            PPR_TEST_ASSERT(gpu->m_textures.m_emissive == kNoTexture);
+            PPR_TEST_ASSERT(gpu->m_textures.m_albedo == none_v);
+            PPR_TEST_ASSERT(gpu->m_textures.m_metallic_roughness == none_v);
+            PPR_TEST_ASSERT(gpu->m_textures.m_normal == none_v);
+            PPR_TEST_ASSERT(gpu->m_textures.m_emissive == none_v);
             PPR_TEST_ASSERT(gpu->m_flags.m_bits == 0u);
         };
 
@@ -97,48 +97,48 @@ namespace pP::tests::detail {
             const TextureBindlessIndex albedo{7u};
             const TextureBindlessIndex normal{9u};
             const Expected<GpuMaterial> agreed = buildGpuMaterial(
-                textured, {albedo, kNoTexture, normal, kNoTexture});
+                textured, {albedo, none_v, normal, none_v});
             PPR_TEST_ASSERT(agreed.has_value());
             PPR_TEST_ASSERT(agreed->m_textures.m_albedo == albedo);
             PPR_TEST_ASSERT(*agreed->m_texcoord == 1u);
 
             textured.m_normal_map.m_texcoord = mesh::UvSetId{0u};
             const Expected<GpuMaterial> split = buildGpuMaterial(
-                textured, {albedo, kNoTexture, normal, kNoTexture});
+                textured, {albedo, none_v, normal, none_v});
             PPR_TEST_ASSERT(not split.has_value());
             PPR_TEST_ASSERT(split.error() == std::make_error_code(std::errc::invalid_argument));
         };
 
         PPR_UNIT_TEST(build_material_alpha_flags) {
             mesh::MaterialAsset mask{};
-            mask.m_alpha_mode = mesh::AlphaMode::mask;
+            mask.m_alpha_mode = mesh::EAlphaMode::mask;
             mask.m_alpha_cutoff = 0.25f;
             mask.m_is_two_sided = true;
             const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                mask, {kNoTexture, kNoTexture, kNoTexture, kNoTexture});
+                mask, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
-            PPR_TEST_ASSERT((gpu->m_flags.m_bits & kGpuMaterialAlphaModeMask) == enumOrd(mesh::AlphaMode::mask));
+            PPR_TEST_ASSERT((gpu->m_flags.m_bits & kGpuMaterialAlphaModeMask) == enumOrd(mesh::EAlphaMode::mask));
             PPR_TEST_ASSERT((gpu->m_flags.m_bits & kGpuMaterialDoubleSidedBit) != 0u);
             PPR_TEST_ASSERT(gpu->m_rough_alpha_occl_nscale[1] == 0.25f);
 
             mesh::MaterialAsset blend{};
-            blend.m_alpha_mode = mesh::AlphaMode::blend;
+            blend.m_alpha_mode = mesh::EAlphaMode::blend;
             const Expected<GpuMaterial> rejected = buildGpuMaterial(
-                blend, {kNoTexture, kNoTexture, kNoTexture, kNoTexture});
+                blend, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(not rejected.has_value());
             PPR_TEST_ASSERT(rejected.error() == std::make_error_code(std::errc::function_not_supported));
         };
 
         PPR_UNIT_TEST(pipeline_variant_key) {
-            PPR_TEST_ASSERT(not checkPipelineVariant({.m_twosided = false, .m_alpha = mesh::AlphaMode::opaque}));
-            PPR_TEST_ASSERT(not checkPipelineVariant({.m_twosided = true, .m_alpha = mesh::AlphaMode::mask}));
-            PPR_TEST_ASSERT(checkPipelineVariant({.m_twosided = false, .m_alpha = mesh::AlphaMode::blend}) ==
+            PPR_TEST_ASSERT(not checkPipelineVariant({.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::opaque}));
+            PPR_TEST_ASSERT(not checkPipelineVariant({.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::mask}));
+            PPR_TEST_ASSERT(checkPipelineVariant({.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::blend}) ==
                 std::make_error_code(std::errc::function_not_supported));
-            PPR_TEST_ASSERT(checkPipelineVariant({.m_twosided = true, .m_alpha = mesh::AlphaMode::blend}) ==
+            PPR_TEST_ASSERT(checkPipelineVariant({.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::blend}) ==
                 std::make_error_code(std::errc::function_not_supported));
             const TrianglePipelineVariant opaque{};
-            const TrianglePipelineVariant masked{.m_twosided = false, .m_alpha = mesh::AlphaMode::mask};
-            const TrianglePipelineVariant sided{.m_twosided = true, .m_alpha = mesh::AlphaMode::opaque};
+            const TrianglePipelineVariant masked{.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::mask};
+            const TrianglePipelineVariant sided{.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::opaque};
             PPR_TEST_ASSERT(opaque != masked);
             PPR_TEST_ASSERT(opaque != sided);
             PPR_TEST_ASSERT(masked != sided);
@@ -177,7 +177,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST(draw_plan_contract) {
             constexpr TrianglePipelineVariant opaque{};
-            constexpr TrianglePipelineVariant masked{.m_twosided = false, .m_alpha = mesh::AlphaMode::mask};
+            constexpr TrianglePipelineVariant masked{.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::mask};
 
             const TrianglePass::ResolvedInstance instances[] = {
                 {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},

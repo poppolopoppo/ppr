@@ -168,55 +168,66 @@ namespace pP {
             return scene.error();
         }
 
+        return setLoadedScene(dir, std::move(*scene));
+    }
+
+    std::error_code ApplicationEditor::setLoadedScene(const std::filesystem::path &dir, mesh::SceneAsset &&loaded_scene) {
         Array<image::ImageAsset> images{};
-        for (const mesh::ImageRef &ref: scene->m_images) {
+        for (const mesh::ImageRef &ref: loaded_scene.m_images) {
             mem::SharedBuffer bytes{};
             if (ref.m_is_file) {
                 Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(dir / ref.m_rel_path);
                 if (not mapped.has_value()) [[unlikely]] {
                     return mapped.error();
                 }
+
                 bytes = *mapped;
             } else {
                 bytes = ref.m_bytes;
             }
+
             if (not bytes.isValid()) [[unlikely]] {
                 return make_error_code(std::errc::invalid_argument);
             }
+
             Expected<image::ImageAsset> decoded = image::decodeToRgba8(
-                bytes.getBufferData(), ref.m_ext, image::ImageDecodeDesc{}, image::ImageUsage::color);
+                bytes.getBufferData(), ref.m_ext,
+                image::ImageDecodeDesc{},
+                image::EImageUsage::color);
             if (not decoded.has_value()) [[unlikely]] {
                 return decoded.error();
             }
+
             images.push_back(*decoded);
         }
 
-        Expected<TrianglePass::UploadedScene> uploaded = m_triangle_pass->uploadScene(*scene, images);
+        Expected<TrianglePass::UploadedScene> uploaded = m_triangle_pass->uploadScene(loaded_scene, images);
         if (not uploaded.has_value()) [[unlikely]] {
             return uploaded.error();
         }
 
-        m_scene = std::move(*scene);
+        m_scene = std::move(loaded_scene);
         m_images = std::move(images);
         m_uploaded_scene = std::move(*uploaded);
-        m_has_scene = true;
+
         PPR_LOG(Editor, info, "scene loaded", {
-            {"meshes", m_scene.m_meshes.size()},
+            {"meshes", m_scene->m_meshes.size()},
             {"images", m_images.size()},
-            {"prims", m_uploaded_scene.m_prims.size()},
+            {"prims", m_uploaded_scene.m_primitives.size()},
             });
         return default_value_v;
     }
 
     std::error_code ApplicationEditor::unloadScene() {
         std::error_code first_err{};
-        if (m_has_scene and m_triangle_pass) {
+        if (m_scene.has_value() and m_triangle_pass) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->releaseScene(m_uploaded_scene));
         }
+
         m_uploaded_scene = TrianglePass::UploadedScene{};
         m_images.clear();
-        m_scene = mesh::SceneAsset{};
-        m_has_scene = false;
+        m_scene.reset();
+
         if (m_triangle_pass) {
             m_triangle_pass->clearInstances();
         }
@@ -225,29 +236,26 @@ namespace pP {
 
     std::error_code ApplicationEditor::submitSceneInstances_() {
         m_triangle_pass->clearInstances();
-        std::size_t prim_cursor = 0u;
-        for (const mesh::SceneInstance &instance: m_scene.m_instances) {
-            const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
-            const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-            if (mesh_index >= m_scene.m_meshes.size() or node_index >= m_scene.m_nodes.size()) [[unlikely]] {
+
+        const mesh::SceneAsset &scene = *m_scene;
+
+        for (const mesh::SceneInstance &instance: scene.m_instances) {
+            if (instance.m_mesh >= scene.m_meshes.size() or
+                instance.m_node >= scene.m_nodes.size()) [[unlikely]] {
                 return make_error_code(std::errc::invalid_argument);
             }
-            const mesh::StaticMeshAsset &mesh_asset = m_scene.m_meshes[mesh_index];
-            const float4x4 &world = m_scene.m_nodes[node_index].m_world;
-            for ([[maybe_unused]] const mesh::MeshPrimitiveRange &prim: mesh_asset.m_prims) {
-                if (prim_cursor >= m_uploaded_scene.m_prims.size()) [[unlikely]] {
-                    return make_error_code(std::errc::invalid_argument);
+
+            const mesh::StaticMeshAsset &mesh_asset = scene.m_meshes[instance.m_mesh];
+            const float4x4 world = scene.m_nodes[instance.m_node].m_world.toMatrix();
+            for (std::size_t prim_slot = 0u; prim_slot < mesh_asset.m_primitives.size(); ++prim_slot) {
+                Expected<TrianglePass::JoinedInstancePrim> joined =
+                        TrianglePass::joinInstancePrim(scene, m_uploaded_scene, instance, prim_slot);
+                if (not joined.has_value()) [[unlikely]] {
+                    return joined.error();
                 }
-                const TrianglePass::UploadedPrimitive &uploaded = m_uploaded_scene.m_prims[prim_cursor++];
-                MaterialHandle material = uploaded.m_material;
-                if (instance.m_material_override != mesh::kInvalidMaterial) {
-                    const std::size_t override_index = static_cast<std::size_t>(*instance.m_material_override);
-                    if (override_index >= m_uploaded_scene.m_materials.size()) [[unlikely]] {
-                        return make_error_code(std::errc::invalid_argument);
-                    }
-                    material = m_uploaded_scene.m_materials[override_index];
-                }
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->submitInstance(uploaded.m_bag, material, world));
+
+                PPR_RETURN_ERROR_ON_FAIL(Editor,
+                    m_triangle_pass->submitInstance(joined->m_bag, joined->m_material, world));
             }
         }
         return default_value_v;
@@ -258,7 +266,7 @@ namespace pP {
 
         // Release scene GPU handles while the pass caches are still alive,
         // before the §2.4 pass shutdown below.
-        if (m_has_scene) {
+        if (m_scene.has_value()) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, unloadScene());
         }
 
@@ -362,7 +370,7 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
 
-        if (m_has_scene) {
+        if (m_scene.has_value()) {
             PPR_RETURN_ERROR_ON_FAIL(Editor, submitSceneInstances_());
         }
 

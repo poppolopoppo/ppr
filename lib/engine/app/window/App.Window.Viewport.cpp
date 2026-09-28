@@ -76,7 +76,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     // Window size here, not framebuffer size: DPI scaling and framebuffer-space
-    // translation belong to P2 makeRenderView, not to geometry.
+    // translation belong to geometry callers, not here.
     Viewport::Viewport(const Window &window, const ViewportLayout &layout) noexcept
         : Viewport(PixelRect{window.m_window_position, window.m_window_size}, layout) {
     }

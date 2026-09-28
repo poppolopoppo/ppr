@@ -51,9 +51,11 @@ export namespace pP {
         // with the node world matrix; unloadScene releases in reverse order.
         [[nodiscard]] std::error_code loadScene(const std::filesystem::path &dir, std::string_view file);
 
+        [[nodiscard]] std::error_code setLoadedScene(const std::filesystem::path &dir, mesh::SceneAsset &&loaded_scene);
+
         [[nodiscard]] std::error_code unloadScene();
 
-        [[nodiscard]] TrianglePass &trianglePass() noexcept { return *m_triangle_pass; }
+        [[nodiscard]] TrianglePass &getTrianglePass() noexcept { return *m_triangle_pass; }
 
     protected:
         // ReSharper disable once CppOverrideWithDifferentVisibility
@@ -73,10 +75,9 @@ export namespace pP {
 
         [[nodiscard]] std::error_code submitSceneInstances_();
 
-        mesh::SceneAsset m_scene{};
+        std::optional<mesh::SceneAsset> m_scene{};
         Array<image::ImageAsset> m_images{};
         TrianglePass::UploadedScene m_uploaded_scene{};
-        bool m_has_scene = false;
 
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};
