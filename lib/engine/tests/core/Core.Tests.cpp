@@ -7,6 +7,8 @@ namespace pP::tests {
 
     const UnitTest &mathTests() noexcept;
 
+    const UnitTest &transformTests() noexcept;
+
     const UnitTest &stringsTests() noexcept;
 
     const UnitTest &opaqueTests() noexcept;
@@ -101,6 +103,7 @@ namespace pP::tests {
         _.recurse({
             enumsTests(),
             mathTests(),
+            transformTests(),
             memory,
             stringsTests(),
             containers,

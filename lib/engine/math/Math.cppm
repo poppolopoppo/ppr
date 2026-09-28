@@ -129,6 +129,9 @@ export namespace pP {
     using mango::math::slerp;
     using mango::math::squad;
 
+    using mango::math::packQuaternion;
+    using mango::math::unpackQuaternion;
+
     using mango::math::Box;
     using mango::math::Cone;
     using mango::math::FastRay;
@@ -519,6 +522,33 @@ export namespace pP {
         return clamp(value, Vector<T, DimV>(0), Vector<T, DimV>(1));
     }
 
+    // check if inf
+    template<std::floating_point T>
+    [[nodiscard]] constexpr bool isInf(const T value) noexcept {
+        return std::isinf(value);
+    }
+
+    // check if any component isInf
+    [[nodiscard]] constexpr bool isInf(const Quaternion &quat) noexcept {
+        return isInf(quat.x) or isInf(quat.y) or isInf(quat.z) or isInf(quat.w);
+    }
+
+    // check if any component isInf
+    template<std::floating_point T, std::size_t DimV>
+    [[nodiscard]] constexpr bool isInf(const Vector<T, DimV> &value) noexcept {
+        return pP::static_iota<std::size_t, DimV>([&](auto... idx) constexpr noexcept -> bool {
+            return (isInf(value[idx]) or ...);
+        });
+    }
+
+    // check if any column isInf
+    template<std::floating_point T, std::size_t WidthV, std::size_t HeightV>
+    [[nodiscard]] constexpr bool isInf(const Matrix<T, WidthV, HeightV> &value) noexcept {
+        return pP::static_iota<u32, WidthV>([&](auto... idx) constexpr noexcept -> bool {
+            return (isInf(value.template column<idx>()) or ...);
+        });
+    }
+
     // check if nan
     template<std::floating_point T>
     [[nodiscard]] constexpr bool isNan(const T value) noexcept {
@@ -560,6 +590,293 @@ export namespace pP {
     [[nodiscard]] constexpr Vector<T, DimV> safeNormalize(const Vector<T, DimV> &value, const Vector<T, DimV> &fallback, const T epsilon = epsilon_v<T>) noexcept {
         const T norm_sq = dot(value, value);
         return norm_sq > epsilon ? value / std::sqrt(norm_sq) : fallback;
+    }
+
+    namespace math {
+        // Row-vector TRS (scale, then rotate, then translate). Per-node guidance:
+        // compose with multiply(); keep one cached invert() per dirty node with the
+        // parent inverse hoisted (never invert per child); materialize toMatrix() once
+        // per node at the draw leaf; never call invertTransform* per vertex -- hoist
+        // invert() once per node and use transformPosition() on the cached result.
+        struct Transform {
+            Quaternion m_rotate = Quaternion::identity();
+            float3 m_translate{0};
+            float3 m_scale{1};
+
+            [[nodiscard]] static Transform identity() noexcept {
+                return Transform{};
+            }
+
+            [[nodiscard]] float getDeterminant() const noexcept {
+                return m_scale.x * m_scale.y * m_scale.z;
+            }
+
+            // Scalar gate for the rare per-node matrix fallback; never a per-point path.
+            [[nodiscard]] float getDeterminantSign() const noexcept {
+                return getDeterminant() < 0.0f ? -1.0f : 1.0f;
+            }
+
+            [[nodiscard]] bool hasUniformScale() const noexcept {
+                // Signed compare, not abs: (2,2,-2) is magnitude-uniform but does NOT
+                // commute with R, so TRS invert stays approximate; (-s,-s,-s) is a true
+                // scalar matrix and commutes, so it counts. Zero (0,0,0) reports uniform
+                // (degenerate but equal) — callers must still guard rcp(S).
+                const float4 scale4 = m_scale.xyzx;
+                return (maskToInt(hmax(scale4) - hmin(scale4) <= hmax(abs(scale4)) * epsilon_v<float>) & 0x1u) != 0u;
+            }
+
+
+            Transform &accumulate(const Transform &delta) noexcept {
+                // delta is in the parent frame: rotation composes as delta * current.
+                if (dot2(delta.m_rotate.w) < 1.0f - epsilon_v<float>) {
+                    m_rotate = delta.m_rotate * m_rotate;
+                }
+
+                m_translate += delta.m_translate;
+                m_scale *= delta.m_scale;
+                return *this;
+            }
+
+            Transform &accumulateWithAdditiveScale(const Transform &delta) noexcept {
+                if (dot2(delta.m_rotate.w) < 1.0f - epsilon_v<float>) {
+                    m_rotate = delta.m_rotate * m_rotate;
+                }
+
+                m_translate += delta.m_translate;
+                m_scale *= 1.0f + delta.m_scale;
+                return *this;
+            }
+
+            Transform &accumulateWithShortestRotation(const Transform &delta) noexcept {
+                if (dot(m_rotate, delta.m_rotate) < 0.0f) {
+                    m_rotate -= delta.m_rotate;
+                } else {
+                    m_rotate += delta.m_rotate;
+                }
+
+                // Component-wise add/sub drifts off the unit sphere: restore it.
+                m_rotate = normalize(m_rotate);
+
+                m_translate += delta.m_translate;
+                m_scale *= delta.m_scale;
+                return *this;
+            }
+
+
+            [[nodiscard]] float3 transformPosition(const float3 &position) const noexcept {
+                return quaternionTransform(m_rotate, position * m_scale) + m_translate;
+            }
+
+            [[nodiscard]] float3 transformPositionNoScale(const float3 &position) const noexcept {
+                return quaternionTransform(m_rotate, position) + m_translate;
+            }
+
+            [[nodiscard]] float3 transformNormal(const float3 &normal) const noexcept {
+                return normalize(quaternionTransform(m_rotate, normal * rcp(m_scale)));
+            }
+
+            [[nodiscard]] float3 transformVector(const float3 &vector) const noexcept {
+                return quaternionTransform(m_rotate, vector * m_scale);
+            }
+
+            [[nodiscard]] float3 transformVectorNoScale(const float3 &vector) const noexcept {
+                return quaternionTransform(m_rotate, vector);
+            }
+
+
+            [[nodiscard]] float3 invertTransformPosition(const float3 &position) const noexcept {
+                return quaternionTransform(conjugate(m_rotate), position - m_translate) * rcp(m_scale);
+            }
+
+            [[nodiscard]] float3 invertTransformPositionNoScale(const float3 &position) const noexcept {
+                return quaternionTransform(conjugate(m_rotate), position - m_translate);
+            }
+
+            [[nodiscard]] float3 invertTransformNormal(const float3 &normal) const noexcept {
+                return normalize(quaternionTransform(conjugate(m_rotate), normal) * m_scale);
+            }
+
+            [[nodiscard]] float3 invertTransformVector(const float3 &vector) const noexcept {
+                return quaternionTransform(conjugate(m_rotate), vector) * rcp(m_scale);
+            }
+
+            [[nodiscard]] float3 invertTransformVectorNoScale(const float3 &vector) const noexcept {
+                return quaternionTransform(conjugate(m_rotate), vector);
+            }
+
+
+            // m_rotate stays unit, so conjugate() is its inverse (3 negations, no divides).
+            // Non-uniform scale + rotation: inverse/composition is approximate (S,R do not commute); exact for uniform scale.
+            [[nodiscard]] Transform invert() const noexcept {
+                PPR_ASSERT(hasUniformScale() && "Transform::invert() only approximates for non-uniform scale");
+
+                Transform result;
+                result.m_rotate = conjugate(m_rotate);
+                result.m_scale = rcp(m_scale);
+                result.m_translate = quaternionTransform(result.m_rotate, -m_translate * result.m_scale);
+                return result;
+            }
+
+            [[nodiscard]] Transform invertNoScale() const noexcept {
+                Transform result;
+                result.m_rotate = conjugate(m_rotate);
+                result.m_translate = quaternionTransform(result.m_rotate, -m_translate);
+                return result;
+            }
+
+
+            // Row-vector contract: v * M applies scale, then rotation, then translation.
+            // Batch rule: compose Transforms per node, materialize this matrix once per node
+            // at the draw leaf, and push point clouds through the float4 x Matrix4x4 SIMD
+            // path -- no custom batch kernel.
+            [[nodiscard]] PPR_FLATTEN float4x4 toMatrix() const noexcept {
+                return float4x4::scale(m_scale.x, m_scale.y, m_scale.z) * toMatrixNoScale();
+            }
+
+            [[nodiscard]] float4x4 toMatrixNoScale() const noexcept {
+                return float4x4(m_rotate) * float4x4::translate(m_translate.x, m_translate.y, m_translate.z);
+            }
+
+            // Shear-free TRS only: rows 0..2 are the scaled basis (|row| = scale
+            // component, unit rows = rotation); shear is dropped because a TRS
+            // cannot represent it.
+            [[nodiscard]] static Transform fromMatrix(const float4x4 &transform) noexcept {
+                const float3 basis_x = transform[0].xyz;
+                const float3 basis_y = transform[1].xyz;
+                const float3 basis_z = transform[2].xyz;
+                const float3 extent{length(basis_x), length(basis_y), length(basis_z)};
+
+                // A near-zero row carries no direction: substitute a basis axis,
+                // saturate that scale component to 0 (never inf/NaN) and leave the
+                // rotation around the collapsed axis undefined.
+                const mask32x4 collapsed = float4(extent.xyz, 0) <= epsilon_v<float>;
+                float4 scale = select(collapsed, float4(0), float4(extent, 0));
+                const float4 safe_scale = rcp(select(collapsed, float4(1), float4(extent, 1)));
+                const u32 collapsed_i = maskToInt(collapsed);
+                float3 rotation_x = collapsed_i & 0x1u ? axis_x : basis_x * safe_scale.x;
+                const float3 rotation_y = collapsed_i & 0x2u ? axis_y : basis_y * safe_scale.y;
+                const float3 rotation_z = collapsed_i & 0x4u ? axis_z : basis_z * safe_scale.z;
+
+                // Fold a mirroring upper-3x3 (det < 0) into a negative X scale plus
+                // the matching row flip so the quaternion always sees a proper
+                // (det = +1) orthonormal basis. Cold scalar path: mirrors are rare,
+                // so folding stays scalar and gated by [[unlikely]].
+                if (dot(cross(rotation_x, rotation_y), rotation_z) < 0.0f) [[unlikely]] {
+                    scale.x = -scale.x;
+                    rotation_x = -rotation_x;
+                }
+
+                return Transform{
+                    .m_rotate = normalize(Quaternion(float3x3(rotation_x, rotation_y, rotation_z))),
+                    .m_translate = transform[3].xyz,
+                    .m_scale = scale.xyz,
+                };
+            }
+
+            [[nodiscard]] static Transform blend(const Transform &a, const Transform &b, const float alpha) noexcept {
+                if (alpha < epsilon_v<float>) [[unlikely]] {
+                    return a;
+                }
+                if (alpha > 1.0f - epsilon_v<float>) [[unlikely]] {
+                    return b;
+                }
+
+                // Flip the antipodal partner onto the shortest arc; mango lerp is
+                // component-wise and unnormalized, so restore unit length after.
+                const Quaternion target = dot(a.m_rotate, b.m_rotate) < 0.0f ? -b.m_rotate : b.m_rotate;
+
+                return Transform{
+                    .m_rotate = normalize(lerp(a.m_rotate, target, alpha)),
+                    .m_translate = lerp(a.m_translate, b.m_translate, alpha),
+                    .m_scale = lerp(a.m_scale, b.m_scale, alpha),
+                };
+            }
+
+            // Scalar quaternion composition is deliberate: tens of flops per node are
+            // cheaper than materializing two matrices per compose.
+            [[nodiscard]] static Transform multiply(const Transform &a, const Transform &b) noexcept {
+                if (a.getDeterminantSign() < 0 or b.getDeterminantSign() < 0) [[unlikely]] {
+                    return fromMatrix(a.toMatrix() * b.toMatrix());
+                }
+
+                Transform result;
+                result.m_scale = b.m_scale * a.m_scale;
+                result.m_rotate = b.m_rotate * a.m_rotate;
+                result.m_translate = quaternionTransform(b.m_rotate, b.m_scale * a.m_translate) + b.m_translate;
+                return result;
+            }
+
+            [[nodiscard]] static Transform relativeTransform(const Transform &from, const Transform &to) noexcept {
+                if (from.getDeterminantSign() < 0 or to.getDeterminantSign() < 0) [[unlikely]] {
+                    return fromMatrix(from.toMatrix() * inverse(to.toMatrix()));
+                }
+
+                // to.m_rotate stays unit, so conjugate() is its inverse; hoisted once here.
+                const Quaternion inv_rotate = conjugate(to.m_rotate);
+                const float3 inv_scale = rcp(to.m_scale);
+
+                Transform result;
+                result.m_scale = from.m_scale * inv_scale;
+                result.m_rotate = inv_rotate * from.m_rotate;
+                result.m_translate = quaternionTransform(inv_rotate, from.m_translate - to.m_translate) * inv_scale;
+                return result;
+            }
+        };
+
+        [[nodiscard]] bool isInf(const Transform &transform) noexcept {
+            using pP::isInf;
+            return isInf(transform.m_rotate) or isInf(transform.m_translate) or isInf(transform.m_scale);
+        }
+
+        [[nodiscard]] bool isNan(const Transform &transform) noexcept {
+            using pP::isNan;
+            return isNan(transform.m_rotate) or isNan(transform.m_translate) or isNan(transform.m_scale);
+        }
+
+        [[nodiscard]] Transform inverse(const Transform &transform) noexcept {
+            return transform.invert();
+        }
+
+        void swap(Transform &a, Transform &b) noexcept {
+            using std::swap;
+            swap(a.m_rotate, b.m_rotate);
+            swap(a.m_translate, b.m_translate);
+            swap(a.m_scale, b.m_scale);
+        }
+    }
+
+    template<typename T>
+        requires requires(param_lvref_t<const T> value)
+        {
+            { isInf(value) } -> std::same_as<bool>;
+            { isNan(value) } -> std::same_as<bool>;
+        }
+    [[nodiscard]] constexpr bool isInfOrNan(param_lvref_t<const T> value) noexcept {
+        return isInf(value) or isNan(value);
+    }
+
+    template<typename T>
+        requires requires(param_lvref_t<const T> value)
+        {
+            { isInf(value) } -> std::same_as<bool>;
+            { isNan(value) } -> std::same_as<bool>;
+        }
+    [[nodiscard]] constexpr bool isFinite(param_lvref_t<const T> value) noexcept {
+        return not isInf(value) and not isNan(value);
+    }
+
+    [[nodiscard]] float3 fallbackPerpendicular(const float3 &n) noexcept {
+        // smallest-component axis ⇒ cross is never near-parallel
+        const float3 a = abs(n);
+        const float3 axis = a.x <= a.y
+            ? (a.x <= a.z ? math::axis_x : math::axis_z)
+            : (a.y <= a.z ? math::axis_y : math::axis_z);
+        return safeNormalize(cross(n, axis), math::axis_x);
+    }
+
+    [[nodiscard]] float3 orthonormalize(const float3 &n, const float3 &t) noexcept {
+        const float3 nn = safeNormalize(n, math::axis_y); // bake N is unit; guard anyway
+        return safeNormalize(t - nn * dot(t, nn), fallbackPerpendicular(nn));
     }
 }
 

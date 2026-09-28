@@ -29,6 +29,7 @@ target_sources(engine.tests.core
         Core.HAL.Tests.cpp
         Core.Enums.Tests.cpp
         Core.Math.Tests.cpp
+        Core.Math.Transform.Tests.cpp
         Core.Strings.Tests.cpp
         Core.Utility.Tests.cpp
         Core.Opaque.Tests.cpp
