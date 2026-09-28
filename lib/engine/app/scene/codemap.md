@@ -3,8 +3,9 @@
 ## Responsibility
 
 The `engine.app:scene.camera` module provides the camera home for the app layer: `Camera` (pose + projection state,
-velocities, jitter, frusta) plus its controller hierarchy, feeding `CameraSnapshot` into the renderer scene layer
-(`SceneView` in `:renderer.types`). Moved here from `lib/engine/app/camera/` (`App.Camera.cpp/.cppm` deleted); the old
+velocities, jitter, frusta) plus its controller hierarchy, publishing `CameraSnapshot` for downstream consumers.
+This directory provides `engine.app:scene.camera` and `engine.app:scene.camera.controller` only — there is no
+`:scene` partition. Moved here from `lib/engine/app/camera/` (`App.Camera.cpp/.cppm` deleted); the old
 location no longer exists.
 
 ## Design
@@ -67,12 +68,12 @@ location no longer exists.
 2. Per-frame input callbacks accumulate `m_delta_position`/`m_delta_heading`+`m_delta_pitch_roll` (speed/fov filters update inline);
    `Camera::updateModel(dt, controller, viewport)` runs `controller.updateCameraModel` → `updateCameraPose_` then
    snapshots view/projection/jitter/frusta/velocities (degenerate viewports skip in place).
-3. Snapshot pairs with a target-local `RenderView` as `SceneView` (`:renderer.types`).
+3. Snapshot is consumed directly (e.g. `TrianglePass::update`).
 4. `TrianglePass::draw()` uploads the snapshot-fed frame constants; per-frame submission stays in `Renderer`.
 
 ## Integration
 
-- **Consumers**: `engine.app:renderer.triangle_pass` (snapshot upload), `SceneView` pairing in `:renderer.types`
+- **Consumers**: `engine.app:renderer.triangle_pass` (snapshot upload)
 - **Depends on**: `engine.core` (safe_object, TimeSpan), `engine.math` (float/quaternion/matrix, frusta, angular
   velocity), `engine.rhi` (projection helpers), `:window.viewport` (client rect), `:input.action` + `:input.filtered_analog` + `:service.input` (controller actions/bindings)
 - **Provides**: `engine.app:scene.camera`, `engine.app:scene.camera.controller`

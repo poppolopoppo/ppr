@@ -51,7 +51,7 @@ handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
 - **Deferred dispatch**: `CallbackSink` latches event args during an unsafe phase (e.g. inside a dispatch loop where
   removal is forbidden) and `sink()` replays them later from a safe point.
 - **Draw command submission**: `Application` builds stack `DrawSubmission`s (named lambdas + borrowed draw callbacks);
-  the renderer invokes those callbacks per submission via `renderAndPresent`/`submitToTexture`, retaining nothing.
+  the renderer invokes those callbacks per submission via `renderAndPresent`/`renderToTexture`, retaining nothing.
 - **Signal handler composition**: `Signal<Events...>` consumers combine handlers over `function_ref` targets in a
   single `select()`-filtered loop.
 
@@ -61,8 +61,9 @@ handlers, and draw commands. (`overloaded` lives in `hal`, not here.)
   `function_ref`-derived push-back sink.
 - **memory**: `BroadcastCallback`/`CallbackSink` allocate subscriber storage via `AllocatorT` (default `mem::GPA`);
   `CallbackSink` forwards `safe_object` arguments as `safe_ptr` for lifetime-checked callbacks.
-- **engine.app**: `Renderer::renderAndPresent`/`submitToTexture` take `span<const DrawSubmission>`; each submission
-  pairs a `RenderView` with a borrowed draw callback.
+- **engine.app**: `Renderer::render`/`renderToTexture` take `std::initializer_list<DrawSubmission>` and
+  `renderAndPresent` takes `std::initializer_list<SurfaceRenderPass>`; each `DrawSubmission` carries a borrowed draw
+  callback plus optional per-draw `m_viewport`/`m_scissor`.
 - **input system**: `IInputService` listener stack stores per-listener callback lambdas as `function_ref` targets;
   `whenKeyPressed`, `whenMouseMoved` etc. accept `function_ref`.
 - **engine.tests.core**: Tests `function_ref` (construct from lambda/function pointer/member function/nontype,

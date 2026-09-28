@@ -114,14 +114,14 @@ normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
   render pass owns its content-specific shader, pipeline, buffers, and pass-local
   resources; it produces and encodes its own draw work.
   Do not move scene/content ownership into `Renderer`.
-- Renderer boundary types are camera-free. Scene-owned `SceneView` pairs a
-  `CameraSnapshot` with a `RenderView`; passes consume that snapshot and must
-  not consult a mutable `Camera` while drawing.
-- Geometry derives from `SceneView::m_render_view`. The camera/matrix contract
-  is row-major, row-vector, left-handed, +Z-forward, +Y-up, with `[0,1]` depth:
-  use `mul(float4, matrix)`, view-projection `view * projection`, and no
-  backend-specific transpose or Y flip. See `App.Scene.Camera` and
-  `Shader.cpp` for the canonical implementation.
+- Renderer boundary types are camera-free. Passes consume a `CameraSnapshot`
+  and must not consult a mutable `Camera` while drawing; viewport and scissor
+  travel per-draw on `DrawSubmission`.
+- The camera/matrix contract is row-major, row-vector, left-handed, +Z-forward,
+  +Y-up, with `[0,1]` depth: use `mul(float4, matrix)`, view-projection
+  `view * projection`, and no backend-specific transpose or Y flip. See
+  `App.Scene.Camera.cpp` and `engine.rhi` `RHI.cppm`/`RHI.cpp` (projection
+  helpers) for the canonical implementation.
 
 ## Tests
 

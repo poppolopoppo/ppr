@@ -64,10 +64,11 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   `Application` owns the run loop + platform/services/shader-RHI-`Renderer`
   bootstrap; `ApplicationEditor` implements `IClientService` and owns scene,
   player, camera, viewport, input-context, triangle pass, and UI state.
-  `WindowViewport` supplies window geometry; `SceneView` pairs it with a
-  `CameraSnapshot`. `Renderer` consumes `DrawSubmission` spans through
-  `renderAndPresent` or `renderToTexture`, while passes own scene-specific draw
-  resources and encoding.
+  `WindowViewport` supplies window geometry; `CameraSnapshot` carries the
+  derived viewport size/aspect (`m_viewport_size`/`m_aspect_ratio`). `Renderer`
+  consumes `initializer_list<DrawSubmission>` through `render`/`renderToTexture`
+  and `initializer_list<SurfaceRenderPass>` through `renderAndPresent`, while
+  passes own scene-specific draw resources and encoding.
 
 ## Directory Map (Aggregated)
 
@@ -123,7 +124,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
    `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
   (17 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
-  `App.Shader/Viewport/RenderView/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
+  `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
   `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
   TU-local `const UnitTest` + non-exported `const UnitTest &<node>Tests() noexcept` accessor per root-visible node;
