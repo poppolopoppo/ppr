@@ -46,14 +46,14 @@ namespace pP::tests::detail {
 
         [[nodiscard]] Expected<image::ImageAsset> decodeFilePng(const std::string_view name) {
             Expected<mem::SharedBuffer> mapped =
-                mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
+                    mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
             if (not
                 mapped.has_value())
             {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(
-                mapped->getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                mapped->getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
         }
 
         [[nodiscard]] mem::SharedBuffer gatePngBytes(const std::string_view name, const std::array<std::byte, 64u> &rgba) {
@@ -93,7 +93,7 @@ namespace pP::tests::detail {
                 return std::unexpected{std::make_error_code(std::errc::io_error)};
             }
             return image::decodeToRgba8(
-                png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
+                png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::data);
         }
 
         [[nodiscard]] CameraSnapshot gateCamera_(const float3 &eye, const float3 &target, const float2 &extent) {
@@ -222,7 +222,7 @@ namespace pP::tests::detail {
             shader::ComPtr<ISlangBlob> blob{};
             rhi::SubresourceLayout layout{};
             if (const std::error_code err =
-                make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
+                    make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
             if (blob.get() == nullptr
@@ -268,13 +268,13 @@ namespace pP::tests::detail {
         }
 
         // §7 submission mirror for tests that drive the pass directly: one
-        // instance per (scene instance, prim) with the node world matrix.
+        // instance per (scene instance, prim) with the node world matrix,
+        // joined through the shared mesh-major table.
         [[nodiscard]] std::error_code submitScene_(
             TrianglePass &pass,
             const mesh::SceneAsset &scene,
             const TrianglePass::UploadedScene &uploaded) {
             pass.clearInstances();
-            std::size_t prim_cursor = 0u;
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
@@ -283,22 +283,19 @@ namespace pP::tests::detail {
                 {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
-                const float4x4 &world = scene.m_nodes[node_index].m_world;
-                for ([[maybe_unused]] const mesh::MeshPrimitiveRange &prim: scene.m_meshes[mesh_index].m_prims) {
-                    if (prim_cursor >= uploaded.m_prims.size()) {
-                        return std::make_error_code(std::errc::invalid_argument);
+                const float4x4 world = scene.m_nodes[node_index].m_world.toMatrix();
+                for (std::size_t prim_slot = 0u;
+                     prim_slot < scene.m_meshes[mesh_index].m_primitives.size();
+                     ++prim_slot) {
+                    Expected<TrianglePass::JoinedInstancePrim> joined =
+                            TrianglePass::joinInstancePrim(scene, uploaded, instance, prim_slot);
+                    if (not
+                        joined.has_value())
+                    {
+                        return joined.error();
                     }
-                    const TrianglePass::UploadedPrimitive &up = uploaded.m_prims[prim_cursor++];
-                    MaterialHandle material = up.m_material;
-                    if (instance.m_material_override != mesh::kInvalidMaterial) {
-                        const std::size_t override_index =
-                            static_cast<std::size_t>(*instance.m_material_override);
-                        if (override_index >= uploaded.m_materials.size()) {
-                            return std::make_error_code(std::errc::invalid_argument);
-                        }
-                        material = uploaded.m_materials[override_index];
-                    }
-                    if (const std::error_code submit_err = pass.submitInstance(up.m_bag, material, world)) {
+                    if (const std::error_code submit_err =
+                            pass.submitInstance(joined->m_bag, joined->m_material, world)) {
                         return submit_err;
                     }
                 }
@@ -397,14 +394,14 @@ namespace pP::tests::detail {
             images.push_back(*decoded);
             const Expected<TrianglePass::UploadedScene> uploaded = pass.uploadScene(*scene, images);
             PPR_TEST_ASSERT(uploaded.has_value());
-            PPR_TEST_ASSERT(not uploaded->m_prims.empty());
+            PPR_TEST_ASSERT(not uploaded->m_primitives.empty());
             PPR_TEST_ASSERT(not scene->m_materials.empty());
 
             mesh::MaterialAsset green_material = scene->m_materials.front();
             green_material.m_base_color = float4{0.0f, 1.0f, 0.0f, 1.0f};
             green_material.m_metallic = 0.0f;
             green_material.m_roughness = 1.0f;
-            green_material.m_base_color_map.m_image = mesh::kInvalidImage;
+            green_material.m_base_color_map.m_image = none_v;
             mesh::MaterialAsset red_material = green_material;
             red_material.m_base_color = float4{1.0f, 0.0f, 0.0f, 1.0f};
             const TextureHandle no_texture[] = {
@@ -426,7 +423,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.update(TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
 
             pass.clearInstances();
-            const TrianglePass::UploadedPrimitive &primitive = uploaded->m_prims.front();
+            const TrianglePass::UploadedPrimitive &primitive = uploaded->m_primitives.front();
             const float4x4 green_transform{
                 float4{1.0f, 0.0f, 0.0f, 0.0f},
                 float4{0.0f, 1.0f, 0.0f, 0.0f},
@@ -598,7 +595,7 @@ namespace pP::tests::detail {
                     const mesh::StaticMeshVertex &src = quad.m_vertices[quad.m_indices[t + c]];
                     m3d::Vertex corner{};
                     corner.position =
-                        m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
+                            m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
                     corner.normal = m3d::float32x3{src.m_normal[0], src.m_normal[1], src.m_normal[2]};
                     corner.texcoord = m3d::float32x2{src.m_texcoord[0], src.m_texcoord[1]};
                     tri.vertex[c] = corner;
@@ -623,7 +620,7 @@ namespace pP::tests::detail {
             const mem::SharedBuffer tilt_mapped = gatePngBytes("tangent_tilt.png", tilt_bytes);
             PPR_TEST_ASSERT(tilt_mapped.isValid());
             const Expected<image::ImageAsset> tilt_decoded = image::decodeToRgba8(
-                tilt_mapped.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
+                tilt_mapped.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::data);
             PPR_TEST_ASSERT(tilt_decoded.has_value());
             const Expected<TextureHandle> tilt_tex = pass.uploadTexture(*tilt_decoded);
             PPR_TEST_ASSERT(tilt_tex.has_value());
@@ -652,7 +649,7 @@ namespace pP::tests::detail {
                 quad.m_vertices.front().m_normal[2]
             };
             const float normal_len =
-                std::sqrt(face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
+                    std::sqrt(face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
             face_normal.x /= normal_len;
             face_normal.y /= normal_len;
             face_normal.z /= normal_len;
@@ -678,7 +675,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(p_renderer != nullptr);
                 Renderer &renderer = *p_renderer;
                 const std::error_code render_err =
-                    renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
+                        renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
                 pass.clearInstances();
                 if (render_err) {
                     return std::unexpected{render_err};
@@ -730,7 +727,7 @@ namespace pP::tests::detail {
                 shaded[2] /= len;
                 constexpr float kLight[3] = {-0.35f, 0.55f, 0.76f};
                 const float light_len =
-                    std::sqrt(kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
+                        std::sqrt(kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
                 const float diff = std::max(0.0f,
                     (shaded[0] * kLight[0] + shaded[1] * kLight[1] + shaded[2] * kLight[2]) / light_len);
                 float view[3] = {eye.x - center.x, eye.y - center.y, eye.z - center.z};
@@ -742,7 +739,7 @@ namespace pP::tests::detail {
                     kLight[0] / light_len + view[0], kLight[1] / light_len + view[1], kLight[2] / light_len + view[2]
                 };
                 const float half_len =
-                    std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
+                        std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
                 const float spec = std::pow(
                     std::max(0.0f, (shaded[0] * half_v[0] + shaded[1] * half_v[1] + shaded[2] * half_v[2]) / half_len),
                     64.0f + (8.0f - 64.0f) * quad_mat.m_roughness);
@@ -1122,7 +1119,7 @@ namespace pP::tests::detail {
                 box_center.x + 0.25f * box_max, box_center.y + 0.2f * box_max,
                 box_center.z + 2.2f * box_max
             };
-            PPR_TEST_ASSERT(not test_app.trianglePass().update(TimeSpan{}, gateCamera_(box_eye, box_center, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(not test_app.getTrianglePass().update(TimeSpan{}, gateCamera_(box_eye, box_center, float2{256.0f, 256.0f})));
 
             const auto rhi = test_app.getServices().get<IRhiService>();
             PPR_TEST_ASSERT(rhi.isValid());
@@ -1131,7 +1128,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(target.has_value());
             Renderer &renderer = test_app.getRenderer();
             PPR_TEST_ASSERT(not renderer.renderToTexture(
-                targetRef_(target), {DrawSubmission{test_app.trianglePass()}}, ColorAttachmentOps{}));
+                targetRef_(target), {DrawSubmission{test_app.getTrianglePass()}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
 
             const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);

@@ -21,6 +21,7 @@ target_sources(engine.tests.asset
         Asset.Render.Caches.Tests.cpp
         Asset.Render.Gates.Tests.cpp
         Asset.Render.Draws.Tests.cpp
+        Asset.Render.SharedMesh.Tests.cpp
         # Resilience: fuzz corpus + import/decode storm (both CPU-only).
         Asset.Resilience.Tests.cpp
         # Observe: asset-pipeline logging proofs (CPU-owned lines).

@@ -18,9 +18,9 @@ export namespace pP {
     // ------------------------------------------------------------------
     // triangle pass: owns the triangle shader/pipeline/resources
     // ------------------------------------------------------------------
-    // The Renderer stays content-free; scene content lives here. Viewport
-    // geometry always derives from SceneView::m_render_view, camera data
-    // always from the snapshot — mutable Camera is never consulted.
+    // The Renderer stays content-free; scene content lives here. Viewport and
+    // scissor travel per-draw on DrawSubmission; camera data comes from
+    // CameraSnapshot and a mutable Camera is never consulted.
 
     class TrianglePass {
     public:
@@ -124,21 +124,34 @@ export namespace pP {
         // §7 uploadScene product: one bag per (mesh, prim) — full mesh verts
         // plus the prim index slice, Mango prim base riding the range —
         // materials parallel to SceneAsset::m_mats, textures parallel to the
-        // decoded image span.
+        // decoded image span. m_mesh_prim_base is the mesh-major join table:
+        // one base per mesh, so instance submission shares meshes via
+        // base + slot instead of a running cursor.
         struct UploadedPrimitive {
             TriangleBagHandle m_bag{};
             MaterialHandle m_material{};
         };
 
         struct UploadedScene {
-            Array<UploadedPrimitive> m_prims{};
+            Array<UploadedPrimitive> m_primitives{};
             Array<TextureHandle> m_textures{};
             Array<MaterialHandle> m_materials{};
+            // Mesh-major prim bases parallel to SceneAsset::m_meshes:
+            // prims of mesh i occupy m_primitives[m_mesh_prim_base[i] ..]
+            // contiguously. Invariant: size == scene mesh count.
+            Array<u32> m_mesh_prim_base{};
             // Scene receipt: issued by uploadScene, consumed by
             // releaseScene. Copies share the receipt — the first release wins
             // and repeats fail closed (invalid_argument) even when a
             // refcounted texture entry outlives the releasing scene.
             u64 m_receipt = 0u;
+        };
+
+        // §7 instance→prim join product: the (mesh, prim) bag with the
+        // instance's material (prim material, or the override when set).
+        struct JoinedInstancePrim {
+            TriangleBagHandle m_bag{};
+            MaterialHandle m_material{};
         };
 
         // ------------------------------------------------------------------
@@ -194,6 +207,15 @@ export namespace pP {
         // Partial rollback in reverse order; images[i] joins SceneAsset::m_images[i].
         [[nodiscard]] Expected<UploadedScene> uploadScene(
             const mesh::SceneAsset &scene, std::span<const image::ImageAsset> images);
+
+        // §7 (mesh, prim) → UploadedPrimitive join for shared meshes:
+        // uploaded.m_primitives[mesh_base[instance.m_mesh] + prim_slot],
+        // with the instance material override applied. Fail-closed
+        // (invalid_argument) on mesh/table/slot mismatch. Pure CPU lookup,
+        // so it is unit-testable without a device.
+        [[nodiscard]] static Expected<JoinedInstancePrim> joinInstancePrim(
+            const mesh::SceneAsset &scene, const UploadedScene &uploaded,
+            const mesh::SceneInstance &instance, std::size_t prim_slot) noexcept;
 
         [[nodiscard]] std::error_code releaseScene(const UploadedScene &uploaded) noexcept;
 
@@ -314,7 +336,7 @@ export namespace pP {
         // m_material_cache must be shut down (which nulls its view) BEFORE
         // m_shared_sampler is released. Both shutdown and notifyDeviceLost
         // perform exactly that order; the initialize rollback does too.
-        // m_fallback_* is the 1x1 white texture bound to kNoTexture slots in
+        // m_fallback_* is the 1x1 white texture bound to none_v slots in
         // the TEXTURE heap only (heap slot 0); material slots start at 0 and
         // are real materials, so they have no fallback entry.
         TriangleBagCache m_bag_cache{};

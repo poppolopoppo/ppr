@@ -31,26 +31,11 @@ export namespace pP {
     // handle revalidates; every lookup goes through the generation-checked
     // tryGet(SparseHandle) path, never the wrapping 8-bit seed. Handles are
     // CPU-side only (the GPU sees slots/indices/offsets, all still 4 B).
-    struct TextureHandleTag final {
-    };
+    using TextureHandle = Numeric<SparseHandle, struct TextureHandleTag>;
 
-    using TextureHandle = Numeric<SparseHandle, TextureHandleTag>;
+    using MaterialHandle = Numeric<SparseHandle, struct MaterialHandleTag>;
 
-    struct MaterialHandleTag final {
-    };
-
-    using MaterialHandle = Numeric<SparseHandle, MaterialHandleTag>;
-
-    struct TriangleBagHandleTag final {
-    };
-
-    using TriangleBagHandle = Numeric<SparseHandle, TriangleBagHandleTag>;
-
-    [[nodiscard]] bool isValid(const TextureHandle handle) noexcept { return (*handle).isValid(); }
-
-    [[nodiscard]] bool isValid(const MaterialHandle handle) noexcept { return (*handle).isValid(); }
-
-    [[nodiscard]] bool isValid(const TriangleBagHandle handle) noexcept { return (*handle).isValid(); }
+    using TriangleBagHandle = Numeric<SparseHandle, struct TriangleBagHandleTag>;
 
     static_assert(std::is_standard_layout_v<TextureHandle>);
     static_assert(sizeof(TextureHandle) == 8u);
@@ -59,16 +44,7 @@ export namespace pP {
     static_assert(std::is_standard_layout_v<TriangleBagHandle>);
     static_assert(sizeof(TriangleBagHandle) == 8u);
 
-    struct TextureBindlessIndexTag final {
-    };
-
-    using TextureBindlessIndex = Numeric<u32, TextureBindlessIndexTag>;
-
-    // GPU none-sentinel (shader compares slots to this). Declared here and
-    // defined in App.Renderer.GpuCaches.cpp: an inline constexpr variable of
-    // imported template type in namespace pP trips MSVC C1001 (same family as
-    // the extern-umbrella workaround in engine.tests suites).
-    extern const TextureBindlessIndex kNoTexture;
+    using TextureBindlessIndex = Numeric<u32, struct TextureBindlessIndexTag>;
 
     static_assert(std::is_standard_layout_v<TextureBindlessIndex>);
     static_assert(sizeof(TextureBindlessIndex) == 4u);
@@ -160,36 +136,37 @@ export namespace pP {
     // m_base_color; emissive.rgb+metallic → m_emissive_metallic;
     // roughness/alpha_cutoff/occlusion_strength/normal_scale →
     // m_rough_alpha_occl_nscale; resolved TextureHandles → residentIndex →
-    // m_textures slots (missing → kNoTexture); shared texcoord set →
+    // m_textures slots (missing → ); shared texcoord set →
     // m_texcoord; alpha_mode/twosided → m_flags bits. Enabled slots must agree
     // on the texcoord set; blend is REJECTED with function_not_supported.
-    // Shader fallbacks when slot = kNoTexture: albedo→m_base_color, mr→factors,
+    // Shader fallbacks when slot = : albedo→m_base_color, mr→factors,
     // normal→geometric normal, emissive→m_emissive factor over black.
-    [[nodiscard]] Expected<GpuMaterial> buildGpuMaterial(const mesh::MaterialAsset &asset,
-                                                         GpuTextureRefs resolved) noexcept;
+    [[nodiscard]] Expected<GpuMaterial> buildGpuMaterial(
+        const mesh::MaterialAsset &asset,
+        GpuTextureRefs resolved) noexcept;
 
     // Pipeline-variant key (plan §7): target signature + twosided cull +
     // opaque/mask alpha. BLEND is deferred: rejected with
     // function_not_supported until a sorting + depth-write policy exists.
     struct TrianglePipelineVariant {
-        bool m_twosided = false;
-        mesh::AlphaMode m_alpha = mesh::AlphaMode::opaque;
+        bool m_is_two_sided = false;
+        mesh::EAlphaMode m_alpha = mesh::EAlphaMode::opaque;
 
         // Hand-written (no defaulted comparisons: MSVC module ICE family).
         [[nodiscard]] constexpr bool operator==(const TrianglePipelineVariant &other) const noexcept {
-            return m_twosided == other.m_twosided and m_alpha == other.m_alpha;
+            return m_is_two_sided == other.m_is_two_sided and m_alpha == other.m_alpha;
         }
 
         [[nodiscard]] constexpr bool operator<(const TrianglePipelineVariant &other) const noexcept {
-            if (m_twosided != other.m_twosided) {
-                return m_twosided < other.m_twosided;
+            if (m_is_two_sided != other.m_is_two_sided) {
+                return m_is_two_sided < other.m_is_two_sided;
             }
             return enumOrd(m_alpha) < enumOrd(other.m_alpha);
         }
     };
 
     [[nodiscard]] inline hash_t hashValue(const TrianglePipelineVariant variant) noexcept {
-        return hash::combine(hash::trivial(&variant.m_twosided, hash::default_seed_v), enumOrd(variant.m_alpha));
+        return hash::combine(hash::trivial(&variant.m_is_two_sided, hash::default_seed_v), enumOrd(variant.m_alpha));
     }
 
     [[nodiscard]] std::error_code checkPipelineVariant(TrianglePipelineVariant variant) noexcept;
@@ -290,10 +267,7 @@ export namespace pP {
     private:
         // Bucket identity is cache-internal: the only way out is resolveForDraw,
         // which hands back resolved buffers rather than a bag index.
-        struct BagBucketIdTag final {
-        };
-
-        using BagBucketId = Numeric<u32, BagBucketIdTag>;
+        using BagBucketId = Numeric<u32, struct BagBucketIdTag>;
 
         struct BagBucket {
             u64 m_vertex_capacity = 0u;
@@ -386,7 +360,7 @@ export namespace pP {
             hash_t m_hash{};
             u32 m_width = 0u;
             u32 m_height = 0u;
-            image::NativeImageFormat m_format = image::NativeImageFormat::rgba8_linear;
+            image::ENativeImageFormat m_format = image::ENativeImageFormat::rgba8_linear;
             u32 m_mips = 0u;
 
             // Hand-written (no defaulted comparisons: MSVC module ICE family).
@@ -431,7 +405,7 @@ export namespace pP {
 
         [[nodiscard]] static bool bytesEqual_(const mem::SharedBuffer &pinned, const image::ImageAsset &asset) noexcept;
 
-        [[nodiscard]] static Expected<rhi::Format> uploadFormat_(image::NativeImageFormat format) noexcept;
+        [[nodiscard]] static Expected<rhi::Format> uploadFormat_(image::ENativeImageFormat format) noexcept;
 
         [[nodiscard]] bool onRenderThread_() const noexcept;
 

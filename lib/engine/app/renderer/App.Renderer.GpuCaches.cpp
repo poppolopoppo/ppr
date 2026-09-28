@@ -15,8 +15,6 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(GpuCaches, debug, none)
 
-    constexpr TextureBindlessIndex kNoTexture{0xFFFFFFFFu};
-
     namespace {
         // Budgets are exported (kTriangleBagVertexCapacity and friends) so
         // telemetry tests name the same limits the caches enforce.
@@ -42,7 +40,7 @@ namespace pP {
     Expected<GpuMaterial> buildGpuMaterial(
         const mesh::MaterialAsset &asset,
         const GpuTextureRefs resolved) noexcept {
-        if (asset.m_alpha_mode == mesh::AlphaMode::blend) [[unlikely]] {
+        if (asset.m_alpha_mode == mesh::EAlphaMode::blend) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::function_not_supported)};
         }
 
@@ -93,7 +91,7 @@ namespace pP {
     }
 
     std::error_code checkPipelineVariant(const TrianglePipelineVariant variant) noexcept {
-        if (variant.m_alpha == mesh::AlphaMode::blend) [[unlikely]] {
+        if (variant.m_alpha == mesh::EAlphaMode::blend) [[unlikely]] {
             return std::make_error_code(std::errc::function_not_supported);
         }
         return default_value_v;
@@ -488,10 +486,10 @@ namespace pP {
         return storageBytesEqual_(pinned, asset.m_storage);
     }
 
-    Expected<rhi::Format> BindlessTextureCache::uploadFormat_(const image::NativeImageFormat format) noexcept {
+    Expected<rhi::Format> BindlessTextureCache::uploadFormat_(const image::ENativeImageFormat format) noexcept {
         switch (format) {
-            case image::NativeImageFormat::rgba8_linear: return rhi::Format::RGBA8Unorm;
-            case image::NativeImageFormat::rgba8_srgb: return rhi::Format::RGBA8UnormSrgb;
+            case image::ENativeImageFormat::rgba8_linear: return rhi::Format::RGBA8Unorm;
+            case image::ENativeImageFormat::rgba8_srgb: return rhi::Format::RGBA8UnormSrgb;
             default: return std::unexpected{std::make_error_code(std::errc::function_not_supported)};
         }
     }
@@ -519,7 +517,7 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
-        if (asset.m_dimension != image::ImageDimension::image2d or
+        if (asset.m_dimension != image::EImageDimension::image2d or
             asset.m_width == 0u or
             asset.m_height == 0u or
             asset.m_mip_count == 0u or
@@ -872,14 +870,14 @@ namespace pP {
             // slots start at 1 with slot 0 pinned to fallback-white, so a
             // zeroed m_textures would name that white texture four times
             // and a released slot would read as a valid white-textured
-            // one. kNoTexture is the honest released state. (The slot is never
+            // one. none_v is the honest released state. (The slot is never
             // reissued, so this is defence in depth, not a live path.)
             GpuMaterial tombstone{};
             tombstone.m_textures = GpuTextureRefs{
-                .m_albedo = kNoTexture,
-                .m_metallic_roughness = kNoTexture,
-                .m_normal = kNoTexture,
-                .m_emissive = kNoTexture,
+                .m_albedo = none_v,
+                .m_metallic_roughness = none_v,
+                .m_normal = none_v,
+                .m_emissive = none_v,
             };
             return writeSlot_(slot, tombstone);
         }

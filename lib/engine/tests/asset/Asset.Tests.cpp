@@ -24,6 +24,8 @@ namespace pP::tests {
 
     const UnitTest &renderDrawsTests() noexcept;
 
+    const UnitTest &renderSharedMeshTests() noexcept;
+
     const UnitTest &renderQuarantineTests() noexcept;
 
     const UnitTest &resilienceTests() noexcept;
@@ -44,6 +46,7 @@ namespace pP::tests {
             renderCachesTests(),
             renderGatesTests(),
             renderDrawsTests(),
+            renderSharedMeshTests(),
         });
         PPR_TEST_ASSERT(not detail::SharedGpu::release());
         // Phase 3: quarantine (private app/device only, shared session gone).
