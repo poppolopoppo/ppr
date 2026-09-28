@@ -7,26 +7,6 @@ import engine.math;
 
 import std;
 
-namespace pP {
-    // ------------------------------------------------------------------
-    // numeric wrapper layout checks
-    // ------------------------------------------------------------------
-
-    namespace {
-        // GPU-resident handles must be standard-layout and exactly 4 bytes. Local tags only.
-        struct GpuU32TestTag final {
-        };
-
-        struct GpuKeyTestTag final {
-        };
-
-        static_assert(std::is_standard_layout_v<Numeric<u32, GpuU32TestTag> >);
-        static_assert(sizeof(Numeric<u32, GpuU32TestTag>) == 4u);
-        static_assert(std::is_standard_layout_v<Numeric<SparseKeyId, GpuKeyTestTag> >);
-        static_assert(sizeof(Numeric<SparseKeyId, GpuKeyTestTag>) == 4u);
-    }
-}
-
 export namespace pP::image {
     // ------------------------------------------------------------------
     // image errors and formats
@@ -46,11 +26,24 @@ export namespace pP::image {
 
     [[nodiscard]] std::error_code make_error_code(errc err) noexcept;
 
-    enum class BlockTag : u32 { none, bc1, bc3, bc4, bc5, bc7, astc4x4, astc6x6, astc8x8 };
+    enum class EBlockTag : u32 {
+        none,
 
-    enum class NativeImageFormat : u32 {
+        bc1,
+        bc3,
+        bc4,
+        bc5,
+        bc7,
+
+        astc4x4,
+        astc6x6,
+        astc8x8
+    };
+
+    enum class ENativeImageFormat : u32 {
         rgba8_linear,
         rgba8_srgb,
+
         bc1_linear,
         bc1_srgb,
         bc3_linear,
@@ -59,6 +52,7 @@ export namespace pP::image {
         bc5_linear,
         bc7_linear,
         bc7_srgb,
+
         astc4x4_linear,
         astc4x4_srgb,
         astc6x6_linear,
@@ -67,9 +61,9 @@ export namespace pP::image {
         astc8x8_srgb
     };
 
-    enum class ImageUsage : u8 { color, data };
+    enum class EImageUsage : u8 { color, data };
 
-    enum class ImageDimension : u8 { image2d };
+    enum class EImageDimension : u8 { image2d };
 
     // Configurable production limits: every decode rejects over-limit inputs fail-closed
     // with invalid_argument (no new errc — the taxonomy already covers deterministic
@@ -88,10 +82,11 @@ export namespace pP::image {
     inline constexpr ImageLimits kDefaultImageLimits{};
 
     struct ImageDecodeDesc {
-        bool m_simd = true;
-        bool m_multithread = false;
-        bool m_flip_v = false;
         ImageLimits m_limits = kDefaultImageLimits;
+
+        bool m_use_simd = true;
+        bool m_use_multithread = false;
+        bool m_use_flip_v = false;
     };
 
     // m_multithread=false is engine POLICY (no Mango pool in the RT path), not the Mango default.
@@ -103,24 +98,29 @@ export namespace pP::image {
 
     struct ImageSubresource {
         mem::SharedBuffer m_view{};
+
         u64 m_row_pitch = 0u;
         u64 m_slice_pitch = 0u;
     };
 
     struct ImageAsset {
+        mem::SharedBuffer m_storage{};
+        Array<ImageSubresource> m_subresources{};
+
         u32 m_width = 0u;
         u32 m_height = 0u;
         u32 m_mip_count = 1u;
-        ImageDimension m_dimension = ImageDimension::image2d;
-        NativeImageFormat m_format = NativeImageFormat::rgba8_linear;
-        BlockTag m_tag = BlockTag::none;
+
         u32 m_block_w = 1u;
         u32 m_block_h = 1u;
         u32 m_bytes_per_block = 4u;
+
+        EImageDimension m_dimension = EImageDimension::image2d;
+        ENativeImageFormat m_format = ENativeImageFormat::rgba8_linear;
+        EBlockTag m_tag = EBlockTag::none;
+
         bool m_is_srgb = false;
         bool m_is_block = false;
-        mem::SharedBuffer m_storage{};
-        Array<ImageSubresource> m_subresources{};
     };
 
     // Invariants (checked at decode return; PPR_ASSERT + invalid_argument on violation):
@@ -136,80 +136,80 @@ export namespace pP::image {
     // format and block geometry
     // ------------------------------------------------------------------
 
-    [[nodiscard]] constexpr bool isSrgb(const NativeImageFormat format) noexcept {
+    [[nodiscard]] constexpr bool isSrgb(const ENativeImageFormat format) noexcept {
         switch (format) {
-            case NativeImageFormat::rgba8_srgb:
-            case NativeImageFormat::bc1_srgb:
-            case NativeImageFormat::bc3_srgb:
-            case NativeImageFormat::bc7_srgb:
-            case NativeImageFormat::astc4x4_srgb:
-            case NativeImageFormat::astc6x6_srgb:
-            case NativeImageFormat::astc8x8_srgb: return true;
+            case ENativeImageFormat::rgba8_srgb:
+            case ENativeImageFormat::bc1_srgb:
+            case ENativeImageFormat::bc3_srgb:
+            case ENativeImageFormat::bc7_srgb:
+            case ENativeImageFormat::astc4x4_srgb:
+            case ENativeImageFormat::astc6x6_srgb:
+            case ENativeImageFormat::astc8x8_srgb: return true;
             default: return false;
         }
     }
 
-    [[nodiscard]] constexpr bool isBlocked(const NativeImageFormat format) noexcept {
-        return format != NativeImageFormat::rgba8_linear and format != NativeImageFormat::rgba8_srgb;
+    [[nodiscard]] constexpr bool isBlocked(const ENativeImageFormat format) noexcept {
+        return format != ENativeImageFormat::rgba8_linear and format != ENativeImageFormat::rgba8_srgb;
     }
 
-    [[nodiscard]] constexpr BlockTag blockTagOf(const NativeImageFormat format) noexcept {
+    [[nodiscard]] constexpr EBlockTag blockTagOf(const ENativeImageFormat format) noexcept {
         switch (format) {
-            case NativeImageFormat::bc1_linear:
-            case NativeImageFormat::bc1_srgb: return BlockTag::bc1;
-            case NativeImageFormat::bc3_linear:
-            case NativeImageFormat::bc3_srgb: return BlockTag::bc3;
-            case NativeImageFormat::bc4_linear: return BlockTag::bc4;
-            case NativeImageFormat::bc5_linear: return BlockTag::bc5;
-            case NativeImageFormat::bc7_linear:
-            case NativeImageFormat::bc7_srgb: return BlockTag::bc7;
-            case NativeImageFormat::astc4x4_linear:
-            case NativeImageFormat::astc4x4_srgb: return BlockTag::astc4x4;
-            case NativeImageFormat::astc6x6_linear:
-            case NativeImageFormat::astc6x6_srgb: return BlockTag::astc6x6;
-            case NativeImageFormat::astc8x8_linear:
-            case NativeImageFormat::astc8x8_srgb: return BlockTag::astc8x8;
-            default: return BlockTag::none;
+            case ENativeImageFormat::bc1_linear:
+            case ENativeImageFormat::bc1_srgb: return EBlockTag::bc1;
+            case ENativeImageFormat::bc3_linear:
+            case ENativeImageFormat::bc3_srgb: return EBlockTag::bc3;
+            case ENativeImageFormat::bc4_linear: return EBlockTag::bc4;
+            case ENativeImageFormat::bc5_linear: return EBlockTag::bc5;
+            case ENativeImageFormat::bc7_linear:
+            case ENativeImageFormat::bc7_srgb: return EBlockTag::bc7;
+            case ENativeImageFormat::astc4x4_linear:
+            case ENativeImageFormat::astc4x4_srgb: return EBlockTag::astc4x4;
+            case ENativeImageFormat::astc6x6_linear:
+            case ENativeImageFormat::astc6x6_srgb: return EBlockTag::astc6x6;
+            case ENativeImageFormat::astc8x8_linear:
+            case ENativeImageFormat::astc8x8_srgb: return EBlockTag::astc8x8;
+            default: return EBlockTag::none;
         }
     }
 
-    [[nodiscard]] constexpr u32 blockWidthOf(const BlockTag tag) noexcept {
+    [[nodiscard]] constexpr u32 blockWidthOf(const EBlockTag tag) noexcept {
         switch (tag) {
-            case BlockTag::astc6x6: return 6u;
-            case BlockTag::astc8x8: return 8u;
-            case BlockTag::none: return 1u;
+            case EBlockTag::astc6x6: return 6u;
+            case EBlockTag::astc8x8: return 8u;
+            case EBlockTag::none: return 1u;
             default: return 4u;
         }
     }
 
-    [[nodiscard]] constexpr u32 blockHeightOf(const BlockTag tag) noexcept {
+    [[nodiscard]] constexpr u32 blockHeightOf(const EBlockTag tag) noexcept {
         switch (tag) {
-            case BlockTag::astc6x6: return 6u;
-            case BlockTag::astc8x8: return 8u;
-            case BlockTag::none: return 1u;
+            case EBlockTag::astc6x6: return 6u;
+            case EBlockTag::astc8x8: return 8u;
+            case EBlockTag::none: return 1u;
             default: return 4u;
         }
     }
 
-    [[nodiscard]] constexpr u32 bytesPerBlockOf(const BlockTag tag) noexcept {
+    [[nodiscard]] constexpr u32 bytesPerBlockOf(const EBlockTag tag) noexcept {
         switch (tag) {
-            case BlockTag::bc1:
-            case BlockTag::bc4: return 8u;
-            case BlockTag::none: return 4u;
+            case EBlockTag::bc1:
+            case EBlockTag::bc4: return 8u;
+            case EBlockTag::none: return 4u;
             default: return 16u;
         }
     }
 
-    [[nodiscard]] constexpr u64 rowPitchFor(const u32 width, const BlockTag tag) noexcept {
-        if (tag == BlockTag::none) [[likely]] {
+    [[nodiscard]] constexpr u64 rowPitchFor(const u32 width, const EBlockTag tag) noexcept {
+        if (tag == EBlockTag::none) [[likely]] {
             return static_cast<u64>(width) * 4u;
         }
         const u64 blocks_x = (static_cast<u64>(width) + blockWidthOf(tag) - 1u) / blockWidthOf(tag);
         return blocks_x * bytesPerBlockOf(tag);
     }
 
-    [[nodiscard]] constexpr u64 slicePitchFor(const u32 width, const u32 height, const BlockTag tag) noexcept {
-        if (tag == BlockTag::none) [[likely]] {
+    [[nodiscard]] constexpr u64 slicePitchFor(const u32 width, const u32 height, const EBlockTag tag) noexcept {
+        if (tag == EBlockTag::none) [[likely]] {
             return rowPitchFor(width, tag) * height;
         }
         const u64 blocks_y = (static_cast<u64>(height) + blockHeightOf(tag) - 1u) / blockHeightOf(tag);

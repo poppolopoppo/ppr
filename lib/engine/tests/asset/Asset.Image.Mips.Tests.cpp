@@ -40,9 +40,9 @@ namespace pP::tests::detail {
             built.m_width = width;
             built.m_height = height;
             built.m_mip_count = 1u;
-            built.m_dimension = image::ImageDimension::image2d;
-            built.m_format = image::NativeImageFormat::rgba8_srgb;
-            built.m_tag = image::BlockTag::none;
+            built.m_dimension = image::EImageDimension::image2d;
+            built.m_format = image::ENativeImageFormat::rgba8_srgb;
+            built.m_tag = image::EBlockTag::none;
             built.m_block_w = 1u;
             built.m_block_h = 1u;
             built.m_bytes_per_block = 4u;
@@ -81,7 +81,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not image::generateMipChain(chained, image::MipGenDesc{}));
             PPR_TEST_ASSERT(chained.m_mip_count == 3u);
             PPR_TEST_ASSERT(chained.m_subresources.size() == 3u);
-            PPR_TEST_ASSERT(chained.m_format == image::NativeImageFormat::rgba8_srgb);
+            PPR_TEST_ASSERT(chained.m_format == image::ENativeImageFormat::rgba8_srgb);
             PPR_TEST_ASSERT(chained.m_is_srgb);
             PPR_TEST_ASSERT(not chained.m_is_block);
 
@@ -164,9 +164,9 @@ namespace pP::tests::detail {
             built.m_width = size;
             built.m_height = size;
             built.m_mip_count = 1u;
-            built.m_dimension = image::ImageDimension::image2d;
-            built.m_format = image::NativeImageFormat::rgba8_linear;
-            built.m_tag = image::BlockTag::none;
+            built.m_dimension = image::EImageDimension::image2d;
+            built.m_format = image::ENativeImageFormat::rgba8_linear;
+            built.m_tag = image::EBlockTag::none;
             built.m_block_w = 1u;
             built.m_block_h = 1u;
             built.m_bytes_per_block = 4u;
@@ -217,9 +217,9 @@ namespace pP::tests::detail {
             built.m_width = size;
             built.m_height = size;
             built.m_mip_count = 1u;
-            built.m_dimension = image::ImageDimension::image2d;
-            built.m_format = image::NativeImageFormat::rgba8_linear;
-            built.m_tag = image::BlockTag::none;
+            built.m_dimension = image::EImageDimension::image2d;
+            built.m_format = image::ENativeImageFormat::rgba8_linear;
+            built.m_tag = image::EBlockTag::none;
             built.m_block_w = 1u;
             built.m_block_h = 1u;
             built.m_bytes_per_block = 4u;
@@ -249,7 +249,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (mips_coverage_preserved) {
             constexpr u32 kSize = 32u;
             image::MipGenDesc preserve{};
-            preserve.m_preserve_coverage = true;
+            preserve.m_has_preserve_coverage = true;
             preserve.m_alpha_cutoff = 0.5f;
 
             // Without preserve the lone pixel dilutes to zero coverage at mip 1,
@@ -325,9 +325,9 @@ namespace pP::tests::detail {
             built.m_width = kSize;
             built.m_height = kSize;
             built.m_mip_count = 1u;
-            built.m_dimension = image::ImageDimension::image2d;
-            built.m_format = image::NativeImageFormat::rgba8_srgb;
-            built.m_tag = image::BlockTag::none;
+            built.m_dimension = image::EImageDimension::image2d;
+            built.m_format = image::ENativeImageFormat::rgba8_srgb;
+            built.m_tag = image::EBlockTag::none;
             built.m_block_w = 1u;
             built.m_block_h = 1u;
             built.m_bytes_per_block = 4u;
@@ -423,9 +423,9 @@ namespace pP::tests::detail {
             built.m_width = size;
             built.m_height = size;
             built.m_mip_count = 1u;
-            built.m_dimension = image::ImageDimension::image2d;
-            built.m_format = image::NativeImageFormat::rgba8_linear;
-            built.m_tag = image::BlockTag::none;
+            built.m_dimension = image::EImageDimension::image2d;
+            built.m_format = image::ENativeImageFormat::rgba8_linear;
+            built.m_tag = image::EBlockTag::none;
             built.m_block_w = 1u;
             built.m_block_h = 1u;
             built.m_bytes_per_block = 4u;
@@ -484,7 +484,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(direct.m_width == kSize);
 
             image::MipGenDesc hq{};
-            hq.m_high_quality = true;
+            hq.m_is_high_quality = true;
             PPR_TEST_ASSERT(not image::generateMipChain(stepped, image::MipGenDesc{}));
             PPR_TEST_ASSERT(not image::generateMipChain(direct, hq));
             PPR_TEST_ASSERT(stepped.m_mip_count == direct.m_mip_count);
@@ -511,7 +511,7 @@ namespace pP::tests::detail {
             const mem::SharedBuffer dds = makeDxt1Fixture_();
             PPR_TEST_ASSERT(dds.isValid());
             Expected<image::ImageAsset> blocked =
-                    image::decodeToBlocks(dds.getBufferData(), ".dds", image::BlockTag::bc1, image::ImageDecodeDesc{});
+                    image::decodeToBlocks(dds.getBufferData(), ".dds", image::EBlockTag::bc1, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(blocked.has_value());
             PPR_TEST_ASSERT(blocked->m_mip_count == 1u);
             const std::error_code rejected = image::generateMipChain(*blocked, image::MipGenDesc{});

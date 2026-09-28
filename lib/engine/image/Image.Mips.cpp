@@ -163,7 +163,7 @@ namespace pP::image {
         // ------------------------------------------------------------------
 
         [[nodiscard]] bool checkChainInvariants_(const ImageAsset &asset) noexcept {
-            if (asset.m_dimension != ImageDimension::image2d or asset.m_is_block or asset.m_tag != BlockTag::none) {
+            if (asset.m_dimension != EImageDimension::image2d or asset.m_is_block or asset.m_tag != EBlockTag::none) {
                 return false;
             }
             if (asset.m_subresources.size() != asset.m_mip_count) {
@@ -175,10 +175,10 @@ namespace pP::image {
                 const u32 level_w = mipExtentAt(asset.m_width, level);
                 const u32 level_h = mipExtentAt(asset.m_height, level);
                 const ImageSubresource &sub = asset.m_subresources[level];
-                if (sub.m_row_pitch != rowPitchFor(level_w, BlockTag::none)) {
+                if (sub.m_row_pitch != rowPitchFor(level_w, EBlockTag::none)) {
                     return false;
                 }
-                if (sub.m_slice_pitch != slicePitchFor(level_w, level_h, BlockTag::none)) {
+                if (sub.m_slice_pitch != slicePitchFor(level_w, level_h, EBlockTag::none)) {
                     return false;
                 }
                 const mem::SharedBufferView view = sub.m_view.getBufferData();
@@ -199,13 +199,13 @@ namespace pP::image {
     // ------------------------------------------------------------------
 
     [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, MipGenDesc desc) {
-        if (asset.m_dimension != ImageDimension::image2d or asset.m_width == 0u or
+        if (asset.m_dimension != EImageDimension::image2d or asset.m_width == 0u or
             asset.m_height == 0u) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         // KTX2/DDS-embedded chains pass through untouched: blocked assets never
         // decode to recompress, so generation rejects them here.
-        if (asset.m_is_block or asset.m_tag != BlockTag::none or isBlocked(asset.m_format)) [[unlikely]] {
+        if (asset.m_is_block or asset.m_tag != EBlockTag::none or isBlocked(asset.m_format)) [[unlikely]] {
             return make_error_code(errc::function_not_supported);
         }
         if (asset.m_mip_count != 1u or asset.m_subresources.size() != 1u) [[unlikely]] {
@@ -214,7 +214,7 @@ namespace pP::image {
         if (not asset.m_storage.isValid() or not asset.m_storage.isMaterialized()) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
-        if (desc.m_preserve_coverage and
+        if (desc.m_has_preserve_coverage and
             (not(desc.m_alpha_cutoff > 0.0f) or not(desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
@@ -226,13 +226,13 @@ namespace pP::image {
         // no headroom left and fails closed here.
         u64 chain_bytes = 0u;
         for (u32 level = 0u; level < count; ++level) {
-            chain_bytes += slicePitchFor(mipExtentAt(asset.m_width, level), mipExtentAt(asset.m_height, level), BlockTag::none);
+            chain_bytes += slicePitchFor(mipExtentAt(asset.m_width, level), mipExtentAt(asset.m_height, level), EBlockTag::none);
         }
         if (chain_bytes > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         const mem::SharedBufferView top_bytes = asset.m_subresources.front().m_view.getBufferData();
-        const auto top_size = static_cast<std::size_t>(slicePitchFor(asset.m_width, asset.m_height, BlockTag::none));
+        const auto top_size = static_cast<std::size_t>(slicePitchFor(asset.m_width, asset.m_height, EBlockTag::none));
         if (top_bytes.size() != top_size) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
@@ -249,7 +249,7 @@ namespace pP::image {
             top[i * 4u + 2u] = to_linear ? mango::math::srgb_to_linear(b) : b;
             top[i * 4u + 3u] = byteToUnit_(top_bytes[i * 4u + 3u]);
         }
-        const float target_coverage = desc.m_preserve_coverage ? coverageOf_(top, desc.m_alpha_cutoff) : 0.0f;
+        const float target_coverage = desc.m_has_preserve_coverage ? coverageOf_(top, desc.m_alpha_cutoff) : 0.0f;
 
         mem::UniqueBuffer job = mem::UniqueBuffer::allocate(static_cast<std::size_t>(chain_bytes));
         if (const std::error_code err = job.materialize()) [[unlikely]] {
@@ -277,7 +277,7 @@ namespace pP::image {
             const u32 level_h = mipExtentAt(asset.m_height, level);
             u32 source_w = 0u;
             u32 source_h = 0u;
-            if (desc.m_high_quality) {
+            if (desc.m_is_high_quality) {
                 work = top;
                 source_w = asset.m_width;
                 source_h = asset.m_height;
@@ -297,7 +297,7 @@ namespace pP::image {
                     STBIR_RGBA) == nullptr) [[unlikely]] {
                 return make_error_code(errc::invalid_argument);
             }
-            if (desc.m_preserve_coverage) {
+            if (desc.m_has_preserve_coverage) {
                 preserveCoverage_(next, target_coverage, desc.m_alpha_cutoff);
             }
             std::byte *const dest = chain->data() + offset;
@@ -310,7 +310,7 @@ namespace pP::image {
                 dest[i * 4u + 2u] = unitToByte_(b);
                 dest[i * 4u + 3u] = unitToByte_(next[i * 4u + 3u]);
             }
-            offset += slicePitchFor(level_w, level_h, BlockTag::none);
+            offset += slicePitchFor(level_w, level_h, EBlockTag::none);
             previous = next;
             previous_w = level_w;
             previous_h = level_h;
@@ -331,8 +331,8 @@ namespace pP::image {
         for (u32 level = 0u; level < count; ++level) {
             const u32 level_w = mipExtentAt(asset.m_width, level);
             const u32 level_h = mipExtentAt(asset.m_height, level);
-            const u64 row_pitch = rowPitchFor(level_w, BlockTag::none);
-            const u64 slice_pitch = slicePitchFor(level_w, level_h, BlockTag::none);
+            const u64 row_pitch = rowPitchFor(level_w, EBlockTag::none);
+            const u64 slice_pitch = slicePitchFor(level_w, level_h, EBlockTag::none);
             asset.m_subresources.push_back(ImageSubresource{
                 .m_view = asset.m_storage.subspan(static_cast<std::size_t>(sub_offset), static_cast<std::size_t>(slice_pitch)),
                 .m_row_pitch = row_pitch,

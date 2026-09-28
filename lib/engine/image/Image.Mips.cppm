@@ -23,10 +23,12 @@ export namespace pP::image {
     // ------------------------------------------------------------------
 
     struct MipGenDesc {
-        bool m_high_quality = false;
-        bool m_preserve_coverage = false;
-        float m_alpha_cutoff = 0.5f;
         ImageLimits m_limits = kDefaultImageLimits;
+
+        float m_alpha_cutoff = 0.5f;
+
+        bool m_is_high_quality = false;
+        bool m_has_preserve_coverage = false;
     };
 
     // Incremental resampling (false, the default) filters each level from its

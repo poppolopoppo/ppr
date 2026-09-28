@@ -127,36 +127,36 @@ namespace pP::image {
             return Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8);
         }
 
-        [[nodiscard]] u32 mangoCompressionFor_(const BlockTag want, const bool is_srgb) noexcept {
+        [[nodiscard]] u32 mangoCompressionFor_(const EBlockTag want, const bool is_srgb) noexcept {
             using mango::image::TextureCompression;
             switch (want) {
-                case BlockTag::bc1: return is_srgb ? TextureCompression::DXT1_SRGB : TextureCompression::DXT1;
-                case BlockTag::bc3: return is_srgb ? TextureCompression::DXT5_SRGB : TextureCompression::DXT5;
-                case BlockTag::bc4: return TextureCompression::RGTC1_RED;
-                case BlockTag::bc5: return TextureCompression::RGTC2_RG;
-                case BlockTag::bc7:
+                case EBlockTag::bc1: return is_srgb ? TextureCompression::DXT1_SRGB : TextureCompression::DXT1;
+                case EBlockTag::bc3: return is_srgb ? TextureCompression::DXT5_SRGB : TextureCompression::DXT5;
+                case EBlockTag::bc4: return TextureCompression::RGTC1_RED;
+                case EBlockTag::bc5: return TextureCompression::RGTC2_RG;
+                case EBlockTag::bc7:
                     return is_srgb ? TextureCompression::BPTC_SRGB_ALPHA_UNORM : TextureCompression::BPTC_RGBA_UNORM;
-                case BlockTag::astc4x4: return is_srgb ? TextureCompression::ASTC_SRGB_4x4 : TextureCompression::ASTC_UNORM_4x4;
-                case BlockTag::astc6x6: return is_srgb ? TextureCompression::ASTC_SRGB_6x6 : TextureCompression::ASTC_UNORM_6x6;
-                case BlockTag::astc8x8: return is_srgb ? TextureCompression::ASTC_SRGB_8x8 : TextureCompression::ASTC_UNORM_8x8;
+                case EBlockTag::astc4x4: return is_srgb ? TextureCompression::ASTC_SRGB_4x4 : TextureCompression::ASTC_UNORM_4x4;
+                case EBlockTag::astc6x6: return is_srgb ? TextureCompression::ASTC_SRGB_6x6 : TextureCompression::ASTC_UNORM_6x6;
+                case EBlockTag::astc8x8: return is_srgb ? TextureCompression::ASTC_SRGB_8x8 : TextureCompression::ASTC_UNORM_8x8;
                 default: return TextureCompression::NONE;
             }
         }
 
-        [[nodiscard]] NativeImageFormat nativeFormatFor_(const BlockTag want, const bool is_srgb) noexcept {
+        [[nodiscard]] ENativeImageFormat nativeFormatFor_(const EBlockTag want, const bool is_srgb) noexcept {
             switch (want) {
-                case BlockTag::bc1: return is_srgb ? NativeImageFormat::bc1_srgb : NativeImageFormat::bc1_linear;
-                case BlockTag::bc3: return is_srgb ? NativeImageFormat::bc3_srgb : NativeImageFormat::bc3_linear;
-                case BlockTag::bc4: return NativeImageFormat::bc4_linear;
-                case BlockTag::bc5: return NativeImageFormat::bc5_linear;
-                case BlockTag::bc7: return is_srgb ? NativeImageFormat::bc7_srgb : NativeImageFormat::bc7_linear;
-                case BlockTag::astc4x4:
-                    return is_srgb ? NativeImageFormat::astc4x4_srgb : NativeImageFormat::astc4x4_linear;
-                case BlockTag::astc6x6:
-                    return is_srgb ? NativeImageFormat::astc6x6_srgb : NativeImageFormat::astc6x6_linear;
-                case BlockTag::astc8x8:
-                    return is_srgb ? NativeImageFormat::astc8x8_srgb : NativeImageFormat::astc8x8_linear;
-                default: return NativeImageFormat::rgba8_linear;
+                case EBlockTag::bc1: return is_srgb ? ENativeImageFormat::bc1_srgb : ENativeImageFormat::bc1_linear;
+                case EBlockTag::bc3: return is_srgb ? ENativeImageFormat::bc3_srgb : ENativeImageFormat::bc3_linear;
+                case EBlockTag::bc4: return ENativeImageFormat::bc4_linear;
+                case EBlockTag::bc5: return ENativeImageFormat::bc5_linear;
+                case EBlockTag::bc7: return is_srgb ? ENativeImageFormat::bc7_srgb : ENativeImageFormat::bc7_linear;
+                case EBlockTag::astc4x4:
+                    return is_srgb ? ENativeImageFormat::astc4x4_srgb : ENativeImageFormat::astc4x4_linear;
+                case EBlockTag::astc6x6:
+                    return is_srgb ? ENativeImageFormat::astc6x6_srgb : ENativeImageFormat::astc6x6_linear;
+                case EBlockTag::astc8x8:
+                    return is_srgb ? ENativeImageFormat::astc8x8_srgb : ENativeImageFormat::astc8x8_linear;
+                default: return ENativeImageFormat::rgba8_linear;
             }
         }
 
@@ -198,10 +198,10 @@ namespace pP::image {
         }
 
         [[nodiscard]] bool checkInvariants_(const ImageAsset &asset) noexcept {
-            if (asset.m_dimension != ImageDimension::image2d) {
+            if (asset.m_dimension != EImageDimension::image2d) {
                 return false;
             }
-            if (asset.m_is_block != (asset.m_tag != BlockTag::none)) {
+            if (asset.m_is_block != (asset.m_tag != EBlockTag::none)) {
                 return false;
             }
             if (asset.m_is_srgb != isSrgb(asset.m_format)) {
@@ -270,7 +270,7 @@ namespace pP::image {
     // ------------------------------------------------------------------
 
     [[nodiscard]] Expected<ImageAsset> decodeToRgba8(
-        const mem::SharedBufferView bytes, const std::string_view ext, const ImageDecodeDesc desc, const ImageUsage usage) {
+        const mem::SharedBufferView bytes, const std::string_view ext, const ImageDecodeDesc desc, const EImageUsage usage) {
         const std::string dotted = normalizeExtension_(ext);
         if (not isRgbaSource_(dotted)) [[unlikely]] {
             PPR_LOG_ONCE(Image, warning, "decode rejected: unsupported extension", {{"ext", dotted}});
@@ -327,15 +327,15 @@ namespace pP::image {
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
         // sRGB from the header (!header.linear); usage data forces linear.
-        const bool is_srgb = usage == ImageUsage::color ? not header.linear : false;
-        if (usage == ImageUsage::data and not header.linear) {
+        const bool is_srgb = usage == EImageUsage::color ? not header.linear : false;
+        if (usage == EImageUsage::data and not header.linear) {
             PPR_LOG(Image, info, "decode coerces sRGB source to linear for data usage",
                 {{"ext", dotted}, {"forced_linear", true}});
         }
 
         const u32 width = static_cast<u32>(header.width);
         const u32 height = static_cast<u32>(header.height);
-        const u64 row_pitch = rowPitchFor(width, BlockTag::none);
+        const u64 row_pitch = rowPitchFor(width, EBlockTag::none);
 
         // u64 compare before narrowing: closes overflow as well as over-limit.
         if (row_pitch * static_cast<u64>(height) > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
@@ -355,7 +355,7 @@ namespace pP::image {
         }
 
         mango::image::ImageDecodeOptions options{};
-        options.simd = desc.m_simd;
+        options.simd = desc.m_use_simd;
         options.multithread = false;
         const mango::image::Surface surface{
             header.width, header.height, rgba8Format_(), static_cast<std::size_t>(row_pitch), target->data()
@@ -373,7 +373,7 @@ namespace pP::image {
             PPR_LOG_ONCE(Image, warning, "decode rejected: mango decoder failed", {{"ext", dotted}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
-        if (desc.m_flip_v) {
+        if (desc.m_use_flip_v) {
             if (const std::error_code err = flipRows_(*target, row_pitch, height)) [[unlikely]] {
                 return std::unexpected{err};
             }
@@ -388,9 +388,9 @@ namespace pP::image {
         asset.m_width = width;
         asset.m_height = height;
         asset.m_mip_count = 1u;
-        asset.m_dimension = ImageDimension::image2d;
-        asset.m_format = is_srgb ? NativeImageFormat::rgba8_srgb : NativeImageFormat::rgba8_linear;
-        asset.m_tag = BlockTag::none;
+        asset.m_dimension = EImageDimension::image2d;
+        asset.m_format = is_srgb ? ENativeImageFormat::rgba8_srgb : ENativeImageFormat::rgba8_linear;
+        asset.m_tag = EBlockTag::none;
         asset.m_block_w = 1u;
         asset.m_block_h = 1u;
         asset.m_bytes_per_block = 4u;
@@ -416,8 +416,8 @@ namespace pP::image {
     // ------------------------------------------------------------------
 
     [[nodiscard]] Expected<ImageAsset> decodeToBlocks(
-        const mem::SharedBufferView bytes, const std::string_view ext, const BlockTag want, const ImageDecodeDesc desc) {
-        if (want == BlockTag::none) [[unlikely]] {
+        const mem::SharedBufferView bytes, const std::string_view ext, const EBlockTag want, const ImageDecodeDesc desc) {
+        if (want == EBlockTag::none) [[unlikely]] {
             PPR_LOG_ONCE(Image, warning, "decode rejected: block target is none", {{"ext", ext}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
@@ -499,7 +499,7 @@ namespace pP::image {
         }
 
         mango::image::ImageDecodeOptions options{};
-        options.simd = desc.m_simd;
+        options.simd = desc.m_use_simd;
         options.multithread = false;
         options.compression = mango_compression;
 
@@ -561,7 +561,7 @@ namespace pP::image {
         asset.m_width = width;
         asset.m_height = height;
         asset.m_mip_count = 1u;
-        asset.m_dimension = ImageDimension::image2d;
+        asset.m_dimension = EImageDimension::image2d;
         asset.m_format = nativeFormatFor_(want, is_srgb);
         asset.m_tag = want;
         asset.m_block_w = blockWidthOf(want);

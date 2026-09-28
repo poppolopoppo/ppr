@@ -25,7 +25,7 @@ export namespace pP::image {
     // never from the filename. Y-flip (when requested) is a positive-pitch CPU
     // blit; uploads always emit positive-pitch rows in sampler order.
     [[nodiscard]] Expected<ImageAsset> decodeToRgba8(
-        mem::SharedBufferView bytes, std::string_view ext, ImageDecodeDesc desc, ImageUsage usage);
+        mem::SharedBufferView bytes, std::string_view ext, ImageDecodeDesc desc, EImageUsage usage);
 
     // ------------------------------------------------------------------
     // block decoding
@@ -35,5 +35,5 @@ export namespace pP::image {
     // the Mango decoder exposes). NEVER recompresses PNG/JPG into blocks: those
     // return function_not_supported so the caller falls back to decodeToRgba8.
     [[nodiscard]] Expected<ImageAsset> decodeToBlocks(
-        mem::SharedBufferView bytes, std::string_view ext, BlockTag want, ImageDecodeDesc desc);
+        mem::SharedBufferView bytes, std::string_view ext, EBlockTag want, ImageDecodeDesc desc);
 }

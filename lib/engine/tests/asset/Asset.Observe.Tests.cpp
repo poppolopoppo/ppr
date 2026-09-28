@@ -90,10 +90,10 @@ namespace pP::tests::detail {
             const mem::SharedBufferView tiny_view{tiny.data(), tiny.size()};
             for (int i = 0; i < 2; ++i) {
                 const Expected<image::ImageAsset> bad_ext =
-                        image::decodeToRgba8(tiny_view, ".tga", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                        image::decodeToRgba8(tiny_view, ".tga", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not bad_ext.has_value());
                 const Expected<image::ImageAsset> empty =
-                        image::decodeToRgba8(tiny_view.subspan(0u, 0u), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                        image::decodeToRgba8(tiny_view.subspan(0u, 0u), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not empty.has_value());
             }
             // Below-floor input and an unsound PNG chain reject deterministically.
@@ -101,7 +101,7 @@ namespace pP::tests::detail {
             const mem::SharedBufferView zeros_view{zeros.data(), zeros.size()};
             for (int i = 0; i < 2; ++i) {
                 const Expected<image::ImageAsset> bad_chain =
-                        image::decodeToRgba8(zeros_view, ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                        image::decodeToRgba8(zeros_view, ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not bad_chain.has_value());
             }
             std::ignore = Log::flush(true);
@@ -140,11 +140,11 @@ namespace pP::tests::detail {
             const mem::SharedBuffer file = encodeLoggingPng_("coerce.png", kRed);
             PPR_TEST_ASSERT(file.isValid());
             const Expected<image::ImageAsset> color = image::decodeToRgba8(
-                file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
             PPR_TEST_ASSERT(color.has_value());
             PPR_TEST_ASSERT(color->m_is_srgb);
             const Expected<image::ImageAsset> data = image::decodeToRgba8(
-                file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::data);
+                file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::data);
             PPR_TEST_ASSERT(data.has_value());
             PPR_TEST_ASSERT(not data->m_is_srgb);
             std::ignore = Log::flush(true);

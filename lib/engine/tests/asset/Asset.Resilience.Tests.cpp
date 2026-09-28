@@ -137,7 +137,7 @@ namespace pP::tests::detail {
             ImageOutcome out{};
             try {
                 const Expected<image::ImageAsset> decoded =
-                        image::decodeToRgba8(mem::SharedBufferView{bytes.data(), bytes.size()}, ext, desc, image::ImageUsage::color);
+                        image::decodeToRgba8(mem::SharedBufferView{bytes.data(), bytes.size()}, ext, desc, image::EImageUsage::color);
                 if (decoded.has_value()) {
                     out.m_ok = true;
                     out.m_width = decoded->m_width;
@@ -264,11 +264,11 @@ namespace pP::tests::detail {
                 }
                 for (const std::string_view ext: {".ktx2", ".dds"}) {
                     const Expected<image::ImageAsset> first = image::decodeToBlocks(
-                        mem::SharedBufferView{mutated.data(), mutated.size()}, ext, image::BlockTag::bc7,
+                        mem::SharedBufferView{mutated.data(), mutated.size()}, ext, image::EBlockTag::bc7,
                         image::ImageDecodeDesc{});
                     PPR_TEST_ASSERT(not first.has_value());
                     const Expected<image::ImageAsset> second = image::decodeToBlocks(
-                        mem::SharedBufferView{mutated.data(), mutated.size()}, ext, image::BlockTag::bc7,
+                        mem::SharedBufferView{mutated.data(), mutated.size()}, ext, image::EBlockTag::bc7,
                         image::ImageDecodeDesc{});
                     PPR_TEST_ASSERT(not second.has_value());
                     PPR_TEST_ASSERT(first.error() == second.error());
@@ -488,7 +488,7 @@ namespace pP::tests::detail {
                     }
                     for (int round = 0; round < 5; ++round) {
                         const Expected<image::ImageAsset> decoded = image::decodeToRgba8(
-                            png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::ImageUsage::color);
+                            png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
                         if (not
                             decoded.has_value()
                         or
