@@ -2,9 +2,10 @@
 
 ## Responsibility
 
-The PPR engine library tree. Hosts the five C++20 module libraries that compose the engine, organized by
-dependency layer: `engine.core` (foundation) → `engine.math` (vector math) → `engine.shader` (Slang
-compilation) → `engine.rhi` (GPU abstraction) → `engine.app` (application layer).
+The PPR engine library tree. Hosts the C++20 module libraries that compose the engine (core/math/sim/physics/shader/rhi/image/mesh/app), organized by
+dependency layer: `engine.core` (foundation) → `engine.math` (vector math) → `engine.sim`
+(deterministic simulation: chunk grid, fixed-timestep tick, snapshot) + `engine.physics` (Box2D boundary, PRIVATE box2d) → `engine.shader` (Slang
+compilation) → `engine.rhi` (GPU abstraction) → `engine.image`/`engine.mesh` → `engine.app` (application layer).
 `engine.core` is the umbrella foundation re-exporting ~30 partitions into a single `pP` namespace
 (`import engine.core;`). `engine.app` is the single compile-time aggregation point (`import engine.app;`):
 slim `Application` lifecycle base + `ApplicationEditor` interactive-client subclass owning window, viewport,
@@ -14,7 +15,8 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
 
 - **Layered acyclic dependency chain** (mirrored in each `CMakeLists.txt` via `setup_ppr_project`, no upward
   or cyclic edges): `engine.app` → core + math + shader + rhi (+ `glfw`, `mango` private, `imgui.base`/`imgui`
-  public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public); `engine.shader` → core
+  public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public); `engine.sim` →
+  core + math (public); `engine.physics` → core + math (public) + box2d::box2d (private); physics/sim siblings, no cross-import; `engine.shader` → core
   (public) + `slang` (private); `engine.math` → core (public) + `mango` (private); `engine.core` → `rapidhash`
   (private) + per-platform HAL sources (windows + linux `Random`/`RingBuffer` (11 shared HAL areas + per-platform `Random`/`RingBuffer` pairs)).
 - **Module convention**: `.cppm` = interface (exports), `.cpp` = implementation; single-module libraries
@@ -55,8 +57,7 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
 
 ## Flow
 
-`game/main.cpp` (`app.game`: core + app + math + shader + rhi) → `import engine.app` pulls all five modules
-transitively → concrete `Application`/`ApplicationEditor` constructs → `run()` (torn-down guard →
+`game/main.cpp` (`app.game`: core + app + math + shader + rhi + sim, no physics) → `import engine.app` pulls the engine modules transitively → concrete `Application`/`ApplicationEditor` constructs → `run()` (torn-down guard →
 `initialize()` → `PPR_DEFER shutdown()` → loop `while (not m_lifecycle->error())`: clock tick, sleep-throttle
 to target frame duration, `update(dt)` + `render()` with first-error-wins exit via request-exit clause):
 platform init, directory resolution (`content/install` = executable parent, `working` = `current_path`),
@@ -72,8 +73,8 @@ messaging via `producerReserve`/`producerSubmit` → `consumerAcquire`/`consumer
 
 ## Integration
 
-- Consumed by: `game/main.cpp`, test targets (`engine.tests.core` GLFW-free, `engine.tests.app` GLFW-dependent
-  sharing the `engine.tests` static lib `parseCli`/`runSuite`).
+- Consumed by: `game/main.cpp`, test targets (`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`,
+  `engine.tests.asset` via the `engine.tests` shared lib `parseCli`/`runSuite`).
 - Depends on: third-party libraries (Slang, Slang-RHI, mango::math, GLFW, DearImGui `imgui.base`/`imgui`,
   rapidhash, STB) via `cmake/external/` + `setup_ppr_project`. Lower layers never depend upward, preserving
   acyclicity.
@@ -88,5 +89,8 @@ messaging via `producerReserve`/`producerSubmit` → `consumerAcquire`/`consumer
 - `math/` — mango re-export, constants, math helpers (`Math.cppm` only). See [math/codemap.md](math/codemap.md).
 - `shader/` — Slang session + module loading. See [shader/codemap.md](shader/codemap.md).
 - `rhi/` — GPU abstraction + projections + `IRhiService`. See [rhi/codemap.md](rhi/codemap.md).
+- `sim/` — deterministic simulation state: chunk grid, fixed-timestep tick + step registry, snapshot
+  save/load. See [sim/codemap.md](sim/codemap.md).
+- `physics/` — Box2D Scene/ChunkColliders/Coupling. See [physics/codemap.md](physics/codemap.md).
 - `app/` — application layer (slim Application, ApplicationEditor client, input, window, player, renderer, scene, UI,
   platform, five service contracts). See [app/codemap.md](app/codemap.md).

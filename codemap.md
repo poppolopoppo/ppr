@@ -44,6 +44,8 @@ Module dependencies (flat fan-out, per CMake):
 ```
 game/main.cpp → engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
                  engine.rhi → engine.core / engine.math / engine.shader
+                 engine.sim → engine.core / engine.math
+                 engine.physics → engine.core / engine.math (+ PRIVATE box2d::box2d)
                   engine.shader → engine.core
                   engine.math → engine.core
                   engine.image → engine.core / engine.math (+ PRIVATE mango-image)
@@ -90,6 +92,8 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `lib/engine/mesh/`              | CPU static mesh assets (`:types` frozen vocabulary + `:convert` glTF/GLB import).      | [View Map](lib/engine/mesh/codemap.md)              |
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
+| `lib/engine/sim/`               | Deterministic simulation: 4096x4096 cell chunk grid, fixed-timestep tick driver, snapshot save/load, ECS, worldgen.  | [View Map](lib/engine/sim/codemap.md)               |
+| `lib/engine/physics/`           | Box2D boundary: Scene world, ChunkColliders, Coupling. | [View Map](lib/engine/physics/codemap.md)           |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
 | `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer + Routing background-drag latch (12 files, 6 partitions).                      | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
@@ -119,9 +123,9 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   sit behind `BUILD_TESTING` (undefined-tolerant: present unless explicitly `OFF`; `msvc-rel` sets `OFF`).
   The editor partition ships — `game/main.cpp` imports `ApplicationEditor` unconditionally.
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
-  services, enums. Thematic private groups (23 files: per-area splits such as `Core.Allocator.Tests.cpp`,
+  services, enums. Thematic private groups (26 files: per-area splits such as `Core.Allocator.Tests.cpp`,
   `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
-   `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`14` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
+   `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`16` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
   (17 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
   `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
@@ -141,6 +145,12 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
   (textured render gate + arbitration + editor flow). Links `engine.image + engine.mesh +
   engine.app + engine.rhi + engine.shader + engine.core + engine.math + engine.tests`
   (private GLFW for GPU integration); test dependencies never change the production graph.
+- `engine.tests.sim` (`lib/engine/tests/sim/`) — renderer-independent simulation suite (`EngineSimUnitTests`,
+  `sim/` root with the same extern-umbrella + `Tests()`-accessor pattern, no fixture staging):
+  `sim/chunk_grid` (world geometry + coordinate/residency queries), `sim/tick` (fixed-timestep driver
+  ordering/backlog), `sim/snapshot` (save/load/versioned apply round-trips), `sim/ecs`, `sim/worldgen`,
+  `sim/physics`. Links PUBLIC `engine.core + engine.math + engine.sim + engine.tests`, PRIVATE `engine.physics`
+  (GLFW-free, CPU-only; TIMEOUT 300).
 - Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
 

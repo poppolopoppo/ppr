@@ -11,21 +11,14 @@ here.
 
 PPR is a high-performance real-time C++23 engine built with C++20 modules.
 `game/main.cpp` hosts an `Application` run loop. `include/pP/Macros.h` is the
-public macro header. CMake presets include `msvc-dev`, `msvc-live`, `msvc-rel`,
-`clang-cl-*`, `clang-*`, and hidden non-module `gcc-*` variants.
+public macro header.
 
-The dependency graph is directional and must remain acyclic:
-
-```
-app.game -> engine.app
-engine.app -> engine.core, engine.math, engine.shader, engine.rhi, engine.image, engine.mesh
-engine.rhi -> engine.core, engine.math, engine.shader
-engine.sim -> engine.core, engine.math
-engine.shader -> engine.core
-engine.math -> engine.core
-engine.image -> engine.core, engine.math (+ PRIVATE mango-image)
-engine.mesh -> engine.core, engine.math (+ PRIVATE mango-import3d)
-```
+The dependency graph is directional and must remain acyclic (see `codemap.md`;
+on conflict `CMakeLists.txt` wins over this file). `engine.physics` exposes
+PUBLIC `core, math` and PRIVATE `box2d::box2d`
+(`lib/engine/physics/CMakeLists.txt`); `engine.app` links neither `sim` nor
+`physics`; `game` links `sim`, not `physics` (`game/CMakeLists.txt`); the sole
+physics consumer is `engine.tests.sim` via PRIVATE link (`lib/engine/tests/sim/CMakeLists.txt`).
 
 `engine.core` supplies types, allocators, containers, concurrency, services,
 I/O, and HAL. `engine.math` wraps Mango math. `engine.shader` compiles Slang
@@ -41,39 +34,19 @@ construction. Client/editor code owns
 scene, player, camera, viewport, and UI state; it submits work to the renderer
 rather than transferring that ownership to it.
 
-Tests are split across GLFW-free `engine.tests.core`, GLFW-free `engine.tests.sim`
-(simulation: chunk grid, tick, snapshot), GLFW-dependent
-`engine.tests.app`, and `engine.tests.asset` (asset-pipeline: CPU-only tiers
-plus headless-GPU tiers); shared test support is `engine.tests`. Tests use the
-test-only `"pP/UnitTest.h"` header and `PPR_UNIT_TEST`/`PPR_TEST_ASSERT`.
-
+For presets, exclusions, and gates see `codemap.md` and **`build-system`**.
 Read the root `codemap.md` before working; read a directory's `codemap.md` for
-work in that area. Treat generated/dependency directories as excluded from
-normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
-`build/`, and `imgui_module_bindings/`.
+work in that area.
 
 ## Architecture and module boundaries
 
 - Dependencies may only point down the graph above. A lower layer must not
   import, include, resolve, or otherwise depend on a higher layer.
-- Keep features in narrow module partitions with one coherent responsibility.
-  Do not make umbrella modules or catch-all partitions carry feature logic.
-- A `.cppm` exports declarations and necessary definitions for exported
-  templates and inline functions. Non-inline, non-template definitions belong
-  in the matching `.cpp` unless explicit instantiation closes the supported
-  types. Follow the module
-  declaration, partition, umbrella re-export, and CMake-registration procedure
-  in **`module-architect`**. It is also the authority on `import std` policy.
-- A new source file and its CMake registration are one change. CMake target
-  names normally match dotted module names; use **`build-system`** for target,
-  preset, dependency, sanitizer, or linker work.
-- Never set `CMAKE_CXX_MODULE_STD` globally: it initializes fetched and
-  subproject targets. Only PPR targets opt in through `setup_ppr_project()`;
-  external exceptions set `CXX_MODULE_STD OFF` locally.
-- Export only a deliberate, stable consumer contract. Keep implementation
-  types, helpers, storage choices, and feature-local details unexported.
-  Prefer a narrow exported interface over exporting a convenient dependency.
-  Public API changes require tests and an explicit compatibility decision.
+- A new source file and its CMake registration are one change. A `.cppm`
+  exports declarations (plus definitions only for exported templates and inline
+  functions); non-inline, non-template definitions belong in the matching
+  `.cpp`. Follow **`module-architect`** for module procedure and
+  **`build-system`** for targets and dependencies.
 
 ## Ownership, lifetime, and teardown
 
@@ -129,144 +102,82 @@ normal searches: `out/`, `_deps/`, `vcpkg_installed/`, `cmake-build-*/`,
 
 ## Tests
 
-- Test externally observable behavior, contracts, error paths, lifetime and
-  teardown effects—not private implementation structure.
-- Keep core tests GLFW-free; put platform/window behavior in app tests. Keep
-  asset CPU tiers GLFW-free; use the headless fixture for asset GPU tiers. Add
-  or update focused tests with a behavior/API change. Use `PPR_TEST_ASSERT`,
-  which remains functional in release builds.
-- Use **`unit-test-updater`** for test changes and **`validation`** for the
-  post-change build, test, inspection, and diff checklist.
+Test externally observable behavior, contracts, error paths, and lifetime and
+teardown effects; use `PPR_TEST_ASSERT`. Core/sim tests are GLFW-free;
+app/asset tiers use GLFW/headless as documented in `codemap.md`. Use
+**`unit-test-updater`** for test changes and **`validation`** for the
+post-change checklist.
 
 ## C++ and API rules
 
-- Prefer `constexpr`, `[[nodiscard]]` for meaningful results, and `noexcept`
-  where truthful. Use engine integer aliases, sentinel values, strong
-  `Numeric` wrappers, and `safe_narrowing` where they encode the contract.
-- Prefer algorithms/ranges over raw loops. Use only macros from
-  `include/pP/Macros.h`, except the test macros in `pP/UnitTest.h`.
-- Functions access the outside world only through their signatures. Inject time,
-  I/O, RNG, services, and mutable state at high-level boundaries.
-- Accept the weakest useful input (views/spans and individual fields rather
-  than owning containers or "wallet" aggregates). Use strong types or a named
-  parameter struct when they prevent misuse.
-- Encode important invariants and ordering requirements in types where that
-  improves correctness. Keep every function body at one abstraction level;
-  split work into named helpers rather than mixing orchestration and mechanics.
-- Framework hooks (`main`, application hooks, listeners) are thin glue that
-  delegates to engine logic.
+AGENTS.md states the only C++ invariants; skills state procedures and must not
+restate or compete with them.
+
+- Dependencies point down the graph only; a lower layer never depends on a
+  higher one.
+- A `.cppm` exports declarations (plus definitions only for exported templates
+  and inline functions); non-inline, non-template definitions belong in the
+  matching `.cpp`.
+- Make ownership visible in types: RAII values and `unique_ptr` own;
+  references, views, callbacks, `function_ref`, and `safe_ptr` do not. The
+  owner outlives every `safe_ptr`; never hide ownership or lifetime in
+  global/singleton state.
+- Inject dependencies (time, I/O, RNG, services, mutable state) at high-level
+  boundaries through constructors, parameters, or explicit service boundaries;
+  lower-level logic never reads an implicit clock or resolves a hidden
+  singleton. Teardown is the inverse of setup (detach, drain/join, release in
+  dependency order); shutdown is best effort preserving the first error.
+- Use `std::error_code` for no-value lifecycle/operational actions and
+  `std::expected<T, std::error_code>` (or established equivalent) for
+  value-producing recoverable operations; make failure/cancellation visible,
+  never opaque false/null/default. Assertions express violated programmer
+  invariants (`PPR_ASSERT`/`PPR_VERIFY`); tests use `PPR_TEST_ASSERT`.
+- Prefer `constexpr`, `[[nodiscard]]` for meaningful results, and truthful
+  `noexcept`. Use only macros from `include/pP/Macros.h` (plus test macros in
+  `pP/UnitTest.h`). Accept the weakest useful input (views/spans, fields over
+  wallet aggregates; strong types where they prevent misuse). Framework hooks
+  (`main`, application hooks, listeners) are thin glue delegating to engine
+  logic.
+- Use `not`/`and`/`or`; use `const T` and `T *const`/`const T *const` where the
+  callee must not reseat; order attributes, inline-control macros, `constexpr`,
+  return type, name, parameters, `const`, `noexcept`.
 
 ### Semantic control flow
 
-After mechanical formatting, perform a semantic readability pass on touched C++
-when a function mixes setup, validation, nested iteration, material/resource
-resolution, submission, counters, and logging, or has deeply nested control flow
-or repeated early exits. Do not use an arbitrary function length as the trigger.
-
-- Keep validation guards together at the start of the relevant helper, then keep
-  the successful path as one contiguous fall-through sequence.
-- Use blank lines between distinct logical phases such as setup, validation,
-  iteration, submission, and final logging. Keep related declarations and guards
-  grouped, and do not insert a blank line between every statement. Separate
-  independent phases and nested loops when that clarifies the flow.
-- Extract a named helper when a block expresses a distinct domain operation or
-  is reused; keep side effects and submissions in the caller. Do not create a
-  helper solely to satisfy an arbitrary line-count threshold.
-- Keep structured logging fields grouped as one logical block; do not flatten
-  surrounding control flow merely to accommodate a logging call.
-
-Mechanical `reformat_file` (via the single `execute_tool` router) does not satisfy
-this semantic readability requirement. It only handles indentation, wrapping,
-spacing, and braces.
+After mechanical formatting, do one semantic readability pass on touched C++:
+keep validation guards together, the success path contiguous, phases separated,
+and distinct domain operations in named helpers.
 
 ## Source format
 
-The active project CLion C/C++ Code Style is canonical for mechanical
-formatting; invoke it manually through Reformat Code and through
-`execute_tool` with `command="reformat_file --files '...'"` as an agent. The
-repository-root `.clang-format` is a tracked reference/configuration only; it
-is not the agent formatting authority. `reformat_file` via `execute_tool` is
-required for every touched C++ file after functional writes and before final
-read-only diff inspection. Every `execute_tool` reformat call MUST pass
-`projectPath="E:/Code/ppr"` so the Project scheme resolves. The verified form
-is `execute_tool(command="reformat_file --files
-'["E:/Code/ppr/<project-relative path>"]'", projectPath="E:/Code/ppr")`; the
-`--files` arg MUST be a single-quoted JSON array string. Direct
-`clang-format`, `git-clang-format`, `clang-format --lines`, and native/manual
-whitespace alternatives are not the normal formatter path and must not replace
-it. Agents must not manually alter whitespace, line wrapping, indentation,
-blank lines, or brace placement as part of a functional patch. A failed,
-timed-out, or unknown reformat result leaves the edit lifecycle incomplete:
-diagnose and retry the CLion operation, and do not substitute manual
-formatting. The final diff review rejects any whitespace-only hunks outside the
-functional edit. Apply these additional rules:
-
-- Use `const T` and `T *const`/`const T *const` when the callee must not reseat
-  a pointer. Put `[[nodiscard]]`/other attributes, then inline-control macros,
-  then `constexpr`, return type, name, parameters, `const`, and `noexcept`.
-- Place `[[likely]]`/`[[unlikely]]` on the same line as the complete condition
-  and immediately before its opening brace. The canonical forms are
-  `if (not mapped.has_value()) [[unlikely]] {` and
-  `if (not bytes.isValid()) [[unlikely]] {`. Do not split immediately after
-  `not`; forbidden form: place `not` at the end of a line before its predicate.
-  Reserve condition line breaks for conditions that are genuinely too long, and
-  do not place the attribute on its own line after a short condition. Use `not`
-  for new boolean negation; match surrounding `and`/`or` style.
-- Order class members: `static_assert`s, data, static traits/constants, default
-  constructor, copy/move, other constructors, destructor, accessors, mutators,
-  comparisons. Keep private nested types immediately above the data they serve.
-- Use comments only for invariants or non-obvious intent. Use a three-line
-  divider only between genuinely separate conceptual regions.
-- In public and module interface files, use a three-line section header to
-  separate genuinely distinct regions. Place the header before the complete
-  related documentation and declaration block; never insert it between a
-  documentation comment and the declaration it documents. Use a concise,
-  descriptive title and avoid redundant headers in short interfaces.
-- Use `#if PPR_ENABLE_*`, not `#ifdef`, for feature values. Keep top-level
-  preprocessor directives at column zero.
+The active project CLion C/C++ Code Style (`Project.xml`) is canonical for
+mechanical formatting; the repository-root `.clang-format` is a tracked
+reference/configuration only and `Project.xml` wins on conflict. Reformat every
+touched C++ file after functional writes via `execute_tool` with
+`command="reformat_file --files '["E:/Code/ppr/<project-relative path>"]'"`
+and `projectPath="E:/Code/ppr"`.
 
 ## Specialist authorities and workflow
 
-Use the named skill instead of reproducing its procedure here:
+Skills live at `.opencode/skills/<id>/SKILL.md`; use the named skill instead of
+reproducing its procedure here:
 
 | Need | Authority |
 |---|---|
-| Builds, run-only allow-list, and IDE diagnostics | `build-system`; `validation`; debugging via vendored `clion-debugger` skill |
+| Builds, presets, dependencies, sanitizers, diagnostics | `build-system` |
 | Modules, exports, partitions, `import std` | `module-architect` |
-| CMake, presets, dependencies, sanitizers, fixer build/test procedure | `build-system` |
 | Slang shaders, reflection, CPU/GPU layouts, and Slang-RHI bindings | `slang-shader-developer` |
 | HAL changes | `hal-developer` |
 | Allocators and `safe_ptr` mechanics | `memory-allocator` |
 | Concurrency and async I/O | `concurrency-patterns` |
 | Test updates | `unit-test-updater` |
 | Validation | `validation` |
-| Reviews, commits, pushes, deep work, worktrees | Their named OMO skills/commands |
 
-The `fixer` agent is edit-only: it makes no builds and runs no commands;
-build and test execution is owned by the orchestrator and builder lane.
-
-Use CodeGraph first when the repository is indexed; otherwise use CLion.
-The `clion` MCP server exposes exactly one tool, the `execute_tool` router:
-agents call it with `projectPath="E:/Code/ppr"` and the `<tool>` name inside
-`command` (e.g. `reformat_file`, `get_file_problems`), never as direct
-`clion_*` tools — the MCP server does not infer `projectPath`. Empirical, not JetBrains-documented: never run or
-debug a library target or a library source path — the IDE raises an
-undismissable modal; the run-only allow-list
-(5 executables) lives in `build-system`. Reserve CLion for debugging
-(vendored `clion-debugger` skill) and code search, and build through the
-persistent-shell cmake path documented in `build-system`. Use PowerShell on
-Windows for shell work. Temporary artifacts belong in `.slim/tmp/`
-(repo-scoped) or `C:\Users\bek4b\AppData\Local\Temp\opencode\` (external). Do
-not commit, push, or change generated/configuration files unless explicitly
-requested.
+The `fixer` agent is edit-only (no builds); builds and tests run via the
+orchestrator per `build-system`. The `clion` MCP server exposes exactly one
+tool, the `execute_tool` router; agents call it with `projectPath="E:/Code/ppr"`.
 
 ## Repository Map
 
-A full codemap is available at `codemap.md` in the project root.
-
-Before working on any task, read `codemap.md` to understand:
-- Project architecture and entry points
-- Directory responsibilities and design patterns
-- Data flow and integration points between modules
-
-For deep work on a specific folder, also read that folder's `codemap.md`.
+Read the root `codemap.md` before working and a directory's `codemap.md` for
+work in that area (41 codemaps indexed by `.codegraph/`).
