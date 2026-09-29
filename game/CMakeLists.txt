@@ -1,9 +1,37 @@
 # Define the executable target
 add_executable(app.game main.cpp)
 
+target_sources(app.game
+    PUBLIC
+        FILE_SET CXX_MODULES FILES
+            colony/Agents.cppm
+            colony/Buildings.cppm
+            colony/Colony.cppm
+            colony/ColonyDriver.cppm
+            colony/ColonyPanel.cppm
+            colony/ColonySmoke.cppm
+            colony/ColonyTranslator.cppm
+            colony/Pathfinding.cppm
+            colony/WorldGen.cppm
+    PRIVATE
+        colony/Agents.cpp
+        colony/Buildings.cpp
+        colony/Colony.cpp
+        colony/ColonyDriver.cpp
+        colony/ColonyPanel.cpp
+        colony/ColonySmoke.cpp
+        colony/ColonyTranslator.cpp
+        colony/Pathfinding.cpp
+        colony/WorldGen.cpp
+    )
+
 setup_ppr_project(app.game
-  INTERNAL_PUBLIC_DEPS engine.core engine.app engine.math engine.shader engine.rhi
+  INTERNAL_PUBLIC_DEPS engine.core engine.app engine.math engine.shader engine.rhi engine.sim
 )
+
+# Slice 4: driver-owned physics Scene + chunk colliders (explicit grant).
+# PRIVATE shape mirrors engine.tests.sim; box2d stays behind engine.physics.
+target_link_libraries(app.game PRIVATE engine.physics)
 
 # Copy shader assets to output directory
 add_custom_command(TARGET app.game POST_BUILD
