@@ -490,7 +490,7 @@ export namespace pP {
             }
 
             friend bool operator!=(const InputIterator &a, const InputIterator &b) noexcept {
-                return not(a == b);
+                return not (a == b);
             }
         };
 

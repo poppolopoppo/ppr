@@ -24,8 +24,9 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] bool nearEqual(const float3 &expected, const float3 &actual, const float eps = kEps) noexcept {
-            return nearEqual(expected.x, actual.x, eps)
-            and nearEqual(expected.y, actual.y, eps) and nearEqual(expected.z, actual.z, eps);
+            return nearEqual(expected.x, actual.x, eps) and
+                nearEqual(expected.y, actual.y, eps) and
+                nearEqual(expected.z, actual.z, eps);
         }
 
         // Quaternions double-cover SO(3): compare the rotation, never the raw components.
@@ -50,8 +51,7 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] bool rowEquals(const float4x4 &matrix, const std::size_t row, const float x, const float y, const float z, const float w) noexcept {
-            return matrix(row, 0) == x
-            and matrix(row, 1) == y and matrix(row, 2) == z and matrix(row, 3) == w;
+            return matrix(row, 0) == x and matrix(row, 1) == y and matrix(row, 2) == z and matrix(row, 3) == w;
         }
 
         [[nodiscard]] float3 rowOf(const float4x4 &matrix, const std::size_t row) noexcept {
@@ -64,12 +64,16 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] bool allFinite(const Transform &value) noexcept {
-            return std::isfinite(value.m_rotate.x)
-            and std::isfinite(value.m_rotate.y) and std::isfinite(value.m_rotate.z) and std::isfinite(value.m_rotate.w) and
-            std::isfinite(value.m_translate.x)
-            and std::isfinite(value.m_translate.y) and std::isfinite(value.m_translate.z) and
-            std::isfinite(value.m_scale.x)
-            and std::isfinite(value.m_scale.y) and std::isfinite(value.m_scale.z);
+            return std::isfinite(value.m_rotate.x) and
+                std::isfinite(value.m_rotate.y) and
+                std::isfinite(value.m_rotate.z) and
+                std::isfinite(value.m_rotate.w) and
+                std::isfinite(value.m_translate.x) and
+                std::isfinite(value.m_translate.y) and
+                std::isfinite(value.m_translate.z) and
+                std::isfinite(value.m_scale.x) and
+                std::isfinite(value.m_scale.y) and
+                std::isfinite(value.m_scale.z);
         }
 
         // isInfOrNan/isFinite take a non-deduced param_lvref_t<T>: the template

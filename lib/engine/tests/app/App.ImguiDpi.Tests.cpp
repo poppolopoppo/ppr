@@ -18,10 +18,10 @@ namespace pP::tests::detail {
             if (logical.y > 0) {
                 scale.y = static_cast<float>(framebuffer.y) / static_cast<float>(logical.y);
             }
-            if (not(scale.x > 0.0f)) {
+            if (not (scale.x > 0.0f)) {
                 scale.x = 1.0f;
             }
-            if (not(scale.y > 0.0f)) {
+            if (not (scale.y > 0.0f)) {
                 scale.y = 1.0f;
             }
             return scale;

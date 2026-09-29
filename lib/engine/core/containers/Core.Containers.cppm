@@ -465,7 +465,7 @@ export namespace pP {
             PPR_ASSERT(offset + n <= bit_count_v);
 
             const integral_type mask = (bitMask(n) - 1u) << offset;
-            PPR_ASSERT(not(mask & m_bits));
+            PPR_ASSERT(not (mask & m_bits));
 
             m_bits |= mask;
         }
@@ -474,7 +474,7 @@ export namespace pP {
             PPR_ASSERT(offset + n <= bit_count_v);
 
             const integral_type mask = (bitMask(n) - 1u) << offset;
-            PPR_ASSERT(not(mask & ~m_bits));
+            PPR_ASSERT(not (mask & ~m_bits));
 
             m_bits &= ~mask;
         }

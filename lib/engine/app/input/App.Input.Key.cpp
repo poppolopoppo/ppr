@@ -333,6 +333,7 @@ namespace pP {
             case EKeyboardKey::seven: return seven;
             case EKeyboardKey::eight: return eight;
             case EKeyboardKey::nine: return nine;
+
             case EKeyboardKey::a: return a;
             case EKeyboardKey::b: return b;
             case EKeyboardKey::c: return c;
@@ -359,6 +360,7 @@ namespace pP {
             case EKeyboardKey::x: return x;
             case EKeyboardKey::y: return y;
             case EKeyboardKey::z: return z;
+
             case EKeyboardKey::comma: return decimal;
             case EKeyboardKey::equals: return equals;
             case EKeyboardKey::plus: return add;
@@ -381,6 +383,7 @@ namespace pP {
             case EKeyboardKey::right_bracket: return right_bracket;
             case EKeyboardKey::left_parenthesis: return left_parenthesis;
             case EKeyboardKey::right_parenthesis: return right_parenthesis;
+
             case EKeyboardKey::numpad0: return numpad0;
             case EKeyboardKey::numpad1: return numpad1;
             case EKeyboardKey::numpad2: return numpad2;
@@ -398,6 +401,7 @@ namespace pP {
             case EKeyboardKey::numpad_divide: return numpad_divide;
             case EKeyboardKey::numpad_enter: return numpad_enter;
             case EKeyboardKey::numpad_equal: return numpad_equal;
+
             case EKeyboardKey::f1: return f1;
             case EKeyboardKey::f2: return f2;
             case EKeyboardKey::f3: return f3;
@@ -410,6 +414,7 @@ namespace pP {
             case EKeyboardKey::f10: return f10;
             case EKeyboardKey::f11: return f11;
             case EKeyboardKey::f12: return f12;
+
             case EKeyboardKey::escape: return escape;
             case EKeyboardKey::space: return space_bar;
             case EKeyboardKey::pause: return pause;
@@ -428,6 +433,7 @@ namespace pP {
             case EKeyboardKey::right_arrow: return right_arrow;
             case EKeyboardKey::up_arrow: return up_arrow;
             case EKeyboardKey::down_arrow: return down_arrow;
+
             case EKeyboardKey::caps_lock: return caps_lock;
             case EKeyboardKey::num_lock: return num_lock;
             case EKeyboardKey::left_alt: return left_alt;
@@ -545,6 +551,7 @@ namespace pP {
             down_arrow,
             insert,
             delete_,
+
             zero,
             one,
             two,
@@ -555,6 +562,7 @@ namespace pP {
             seven,
             eight,
             nine,
+
             a,
             b,
             c,
@@ -581,6 +589,7 @@ namespace pP {
             x,
             y,
             z,
+
             numpad0,
             numpad1,
             numpad2,
@@ -598,11 +607,13 @@ namespace pP {
             numpad_divide,
             numpad_enter,
             numpad_equal,
+
             multiply,
             add,
             subtract,
             decimal,
             divide,
+
             f1,
             f2,
             f3,
@@ -615,9 +626,11 @@ namespace pP {
             f10,
             f11,
             f12,
+
             num_lock,
             print_screen,
             scroll_lock,
+
             left_shift,
             right_shift,
             left_control,
@@ -626,6 +639,7 @@ namespace pP {
             right_alt,
             left_super,
             right_super,
+
             semicolon,
             equals,
             underscore,
