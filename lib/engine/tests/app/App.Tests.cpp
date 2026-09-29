@@ -21,6 +21,8 @@ namespace pP::tests {
 
     const UnitTest &render_viewTests() noexcept;
 
+    const UnitTest &grid_passTests() noexcept;
+
     const UnitTest &pixel_readbackTests() noexcept;
 
     const UnitTest &renderer_triangle_reinit_okTests() noexcept;
@@ -74,6 +76,7 @@ namespace pP::tests {
             shaderTests(),
             viewportTests(),
             render_viewTests(),
+            grid_passTests(),
             pixel_readbackTests(),
             renderer_triangle_reinit_okTests(),
             renderer_off_thread_fails_closedTests(),

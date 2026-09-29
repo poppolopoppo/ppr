@@ -53,21 +53,22 @@ namespace pP::tests::detail {
                 return std::unexpected{err};
             }
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
-            if (not
-                destination.has_value())
-            [[unlikely]] {
+            if (not destination.has_value()) [[unlikely]] {
                 return std::unexpected{destination.error()};
             }
+
             for (std::size_t i = 0u; i < 16u; i += 4u) {
                 (*destination)[i] = static_cast<std::byte>(r);
                 (*destination)[i + 1u] = static_cast<std::byte>(g);
                 (*destination)[i + 2u] = static_cast<std::byte>(b);
                 (*destination)[i + 3u] = std::byte{255};
             }
+
             mem::SharedBuffer frozen{};
             if (const std::error_code err = storage.moveToShared(&frozen)) [[unlikely]] {
                 return std::unexpected{err};
             }
+
             image::ImageAsset picture{};
             picture.m_width = 2u;
             picture.m_height = 2u;
@@ -96,9 +97,7 @@ namespace pP::tests::detail {
         // material override to material 1.
         [[nodiscard]] Expected<SharedScene> twoInstanceSharedMesh_() {
             Expected<image::ImageAsset> image = sharedSolidImage_(40u, 120u, 200u);
-            if (not
-                image.has_value())
-            [[unlikely]] {
+            if (not image.has_value()) [[unlikely]] {
                 return std::unexpected{image.error()};
             }
 

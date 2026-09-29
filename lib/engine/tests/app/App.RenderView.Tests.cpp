@@ -64,9 +64,9 @@ namespace pP::tests::detail {
         }
 
         PPR_UNIT_TEST(handles_default_invalid) {
-            PPR_TEST_ASSERT(not pP::isValid(TextureHandle{}));
-            PPR_TEST_ASSERT(not pP::isValid(MaterialHandle{}));
-            PPR_TEST_ASSERT(not pP::isValid(TriangleBagHandle{}));
+            PPR_TEST_ASSERT(not TextureHandle{}->isValid());
+            PPR_TEST_ASSERT(not MaterialHandle{}->isValid());
+            PPR_TEST_ASSERT(not TriangleBagHandle{}->isValid());
             PPR_TEST_ASSERT(none_v == 0xFFFFFFFFu);
             PPR_TEST_ASSERT(sizeof(GpuMaterial) == 80u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GpuMaterial, m_textures) == 48u);

@@ -794,7 +794,7 @@ namespace pP {
     namespace {
         [[nodiscard]] bool submittedEqual_(
             const TrianglePass::SubmittedInstance &lhs, const TrianglePass::SubmittedInstance &rhs) noexcept {
-            if (not(lhs.m_bag == rhs.m_bag) or not(lhs.m_material == rhs.m_material)) {
+            if (not (lhs.m_bag == rhs.m_bag) or not (lhs.m_material == rhs.m_material)) {
                 return false;
             }
             const float *const lhs_model = lhs.m_model.data();
@@ -811,7 +811,7 @@ namespace pP {
         // resolved geometry/material/model payload. Padding is never compared.
         [[nodiscard]] bool resolvedEqual_(
             const TrianglePass::ResolvedInstance &lhs, const TrianglePass::ResolvedInstance &rhs) noexcept {
-            if (not(lhs.m_variant == rhs.m_variant) or
+            if (not (lhs.m_variant == rhs.m_variant) or
                 lhs.m_vertex_buffer != rhs.m_vertex_buffer or
                 lhs.m_index_buffer != rhs.m_index_buffer or
                 lhs.m_count != rhs.m_count or
@@ -1032,8 +1032,7 @@ namespace pP {
         }
         rhi::IRenderPipeline *const pipeline = (*cached)->m_pipeline.get();
         rhi::IShaderObject *const root_object = (*cached)->m_root_object.get();
-        if (pipeline == nullptr or root_object == nullptr or
-            not(*cached)->m_frame_cursor.isValid()) [[unlikely]] {
+        if (pipeline == nullptr or root_object == nullptr or not (*cached)->m_frame_cursor.isValid()) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 

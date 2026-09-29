@@ -393,6 +393,7 @@ namespace pP::tests::detail {
             // light must observe y or the inversion hides (prior y=0 bug).
             const float light[3]{0.5f, 0.5f, 0.7071068f};
             float lighting[2]{};
+
             for (int sign = 0; sign < 2; ++sign) {
                 const float w = sign == 0 ? 1.0f : -1.0f;
                 const float bitangent[3] = {
@@ -413,6 +414,7 @@ namespace pP::tests::detail {
                 lighting[sign] = perturbed[0] * light[0] + perturbed[1] * light[1] + perturbed[2] * light[2];
             }
             PPR_TEST_ASSERT(lighting[0] != lighting[1]);
+
             // Converted fixtures keep unit tangents with |w| == 1 (w=-w applied).
             for (const char *const file: {"textured_quad.glb", "textured_box.gltf"}) {
                 const Expected<mesh::SceneAsset> scene =

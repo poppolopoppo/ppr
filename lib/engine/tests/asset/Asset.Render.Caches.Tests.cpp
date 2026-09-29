@@ -60,21 +60,22 @@ namespace pP::tests::detail {
                 return std::unexpected{err};
             }
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
-            if (not
-                destination.has_value())
-            [[unlikely]] {
+            if (not destination.has_value()) [[unlikely]] {
                 return std::unexpected{destination.error()};
             }
+
             for (std::size_t i = 0u; i < 16u; i += 4u) {
                 (*destination)[i] = static_cast<std::byte>(r);
                 (*destination)[i + 1u] = static_cast<std::byte>(g);
                 (*destination)[i + 2u] = static_cast<std::byte>(b);
                 (*destination)[i + 3u] = std::byte{255};
             }
+
             mem::SharedBuffer frozen{};
             if (const std::error_code err = storage.moveToShared(&frozen)) [[unlikely]] {
                 return std::unexpected{err};
             }
+
             image::ImageAsset picture{};
             picture.m_width = 2u;
             picture.m_height = 2u;
@@ -94,11 +95,10 @@ namespace pP::tests::detail {
 
         [[nodiscard]] Expected<SyntheticScene> singleQuadScene_(const u8 r, const u8 g, const u8 b) {
             Expected<image::ImageAsset> image = solidImage_(r, g, b);
-            if (not
-                image.has_value())
-            [[unlikely]] {
+            if (not image.has_value()) [[unlikely]] {
                 return std::unexpected{image.error()};
             }
+
             SyntheticScene out{};
             mesh::StaticMeshAsset mesh_asset{};
             mesh_asset.m_vertices.push_back(quadVert(-0.5f, -0.5f));
@@ -113,6 +113,7 @@ namespace pP::tests::detail {
             });
             mesh_asset.m_flags = mesh::EMeshAttribute::position | mesh::EMeshAttribute::normal |
                                  mesh::EMeshAttribute::texcoord | mesh::EMeshAttribute::tangent | mesh::EMeshAttribute::color;
+
             mesh::MaterialAsset material{};
             material.m_base_color_map.m_image = mesh::ImageAssetId{0u};
             material.m_base_color_map.m_texcoord = mesh::UvSetId{0u};
@@ -840,10 +841,7 @@ namespace pP::tests::detail {
             u64 found = 0u;
             try {
                 for (const Captured &entry: LogCapture::s_entries) {
-                    if (entry.m_level == level
-                        and
-                    entry.m_message.find(needle) != std::string::npos)
-                    {
+                    if (entry.m_level == level and entry.m_message.find(needle) != std::string::npos) {
                         ++found;
                     }
                 }
@@ -855,9 +853,7 @@ namespace pP::tests::detail {
         [[nodiscard]] Expected<image::ImageAsset> decodeBoxPng_() {
             Expected<mem::SharedBuffer> mapped =
                 mem::SharedBuffer::mapFile(std::filesystem::current_path() / "meshes" / "textured_box.png");
-            if (not
-                mapped.has_value())
-            {
+            if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(

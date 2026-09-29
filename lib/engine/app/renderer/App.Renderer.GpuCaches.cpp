@@ -723,8 +723,10 @@ namespace pP {
             PPR_LOG(GpuCaches, error, "BindlessMaterialCache requires bindless support");
             return std::make_error_code(std::errc::function_not_supported);
         }
+
         m_device = &device;
         m_shared_sampler = shared_sampler;
+
         // One capacity-sized buffer for the cache lifetime (512×80 B);
         // pack/release rewrite a single slot in place — never re-create.
         rhi::BufferDesc buffer_desc{};
@@ -734,6 +736,7 @@ namespace pP {
         buffer_desc.usage = rhi::BufferUsage::ShaderResource;
         buffer_desc.defaultState = rhi::ResourceState::ShaderResource;
         buffer_desc.label = "bindless materials";
+
         if (const std::error_code err = make_error_code(
             device.createBuffer(buffer_desc, nullptr, m_material_buffer.writeRef()))) [[unlikely]] {
             m_material_buffer.setNull();
@@ -742,6 +745,7 @@ namespace pP {
             PPR_LOG(GpuCaches, error, "material buffer creation failed", {{"message", err.message()}});
             return err;
         }
+
         m_initialized = true;
         m_owner = std::this_thread::get_id();
         m_residency = CacheResidency::ready;
@@ -853,6 +857,7 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+
         // Allowed while device_lost (CPU record only); the slot rewrite is
         // skipped then — the GPU buffer is gone, so there is nothing to zero.
         if (const MaterialEntry *const entry = m_entries.tryGet(key);
@@ -863,9 +868,11 @@ namespace pP {
                 {{"used", materialUsed()}, {"capacity", materialCapacity()}});
             PPR_LOG(GpuCaches, debug, "material entry retired",
                 {{"slot", slot}, {"used", materialUsed()}, {"capacity", materialCapacity()}});
+
             if (m_residency == CacheResidency::device_lost) {
                 return default_value_v;
             }
+
             // Explicit tombstone rather than a zeroed GpuMaterial: texture
             // slots start at 1 with slot 0 pinned to fallback-white, so a
             // zeroed m_textures would name that white texture four times

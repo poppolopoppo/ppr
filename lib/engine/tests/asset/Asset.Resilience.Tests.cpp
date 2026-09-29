@@ -95,9 +95,7 @@ namespace pP::tests::detail {
                 8, 8, Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8),
                 static_cast<std::size_t>(8u) * 4u, rgba.data(),
             };
-            if (not
-                static_cast<bool>(surface.save(path.string())))
-            {
+            if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -177,29 +175,17 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] bool sameImageOutcome(const ImageOutcome &lhs, const ImageOutcome &rhs) noexcept {
-            if (lhs.m_threw
-                or
-            rhs.m_threw
-            or
-            lhs.m_ok != rhs.m_ok)
-            {
+            if (lhs.m_threw or rhs.m_threw or lhs.m_ok != rhs.m_ok) {
                 return false;
             }
             if (lhs.m_ok) {
-                return lhs.m_width == rhs.m_width
-                and
-                lhs.m_height == rhs.m_height;
+                return lhs.m_width == rhs.m_width and lhs.m_height == rhs.m_height;
             }
             return lhs.m_err == rhs.m_err;
         }
 
         [[nodiscard]] bool sameMeshOutcome(const MeshOutcome &lhs, const MeshOutcome &rhs) noexcept {
-            if (lhs.m_threw
-                or
-            rhs.m_threw
-            or
-            lhs.m_ok != rhs.m_ok)
-            {
+            if (lhs.m_threw or rhs.m_threw or lhs.m_ok != rhs.m_ok) {
                 return false;
             }
             if (lhs.m_ok) {
@@ -237,9 +223,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not first.m_threw);
                 const ImageOutcome second = tryDecodeRgba8(mutated, ".png", image::ImageDecodeDesc{});
                 PPR_TEST_ASSERT(sameImageOutcome(first, second));
-                if (not
-                    first.m_ok)
-                {
+                if (not first.m_ok) {
                     ++rejects;
                 }
             }
@@ -349,9 +333,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not first.m_threw);
                 const MeshOutcome second = tryImport(fuzzDir() / "", name, mesh::kDefaultMeshLimits);
                 PPR_TEST_ASSERT(sameMeshOutcome(first, second));
-                if (not
-                    first.m_ok)
-                {
+                if (not first.m_ok) {
                     ++rejects;
                 }
             }
@@ -384,9 +366,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not first.m_threw);
                 const MeshOutcome second = tryImport(fuzzDir() / "", name, mesh::kDefaultMeshLimits);
                 PPR_TEST_ASSERT(sameMeshOutcome(first, second));
-                if (not
-                    first.m_ok)
-                {
+                if (not first.m_ok) {
                     ++rejects;
                 }
             }
@@ -463,9 +443,7 @@ namespace pP::tests::detail {
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 16u, rgba.data()
             };
-            if (not
-                static_cast<bool>(surface.save(path.string())))
-            {
+            if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -477,44 +455,35 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (hammer_8way_import_decode) {
             std::atomic<int> failures{0};
             std::vector<std::thread> workers{};
+
             for (int t = 0; t < 8; ++t) {
                 workers.emplace_back([t, &failures] {
                     const mem::SharedBuffer png = hammerPngBytes(t);
-                    if (not
-                        png.isValid())
-                    {
+                    if (not png.isValid()) {
                         failures.fetch_add(1, std::memory_order_relaxed);
                         return;
                     }
                     for (int round = 0; round < 5; ++round) {
                         const Expected<image::ImageAsset> decoded = image::decodeToRgba8(
                             png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
-                        if (not
-                            decoded.has_value()
-                        or
-                        decoded->m_width != 4u
-                        or
-                        decoded->m_height != 4u)
-                        {
+                        if (not decoded.has_value() or decoded->m_width != 4u or decoded->m_height != 4u) {
                             failures.fetch_add(1, std::memory_order_relaxed);
                             return;
                         }
                         const char *const file = (t + round) % 2 == 0 ? "textured_quad.glb" : "textured_box.gltf";
                         const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(hammerMeshDir(), file);
-                        if (not
-                            scene.has_value()
-                        or
-                        scene->m_meshes.empty())
-                        {
+                        if (not scene.has_value() or scene->m_meshes.empty()) {
                             failures.fetch_add(1, std::memory_order_relaxed);
                             return;
                         }
                     }
                 });
             }
+
             for (std::thread &worker: workers) {
                 worker.join();
             }
+
             PPR_TEST_ASSERT(failures.load(std::memory_order_relaxed) == 0);
         };
     } // namespace Hammer

@@ -3,7 +3,7 @@
 ## Responsibility
 
 The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
-queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`);
+queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world);
 camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
 `engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
@@ -105,6 +105,20 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `pipelineFor_` validates the signature shape (one color format — the sample count is a `SampleCount`, so every
   value is accepted by construction) BEFORE the cache clear,
   so an unsupported signature can never drop the pipelines built for the last good one.
+- **GridPass** (`App.Renderer.GridPass.cppm/.cpp`): content-specific pass beside `TrianglePass` (NOT under `scene/`: it consumes `DrawContext`/`RenderPipelineSignature` from `:renderer.types`, and a `:scene.grid_pass` would invert the established renderer→scene edge). Chunk-sized tiles (1 tile = 1 chunk over the 32×32-chunk × 128²-cell world, never a second tiling system) drawn as flat tinted quads or optional cell materials (no lighting/texturing/GI) from `grid_tiles.slang` (`vertexGridMain` + `fragmentGridMain`, per-draw `uniform uint g_tile_base`, `ConstantBuffer<GridFrame>` 64 B + `StructuredBuffer<GridTilePayload>` 32 B stride with CPU `sizeof/alignof/offsetof` asserts). Plain-data boundary (`GridTileSubmission{chunkId,tileRange,dirtyMask,materialId}`, `GridUploadRequest{chunkId,tileDataView,cellMaterials}` — no sim types; `game/colony` translates grid → submissions). Pure-CPU `planTiles(snapshot, submissions)` culls via epsilon-expanded (`0.5` cell) tile boxes against `snapshot.m_frustum` (edge-touching visible, off-screen/quiescent skipped, submission order kept); staging + dirty-upload lane + cache probe are pure CPU (device-free, render-thread confined), while pre-render cell publication and both render lanes touch the GPU. `render` retains plan → resolve cache-hit-else-stage-cold → 3-slot payload ring → one instanced draw, 6 verts/quad, `startInstanceLocation` 0. Upload cache clamps at 1024 entries (one per world chunk, `no_buffer_space` overflow). Teardown mirrors `TrianglePass` (stop submissions → drop pipeline root → clear CPU cache → program/ring release, retain-first-error; device loss retains CPU records but invalidates GPU cell residency).
+  An additive MDI lane (`compactIndirect` + `renderIndirect`) compacts the same plan to one `IndirectDrawArguments` per visible tile (`{6, 1, 0, plan_index}` in plan order, clamped at the tile-cache budget with `no_buffer_space` overflow, empty plan → zero args and the encode returns before any pass call) and issues one `drawIndirect` over a 3-slot args ring (`Upload`/`IndirectArgument`, same shared cursor as the payload ring) with `g_tile_base` 0; the CPU-staged `drawInstanced` path is retained, the RHI call surface is the existing `IRenderPassEncoder::drawIndirect` (no new RHI entry point).
+- **GridPass per-cell extension:** `GridUploadRequest::m_cell_materials` is an optional borrowed span of exactly
+  16384 row-major u16 entries (0xffff transparent); empty retains flat tiles. Cell requests require a valid
+  chunk ID and its exact 128x128 chunk rect, even on clean/no-op requests. Dirty requests pack pairs into
+  8192 u32 words per chunk in a lazy pass-owned CPU cache (latest wins). `clearCache()` invalidates cached
+  tiles and cells independently of `clearTiles()` staging; regeneration calls clearCache before resubmission.
+  Before entering a render callback, the editor must call
+  `prepareCellUploads(device, waitForGpuIdle)` using its renderer-owned queue wait. Clean/offscreen/flat-only
+  frames do not wait; dirty visible chunks are batched into their slots of a persistently mapped, GPU-readable
+  32 MiB max atlas only after one successful wait, and stale draws fail closed. A valid 4-byte dummy SRV
+  serves flat-only rendering; both direct and MDI lanes bind the explicit full buffer range.
+  `GridTilePayload` retains its 32-byte stride; offsets 20/24/28 carry cell-word base/flags/pad.
+  MDI `SV_InstanceID`/startInstanceLocation parity remains to be proven with GPU readback on each backend.
 - **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic bump buckets,
   stable `TriangleBagRange`, **no dedup** — one range per upload), `BindlessTextureCache` (**content-hash dedup
   + refcount + pin-while-held**, heap slot 0 pinned to the white fallback and host slots start at 1),
@@ -151,7 +165,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -160,6 +174,8 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
 - `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, caches, pipeline helpers)
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)
+- `App.Renderer.GridPass.cppm` — `GridPass` declaration (boundary structs, tile payload mirror, snapshot cache, CPU tile cache, pipeline helper)
+- `App.Renderer.GridPass.cpp` — GridPass implementations (validation/planTiles, shader program, single pipeline, upload lane, ring upload, single-draw encode)
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`

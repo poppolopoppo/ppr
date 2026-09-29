@@ -149,10 +149,7 @@ namespace pP::tests::detail {
                 make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr
-                or
-            blob->getBufferPointer() == nullptr)
-            {
+            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             DrawsPixels pixels{};
@@ -422,11 +419,7 @@ namespace pP::tests::detail {
             u32 drawn_columns = 0u;
             for (const float x: kPlacements) {
                 const std::array<u8, 4u> texel = drawsWindow_(*pixels, drawsScreenX_(x), 128u, 2u);
-                if (texel[2] > texel[0] + 20u
-                    and texel[2] > texel[1] + 20u
-                and
-                    drawsDist_(texel, background) > 20u)
-                {
+                if (texel[2] > texel[0] + 20u and texel[2] > texel[1] + 20u and drawsDist_(texel, background) > 20u) {
                     ++drawn_columns;
                 }
             }

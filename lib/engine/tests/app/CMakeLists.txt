@@ -21,6 +21,7 @@ target_sources(engine.tests.app
         App.RenderView.Tests.cpp
         App.PixelReadback.Tests.cpp
         App.Camera.Tests.cpp
+        App.GridPass.Tests.cpp
         App.Quaternion.Tests.cpp
         App.ImGuiRouting.Tests.cpp
         App.ImguiDpi.Tests.cpp
@@ -51,7 +52,8 @@ add_test(NAME EngineAppUnitTests COMMAND engine.tests.app)
 
 set_tests_properties(EngineAppUnitTests
     PROPERTIES
-        TIMEOUT 120
+        # Runner executes 3 shuffle loops (~176s measured debug); keep margin.
+        TIMEOUT 600
         LABELS "unit;engine;app"
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.app>"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.app>"

@@ -10,7 +10,9 @@ import :input.device;
 import :input.key;
 import :input.listener;
 import :input.routing;
+import :renderer.grid_pass;
 import :renderer.triangle_pass;
+import :scene.camera.controller;
 import :service.input;
 import :window.viewport;
 
@@ -76,9 +78,10 @@ namespace pP {
         // Camera controller is a pure motion integrator; the
         // background-drag latch lives in Routing (m_bg_state).
         m_camera_input_mapping = std::make_unique<InputMapping>("camera_input_mapping");
-        m_camera_controller = std::make_unique<FreeCameraController>();
-        m_camera_controller->lookAt(float3{0.0f, 0.0f, -2.0f}, float3{0.0f, 0.0f, 0.0f}, math::axis_y);
-        m_camera_controller->provideInputActionKeyMappings(*m_camera_input_mapping);
+        auto free_camera = std::make_unique<FreeCameraController>();
+        free_camera->lookAt(float3{0.0f, 0.0f, -2.0f}, float3{0.0f, 0.0f, 0.0f}, math::axis_y);
+        free_camera->provideInputActionKeyMappings(*m_camera_input_mapping);
+        m_camera_controller = std::move(free_camera);
 
         m_player->getListener().addInputMapping(m_camera_input_mapping, static_cast<int>(EInputMappingPriority::camera));
 
@@ -94,7 +97,9 @@ namespace pP {
 
         m_device_disconnected_handle = input_service->whenDeviceDisconnected([this](const IInputDevice &) noexcept {
             // Session reset (Routing latch) is separate from motion reset (controller).
-            m_input_background_latch->resetInputState();
+            if (m_input_background_latch) {
+                m_input_background_latch->resetInputState();
+            }
             if (m_camera_controller) {
                 m_camera_controller->resetInputState();
             }
@@ -111,6 +116,17 @@ namespace pP {
             *shader_service,
             getContentDir()));
 
+        m_grid_pass = std::make_unique<GridPass>();
+        const std::error_code grid_err = m_grid_pass->initialize(*rhi_service, *shader_service, getContentDir());
+        if (grid_err) [[unlikely]] {
+            // run() also calls shutdown on failed initialization. Clean the
+            // partially initialized pass now, retaining the original error.
+            std::error_code cleanup_err{};
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup_err, m_grid_pass->shutdown());
+            m_grid_pass.reset();
+            return grid_err;
+        }
+
         m_ui_service = ui::createImGuiService();
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->initialize(
             *m_main_input_context,
@@ -119,6 +135,7 @@ namespace pP {
             m_input_background_latch->m_foreground_priority));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_input_background_latch->initialize(m_main_input_context->m_context, m_ui_service->getInputListener()));
+        m_input_latch_initialized = true;
 
         IWindowService &window_service = *getPlatform().getWindowService();
 
@@ -154,6 +171,45 @@ namespace pP {
         main_window->m_when_focused.subscribe<&ApplicationEditor::onMainWindowFocused_>(this);
 
         getServices().insert_or_assign(safe_ptr(m_ui_service));
+        return default_value_v;
+    }
+
+    std::error_code ApplicationEditor::replaceMainCameraController(std::unique_ptr<ICameraController> controller,
+                                                                   const ECameraProjection projection) {
+        if (not controller) [[unlikely]] {
+            return make_error_code(std::errc::invalid_argument);
+        }
+        if (not m_camera or not m_camera_controller or not m_camera_input_mapping or
+            not m_player or not m_main_input_context or not m_main_viewport) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
+        // Prepare before detaching so allocation failures leave the current
+        // controller and its mapping intact.
+        auto next_mapping = std::make_unique<InputMapping>("camera_input_mapping");
+        controller->resetInputState();
+        controller->provideInputActionKeyMappings(*next_mapping);
+
+        InputListener &listener = m_player->getListener();
+        if (not listener.removeInputMapping(*m_camera_input_mapping)) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
+        m_camera_controller->resetInputState();
+        m_player->clearFrameMessages();
+        if (m_input_background_latch) {
+            m_input_background_latch->resetInputState();
+        }
+
+        // Destroy the old mapping (including its callback captures) before
+        // the old controller at scope exit.
+        auto previous_controller = std::move(m_camera_controller);
+        auto previous_mapping = std::move(m_camera_input_mapping);
+        m_camera_controller = std::move(controller);
+        m_camera_input_mapping = std::move(next_mapping);
+        listener.addInputMapping(m_camera_input_mapping, static_cast<int>(EInputMappingPriority::camera));
+        m_camera->setCameraMode(projection);
+        m_camera->signalCameraCutNextFrame();
         return default_value_v;
     }
 
@@ -278,7 +334,10 @@ namespace pP {
         }
 
         if (m_input_background_latch) {
-            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_input_background_latch->shutdown(m_main_input_context->m_context));
+            if (m_input_latch_initialized) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_input_background_latch->shutdown(m_main_input_context->m_context));
+                m_input_latch_initialized = false;
+            }
             m_input_background_latch.reset();
         }
 
@@ -290,6 +349,11 @@ namespace pP {
 
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_ui_service->shutdown());
             m_ui_service.reset();
+        }
+
+        if (m_grid_pass) {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->shutdown());
+            m_grid_pass.reset();
         }
 
         if (m_triangle_pass) {
@@ -369,6 +433,7 @@ namespace pP {
             std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_camera->getSnapshot()));
 
         if (m_scene.has_value()) {
             PPR_RETURN_ERROR_ON_FAIL(Editor, submitSceneInstances_());
@@ -386,10 +451,22 @@ namespace pP {
 
         Renderer &renderer = getRenderer();
 
+        // Cell uploads write a mapped atlas shared with earlier GPU frames.
+        // Stage and snapshot updates happen in update(); fence and publish
+        // pending visible cells before opening the surface render pass.
+        const safe_ptr<IRhiService> rhi_service = getServices().tryGet<IRhiService>();
+        if (not rhi_service) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+        const auto wait_for_gpu_idle = [&renderer]() -> std::error_code {
+            return renderer.waitOnHost();
+        };
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle));
+
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
                 .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
-                .m_draws = {DrawSubmission(*m_triangle_pass)},
+                .m_draws = {DrawSubmission(*m_grid_pass), DrawSubmission(*m_triangle_pass)},
             },
             {
                 .m_surface_color = ColorAttachmentOps{

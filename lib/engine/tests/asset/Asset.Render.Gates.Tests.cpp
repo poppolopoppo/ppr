@@ -47,9 +47,7 @@ namespace pP::tests::detail {
         [[nodiscard]] Expected<image::ImageAsset> decodeFilePng(const std::string_view name) {
             Expected<mem::SharedBuffer> mapped =
                     mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
-            if (not
-                mapped.has_value())
-            {
+            if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
             return image::decodeToRgba8(
@@ -65,9 +63,7 @@ namespace pP::tests::detail {
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 16u, rgba.data()
             };
-            if (not
-                static_cast<bool>(surface.save(path.string())))
-            {
+            if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }
             if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(path); mapped.has_value()) {
@@ -87,9 +83,7 @@ namespace pP::tests::detail {
                 rgba[offset + 3u] = std::byte{255u};
             }
             const mem::SharedBuffer png = gatePngBytes(name, rgba);
-            if (not
-                png.isValid())
-            [[unlikely]] {
+            if (not png.isValid()) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::io_error)};
             }
             return image::decodeToRgba8(
@@ -225,10 +219,7 @@ namespace pP::tests::detail {
                     make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
-            if (blob.get() == nullptr
-                or
-            blob->getBufferPointer() == nullptr)
-            {
+            if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
             GatePixels pixels{};
@@ -278,9 +269,7 @@ namespace pP::tests::detail {
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
                 const std::size_t node_index = static_cast<std::size_t>(*instance.m_node);
-                if (mesh_index >= scene.m_meshes.size()
-                    or node_index >= scene.m_nodes.size())
-                {
+                if (mesh_index >= scene.m_meshes.size() or node_index >= scene.m_nodes.size()) {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
                 const float4x4 world = scene.m_nodes[node_index].m_world.toMatrix();
@@ -289,9 +278,7 @@ namespace pP::tests::detail {
                      ++prim_slot) {
                     Expected<TrianglePass::JoinedInstancePrim> joined =
                             TrianglePass::joinInstancePrim(scene, uploaded, instance, prim_slot);
-                    if (not
-                        joined.has_value())
-                    {
+                    if (not joined.has_value()) {
                         return joined.error();
                     }
                     if (const std::error_code submit_err =
@@ -665,9 +652,7 @@ namespace pP::tests::detail {
                     return std::unexpected{submit_err};
                 }
                 const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 128u);
-                if (not
-                    target.has_value())
-                {
+                if (not target.has_value()) {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
                 }
@@ -684,9 +669,7 @@ namespace pP::tests::detail {
                     return std::unexpected{wait_err};
                 }
                 const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 128u);
-                if (not
-                    pixels.has_value())
-                {
+                if (not pixels.has_value()) {
                     return std::unexpected{pixels.error()};
                 }
                 const std::array<u8, 4u> texel = gateTexel_(*pixels, 64u, 64u);
@@ -749,9 +732,7 @@ namespace pP::tests::detail {
             };
 
             const auto closeEnough = [](const float3 &lhs, const float3 &rhs, const float tol) noexcept {
-                return std::abs(lhs.x - rhs.x) < tol
-                and std::abs(lhs.y - rhs.y) < tol and
-                std::abs(lhs.z - rhs.z) < tol;
+                return std::abs(lhs.x - rhs.x) < tol and std::abs(lhs.y - rhs.y) < tol and std::abs(lhs.z - rhs.z) < tol;
             };
 
             Array<mesh::StaticMeshVertex> ref_verts(quad.m_vertices.begin(), quad.m_vertices.end());
@@ -785,7 +766,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(closeEnough(*ref_lit, analytic(ref_t, ref_tangent.w), 0.05f));
             PPR_TEST_ASSERT(closeEnough(*flip_lit, analytic(ref_t, -ref_tangent.w), 0.05f));
             PPR_TEST_ASSERT(
-                std::abs(ref_lit->x - flip_lit->x) > 0.05f or std::abs(ref_lit->y - flip_lit->y) > 0.05f or
+                std::abs(ref_lit->x - flip_lit->x) > 0.05f or
+                std::abs(ref_lit->y - flip_lit->y) > 0.05f or
                 std::abs(ref_lit->z - flip_lit->z) > 0.05f);
 
             const Expected<float3> flat_lit = render_center(*ref_bag, *flat_mat);
@@ -820,8 +802,8 @@ namespace pP::tests::detail {
             two.m_color_format_count = 2u;
             PPR_TEST_ASSERT(one.colorFormats().size() == 1u);
             PPR_TEST_ASSERT(two.colorFormats().size() == 2u);
-            PPR_TEST_ASSERT(not(one == two));
-            PPR_TEST_ASSERT(not(two == one));
+            PPR_TEST_ASSERT(not (one == two));
+            PPR_TEST_ASSERT(not (two == one));
         };
 
         PPR_UNIT_TEST (pipeline_signature_tail_insensitivity) {
@@ -848,7 +830,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(hashValue(base) == hashValue(copy));
             RenderPipelineSignature resampled = base;
             resampled.m_sample_count = SampleCount::x4;
-            PPR_TEST_ASSERT(not(base == resampled));
+            PPR_TEST_ASSERT(not (base == resampled));
             // The sample count is part of the key: a resampled signature must
             // not collide with the single-sampled one it came from.
             PPR_TEST_ASSERT(hashValue(base) != hashValue(resampled));

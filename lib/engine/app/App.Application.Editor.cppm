@@ -3,6 +3,7 @@ module;
 export module engine.app:application_editor;
 
 import :application;
+import :scene.camera;
 import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
@@ -13,7 +14,8 @@ import engine.mesh;
 import std;
 
 export namespace pP {
-    class FreeCameraController;
+    class GridPass;
+    class ICameraController;
     class InputBackgroundLatch;
     class InputMapping;
     class TrianglePass;
@@ -56,6 +58,12 @@ export namespace pP {
         [[nodiscard]] std::error_code unloadScene();
 
         [[nodiscard]] TrianglePass &getTrianglePass() noexcept { return *m_triangle_pass; }
+        [[nodiscard]] GridPass &getGridPass() noexcept { return *m_grid_pass; }
+
+        // Post-initialize only. Rebuilds the camera input mapping before
+        // releasing the previous controller; the editor keeps camera ownership.
+        [[nodiscard]] std::error_code replaceMainCameraController(std::unique_ptr<ICameraController> controller,
+                                                                  ECameraProjection projection);
 
     protected:
         // ReSharper disable once CppOverrideWithDifferentVisibility
@@ -81,17 +89,19 @@ export namespace pP {
 
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};
-        std::unique_ptr<FreeCameraController> m_camera_controller{};
+        std::unique_ptr<ICameraController> m_camera_controller{};
         std::unique_ptr<WindowInputContext> m_main_input_context{};
         std::unique_ptr<InputMapping> m_camera_input_mapping{};
         std::unique_ptr<IUIService> m_ui_service{};
         std::unique_ptr<WindowViewport> m_main_viewport{};
         std::unique_ptr<TrianglePass> m_triangle_pass{};
+        std::unique_ptr<GridPass> m_grid_pass{};
 
         // Background-drag actuator @ detector priority; registrar == owner.
         // Routing-owned latch; actuator borrows it (detach-before-destroy).
         std::unique_ptr<InputBackgroundLatch> m_input_background_latch{};
 
         IInputService::DeviceCallback::Handle m_device_disconnected_handle{};
+        bool m_input_latch_initialized{false};
     };
 }
