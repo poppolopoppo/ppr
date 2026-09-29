@@ -2,30 +2,93 @@
 
 ## Responsibility
 
-Demo executable (`app.game`): `demo::TurboLarbin : ApplicationEditor` privately owns a static Kenney colony fixture, plus `main()` that constructs it (`"ppr"`, argv span via `pP::checked_cast<std::size_t>(argc)` — `int`→`size_t` sign-conversion safe under Clang `-Wconversion -Werror`) and returns `app.run().value()` as the exit code. The fixture imports 16 staged GLBs with `engine.mesh`, decodes their image references with `engine.image`, uploads each scene to the editor-owned `TrianglePass`, and submits a measured 53-placement, roughly 20-unit-wide, three-depth-layer cutaway habitat without using `ApplicationEditor::loadScene` or `unloadScene`. The editor partition SHIPS — `main.cpp` imports `ApplicationEditor` unconditionally, so do not attempt to gate it behind `BUILD_TESTING`/`PPR_ENABLE_UNIT_TEST`. It hosts the `Application` run loop without owning engine behavior: scene, player, camera, viewport, and UI state are inherited from `ApplicationEditor`/`Application`; game code adds only fixture lifecycle ownership.
+Demo executable (`app.game`): `main()` passes a checked `argc`/`argv` span to
+`demo::TurboLarbin : ApplicationEditor`, unless `--smoke` selects the separate
+headless `pP::colony::runColonySmoke` host before the editor is constructed.
+The interactive editor presents a seeded, generated 4096×4096-cell colony
+through its `GridPass` and a compact ImGui status panel. It still initializes
+`TrianglePass`, but submits no Kenney fixture scene. `ApplicationEditor` owns
+the window, player, camera, viewport, input context, UI, and both passes;
+game code owns the colony driver, render translator, and game input mapping.
+The editor module ships unconditionally, independent of `BUILD_TESTING`.
 
 ## Design
 
-- Patterns/abstractions: template-method lifecycle hooks (`initialize()` / `update(const TimeSpan)` / `shutdown()` returning `std::error_code`), inherited constructors (`using super_t::super_t` where `super_t = ApplicationEditor`), data-driven static asset and placement tables, per-entry CPU/GPU ownership, reverse receipt release, service-locator lookup with validity guard (`getServices().get<IUIService>()` + `isValid()`), and thin `main` glue delegating to `Application::run()`.
-- `main.cpp` — `TurboLarbin` owns 16 loaded `LoadedAsset` entries and a spec-to-loaded mapping. `initialize` first initializes the editor, then imports `meshes/kenney_colony` with `mesh::importAndConvert`, logs each runtime mesh center/size, resolves each `ImageRef`, decodes RGBA8 color images, and calls `TrianglePass::uploadScene` without mip generation. `update` first updates the editor, clears pass instances, walks the 53-placement habitat layout's `SceneInstance -> mesh -> primitive` source descriptors, and submits `placement * source_world` with row-major row-vector transforms. Each placement has a validated positive uniform scale and measured quarter-turn orientation; the composition spans foreground service traffic, central circulation/habitat, and background shell/services. `shutdown` disables submissions, releases successful receipts in reverse order, preserves the first cleanup error, then shuts down the editor. `PPR_DEFINE_LOG_CATEGORY(Demo, …)` provides load, bounds, one-time submission, and release logging without per-frame spam.
-- `CMakeLists.txt` — `add_executable(app.game main.cpp)` + `setup_ppr_project(... engine.core/app/math/shader/rhi)`; two POST_BUILD steps: (1) copy `$<TARGET_RUNTIME_DLLS:app.game>` (transitive Windows DLLs, e.g. Slang) next to the exe — replaces any hardcoded DLL list — guarded by `if(WIN32)` (the genex is empty on Linux, which would degrade the copy command into a usage error); (2) unconditional copy `assets/shaders` → `<exe-dir>/shaders`.
-- Imports six engine C++23 modules (`engine.core/image/math/mesh/rhi/app`) + `std`; direct `engine.image` and `engine.mesh` imports expose the colony fixture APIs.
+- `main.cpp` — `TurboLarbin` lifecycle hooks return `std::error_code`.
+  `initialize()` first initializes `ApplicationEditor`, then generates seed
+  `1234567`, installs `PanCameraController` in orthographic XY mode near world
+  center (pixel extent × scale 0.5, eye z = -0.5), and registers owned
+  `InputAction`s in the player listener at camera mapping priority without
+  shadowing camera WASD/wheel or the higher-priority UI. Space toggles pause;
+  N single-steps only while paused; 1/2/3 select tick speed; R selects a fresh
+  application-boundary random seed, logs it, regenerates, and resets pass
+  presentation state. Input errors surface through `update()`.
+- `update(dt)` runs the editor, advances the fixed-step driver, stages resident
+  chunk tiles via `ColonyTranslator`, computes frustum-visible tile/chunk counts
+  using `GridPass::planTiles` and the camera snapshot, then draws the Colony
+  panel. One chunk-sized tile per chunk makes the two visible counts equal.
+  `shutdown()` detaches the game mapping before destroying callbacks/actions,
+  resets translator staging, shuts down the driver, then shuts down the editor
+  while retaining the first cleanup error.
+- `colony/Colony.cppm/.cpp` and `WorldGen.cppm/.cpp` — game-owned colony
+  lifecycle and deterministic `sim::generate` world generation; element IDs
+  live in `colony/Colony.Elements.h`.
+- `colony/ColonyDriver.cppm/.cpp` — seeded `Colony` plus bounded fixed-timestep
+  accumulator, pause/step/speed controls, regeneration, and grid/clock access;
+  no rendering, physics, application, or implicit clock dependency.
+- `colony/ColonyTranslator.cppm/.cpp` — render-thread-confined bridge from
+  resident `engine.sim` chunks to `GridPass` tile and cell-material submissions;
+  unseen/invalidated chunks upload, vacuum maps to transparent `0xffff`, and
+  reset or submission failure clears pass staging/cache. Its submitted-chunk
+  counter is not a frustum-visibility count.
+- `colony/ColonyPanel.cppm/.cpp` — read-only ImGui overlay for seed, tick,
+  simulation time, pause/speed, resident chunks, and frustum-visible counts.
+- `colony/ColonySmoke.cppm/.cpp` — `game.colony.smoke` exposes
+  `runColonySmoke(argv)`. Its own headless, rendering-enabled `Application`
+  generates a colony, renders one `GridPass` frame into an RGBA8 offscreen
+  target, checks a generated temperate rock cell by GPU readback, prints a
+  PASS/FAIL summary, and does not create an editor window or UI.
 
 ## Flow
 
-1. `main(argc, argv)` → `TurboLarbin("ppr", std::span(&argv[0], checked_cast<size_t>(argc)))` → `app.run()` (dirs, platform/services, window, renderer, camera, UI bootstrap owned by `Application`/`ApplicationEditor`).
-2. `run()` → `TurboLarbin::initialize()` → `ApplicationEditor::initialize()` → static GLB import/image decode/GPU upload for the staged colony.
-3. Loop per frame until cancel/exit: `ApplicationEditor::update(dt)` → `TurboLarbin::update(dt)` rebuilds the colony submissions → debug-only ImGui demo window → engine render.
-4. Teardown: `TurboLarbin::shutdown()` clears instances and releases fixture receipts in reverse, then `ApplicationEditor::shutdown()`; `main` returns `err.value()`.
-5. POST_BUILD assets (Windows-only DLLs + shaders/textures/meshes) must land next to the exe or startup file loads fail.
+1. `main(argc, argv)` builds the checked span. If `argv[1]` is `--smoke`,
+   call `runColonySmoke(args)` and return its error value; otherwise construct
+   `TurboLarbin("ppr", args)` and return `app.run().value()` (other flags retain
+   the editor path).
+2. Editor initialization bootstraps window/services/shaders/passes/UI,
+   generates the default colony, installs orthographic pan/zoom camera and
+   registers colony keys. No fixture import, scene merge, or triangle submission.
+3. Each interactive frame updates editor and colony, translates resident
+   chunks into `GridPass` submissions, plans visible tile counts, and draws
+   the panel before editor-owned rendering/presentation.
+4. On exit, remove the colony input mapping before its actions, clear staged
+   grid tiles, shut down the driver, and perform editor teardown; preserve the
+   first error. The smoke path independently tears down its offscreen target,
+   grid pass, driver, and base `Application`.
+5. `app.game` POST_BUILD stages `assets/shaders/` and `assets/textures/` beside
+   the executable, and `assets/meshes/` if it exists. The generated-colony
+   render and smoke paths need the staged shaders, not Kenney meshes.
 
 ## Integration
 
-- **Consumers**: run configuration / built `app.game` binary.
-- **Depends on**: engine app/core/image/math/mesh/rhi modules; `ApplicationEditor` + `Application` run loop + `IUIService`; `mesh::importAndConvert`; `image::decodeToRgba8`; `TrianglePass`; DearImGui bindings; runtime `shaders/`, `textures/`, and `meshes/kenney_colony/` staged beside the executable.
-- **Provides**: process entry point only — no library, no reusable namespace.
+- **Consumers**: interactive `app.game` and `app.game --smoke` run configurations.
+- **Depends on**: `engine.core`, `engine.app`, `engine.math`, `engine.shader`,
+  `engine.rhi`, and `engine.sim` via `game/CMakeLists.txt`; **not**
+  `engine.physics`. The editor uses `ApplicationEditor`, `GridPass`,
+  `PanCameraController`, input actions, and ImGui; smoke uses `Application`,
+  `Renderer`, `GridPass`, and RHI readback. Runtime `shaders/` are staged.
+- **Provides**: process entry point and game-owned `game.colony`,
+  `game.colony.worldgen`, `.driver`, `.translator`, `.panel`, and `.smoke`
+  module APIs. `main.cpp` directly imports `engine.app/core/math/sim` and
+  `std`, plus the driver/translator/panel/smoke modules.
 
 ## Key Files
 
-- `main.cpp` — `TurboLarbin` subclass + `main()`.
-- `CMakeLists.txt` — `app.game` target, DLL + shader POST_BUILD copies.
+- `main.cpp` — editor-facing generated colony, controls, panel, `--smoke` dispatch.
+- `colony/Colony.Elements.h`, `colony/Colony.cppm/.cpp`, `colony/WorldGen.cppm/.cpp` — element IDs, grid ownership, seeded generation.
+- `colony/ColonyDriver.cppm/.cpp` — deterministic fixed-step simulation host.
+- `colony/ColonyTranslator.cppm/.cpp` — GridPass submissions and cache invalidation.
+- `colony/ColonyPanel.cppm/.cpp` — read-only ImGui colony status overlay.
+- `colony/ColonySmoke.cppm/.cpp` — one-frame headless GPU readback smoke host.
+- `colony/codemap.md` — colony module detail map.
+- `CMakeLists.txt` — `app.game` modules/dependencies and shader/texture/conditional mesh staging.

@@ -1,159 +1,127 @@
 #include "pP/Macros.h"
 
+import engine.app;
 import engine.core;
-import engine.image;
 import engine.math;
 import engine.mesh;
-import engine.rhi;
-import engine.app;
+import engine.sim;
 import std;
 
-import imgui_internal;
+import game.colony.driver;
+import game.colony.translator;
+import game.colony.panel;
+import game.colony.pathfinding;
+import game.colony.smoke;
 
 namespace demo {
     using namespace pP;
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
 
-    class TurboLarbin : public ApplicationEditor {
-        struct AssetSpec final {
-            const char *m_pack;
-            const char *m_format;
-            const char *m_file;
-        };
+    class TurboLarbin final : public ApplicationEditor {
+        colony::ColonyDriver m_driver{};
+        colony::ColonyTranslator m_translator{};
+        TriangleBagHandle m_quad_bag{};
+        MaterialHandle m_agent_material{};
+        MaterialHandle m_path_material{};
+        std::array<std::unique_ptr<InputAction>, 6u> m_actions{};
+        std::unique_ptr<InputMapping> m_colony_mapping{};
+        std::error_code m_input_error{};
+        bool m_driver_ready{false};
+        bool m_debug_draw_ready{false};
 
-        enum class ESceneZone : u8 {
-            shell,
-            circulation,
-            services,
-            habitat,
-            nature,
-        };
-
-        struct Placement final {
-            ESceneZone m_zone;
-            std::size_t m_asset;
-            float m_position[3];
-            float m_scale;
-            u8 m_quarter_turns;
-        };
-
-        static constexpr AssetSpec kAssetSpecs[]{
-            {"Space Station Kit", "GLB format", "floor.glb"},
-            {"Space Station Kit", "GLB format", "wall.glb"},
-            {"Space Station Kit", "GLB format", "wall-window.glb"},
-            {"Space Station Kit", "GLB format", "wall-door-center.glb"},
-            {"Space Station Kit", "GLB format", "door-single.glb"},
-            {"Space Station Kit", "GLB format", "stairs.glb"},
-            {"Space Station Kit", "GLB format", "pipe.glb"},
-            {"Space Station Kit", "GLB format", "bed-single.glb"},
-            {"Space Station Kit", "GLB format", "container-tall.glb"},
-            {"Space Station Kit", "GLB format", "table.glb"},
-            {"Factory Kit", "GLB format", "catwalk-straight.glb"},
-            {"Factory Kit", "GLB format", "machine.glb"},
-            {"Factory Kit", "GLB format", "conveyor.glb"},
-            {"Factory Kit", "GLB format", "pipe-large-valve.glb"},
-            {"Prototype Kit", "GLB format", "ladder.glb"},
-            {"Food Kit", "GLB format", "bread.glb"},
-        };
-        static_assert(std::size(kAssetSpecs) == 16u);
-
-        // Kepler-9 Cutaway Waystation: a 20-unit shell establishes the
-        // footprint while the entrance, stairs, ladder, catwalk, and raised
-        // habitat remain concentrated around the inherited central camera.
-        static constexpr std::array<Placement, 53u> kHabitatLayout{
-            {
-                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 2u, {-7.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {-5.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 2u, {-3.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {-1.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 2u, {1.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {3.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 2u, {5.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {7.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {9.0f, 0.0f, 15.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 8.0f}, 2.0f, 1u},
-                {ESceneZone::shell, 1u, {-9.0f, 0.0f, 11.5f}, 2.0f, 1u},
-                {ESceneZone::shell, 2u, {-9.0f, 0.0f, 15.0f}, 2.0f, 1u},
-                {ESceneZone::shell, 1u, {9.0f, 0.0f, 8.0f}, 2.0f, 1u},
-                {ESceneZone::shell, 1u, {9.0f, 0.0f, 11.5f}, 2.0f, 1u},
-                {ESceneZone::shell, 2u, {9.0f, 0.0f, 15.0f}, 2.0f, 1u},
-                {ESceneZone::shell, 3u, {0.0f, 0.0f, 6.0f}, 1.5f, 0u},
-                {ESceneZone::shell, 4u, {0.0f, 0.0f, 6.2f}, 1.5f, 0u},
-                {ESceneZone::shell, 0u, {-8.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {-6.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {-4.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {-2.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {0.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {2.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {4.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {6.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::shell, 0u, {8.0f, -0.3f, 8.0f}, 2.0f, 0u},
-                {ESceneZone::circulation, 5u, {-1.5f, 0.0f, 6.5f}, 1.0f, 0u},
-                {ESceneZone::circulation, 5u, {-0.5f, 0.3f, 6.5f}, 1.0f, 0u},
-                {ESceneZone::circulation, 5u, {0.5f, 0.6f, 6.5f}, 1.0f, 0u},
-                {ESceneZone::circulation, 5u, {1.5f, 0.9f, 6.5f}, 1.0f, 0u},
-                {ESceneZone::circulation, 14u, {2.2f, 0.9f, 6.8f}, 1.8f, 0u},
-                {ESceneZone::circulation, 10u, {-1.0f, 1.8f, 6.8f}, 1.5f, 1u},
-                {ESceneZone::circulation, 10u, {1.0f, 1.8f, 6.8f}, 1.5f, 1u},
-                {ESceneZone::circulation, 10u, {3.0f, 1.8f, 6.8f}, 1.5f, 1u},
-                {ESceneZone::circulation, 10u, {5.0f, 1.8f, 6.8f}, 1.5f, 1u},
-                {ESceneZone::circulation, 0u, {0.0f, 1.8f, 7.0f}, 2.0f, 0u},
-                {ESceneZone::circulation, 0u, {2.0f, 1.8f, 7.0f}, 2.0f, 0u},
-                {ESceneZone::circulation, 0u, {4.0f, 1.8f, 7.0f}, 2.0f, 0u},
-                {ESceneZone::services, 11u, {-2.5f, 0.0f, 6.0f}, 1.2f, 0u},
-                {ESceneZone::services, 12u, {0.0f, 0.0f, 6.2f}, 1.5f, 0u},
-                {ESceneZone::services, 12u, {-2.0f, 0.0f, 9.0f}, 2.0f, 0u},
-                {ESceneZone::services, 12u, {2.0f, 0.0f, 9.0f}, 2.0f, 0u},
-                {ESceneZone::services, 13u, {-3.5f, 0.9f, 9.0f}, 1.2f, 0u},
-                {ESceneZone::services, 8u, {-6.0f, 0.0f, 8.0f}, 1.5f, 0u},
-                {ESceneZone::services, 8u, {6.0f, 0.0f, 8.0f}, 1.5f, 0u},
-                {ESceneZone::services, 6u, {-5.0f, 2.3f, 14.6f}, 1.5f, 0u},
-                {ESceneZone::services, 6u, {-2.5f, 2.3f, 14.6f}, 1.5f, 0u},
-                {ESceneZone::services, 6u, {0.0f, 2.3f, 14.6f}, 1.5f, 0u},
-                {ESceneZone::services, 6u, {2.5f, 2.3f, 14.6f}, 1.5f, 0u},
-                {ESceneZone::habitat, 7u, {0.5f, 2.1f, 7.3f}, 1.2f, 0u},
-                {ESceneZone::habitat, 9u, {-0.2f, 2.1f, 7.3f}, 1.2f, 0u},
-                {ESceneZone::habitat, 15u, {-0.2f, 2.58f, 7.3f}, 1.0f, 0u},
+        [[nodiscard]] std::error_code regenerate_() {
+            // Entropy is chosen at the application boundary, never inside the simulation.
+            try {
+                std::random_device entropy{};
+                const u64 seed = std::mt19937_64{entropy()}();
+                PPR_LOG(Demo, info, "colony regeneration", {{"seed", seed},});
+                const std::error_code error = m_driver.regenerate(seed);
+                m_translator.reset(getGridPass());
+                return error;
+            } catch (const std::system_error &error) {
+                return error.code();
             }
-        };
+        }
 
-        [[nodiscard]] static float4x4 placementTransform(const Placement &placement) noexcept {
-            const float scale_x = placement.m_scale;
-            const float scale_y = placement.m_scale;
-            const float scale_z = placement.m_scale;
-            switch (placement.m_quarter_turns) {
-                case 0u:
-                    return float4x4{
-                        float4{scale_x, 0.0f, 0.0f, 0.0f},
-                        float4{0.0f, scale_y, 0.0f, 0.0f},
-                        float4{0.0f, 0.0f, scale_z, 0.0f},
-                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
-                    };
-                case 1u:
-                    return float4x4{
-                        float4{0.0f, 0.0f, scale_x, 0.0f},
-                        float4{0.0f, scale_y, 0.0f, 0.0f},
-                        float4{-scale_z, 0.0f, 0.0f, 0.0f},
-                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
-                    };
-                case 2u:
-                    return float4x4{
-                        float4{-scale_x, 0.0f, 0.0f, 0.0f},
-                        float4{0.0f, scale_y, 0.0f, 0.0f},
-                        float4{0.0f, 0.0f, -scale_z, 0.0f},
-                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
-                    };
-                case 3u:
-                    return float4x4{
-                        float4{0.0f, 0.0f, -scale_x, 0.0f},
-                        float4{0.0f, scale_y, 0.0f, 0.0f},
-                        float4{scale_z, 0.0f, 0.0f, 0.0f},
-                        float4{placement.m_position[0], placement.m_position[1], placement.m_position[2], 1.0f},
-                    };
-                default:
-                    return float4x4::identity();
+        void bindAction_(const std::size_t index, const string_literal description, const InputKey &key,
+                         InputTriggerEvent callback) {
+            m_actions[index] = std::make_unique<InputAction>(description, EInputValueType::digital);
+            m_actions[index]->setStarted(std::move(callback));
+            m_colony_mapping->mapInputKey(SharedInputAction(m_actions[index].get()), key);
+        }
+
+        void initializeInput_() {
+            m_colony_mapping = std::make_unique<InputMapping>("colony_input_mapping");
+            bindAction_(0u, "ColonyPause", InputKey::space_bar,
+                [this](const InputActionEvent &, const InputKey &) noexcept { m_driver.togglePaused(); });
+            bindAction_(1u, "ColonyStep", InputKey::n,
+                [this](const InputActionEvent &, const InputKey &) noexcept {
+                    if (m_driver.paused() and not m_input_error) {
+                        m_input_error = m_driver.stepOne();
+                    }
+                });
+            bindAction_(2u, "ColonySpeed1", InputKey::one,
+                [this](const InputActionEvent &, const InputKey &) noexcept {
+                    if (not m_input_error) { m_input_error = m_driver.setSpeed(1u); }
+                });
+            bindAction_(3u, "ColonySpeed2", InputKey::two,
+                [this](const InputActionEvent &, const InputKey &) noexcept {
+                    if (not m_input_error) { m_input_error = m_driver.setSpeed(2u); }
+                });
+            bindAction_(4u, "ColonySpeed3", InputKey::three,
+                [this](const InputActionEvent &, const InputKey &) noexcept {
+                    if (not m_input_error) { m_input_error = m_driver.setSpeed(3u); }
+                });
+            bindAction_(5u, "ColonyRegenerate", InputKey::r,
+                [this](const InputActionEvent &, const InputKey &) {
+                    if (not m_input_error) { m_input_error = regenerate_(); }
+                });
+
+            // These keys do not overlap the camera mapping; UI still gets first refusal.
+            getMainPlayer()->getListener().addInputMapping(m_colony_mapping,
+                static_cast<int>(EInputMappingPriority::camera));
+        }
+
+        [[nodiscard]] std::error_code drawPanel_() {
+            // The translator's count is submitted/resident, not frustum-visible.
+            // Plan the same chunk-sized tiles against the editor's current snapshot.
+            Array<GridTileSubmission> submissions{};
+            submissions.reserve(sim::kChunkCount);
+            const sim::ChunkGrid &grid = m_driver.grid();
+            for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
+                for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+                    const sim::ChunkPos pos{x, y};
+                    if (not grid.isResident(pos)) {
+                        continue;
+                    }
+                    const i32 min_x = static_cast<i32>(x * sim::kChunkEdge);
+                    const i32 min_y = static_cast<i32>(y * sim::kChunkEdge);
+                    submissions.push_back(GridTileSubmission{
+                        .m_chunk_id = sim::chunkIndexOf(pos),
+                        .m_tile_range = {
+                            min_x, min_y, min_x + static_cast<i32>(sim::kChunkEdge),
+                            min_y + static_cast<i32>(sim::kChunkEdge)
+                        },
+                    });
+                }
             }
+
+            Expected<GridTilePlan> plan = GridPass::planTiles(getMainCamera()->getSnapshot(), submissions);
+            if (not plan) [[unlikely]] {
+                return plan.error();
+            }
+            // Slice 1 uses exactly one tile per chunk, so these counts coincide.
+            const u32 visible = safe_narrowing(plan->m_tiles.size());
+            const colony::PathCounts paths = m_driver.pathCounts();
+            colony::drawColonyPanel(m_driver, colony::ColonyPanelCounts{
+                .m_visible_chunks = visible,
+                .m_visible_tiles = visible,
+                .m_paths = paths.m_paths,
+                .m_partials = paths.m_partials,
+                .m_blocked = paths.m_blocked,
+                .m_errands = m_driver.errandCount(),
+            });
+            return {};
         }
 
     public:
@@ -161,294 +129,181 @@ namespace demo {
         using super_t::super_t;
 
     protected:
-        std::error_code initialize() override {
+        [[nodiscard]] std::error_code initialize() override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::initialize());
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.init(colony::ColonyDriverDesc{.m_seed = 1234567u}));
+            m_driver_ready = true;
 
-            const std::filesystem::path asset_root = getContentDir().path() / "meshes" / "kenney_colony";
-            PPR_LOG(Demo, info, "colony fixture loading", {
-                {"root", asset_root.string()},
-                {"candidates", static_cast<u32>(std::size(kAssetSpecs))},
-                });
-
-            for (const Placement &placement: kHabitatLayout) {
-                if (placement.m_asset >= std::size(kAssetSpecs) or placement.m_scale <= 0.0f or
-                    placement.m_quarter_turns > 3u) [[unlikely]] {
-                    return make_error_code(std::errc::invalid_argument);
-                }
+            auto camera_controller = std::make_unique<PanCameraController>();
+            constexpr float ortho_scale = 0.5f;
+            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setOrthoScale(ortho_scale));
+            camera_controller->setParallelPlane(float3{0.0f, 0.0f, -1.0f}, math::axis_y, true);
+            const PixelRect &client = getMainViewport()->getViewport().getClientRect();
+            if (client.m_extent.x <= 0 or client.m_extent.y <= 0) [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
             }
+            // Ortho projects [0, width] x [0, height], not a centered interval.
+            // Put the temperate world center in the middle of the visible pixel extent.
+            const float half_width = static_cast<float>(client.m_extent.x) * ortho_scale * 0.5f;
+            const float half_height = static_cast<float>(client.m_extent.y) * ortho_scale * 0.5f;
+            camera_controller->translate(float3{2048.0f - half_width, 2048.0f - half_height, -0.5f}, true);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, replaceMainCameraController(std::move(camera_controller),
+                ECameraProjection::orthographic));
 
-            struct SourceAsset final {
-                mesh::SceneAsset m_scene{};
-                Array<mem::SharedBuffer> m_bytes{};
-                u32 m_mesh_base = 0u;
-                u32 m_mat_base = 0u;
-                u32 m_img_base = 0u;
-                u32 m_node_base = 0u;
-                bool m_included = false;
+            initializeInput_();
+            PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
+            return {};
+        }
+
+        [[nodiscard]] std::error_code uploadDebugDraw_() {
+            // Clockwise unit quad in XY facing +Z (this pipeline culls the
+            // other winding); shared by capsules and path polylines.
+            const mesh::StaticMeshVertex quad[4] = {
+                {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
             };
-            std::array<SourceAsset, std::size(kAssetSpecs)> sources{};
+            const u32 quad_indices[6] = {0u, 3u, 2u, 0u, 2u, 1u};
 
-            for (const auto &[spec_index, spec]: std::ranges::views::enumerate(kAssetSpecs)) {
-                const std::filesystem::path model_dir = asset_root / spec.m_pack / "Models" / spec.m_format / "";
-                Expected<mesh::SceneAsset> scene = mesh::importAndConvert(model_dir, spec.m_file);
-                if (not scene.has_value()) [[unlikely]] {
-                    PPR_LOG(Demo, warning, "colony asset import failed", {
-                        {"file", std::string{spec.m_file}},
-                        {"pack", std::string{spec.m_pack}},
-                        {"error", scene.error().message()},
-                        });
-                    continue;
-                }
-
-                for (std::size_t mesh_index = 0u; mesh_index < scene->m_meshes.size(); ++mesh_index) {
-                    const mesh::StaticMeshAsset &mesh_asset = scene->m_meshes[mesh_index];
-                    const float3 bounds_center = mesh_asset.m_bounds.center();
-                    const float3 bounds_size = mesh_asset.m_bounds.size();
-                    PPR_LOG(Demo, info, "colony source bounds", {
-                        {"file", std::string{spec.m_file}},
-                        {"mesh", static_cast<u32>(mesh_index)},
-                        {"center_x", bounds_center.x},
-                        {"center_y", bounds_center.y},
-                        {"center_z", bounds_center.z},
-                        {"size_x", bounds_size.x},
-                        {"size_y", bounds_size.y},
-                        {"size_z", bounds_size.z},
-                        });
-                }
-
-                Array<mem::SharedBuffer> source_bytes{};
-                source_bytes.reserve(scene->m_images.size());
-                bool decoded_all = true;
-                for (const mesh::ImageRef &ref: scene->m_images) {
-                    mem::SharedBuffer bytes{};
-                    if (ref.m_is_file) {
-                        Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(model_dir / ref.m_rel_path);
-                        if (not mapped.has_value()) [[unlikely]] {
-                            PPR_LOG(Demo, warning, "colony texture mapping failed", {
-                                {"file", std::string{spec.m_file}},
-                                {"texture", ref.m_rel_path},
-                                {"error", mapped.error().message()},
-                                });
-                            decoded_all = false;
-                            break;
-                        }
-                        bytes = *mapped;
-                    } else {
-                        bytes = ref.m_bytes;
-                    }
-
-                    if (not bytes.isValid()) [[unlikely]] {
-                        PPR_LOG(Demo, warning, "colony texture bytes are invalid", {
-                            {"file", std::string{spec.m_file}},
-                            {"texture", ref.m_name},
-                            });
-                        decoded_all = false;
-                        break;
-                    }
-
-                    Expected<image::ImageAsset> decoded = image::decodeToRgba8(
-                        bytes.getBufferData(), ref.m_ext,
-                        image::ImageDecodeDesc{}, image::EImageUsage::color);
-
-                    if (not decoded.has_value()) [[unlikely]] {
-                        PPR_LOG(Demo, warning, "colony asset decode failed", {
-                            {"file", std::string{spec.m_file}},
-                            {"texture", ref.m_name},
-                            {"error", decoded.error().message()},
-                            });
-                        decoded_all = false;
-                        break;
-                    }
-
-                    source_bytes.push_back(bytes);
-                }
-
-                if (not decoded_all) {
-                    continue;
-                }
-
-                PPR_LOG(Demo, info, "colony asset ready", {
-                    {"file", std::string{spec.m_file}},
-                    {"images", source_bytes.size()},
-                    {"meshes", scene->m_meshes.size()},
-                    });
-
-                SourceAsset &source = sources[spec_index];
-                source.m_scene = std::move(*scene);
-                source.m_bytes = std::move(source_bytes);
-                source.m_included = true;
+            TrianglePass &pass = getTrianglePass();
+            const auto bag = pass.uploadMesh(std::span<const mesh::StaticMeshVertex>{quad, 4u},
+                std::span<const u32>{quad_indices, 6u});
+            if (not bag) {
+                return bag.error();
             }
 
-            mesh::SceneAsset merged{};
-
-            std::size_t total_meshes = 0u;
-            std::size_t total_materials = 0u;
-            std::size_t total_images = 0u;
-            std::size_t total_nodes = 0u;
-            std::size_t total_expanded = 0u;
-            for (const SourceAsset &source: sources) {
-                if (not source.m_included) {
-                    continue;
-                }
-                total_meshes += source.m_scene.m_meshes.size();
-                total_materials += source.m_scene.m_materials.size();
-                total_images += source.m_scene.m_images.size();
-                total_nodes += source.m_scene.m_nodes.size();
-            }
-            for (const Placement &placement: kHabitatLayout) {
-                const SourceAsset &source = sources[placement.m_asset];
-                if (not source.m_included) {
-                    continue;
-                }
-                total_expanded += source.m_scene.m_instances.size();
+            const TextureHandle no_textures[4] = {{}, {}, {}, {}};
+            mesh::MaterialAsset agent_asset{};
+            agent_asset.m_base_color = float4{1.0f, 0.55f, 0.15f, 1.0f};
+            agent_asset.m_metallic = 0.0f;
+            agent_asset.m_roughness = 1.0f;
+            const auto agent_material = pass.packMaterial(agent_asset,
+                std::span<const TextureHandle>{no_textures, 4u});
+            if (not agent_material) {
+                return agent_material.error();
             }
 
-            merged.m_meshes.reserve(total_meshes);
-            merged.m_materials.reserve(total_materials);
-            merged.m_images.reserve(total_images);
-            merged.m_nodes.reserve(total_nodes + total_expanded);
-            merged.m_instances.reserve(total_expanded);
+            mesh::MaterialAsset path_asset{};
+            path_asset.m_base_color = float4{0.2f, 0.9f, 0.9f, 1.0f};
+            path_asset.m_metallic = 0.0f;
+            path_asset.m_roughness = 1.0f;
+            const auto path_material = pass.packMaterial(path_asset,
+                std::span<const TextureHandle>{no_textures, 4u});
+            if (not path_material) {
+                return path_material.error();
+            }
 
-            for (SourceAsset &source: sources) {
-                if (not source.m_included) {
+            m_quad_bag = *bag;
+            m_agent_material = *agent_material;
+            m_path_material = *path_material;
+            m_debug_draw_ready = true;
+            return {};
+        }
+
+        [[nodiscard]] float4x4 debugModel_(const float x, const float y, const float angle, const float sx,
+                                           const float sy) noexcept {
+            const float c = std::cos(angle);
+            const float s = std::sin(angle);
+            return float4x4{
+                float4{sx * c, sx * s, 0.0f, 0.0f},
+                float4{-sy * s, sy * c, 0.0f, 0.0f},
+                float4{0.0f, 0.0f, 1.0f, 0.0f},
+                float4{x, y, 0.5f, 1.0f},
+            };
+        }
+
+        [[nodiscard]] std::error_code submitDebugInstances_() {
+            TrianglePass &pass = getTrianglePass();
+            pass.clearInstances();
+            if (not m_debug_draw_ready) {
+                return {};
+            }
+
+            for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
+                if (const std::error_code error =
+                        pass.submitInstance(m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
+                    return error;
+                }
+            }
+
+            sim::Registry &registry = m_driver.registry();
+            for (const auto &[entity, agent]: registry.view<colony::Agent>()) {
+                (void) agent;
+                const colony::PathComp *path = registry.get<colony::PathComp>(entity);
+                if (path == nullptr or path->m_partial or path->m_count == 0u) {
                     continue;
                 }
-
-                source.m_mesh_base = safe_narrowing(merged.m_meshes.size());
-                source.m_mat_base = safe_narrowing(merged.m_materials.size());
-                source.m_img_base = safe_narrowing(merged.m_images.size());
-                source.m_node_base = safe_narrowing(merged.m_nodes.size());
-
-                const u32 img_base = source.m_img_base;
-                const u32 node_base = source.m_node_base;
-                for (const mesh::StaticMeshAsset &src_mesh: source.m_scene.m_meshes) {
-                    merged.m_meshes.push_back(src_mesh);
-                    mesh::StaticMeshAsset &dst_mesh = merged.m_meshes[merged.m_meshes.size() - 1u];
-                    for (mesh::MeshPrimitiveRange &primitive: dst_mesh.m_primitives) {
-                        primitive.m_material =
-                                mesh::MaterialAssetId{static_cast<u32>(*primitive.m_material + source.m_mat_base)};
-                    }
+                float px = 0.0f;
+                float py = 0.0f;
+                const sim::BodyState *pose = registry.get<sim::BodyState>(entity);
+                if (pose != nullptr) {
+                    px = pose->m_x;
+                    py = pose->m_y;
                 }
-                for (const mesh::MaterialAsset &src_material: source.m_scene.m_materials) {
-                    merged.m_materials.push_back(src_material);
 
-                    mesh::MaterialAsset &dst_material = merged.m_materials[merged.m_materials.size() - 1u];
-                    mesh::MaterialImageSlot *const slots[] = {
-                        &dst_material.m_base_color_map,
-                        &dst_material.m_metallic_map,
-                        &dst_material.m_roughness_map,
-                        &dst_material.m_normal_map,
-                        &dst_material.m_occlusion_map,
-                        &dst_material.m_emissive_map,
-                    };
-
-                    for (mesh::MaterialImageSlot *const slot: slots) {
-                        if (slot->enabled()) {
-                            slot->m_image = mesh::ImageAssetId{static_cast<u32>(*slot->m_image + img_base)};
+                for (u32 point = 0u; point < path->m_count; ++point) {
+                    const float qx = static_cast<float>(path->m_pts[point].m_x) + 0.5f;
+                    const float qy = static_cast<float>(path->m_pts[point].m_y) + 0.5f;
+                    const float dx = qx - px;
+                    const float dy = qy - py;
+                    const float length = std::sqrt(dx * dx + dy * dy);
+                    if (length > 0.01f) {
+                        if (const std::error_code error = pass.submitInstance(m_quad_bag, m_path_material,
+                            debugModel_((px + qx) * 0.5f, (py + qy) * 0.5f, std::atan2(dy, dx), length, 0.3f))) {
+                            return error;
                         }
                     }
-                }
-
-                for (std::size_t img_index = 0u; img_index < source.m_scene.m_images.size(); ++img_index) {
-                    merged.m_images.push_back(source.m_scene.m_images[img_index]);
-                    mesh::ImageRef &dst_ref = merged.m_images[merged.m_images.size() - 1u];
-                    dst_ref.m_is_file = false;
-                    dst_ref.m_bytes = source.m_bytes[img_index];
-                }
-
-                for (const mesh::SceneNodeAsset &src_node: source.m_scene.m_nodes) {
-                    merged.m_nodes.push_back(src_node);
-                    if (src_node.m_parent != none_v) {
-                        mesh::SceneNodeAsset &dst_node = merged.m_nodes[merged.m_nodes.size() - 1u];
-                        dst_node.m_parent = mesh::NodeId{static_cast<u32>(*src_node.m_parent + node_base)};
-                    }
+                    px = qx;
+                    py = qy;
                 }
             }
+            return {};
+        }
 
-            u32 active_placements = 0u;
-            std::array<u32, 5u> zone_counts{};
-            std::size_t total_draws = 0u;
-            for (const Placement &placement: kHabitatLayout) {
-                SourceAsset &source = sources[placement.m_asset];
-                if (not source.m_included) {
-                    continue;
+        [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+            PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
+            if (m_input_error) [[unlikely]] {
+                return m_input_error;
+            }
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.update(dt));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_translator.submit(m_driver.grid(), getGridPass()));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, submitDebugInstances_());
+            return drawPanel_();
+        }
+
+        [[nodiscard]] std::error_code shutdown() override {
+            std::error_code first_error{};
+            // Unregister borrowed action pointers and callbacks before releasing owners.
+            if (m_colony_mapping) {
+                if (not getMainPlayer()->getListener().removeInputMapping(*m_colony_mapping))
+                {
+                    first_error = make_error_code(std::errc::not_connected);
                 }
-
-                ++active_placements;
-                ++zone_counts[enumOrd(placement.m_zone)];
-
-                const float4x4 placement_matrix = placementTransform(placement);
-                for (const mesh::SceneInstance &src_instance: source.m_scene.m_instances) {
-                    if (src_instance.m_mesh >= source.m_scene.m_meshes.size() or
-                        src_instance.m_node >= source.m_scene.m_nodes.size()) [[unlikely]] {
-                        return make_error_code(std::errc::invalid_argument);
-                    }
-
-                    const mesh::SceneNodeAsset &src_node = source.m_scene.m_nodes[src_instance.m_node];
-                    const float4x4 combined = placement_matrix * src_node.m_world.toMatrix();
-                    const math::Transform baked = math::Transform::fromMatrix(combined);
-
-                    const mesh::StaticMeshAsset &src_mesh = source.m_scene.m_meshes[src_instance.m_mesh];
-                    const u32 shared_mesh = source.m_mesh_base + static_cast<u32>(*src_instance.m_mesh);
-                    total_draws += src_mesh.m_primitives.size();
-
-                    const u32 fresh_node = static_cast<u32>(merged.m_nodes.size());
-                    merged.m_nodes.push_back(mesh::SceneNodeAsset{
-                        .m_local = baked,
-                        .m_world = baked,
-                        .m_parent = none_v,
-                    });
-
-                    mesh::SceneInstance fresh_instance{
-                        .m_mesh = mesh::MeshAssetId{shared_mesh},
-                        .m_node = mesh::NodeId{fresh_node},
-                    };
-                    if (src_instance.m_material_override != none_v) {
-                        fresh_instance.m_material_override = mesh::MaterialAssetId{
-                            static_cast<u32>(*src_instance.m_material_override + source.m_mat_base)
-                        };
-                    }
-                    merged.m_instances.push_back(fresh_instance);
-                }
+                m_colony_mapping.reset();
             }
-
-            PPR_LOG(Demo, info, "colony fixture loaded", {
-                {"placements", active_placements},
-                {"candidates", static_cast<u32>(std::size(kAssetSpecs))},
-                {"meshes", static_cast<u32>(merged.m_meshes.size())},
-                {"instances", static_cast<u32>(merged.m_instances.size())},
-                });
-
-            if (merged.m_instances.empty()) [[unlikely]] {
-                return make_error_code(std::errc::no_such_file_or_directory);
+            for (auto &action: m_actions) {
+                action.reset();
             }
-
-            const std::error_code scene_err = super_t::setLoadedScene(asset_root, std::move(merged));
-            if (scene_err) [[unlikely]] {
-                PPR_LOG(Demo, warning, "colony scene upload failed", {
-                    {"error", scene_err.message()},
-                    });
-                return scene_err;
+            if (m_driver_ready) {
+                m_translator.reset(getGridPass());
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_driver.shutdown());
+                m_driver_ready = false;
             }
-
-            PPR_LOG(Demo, info, "colony fixture submitted", {
-                {"placements", kHabitatLayout.size()},
-                {"active_placements", active_placements},
-                {"draws", total_draws},
-                {"shell", zone_counts[enumOrd(ESceneZone::shell)]},
-                {"circulation", zone_counts[enumOrd(ESceneZone::circulation)]},
-                {"services", zone_counts[enumOrd(ESceneZone::services)]},
-                {"habitat", zone_counts[enumOrd(ESceneZone::habitat)]},
-                {"nature", zone_counts[enumOrd(ESceneZone::nature)]},
-                });
-
-            return default_value_v;
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, super_t::shutdown());
+            return first_error;
         }
     };
 }
 
 int main(const int argc, char *argv[]) {
-    demo::TurboLarbin app("ppr", std::span(&argv[0], pP::checked_cast<std::size_t>(argc)));
-    const std::error_code err = app.run();
-    return err.value();
+    const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};
+    if (argc > 1 and std::string_view{argv[1]} == "--smoke")
+    {
+        pP::hal::installDebugAssertHooks();
+        pP::hal::disableSystemErrorReporting();
+        return pP::colony::runColonySmoke(args).value();
+    }
+    demo::TurboLarbin app("ppr", args);
+    return app.run().value();
 }
