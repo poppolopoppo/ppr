@@ -22,7 +22,21 @@ export namespace pP::physics {
     };
 
     class ChunkColliders {
+        // H4b/Slice 6: per-chunk payload snapshot shadowing m_chains. Scene
+        // exposes no chain-content query, so the previous drain's geometry is
+        // cached here to diff against; m_shapes[pos][i] describes the chain
+        // held by m_chains[pos][i]. Entries are committed only after the
+        // Scene splice succeeds, so every failure path leaves both maps
+        // untouched exactly like the legacy code.
+        struct StoredChain {
+            std::vector<ChainPoint> m_points;
+            ChainPoint m_before{};
+            ChainPoint m_after{};
+            bool m_loop{};
+        };
+
         std::map<ColliderChunkPos, std::vector<ChainHandle> > m_chains;
+        std::map<ColliderChunkPos, std::vector<StoredChain> > m_shapes;
         std::set<ColliderChunkPos> m_pending;
 
     public:

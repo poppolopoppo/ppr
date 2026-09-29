@@ -435,6 +435,119 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not original.shutdown());
             PPR_TEST_ASSERT(not resumed.shutdown());
         };
+
+        PPR_UNIT_TEST (kept_chains_match_fresh_rebuild) {
+            constexpr physics::ColliderChunkPos left{0, 0};
+            constexpr physics::ColliderChunkPos right{1, 0};
+            constexpr u64 rider{201u};
+
+            std::array<u16, 64> left_cells{};
+            std::array<u16, 64> right_cells{};
+            for (int x = 0; x < 8; ++x) {
+                left_cells[x] = 1u;
+                right_cells[x] = 1u;
+            }
+            const std::array views{
+                physics::ColliderChunkView{left, left_cells, true},
+                physics::ColliderChunkView{right, right_cells, true}
+            };
+            const std::array both{left, right};
+
+            const auto noteContacts = [&](physics::Scene &target, bool &began, bool &ended) {
+                std::array<physics::ContactEvent, 64> events{};
+                std::size_t written{};
+                PPR_TEST_ASSERT(not target.drainContactEvents(events, written));
+                for (std::size_t i = 0u; i < written; ++i) {
+                    const bool involves = events[i].m_entity_a == rider or events[i].m_entity_b == rider;
+                    began = began or (involves and events[i].m_begin);
+                    ended = ended or (involves and not events[i].m_begin and not events[i].m_hit);
+                }
+            };
+
+            physics::Scene kept;
+            physics::ChunkColliders kept_colliders;
+            PPR_TEST_ASSERT(not kept.initialize({}));
+            u32 processed{};
+            PPR_TEST_ASSERT(not kept_colliders.rebuildDirtyChunks(kept, views, both, 8u, 8u, processed));
+            PPR_TEST_ASSERT(processed == 2u);
+            const std::size_t left_chains = kept_colliders.chainCount(left);
+            const std::size_t right_chains = kept_colliders.chainCount(right);
+            PPR_TEST_ASSERT(left_chains != 0u and right_chains != 0u);
+
+            const std::array<u64, 1> entities{rider};
+            std::array<physics::BodyDefinition, 1> definitions{};
+            definitions[0].m_motion = physics::EMotion::dynamic;
+            definitions[0].m_x = 3.5f;
+            definitions[0].m_y = 3.0f;
+            definitions[0].m_half_width = 0.3f;
+            definitions[0].m_half_height = 0.3f;
+            definitions[0].m_enable_sleep = false;
+            std::array<physics::BodyHandle, 1> kept_handle{};
+            PPR_TEST_ASSERT(not kept.createBodies(entities, definitions, kept_handle));
+            bool kept_began{false};
+            bool kept_ended{false};
+            for (int i = 0; i < 120; ++i) {
+                PPR_TEST_ASSERT(not kept.step());
+                noteContacts(kept, kept_began, kept_ended);
+            }
+            const auto kept_pose = kept.state(kept_handle[0]);
+            PPR_TEST_ASSERT(kept_pose.has_value() and kept_pose->m_y > 1.2f);
+            PPR_TEST_ASSERT(kept_began and not kept_ended);
+
+            PPR_TEST_ASSERT(not kept_colliders.rebuildDirtyChunks(kept, views, both, 8u, 8u, processed));
+            PPR_TEST_ASSERT(processed == 2u);
+            PPR_TEST_ASSERT(not kept_colliders.rebuildDirtyChunks(kept, views, both, 8u, 8u, processed));
+            const bool chains_stable = kept_colliders.chainCount(left) == left_chains and
+                kept_colliders.chainCount(right) == right_chains;
+            PPR_TEST_ASSERT(processed == 2u and chains_stable);
+
+            bool kept_after_began{false};
+            bool kept_after_ended{false};
+            for (int i = 0; i < 30; ++i) {
+                PPR_TEST_ASSERT(not kept.step());
+                noteContacts(kept, kept_after_began, kept_after_ended);
+            }
+            PPR_TEST_ASSERT(not kept_after_began and not kept_after_ended);
+            const auto kept_resting = kept.state(kept_handle[0]);
+            PPR_TEST_ASSERT(kept_resting.has_value() and kept_resting->m_y > 1.2f);
+
+            physics::Scene fresh;
+            physics::ChunkColliders fresh_colliders;
+            PPR_TEST_ASSERT(not fresh.initialize({}));
+            PPR_TEST_ASSERT(not fresh_colliders.rebuildDirtyChunks(fresh, views, both, 8u, 8u, processed));
+            const bool fresh_matches = fresh_colliders.chainCount(left) == left_chains and
+                fresh_colliders.chainCount(right) == right_chains;
+            PPR_TEST_ASSERT(processed == 2u and fresh_matches);
+            std::array<physics::BodyHandle, 1> fresh_handle{};
+            PPR_TEST_ASSERT(not fresh.createBodies(entities, definitions, fresh_handle));
+            bool fresh_began{false};
+            bool fresh_ended{false};
+            for (int i = 0; i < 120; ++i) {
+                PPR_TEST_ASSERT(not fresh.step());
+                noteContacts(fresh, fresh_began, fresh_ended);
+            }
+            PPR_TEST_ASSERT(kept_pose == fresh.state(fresh_handle[0]));
+            PPR_TEST_ASSERT(kept.isAwake(kept_handle[0]) == fresh.isAwake(fresh_handle[0]));
+            PPR_TEST_ASSERT(fresh_began and not fresh_ended);
+            PPR_TEST_ASSERT(kept_began == fresh_began and kept_ended == fresh_ended);
+
+            right_cells[3] = 0u;
+            right_cells[4] = 0u;
+            const std::array edit{right};
+            PPR_TEST_ASSERT(not kept_colliders.rebuildDirtyChunks(kept, views, edit, 8u, 8u, processed));
+            PPR_TEST_ASSERT(processed == 2u and kept_colliders.chainCount(left) == left_chains);
+            bool edit_began{false};
+            bool edit_ended{false};
+            for (int i = 0; i < 60; ++i) {
+                PPR_TEST_ASSERT(not kept.step());
+                noteContacts(kept, edit_began, edit_ended);
+            }
+            PPR_TEST_ASSERT(not edit_began and not edit_ended);
+            const auto kept_edited = kept.state(kept_handle[0]);
+            PPR_TEST_ASSERT(kept_edited.has_value() and kept_edited->m_y > 1.2f);
+            PPR_TEST_ASSERT(not kept.shutdown());
+            PPR_TEST_ASSERT(not fresh.shutdown());
+        };
     }
 }
 
@@ -448,7 +561,8 @@ namespace pP::tests {
             detail::PhysicsSuite::cross_chunk_seam_slide_uses_ghost_vertices,
             detail::PhysicsSuite::lazy_activation_and_bounded_dirty_slices,
             detail::PhysicsSuite::ladder_door_vent_sensor_begin_end_are_published,
-            detail::PhysicsSuite::v3_active_contact_continues_by_deterministic_replay
+            detail::PhysicsSuite::v3_active_contact_continues_by_deterministic_replay,
+            detail::PhysicsSuite::kept_chains_match_fresh_rebuild
         });
     };
 
