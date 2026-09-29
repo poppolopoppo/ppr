@@ -42,6 +42,52 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(distance(snap.m_origin, model.m_origin) < kEps);
     };
 
+    PPR_UNIT_TEST (ortho_default_scale_preserves_pixel_extent) {
+        Camera camera{ECameraProjection::orthographic};
+        const Viewport viewport = testViewport(int2{800, 600});
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        camera.updateModel(std::chrono::milliseconds{16}, model, viewport);
+
+        const CameraSnapshot &snapshot = camera.getSnapshot();
+        PPR_TEST_ASSERT(model.m_ortho_scale == 1.0f);
+        PPR_TEST_ASSERT(snapshot.m_ortho_scale == 1.0f);
+        PPR_TEST_ASSERT(matEq(snapshot.m_projection, rhi::getOrthoMatrix(800.0f, 600.0f)));
+        PPR_TEST_ASSERT(std::abs(snapshot.m_aspect_ratio - 800.0f / 600.0f) < kEps);
+        PPR_TEST_ASSERT(snapshot.m_frustum.isVisible(Box{float3{300.0f, 100.0f, 0.5f}, 0.1f}));
+    };
+
+    PPR_UNIT_TEST (ortho_scale_updates_projection_inverse_and_frustum) {
+        Camera camera{ECameraProjection::orthographic};
+        const Viewport viewport = testViewport(int2{800, 600});
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        camera.updateModel(std::chrono::milliseconds{16}, model, viewport);
+        const float4x4 default_projection = camera.getProjection();
+
+        model.m_ortho_scale = 0.25f;
+        camera.updateModel(std::chrono::milliseconds{16}, model, viewport);
+        const CameraSnapshot &snapshot = camera.getSnapshot();
+        const float4x4 expected_projection = rhi::getOrthoMatrix(200.0f, 150.0f);
+        PPR_TEST_ASSERT(snapshot.m_ortho_scale == 0.25f);
+        PPR_TEST_ASSERT(snapshot.m_viewport_size.x == 800.0f and snapshot.m_viewport_size.y == 600.0f);
+        PPR_TEST_ASSERT(std::abs(snapshot.m_aspect_ratio - 800.0f / 600.0f) < kEps);
+        PPR_TEST_ASSERT(not matEq(snapshot.m_projection, default_projection));
+        PPR_TEST_ASSERT(matEq(snapshot.m_projection, expected_projection));
+        PPR_TEST_ASSERT(matEq(snapshot.m_invert_projection, inverse(expected_projection)));
+        PPR_TEST_ASSERT(matEq(snapshot.m_view_projection, snapshot.m_view * expected_projection));
+        PPR_TEST_ASSERT(matEq(snapshot.m_invert_view_projection, inverse(snapshot.m_view_projection)));
+        PPR_TEST_ASSERT(matEq(snapshot.m_jittered_view_projection, snapshot.m_view_projection));
+        PPR_TEST_ASSERT(matEq(snapshot.m_invert_jittered_view_projection, snapshot.m_invert_view_projection));
+
+        const Frustum expected_frustum = makeZeroToOneFrustum(snapshot.m_view_projection);
+        for (std::size_t i = 0; i < 6u; ++i) {
+            PPR_TEST_ASSERT(distance(snapshot.m_frustum.clip[i], expected_frustum.clip[i]) < kEps);
+        }
+        PPR_TEST_ASSERT(snapshot.m_frustum.isVisible(Box{float3{100.0f, 100.0f, 0.5f}, 0.1f}));
+        PPR_TEST_ASSERT(not snapshot.m_frustum.isVisible(Box{float3{300.0f, 100.0f, 0.5f}, 0.1f}));
+    };
+
     PPR_UNIT_TEST (look_at_canonical) {
         const float4x4 view = float4x4::lookat(float3{0.0f, 0.0f, 1.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 expected{
@@ -219,17 +265,24 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (mode_accessors) {
-        // NOTE: getCameraMode reflects the last committed model; the pending
-        // mode lands on the next updateModel.
+        // Direct-model updates are model-authoritative for the projection
+        // mode; setCameraMode seeds the controller path (Editor camera swaps).
         Camera cam;
         const Viewport mode_viewport = testViewport(int2{800, 600});
         PPR_TEST_ASSERT(cam.getCameraMode() == ECameraProjection::perspective);
-        cam.setCameraMode(ECameraProjection::orthographic);
-        cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, mode_viewport);
+        CameraModel ortho_model{};
+        ortho_model.m_camera_mode = ECameraProjection::orthographic;
+        cam.updateModel(std::chrono::milliseconds{16}, ortho_model, mode_viewport);
         PPR_TEST_ASSERT(cam.getCameraMode() == ECameraProjection::orthographic);
-        cam.setCameraMode(ECameraProjection::perspective);
-        cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, mode_viewport);
+        CameraModel persp_model{};
+        cam.updateModel(std::chrono::milliseconds{16}, persp_model, mode_viewport);
         PPR_TEST_ASSERT(cam.getCameraMode() == ECameraProjection::perspective);
+
+        // A pending setCameraMode lands on the next controller-path update.
+        cam.setCameraMode(ECameraProjection::orthographic);
+        DummyCameraController dummy{};
+        cam.updateModel(std::chrono::milliseconds{16}, dummy, mode_viewport);
+        PPR_TEST_ASSERT(cam.getCameraMode() == ECameraProjection::orthographic);
     };
 
     PPR_UNIT_TEST (state_accessors) {
@@ -428,7 +481,7 @@ namespace pP::tests::detail {
 
         PPR_TEST_ASSERT(dot(mouse_rotation(std::chrono::milliseconds{1}), mouse_rotation(std::chrono::milliseconds{100})) > 1.0f - kEps);
 
-        const auto wheel_translation = [](const TimeSpan dt) {
+        const auto wheel_zoom = [](const TimeSpan dt) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
             InputMapping mapping{"PanCameraWheelImpulse"};
@@ -441,13 +494,16 @@ namespace pP::tests::detail {
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel);
             CameraModel model{};
             ctrl.updateCameraModel(dt, model);
-            const float first_z = model.m_origin.z;
+            const float first_scale = model.m_ortho_scale;
+            PPR_TEST_ASSERT(first_scale < 1.0f);
+            PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
             ctrl.updateCameraModel(dt, model);
-            PPR_TEST_ASSERT(std::abs(model.m_origin.z - first_z) < kEps);
-            return first_z;
+            PPR_TEST_ASSERT(std::abs(model.m_ortho_scale - first_scale) < kEps);
+            PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
+            return first_scale;
         };
 
-        PPR_TEST_ASSERT(std::abs(wheel_translation(std::chrono::milliseconds{1}) - wheel_translation(std::chrono::milliseconds{100})) < kEps);
+        PPR_TEST_ASSERT(std::abs(wheel_zoom(std::chrono::milliseconds{1}) - wheel_zoom(std::chrono::milliseconds{100})) < kEps);
     };
 
     PPR_UNIT_TEST (free_camera_gamepad_rate) {
@@ -940,6 +996,69 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(std::abs(forward.z + normal.z) < 1e-3f);
     };
 
+    PPR_UNIT_TEST (pan_camera_ortho_scale_validates_explicit_bounds) {
+        PanCameraController controller;
+        PPR_TEST_ASSERT(controller.getOrthoScale() == 1.0f);
+        PPR_TEST_ASSERT(not controller.setOrthoScale(0.001f));
+        PPR_TEST_ASSERT(not controller.setOrthoScale(1000.0f));
+        PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
+
+        constexpr float invalid_scales[]{0.0f, -1.0f, 0.0009f, 1000.1f};
+        for (const float scale: invalid_scales) {
+            PPR_TEST_ASSERT(controller.setOrthoScale(scale) == std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(controller.getOrthoScale() == 0.25f);
+        }
+        PPR_TEST_ASSERT(controller.setOrthoScale(std::numeric_limits<float>::infinity()) == std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(controller.setOrthoScale(-std::numeric_limits<float>::infinity()) == std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(controller.setOrthoScale(std::numeric_limits<float>::quiet_NaN()) == std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(controller.getOrthoScale() == 0.25f);
+
+        CameraModel model{};
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(model.m_ortho_scale == 0.25f);
+    };
+
+    PPR_UNIT_TEST (pan_camera_wheel_zoom_has_one_binding_and_never_moves_depth) {
+        PanCameraController controller;
+        PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
+        InputMapping mapping{"PanCameraOrthoWheel"};
+        controller.provideInputActionKeyMappings(mapping);
+        const auto wheel_bindings = std::ranges::count_if(mapping.m_keymap, [](const InputActionKeyMapping &binding) {
+            return binding.m_key == InputKey::mouse_wheel_axis_y;
+        });
+        PPR_TEST_ASSERT(wheel_bindings == 1);
+
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const InputMessage wheel_up{
+            InputKey::mouse_wheel_axis_y,
+            InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis
+        };
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_up);
+        CameraModel model{};
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        const float zoomed_scale = 0.25f * std::exp(-0.1f);
+        PPR_TEST_ASSERT(std::abs(controller.getOrthoScale() - zoomed_scale) < kEps);
+        PPR_TEST_ASSERT(std::abs(model.m_ortho_scale - zoomed_scale) < kEps);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
+
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(std::abs(model.m_ortho_scale - zoomed_scale) < kEps);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
+
+        const InputMessage wheel_down{
+            InputKey::mouse_wheel_axis_y,
+            InputValue{InputAxis1D{.m_absolute = -1.0f, .m_relative = -1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis
+        };
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_down);
+        controller.resetInputState();
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(std::abs(model.m_ortho_scale - zoomed_scale) < kEps);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
+    };
+
     // Orbit keeps target/radius: lookAt fixes both, setOrbitRadius re-seats the eye.
     PPR_UNIT_TEST (orbit_camera_look_at_and_radius) {
         OrbitCameraController ctrl;
@@ -1070,6 +1189,8 @@ namespace pP::tests {
     const UnitTest camera = UnitTest::Named("camera") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::camera_model,
+            detail::ortho_default_scale_preserves_pixel_extent,
+            detail::ortho_scale_updates_projection_inverse_and_frustum,
             detail::viewport_size,
             detail::velocity,
             detail::cut_velocity,
@@ -1109,6 +1230,8 @@ namespace pP::tests {
             detail::free_camera_retuned_rates,
             detail::pan_camera_key_directions,
             detail::pan_camera_parallel_plane,
+            detail::pan_camera_ortho_scale_validates_explicit_bounds,
+            detail::pan_camera_wheel_zoom_has_one_binding_and_never_moves_depth,
             detail::orbit_camera_look_at_and_radius,
             detail::free_camera_primed_held_key_partition_invariant,
         });

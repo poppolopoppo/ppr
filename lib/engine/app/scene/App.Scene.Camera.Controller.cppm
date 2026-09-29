@@ -144,7 +144,17 @@ export namespace pP {
 
     class PanCameraController final : public details::BasicCameraController {
     public:
-        PanCameraController() = default;
+        PanCameraController();
+
+        // Finite scales in [0.001, 1000] are supported; smaller means
+        // zoomed in. The wheel adjusts this scale, never camera depth.
+        [[nodiscard]] std::error_code setOrthoScale(float scale) noexcept;
+
+        [[nodiscard]] float getOrthoScale() const noexcept { return m_ortho_scale; }
+
+        void resetInputState() noexcept override;
+
+        void updateCameraModel(TimeSpan dt, CameraModel &model) noexcept override;
 
         [[nodiscard]] Quaternion getParallelBasis() const noexcept { return m_rotation_analog.filtered(); }
 
@@ -155,6 +165,11 @@ export namespace pP {
         void translate(const float3 &eye, bool has_teleported = false) noexcept;
 
         void provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept override;
+
+    private:
+        std::unique_ptr<InputAction> m_zoom_action{std::make_unique<InputAction>("CameraOrthoZoom", EInputValueType::axis_1d)};
+        float m_ortho_scale{1.0f};
+        float m_zoom_impulse{0.0f};
     };
 
     class OrbitCameraController final : public details::BasicCameraController {

@@ -32,6 +32,7 @@ namespace pP {
             [&](FullWindow) noexcept -> PixelRect {
                 return window_rect;
             },
+
             [&](const Centered &centered) noexcept -> PixelRect {
                 // NOTE: component-wise; mango int-vector / and - don't cover
                 // generic vectors on this toolchain (same as operator==).
@@ -45,9 +46,11 @@ namespace pP {
                     centered.m_extent
                 };
             },
+
             [&](const WindowRect &client_rect) noexcept -> PixelRect {
                 return client_rect;
             },
+
             [&](const NormalizedWindowRect &normalized_rect) noexcept -> PixelRect {
                 const float2 window_origin{
                     static_cast<float>(window_rect.m_origin.x) + 0.5f,
@@ -57,6 +60,7 @@ namespace pP {
                     static_cast<float>(window_rect.m_extent.x),
                     static_cast<float>(window_rect.m_extent.y)
                 };
+
                 return {
                     int2{
                         static_cast<int>(std::round(window_origin.x + window_extent.x * normalized_rect.m_origin.x)),

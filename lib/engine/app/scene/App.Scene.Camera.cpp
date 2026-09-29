@@ -35,6 +35,7 @@ namespace pP {
         PPR_ASSERT(not isNan<float, 3u>(new_model.m_origin));
         PPR_ASSERT(not isNan(new_model.m_basis));
         PPR_ASSERT(not isNan(new_model.m_fov));
+        PPR_ASSERT(std::isfinite(new_model.m_ortho_scale) and new_model.m_ortho_scale > 0.0f);
         PPR_ASSERT(not isNan(new_model.m_z_near));
         PPR_ASSERT(not isNan(new_model.m_z_far));
 
@@ -52,10 +53,19 @@ namespace pP {
         }
 
         const bool has_previous_state = m_previous_state.has_value();
+        // Pending setCameraMode wins over the supplied model; otherwise the
+        // model is authoritative and the member follows it. This keeps both
+        // the direct-model ortho helper (no setCameraMode call) and the
+        // setCameraMode-then-default-model accessor contract green.
+        const bool has_pending_mode = m_camera_mode != m_actual_state.m_camera_mode;
         m_previous_state = m_actual_state;
 
         m_actual_state = new_model;
-        m_actual_state.m_camera_mode = m_camera_mode;
+        if (has_pending_mode) {
+            m_actual_state.m_camera_mode = m_camera_mode;
+        } else {
+            m_camera_mode = new_model.m_camera_mode;
+        }
 
         if (has_previous_state) {
             ++m_actual_state.m_revision;
@@ -85,7 +95,7 @@ namespace pP {
             new_model.m_origin,
             m_actual_state.m_up);
 
-        switch (new_model.m_camera_mode) {
+        switch (m_actual_state.m_camera_mode) {
             case ECameraProjection::perspective:
                 m_actual_state.m_projection = rhi::getPerspectiveMatrix(
                     new_model.m_fov,
@@ -95,8 +105,8 @@ namespace pP {
                 break;
             case ECameraProjection::orthographic:
                 m_actual_state.m_projection = rhi::getOrthoMatrix(
-                    m_actual_state.m_viewport_size.x,
-                    m_actual_state.m_viewport_size.y);
+                    m_actual_state.m_viewport_size.x * new_model.m_ortho_scale,
+                    m_actual_state.m_viewport_size.y * new_model.m_ortho_scale);
                 break;
         }
 
@@ -165,6 +175,9 @@ namespace pP {
 
     void Camera::updateModel(const TimeSpan dt, ICameraController &controller, const Viewport &viewport) noexcept {
         CameraModel new_model = m_actual_state;
+        if (m_camera_mode != m_actual_state.m_camera_mode) {
+            new_model.m_camera_mode = m_camera_mode;
+        }
         controller.updateCameraModel(dt, new_model);
         updateModel(dt, new_model, viewport);
     }

@@ -27,6 +27,10 @@ export namespace pP {
 
         float m_fov{pi_over_3_v<>};
 
+        // World units per pixel in orthographic mode; 1 preserves the
+        // original pixel-sized projection. Smaller values zoom in.
+        float m_ortho_scale{1.0f};
+
         float m_z_near{0.01f};
         float m_z_far{10000.0f};
 
@@ -86,6 +90,7 @@ export namespace pP {
         [[nodiscard]] std::size_t getRevision() const noexcept { return m_actual_state.m_revision; }
 
         [[nodiscard]] ECameraProjection getCameraMode() const noexcept { return m_actual_state.m_camera_mode; }
+
         void setCameraMode(ECameraProjection projection) noexcept;
 
         [[nodiscard]] const float3 &getOrigin() const noexcept { return m_actual_state.m_origin; }

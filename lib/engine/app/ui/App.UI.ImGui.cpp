@@ -68,10 +68,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             if (logical.y > 0) {
                 scale.y = static_cast<float>(framebuffer.y) / static_cast<float>(logical.y);
             }
-            if (not(scale.x > 0.0f)) {
+            if (not (scale.x > 0.0f)) {
                 scale.x = 1.0f;
             }
-            if (not(scale.y > 0.0f)) {
+            if (not (scale.y > 0.0f)) {
                 scale.y = 1.0f;
             }
             return scale;
@@ -620,8 +620,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // The sample count is a SampleCount by construction — all four
             // enumerators are accepted — so only the color shape and the
             // absent depth attachment are checked.
-            if (signature.colorFormats().size() != 1u ||
-                signature.m_depth_stencil_format.has_value()) {
+            if (signature.colorFormats().size() != 1u || signature.m_depth_stencil_format.has_value()) {
                 PPR_LOG(UI, error, "unsupported render pipeline signature", {
                     {"color_format_count", signature.colorFormats().size()},
                     {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
@@ -873,6 +872,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::space: return ImGuiKey_Space;
                 case EKeyboardKey::enter: return ImGuiKey_Enter;
                 case EKeyboardKey::escape: return ImGuiKey_Escape;
+
                 case EKeyboardKey::left_control: return ImGuiKey_LeftCtrl;
                 case EKeyboardKey::left_shift: return ImGuiKey_LeftShift;
                 case EKeyboardKey::left_alt: return ImGuiKey_LeftAlt;
@@ -881,11 +881,13 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::right_shift: return ImGuiKey_RightShift;
                 case EKeyboardKey::right_alt: return ImGuiKey_RightAlt;
                 case EKeyboardKey::right_super: return ImGuiKey_RightSuper;
+
                 case EKeyboardKey::num_lock: return ImGuiKey_NumLock;
                 case EKeyboardKey::caps_lock: return ImGuiKey_CapsLock;
                 case EKeyboardKey::scroll_lock: return ImGuiKey_ScrollLock;
                 case EKeyboardKey::pause: return ImGuiKey_Pause;
                 case EKeyboardKey::print_screen: return ImGuiKey_PrintScreen;
+
                 case EKeyboardKey::f1: return ImGuiKey_F1;
                 case EKeyboardKey::f2: return ImGuiKey_F2;
                 case EKeyboardKey::f3: return ImGuiKey_F3;
@@ -898,6 +900,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::f10: return ImGuiKey_F10;
                 case EKeyboardKey::f11: return ImGuiKey_F11;
                 case EKeyboardKey::f12: return ImGuiKey_F12;
+
                 case EKeyboardKey::zero: return ImGuiKey_0;
                 case EKeyboardKey::one: return ImGuiKey_1;
                 case EKeyboardKey::two: return ImGuiKey_2;
@@ -908,6 +911,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::seven: return ImGuiKey_7;
                 case EKeyboardKey::eight: return ImGuiKey_8;
                 case EKeyboardKey::nine: return ImGuiKey_9;
+
                 case EKeyboardKey::a: return ImGuiKey_A;
                 case EKeyboardKey::b: return ImGuiKey_B;
                 case EKeyboardKey::c: return ImGuiKey_C;
@@ -934,6 +938,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::x: return ImGuiKey_X;
                 case EKeyboardKey::y: return ImGuiKey_Y;
                 case EKeyboardKey::z: return ImGuiKey_Z;
+
                 case EKeyboardKey::numpad0: return ImGuiKey_Keypad0;
                 case EKeyboardKey::numpad1: return ImGuiKey_Keypad1;
                 case EKeyboardKey::numpad2: return ImGuiKey_Keypad2;
@@ -951,6 +956,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 case EKeyboardKey::numpad_divide: return ImGuiKey_KeypadDivide;
                 case EKeyboardKey::numpad_enter: return ImGuiKey_KeypadEnter;
                 case EKeyboardKey::numpad_equal: return ImGuiKey_KeypadEqual;
+
                 case EKeyboardKey::period: return ImGuiKey_Period;
                 case EKeyboardKey::comma: return ImGuiKey_Comma;
                 case EKeyboardKey::semicolon: return ImGuiKey_Semicolon;

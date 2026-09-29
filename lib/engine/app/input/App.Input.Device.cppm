@@ -166,8 +166,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename ButtonT>
-        requires std::is_enum_v<ButtonT>
-    or std::is_integral_v<ButtonT>
+        requires std::is_enum_v<ButtonT> or std::is_integral_v<ButtonT>
 
     class InputDigitalState {
     public:

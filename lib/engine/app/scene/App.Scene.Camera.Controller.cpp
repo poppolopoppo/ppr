@@ -210,7 +210,8 @@ namespace pP {
         }
         m_rotation_analog.update(dt);
 
-        if (not m_has_teleported and dot2(m_delta_position) > 0.0f) {
+        if (not m_has_teleported and dot2(m_delta_position) > 0.0f)
+        {
             const float3 local_delta = m_delta_position * float3(m_speed_analog.filtered());
             const float3 world_delta = quaternionTransform(m_rotation_analog.raw(), local_delta);
             m_position_analog.add(world_delta);
@@ -345,6 +346,40 @@ namespace pP {
     // PanCameraController — pan parallel to a 3d plane
     // ------------------------------------------------------------------
 
+    PanCameraController::PanCameraController() {
+        m_zoom_action->setTriggered([self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &) noexcept {
+            const float wheel_delta = event.getAxis1DValue().m_relative;
+            if (std::isfinite(wheel_delta)) {
+                self->m_zoom_impulse = std::clamp(
+                    self->m_zoom_impulse + std::clamp(wheel_delta, -100.0f, 100.0f), -100.0f, 100.0f);
+            }
+        });
+    }
+
+    std::error_code PanCameraController::setOrthoScale(const float scale) noexcept {
+        if (not std::isfinite(scale) or scale < 0.001f or scale > 1000.0f) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        m_ortho_scale = scale;
+        m_zoom_impulse = 0.0f;
+        return default_value_v;
+    }
+
+    void PanCameraController::resetInputState() noexcept {
+        BasicCameraController::resetInputState();
+        m_zoom_impulse = 0.0f;
+    }
+
+    void PanCameraController::updateCameraModel(const TimeSpan dt, CameraModel &model) noexcept {
+        BasicCameraController::updateCameraModel(dt, model);
+        if (m_zoom_impulse != 0.0f) {
+            const float clamped_delta = std::clamp(m_zoom_impulse, -100.0f, 100.0f);
+            m_ortho_scale = std::clamp(m_ortho_scale * std::exp(-0.1f * clamped_delta), 0.001f, 1000.0f);
+            m_zoom_impulse = 0.0f;
+        }
+        model.m_ortho_scale = m_ortho_scale;
+    }
+
     void PanCameraController::setParallelPlane(const float3 &plane_normal, const float3 &plane_up, const bool has_teleported) noexcept {
         PPR_ASSERT(isNormalized<float, 3u>(plane_normal));
         PPR_ASSERT(isNormalized<float, 3u>(plane_up));
@@ -378,6 +413,7 @@ namespace pP {
 
     void PanCameraController::provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept {
         BasicCameraController::provideInputActionKeyMappings(out_mapping);
+        out_mapping.mapInputKey(SharedInputAction(m_zoom_action.get()), InputKey::mouse_wheel_axis_y);
 
         // translation, only parallel/orthogonal to the plane:
 
@@ -417,13 +453,6 @@ namespace pP {
                 output = InputValue(scaled, InputAxis1D{}). // transforms {x,y} vector to {x,y,0}
                         modulate(self->getTranslateSpeed());
             });
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::mouse_wheel_axis_y,
-            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-                // mouse wheel moves forward/backward
-                output = InputValue(InputAxis1D{}, std::get<InputAxis1D>(output)). // transforms {x} vector to {0,x}
-                        modulate(self->getTranslateSpeed()); // transforms {0,x} vector to {0,0,x}
-            });
-
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_left_2d,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 // left stick moves left/right & up/down

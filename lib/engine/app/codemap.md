@@ -7,7 +7,7 @@ for application lifecycle, input, player, scene camera, services, window, platfo
 `pP::Application` (`:application`) is the slim lifecycle base — `ApplicationDomain`, run-loop, `IPlatform`,
 `ServicesStore`, shader/RHI/`Renderer` bootstrap, directory resolution. `pP::ApplicationEditor`
 (`:application_editor`) is the interactive-client subclass that owns window, viewport, input context, player, camera,
-triangle pass, and ImGui service, and implements `IClientService`. `game/main.cpp` drives `run()` on the concrete
+  triangle and grid passes, and ImGui service, and implements `IClientService`. `game/main.cpp` drives `run()` on the concrete
 application.
 
 ## Design
@@ -36,12 +36,15 @@ application.
   Application, protected IClientService`. Owns `unique_ptr<Player>`, `unique_ptr<Camera>`,
   `unique_ptr<ICameraController>`, `unique_ptr<WindowInputContext> m_main_input_context`,
   `unique_ptr<InputMapping> m_camera_input_mapping`, `unique_ptr<IUIService>`, `unique_ptr<WindowViewport>`,
-  `unique_ptr<TrianglePass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
+   `unique_ptr<TrianglePass>` + `unique_ptr<GridPass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
    getters (input getters wrap `&m_main_input_context->m_context`) plus protected `getApplication()` returning `this`.
    Owns `unique_ptr<InputBackgroundLatch> m_input_background_latch` (registrar == owner; actuator borrows it,
    detach-before-destroy) + device-disconnect handle. Private `onMainWindowFocused_(window, focused)` throttles to
    5 fps via `setBackgroundPriority` and, on focus loss, resets the routing latch + camera-controller motion state.
-   Input-chain order comes from `:service.input`: listener `EInputListenerPriority { ui = 0, detector = 1, player = 2 }`
+    Public `getGridPass()` exposes editor-owned tile staging; `replaceMainCameraController(unique_ptr<ICameraController>,
+    ECameraProjection)` prepares a fresh mapping, detaches the previous mapping and resets input, then attaches the
+    replacement at camera priority (invalid null → `invalid_argument`; absent editor state → `not_connected`).
+    Input-chain order comes from `:service.input`: listener `EInputListenerPriority { ui = 0, detector = 1, player = 2 }`
    with mapping `EInputMappingPriority::camera = 1`.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
   overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
@@ -86,18 +89,21 @@ application.
    → player listener `addInputMapping(camera_mapping, EInputMappingPriority::camera)` → `WindowInputContext(input_service)`
    → `InputBackgroundLatch(ui, player-listener, player, detector)` + device-disconnect handle (resets latch + controller
    motion) → `app_services.inject()` deducing `IRhiService/IShaderService` → `TrianglePass::initialize(rhi, shader,
-   getContentDir())` → `ui::createImGuiService()->initialize(input_context, rhi, shader, latch.m_foreground_priority)` →
+    getContentDir())` → `GridPass::initialize(rhi, shader, getContentDir())` →
+    `ui::createImGuiService()->initialize(input_context, rhi, shader, latch.m_foreground_priority)` →
    `latch.initialize(context, ui-listener)` → `IWindowService::createWindow({title = getName(), 1280x720})` → refresh-rate
    throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
    `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("<name> - CPU = <ms> ms")` →
-   `triangle_pass->update(dt, camera->getSnapshot())` →
+    `triangle_pass->update(dt, camera->getSnapshot())` + `grid_pass->update(dt, camera->getSnapshot())` →
    `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` → two explicit surface passes:
-   TrianglePass selects the renderer-owned depth view, then ImGui selects no depth and loads the existing color
+    GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
+    renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
+    then ImGui selects no depth and loads the existing color
    attachment; both render before one present. `shutdown()` detaches the
    device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
-   erases + shuts down UI, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
+    erases + shuts down UI, grid pass, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
    resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then
    `Application::shutdown()`.
 5. No runtime logic in `App.cppm` itself — compile-time re-export only.
@@ -115,6 +121,6 @@ application.
 
 - `App.cppm` — umbrella re-export list incl. `:application_editor` + `:service.client` (no runtime code).
 - `App.Application.cppm/.cpp` — slim `Application` base: domain/run-loop/platform/services/shader-RHI-renderer bootstrap.
-- `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/triangle/UI ownership.
+- `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/grid/triangle/UI ownership.
 - `App.TemplateInstantiations.cpp` — explicit `Delegate`/`BroadcastCallback` instantiations.
 - `CMakeLists.txt` — module + source registration, `setup_ppr_project` deps.

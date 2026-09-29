@@ -11,7 +11,7 @@ location no longer exists.
 ## Design
 
 - **CameraModel** — pose and projection parameters (`m_origin`, `m_basis`, `m_fov`, `m_z_near`/`m_z_far`,
-  `m_camera_mode`, `m_has_camera_cut` teleport flag).
+  positive finite `m_ortho_scale` world-units-per-pixel (default 1), `m_camera_mode`, `m_has_camera_cut` teleport flag).
 - **CameraSnapshot** — `CameraModel` plus derived matrices (`m_view`, `m_projection`, `m_view_projection` and
   inverses, jittered variants), basis vectors (`m_right`/`m_up`/`m_forward`), viewport size/aspect, `m_jitter` NDC
   offset, `m_frustum`/`m_ray_frustum`, and `m_revision`.
@@ -19,7 +19,7 @@ location no longer exists.
   on degenerate (zero-extent) viewports keeping prior state; shifts previous snapshot, bumps/resets `m_revision` (first
   frame and any cut reset to 0), derives basis vectors via `quaternionTransform`, builds the view matrix via
   `float4x4::lookat` (`App.Scene.Camera.cpp:83`), selects perspective (`rhi::getPerspectiveMatrix`) / ortho
-  (`rhi::getOrthoMatrix`) projection, then composes `m_view * m_projection` with inverses; converts the active jitter
+  (`rhi::getOrthoMatrix`, viewport extents scaled by `m_ortho_scale`) projection, then composes `m_view * m_projection` with inverses; converts the active jitter
   pixel offset to NDC (`pixel / (size / 2)`) and composes `projection * makeJitterMatrix`; pins frusta to the unjittered
   D3D `[0,1]`-remapped VP (`makeZeroToOneFrustum`, `RayFrustum` over the same corrected matrix); zeroes velocities on
   cuts/near-zero dt, else derives translational (`Δorigin/dt`) and angular (`angularVelocity`) velocities.
@@ -54,8 +54,9 @@ location no longer exists.
   (`reset`) vs smooth (`setRaw`) paths; binds WASD/arrows/`PgUp`/`PgDn`/D-pad translate, left-stick 2D→3D, Q/E +
   mouse-2D + right-stick rotate, wheel fov on top of the base bindings.
 - **PanCameraController** — plane-parallel pan: `setParallelPlane(normal,up | basis)` + `translate(eye)` with
-  teleport/smooth paths; rebinds translate to plane axes (WASD/arrows/D-pad/Q/E), mouse-2D `{x,y}→{x,y,0}` and wheel
-  `{x}→{0,x}` lifts, left stick planar, right stick forward-only (`{0,0,y}` mask).
+  teleport/smooth paths; rebinds translate to plane axes (WASD/arrows/D-pad/Q/E), mouse-2D `{x,y}→{x,y,0}`,
+  left stick planar, right stick forward-only (`{0,0,y}` mask). `setOrthoScale(scale)` accepts finite [0.001, 1000]
+  or returns `invalid_argument`; wheel Y exclusively zooms the ortho scale (positive wheel zooms in), never moves Z.
 - **OrbitCameraController** — orbit-around-target: `lookAt(eye,target)` / `setOrbitTarget` / `setOrbitRadius`
   (epsilon-clamped radius, pole-safe `safeOrbitRight_`, `orbitOrigin_ = target − forward×radius`); overrides
   `updateCameraPose_` so translate-Z dollies `m_radius_analog` and the origin is recomputed from basis/target/radius
