@@ -28,6 +28,10 @@ namespace pP::colony {
         ImGui::Text("Chunks  %u visible", counts.m_visible_chunks);
         ImGui::Text("Paths   %u ok / %u partial / %u blocked", counts.m_paths, counts.m_partials, counts.m_blocked);
         ImGui::Text("Errands %u active", counts.m_errands);
+        ImGui::Text("Dug     %u cells (wake %u)", counts.m_dug_total, counts.m_wake_radius);
+        ImGui::Text("Edits   %u chunks", counts.m_affected_chunks);
+        ImGui::Text("Dig     %s · highlight %s", counts.m_dig_mode ? "ON" : "off",
+            counts.m_show_highlight ? "ON" : "off");
         u32 agent = 0u;
         for (const AgentSummary &row: driver.agentSummaries()) {
             ImGui::Text("A%u %s pc %u/%u @ %.0f,%.0f", agent, row.m_has_plan ? "plan" : "idle", row.m_pc, row.m_replans,
@@ -36,7 +40,7 @@ namespace pP::colony {
         }
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Space pause · N step · 1–3 speed · R new seed");
+        ImGui::TextDisabled("Space pause · N step · 1–3 speed · R new seed · G dig · H highlight");
         ImGui::End();
     }
 }

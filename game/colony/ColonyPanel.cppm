@@ -15,6 +15,11 @@ export namespace pP::colony {
         u32 m_partials{};
         u32 m_blocked{};
         u32 m_errands{};
+        u32 m_dug_total{};
+        u32 m_wake_radius{};
+        u32 m_affected_chunks{};
+        bool m_dig_mode{};
+        bool m_show_highlight{};
     };
 
     /// Draws the compact colony status overlay; this panel never changes state.
