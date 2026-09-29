@@ -1,5 +1,6 @@
 module;
 #include "Colony.Elements.h"
+#include "StageTiming.h"
 
 module game.colony.translator;
 
@@ -64,7 +65,8 @@ namespace pP::colony {
     }
 
     std::error_code ColonyTranslator::markChunkChanged(const sim::ChunkPos pos) noexcept {
-        if (pos.m_x >= sim::kChunksPerEdge or pos.m_y >= sim::kChunksPerEdge)
+        if (pos.m_x >= sim::kChunksPerEdge or
+            pos.m_y >= sim::kChunksPerEdge)
         [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -73,38 +75,49 @@ namespace pP::colony {
     }
 
     std::error_code ColonyTranslator::submit(const sim::ChunkGrid &grid, GridPass &pass) {
+        const hal::ProfileScope scope_submit{"Colony.Submit"};
+        const StageTimer timer_submit{m_timings, Stage::Submit};
         Array<GridTileSubmission> tiles{};
         tiles.reserve(sim::kChunkCount);
-        for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
-            for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
-                const sim::ChunkPos pos{x, y};
-                if (not grid.isResident(pos)) {
-                    continue;
+        {
+            const hal::ProfileScope scope_gather{"Colony.Submit.Gather"};
+            for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
+                for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+                    const sim::ChunkPos pos{x, y};
+                    if (not grid.isResident(pos)) {
+                        continue;
+                    }
+                    const u32 chunk_id = sim::chunkIndexOf(pos);
+                    tiles.push_back(GridTileSubmission{
+                        .m_chunk_id = chunk_id,
+                        .m_tile_range = tileRange(pos),
+                        .m_dirty_mask = m_presented[chunk_id] ? 0u : 1u,
+                        .m_material_id = 0u,
+                    });
                 }
-                const u32 chunk_id = sim::chunkIndexOf(pos);
-                tiles.push_back(GridTileSubmission{
-                    .m_chunk_id = chunk_id,
-                    .m_tile_range = tileRange(pos),
-                    .m_dirty_mask = m_presented[chunk_id] ? 0u : 1u,
-                    .m_material_id = 0u,
-                });
             }
         }
 
-        if (const std::error_code error = pass.submitTiles(tiles)) [[unlikely]] {
-            reset(pass);
-            return error;
+        {
+            const hal::ProfileScope scope_tiles{"Colony.Submit.Tiles"};
+            if (const std::error_code error = pass.submitTiles(tiles)) [[unlikely]] {
+                reset(pass);
+                return error;
+            }
         }
 
         Array<u16> scratch{};
-        for (const GridTileSubmission &tile: tiles) {
-            if (tile.m_dirty_mask == 0u) {
-                continue;
-            }
-            const sim::ChunkPos pos{tile.m_chunk_id % sim::kChunksPerEdge, tile.m_chunk_id / sim::kChunksPerEdge};
-            if (const std::error_code error = uploadChunk(grid, pass, pos, scratch)) [[unlikely]] {
-                reset(pass);
-                return error;
+        {
+            const hal::ProfileScope scope_stage{"Colony.Submit.Stage"};
+            for (const GridTileSubmission &tile: tiles) {
+                if (tile.m_dirty_mask == 0u) {
+                    continue;
+                }
+                const sim::ChunkPos pos{tile.m_chunk_id % sim::kChunksPerEdge, tile.m_chunk_id / sim::kChunksPerEdge};
+                if (const std::error_code error = uploadChunk(grid, pass, pos, scratch)) [[unlikely]] {
+                    reset(pass);
+                    return error;
+                }
             }
         }
 
@@ -117,5 +130,13 @@ namespace pP::colony {
 
     u32 ColonyTranslator::submittedChunks() const noexcept {
         return m_submitted_chunks;
+    }
+
+    const StageTimings& ColonyTranslator::stageTimings() const noexcept {
+        return m_timings;
+    }
+
+    void ColonyTranslator::resetStageTimings() noexcept {
+        m_timings = StageTimings{};
     }
 }

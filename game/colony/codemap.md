@@ -11,6 +11,9 @@ controls. `ColonyTranslator` stages resident chunks to `GridPass` each frame and
 uploads only unseen/explicitly invalidated chunk materials (vacuum becomes
 `0xffff`). `ColonyPanel` is the read-only ImGui status overlay.
 `ColonySmoke` is the separate headless `--smoke` entry (`runColonySmoke`).
+`TimeTrials` (`game.colony.timetrials`, `runTimeTrials`) is the deterministic
+headless `--time-trials` runner: S1 steady plus S2 scripted wall-building,
+driver-only CSVs, no renderer or translator.
 `game.colony.pathfinding` is bounded budgeted BFS over vacuum cells, resumable
 across ticks, with counters for the panel.
 
@@ -30,7 +33,7 @@ across ticks, with counters for the panel.
   `error_code` operational boundary explicit.
 - `ColonyDriver.cppm/.cpp` (`game.colony.driver`) — owns one `Colony` plus the
   fixed-step accumulator; explicit elapsed-time input, 5-slice clamp, deterministic
-  tick accounting, boundary-owned RNG seeds only. No app/renderer/physics imports.
+  tick accounting, boundary-owned RNG seeds only. No app/renderer imports; PRIVATE engine.physics via the Slice 4 Oracle grant.
 - `ColonyTranslator.cppm/.cpp` (`game.colony.translator`) — render-thread-confined
   presentation revisions separate from sim dirty flags; submits every resident
   chunk descriptor per frame, copies cell materials only for unseen/invalidated
@@ -85,6 +88,9 @@ emplaces `PathComp` on completion → `pathCounts` for the panel.
 Dig: `digCells(grid, rect)` validates → collects non-vacuum cells row-major →
 applies vacuum writes (`setCell` auto-dirties) → returns `DigResult`
 (`m_dug` + deduped `m_touched`); failures change nothing.
+TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
+`stepOne`, driver CSV) → S2 wall-building (scripted `buildWall` rects, 600x
+`stepOne` with `presentEdits` skipped headless, driver CSV).
 
 ## Integration
 

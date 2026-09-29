@@ -1,3 +1,6 @@
+module;
+#include "StageTiming.h"
+
 export module game.colony.driver;
 
 import engine.core;
@@ -27,6 +30,11 @@ export namespace pP::colony {
     struct ColonyDriverDesc {
         u64 m_seed{1234567u};
         u32 m_tick_hz{60u};
+        /// Spawn-count override for profiling fixtures (agent count, not cells
+        /// or ticks). 0 fails closed to `kAgentCount`; values above
+        /// `kAgentCountMax` reject init/regenerate with `value_too_large`.
+        /// Production default stays `kAgentCount` (3).
+        u32 m_agent_count{kAgentCount};
     };
 
     /// Owns a single generated colony and its fixed-step clock. Rendering and
@@ -53,6 +61,7 @@ export namespace pP::colony {
         std::optional<sim::FixedTimestep> m_timestep{};
         u64 m_seed{};
         u64 m_tick_count{};
+        u32 m_agent_count{kAgentCount};
         u32 m_speed{1u};
         bool m_paused{false};
         sim::Registry m_registry{};
@@ -63,6 +72,26 @@ export namespace pP::colony {
         DigStats m_dig_stats{};
         std::optional<PendingDig> m_pending_dig{};
         Array<sim::ChunkPos> m_collider_covered{};
+        /// Collider view cache (H1 Slice 6: split expensive preparation from
+        /// the cheap per-tick drain). Key = sorted `needed` array +
+        /// `m_cover_gen` + validity; values = prepared listed/pool/views.
+        /// H3a Slice 6 invariant: cached views are always a SUPERSET of what
+        /// drain needs — clearing (or retaining) `m_collider_covered` removes
+        /// views rather than changing content, so it must NOT bump
+        /// `m_cover_gen`; only real content change bumps (non-empty absorb in
+        /// fanOutEditChunks, covered growth, restore/reinit invalidations).
+        /// When pending==0 the drain contract (pending ⊆ views) holds
+        /// trivially regardless of covered; new dirt bumps gen via the absorb
+        /// path → guaranteed MISS → views rebuilt including the new chunks.
+        /// DERIVED state only: never snapshotted, never compared. The views
+        /// borrow the pool, so the pool member precedes the views member.
+        u64 m_cover_gen{};
+        u64 m_cached_gen{};
+        bool m_cache_valid{false};
+        Array<sim::ChunkPos> m_cached_needed{};
+        Array<sim::ChunkPos> m_cached_listed{};
+        Array<Array<u16> > m_cached_pool{};
+        Array<physics::ColliderChunkView> m_cached_views{};
         PathCounts m_counts{};
         u32 m_errands{};
         physics::Scene m_scene{};
@@ -73,6 +102,7 @@ export namespace pP::colony {
         const char *m_step_stage{""};
         bool m_steps_bound{false};
         bool m_physics_ready{false};
+        StageTimings m_timings{};
 
     private:
         std::error_code initPhysics();
@@ -104,6 +134,19 @@ export namespace pP::colony {
 
         void clearToolState() noexcept;
 
+        void invalidateColliderCache() noexcept;
+
+        /// H4a Slice 6: incremental view maintenance for a cache MISS. Diffs
+        /// `sorted_needed` against `m_cached_needed`, closes the new listed
+        /// set with an indexed (bitset) coverage merge, copies ONLY the recopy
+        /// set (added ∪ dirty ∪ coverage-growth) fresh, and moves kept buffers
+        /// verbatim. Returns false when the full preparation must run instead
+        /// (empty history, inconsistent sizes, or out-of-range input); outputs
+        /// are untouched on false. Reuse proof lives on the definition.
+        [[nodiscard]] bool buildColliderViewsDelta(std::span<const sim::ChunkPos> sorted_needed,
+            std::span<const sim::ChunkPos> dirty, Array<sim::ChunkPos> &listed_out,
+            Array<Array<u16> > &pool_out, Array<physics::ColliderChunkView> &views_out);
+
     public:
 
     public:
@@ -125,7 +168,14 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code setSpeed(u32 speed) noexcept;
 
         /// Replaces the generated world, discarding tick and time backlog.
+        /// Keeps the current spawn count, so a profiling load persists across
+        /// regeneration.
         [[nodiscard]] std::error_code regenerate(u64 seed);
+
+        /// Replaces the generated world with a spawn-count override (agent
+        /// count; 0 fails closed to `kAgentCount`, above `kAgentCountMax`
+        /// returns `value_too_large`). Snapshot/registration order untouched.
+        [[nodiscard]] std::error_code regenerate(u64 seed, u32 agent_count);
 
         [[nodiscard]] const sim::ChunkGrid &grid() const noexcept;
 
@@ -152,6 +202,15 @@ export namespace pP::colony {
         [[nodiscard]] const char *stepStage() const noexcept {
             return m_step_stage;
         }
+
+        /// Accumulated per-stage wall-clock timings (observation only; never
+        /// merged with the translator's submit-side table. Submit runs on the
+        /// presentation boundary with its own lifetime, so both tables are
+        /// reported side by side instead of summed).
+        [[nodiscard]] const StageTimings& stageTimings() const noexcept;
+
+        /// Clears the accumulated stage timings (same paths as clearToolState).
+        void resetStageTimings() noexcept;
 
         /// Cached counters from the last committed tick or edit (panel-safe).
         [[nodiscard]] PathCounts pathCounts() const noexcept;

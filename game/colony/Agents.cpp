@@ -178,7 +178,16 @@ namespace pP::colony {
     }
 
     std::error_code spawnAgents(
-        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, const u32 count) {
+        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count) {
+        // Phase: normalize the profiling override. Fail closed to the
+        // production default on empty, reject above the named ceiling.
+        if (count == 0u) {
+            count = kAgentCount;
+        }
+        if (count > kAgentCountMax) [[unlikely]] {
+            return std::make_error_code(std::errc::value_too_large);
+        }
+
         u64 stream = seed + 0x9E3779B97F4A7C15u;
         for (u32 agent = 0u; agent < count; ++agent) {
             sim::GlobalCellPos spawn{sim::kWorldEdge, sim::kWorldEdge};

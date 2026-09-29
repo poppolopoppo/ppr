@@ -1,6 +1,7 @@
 module;
 #include "pP/Macros.h"
 #include "Colony.Elements.h"
+#include "StageTiming.h"
 #include <slang.h>
 #include <slang-com-ptr.h>
 
@@ -2430,7 +2431,7 @@ namespace pP::colony {
                 m_visible_tiles = static_cast<u32>(plan->m_tiles.size());
                 if (m_visible_tiles == 0u or m_pass.stagedTileCount() == 0u)
                 [[unlikely]] {
-                    return std::make_error_code(std::errc::no_message_available);
+                    return std::make_error_code(std::errc::operation_not_supported);
                 }
 
                 const auto wait_for_gpu_idle = [&renderer]() -> std::error_code {
@@ -2516,6 +2517,273 @@ namespace pP::colony {
             bool m_pass_started{false};
             bool m_driver_started{false};
             bool m_verified{false};
+        };
+
+        /// Slice 6 gate constants: 100-agent load (Trials S1 scale), 600
+        /// fixed-step frames (10s at 60Hz), stderr breadcrumb every 60.
+        constexpr u32 kLoad100Agents = 100u;
+        constexpr u32 kLoad100Frames = 600u;
+        constexpr u32 kLoad100DiagPeriod = 60u;
+        constexpr TimeSpan kLoad100Dt{std::chrono::nanoseconds{1'000'000'000 / 60}};
+        static_assert(kLoad100Agents <= kAgentCountMax);
+
+        /// Slice 6 pan load: 4 hardcoded camera waypoints cycling every 150
+        /// frames over the 600-frame run (4 * 150 == 600). Offsets are in
+        /// world-cell units from the smoke framing origin; fixed values, no
+        /// RNG, no wall-clock in any decision.
+        constexpr u32 kLoad100PanWaypoints = 4u;
+        constexpr u32 kLoad100PanPeriod = 150u;
+        static_assert(kLoad100PanWaypoints * kLoad100PanPeriod == kLoad100Frames);
+        constexpr float kLoad100PanOffsets[kLoad100PanWaypoints][2u] = {
+            {0.0f, 0.0f}, {96.0f, 0.0f}, {0.0f, 96.0f}, {-64.0f, -64.0f}
+        };
+
+        /// Timing CSV printer: same columns and printf shape as TimeTrials
+        /// (TimeTrials.cpp printTimingsCsv). stdout CSV, stderr banners.
+        void printTimingsCsv(const StageTimings &timings) {
+            std::println("stage,calls,total_us,mean_us,max_us");
+            for (std::size_t index = 0u; index < static_cast<std::size_t>(Stage::Count); ++index) {
+                const Stage stage = static_cast<Stage>(index);
+                const StageStat &stat = timings.m_stats[index];
+                const u64 calls = stat.m_calls;
+                const u64 total = stat.m_microseconds;
+                const double mean = calls > 0u ? static_cast<double>(total) / static_cast<double>(calls) : 0.0;
+                // NOTE: std::println with >2 fixed-width args trips consteval
+                // _Format_checker C3546 on this toolchain (VS18 Insiders);
+                // printf is runtime-parsed and prints byte-identical CSV.
+                std::printf("%s,%llu,%llu,%.2f,%llu\n", stageName(stage), static_cast<unsigned long long>(calls),
+                    static_cast<unsigned long long>(total), static_cast<double>(mean),
+                    static_cast<unsigned long long>(stat.m_max_us));
+            }
+        }
+
+        /// Slice 6 load harness: 100-agent sustained update-phase load with
+        /// GridPass uploads and stderr diagnostics. The frame body copies the
+        /// ColonySmokeApp::update call sequence above with presentEdits in
+        /// the production position (TurboLarbin::update, main.cpp):
+        /// Application::update, driver.update (fixed 1/60, ticked — never
+        /// paused), presentEdits, translator.submit, pass.update. No input,
+        /// no panel, no debug instances; requestExit after kLoad100Frames.
+        class ColonyLoad100App final : public Application {
+        public:
+            explicit ColonyLoad100App()
+                : Application(ApplicationDomain{
+                    .m_is_headless = true,
+                    .m_is_interactive = false,
+                    .m_needs_presence = false,
+                    .m_needs_rendering = true,
+                    .m_needs_user_interface = false,
+                }, "colony-load100", std::span<const char *const>{}) {
+            }
+
+            [[nodiscard]] u64 frames() const noexcept { return m_frames; }
+            [[nodiscard]] const StageTimings &driverStageTimings() const noexcept {
+                return m_driver_snapshot;
+            }
+            [[nodiscard]] const StageTimings &translatorStageTimings() const noexcept {
+                return m_translator_snapshot;
+            }
+            [[nodiscard]] u64 panPlanUs(const u32 waypoint) const noexcept {
+                return waypoint < kLoad100PanWaypoints ? m_plan_us[waypoint] : 0u;
+            }
+            [[nodiscard]] u64 panUploadMark(const u32 mark) const noexcept {
+                return mark <= kLoad100PanWaypoints ? m_upload_marks[mark] : 0u;
+            }
+            [[nodiscard]] std::error_code shutdownError() const noexcept { return m_shutdown_error; }
+
+        protected:
+            [[nodiscard]] std::error_code initialize() override {
+                m_base_started = true;
+                if (const std::error_code error = Application::initialize()) [[unlikely]] {
+                    return error;
+                }
+                m_base_ready = true;
+
+                const auto rhi_service = getServices().tryGet<IRhiService>();
+                const auto shader_service = getServices().tryGet<IShaderService>();
+                if (not rhi_service or not shader_service) [[unlikely]] {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+
+                m_pass_started = true;
+                if (const std::error_code error = m_pass.initialize(*rhi_service, *shader_service,
+                    getContentDir().path())) [[unlikely]] {
+                    return error;
+                }
+
+                m_driver_started = true;
+                if (const std::error_code error = m_driver.init(
+                    ColonyDriverDesc{.m_seed = kSeed, .m_agent_count = kLoad100Agents})) [[unlikely]] {
+                    return error;
+                }
+
+                const auto core = findCoreCell(m_driver.grid());
+                if (not core) [[unlikely]] {
+                    return core.error();
+                }
+                m_core = *core;
+
+                // Fixed pan-cull fixture: a 4x4 chunk tile block around the
+                // core chunk (clamped in-bounds), identical for every
+                // waypoint, so planTiles deltas reflect camera culling only.
+                {
+                    const sim::ChunkPos home = sim::chunkOf(m_core);
+                    const u32 x_lo = home.m_x >= 2u ? home.m_x - 2u : 0u;
+                    const u32 y_lo = home.m_y >= 2u ? home.m_y - 2u : 0u;
+                    for (u32 dy = 0u; dy < 4u; ++dy) {
+                        for (u32 dx = 0u; dx < 4u; ++dx) {
+                            u32 cx = x_lo + dx;
+                            u32 cy = y_lo + dy;
+                            if (cx >= sim::kChunksPerEdge) {
+                                cx = sim::kChunksPerEdge - 1u;
+                            }
+                            if (cy >= sim::kChunksPerEdge) {
+                                cy = sim::kChunksPerEdge - 1u;
+                            }
+                            const i32 left = static_cast<i32>(cx * sim::kChunkEdge);
+                            const i32 bottom = static_cast<i32>(cy * sim::kChunkEdge);
+                            m_pan_submissions.push_back(GridTileSubmission{
+                                .m_chunk_id = sim::chunkIndexOf(sim::ChunkPos{cx, cy}),
+                                .m_tile_range = {left, bottom, left + static_cast<i32>(sim::kChunkEdge),
+                                    bottom + static_cast<i32>(sim::kChunkEdge)},
+                            });
+                        }
+                    }
+                }
+
+                // Same offscreen framing as ColonySmokeApp: a 256x256 target
+                // at 1/4 unit per pixel centered on a generated rock cell.
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_ortho_scale = 0.25f;
+                model.m_origin = float3{
+                    static_cast<float>(core->m_x) + 0.5f - 32.0f,
+                    static_cast<float>(core->m_y) + 0.5f - 32.0f,
+                    -0.5f,
+                };
+                Camera camera{ECameraProjection::orthographic};
+                camera.updateModel(TimeSpan{}, model,
+                    Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
+                m_camera_view = camera.getSnapshot();
+                return {};
+            }
+
+            /// Reframes the camera on a pan waypoint and times one CPU-only
+            /// GridPass::planTiles over the fixed submission fixture (cull
+            /// cost). Records the post-submit upload mark: camera motion must
+            /// never add uploads (uploads are dirt-driven only). Wall-clock is
+            /// measurement output here, never a decision input.
+            [[nodiscard]] std::error_code applyPanWaypoint(const u32 waypoint) {
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_ortho_scale = 0.25f;
+                model.m_origin = float3{
+                    static_cast<float>(m_core.m_x) + 0.5f - 32.0f + kLoad100PanOffsets[waypoint][0u],
+                    static_cast<float>(m_core.m_y) + 0.5f - 32.0f + kLoad100PanOffsets[waypoint][1u],
+                    -0.5f,
+                };
+                Camera camera{ECameraProjection::orthographic};
+                camera.updateModel(TimeSpan{}, model,
+                    Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
+                m_camera_view = camera.getSnapshot();
+                const auto started = std::chrono::steady_clock::now();
+                const auto plan = GridPass::planTiles(m_camera_view,
+                    std::span<const GridTileSubmission>{
+                        m_pan_submissions.data(), m_pan_submissions.size()});
+                const auto finished = std::chrono::steady_clock::now();
+                if (not plan) [[unlikely]] {
+                    return plan.error();
+                }
+                m_plan_us[waypoint] =
+                    static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(finished - started).count());
+                m_upload_marks[waypoint] = m_pass.uploadCount();
+                m_waypoint = waypoint;
+                return {};
+            }
+
+            [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+                if (const std::error_code error = Application::update(dt)) [[unlikely]] {
+                    return error;
+                }
+                if (const std::error_code error = m_driver.update(kLoad100Dt)) [[unlikely]] {
+                    return error;
+                }
+                if (const std::error_code error = m_driver.presentEdits(m_translator)) [[unlikely]] {
+                    return error;
+                }
+                if (const std::error_code error = m_translator.submit(m_driver.grid(), m_pass)) [[unlikely]] {
+                    return error;
+                }
+                const u32 waypoint =
+                    static_cast<u32>((m_frames / kLoad100PanPeriod) % kLoad100PanWaypoints);
+                if (waypoint != m_waypoint) {
+                    if (const std::error_code error = applyPanWaypoint(waypoint)) [[unlikely]] {
+                        return error;
+                    }
+                }
+                if (const std::error_code error = m_pass.update(dt, m_camera_view)) [[unlikely]] {
+                    return error;
+                }
+                ++m_frames;
+                if (m_frames % kLoad100DiagPeriod == 0u) {
+                    // NOTE: fprintf — println trips consteval _Format_checker
+                    // C3546 on this toolchain; same reason as TimeTrials.
+                    std::fprintf(stderr, "[load100] tick=%llu iter=%llu chunks=%u\n",
+                        static_cast<unsigned long long>(m_driver.tickCount()),
+                        static_cast<unsigned long long>(m_frames),
+                        static_cast<unsigned>(m_translator.submittedChunks()));
+                }
+                if (m_frames >= kLoad100Frames) {
+                    // Snapshot pre-shutdown: shutdown() clears live tables.
+                    // Final upload mark closes the last pan interval.
+                    m_driver_snapshot = m_driver.stageTimings();
+                    m_translator_snapshot = m_translator.stageTimings();
+                    m_upload_marks[kLoad100PanWaypoints] = m_pass.uploadCount();
+                    requestExit();
+                }
+                return {};
+            }
+
+            [[nodiscard]] std::error_code shutdown() override {
+                std::error_code first_error{};
+                if (m_base_ready) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonySmoke, first_error, getRenderer().waitOnHost());
+                }
+                if (m_pass_started) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonySmoke, first_error, m_pass.shutdown());
+                    m_pass_started = false;
+                }
+                if (m_driver_started) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonySmoke, first_error, m_driver.shutdown());
+                    m_driver_started = false;
+                }
+                if (m_base_started) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonySmoke, first_error, Application::shutdown());
+                    m_base_started = false;
+                    m_base_ready = false;
+                }
+                m_shutdown_error = first_error;
+                return first_error;
+            }
+
+        private:
+            ColonyDriver m_driver{};
+            ColonyTranslator m_translator{};
+            StageTimings m_driver_snapshot{};
+            StageTimings m_translator_snapshot{};
+            GridPass m_pass{};
+            CameraSnapshot m_camera_view{};
+            sim::GlobalCellPos m_core{};
+            Array<GridTileSubmission> m_pan_submissions{};
+            std::array<u64, kLoad100PanWaypoints> m_plan_us{};
+            std::array<u64, kLoad100PanWaypoints + 1u> m_upload_marks{};
+            u32 m_waypoint{kLoad100PanWaypoints};
+            std::error_code m_shutdown_error{};
+            u64 m_frames{};
+            bool m_base_ready{false};
+            bool m_base_started{false};
+            bool m_pass_started{false};
+            bool m_driver_started{false};
         };
     }
 
@@ -3063,5 +3331,66 @@ namespace pP::colony {
             paths->m_paths, paths->m_partials, paths->m_blocked,
             result ? "FAIL" : "PASS", result ? result.message() : "-");
         return result;
+    }
+
+    Expected<void> runLoad100() {
+        // Stderr breadcrumbs are unbuffered: on abort the last tick line
+        // survives. Timing CSVs print on all paths so partial windows are
+        // still evidence; shutdown preserves the first error throughout.
+        std::println(stderr, "[load100] start seed={} agents={} frames={} dt=1/60", kSeed, kLoad100Agents,
+            kLoad100Frames);
+        ColonyLoad100App app{};
+        std::error_code first_error{};
+        try {
+            first_error = app.run();
+        } catch (const std::system_error &error) {
+            first_error = error.code();
+        } catch (const std::invalid_argument &) {
+            first_error = std::make_error_code(std::errc::invalid_argument);
+        } catch (const std::bad_alloc &) {
+            first_error = std::make_error_code(std::errc::not_enough_memory);
+        } catch (...) {
+            first_error = std::make_error_code(std::errc::state_not_recoverable);
+        }
+        if (not first_error) {
+            first_error = app.shutdownError();
+        }
+
+        std::println(stderr, "[load100] driver timings frames={}", app.frames());
+        printTimingsCsv(app.driverStageTimings());
+        std::println(stderr, "[load100] translator timings frames={}", app.frames());
+        printTimingsCsv(app.translatorStageTimings());
+
+        // Pan table: per-waypoint CPU cull cost (planTiles us, wall-clock
+        // measurement only) and upload deltas (count-based). Waypoint 0
+        // carries the initial dirt-driven upload burst, so the invariance
+        // assert covers waypoints 1..3 only: pure pans must add no uploads.
+        std::println(stderr, "[load100] pan table frames={}", app.frames());
+        std::println("waypoint,plan_us,uploads_delta");
+        bool pan_clean = true;
+        for (u32 waypoint = 0u; waypoint < kLoad100PanWaypoints; ++waypoint) {
+            const u64 mark_lo = app.panUploadMark(waypoint);
+            const u64 mark_hi = app.panUploadMark(waypoint + 1u);
+            const u64 delta = mark_hi >= mark_lo ? mark_hi - mark_lo : 0u;
+            // NOTE: fprintf — println trips consteval _Format_checker C3546.
+            std::printf("%u,%llu,%llu\n", static_cast<unsigned>(waypoint),
+                static_cast<unsigned long long>(app.panPlanUs(waypoint)),
+                static_cast<unsigned long long>(delta));
+            if (waypoint > 0u and delta != 0u) {
+                pan_clean = false;
+            }
+        }
+        if (not pan_clean and not first_error) {
+            std::println(stderr, "[load100] pan invariance FAIL (pure pan uploaded)");
+            first_error = std::make_error_code(std::errc::state_not_recoverable);
+        } else {
+            std::println(stderr, "[load100] pan invariance result={}", pan_clean ? "PASS" : "FAIL");
+        }
+        std::println(stderr, "[load100] frames={} result={} error={}", app.frames(), first_error ? "FAIL" : "PASS",
+            first_error ? first_error.message() : "-");
+        if (first_error) {
+            return std::unexpected{first_error};
+        }
+        return {};
     }
 }

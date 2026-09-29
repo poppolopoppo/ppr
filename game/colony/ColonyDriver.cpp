@@ -1,6 +1,7 @@
 module;
 
 #include "Colony.Elements.h"
+#include "StageTiming.h"
 
 module game.colony.driver;
 
@@ -140,6 +141,9 @@ namespace pP::colony {
         if (desc.m_tick_hz == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+        if (desc.m_agent_count > kAgentCountMax) [[unlikely]] {
+            return std::make_error_code(std::errc::value_too_large);
+        }
 
         const TimeSpan period = std::chrono::duration_cast<TimeSpan>(std::chrono::seconds{1}) /
                                 static_cast<TimeSpan::rep>(desc.m_tick_hz);
@@ -151,6 +155,7 @@ namespace pP::colony {
         if (shutdown_error) [[unlikely]] {
             return shutdown_error;
         }
+        m_timings = StageTimings{};
 
         const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed});
         if (init_error) [[unlikely]] {
@@ -215,6 +220,8 @@ namespace pP::colony {
                 return bound_tool.error();
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
+                const hal::ProfileScope scope_build{"Colony.Build"};
+                const StageTimer timer_build{m_timings, Stage::Build};
                 m_step_stage = "build";
                 Array<sim::ChunkPos> touched{};
                 advanceErrands(m_colony.grid(), registry, m_finder, touched, kErrandCellsPerTick);
@@ -226,6 +233,8 @@ namespace pP::colony {
                 return bound_build.error();
             }
             const Expected<void> bound = m_steps.addSystem(*declared, [this](sim::Registry &registry) {
+                const hal::ProfileScope scope_pathfind{"Colony.Pathfind"};
+                const StageTimer timer_pathfind{m_timings, Stage::Pathfind};
                 m_step_stage = "pathfind";
                 stepPathfinding(m_colony.grid(), registry, m_finder, kExpansionsPerTick);
             });
@@ -235,6 +244,8 @@ namespace pP::colony {
                 return bound.error();
             }
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
+                const hal::ProfileScope scope_plan{"Colony.Plan"};
+                const StageTimer timer_plan{m_timings, Stage::Plan};
                 m_step_stage = "aiplan";
                 planAgent(m_colony.grid(), registry);
             });
@@ -267,6 +278,7 @@ namespace pP::colony {
             (void) shutdown();
             return error;
         }
+        m_agent_count = desc.m_agent_count == 0u ? kAgentCount : desc.m_agent_count;
         if (const std::error_code error = spawnColonyAgents()) [[unlikely]] {
             (void) shutdown();
             return error;
@@ -281,6 +293,7 @@ namespace pP::colony {
         m_registry.clear();
         m_finder = Pathfinder{};
         clearToolState();
+        m_timings = StageTimings{};
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -289,6 +302,7 @@ namespace pP::colony {
         const std::error_code error = m_colony.shutdown();
         m_seed = 0u;
         m_tick_count = 0u;
+        m_agent_count = kAgentCount;
         m_speed = 1u;
         m_paused = false;
         return error;
@@ -311,6 +325,9 @@ namespace pP::colony {
             return {};
         }
 
+        const hal::ProfileScope scope_update{"Colony.Update"};
+        const StageTimer timer_update{m_timings, Stage::Update};
+
         const auto speed = static_cast<TimeSpan::rep>(m_speed);
         if (elapsed > TimeSpan::max() / speed) [[unlikely]] {
             return std::make_error_code(std::errc::value_too_large);
@@ -332,6 +349,8 @@ namespace pP::colony {
         // Each committed fixed slice runs the simulation systems once; a
         // system failure aborts the tick count before it advances.
         for (u32 slice = 0u; slice < report->m_slices; ++slice) {
+            const hal::ProfileScope scope_tick{"Colony.Tick"};
+            const StageTimer timer_tick{m_timings, Stage::Tick};
             const std::error_code system_error = m_steps.runSystems(m_registry);
             if (system_error) [[unlikely]] {
                 m_counts = pP::colony::pathCounts(m_registry);
@@ -347,10 +366,14 @@ namespace pP::colony {
             }
         }
 
-        m_tick_count += report->m_slices;
-        m_counts = pP::colony::pathCounts(m_registry);
-        m_errands = liveErrandCount(m_registry);
-        refreshAgents();
+        {
+            const hal::ProfileScope scope_summary{"Colony.Summary"};
+            const StageTimer timer_summary{m_timings, Stage::Summary};
+            m_tick_count += report->m_slices;
+            m_counts = pP::colony::pathCounts(m_registry);
+            m_errands = liveErrandCount(m_registry);
+            refreshAgents();
+        }
         return {};
     }
 
@@ -370,12 +393,16 @@ namespace pP::colony {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
-        const std::error_code system_error = m_steps.runSystems(m_registry);
-        if (system_error) [[unlikely]] {
-            return system_error;
-        }
-        if (m_step_error) [[unlikely]] {
-            return m_step_error;
+        {
+            const hal::ProfileScope scope_tick{"Colony.Tick"};
+            const StageTimer timer_tick{m_timings, Stage::Tick};
+            const std::error_code system_error = m_steps.runSystems(m_registry);
+            if (system_error) [[unlikely]] {
+                return system_error;
+            }
+            if (m_step_error) [[unlikely]] {
+                return m_step_error;
+            }
         }
 
         ++m_tick_count;
@@ -406,6 +433,7 @@ namespace pP::colony {
         m_registry.clear();
         m_finder = Pathfinder{};
         clearToolState();
+        m_timings = StageTimings{};
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -436,6 +464,14 @@ namespace pP::colony {
         return {};
     }
 
+    std::error_code ColonyDriver::regenerate(const u64 seed, const u32 agent_count) {
+        if (agent_count > kAgentCountMax) [[unlikely]] {
+            return std::make_error_code(std::errc::value_too_large);
+        }
+        m_agent_count = agent_count == 0u ? kAgentCount : agent_count;
+        return regenerate(seed);
+    }
+
     sim::ChunkGrid &ColonyDriver::grid() noexcept {
         return m_colony.grid();
     }
@@ -458,6 +494,14 @@ namespace pP::colony {
         }
         const std::chrono::duration<double, std::milli> milliseconds{m_timestep->period()};
         return static_cast<double>(m_tick_count) * milliseconds.count();
+    }
+
+    const StageTimings& ColonyDriver::stageTimings() const noexcept {
+        return m_timings;
+    }
+
+    void ColonyDriver::resetStageTimings() noexcept {
+        m_timings = StageTimings{};
     }
 
     bool ColonyDriver::paused() const noexcept {
@@ -560,6 +604,8 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::presentEdits(ColonyTranslator &translator) noexcept {
+        const hal::ProfileScope scope_invalidate{"Colony.Presentation.Invalidate"};
+        const StageTimer timer_invalidate{m_timings, Stage::Invalidate};
         // Presentation owns m_present_dirty only; the collider sets drain in
         // stepPhysics so cleared collider entries always reach a rebuild.
         std::error_code first_error{};
@@ -575,6 +621,8 @@ namespace pP::colony {
     }
 
     void ColonyDriver::applyToolEdits() noexcept {
+        const hal::ProfileScope scope_tool{"Colony.Tool"};
+        const StageTimer timer_tool{m_timings, Stage::Tool};
         if (not m_pending_dig) {
             return;
         }
@@ -657,6 +705,8 @@ namespace pP::colony {
         if (touched.empty()) {
             return;
         }
+        // New dirt means grid cells changed, so any cached views are stale.
+        invalidateColliderCache();
         m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
         for (const sim::ChunkPos pos: touched) {
             m_dig_stats.m_last_chunks.push_back(pos);
@@ -669,6 +719,14 @@ namespace pP::colony {
         m_pending_dig.reset();
         m_dig_stats.m_dug_total = 0u;
         m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
+        invalidateColliderCache();
+    }
+
+    void ColonyDriver::invalidateColliderCache() noexcept {
+        // H3a Slice 6: KEPT bump — every caller is real content change
+        // (non-empty absorb in fanOutEditChunks; restore/reinit clears).
+        ++m_cover_gen;
+        m_cache_valid = false;
     }
 
     std::error_code ColonyDriver::initPhysics() {
@@ -699,11 +757,16 @@ namespace pP::colony {
         (void) m_scene.dispose();
         m_colliders = physics::ChunkColliders{};
         m_collider_covered = Array<sim::ChunkPos>{};
+        m_cached_views = Array<physics::ColliderChunkView>{};
+        m_cached_pool = Array<Array<u16> >{};
+        m_cached_listed = Array<sim::ChunkPos>{};
+        m_cached_needed = Array<sim::ChunkPos>{};
+        invalidateColliderCache();
         m_physics_ready = false;
     }
 
     std::error_code ColonyDriver::spawnColonyAgents() {
-        if (const std::error_code error = spawnAgents(m_colony.grid(), m_registry, m_seed, kAgentCount)) {
+        if (const std::error_code error = spawnAgents(m_colony.grid(), m_registry, m_seed, m_agent_count)) {
             return error;
         }
         if (const std::error_code error = createAgentBodies()) {
@@ -785,6 +848,8 @@ namespace pP::colony {
     }
 
     void ColonyDriver::moveAgents() noexcept {
+        const hal::ProfileScope scope_move{"Colony.Move"};
+        const StageTimer timer_move{m_timings, Stage::Move};
         for (const auto &[entity, agent]: m_registry.view<Agent>()) {
             (void) agent;
             Intent intent{};
@@ -877,6 +942,7 @@ namespace pP::colony {
     }
 
     void ColonyDriver::stepPhysics() noexcept {
+        const hal::ProfileScope scope_physics{"Colony.Physics"};
         if (not m_physics_ready) {
             return;
         }
@@ -889,43 +955,100 @@ namespace pP::colony {
             }
             return;
         }
+
         // Split ownership: m_collider_dirty drains here on success only, so a
         // failed rebuild retains it for retry; presentEdits never touches it.
         m_collider_dirty = Array<sim::ChunkPos>{};
         m_step_stage = "scene-step";
-        if (const std::error_code error = m_scene.step()) {
-            if (not m_step_error) {
-                m_step_error = error;
+        {
+            const hal::ProfileScope scope_step{"Colony.Physics.Step"};
+            const StageTimer timer_step{m_timings, Stage::PhysicsStep};
+            if (const std::error_code error = m_scene.step()) {
+                if (not m_step_error) {
+                    m_step_error = error;
+                }
+                return;
             }
-            return;
         }
+
         m_step_stage = "mirror";
-        mirrorBodyStates();
+        {
+            const hal::ProfileScope scope_mirror{"Colony.Physics.Mirror"};
+            const StageTimer timer_mirror{m_timings, Stage::Mirror};
+            mirrorBodyStates();
+        }
     }
 
-    std::error_code ColonyDriver::rebuildChunks(
-        std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, const u32 max) {
-        Array<sim::ChunkPos> listed{};
-        const auto include = [&listed](const sim::ChunkPos pos) {
-            if (not chunkListedU32(listed, pos)) {
-                listed.push_back(pos);
+    bool ColonyDriver::buildColliderViewsDelta(std::span<const sim::ChunkPos> sorted_needed,
+        std::span<const sim::ChunkPos> dirty, Array<sim::ChunkPos> &listed_out,
+        Array<Array<u16> > &pool_out, Array<physics::ColliderChunkView> &views_out) {
+        // Fallback: no reusable history. Init/shutdown/reinit clear the pool
+        // (shutdownPhysics) and invalidate, so the canonical full preparation
+        // below runs for every restore/reinit. A dirt invalidation never clears
+        // the pool, so small-delta MISSes always reach the delta path.
+        if (m_cached_pool.empty()) {
+            return false;
+        }
+        if (m_cached_pool.size() != m_cached_listed.size() or
+            m_cached_views.size() != m_cached_listed.size()) {
+            return false;
+        }
+        for (const Array<u16> &buffer: m_cached_pool) {
+            if (buffer.size() != sim::kCellsPerChunk) {
+                return false;
             }
-        };
+        }
+
+        // Indexed sets over the fixed 32x32 chunk grid: every membership probe
+        // below is O(1), so a handful-sized delta never rescans the ~347 cached
+        // entries. `slot` maps a cached listed key to its pool/views ordinal.
+        std::bitset<sim::kChunkCount> need{};
+        std::bitset<sim::kChunkCount> prev_need{};
+        std::bitset<sim::kChunkCount> kept{};
+        std::bitset<sim::kChunkCount> dirt{};
+        std::bitset<sim::kChunkCount> grown{};
+        std::bitset<sim::kChunkCount> fresh_bits{};
+        std::array<i32, sim::kChunkCount> slot{};
+        slot.fill(-1);
+
+        for (const sim::ChunkPos pos: sorted_needed) {
+            if (not sim::isInsideChunkGrid(pos)) {
+                return false;
+            }
+            need.set(sim::chunkIndexOf(pos));
+        }
+        for (const sim::ChunkPos pos: m_cached_needed) {
+            if (not sim::isInsideChunkGrid(pos)) {
+                return false;
+            }
+            prev_need.set(sim::chunkIndexOf(pos));
+        }
+        for (std::size_t index = 0u; index < m_cached_listed.size(); ++index) {
+            const sim::ChunkPos pos = m_cached_listed[index];
+            if (not sim::isInsideChunkGrid(pos)) {
+                return false;
+            }
+            const u32 key = sim::chunkIndexOf(pos);
+            if (slot[key] >= 0) {
+                return false;
+            }
+            slot[key] = static_cast<i32>(index);
+            kept.set(key);
+        }
         for (const sim::ChunkPos pos: dirty) {
-            include(pos);
+            if (not sim::isInsideChunkGrid(pos)) {
+                return false;
+            }
+            dirt.set(sim::chunkIndexOf(pos));
         }
-        for (const sim::ChunkPos pos: needed) {
-            include(pos);
-        }
-        // The collider queue persists across calls: covered views are
-        // maintained by rebuildChunks only (cleared when nothing pends), and
-        // m_collider_dirty drains in stepPhysics only — never in presentEdits.
-        for (const sim::ChunkPos pos: m_collider_covered) {
-            include(pos);
-        }
-        const u32 listed_count = static_cast<u32>(listed.size());
-        for (u32 index = 0u; index < listed_count; ++index) {
-            const sim::ChunkPos pos = listed[index];
+
+        // Coverage merge constrained to the seed: every stored listed set is
+        // ring-closed, so kept chunks already carry their ring and only
+        // dirty/added/covered-new chunks can grow the closure. The result is
+        // the exact set the full path computes (seed ∪ one 3x3 ring per seed
+        // entry), and key-ascending iteration matches its sort order, so no
+        // O(n^2) include scan and no sort are needed here.
+        const auto grow = [&grown](const sim::ChunkPos pos) {
             for (i32 dy = -1; dy <= 1; ++dy) {
                 for (i32 dx = -1; dx <= 1; ++dx) {
                     const i32 nx = static_cast<i32>(pos.m_x) + dx;
@@ -936,16 +1059,47 @@ namespace pP::colony {
                         static_cast<u32>(ny) >= sim::kChunksPerEdge) {
                         continue;
                     }
-                    include(sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)});
+                    grown.set(sim::chunkIndexOf(
+                        sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)}));
                 }
             }
+        };
+        for (const sim::ChunkPos pos: dirty) {
+            grow(pos);
         }
-        std::ranges::sort(listed, {}, [](const sim::ChunkPos pos) {
-            return pos.m_y * sim::kChunksPerEdge + pos.m_x;
-        });
-        Array<Array<u16> > pool{};
-        Array<physics::ColliderChunkView> views{};
-        for (const sim::ChunkPos pos: listed) {
+        for (const sim::ChunkPos pos: sorted_needed) {
+            grow(pos);
+        }
+        for (const sim::ChunkPos pos: m_collider_covered) {
+            if (not sim::isInsideChunkGrid(pos)) {
+                return false;
+            }
+            grow(pos);
+        }
+
+        // Sorted-merge diff: both the cached and the new listed sets are in
+        // key order, so one ascending sweep yields the recopy set
+        // (added ∪ dirty ∪ coverage-growth) and the grown size up front.
+        Array<u32> fresh_keys{};
+        u32 grown_count = 0u;
+        for (u32 key = 0u; key < sim::kChunkCount; ++key) {
+            if (not grown.test(key)) {
+                continue;
+            }
+            ++grown_count;
+            if (dirt.test(key) or (need.test(key) and not prev_need.test(key)) or not kept.test(key)) {
+                fresh_keys.push_back(key);
+                fresh_bits.set(key);
+            }
+        }
+
+        // Fresh copies first (verbatim mirror of the full-path cell copy): the
+        // cache is untouched until assembly, so an allocation failure here
+        // propagates exactly as it would on the full path.
+        Array<Array<u16> > fresh{};
+        fresh.reserve(fresh_keys.size());
+        for (const u32 key: fresh_keys) {
+            const sim::ChunkPos pos{key % sim::kChunksPerEdge, key / sim::kChunksPerEdge};
             const std::optional<std::span<const sim::Cell> > cells = m_colony.grid().residentCells(pos);
             Array<u16> elements{};
             elements.resize(sim::kCellsPerChunk);
@@ -956,14 +1110,180 @@ namespace pP::colony {
             } else {
                 std::fill(elements.data(), elements.data() + elements.size(), u16{});
             }
-            const bool wanted = chunkListedU32(needed, pos);
-            pool.push_back(std::move(elements));
-            const Array<u16> &stored = pool[pool.size() - 1u];
-            views.push_back(physics::ColliderChunkView{
+            fresh.push_back(std::move(elements));
+        }
+
+        // Assembly moves kept buffers verbatim into key order and splices the
+        // fresh copies at their keys. Outputs are reserved up front, so no
+        // reallocation can occur mid-assembly. Dropped (removed-and-uncovered)
+        // buffers stay in `m_cached_pool` until the shared tail overwrites it.
+        //
+        // Determinism invariant: reusing a kept buffer yields bit-identical
+        // views to recopying whenever the chunk is not in dirty/added/growth.
+        // Proof by set: a kept buffer is a verbatim cell copy from an earlier
+        // prepare, and every grid-cell write since then fanned out into the
+        // collider-dirty set, which clears only after a successful prepare
+        // that recopies its whole dirty set — so a chunk absent from the
+        // current dirty set has no un-recopied write since its copy. Added and
+        // growth chunks hold no reusable buffer and are copied fresh above; a
+        // `m_needed` flip on a reused buffer is flag-only over identical
+        // content, matching what a recopy would produce.
+        listed_out.reserve(grown_count);
+        pool_out.reserve(grown_count);
+        views_out.reserve(grown_count);
+        std::size_t cursor = 0u;
+        for (u32 key = 0u; key < sim::kChunkCount; ++key) {
+            if (not grown.test(key)) {
+                continue;
+            }
+            const sim::ChunkPos pos{key % sim::kChunksPerEdge, key / sim::kChunksPerEdge};
+            if (fresh_bits.test(key)) {
+                pool_out.push_back(std::move(fresh[cursor]));
+                ++cursor;
+            } else {
+                pool_out.push_back(std::move(m_cached_pool[static_cast<std::size_t>(slot[key])]));
+            }
+            listed_out.push_back(pos);
+            const Array<u16> &stored = pool_out[pool_out.size() - 1u];
+            views_out.push_back(physics::ColliderChunkView{
                 .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
                 .m_elements = std::span<const u16>{stored.data(), stored.size()},
-                .m_needed = wanted
+                .m_needed = need.test(key)
             });
+        }
+        return true;
+    }
+
+    std::error_code ColonyDriver::rebuildChunks(
+        std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, const u32 max) {
+        const hal::ProfileScope scope_prepare{"Colony.Colliders.Prepare"};
+        const StageTimer timer_prepare{m_timings, Stage::CollidersPrepare};
+
+        // Determinism invariant: every grid-cell write path fans out dirt
+        // (advanceErrands `touched`, dig intents) and bumps `m_cover_gen`,
+        // or goes through a restore re-init that invalidates the cache. The
+        // neighbourhood walk below performs no cell copies, so an intact key
+        // (valid flag, unchanged generation, element-wise equal sorted
+        // `needed`, empty new dirt) implies a fresh preparation would produce
+        // bit-identical views. The cache holds DERIVED state only: it is
+        // never snapshotted and never compared for determinism.
+        Array<sim::ChunkPos> sorted_needed{};
+        for (const sim::ChunkPos pos: needed) {
+            sorted_needed.push_back(pos);
+        }
+        std::ranges::sort(sorted_needed, {}, [](const sim::ChunkPos pos) {
+            return pos.m_y * sim::kChunksPerEdge + pos.m_x;
+        });
+        m_timings.m_stats[(std::size_t)Stage::NeededCells].m_calls +=
+            static_cast<std::uint64_t>(sorted_needed.size());
+        const bool hit = m_cache_valid and
+            m_cover_gen == m_cached_gen and
+            dirty.empty() and
+            std::ranges::equal(m_cached_needed, sorted_needed);
+        if (hit) {
+            m_timings.m_stats[(std::size_t)Stage::CacheHit].m_calls += 1u;
+            // Cache HIT: skip the coverage merge, sort, and per-chunk cell
+            // copies entirely. The cached views already span every chunk the
+            // drain can touch: empty dirt enqueues nothing, and the pending
+            // remainder only shrinks, so each pending entry was validated
+            // against these exact views when it was enqueued.
+            if (dirty.empty() and m_colliders.pendingCount() == 0u) {
+                // Proven no-op: empty dirt enqueues nothing, an empty pending
+                // queue drains nothing, and identical views build nothing, so
+                // the rebuild call would touch neither the scene nor the
+                // pending set. Skipping it preserves state bit-identically.
+                return {};
+            }
+            Array<physics::ColliderChunkPos> dirty_i32{};
+            u32 processed = 0u;
+            std::error_code rebuilt{};
+            {
+                const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
+                const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
+                rebuilt = m_colliders.rebuildDirtyChunks(m_scene,
+                    std::span<const physics::ColliderChunkView>{m_cached_views.data(), m_cached_views.size()},
+                    std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()},
+                    sim::kChunkEdge, max, processed);
+            }
+            m_timings.m_stats[(std::size_t)Stage::ChunksDrained].m_calls += processed;
+            if (m_colliders.pendingCount() == 0u and not m_collider_covered.empty()) {
+                // H3a Slice 6: REMOVED gen bump — clearing removes views, and cached
+                // views stay a SUPERSET of what drain needs (pending==0 needs nothing).
+                m_collider_covered = Array<sim::ChunkPos>{};
+            }
+            // Otherwise the covered set is retained as-is: the cached views
+            // already span the whole pending remainder, so regrowing the ring
+            // here would only add fringe, never drain work.
+            return rebuilt;
+        }
+
+        m_timings.m_stats[(std::size_t)Stage::CacheMiss].m_calls += 1u;
+        Array<sim::ChunkPos> listed{};
+        Array<Array<u16> > pool{};
+        Array<physics::ColliderChunkView> views{};
+        // H4a Slice 6: a delta prepare still counts one Miss; the recopy set
+        // is (added ∪ dirty ∪ coverage-growth) while kept buffers move over
+        // verbatim. The full preparation inside the branch is the unchanged
+        // fallback (same set, same order, same copies, same flags).
+        const bool delta_ready = buildColliderViewsDelta(sorted_needed, dirty, listed, pool, views);
+        if (not delta_ready) {
+            const auto include = [&listed](const sim::ChunkPos pos) {
+                if (not chunkListedU32(listed, pos)) {
+                    listed.push_back(pos);
+                }
+            };
+            for (const sim::ChunkPos pos: dirty) {
+                include(pos);
+            }
+            for (const sim::ChunkPos pos: sorted_needed) {
+                include(pos);
+            }
+            // The collider queue persists across calls: covered views are
+            // maintained by rebuildChunks only (cleared when nothing pends), and
+            // m_collider_dirty drains in stepPhysics only — never in presentEdits.
+            for (const sim::ChunkPos pos: m_collider_covered) {
+                include(pos);
+            }
+            const u32 listed_count = static_cast<u32>(listed.size());
+            for (u32 index = 0u; index < listed_count; ++index) {
+                const sim::ChunkPos pos = listed[index];
+                for (i32 dy = -1; dy <= 1; ++dy) {
+                    for (i32 dx = -1; dx <= 1; ++dx) {
+                        const i32 nx = static_cast<i32>(pos.m_x) + dx;
+                        const i32 ny = static_cast<i32>(pos.m_y) + dy;
+                        if (nx < 0 or
+                            ny < 0 or
+                            static_cast<u32>(nx) >= sim::kChunksPerEdge or
+                            static_cast<u32>(ny) >= sim::kChunksPerEdge) {
+                            continue;
+                        }
+                        include(sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)});
+                    }
+                }
+            }
+            std::ranges::sort(listed, {}, [](const sim::ChunkPos pos) {
+                return pos.m_y * sim::kChunksPerEdge + pos.m_x;
+            });
+            for (const sim::ChunkPos pos: listed) {
+                const std::optional<std::span<const sim::Cell> > cells = m_colony.grid().residentCells(pos);
+                Array<u16> elements{};
+                elements.resize(sim::kCellsPerChunk);
+                if (cells) {
+                    for (u32 cell = 0u; cell < sim::kCellsPerChunk; ++cell) {
+                        elements[cell] = (*cells)[cell].m_element;
+                    }
+                } else {
+                    std::fill(elements.data(), elements.data() + elements.size(), u16{});
+                }
+                const bool wanted = chunkListedU32(sorted_needed, pos);
+                pool.push_back(std::move(elements));
+                const Array<u16> &stored = pool[pool.size() - 1u];
+                views.push_back(physics::ColliderChunkView{
+                    .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
+                    .m_elements = std::span<const u16>{stored.data(), stored.size()},
+                    .m_needed = wanted
+                });
+            }
         }
         Array<physics::ColliderChunkPos> dirty_i32{};
         for (const sim::ChunkPos pos: dirty) {
@@ -971,13 +1291,43 @@ namespace pP::colony {
                 physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
         }
         u32 processed = 0u;
-        const std::error_code rebuilt = m_colliders.rebuildDirtyChunks(m_scene,
-            std::span<const physics::ColliderChunkView>{views.data(), views.size()},
-            std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()},
-            sim::kChunkEdge, max, processed);
+        std::error_code rebuilt{};
+        {
+            const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
+            const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
+            rebuilt = m_colliders.rebuildDirtyChunks(m_scene,
+                std::span<const physics::ColliderChunkView>{views.data(), views.size()},
+                std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()},
+                sim::kChunkEdge, max, processed);
+        }
+        m_timings.m_stats[(std::size_t)Stage::ChunksDrained].m_calls += processed;
+        // Store the prepared views for steady-state reuse; the stored
+        // generation is the pre-drain value, so covered growth below forces
+        // the next tick to re-prepare, while a gen-preserving clear keeps the
+        // key intact for a HIT (SUPERSET invariant: pending==0 needs nothing).
+        m_cached_needed = std::move(sorted_needed);
+        m_cached_listed = listed;
+        m_cached_pool = std::move(pool);
+        m_cached_views = std::move(views);
+        for (std::size_t index = 0u; index < m_cached_views.size(); ++index) {
+            m_cached_views[index].m_elements =
+                std::span<const u16>{m_cached_pool[index].data(), m_cached_pool[index].size()};
+        }
+        m_cached_gen = m_cover_gen;
+        m_cache_valid = true;
+
         if (m_colliders.pendingCount() == 0u) {
-            m_collider_covered = Array<sim::ChunkPos>{};
+            if (not m_collider_covered.empty()) {
+                // H3a Slice 6: REMOVED gen bump — same SUPERSET invariant as the hit
+                // path above; keep the clear itself for memory hygiene.
+                m_collider_covered = Array<sim::ChunkPos>{};
+            }
         } else {
+            // H3a Slice 6: KEPT bump — covered growth to `listed` is real content
+            // change; the next tick must re-prepare over the expanded ring.
+            if (m_collider_covered != listed) {
+                ++m_cover_gen;
+            }
             m_collider_covered = std::move(listed);
         }
         return rebuilt;
@@ -994,7 +1344,11 @@ namespace pP::colony {
         (void) m_scene.clear();
         m_colliders = physics::ChunkColliders{};
         m_collider_covered = Array<sim::ChunkPos>{};
+        // Restores always invalidate: transient colliders are gone, so no
+        // cached view may survive even though createAgentBodies re-prepares.
+        invalidateColliderCache();
         clearToolState();
+        m_timings = StageTimings{};
         if (const std::error_code error = createAgentBodies()) {
             return error;
         }
@@ -1007,6 +1361,7 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::rebuildReplayColliders(const sim::Snapshot &snapshot) {
         clearToolState();
+        m_timings = StageTimings{};
         Array<sim::ChunkPos> dirty{};
         for (const sim::ChunkDelta &delta: snapshot.m_deltas) {
             const sim::ChunkPos pos{delta.m_chunk % sim::kChunksPerEdge, delta.m_chunk / sim::kChunksPerEdge};

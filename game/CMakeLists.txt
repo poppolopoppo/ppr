@@ -13,6 +13,7 @@ target_sources(app.game
             colony/ColonyTranslator.cppm
             colony/DigTool.cppm
             colony/Pathfinding.cppm
+            colony/TimeTrials.cppm
             colony/WorldGen.cppm
     PRIVATE
         colony/Agents.cpp
@@ -24,6 +25,7 @@ target_sources(app.game
         colony/ColonyTranslator.cpp
         colony/DigTool.cpp
         colony/Pathfinding.cpp
+        colony/TimeTrials.cpp
         colony/WorldGen.cpp
     )
 

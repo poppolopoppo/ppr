@@ -1,3 +1,6 @@
+module;
+#include "StageTiming.h"
+
 export module game.colony.translator;
 
 import engine.app;
@@ -12,6 +15,7 @@ export namespace pP::colony {
     private:
         std::array<bool, sim::kChunkCount> m_presented{};
         u32 m_submitted_chunks{};
+        StageTimings m_timings{};
 
     public:
         /// Drop the old world's staged tiles and cached cell materials before
@@ -29,6 +33,15 @@ export namespace pP::colony {
 
         /// Submitted resident chunks (not camera-frustum visibility).
         [[nodiscard]] u32 submittedChunks() const noexcept;
+
+        /// Accumulated submit-side wall-clock timings (observation only).
+        /// Owned separately from the driver's in-tick table: submit runs on
+        /// the presentation boundary with its own lifetime, so the driver
+        /// never merges this table — both are reported side by side.
+        [[nodiscard]] const StageTimings& stageTimings() const noexcept;
+
+        /// Clears the accumulated submit timings.
+        void resetStageTimings() noexcept;
 
         [[nodiscard]] static constexpr u32 totalChunks() noexcept { return sim::kChunkCount; }
     };

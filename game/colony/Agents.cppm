@@ -11,6 +11,11 @@ export namespace pP::colony {
     /// Agent count spawned per colony (deterministic, seed-derived).
     inline constexpr u32 kAgentCount = 3u;
 
+    /// Profiling ceiling for the spawn-count override (Slice 6 fixture).
+    /// Requests above this fail with `value_too_large`; requests of 0 fail
+    /// closed to `kAgentCount` (never zero agents).
+    inline constexpr u32 kAgentCountMax = 128u;
+
     /// Default walk speed in cells per second.
     inline constexpr float kAgentSpeed = 3.0f;
 
@@ -98,8 +103,14 @@ export namespace pP::colony {
 
     /// Creates `count` agents at seed-derived vacuum cells with full physics
     /// definition state. No plans yet; the planner fills them.
+    /// Units: `count` is an agent count (not cells or ticks). Order:
+    /// slot-ordered draws from the seed-derived splitmix64 stream, so the same
+    /// seed+count reproduces the same spawns and the first N spawns of a larger
+    /// run match the N-spawn run (prefix-stable). `count == 0` fails closed to
+    /// `kAgentCount`; `count > kAgentCountMax` returns `value_too_large`.
+    /// No wall-clock or global RNG is consulted.
     [[nodiscard]] std::error_code spawnAgents(
-        const sim::ChunkGrid &grid, sim::Registry &registry, u64 seed, u32 count);
+        const sim::ChunkGrid &grid, sim::Registry &registry, u64 seed, u32 count = kAgentCount);
 
     /// Plans the first agent (slot order) needing a plan: none, or desired
     /// goal/site differing from the current Plan. Issues or refreshes the
