@@ -4,6 +4,7 @@ module;
 
 #include "Core.HAL.windows.include.hpp"
 
+#include <pix3.h>
 #include <crtdbg.h>
 #include <werapi.h>
 
@@ -59,7 +60,6 @@ namespace pP::hal {
 
 #if PPR_ENABLE_DEBUG
         for (const int channel: {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
-
             ::_CrtSetReportMode(channel, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
             ::_CrtSetReportFile(channel, _CRTDBG_FILE_STDERR);
         }
@@ -76,7 +76,7 @@ namespace pP::hal {
     namespace {
         int __cdecl crtReportHook([[maybe_unused]] int reportType, char *message, int *returnValue) {
             if (returnValue) {
-                *returnValue = 0;  // suppress the default CRT debug-break / dialog
+                *returnValue = 0; // suppress the default CRT debug-break / dialog
             }
 
             if (message) {
@@ -89,7 +89,7 @@ namespace pP::hal {
             // cannot be silently swallowed by caller exception handling.
             breakpointIfDebugging();
 
-            return TRUE;  // we have handled the report: no "Abort/Retry/Ignore" box
+            return TRUE; // we have handled the report: no "Abort/Retry/Ignore" box
         }
 
         void __cdecl invalidParamHandler(
@@ -97,11 +97,11 @@ namespace pP::hal {
             const wchar_t *func,
             const wchar_t *file,
             const unsigned int line,
-            uintptr_t
-        ) {
+            uintptr_t) {
             char buf[2048];
             const auto w2a = [](const wchar_t *ws) -> std::string {
-                if (!ws) return std::string("(null)");
+                if (!ws)
+                    return std::string("(null)");
                 return toString<char>(std::wstring_view(ws));
             };
             const auto [end, _] = std::format_to_n(buf, sizeof(buf) - 1,
@@ -135,13 +135,34 @@ namespace pP::hal {
 
     void installDebugAssertHooks() noexcept {
 #if PPR_ENABLE_ASSERTIONS
-        if (::IsDebuggerPresent()) {
+        // if (::IsDebuggerPresent())
+        {
             ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
             ::_set_invalid_parameter_handler(&invalidParamHandler);
             ::_set_purecall_handler(&purecallHandler);
             std::set_terminate(&terminateHandler);
         }
 #endif
+    }
+
+    // ------------------------------------------------------------------
+    // profiling markers (PIX on Windows, no-op elsewhere)
+    // ------------------------------------------------------------------
+
+    void profileBegin(const char *name) noexcept {
+        ::PIXBeginEvent(PIX_COLOR(200u, 200u, 200u), name);
+    }
+
+    void profileEnd() noexcept {
+        ::PIXEndEvent();
+    }
+
+    ProfileScope::ProfileScope(const char *name) noexcept {
+        profileBegin(name);
+    }
+
+    ProfileScope::~ProfileScope() noexcept {
+        profileEnd();
     }
 
     // ------------------------------------------------------------------

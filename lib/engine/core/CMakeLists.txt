@@ -103,6 +103,13 @@ setup_ppr_project(engine.core
     EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash
 )
 
+# WinPix event markers (Windows-only HAL profiling backend). The import
+# target carries headers + lib; the DLL stages via vcpkg applocal.
+if(WIN32)
+    find_package(winpixevent CONFIG REQUIRED)
+    target_link_libraries(engine.core PRIVATE Microsoft::WinPixEventRuntime)
+endif()
+
 # libc++ emits libatomic calls for 16-byte atomics (e.g. atomic<error_code>);
 # clang does not link it implicitly. Consumers inherit it via the interface.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -60,6 +60,25 @@ namespace pP::hal {
     }
 
     // ------------------------------------------------------------------
+    // profiling markers (PIX on Windows, no-op elsewhere)
+    // ------------------------------------------------------------------
+
+    void profileBegin(const char *name) noexcept {
+        (void) name;
+    }
+
+    void profileEnd() noexcept {
+    }
+
+    ProfileScope::ProfileScope(const char *name) noexcept {
+        profileBegin(name);
+    }
+
+    ProfileScope::~ProfileScope() noexcept {
+        profileEnd();
+    }
+
+    // ------------------------------------------------------------------
     // thread names (visible to debuggers)
     // ------------------------------------------------------------------
 
@@ -80,7 +99,7 @@ namespace pP::hal {
         if (fd < 0) {
             return 0u;
         }
-        PPR_DEFER { ::close(fd); };
+        PPR_DEFER{::close(fd); };
 
         char raw[16]{};
         const auto result = ::read(fd, raw, sizeof(raw) - 1u);

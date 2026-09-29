@@ -290,7 +290,9 @@ export namespace pP {
 
         // converting: transcodes into a newly allocated string.
         template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
-            requires (not std::is_same_v<DstCharT, SrcCharT>)
+            requires (not
+        std::is_same_v<DstCharT, SrcCharT>
+        )
         [[nodiscard]] std::basic_string<DstCharT> toString(const std::basic_string_view<SrcCharT> src, AllocatorT &&alloc = {}) noexcept(false) {
             const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
             std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
@@ -370,6 +372,28 @@ export namespace pP {
         void disableSystemErrorReporting() noexcept;
 
         void installDebugAssertHooks() noexcept;
+
+        // ------------------------------------------------------------------
+        // profiling markers (PIX on Windows, no-op elsewhere)
+        // ------------------------------------------------------------------
+
+        void profileBegin(const char *name) noexcept;
+
+        void profileEnd() noexcept;
+
+        struct ProfileScope {
+            explicit ProfileScope(const char *name) noexcept;
+
+            ~ProfileScope() noexcept;
+
+            ProfileScope(const ProfileScope &) = delete;
+
+            ProfileScope &operator=(const ProfileScope &) = delete;
+
+            ProfileScope(ProfileScope &&) = delete;
+
+            ProfileScope &operator=(ProfileScope &&) = delete;
+        };
 
         // ------------------------------------------------------------------
         // thread names (visible to debuggers)
@@ -614,7 +638,7 @@ export namespace std {
                     return std::format_to(ctx.out(), "{}", std::string_view(stack_buffer, length));
                 }
             }
-            (void)thread_id;
+            (void) thread_id;
             return std::format_to(ctx.out(), "{}", thread_id.m_value);
         }
     };

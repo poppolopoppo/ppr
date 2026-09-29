@@ -74,6 +74,25 @@ namespace pP::hal {
     }
 
     // ------------------------------------------------------------------
+    // profiling markers (PIX on Windows, no-op elsewhere)
+    // ------------------------------------------------------------------
+
+    void profileBegin(const char *name) noexcept {
+        (void) name;
+    }
+
+    void profileEnd() noexcept {
+    }
+
+    ProfileScope::ProfileScope(const char *name) noexcept {
+        profileBegin(name);
+    }
+
+    ProfileScope::~ProfileScope() noexcept {
+        profileEnd();
+    }
+
+    // ------------------------------------------------------------------
     // thread names (visible to debuggers)
     // ------------------------------------------------------------------
 
@@ -95,13 +114,13 @@ namespace pP::hal {
         mach_msg_type_number_t thread_count = 0u;
 
         PPR_PRAGMA_WARNING_PUSH()
-        PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wdeprecated-declarations) // task_threads: no public tid→pthread_t alternative
+        PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wdeprecated - declarations) // task_threads: no public tid→pthread_t alternative
         const kern_return_t result = ::task_threads(self, &threads, &thread_count);
         PPR_PRAGMA_WARNING_POP()
         if (result != KERN_SUCCESS) {
             return 0u;
         }
-        PPR_DEFER { ::vm_deallocate(self, reinterpret_cast<vm_address_t>(threads), thread_count * sizeof(mach_port_t)); };
+        PPR_DEFER{::vm_deallocate(self, reinterpret_cast<vm_address_t>(threads), thread_count * sizeof(mach_port_t)); };
 
         for (mach_msg_type_number_t i = 0u; i < thread_count; ++i) {
             pthread_t pthread = ::pthread_from_mach_thread_np(threads[i]);

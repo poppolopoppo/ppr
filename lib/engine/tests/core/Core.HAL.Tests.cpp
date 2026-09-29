@@ -8,7 +8,7 @@ import std;
 
 namespace pP::tests::detail {
     namespace Hal {
-        PPR_UNIT_TEST(thread_id) {
+        PPR_UNIT_TEST (thread_id) {
             const auto tid = hal::currentThreadId();
             PPR_TEST_ASSERT(tid == hal::currentThreadId());
             if (hal::platformName() != "generic") {
@@ -16,10 +16,10 @@ namespace pP::tests::detail {
             }
         };
 
-        PPR_UNIT_TEST(set_get_name_roundtrip) {
+        PPR_UNIT_TEST (set_get_name_roundtrip) {
             const auto tid = hal::currentThreadId();
             const std::string previous = hal::getThreadName(tid);
-            PPR_DEFER { hal::setThreadName(previous); };
+            PPR_DEFER{hal::setThreadName(previous); };
 
             constexpr std::string_view expected = "PPR_HAL_Test"; // 12 chars, fits Linux comm limit
             hal::setThreadName(expected);
@@ -45,10 +45,10 @@ namespace pP::tests::detail {
             // std::println with hal::ThreadId at runtime.
         };
 
-        PPR_UNIT_TEST(buffer_truncation) {
+        PPR_UNIT_TEST (buffer_truncation) {
             const auto tid = hal::currentThreadId();
             const std::string previous = hal::getThreadName(tid);
-            PPR_DEFER { hal::setThreadName(previous); };
+            PPR_DEFER{hal::setThreadName(previous); };
 
             hal::setThreadName("PPR_HAL_Test");
             if (hal::platformName() == "generic") {
@@ -60,7 +60,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(written > sizeof(small));
         };
 
-        PPR_UNIT_TEST(worker_thread_name) {
+        PPR_UNIT_TEST (worker_thread_name) {
             std::atomic<hal::ThreadId> tid{};
             std::atomic<bool> named{false};
             std::atomic<bool> release{false};
@@ -70,13 +70,15 @@ namespace pP::tests::detail {
                     tid.store(hal::currentThreadId());
                     hal::setThreadName("PPR_Worker");
                     named.store(true);
-                    while (not release.load()) {
+                    while (not release.load())
+                    {
                         std::this_thread::yield();
                     }
                 }
             };
 
-            while (not named.load()) {
+            while (not named.load())
+            {
                 std::this_thread::yield();
             }
 
@@ -86,6 +88,14 @@ namespace pP::tests::detail {
 
             release.store(true);
             worker.join();
+        };
+
+        PPR_UNIT_TEST (profile_begin_end_no_fault) {
+            hal::profileBegin("PPR_HAL_Test_Scope");
+            hal::profileEnd();
+            {
+                const hal::ProfileScope scope("PPR_HAL_Test_RAII");
+            }
         };
     }
 } // namespace pP::tests::detail
@@ -97,6 +107,7 @@ namespace pP::tests {
             detail::Hal::set_get_name_roundtrip,
             detail::Hal::buffer_truncation,
             detail::Hal::worker_thread_name,
+            detail::Hal::profile_begin_end_no_fault,
         });
     };
 

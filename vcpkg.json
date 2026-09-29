@@ -11,7 +11,15 @@
     "lcms",
     "simdjson",
     "glfw3",
-    "vulkan-headers"
+    "box2d",
+    "vulkan-headers",
+    { "name": "winpixevent", "platform": "windows" }
+  ],
+  "overrides": [
+    {
+      "name": "box2d",
+      "version": "3.1.1"
+    }
   ]
 }
 
