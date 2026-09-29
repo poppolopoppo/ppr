@@ -110,6 +110,12 @@ it does not satisfy this gate.
   and submissions in the caller, and do not create helpers solely to meet a line
   count. Validation does not edit; route findings to the orchestrator for a
   bounded fix, then repeat the affected formatting and readability gates.
+- Run the semantic-style tripwire on touched C++ (`pwsh -NoProfile -File
+  scripts/Check-SemanticStyle.ps1`, optionally `-PathFilter '<subdir>'`) after the
+  final reformat. Classes A-STRANDED, B-OP, C-LEADING, C-DETACHED, and D-DENSE block
+  validation; B-CMP is advisory (template brackets such as `view<T>` are correct,
+  genuine `x<max` comparisons are not — eyeball each hit). Route findings to the
+  orchestrator for a bounded fix, then repeat the affected formatting and readability gates.
 
 ## CLion inspection gate
 

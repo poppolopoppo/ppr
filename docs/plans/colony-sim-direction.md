@@ -27,8 +27,8 @@
     matter framework (gas/liquid/granular/solid, split/merge, sleeping, phases
     0–14). This direction doc defers to it for particle-sim decisions.
 - This doc adds the missing layers on top: frame pacing, render thread, input
-  state machine, ECS, asset-type evolutions, true shading/GI/TSR/post/GPU-scene,
-  editor GUI, and the colony-sim game itself.
+  state machine, ECS, script engine + modding support, asset-type evolutions,
+  true shading/GI/TSR/post/GPU-scene, editor GUI, and the colony-sim game itself.
 
 ## 1. Engine direction
 
@@ -176,6 +176,42 @@ that brings modules up and down in dependency order.
 - Sequencing: decide before ECS systems (§1.4) and sim foundation (§5.0) harden,
   since both take config at init; revisit when hot reload (§2.5) lands (config
   reload rides the same watcher story or is explicitly excluded).
+
+### 1.6 Script engine + modding support
+
+**Intent:** internal gameplay scripting (tools, AI goals, tuning iteration) plus
+a future modding story — without breaking determinism or snapshots.
+
+- Decision (recorded, survey closed): primary AngelScript 2.38.0 — refcounted
+  with no GC pauses, C++-native binding, console-portable bytecode, actively
+  maintained. Fallback is Lua 5.4/5.5 PUC-Rio (no LuaJIT, no sol3). Wren and
+  daslang evaluated and deferred on ecosystem grounds. Umka 1.5.x (Go-inspired,
+  static types, C-compatible structs, refcount+weak, fibers, C99 + simple C API
+  via `umkaAddFunc`/`umkaAddModule`, ~2k stars, Tophat framework) is a
+  technically clean leaf fit and better than Lua on determinism, but deferred:
+  single-maintainer, small modding pool/tooling vs. AngelScript/Lua, and C-flat
+  (not C++-native RAII) interop needs more glue. Revisit only if Go-syntax /
+  C-layout preference outweighs reach — then trial as game-only host first.
+- Placement: new leaf `engine.script`, PRIVATE on `core` (plus `math` only if
+  bindings need it), never PUBLIC. `sim` and `physics` never import it; `sim`
+  stays script-free. `game` hosts the `ScriptService` (`IService` plus a
+  `StepRegistry::addSystem` seam) that drives script systems from the fixed-step
+  tick.
+- Contracts:
+  - Determinism: script tick code sees fixed-timestep state only — no
+    wall-clock, no hash-order iteration inside the tick.
+  - Snapshots: only the C++ `Registry` + `RngStream` serialize; script handles
+    stay transient and rebind on load.
+  - Main-thread affinity; per-call `error_code`/`expected` containment — script
+    errors fail closed to the call and never throw to `requestExit`.
+  - Allow-list sandbox: no FS/process/clock access from script; scripts emit
+    intent components only, never `DrawSubmission`/`Camera`.
+- Interaction: script config arrives as a typed `Desc` at init (§1.5); dev
+  hot-reload rides the §2.5 watcher story (scripts reload like assets dev-only,
+  pack-only shipping fail-closed); editor gets a script-debug toolwindow (§4.1).
+- Sequencing: after ECS (§1.4) + config decision (§1.5), before §5 gameplay
+  systems; prototype on tools/AI goals first (errand effects, goal scoring)
+  before opening any mod-facing surface.
 
 ## 2. Assets direction
 
@@ -549,7 +585,7 @@ lands — re-choosing any of them later re-chunks every consumer.
    folded into its mesh work — unblocks shipping packs and all asset consumers.
 3. Render thread + channel (§1.2) and input state machine (§1.3) in parallel —
    threading fixes GPU-scene/particle ownership; input unblocks tools.
-4. ECS substrate (§1.4) + audio asset (§2.4) + hot reload (§2.5) — gameplay glue
+4. ECS substrate (§1.4) + script engine leaf (§1.6) + audio asset (§2.4) + hot reload (§2.5) — gameplay glue
    and iteration speed before content volume.
 5. BxDF shading (§3.1) → post chain (§3.4) → HRC GI (§3.2) + TSR (§3.3) →
    GPU scene (§3.5) — each stage validated with timings before the next.

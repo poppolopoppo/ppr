@@ -15,15 +15,17 @@ concurrency primitives, a platform HAL (Windows/Linux/Darwin/Generic),
 Slang-based shader compilation, and a Slang-RHI GPU abstraction. Slim
 `Application` owns the run loop + platform/services/shader-RHI-`Renderer`
 bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
-player, camera, viewport, input-context, triangle pass, and UI state. The `game/`
-demo hosts `TurboLarbin : ApplicationEditor`, which privately loads a committed
-Kenney static-colony fixture through `engine.mesh`, `engine.image`, and the GPU
-triangle-pass caches, then submits a measured 53-placement, roughly 20-unit-wide
-cutaway habitat with explicit foreground/midground/background depth layers.
+player, camera, viewport, input-context, triangle and grid passes, and UI state.
+The `game/` demo hosts `TurboLarbin : ApplicationEditor`, which owns seeded
+generated-colony simulation, submits resident chunks to the editor-owned
+`GridPass`, and presents camera-visible counts in a Colony panel. `--smoke`
+instead runs a separate headless, rendering-enabled `Application` for offscreen
+GPU readback; the editor keeps its `TrianglePass` initialized but has no fixture scene.
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; defines `demo::TurboLarbin : ApplicationEditor` (constructed as `"ppr"` + argv span), owns 16 imported Kenney scenes with decoded image assets and GPU upload receipts, submits a 21-placement cutaway habitat, releases receipts in reverse during shutdown, and retains a debug-only ImGui demo window; `main()` returns `app.run().value()`.
+- `game/main.cpp` — Process entry point; dispatches `--smoke` to `game.colony.smoke::runColonySmoke(argv)` before constructing the editor. Otherwise `demo::TurboLarbin : ApplicationEditor` initializes a seeded `ColonyDriver`, orthographic pan camera, game input mapping, and `ColonyTranslator`; per frame it stages generated tiles and draws the Colony panel. Both paths return the resulting `std::error_code::value()`.
+- `game/colony/ColonySmoke.cppm` / `game/colony/ColonySmoke.cpp` — Separate headless `Application` host for one offscreen `GridPass` frame and generated-cell GPU readback; no editor window or UI.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
   include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
   `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; live-only `/MDd`; LNK4075 validators fail
@@ -42,7 +44,9 @@ cutaway habitat with explicit foreground/midground/background depth layers.
 Module dependencies (flat fan-out, per CMake):
 
 ```
-game/main.cpp → engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
+game/main.cpp → game.colony.driver / game.colony.translator / game.colony.panel / game.colony.smoke
+              → engine.app + engine.core + engine.math + engine.sim (app.game; plus PRIVATE engine.physics per Slice 4 Oracle grant — box2d stays behind engine.physics)
+                  engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
                  engine.rhi → engine.core / engine.math / engine.shader
                  engine.sim → engine.core / engine.math
                  engine.physics → engine.core / engine.math (+ PRIVATE box2d::box2d)
@@ -107,7 +111,7 @@ game/main.cpp → engine.app → engine.core / engine.math / engine.shader / eng
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Demo exe (`app.game`): `TurboLarbin : ApplicationEditor` owns the static Kenney colony fixture, authored submissions, and normal editor bootstrap; POST_BUILD stages DLLs + `shaders/` + `textures/` + `meshes/`. | [View Map](game/codemap.md)                         |
+| `game/`                         | Demo exe (`app.game`): editor-driven generated colony with `GridPass` + panel and a separate headless `--smoke` path; POST_BUILD stages shaders/textures/meshes (and DLLs where configured). | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime asset root: shaders + textures + meshes; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources (including `mesh_bindless.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |

@@ -1,6 +1,24 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
+  "warming": {
+    "interval": "4 minutes",
+    "duration": "30 minutes"
+  },
+  "compaction": {
+    "auto": true,
+    "keep": {
+      "tokens": 15000
+    },
+    "buffer": 20000
+  },
+  "provider": {
+    "openai": {
+      "options": {
+        "setCacheKey": true
+      }
+    }
+  },
   "skills": [
     ".opencode/skills",
     "C:/Users/bek4b/AppData/Local/JetBrains/CLion2026.2/aia/agents/.agents/skills"

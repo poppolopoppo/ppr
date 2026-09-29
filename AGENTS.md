@@ -152,9 +152,15 @@ do not put a blank line between every statement.
 Mechanical reformat_file does not satisfy this pass: it only handles indentation, wrapping, spacing,
 and braces — it never inserts blank lines, never rebreaks and/or/not chains, and never spaces
 alternative tokens (and(, or(, x<). The semantic pass owns all three.
-Multi-line conditions use trailing operators with one operand per line: the operator ends
-its line and the next operand starts the next line. Never start a continuation line with `and`/`or`,
-never leave an operator stranded alone on its line, and never write `and(`/`or(` without a trailing space.
+Any boolean-operator expression — `if`/`while`/`for` conditions, returns, assignments,
+assertions — MUST stay on one line when it fits. Break it ONLY when it exceeds the
+column limit, and then break AFTER the operator, never before it:
+- MUST: the operator ends its line and the next operand starts the next line, one operand per line.
+- NEVER: a continuation line starting with `and`/`or`.
+- NEVER: an operator stranded alone on its line.
+- NEVER: `and(`/`or(`/`not(` without a trailing space.
+- NEVER: a missing space in a comparison (`x<max`); always `x < max`.
+- MUST: keep `not` attached to its operand (`and not x`); never strand `not` at end of line.
 
 ## Source format
 

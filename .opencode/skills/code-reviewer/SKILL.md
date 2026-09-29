@@ -94,6 +94,10 @@ verdict.
   an arbitrary line-count threshold, and side effects and submissions stay in
   the caller. Structured logging fields remain one logical block and do not
   justify flattening surrounding control flow.
+- For the lexical tripwire (leading `and`/`or`, `and(`/`or(`/`not(` spacing, genuine
+  `x<max` comparison spacing, detached `{`, dense zero-blank functions), defer to the
+  `scripts/Check-SemanticStyle.ps1` result produced by validation; do not re-derive
+  its taxonomy here.
 
 #### Application and rendering boundary checks
 - A platform/application client owns application-facing window, viewport, and
