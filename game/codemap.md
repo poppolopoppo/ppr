@@ -47,7 +47,11 @@ The editor module ships unconditionally, independent of `BUILD_TESTING`.
   `runColonySmoke(argv)`. Its own headless, rendering-enabled `Application`
   generates a colony, renders one `GridPass` frame into an RGBA8 offscreen
   target, checks a generated temperate rock cell by GPU readback, prints a
-  PASS/FAIL summary, and does not create an editor window or UI.
+  PASS/FAIL summary, and does not create an editor window or UI. Slice 5
+  dig smoke prints `SMOKE-DIG dug=... result=PASS` (D6 v3 snapshot +
+  capture/restore checks, D7 double-run/restore equality); dig CPU-refresh
+  evidence (translator/GridPass uploads) stays distinct from this
+  GPU-readback rasterization proof.
 
 ## Flow
 

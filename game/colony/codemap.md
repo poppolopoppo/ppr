@@ -61,6 +61,12 @@ across ticks, with counters for the panel.
   `advanceErrands` writes cells (temperature preserved) + sim dirt + touched
   chunks + finder reset. Driver exposes `buildWall`/`demolish`/`requestPath`/
   `presentEdits`; `build` step runs before `pathfind` each tick.
+- `DigTool.cppm/.cpp` (`game.colony.digtool`) — immediate rect clear:
+  `DigRect` (min/size, edges in [1, `kMaxDigEdge` = 32]) + `DigResult`
+  (exact cleared count + deduped touched chunks). `digCells` validates,
+  collects non-vacuum cells row-major (temperature kept), then applies via
+  `setCell` (auto-dirties); vacuum cells are no-ops; `kMaxDigCells` = 1024
+  budget. Validation/budget failure changes nothing. Imports sim+core only.
 - `CMakeLists.txt` (parent `game/`) — colony `.cppm` files via
   `FILE_SET CXX_MODULES`, `.cpp` files as PRIVATE sources; `engine.sim`
   added to `app.game` `INTERNAL_PUBLIC_DEPS`. POST_BUILD shader/texture/mesh
@@ -76,6 +82,9 @@ end up dirty), then carves cavern worms and vent shafts to vacuum.
 → `drawColonyPanel`; `R` regenerates with a boundary seed + `translator.reset`.
 Pathfinding: `PathReq` rows → `stepPathfinding` advances one request per tick →
 emplaces `PathComp` on completion → `pathCounts` for the panel.
+Dig: `digCells(grid, rect)` validates → collects non-vacuum cells row-major →
+applies vacuum writes (`setCell` auto-dirties) → returns `DigResult`
+(`m_dug` + deduped `m_touched`); failures change nothing.
 
 ## Integration
 
@@ -96,4 +105,10 @@ emplaces `PathComp` on completion → `pathCounts` for the panel.
 - `ColonyTranslator.cppm` / `ColonyTranslator.cpp` — grid→GridPass presentation.
 - `ColonyPanel.cppm` / `ColonyPanel.cpp` — read-only status overlay.
 - `ColonySmoke.cppm` / `ColonySmoke.cpp` — headless offscreen smoke entry.
+  Slice 5 dig smoke aggregates `SMOKE-DIG dug=... result=PASS`: D6 pins
+  snapshot v3 with capture-is-not-flush, restore-clear, and matched-command
+  next-tick checks; D7 proves same-seed live double-run plus symmetric
+  restored-pair equality (entity-keyed, per-tick, live-contact waiver).
+  CPU-refresh evidence (D5 translator/GridPass upload deltas) is distinct
+  from the offscreen GPU-readback pixel proof; both must pass.
 - `Pathfinding.cppm` / `Pathfinding.cpp` — bounded deterministic BFS module.
