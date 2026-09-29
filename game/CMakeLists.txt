@@ -11,6 +11,7 @@ target_sources(app.game
             colony/ColonyPanel.cppm
             colony/ColonySmoke.cppm
             colony/ColonyTranslator.cppm
+            colony/DigTool.cppm
             colony/Pathfinding.cppm
             colony/WorldGen.cppm
     PRIVATE
@@ -21,6 +22,7 @@ target_sources(app.game
         colony/ColonyPanel.cpp
         colony/ColonySmoke.cpp
         colony/ColonyTranslator.cpp
+        colony/DigTool.cpp
         colony/Pathfinding.cpp
         colony/WorldGen.cpp
     )
