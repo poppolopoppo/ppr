@@ -12,6 +12,18 @@ import game.colony.translator;
 import std;
 
 export namespace pP::colony {
+    /// Wake radius around dug chunks in cells (one physics world unit covers
+    /// one cell, so the wake predicate compares cell-space distances directly).
+    inline constexpr u32 kDigWakeCells = 8u;
+
+    /// Cached dig outcomes for panel/smoke reads. Reset on regenerate,
+    /// restore, replay rebuild, and shutdown. `m_wake_radius` is fixed.
+    struct DigStats {
+        u32 m_dug_total{};
+        const u32 m_wake_radius{kDigWakeCells};
+        Array<sim::ChunkPos> m_last_chunks{};
+    };
+
     struct ColonyDriverDesc {
         u64 m_seed{1234567u};
         u32 m_tick_hz{60u};
@@ -31,6 +43,12 @@ export namespace pP::colony {
 
     class ColonyDriver {
     private:
+        struct PendingDig {
+            sim::GlobalCellPos m_min{};
+            u32 m_width{};
+            u32 m_height{};
+        };
+
         Colony m_colony{};
         std::optional<sim::FixedTimestep> m_timestep{};
         u64 m_seed{};
@@ -40,7 +58,10 @@ export namespace pP::colony {
         sim::Registry m_registry{};
         sim::StepRegistry m_steps{};
         Pathfinder m_finder{};
-        Array<sim::ChunkPos> m_edit_dirty{};
+        Array<sim::ChunkPos> m_present_dirty{};
+        Array<sim::ChunkPos> m_collider_dirty{};
+        DigStats m_dig_stats{};
+        std::optional<PendingDig> m_pending_dig{};
         Array<sim::ChunkPos> m_collider_covered{};
         PathCounts m_counts{};
         u32 m_errands{};
@@ -72,6 +93,16 @@ export namespace pP::colony {
 
         std::error_code rebuildChunks(std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed,
                                       u32 max);
+
+        void applyToolEdits() noexcept;
+
+        [[nodiscard]] std::error_code applyDig(const PendingDig &pending);
+
+        [[nodiscard]] std::error_code wakeBodiesNearEdit(std::span<const sim::ChunkPos> touched) noexcept;
+
+        void fanOutEditChunks(std::span<const sim::ChunkPos> touched);
+
+        void clearToolState() noexcept;
 
     public:
 
@@ -138,8 +169,21 @@ export namespace pP::colony {
         /// Records a durable path request served by the `pathfind` step.
         [[nodiscard]] Expected<sim::Entity> requestPath(sim::GlobalCellPos from, sim::GlobalCellPos to, u32 caps);
 
+        /// Records a rectangular dig intent served by the `tool` step on the
+        /// next committed tick, stepOne, or paused update; the latest intent
+        /// wins. Never routes through demolish errands; UI/smoke call this only.
+        [[nodiscard]] std::error_code requestDig(sim::GlobalCellPos min, u32 width, u32 height);
+
+        /// Total dug cells cached from applied intents (panel-safe).
+        [[nodiscard]] u32 digTotal() const noexcept;
+
+        /// Chunks touched by the most recent edit, for the overlay (panel-safe).
+        [[nodiscard]] std::span<const sim::ChunkPos> lastEditChunks() const noexcept;
+
         /// Pushes edit-touched chunks into presentation (`markChunkChanged`).
         /// Call after `update`/`stepOne` and before the translator submit.
+        /// Drains the presentation set only; collider sets drain in
+        /// stepPhysics, never here.
         [[nodiscard]] std::error_code presentEdits(ColonyTranslator &translator) noexcept;
 
         /// Cached per-agent rows from the last committed tick (panel-safe).

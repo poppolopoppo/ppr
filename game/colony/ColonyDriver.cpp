@@ -10,6 +10,7 @@ import engine.sim;
 import game.colony;
 import game.colony.agents;
 import game.colony.buildings;
+import game.colony.digtool;
 import game.colony.pathfinding;
 import game.colony.translator;
 
@@ -18,6 +19,7 @@ import std;
 namespace pP::colony {
     namespace {
         constexpr u32 kMaxSlices = 5u;
+        constexpr std::string_view kToolStep = "tool";
         constexpr std::string_view kBuildStep = "build";
         constexpr std::string_view kPathfindStep = "pathfind";
         constexpr std::string_view kAiPlanStep = "aiplan";
@@ -108,6 +110,30 @@ namespace pP::colony {
                 }
             }
         }
+
+        [[nodiscard]] u64 cellChunkDistanceSquared(
+            const u32 cell_x, const u32 cell_y, const sim::ChunkPos chunk) noexcept {
+            const i64 min_x = static_cast<i64>(chunk.m_x) * static_cast<i64>(sim::kChunkEdge);
+            const i64 min_y = static_cast<i64>(chunk.m_y) * static_cast<i64>(sim::kChunkEdge);
+            const i64 max_x = min_x + static_cast<i64>(sim::kChunkEdge) - 1;
+            const i64 max_y = min_y + static_cast<i64>(sim::kChunkEdge) - 1;
+            const i64 ix = static_cast<i64>(cell_x);
+            const i64 iy = static_cast<i64>(cell_y);
+
+            i64 dx = 0;
+            if (ix < min_x) {
+                dx = min_x - ix;
+            } else if (ix > max_x) {
+                dx = ix - max_x;
+            }
+            i64 dy = 0;
+            if (iy < min_y) {
+                dy = min_y - iy;
+            } else if (iy > max_y) {
+                dy = iy - max_y;
+            }
+            return static_cast<u64>(dx * dx + dy * dy);
+        }
     }
 
     std::error_code ColonyDriver::init(const ColonyDriverDesc &desc) {
@@ -140,8 +166,15 @@ namespace pP::colony {
             return error;
         }
         if (not m_steps_bound) {
-            // Declaration order is execution order: edits, search, plan,
-            // move, then physics integration and state mirror.
+            // Declaration order is execution order: tool edits, build
+            // errands, search, plan, move, then physics integration and
+            // state mirror.
+            const Expected<u32> tool = m_steps.declare(kToolStep);
+            if (not tool) [[unlikely]] {
+                (void) m_colony.shutdown();
+                m_timestep.reset();
+                return tool.error();
+            }
             const Expected<u32> build = m_steps.declare(kBuildStep);
             if (not build) [[unlikely]] {
                 (void) m_colony.shutdown();
@@ -172,9 +205,20 @@ namespace pP::colony {
                 m_timestep.reset();
                 return physics.error();
             }
+            const Expected<void> bound_tool = m_steps.addSystem(*tool, [this](sim::Registry &) {
+                m_step_stage = "tool";
+                applyToolEdits();
+            });
+            if (not bound_tool) [[unlikely]] {
+                (void) m_colony.shutdown();
+                m_timestep.reset();
+                return bound_tool.error();
+            }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
                 m_step_stage = "build";
-                advanceErrands(m_colony.grid(), registry, m_finder, m_edit_dirty, kErrandCellsPerTick);
+                Array<sim::ChunkPos> touched{};
+                advanceErrands(m_colony.grid(), registry, m_finder, touched, kErrandCellsPerTick);
+                fanOutEditChunks(touched);
             });
             if (not bound_build) [[unlikely]] {
                 (void) m_colony.shutdown();
@@ -236,7 +280,7 @@ namespace pP::colony {
         shutdownPhysics();
         m_registry.clear();
         m_finder = Pathfinder{};
-        m_edit_dirty = Array<sim::ChunkPos>{};
+        clearToolState();
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -258,6 +302,12 @@ namespace pP::colony {
             return std::make_error_code(std::errc::invalid_argument);
         }
         if (m_paused) {
+            // Paused ticks apply the pending tool intent only: no systems,
+            // no physics, no plan advance, and no clock movement.
+            applyToolEdits();
+            if (m_step_error) {
+                return m_step_error;
+            }
             return {};
         }
 
@@ -355,7 +405,7 @@ namespace pP::colony {
         shutdownPhysics();
         m_registry.clear();
         m_finder = Pathfinder{};
-        m_edit_dirty = Array<sim::ChunkPos>{};
+        clearToolState();
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -468,6 +518,31 @@ namespace pP::colony {
         return entity;
     }
 
+    std::error_code ColonyDriver::requestDig(const sim::GlobalCellPos min, const u32 width, const u32 height) {
+        if (not m_timestep) {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        if (width == 0u or height == 0u or width > kMaxDigEdge or height > kMaxDigEdge) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        const u64 far_x = static_cast<u64>(min.m_x) + width;
+        const u64 far_y = static_cast<u64>(min.m_y) + height;
+        if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        m_pending_dig = PendingDig{.m_min = min, .m_width = width, .m_height = height};
+        return {};
+    }
+
+    u32 ColonyDriver::digTotal() const noexcept {
+        return m_dig_stats.m_dug_total;
+    }
+
+    std::span<const sim::ChunkPos> ColonyDriver::lastEditChunks() const noexcept {
+        return std::span<const sim::ChunkPos>{m_dig_stats.m_last_chunks.data(), m_dig_stats.m_last_chunks.size()};
+    }
+
     Expected<sim::Entity> ColonyDriver::requestPath(
         const sim::GlobalCellPos from, const sim::GlobalCellPos to, const u32 caps) {
         if (not m_timestep) {
@@ -485,16 +560,115 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::presentEdits(ColonyTranslator &translator) noexcept {
+        // Presentation owns m_present_dirty only; the collider sets drain in
+        // stepPhysics so cleared collider entries always reach a rebuild.
         std::error_code first_error{};
-        for (const sim::ChunkPos pos: m_edit_dirty) {
+        for (const sim::ChunkPos pos: m_present_dirty) {
             if (const std::error_code error = translator.markChunkChanged(pos)) {
                 if (not first_error) {
                     first_error = error;
                 }
             }
         }
-        m_edit_dirty = Array<sim::ChunkPos>{};
+        m_present_dirty = Array<sim::ChunkPos>{};
         return first_error;
+    }
+
+    void ColonyDriver::applyToolEdits() noexcept {
+        if (not m_pending_dig) {
+            return;
+        }
+
+        const PendingDig pending = *m_pending_dig;
+        m_pending_dig.reset();
+        if (const std::error_code error = applyDig(pending)) {
+            if (not m_step_error) {
+                m_step_error = error;
+            }
+        }
+    }
+
+    std::error_code ColonyDriver::applyDig(const PendingDig &pending) {
+        const DigRect rect{.m_min = pending.m_min, .m_width = pending.m_width, .m_height = pending.m_height};
+
+        const Expected<DigResult> result = digCells(m_colony.grid(), rect);
+        if (not result) {
+            return result.error();
+        }
+
+        const bool changed = result->m_dug > 0u;
+        if (not changed) {
+            return {};
+        }
+
+        fanOutEditChunks(result->m_touched);
+        m_finder = Pathfinder{};
+        m_dig_stats.m_dug_total += result->m_dug;
+        return wakeBodiesNearEdit(result->m_touched);
+    }
+
+    std::error_code ColonyDriver::wakeBodiesNearEdit(const std::span<const sim::ChunkPos> touched) noexcept {
+        if (touched.empty()) {
+            return {};
+        }
+
+        // Units: one physics world unit covers one cell, so the cell-space
+        // point-to-chunk distance compares directly against kDigWakeCells.
+        const u64 radius_squared = static_cast<u64>(kDigWakeCells) * static_cast<u64>(kDigWakeCells);
+        std::error_code first_error{};
+        for (const AgentBody &entry: m_bodies) {
+            const sim::BodyState *pose = m_registry.get<sim::BodyState>(entry.m_entity);
+            if (pose == nullptr or pose->m_x < 0.0f or pose->m_y < 0.0f) {
+                continue;
+            }
+
+            const u32 cell_x = static_cast<u32>(pose->m_x);
+            const u32 cell_y = static_cast<u32>(pose->m_y);
+            bool within_wake = false;
+            for (const sim::ChunkPos chunk: touched) {
+                if (cellChunkDistanceSquared(cell_x, cell_y, chunk) <= radius_squared) {
+                    within_wake = true;
+                    break;
+                }
+            }
+            if (not within_wake) {
+                continue;
+            }
+
+            if (const std::error_code error = m_scene.setAwake(entry.m_handle, true)) {
+                if (not first_error) {
+                    first_error = error;
+                }
+            }
+        }
+        return first_error;
+    }
+
+    void ColonyDriver::fanOutEditChunks(const std::span<const sim::ChunkPos> touched) {
+        for (const sim::ChunkPos pos: touched) {
+            if (not chunkListedU32(m_present_dirty, pos)) {
+                m_present_dirty.push_back(pos);
+            }
+            if (not chunkListedU32(m_collider_dirty, pos)) {
+                m_collider_dirty.push_back(pos);
+            }
+        }
+
+        if (touched.empty()) {
+            return;
+        }
+        m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
+        for (const sim::ChunkPos pos: touched) {
+            m_dig_stats.m_last_chunks.push_back(pos);
+        }
+    }
+
+    void ColonyDriver::clearToolState() noexcept {
+        m_present_dirty = Array<sim::ChunkPos>{};
+        m_collider_dirty = Array<sim::ChunkPos>{};
+        m_pending_dig.reset();
+        m_dig_stats.m_dug_total = 0u;
+        m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
     }
 
     std::error_code ColonyDriver::initPhysics() {
@@ -709,12 +883,15 @@ namespace pP::colony {
         Array<sim::ChunkPos> needed{};
         agentNeighbourhood(m_registry, needed);
         m_step_stage = "colliders";
-        if (const std::error_code error = rebuildChunks(m_edit_dirty, needed, kColliderBudget)) {
+        if (const std::error_code error = rebuildChunks(m_collider_dirty, needed, kColliderBudget)) {
             if (not m_step_error) {
                 m_step_error = error;
             }
             return;
         }
+        // Split ownership: m_collider_dirty drains here on success only, so a
+        // failed rebuild retains it for retry; presentEdits never touches it.
+        m_collider_dirty = Array<sim::ChunkPos>{};
         m_step_stage = "scene-step";
         if (const std::error_code error = m_scene.step()) {
             if (not m_step_error) {
@@ -740,9 +917,9 @@ namespace pP::colony {
         for (const sim::ChunkPos pos: needed) {
             include(pos);
         }
-        // The collider queue persists across calls: every pending entry
-        // must stay covered by this call's views, or the drain rejects the
-        // call when the per-tick sets shift underneath it.
+        // The collider queue persists across calls: covered views are
+        // maintained by rebuildChunks only (cleared when nothing pends), and
+        // m_collider_dirty drains in stepPhysics only — never in presentEdits.
         for (const sim::ChunkPos pos: m_collider_covered) {
             include(pos);
         }
@@ -817,6 +994,7 @@ namespace pP::colony {
         (void) m_scene.clear();
         m_colliders = physics::ChunkColliders{};
         m_collider_covered = Array<sim::ChunkPos>{};
+        clearToolState();
         if (const std::error_code error = createAgentBodies()) {
             return error;
         }
@@ -828,6 +1006,7 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::rebuildReplayColliders(const sim::Snapshot &snapshot) {
+        clearToolState();
         Array<sim::ChunkPos> dirty{};
         for (const sim::ChunkDelta &delta: snapshot.m_deltas) {
             const sim::ChunkPos pos{delta.m_chunk % sim::kChunksPerEdge, delta.m_chunk / sim::kChunksPerEdge};
