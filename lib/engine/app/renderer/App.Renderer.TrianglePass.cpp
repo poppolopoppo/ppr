@@ -734,9 +734,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        const auto scratch_pad_scope = mem::ScratchPad::open();
-
-        Expected<Array<ResolvedInstance, mem::ScratchPad> > resolved_instances = resolveInstances_();
+        Expected<Array<ResolvedInstance> > resolved_instances = resolveInstances_();
         if (not resolved_instances.has_value()) [[unlikely]] {
             return resolved_instances.error();
         }
@@ -782,7 +780,7 @@ namespace pP {
     // The planner is a pure static function over resolved instances, so it is
     // unit-testable without a device; this is the only production caller.
     Expected<TrianglePass::DrawPlan> TrianglePass::buildPlan_(
-        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances) {
+        const Array<ResolvedInstance> &resolved_instances) {
         if (resolved_instances.empty()) {
             return DrawPlan{};
         }
@@ -832,7 +830,7 @@ namespace pP {
     }
 
     bool TrianglePass::planCacheHit_(
-        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances) const noexcept {
+        const Array<ResolvedInstance> &resolved_instances) const noexcept {
         if (not m_plan_cache_valid) {
             return false;
         }
@@ -856,7 +854,7 @@ namespace pP {
     }
 
     void TrianglePass::updatePlanCache_(
-        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+        const Array<ResolvedInstance> &resolved_instances,
         const DrawPlan &plan) {
         m_plan_submitted_key.clear();
         m_plan_submitted_key.reserve(m_submitted_instances.size());
@@ -882,7 +880,7 @@ namespace pP {
 
     std::error_code TrianglePass::uploadPayloads_(
         rhi::IDevice &device,
-        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+        const Array<ResolvedInstance> &resolved_instances,
         const DrawPlan &plan) {
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureDirectPayloads_(device, plan.m_payload_count));
 
@@ -983,7 +981,7 @@ namespace pP {
 
     std::error_code TrianglePass::encodeGroup_(
         const DrawContext &draw_context,
-        const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+        const Array<ResolvedInstance> &resolved_instances,
         const DrawGroup &group) {
         if (group.m_instance_count == 0u or
             group.m_source_indices.empty() or
@@ -1077,8 +1075,18 @@ namespace pP {
     // Fail-closed resolve of every submitted instance, all-or-nothing: a stale
     // handle, a missing material, or a stride mismatch fails the whole frame
     // before anything is encoded.
-    Expected<Array<TrianglePass::ResolvedInstance, mem::ScratchPad> > TrianglePass::resolveInstances_() const {
-        Array<ResolvedInstance, mem::ScratchPad> resolved{};
+    // Slice 6 abort root-cause: this array is GPA-backed BY DESIGN, never
+    // mem::ScratchPad. It grows geometrically with submitted instance count
+    // (100 agents x capsules + up-to-256-pt path quads + borders = thousands
+    // of entries), while ScratchPad is Arena<SmallPage> with a 32752 B usable
+    // slab ceiling — any single request above that aborts in LocalCache
+    // require (noexcept -> terminate -> silent exit 3). Lifetime is unchanged:
+    // the array is per-render() scratch, so GPA frees on scope destruction
+    // exactly where the arena scope would have restored. Per-frame heap churn
+    // is accepted over incorrectness; no hard cap (dropping instances would
+    // change rendered output).
+    Expected<Array<TrianglePass::ResolvedInstance> > TrianglePass::resolveInstances_() const {
+        Array<ResolvedInstance> resolved{};
 
         for (const SubmittedInstance &instance: m_submitted_instances) {
             Expected<ResolvedInstance> resolved_instance = resolveOne_(instance);

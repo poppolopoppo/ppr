@@ -258,12 +258,12 @@ export namespace pP {
         // Fail-closed resolve of every submitted instance, all-or-nothing: one
         // stale handle or stride mismatch fails the whole frame before any
         // encode. Zero-count bags resolve but are dropped by the caller.
-        [[nodiscard]] Expected<Array<ResolvedInstance, mem::ScratchPad> > resolveInstances_() const;
+        [[nodiscard]] Expected<Array<ResolvedInstance> > resolveInstances_() const;
 
         [[nodiscard]] Expected<ResolvedInstance> resolveOne_(const SubmittedInstance &instance) const;
 
         [[nodiscard]] Expected<DrawPlan> buildPlan_(
-            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances);
+            const Array<ResolvedInstance> &resolved_instances);
 
         // Revision-stamped plan cache: the plan is camera-independent, so the
         // key is the submitted-sequence CONTENT (count + exact compare over
@@ -275,10 +275,10 @@ export namespace pP {
         // Resolve still runs every frame ahead of the lookup, so a stale
         // handle or stride mismatch fails closed even on a key hit.
         [[nodiscard]] bool planCacheHit_(
-            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances) const noexcept;
+            const Array<ResolvedInstance> &resolved_instances) const noexcept;
 
         void updatePlanCache_(
-            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const Array<ResolvedInstance> &resolved_instances,
             const DrawPlan &plan);
 
         void invalidatePlanCache_() noexcept;
@@ -286,12 +286,12 @@ export namespace pP {
         // All-or-nothing payload upload: the whole compacted interval or fail.
         [[nodiscard]] std::error_code uploadPayloads_(
             rhi::IDevice &device,
-            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const Array<ResolvedInstance> &resolved_instances,
             const DrawPlan &plan);
 
         [[nodiscard]] std::error_code encodeGroup_(
             const DrawContext &draw_context,
-            const Array<ResolvedInstance, mem::ScratchPad> &resolved_instances,
+            const Array<ResolvedInstance> &resolved_instances,
             const DrawGroup &group);
 
         [[nodiscard]] std::error_code ensureDirectPayloads_(rhi::IDevice &device, u32 payload_count);
