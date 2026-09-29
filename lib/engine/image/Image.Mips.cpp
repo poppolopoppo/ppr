@@ -169,6 +169,7 @@ namespace pP::image {
             if (asset.m_subresources.size() != asset.m_mip_count) {
                 return false;
             }
+
             u64 offset = 0u;
             const mem::SharedBufferView storage = asset.m_storage.getBufferData();
             for (u32 level = 0u; level < asset.m_mip_count; ++level) {
@@ -190,6 +191,7 @@ namespace pP::image {
                 }
                 offset += sub.m_slice_pitch;
             }
+
             return offset == storage.size();
         }
     } // namespace
@@ -199,8 +201,7 @@ namespace pP::image {
     // ------------------------------------------------------------------
 
     [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, MipGenDesc desc) {
-        if (asset.m_dimension != EImageDimension::image2d or asset.m_width == 0u or
-            asset.m_height == 0u) [[unlikely]] {
+        if (asset.m_dimension != EImageDimension::image2d or asset.m_width == 0u or asset.m_height == 0u) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         // KTX2/DDS-embedded chains pass through untouched: blocked assets never
@@ -215,7 +216,7 @@ namespace pP::image {
             return make_error_code(errc::invalid_argument);
         }
         if (desc.m_has_preserve_coverage and
-            (not(desc.m_alpha_cutoff > 0.0f) or not(desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
+            (not (desc.m_alpha_cutoff > 0.0f) or not (desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         const u32 count = mipCountFor(asset.m_width, asset.m_height);

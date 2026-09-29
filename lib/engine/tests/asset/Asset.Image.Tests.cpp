@@ -507,6 +507,7 @@ namespace pP::tests::detail {
                 image::ENativeImageFormat::astc8x8_linear,
                 image::ENativeImageFormat::astc8x8_srgb,
             };
+
             for (const image::ENativeImageFormat format: kFormats) {
                 const bool blocked = image::isBlocked(format);
                 PPR_TEST_ASSERT(image::isSrgb(format) or not image::isSrgb(format));
@@ -520,6 +521,7 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(image::bytesPerBlockOf(tag) >= 8u);
                 }
             }
+
             PPR_TEST_ASSERT(image::isSrgb(image::ENativeImageFormat::rgba8_srgb));
             PPR_TEST_ASSERT(not image::isSrgb(image::ENativeImageFormat::rgba8_linear));
             PPR_TEST_ASSERT(not image::isBlocked(image::ENativeImageFormat::rgba8_linear));
@@ -573,8 +575,7 @@ namespace pP::tests::detail {
                 workers.emplace_back([&] {
                     const image::ImageAsset local = shared;
                     const mem::SharedBufferView view = local.m_subresources.front().m_view.getBufferData();
-                    if (view.size() != kPixels.size() or image::contentHash(view) != expected or not
-                        bytesEqual_(view, kPixels)) {
+                    if (view.size() != kPixels.size() or image::contentHash(view) != expected or not bytesEqual_(view, kPixels)) {
                         mismatches.fetch_add(1, std::memory_order_relaxed);
                     }
                 });

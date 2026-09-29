@@ -81,6 +81,7 @@ namespace pP::image {
             if (not std::ranges::equal(std::span{bytes.data(), 8u}, std::span{kSignature, 8u})) {
                 return false;
             }
+
             auto readBe32 = [&](const std::size_t off) noexcept {
                 u32 value = 0u;
                 std::memcpy(&value, bytes.data() + off, sizeof(value));
@@ -97,6 +98,7 @@ namespace pP::image {
             };
             std::size_t off = 8u;
             bool seen_ihdr = false;
+
             while (true) {
                 if (off + 8u > size) {
                     return false;
@@ -215,7 +217,8 @@ namespace pP::image {
                     return false;
                 }
             } else {
-                if (asset.m_block_w != blockWidthOf(asset.m_tag) or asset.m_block_h != blockHeightOf(asset.m_tag) or
+                if (asset.m_block_w != blockWidthOf(asset.m_tag) or
+                    asset.m_block_h != blockHeightOf(asset.m_tag) or
                     asset.m_bytes_per_block != bytesPerBlockOf(asset.m_tag)) {
                     return false;
                 }
@@ -223,6 +226,7 @@ namespace pP::image {
             if (asset.m_subresources.size() != asset.m_mip_count) {
                 return false;
             }
+
             // Per-level pitches: single-level decodes check level 0, generated
             // chains check every halved extent (mip chain design, :mips).
             for (u32 level = 0u; level < asset.m_mip_count; ++level) {
@@ -239,6 +243,7 @@ namespace pP::image {
                     return false;
                 }
             }
+
             return true;
         }
 
@@ -287,8 +292,7 @@ namespace pP::image {
                 {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"floor", static_cast<u64>(minInputBytesFor_(dotted))}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
-        if (dotted == ".png" and
-            not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+        if (dotted == ".png" and not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
             PPR_LOG_ONCE(Image, warning, "decode rejected: unsound PNG chunk chain",
                 {{"bytes", static_cast<u64>(bytes.size_bytes())}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
@@ -440,8 +444,7 @@ namespace pP::image {
                 {{"ext", dotted}, {"bytes", static_cast<u64>(bytes.size_bytes())}, {"floor", static_cast<u64>(minInputBytesFor_(dotted))}});
             return std::unexpected{make_error_code(errc::invalid_argument)};
         }
-        if (dotted == ".png" and
-            not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
+        if (dotted == ".png" and not validatePngChunks_({bytes.data(), bytes.size_bytes()})) [[unlikely]] {
             PPR_LOG_ONCE(Image, warning, "decode rejected: unsound PNG chunk chain",
                 {{"bytes", static_cast<u64>(bytes.size_bytes())}});
             return std::unexpected{make_error_code(errc::invalid_argument)};

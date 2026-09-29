@@ -16,26 +16,21 @@ namespace pP::tests::detail {
         [[nodiscard]] image::ImageAsset makeSolid_(const u32 width, const u32 height, const std::byte fill) {
             const std::size_t size = static_cast<std::size_t>(width) * height * 4u;
             mem::UniqueBuffer job = mem::UniqueBuffer::allocate(size);
-            if (job.materialize()
-                or not job.isMaterialized())
-            {
+            if (job.materialize() or not job.isMaterialized()) {
                 return {};
             }
             Expected<mem::MutableBufferView> view = job.getMutableData();
-            if (not
-                view.has_value()
-            or
-            view->size() != size)
-            {
+            if (not view.has_value() or view->size() != size) {
                 return {};
             }
+
             std::ranges::fill(*view, fill);
+
             mem::SharedBuffer frozen{};
-            if (job.moveToShared(&frozen)
-                or not frozen.isMaterialized())
-            {
+            if (job.moveToShared(&frozen) or not frozen.isMaterialized()) {
                 return {};
             }
+
             image::ImageAsset built{};
             built.m_width = width;
             built.m_height = height;
@@ -133,19 +128,14 @@ namespace pP::tests::detail {
         [[nodiscard]] image::ImageAsset makeSinglePixel_(const u32 size) {
             const std::size_t bytes = static_cast<std::size_t>(size) * size * 4u;
             mem::UniqueBuffer job = mem::UniqueBuffer::allocate(bytes);
-            if (job.materialize()
-                or not job.isMaterialized())
-            {
+            if (job.materialize() or not job.isMaterialized()) {
                 return {};
             }
             Expected<mem::MutableBufferView> view = job.getMutableData();
-            if (not
-                view.has_value()
-            or
-            view->size() != bytes)
-            {
+            if (not view.has_value() or view->size() != bytes) {
                 return {};
             }
+
             std::ranges::fill(*view, std::byte{0x00});
             // One opaque white pixel dilutes below a 0.5 cutoff at the first
             // halving, so the search path (not the abort path) must engage.
@@ -154,12 +144,12 @@ namespace pP::tests::detail {
             (*view)[at + 1u] = std::byte{0xFF};
             (*view)[at + 2u] = std::byte{0xFF};
             (*view)[at + 3u] = std::byte{0xFF};
+
             mem::SharedBuffer frozen{};
-            if (job.moveToShared(&frozen)
-                or not frozen.isMaterialized())
-            {
+            if (job.moveToShared(&frozen) or not frozen.isMaterialized()) {
                 return {};
             }
+
             image::ImageAsset built{};
             built.m_width = size;
             built.m_height = size;
@@ -184,19 +174,14 @@ namespace pP::tests::detail {
         [[nodiscard]] image::ImageAsset makeHalfOpaque_(const u32 size) {
             const std::size_t bytes = static_cast<std::size_t>(size) * size * 4u;
             mem::UniqueBuffer job = mem::UniqueBuffer::allocate(bytes);
-            if (job.materialize()
-                or not job.isMaterialized())
-            {
+            if (job.materialize() or not job.isMaterialized()) {
                 return {};
             }
             Expected<mem::MutableBufferView> view = job.getMutableData();
-            if (not
-                view.has_value()
-            or
-            view->size() != bytes)
-            {
+            if (not view.has_value() or view->size() != bytes) {
                 return {};
             }
+
             for (u32 y = 0u; y < size; ++y) {
                 for (u32 x = 0u; x < size; ++x) {
                     const std::size_t at = (static_cast<std::size_t>(y) * size + x) * 4u;
@@ -207,12 +192,12 @@ namespace pP::tests::detail {
                     (*view)[at + 3u] = alpha;
                 }
             }
+
             mem::SharedBuffer frozen{};
-            if (job.moveToShared(&frozen)
-                or not frozen.isMaterialized())
-            {
+            if (job.moveToShared(&frozen) or not frozen.isMaterialized()) {
                 return {};
             }
+
             image::ImageAsset built{};
             built.m_width = size;
             built.m_height = size;
@@ -290,19 +275,14 @@ namespace pP::tests::detail {
             constexpr u32 kSize = 8u;
             constexpr std::size_t kBytes = kSize * kSize * 4u;
             mem::UniqueBuffer job = mem::UniqueBuffer::allocate(kBytes);
-            if (job.materialize()
-                or not job.isMaterialized())
-            {
+            if (job.materialize() or not job.isMaterialized()) {
                 return {};
             }
             Expected<mem::MutableBufferView> view = job.getMutableData();
-            if (not
-                view.has_value()
-            or
-            view->size() != kBytes)
-            {
+            if (not view.has_value() or view->size() != kBytes) {
                 return {};
             }
+
             std::ranges::fill(*view, std::byte{0x00});
             // 3x3 opaque red block at the origin: mip texels straddling its
             // border are the bleed witnesses (partial alpha, must stay red).
@@ -315,12 +295,12 @@ namespace pP::tests::detail {
                     (*view)[at + 3u] = std::byte{0xFF};
                 }
             }
+
             mem::SharedBuffer frozen{};
-            if (job.moveToShared(&frozen)
-                or not frozen.isMaterialized())
-            {
+            if (job.moveToShared(&frozen) or not frozen.isMaterialized()) {
                 return {};
             }
+
             image::ImageAsset built{};
             built.m_width = kSize;
             built.m_height = kSize;
@@ -390,19 +370,14 @@ namespace pP::tests::detail {
         [[nodiscard]] image::ImageAsset makeRamp_(const u32 size) {
             const std::size_t bytes = static_cast<std::size_t>(size) * size * 4u;
             mem::UniqueBuffer job = mem::UniqueBuffer::allocate(bytes);
-            if (job.materialize()
-                or not job.isMaterialized())
-            {
+            if (job.materialize() or not job.isMaterialized()) {
                 return {};
             }
             Expected<mem::MutableBufferView> view = job.getMutableData();
-            if (not
-                view.has_value()
-            or
-            view->size() != bytes)
-            {
+            if (not view.has_value() or view->size() != bytes) {
                 return {};
             }
+
             for (u32 y = 0u; y < size; ++y) {
                 for (u32 x = 0u; x < size; ++x) {
                     const std::size_t at = (static_cast<std::size_t>(y) * size + x) * 4u;
@@ -413,12 +388,12 @@ namespace pP::tests::detail {
                     (*view)[at + 3u] = std::byte{0xFF};
                 }
             }
+
             mem::SharedBuffer frozen{};
-            if (job.moveToShared(&frozen)
-                or not frozen.isMaterialized())
-            {
+            if (job.moveToShared(&frozen) or not frozen.isMaterialized()) {
                 return {};
             }
+
             image::ImageAsset built{};
             built.m_width = size;
             built.m_height = size;
