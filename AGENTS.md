@@ -138,7 +138,7 @@ restate or compete with them.
   wallet aggregates; strong types where they prevent misuse). Framework hooks
   (`main`, application hooks, listeners) are thin glue delegating to engine
   logic.
-- Use `not`/`and`/`or`; use `const T` and `T *const`/`const T *const` where the
+- Use `not`/`and`/`or` (on one line when short, otherwise trailing-operator one-operand-per-line per Semantic control flow); use `const T` and `T *const`/`const T *const` where the
   callee must not reseat; order attributes, inline-control macros, `constexpr`,
   return type, name, parameters, `const`, `noexcept`.
 
@@ -147,6 +147,14 @@ restate or compete with them.
 After mechanical formatting, do one semantic readability pass on touched C++:
 keep validation guards together, the success path contiguous, phases separated,
 and distinct domain operations in named helpers.
+Separate distinct logical phases (setup, validation, iteration, submission, logging) with blank lines;
+do not put a blank line between every statement.
+Mechanical reformat_file does not satisfy this pass: it only handles indentation, wrapping, spacing,
+and braces — it never inserts blank lines, never rebreaks and/or/not chains, and never spaces
+alternative tokens (and(, or(, x<). The semantic pass owns all three.
+Multi-line conditions use trailing operators with one operand per line: the operator ends
+its line and the next operand starts the next line. Never start a continuation line with `and`/`or`,
+never leave an operator stranded alone on its line, and never write `and(`/`or(` without a trailing space.
 
 ## Source format
 
