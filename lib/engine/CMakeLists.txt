@@ -4,6 +4,8 @@ add_subdirectory(image)
 add_subdirectory(mesh)
 add_subdirectory(shader)
 add_subdirectory(rhi)
+add_subdirectory(sim)
+add_subdirectory(physics)
 add_subdirectory(app)
 # Dev-only test aggregates (engine.tests, engine.tests.core, engine.tests.app):
 # excluded from shipping configs with tests disabled (e.g. msvc-rel).
