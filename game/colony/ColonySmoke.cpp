@@ -3266,6 +3266,14 @@ namespace pP::colony {
     }
 
     std::error_code runColonySmoke(const std::span<const char *const> argv) {
+        // Opt-in GPU-assisted validation (default off everywhere; accepted
+        // and ignored in Release). Parsed before any stage so the RHI
+        // service carries the effective value into Application::initialize().
+        for (const char *const arg: argv) {
+            if (arg != nullptr and std::string_view{arg} == "--gpu-validation") {
+                IRhiService::get()->setGpuAssistedValidation(true);
+            }
+        }
         // Stage entries go to stderr (unbuffered): on abort/exception the
         // last entered stage survives, which buffered stdout would lose.
         std::println(stderr, "SMOKE-STAGE pathfinding");

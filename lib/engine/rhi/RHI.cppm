@@ -171,6 +171,13 @@ export namespace pP {
             rhi::DeviceType device_type,
             IShaderService &shader_service) = 0;
 
+        /// Opt-in GPU-assisted validation for the next initialize() call.
+        /// Default off; meaningful only where the debug block compiles
+        /// (PPR_ENABLE_DEBUG) — accepted and ignored in Release.
+        virtual void setGpuAssistedValidation(bool enabled) noexcept = 0;
+
+        [[nodiscard]] virtual bool isGpuAssistedValidationEnabled() const noexcept = 0;
+
         [[nodiscard]] virtual std::error_code shutdown() = 0;
 
         [[nodiscard]] virtual rhi::IRHI &getInstance() const noexcept = 0;

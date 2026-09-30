@@ -211,6 +211,8 @@ namespace pP {
         class SlangRhiService final : public IRhiService {
         public:
             rhi::ComPtr<rhi::IDevice> m_device{};
+            // Default off; set explicitly at the application boundary before initialize().
+            bool m_gpu_assisted_validation{false};
 
             [[nodiscard]] rhi::IRHI &getInstance() const noexcept override {
                 return *slang_rhi::getRHI();
@@ -218,6 +220,14 @@ namespace pP {
 
             [[nodiscard]] rhi::IDevice &getDevice() const noexcept override {
                 return *m_device;
+            }
+
+            void setGpuAssistedValidation(const bool enabled) noexcept override {
+                m_gpu_assisted_validation = enabled;
+            }
+
+            [[nodiscard]] bool isGpuAssistedValidationEnabled() const noexcept override {
+                return m_gpu_assisted_validation;
             }
 
             [[nodiscard]] std::error_code initialize(
@@ -242,32 +252,31 @@ namespace pP {
                         const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
                         const std::error_code cleanup_error = make_error_code(result);
                         if (cleanup_error) {
-                            PPR_LOG(RHI, error, "RHI initialization cleanup failed", {
-                                {"category", cleanup_error.category().name()},
-                                {"cause", cleanup_error.message()}
-                                });
+                            PPR_LOG(RHI, error, "RHI initialization cleanup failed",
+                                    {{"category", cleanup_error.category().name()},
+                                     {"cause", cleanup_error.message()}});
                         }
                     }
                 };
 
 #if PPR_ENABLE_DEBUG
-                PPR_LOG(RHI, info, "enabled Slang RHI debug layers", {
-                    {"coreValidation", true},
-                    {"GPUAssistedValidation", true}
-                    });
+                // Effective opt-in state: off unless the application boundary
+                // set it before initialize() (--gpu-validation).
+                const bool gpu_assisted = m_gpu_assisted_validation;
+                PPR_LOG(RHI, info, "enabled Slang RHI debug layers",
+                        {{"coreValidation", true}, {"GPUAssistedValidation", gpu_assisted}});
 
-                PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->setDebugLayerOptions({
-                    .required = true,
-                    .coreValidation = true,
-                    .GPUAssistedValidation = true
-                    }));
+                PPR_RETURN_ERROR_ON_FAIL(
+                        RHI,
+                        p_instance->setDebugLayerOptions(
+                                {.required = true, .coreValidation = true, .GPUAssistedValidation = gpu_assisted}));
 
                 p_instance->enableDebugLayers();
 #endif
 
                 constexpr slang_rhi::Feature required_features[] = {
-                    slang_rhi::Feature::Surface,
-                    slang_rhi::Feature::Rasterization,
+                        slang_rhi::Feature::Surface,
+                        slang_rhi::Feature::Rasterization,
                 };
 
                 rhi::DeviceDesc desc{};

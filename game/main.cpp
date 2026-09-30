@@ -6,7 +6,9 @@ import engine.app;
 import engine.core;
 import engine.math;
 import engine.mesh;
+import engine.rhi;
 import engine.sim;
+import imgui;
 import std;
 
 import game.colony.buildings;
@@ -1125,6 +1127,8 @@ int main(const int argc, char *argv[]) {
             app.setProfileEdits(true);
         } else if (arg == "--profile-pan") {
             app.setProfilePan(true);
+        } else if (arg == "--gpu-validation") {
+            pP::IRhiService::get()->setGpuAssistedValidation(true);
         }
     }
     // Make run-loop failures visible: a bare .value() turns any loop error
