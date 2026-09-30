@@ -1018,7 +1018,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(model.m_ortho_scale == 0.25f);
     };
 
-    PPR_UNIT_TEST (pan_camera_wheel_zoom_has_one_binding_and_never_moves_depth) {
+    PPR_UNIT_TEST(pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth) {
         PanCameraController controller;
         PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
         InputMapping mapping{"PanCameraOrthoWheel"};
@@ -1057,6 +1057,376 @@ namespace pP::tests::detail {
         controller.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(std::abs(model.m_ortho_scale - zoomed_scale) < kEps);
         PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
+
+        // Anchored contract: the ground point under the cursor is invariant.
+        // Identity-ish plane basis, eye (100,100,-0.5), viewport 800x600,
+        // cursor (600,100): pre-zoom ground hit is (400,350,0).
+        PanCameraController anchored;
+        anchored.setPositionInertia(100000.0f);
+        anchored.setViewportSize(float2{800.0f, 600.0f});
+        PPR_TEST_ASSERT(not anchored.setOrthoScale(0.5f));
+        InputMapping anchored_mapping{"PanCameraAnchoredZoom"};
+        anchored.provideInputActionKeyMappings(anchored_mapping);
+        InputListener anchored_listener;
+        anchored_listener.addInputMapping(SharedInputMapping{&anchored_mapping}, 0);
+        anchored.setParallelPlane(float3{0.0f, 0.0f, -1.0f}, float3{0.0f, 1.0f, 0.0f}, true);
+        anchored.translate(float3{100.0f, 100.0f, -0.5f}, true);
+        CameraModel anchored_model{};
+        anchored.updateCameraModel(std::chrono::milliseconds{16}, anchored_model);
+        const InputMessage cursor_at{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{600.0f, 100.0f}, .m_relative = float2{0.0f, 0.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
+        (void) anchored_listener.postKeyEvent(std::chrono::milliseconds{1}, cursor_at);
+        anchored.updateCameraModel(std::chrono::milliseconds{16}, anchored_model);
+        PPR_TEST_ASSERT(distance(anchored_model.m_origin, float3{100.0f, 100.0f, -0.5f}) < kEps);
+        (void) anchored_listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_up);
+        anchored.updateCameraModel(std::chrono::milliseconds{16}, anchored_model);
+        const float anchored_scale = 0.5f * std::exp(-0.1f);
+        PPR_TEST_ASSERT(std::abs(anchored.getOrthoScale() - anchored_scale) < kEps);
+        const float3 anchored_eye = anchored_model.m_origin;
+        PPR_TEST_ASSERT(std::abs(anchored_eye.x + 600.0f * anchored_scale - 400.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(anchored_eye.y + (600.0f - 100.0f) * anchored_scale - 350.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(anchored_eye.z + 0.5f) < kEps);
+    };
+
+    // MMB-held grab-pan moves the eye against the cursor delta at current
+    // scale: +40/+30px at 0.5 lands (-20,+15) world through the plane basis.
+    PPR_UNIT_TEST(pan_camera_grab_pan_direction_sign) {
+        PanCameraController ctrl;
+        ctrl.setPositionInertia(100000.0f);
+        InputMapping mapping{"PanCameraGrabSign"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        ctrl.setParallelPlane(float3{0.0f, 0.0f, -1.0f}, float3{0.0f, 1.0f, 0.0f}, true);
+        ctrl.translate(float3{100.0f, 100.0f, -0.5f}, true);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(not ctrl.setOrthoScale(0.5f));
+        const InputMessage grab_press{InputKey::middle_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                      EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_press);
+        const InputMessage drag{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{440.0f, 330.0f}, .m_relative = float2{40.0f, 30.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.x - 80.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.y - 115.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.z + 0.5f) < kEps);
+
+        // Released: the identical motion adds nothing more.
+        const InputMessage grab_release{InputKey::middle_mouse_button, InputValue{InputDigital{false}},
+                                        InputDeviceID{0u}, EInputMessageEvent::released};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_release);
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.x - 80.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.y - 115.0f) < 1e-2f);
+    };
+
+    // Equal screen displacement scales with zoom: 100px drag moves 100
+    // world units at 1x, 25 at 0.25x.
+    PPR_UNIT_TEST(pan_camera_grab_matches_scale) {
+        const auto dragAt = [](const float scale) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            InputMapping mapping{"PanCameraGrabScale"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            ctrl.translate(float3{0.0f, 0.0f, -0.5f}, true);
+            CameraModel model{};
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            (void) ctrl.setOrthoScale(scale);
+            const InputMessage grab_press{InputKey::middle_mouse_button, InputValue{InputDigital{true}},
+                                          InputDeviceID{0u}, EInputMessageEvent::pressed};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_press);
+            const InputMessage drag{
+                    InputKey::mouse_2d,
+                    InputValue{InputAxis2D{.m_absolute = float2{100.0f, 0.0f}, .m_relative = float2{100.0f, 0.0f}}},
+                    InputDeviceID{0u}, EInputMessageEvent::axis};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            return model.m_origin.x;
+        };
+        PPR_TEST_ASSERT(std::abs(dragAt(1.0f) + 100.0f) < 1e-2f);
+        PPR_TEST_ASSERT(std::abs(dragAt(0.25f) + 25.0f) < 1e-2f);
+    };
+
+    // Cursor motion without MMB never pans (it only records for anchoring).
+    PPR_UNIT_TEST(pan_camera_cursor_motion_alone_never_pans) {
+        PanCameraController ctrl;
+        ctrl.setPositionInertia(100000.0f);
+        InputMapping mapping{"PanCameraCursorAlone"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const float3 eye{50.0f, 60.0f, -0.5f};
+        ctrl.translate(eye, true);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        for (int i = 0; i < 4; ++i) {
+            const InputMessage drift{InputKey::mouse_2d,
+                                     InputValue{InputAxis2D{.m_absolute = float2{100.0f * i, 50.0f * i},
+                                                            .m_relative = float2{100.0f, 50.0f}}},
+                                     InputDeviceID{0u}, EInputMessageEvent::axis};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drift);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            PPR_TEST_ASSERT(distance(model.m_origin, eye) < kEps);
+        }
+    };
+
+    // Plane rate law: 600 world-units/s per scale unit at 1x multiplier.
+    PPR_UNIT_TEST(pan_camera_keyboard_speed_law) {
+        const auto holdW = [](const float scale) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            InputMapping mapping{"PanCameraSpeedLaw"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            (void) ctrl.setOrthoScale(scale);
+            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                     EInputMessageEvent::pressed};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+            CameraModel model{};
+            ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
+            return model.m_origin.y;
+        };
+        const float at1 = holdW(1.0f);
+        const float at025 = holdW(0.25f);
+        PPR_TEST_ASSERT(std::abs(at1 - 150.0f) < 1.0f);
+        PPR_TEST_ASSERT(std::abs(at025 - 37.5f) < 1.0f);
+        PPR_TEST_ASSERT(std::abs(at1 / at025 - 4.0f) < 1e-2f);
+    };
+
+    // Equal wall time converges regardless of partitioning; zero/negative
+    // dt rests and huge dt clamps to 250ms exactly.
+    PPR_UNIT_TEST(pan_camera_dt_partition_invariant_and_clamped) {
+        const auto holdW = [](const int steps, const TimeSpan step) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            InputMapping mapping{"PanCameraDtPartition"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                     EInputMessageEvent::pressed};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+            CameraModel model{};
+            for (int i = 0; i < steps; ++i) {
+                ctrl.updateCameraModel(step, model);
+            }
+            return model.m_origin.y;
+        };
+        const float at100 = holdW(10, TimeSpan{std::chrono::milliseconds{100}});
+        const float at250 = holdW(4, TimeSpan{std::chrono::milliseconds{250}});
+        PPR_TEST_ASSERT(at100 > 500.0f);
+        PPR_TEST_ASSERT(std::abs(at100 - at250) < 1.0f);
+
+        const auto holdOnce = [](const TimeSpan step) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            InputMapping mapping{"PanCameraDtClamp"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                     EInputMessageEvent::pressed};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+            CameraModel model{};
+            ctrl.updateCameraModel(step, model);
+            return model.m_origin.y;
+        };
+        PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::milliseconds{0}}) == 0.0f);
+        PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::milliseconds{-5}}) == 0.0f);
+        PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::seconds{10}}) ==
+                        holdOnce(TimeSpan{std::chrono::milliseconds{250}}));
+    };
+
+    // Bounds clamp the eye rect; a larger viewport centers the world;
+    // unset bounds preserve unbounded motion.
+    PPR_UNIT_TEST(pan_camera_world_bounds_clamp_and_centering) {
+        const auto holdD = [](const bool bounded, const float2 viewport, const float2 bounds_min,
+                              const float2 bounds_max) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            if (bounded) {
+                (void) ctrl.setWorldBounds(bounds_min, bounds_max);
+            }
+            ctrl.setViewportSize(viewport);
+            InputMapping mapping{"PanCameraBounds"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            const InputMessage press{InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                     EInputMessageEvent::pressed};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+            CameraModel model{};
+            for (int i = 0; i < 8; ++i) {
+                ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
+            }
+            return model.m_origin;
+        };
+        // 100px viewport at 1x: eye.x in [0, 200-100] pins at 100.
+        const float3 clamped = holdD(true, float2{100.0f, 100.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
+        PPR_TEST_ASSERT(std::abs(clamped.x - 100.0f) < 1e-3f);
+        // 800px viewport over a 200-wide world: eye.x centers at 100-400.
+        const float3 centered = holdD(true, float2{800.0f, 600.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
+        PPR_TEST_ASSERT(std::abs(centered.x + 300.0f) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(centered.y + 200.0f) < 1e-3f);
+        // Unbounded: the same input runs free.
+        const float3 free = holdD(false, float2{100.0f, 100.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
+        PPR_TEST_ASSERT(free.x > 150.0f);
+    };
+
+    // Clamp wins over anchoring: eye at the wall stays walled while the
+    // scale still applies; the unbounded twin shows the anchor pull.
+    PPR_UNIT_TEST(pan_camera_zoom_clamp_wins_over_anchor) {
+        const auto zoomOut = [](const bool bounded) {
+            PanCameraController ctrl;
+            ctrl.setPositionInertia(100000.0f);
+            if (bounded) {
+                (void) ctrl.setWorldBounds(float2{0.0f, 0.0f}, float2{100.0f, 100.0f});
+            }
+            ctrl.setViewportSize(float2{200.0f, 200.0f});
+            (void) ctrl.setOrthoScale(0.1f);
+            InputMapping mapping{"PanCameraClampWins"};
+            ctrl.provideInputActionKeyMappings(mapping);
+            InputListener listener;
+            listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+            ctrl.translate(float3{0.0f, 0.0f, -0.5f}, true);
+            CameraModel model{};
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+
+            const InputMessage corner{
+                    InputKey::mouse_2d,
+                    InputValue{InputAxis2D{.m_absolute = float2{199.0f, 1.0f}, .m_relative = float2{0.0f, 0.0f}}},
+                    InputDeviceID{0u}, EInputMessageEvent::axis};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, corner);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+
+            const InputMessage wheel_out{InputKey::mouse_wheel_axis_y,
+                                         InputValue{InputAxis1D{.m_absolute = -10.0f, .m_relative = -10.0f}},
+                                         InputDeviceID{0u}, EInputMessageEvent::axis};
+            (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_out);
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+            return model;
+        };
+        const float grown = 0.1f * std::exp(1.0f);
+        const CameraModel walled = zoomOut(true);
+        PPR_TEST_ASSERT(std::abs(walled.m_ortho_scale - grown) < kEps);
+        PPR_TEST_ASSERT(std::abs(walled.m_origin.x) < kEps);
+        PPR_TEST_ASSERT(std::abs(walled.m_origin.y) < kEps);
+
+        const CameraModel pulled = zoomOut(false);
+        PPR_TEST_ASSERT(std::abs(pulled.m_ortho_scale - grown) < kEps);
+        PPR_TEST_ASSERT(pulled.m_origin.x < -1.0f);
+        PPR_TEST_ASSERT(pulled.m_origin.y < -1.0f);
+    };
+
+    // Scale saturates at [0.001, 1000] staying finite; without viewport
+    // info the anchor step is a no-op (scale still applies, pose exact).
+    PPR_UNIT_TEST(pan_camera_scale_clamp_and_invalid_viewport_noop) {
+        PanCameraController ctrl;
+        ctrl.setPositionInertia(100000.0f);
+        InputMapping mapping{"PanCameraScaleClamp"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        const float3 eye{20.0f, 30.0f, -0.5f};
+        ctrl.translate(eye, true);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+
+        const InputMessage cursor_at{
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{700.0f, 500.0f}, .m_relative = float2{0.0f, 0.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, cursor_at);
+
+        const InputMessage wheel_in{InputKey::mouse_wheel_axis_y,
+                                    InputValue{InputAxis1D{.m_absolute = 100.0f, .m_relative = 100.0f}},
+                                    InputDeviceID{0u}, EInputMessageEvent::axis};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_in);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(model.m_ortho_scale == 0.001f);
+        PPR_TEST_ASSERT(distance(model.m_origin, eye) < kEps);
+        PPR_TEST_ASSERT(std::isfinite(model.m_origin.x) and std::isfinite(model.m_origin.y));
+
+        const InputMessage wheel_out{InputKey::mouse_wheel_axis_y,
+                                     InputValue{InputAxis1D{.m_absolute = -100.0f, .m_relative = -100.0f}},
+                                     InputDeviceID{0u}, EInputMessageEvent::axis};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_out);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        // Two-notch saturation: 0.001 * e^10 ~= 22.03 after the first, so a
+        // second identical notch is needed to clamp at exactly 1000.0f.
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_out);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(model.m_ortho_scale == 1000.0f);
+        PPR_TEST_ASSERT(distance(model.m_origin, eye) < kEps);
+    };
+
+    // Game-owned focus: teleport cut keeping depth.
+    PPR_UNIT_TEST(pan_camera_focus_teleport) {
+        PanCameraController ctrl;
+        ctrl.setPositionInertia(100000.0f);
+        ctrl.translate(float3{0.0f, 0.0f, -0.5f}, true);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        ctrl.focusOn(float2{30.0f, 40.0f});
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(distance(model.m_origin, float3{30.0f, 40.0f, -0.5f}) < kEps);
+        PPR_TEST_ASSERT(model.m_has_camera_cut);
+    };
+
+    // Follow eases toward the target in bounded steps; any manual
+    // pan/zoom input cancels it.
+    PPR_UNIT_TEST(pan_camera_follow_eases_and_cancels) {
+        PanCameraController ctrl;
+        ctrl.setPositionInertia(100000.0f);
+        InputMapping mapping{"PanCameraFollow"};
+        ctrl.provideInputActionKeyMappings(mapping);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&mapping}, 0);
+        ctrl.translate(float3{0.0f, 0.0f, -0.5f}, true);
+        CameraModel model{};
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        ctrl.setFollowTarget(float3{100.0f, 0.0f, 0.0f});
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        // One 16ms step at the plane law: 600 * 1 * 0.016 = 9.6 units.
+        PPR_TEST_ASSERT(std::abs(model.m_origin.x - 9.6f) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(model.m_origin.y) < kEps);
+        for (int i = 0; i < 4; ++i) {
+            ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        }
+        PPR_TEST_ASSERT(model.m_origin.x > 40.0f);
+        PPR_TEST_ASSERT(model.m_origin.x < 100.0f);
+
+        // Manual input cancels: W press hands motion back to the keyboard.
+        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                                 EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(not ctrl.getFollowTarget().has_value());
+        const float handed_off = model.m_origin.y;
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(model.m_origin.y > handed_off);
+
+        // Zoom input cancels too (keyboard released first to isolate it).
+        const InputMessage release{InputKey::w, InputValue{InputDigital{false}}, InputDeviceID{0u},
+                                   EInputMessageEvent::released};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, release);
+        ctrl.setFollowTarget(float3{100.0f, 0.0f, 0.0f});
+        const InputMessage wheel{InputKey::mouse_wheel_axis_y,
+                                 InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}}, InputDeviceID{0u},
+                                 EInputMessageEvent::axis};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel);
+        ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(not ctrl.getFollowTarget().has_value());
     };
 
     // Orbit keeps target/radius: lookAt fixes both, setOrbitRadius re-seats the eye.
@@ -1188,52 +1558,62 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest camera = UnitTest::Named("camera") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            detail::camera_model,
-            detail::ortho_default_scale_preserves_pixel_extent,
-            detail::ortho_scale_updates_projection_inverse_and_frustum,
-            detail::viewport_size,
-            detail::velocity,
-            detail::cut_velocity,
-            detail::frustum_from_update_model,
-            detail::empty_jitter,
-            detail::zero_to_one_frustum_near_plane,
-            detail::look_at_canonical,
-            detail::look_at_eye_to_origin,
-            detail::look_at_target_distance,
-            detail::look_at_orthonormal_bis,
-            detail::math_inverse_identity,
-            detail::math_inverse_involution,
-            detail::mode_accessors,
-            detail::state_accessors,
-            detail::basis_accessors,
-            detail::inverse_accessors,
-            detail::free_camera_translate_moves_origin,
-            detail::free_camera_held_key_rate,
-            detail::free_camera_partial_key_release,
-            detail::free_camera_input_reset,
-            detail::free_camera_look_press_gates_pointer_yaw,
-            detail::camera_mouse_wheel_impulses,
-            detail::free_camera_gamepad_rate,
-            detail::free_camera_reset_clears_held_key,
-            detail::free_camera_fov_wheel_transient,
-            detail::free_camera_look_at_target,
-            detail::free_camera_look_at_heading_pitch,
-            detail::free_camera_teleport_skips_delta,
-            detail::free_camera_mouse_look_gate,
-            detail::free_camera_qe_oppose,
-            detail::free_camera_heading_pitch_wiring,
-            detail::free_camera_look_stays_level_after_yaw,
-            detail::free_camera_look_mixed_input_stays_level,
-            detail::free_camera_look_incremental_matches_absolute,
-            detail::free_camera_pitch_clamped,
-            detail::free_camera_accessors,
-            detail::free_camera_retuned_rates,
-            detail::pan_camera_key_directions,
-            detail::pan_camera_parallel_plane,
-            detail::pan_camera_ortho_scale_validates_explicit_bounds,
-            detail::pan_camera_wheel_zoom_has_one_binding_and_never_moves_depth,
-            detail::orbit_camera_look_at_and_radius,
-            detail::free_camera_primed_held_key_partition_invariant,
+                detail::camera_model,
+                detail::ortho_default_scale_preserves_pixel_extent,
+                detail::ortho_scale_updates_projection_inverse_and_frustum,
+                detail::viewport_size,
+                detail::velocity,
+                detail::cut_velocity,
+                detail::frustum_from_update_model,
+                detail::empty_jitter,
+                detail::zero_to_one_frustum_near_plane,
+                detail::look_at_canonical,
+                detail::look_at_eye_to_origin,
+                detail::look_at_target_distance,
+                detail::look_at_orthonormal_bis,
+                detail::math_inverse_identity,
+                detail::math_inverse_involution,
+                detail::mode_accessors,
+                detail::state_accessors,
+                detail::basis_accessors,
+                detail::inverse_accessors,
+                detail::free_camera_translate_moves_origin,
+                detail::free_camera_held_key_rate,
+                detail::free_camera_partial_key_release,
+                detail::free_camera_input_reset,
+                detail::free_camera_look_press_gates_pointer_yaw,
+                detail::camera_mouse_wheel_impulses,
+                detail::free_camera_gamepad_rate,
+                detail::free_camera_reset_clears_held_key,
+                detail::free_camera_fov_wheel_transient,
+                detail::free_camera_look_at_target,
+                detail::free_camera_look_at_heading_pitch,
+                detail::free_camera_teleport_skips_delta,
+                detail::free_camera_mouse_look_gate,
+                detail::free_camera_qe_oppose,
+                detail::free_camera_heading_pitch_wiring,
+                detail::free_camera_look_stays_level_after_yaw,
+                detail::free_camera_look_mixed_input_stays_level,
+                detail::free_camera_look_incremental_matches_absolute,
+                detail::free_camera_pitch_clamped,
+                detail::free_camera_accessors,
+                detail::free_camera_retuned_rates,
+                detail::pan_camera_key_directions,
+                detail::pan_camera_parallel_plane,
+                detail::pan_camera_ortho_scale_validates_explicit_bounds,
+                detail::pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth,
+                detail::pan_camera_grab_pan_direction_sign,
+                detail::pan_camera_grab_matches_scale,
+                detail::pan_camera_cursor_motion_alone_never_pans,
+                detail::pan_camera_keyboard_speed_law,
+                detail::pan_camera_dt_partition_invariant_and_clamped,
+                detail::pan_camera_world_bounds_clamp_and_centering,
+                detail::pan_camera_zoom_clamp_wins_over_anchor,
+                detail::pan_camera_scale_clamp_and_invalid_viewport_noop,
+                detail::pan_camera_focus_teleport,
+                detail::pan_camera_follow_eases_and_cancels,
+                detail::orbit_camera_look_at_and_radius,
+                detail::free_camera_primed_held_key_partition_invariant,
         });
     };
 

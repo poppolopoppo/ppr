@@ -152,11 +152,57 @@ export namespace pP {
 
         [[nodiscard]] float getOrthoScale() const noexcept { return m_ortho_scale; }
 
+        // Plane translate rate law: 600 world-units/s per ortho-scale unit
+        // at 1x speed multiplier (x/y); depth keeps the shared forward speed.
+        [[nodiscard]] float3 getPanTranslateSpeed() const noexcept;
+
+        // World bounds for the camera eye (x/y). The visible rect
+        // [eye, eye + viewport * scale] stays inside; a viewport larger
+        // than the world centers the world instead. Unset preserves the
+        // unbounded behavior for other consumers.
+        [[nodiscard]] std::error_code setWorldBounds(const float2 &min_bound, const float2 &max_bound) noexcept;
+
+        void clearWorldBounds() noexcept {
+            m_world_bounds.reset();
+        }
+
+        [[nodiscard]] bool hasWorldBounds() const noexcept {
+            return m_world_bounds.has_value();
+        }
+
+        // Client viewport extent in pixels; feeds cursor-anchored zoom and
+        // bounds. Unknown/degenerate degrades to center zoom and no clamp.
+        void setViewportSize(const float2 &extent) noexcept {
+            m_viewport_size = extent;
+        }
+
+        [[nodiscard]] float2 getViewportSize() const noexcept {
+            return m_viewport_size;
+        }
+
+        // Game-owned focus: teleport cut to a world point (depth kept).
+        // Bounds apply on the next pose update. A follow target is left
+        // alone — the game composes the two.
+        void focusOn(const float2 &world_xy) noexcept;
+
+        // Optional per-frame follow point (the game refreshes it; Slice 4
+        // drives it). Eased toward with a bounded step; ANY manual
+        // pan/zoom input cancels it.
+        void setFollowTarget(const std::optional<float3> &target) noexcept {
+            m_follow_target = target;
+        }
+
+        [[nodiscard]] std::optional<float3> getFollowTarget() const noexcept {
+            return m_follow_target;
+        }
+
         void resetInputState() noexcept override;
 
         void updateCameraModel(TimeSpan dt, CameraModel &model) noexcept override;
 
-        [[nodiscard]] Quaternion getParallelBasis() const noexcept { return m_rotation_analog.filtered(); }
+        [[nodiscard]] Quaternion getParallelBasis() const noexcept {
+            return m_rotation_analog.filtered();
+        }
 
         void setParallelPlane(const float3 &plane_normal, const float3 &plane_up, bool has_teleported = false) noexcept;
 
@@ -166,10 +212,39 @@ export namespace pP {
 
         void provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept override;
 
+    protected:
+        void updateCameraPose_(TimeSpan dt, CameraModel &model) noexcept override;
+
     private:
+        struct WorldBounds {
+            float2 m_min{zero_v};
+            float2 m_max{zero_v};
+        };
+
+        void applyAnchoredZoom_() noexcept;
+
+        void cancelFollowOnManualInput_() noexcept;
+
+        void foldGrabImpulse_() noexcept;
+
+        void easeFollowTarget_(TimeSpan dt) noexcept;
+
+        void clampEyeToWorldBounds_() noexcept;
+
+        [[nodiscard]] bool hasValidViewport_() const noexcept;
+
         std::unique_ptr<InputAction> m_zoom_action{std::make_unique<InputAction>("CameraOrthoZoom", EInputValueType::axis_1d)};
+        std::unique_ptr<InputAction> m_grab_action{
+                std::make_unique<InputAction>("CameraPanGrab", EInputValueType::digital)};
         float m_ortho_scale{1.0f};
         float m_zoom_impulse{0.0f};
+        bool m_has_grab_pan{false};
+        float3 m_grab_impulse{zero_v};
+        float2 m_cursor_client{zero_v};
+        bool m_has_cursor{false};
+        float2 m_viewport_size{zero_v};
+        std::optional<WorldBounds> m_world_bounds{};
+        std::optional<float3> m_follow_target{};
     };
 
     class OrbitCameraController final : public details::BasicCameraController {
