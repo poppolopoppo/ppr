@@ -169,7 +169,7 @@ export namespace pP::mesh {
     };
 
     // SceneAsset owns meshes + materials + image refs + nodes; instances
-    // reference them by typed ID. m_materialOverride stays kInvalidMaterial:
+    // reference them by typed ID. m_material_override stays none_v:
     // glTF binds materials per primitive, never per instance.
     struct SceneAsset {
         Array<StaticMeshAsset> m_meshes{};
