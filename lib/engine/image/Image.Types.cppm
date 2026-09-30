@@ -12,7 +12,7 @@ export namespace pP::image {
     // image errors and formats
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY(Image);
+    PPR_DECLARE_LOG_CATEGORY (Image);
 
     // CPU-only vocabulary. No mango/rhi types cross — native format + plain layout; RHI mapping happens
     // at upload inside engine.app caches.
@@ -85,11 +85,11 @@ export namespace pP::image {
         ImageLimits m_limits = kDefaultImageLimits;
 
         bool m_use_simd = true;
-        bool m_use_multithread = false;
         bool m_use_flip_v = false;
     };
 
-    // m_multithread=false is engine POLICY (no Mango pool in the RT path), not the Mango default.
+    // Multithreaded decode is unconditionally off: engine POLICY (no Mango pool
+    // in the RT path), not the Mango default, so it is not caller-selectable.
     // m_flip_v=false: glTF/Mango V already matches (import_gltf.cpp:740-742).
 
     // ------------------------------------------------------------------
@@ -150,7 +150,8 @@ export namespace pP::image {
     }
 
     [[nodiscard]] constexpr bool isBlocked(const ENativeImageFormat format) noexcept {
-        return format != ENativeImageFormat::rgba8_linear and format != ENativeImageFormat::rgba8_srgb;
+        return format != ENativeImageFormat::rgba8_linear
+        and format != ENativeImageFormat::rgba8_srgb;
     }
 
     [[nodiscard]] constexpr EBlockTag blockTagOf(const ENativeImageFormat format) noexcept {
