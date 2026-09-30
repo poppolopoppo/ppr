@@ -2291,6 +2291,37 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+            // Phase: regenerate. A confirmed regeneration runs at the very
+            // head, ahead of every other phase: regen ends any held gesture
+            // (accepted commands stay queued per policy and dig into the
+            // fresh world), drops the pin, then translator.reset clears the
+            // grid pass so this frame's submit re-uploads the new world -
+            // the same phase order the old R key had. A failure returns
+            // here, exactly where the old path aborted the frame.
+            if (m_regen_pending) {
+                m_regen_pending = false;
+                cancelToolGesture_();
+                m_ui_state.m_pinned.reset();
+                // Stable keys die with the world: selection and follow go
+                // here, before regenerate_() rebuilds the summaries.
+                clearAgentSelection_();
+                // Slice 6: the driver's digTotal resets on the same regen
+                // path (clearToolState), so the game-side issued count
+                // resets here to keep the pending estimate aligned.
+                m_dig_issued = 0u;
+                if (not m_input_error) {
+                    m_input_error = regenerate_();
+                }
+                if (m_input_error) [[unlikely]] {
+                    return m_input_error;
+                }
+            }
+
+            // Phase: UI observation. Notice countdown + honest inter-frame
+            // timing first, so this frame's Performance section reports the
+            // dt this frame is about to run with.
+            observeFrame_(dt);
+
             // Phase: profile workload index. Counts every live-loop frame while
             // any profiling workload is armed; all flags off leaves the counter
             // at zero and every schedule below untouched (production default).
@@ -2353,6 +2384,16 @@ namespace demo {
                 profile_sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{},
                 profile_sample};
 
+            // Phase: camera viewport. Follow client-extent changes before
+            // input runs (Slice 2 deviation fixed); explicit no-op while the
+            // extent is degenerate or unchanged.
+            refreshControllerViewport_();
+
+            // Phase: selection. Validate the agent key and refresh an
+            // active follow target from the live position, ahead of the
+            // controller update in super so this frame already tracks.
+            refreshSelection_();
+
             // Input poll, camera, pass updates, and UI run in super; pass encode
             // and present run in render(), after this body, so the submits below
             // still land in the same frame's render.
@@ -2361,15 +2402,47 @@ namespace demo {
                 return m_input_error;
             }
 
-            // Phase: input/edit. The owned gesture records at most one pick per
-            // frame; the latest intent wins, matching the pending-dig slot.
-            if (m_pending_pick.has_value()) {
-                const sim::GlobalCellPos cell = *m_pending_pick;
-                m_pending_pick.reset();
+            // Phase: input/edit. Accepted commands drain in accept order
+            // (click first, then drag cells); pop-then-issue so a failing
+            // command cannot wedge the queue. A same-poll press/release
+            // still digs exactly once; errors stay sticky and abort.
+            // digTotal moves only in applyDig, so the post-tick delta below
+            // attributes exactly this frame's tool activity.
+            const u32 dug_before = m_driver.digTotal();
+            const bool tool_active = m_tool.m_accepted_click.has_value() or not m_tool.m_drag_queue.empty();
+            if (m_tool.m_accepted_click.has_value()) {
+                const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
+                m_tool.m_accepted_click.reset();
                 if (const std::error_code error = m_driver.requestDig(cell, 1u, 1u)) {
+                    PPR_LOG(Demo, warning, "tool drain failed",
+                            {
+                                    {"x", cell.m_x},
+                                    {"y", cell.m_y},
+                                    {"error", error.value()},
+                                    {"category", error.category().name()},
+                            });
                     m_input_error = error;
                     return error;
                 }
+                // Slice 6: one cell issued (only on success, so the
+                // issued-minus-applied estimate never counts rejections).
+                ++m_dig_issued;
+            }
+            while (not m_tool.m_drag_queue.empty()) {
+                const sim::GlobalCellPos cell = m_tool.m_drag_queue.front();
+                m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
+                if (const std::error_code error = m_driver.requestDig(cell, 1u, 1u)) {
+                    PPR_LOG(Demo, warning, "tool drain failed",
+                            {
+                                    {"x", cell.m_x},
+                                    {"y", cell.m_y},
+                                    {"error", error.value()},
+                                    {"category", error.category().name()},
+                            });
+                    m_input_error = error;
+                    return error;
+                }
+                ++m_dig_issued;
             }
 
             // Phase: scripted edits. S2-matching alternating build/demolish
@@ -2387,12 +2460,26 @@ namespace demo {
             // next tick.
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.update(dt));
 
+            // Phase: tool progress. Silent when idle; a zero delta with
+            // activity means the cells were already vacuum (silent no-op).
+            if (tool_active) {
+                PPR_LOG(Demo, info, "tool progress",
+                        {
+                                {"dug_delta", m_driver.digTotal() - dug_before},
+                        });
+            }
+
             // Phase: present. Drain edit chunks into presentation every frame,
             // including paused and zero-tick frames, then stage the uploads.
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.presentEdits(m_translator));
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_translator.submit(m_driver.grid(), getGridPass()));
 
-            // Phase: overlay + panel.
+            // Phase: overlay + panel. Hover resolves first so the preview
+            // outline, status line, and Inspector all describe the cell a
+            // click would act on this frame. The 3D debug submission keeps
+            // bodies, paths, grid, and edit outlines; drawPanel_ draws
+            // chrome plus the screen-space feedback overlay.
+            refreshHover_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitDebugInstances_());
             PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
 
@@ -2416,9 +2503,12 @@ namespace demo {
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
             // Detach the tool gesture first: cancel ownership so the camera
-            // mapping below never observes a half-torn suppressor, then drop
-            // the higher-priority tool mapping before the colony one.
+            // mapping below never observes a half-torn suppressor, drop the
+            // focus subscription, then drop the higher-priority tool mapping
+            // before the colony one.
             cancelToolGesture_();
+            clearAgentSelection_();
+            m_focus_handle.reset();
             if (m_tool_mapping) {
                 if (not getMainPlayer()->getListener().removeInputMapping(*m_tool_mapping)) {
                     first_error = make_error_code(std::errc::not_connected);
