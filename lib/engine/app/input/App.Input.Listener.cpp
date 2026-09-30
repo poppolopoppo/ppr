@@ -233,17 +233,11 @@ namespace pP {
             m_action_events.replace(std::move(action_events_keys), std::move(action_events_values));
         }
 
+        // NOTE: retain every compatible candidate binding regardless of the
+        // current consume state; consume short-circuits at dispatch time
+        // (postKeyEvent) against the live action flags, so toggling
+        // setConsumeInput needs no rebuild and shadowed actions keep entries.
         const auto map_key = [&](const InputKey &key, const SharedInputAction &action, const InputBinding &binding) -> bool {
-            auto [first, last] = m_keybindings.equal_range(key);
-            if (first != last) {
-                last = std::prev(last);
-            }
-
-            if (m_keybindings.end() != last and last->first == key and
-                getKeyMapping_(last->second).m_action->hasConsumeInput()) {
-                return false;
-            }
-
             if (const auto it = old_action_events.find(action); old_action_events.end() != it) {
                 m_action_events.emplace(action, std::move(it->second));
 
