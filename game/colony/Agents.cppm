@@ -82,6 +82,10 @@ export namespace pP::colony {
 
     /// Panel-safe per-agent row (driver caches these per tick).
     struct AgentSummary {
+        /// Stable identity: Agent::m_key = (generation<<32)|index, dealt
+        /// once at spawn. View-only; rebuilt by refreshAgents every tick
+        /// and never snapshotted.
+        u64 m_key{};
         float m_x{};
         float m_y{};
         u32 m_goal{};
