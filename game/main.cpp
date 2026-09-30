@@ -57,18 +57,35 @@ namespace demo {
         TriangleBagHandle m_quad_bag{};
         MaterialHandle m_agent_material{};
         MaterialHandle m_path_material{};
-        // Action slots: 0-5 colony keys, 6 dig-mode toggle, 7 highlight toggle,
-        // 8 tool press, 9 tool cursor. The array size derives from the counts.
-        static constexpr std::size_t kColonyKeyActions = 8u;
+        // Action slots: colony key rows first (one per shortcut in the
+        // binding table below), then tool press and tool cursor. The tool
+        // slots derive from the colony count, so adding a binding row
+        // never collides with them.
+        static constexpr std::size_t kColonyKeyActions = 15u;
         static constexpr std::size_t kToolActions = 2u;
         static constexpr std::size_t kActionCount = kColonyKeyActions + kToolActions;
-        static constexpr std::size_t kDigModeAction = 6u;
-        static constexpr std::size_t kHighlightAction = 7u;
-        static constexpr std::size_t kToolPressAction = 8u;
-        static constexpr std::size_t kToolCursorAction = 9u;
+        static constexpr std::size_t kToolPressAction = kColonyKeyActions;
+        static constexpr std::size_t kToolCursorAction = kColonyKeyActions + 1u;
+
+        /// One row of the colony binding table: the intent every source
+        /// dispatches, the physical key, the input-action name, and the
+        /// player-facing key label + tip. The same row builds the key action
+        /// AND the shortcut row the panel shows (button tooltips, the colony
+        /// hint line, the Help window), so visible shortcut text can never
+        /// drift from what is actually bound - there is no second key map.
+        struct Binding final {
+            colony::EColonyIntent m_kind;
+            u32 m_arg;
+            InputKey m_key;
+            string_literal m_description;
+            const char *m_label;
+            const char *m_tip;
+        };
+
         std::array<std::unique_ptr<InputAction>, kActionCount> m_actions{};
         std::unique_ptr<InputMapping> m_colony_mapping{};
         std::unique_ptr<InputMapping> m_tool_mapping{};
+        std::array<colony::ColonyShortcut, kColonyKeyActions> m_shortcut_rows{};
         std::error_code m_input_error{};
         bool m_driver_ready{false};
         bool m_debug_draw_ready{false};
@@ -91,11 +108,123 @@ namespace demo {
         // initialize, cleared before super shutdown); the scripted pan
         // route snaps it with teleport so each waypoint lands exactly.
         safe_ptr<PanCameraController> m_pan_controller{};
-        bool m_dig_mode{false};
+        // Tool gesture ownership (interaction contract items 2+5). Press
+        // snapshots ownership (world vs UI/camera) with the active tool and
+        // client position; only a world-origin press acquires ownership.
+        // Release completes the owned gesture exactly once; cancellation
+        // (Esc, tool switch, focus loss, regen, shutdown) clears transient
+        // drag state but NEVER erases the accepted queue — update()'s drain
+        // owns accepted commands after accept, so a same-poll
+        // press/release still digs exactly one valid cell.
+        enum class EToolGestureOwner : u8 {
+            none = 0,
+            world,
+        };
+
+        static constexpr std::size_t kMaxQueuedDragCells = 256u;
+        static constexpr std::size_t kMaxDragVisitedCells = 2048u;
+
+        struct ToolGesture {
+            bool m_dig_armed{false};
+            EToolGestureOwner m_owner{EToolGestureOwner::none};
+            bool m_held{false};
+            float2 m_cursor_client{zero_v};
+            std::optional<sim::GlobalCellPos> m_accepted_click{};
+            Array<sim::GlobalCellPos> m_drag_queue{};
+            Array<sim::GlobalCellPos> m_visited{};
+            std::optional<sim::GlobalCellPos> m_last_cell{};
+            // Slice 5 footprint anchor: the press snapshot for build_wall and
+            // demolish. The dig accepted queue above is never touched by the
+            // footprint path; footprint orders commit directly at release.
+            std::optional<sim::GlobalCellPos> m_footprint_anchor{};
+        };
+
+        ToolGesture m_tool{};
+
+        /// Slice 5 footprint preview: logic fills it while a build_wall or
+        /// demolish press is held (anchor to current, inclusive, normalized
+        /// to min/max, clamped per-axis); the designer lane draws it. The
+        /// existing hover outline stays dig-only. `m_reason` is "" while the
+        /// rect is committable, otherwise it names why release will not
+        /// commit ("press outside the world", "drag outside the world").
+        struct BuildPreview {
+            bool m_active{false};
+            sim::GlobalCellPos m_anchor{};
+            sim::GlobalCellPos m_min{};
+            sim::GlobalCellPos m_max{};
+            bool m_clamped{false};
+            const char *m_reason{""};
+            // Per-axis clamp flags beside m_clamped (trailing fields only,
+            // so the aggregate order above is untouched): m_clamped stays
+            // the OR of the two for existing readers.
+            bool m_clamped_x{false};
+            bool m_clamped_y{false};
+        };
+
+        BuildPreview m_build_preview{};
         bool m_show_highlight{true};
-        bool m_tool_gesture{false};
-        float2 m_cursor_client{zero_v};
-        std::optional<sim::GlobalCellPos> m_pending_pick{};
+        IWindowService::WindowFocusedCallback::Handle m_focus_handle{};
+        // Lifetime rule: the broadcast stores a non-owning function_ref
+        // view, so this member owns the callable and the handle is reset
+        // in shutdown() before member destruction.
+        std23::move_only_function<std::error_code(const Window &, bool)> m_on_window_focused{};
+
+        // Slice 3 UI session state: one owned block the panel reads and the
+        // intent dispatch writes, the pointer hover shared by the preview
+        // outline/status line/Inspector, cumulative inter-frame timing for
+        // the Performance section, and the client extent last pushed to the
+        // camera controller (Slice 2 resize-deviation fix).
+        colony::ColonyUiState m_ui_state{};
+        colony::ColonyHover m_hover{};
+        // Slice 4 selection: the stable agent key (NEVER a row index) plus
+        // scratch naming the selection on the status line. The hovered key
+        // is the marker under the pointer (same pick a click runs), and the
+        // needs rows are the per-frame O2/rest read keyed by that same
+        // stable key - the view borrows them for one frame only.
+        std::optional<u64> m_selected_agent{};
+        std::optional<u64> m_hovered_agent{};
+        std::vector<colony::AgentNeedsRow> m_agent_needs_rows{};
+        std::string m_status_scratch{};
+        float m_frame_ms_last{0.0f};
+        float m_frame_avg{0.0f};
+        float m_frame_max{0.0f};
+        u64 m_frame_count{0u};
+        // Slice 6 frame sampler: bounded 240-sample ring of inter-frame dt
+        // (ms). Boundary: update()'s dt (elapsed between update() calls) -
+        // it is NOT GPU/present time and is never presented as such. Memory:
+        // 240 floats (960 B) plus one reused sort scratch (<= 960 B).
+        // Percentiles recompute at most every 15 frames from a copied-sorted
+        // window (nearest-rank; O(n log n), n <= 240). Sampling continues
+        // while paused (frames still tick); sim step counters freeze
+        // naturally in the driver. The ring never resets except by its own
+        // overwrite window; the CLI CSV accumulators are untouched.
+        static constexpr std::size_t kFrameWindow = 240u;
+        static constexpr u64 kFrameStatsEvery = 15u;
+        static constexpr float kFrameBudgetMs = 1000.0f / 60.0f;
+        std::vector<float> m_frame_ring{};
+        std::vector<float> m_frame_sort{};
+        std::size_t m_frame_head{};
+        u64 m_frame_samples{};
+        u64 m_frame_stats_frame{};
+        float m_frame_p50{0.0f};
+        float m_frame_p95{0.0f};
+        float m_frame_min{0.0f};
+        float m_frame_window_max{0.0f};
+        u64 m_frame_over{0u};
+        // Slice 6 work-queue counters (game-side; no driver change): cells
+        // handed to requestDig since launch/regen. The driver's digTotal
+        // resets on the same regen path (clearToolState), so issued minus
+        // applied estimates pending; the driver FIFO sheds under overflow,
+        // so the estimate is an upper bound. View state only.
+        u64 m_dig_issued{0u};
+        // Grid overlay flag (V, off by default), mirroring the H highlight
+        // path: this member holds the state only, and submitDebugInstances_
+        // draws the chunk-boundary bands while it stands.
+        bool m_show_grid{false};
+        float2 m_viewport_extent{zero_v};
+        /// Confirmed regeneration waiting for the next update() head (see
+        /// the regenerate case in dispatchIntent_ for why it defers).
+        bool m_regen_pending{false};
 
         [[nodiscard]] std::error_code regenerate_() {
             // Entropy is chosen at the application boundary, never inside the simulation.
@@ -119,104 +248,506 @@ namespace demo {
         }
 
         void cancelToolGesture_() noexcept {
-            m_tool_gesture = false;
-            m_pending_pick.reset();
+            // Release consume FIRST, then relinquish ownership; the accepted
+            // queue survives (the update() drain owns it after accept).
             if (m_actions[kToolPressAction]) {
                 m_actions[kToolPressAction]->setConsumeInput(false);
             }
             if (m_actions[kToolCursorAction]) {
                 m_actions[kToolCursorAction]->setConsumeInput(false);
             }
+            m_tool.m_owner = EToolGestureOwner::none;
+            m_tool.m_held = false;
+            m_tool.m_visited.clear();
+            m_tool.m_last_cell.reset();
+            // Slice 5: the footprint transient clears with the gesture; the
+            // dig accepted queue still survives (the update() drain owns it).
+            m_tool.m_footprint_anchor.reset();
+            m_build_preview = BuildPreview{};
+        }
+
+        void acquireToolGesture_() noexcept {
+            // Slice 5: build_wall and demolish arm a footprint gesture under
+            // the same ownership gates as dig; the dig body below is
+            // otherwise byte-identical.
+            const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                        m_ui_state.m_tool == colony::EColonyTool::demolish;
+            const bool armed = (m_tool.m_dig_armed or footprint_tool) and not m_tool.m_held and not m_input_error;
+            if (not armed) {
+                return;
+            }
+
+            // A press starting over UI never acquires world ownership.
+            const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
+            const bool ui_captured = ui and ui->hasMouseCaptureUnlessPopupClose();
+            if (ui_captured) {
+                return;
+            }
+
+            m_tool.m_held = true;
+            m_tool.m_owner = EToolGestureOwner::world;
+            m_actions[kToolPressAction]->setConsumeInput(true);
+            m_actions[kToolCursorAction]->setConsumeInput(true);
+
+            if (m_tool.m_dig_armed) {
+                // Press immediately queues one accepted click (latest wins if an
+                // earlier same-poll press has not drained yet); release
+                // finalizes drag state but never un-queues it.
+                m_tool.m_accepted_click = pickCell_(m_tool.m_cursor_client);
+                m_tool.m_visited.clear();
+                m_tool.m_last_cell.reset();
+                if (m_tool.m_accepted_click.has_value()) {
+                    m_tool.m_visited.push_back(*m_tool.m_accepted_click);
+                    m_tool.m_last_cell = m_tool.m_accepted_click;
+                    PPR_LOG(Demo, info, "tool accepted",
+                            {
+                                    {"slot", "click"},
+                                    {"x", m_tool.m_accepted_click->m_x},
+                                    {"y", m_tool.m_accepted_click->m_y},
+                            });
+                }
+                return;
+            }
+
+            // Footprint snapshot: anchor the press cell and publish the
+            // preview; the dig accepted queue is never touched here.
+            m_tool.m_visited.clear();
+            m_tool.m_last_cell.reset();
+            m_tool.m_footprint_anchor = pickCell_(m_tool.m_cursor_client);
+            m_build_preview = BuildPreview{};
+            m_build_preview.m_active = true;
+            if (not m_tool.m_footprint_anchor.has_value()) {
+                m_build_preview.m_reason = "press outside the world";
+                return;
+            }
+            m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
+            m_build_preview.m_min = *m_tool.m_footprint_anchor;
+            m_build_preview.m_max = *m_tool.m_footprint_anchor;
+        }
+
+        void trackToolCursor_(const float2 cursor_absolute) noexcept {
+            m_tool.m_cursor_client = cursor_absolute;
+
+            // World-origin drags stay world-owned across panels (no UI
+            // re-check here); UI-origin drags never set held, so this gate
+            // also stops them becoming world-owned mid-gesture.
+            const bool track_drag = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world and not m_input_error;
+            if (not track_drag) {
+                return;
+            }
+
+            // Slice 5: footprint drags update the preview rect only; the dig
+            // visited/queue body below stays byte-identical.
+            if (not m_tool.m_dig_armed) {
+                if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                    m_ui_state.m_tool == colony::EColonyTool::demolish) {
+                    updateBuildPreview_();
+                }
+                return;
+            }
+
+            const std::optional<sim::GlobalCellPos> cell = pickCell_(cursor_absolute);
+            if (not cell.has_value() or m_tool.m_last_cell == cell) {
+                return;
+            }
+            const bool seen = std::ranges::any_of(m_tool.m_visited, [&](const sim::GlobalCellPos known) noexcept {
+                return known == *cell;
+            });
+            if (seen) {
+                m_tool.m_last_cell = cell;
+                return;
+            }
+
+            // Bounded visited set (drop-oldest); an evicted cell may re-fire
+            // if revisited later in the same drag.
+            if (m_tool.m_visited.size() >= kMaxDragVisitedCells) {
+                m_tool.m_visited.erase(m_tool.m_visited.begin());
+            }
+            m_tool.m_visited.push_back(*cell);
+            m_tool.m_last_cell = cell;
+
+            // Bounded drag queue (drop-oldest tail under extreme event
+            // rates); the click slot is never shed.
+            if (m_tool.m_drag_queue.size() >= kMaxQueuedDragCells) {
+                m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
+            }
+            m_tool.m_drag_queue.push_back(*cell);
+            PPR_LOG(Demo, info, "tool accepted",
+                    {
+                            {"slot", "drag"},
+                            {"x", cell->m_x},
+                            {"y", cell->m_y},
+                    });
+        }
+
+        /// Slice 5 preview update: anchor to cursor, inclusive, normalized to
+        /// min/max, then clamped per-axis to kMaxFootprintEdge with the press
+        /// cell held fixed (the cursor side gives). A nullopt anchor or
+        /// cursor pick marks the preview invalid with a reason; release then
+        /// posts that reason instead of committing.
+        void updateBuildPreview_() noexcept {
+            if (not m_build_preview.m_active) {
+                return;
+            }
+            if (not m_tool.m_footprint_anchor.has_value()) {
+                m_build_preview.m_reason = "press outside the world";
+                return;
+            }
+            const std::optional<sim::GlobalCellPos> cell = pickCell_(m_tool.m_cursor_client);
+            if (not cell.has_value()) {
+                m_build_preview.m_reason = "drag outside the world";
+                return;
+            }
+
+            const i64 anchor_x = static_cast<i64>(m_tool.m_footprint_anchor->m_x);
+            const i64 anchor_y = static_cast<i64>(m_tool.m_footprint_anchor->m_y);
+            const i64 cursor_x = static_cast<i64>(cell->m_x);
+            const i64 cursor_y = static_cast<i64>(cell->m_y);
+            i64 lo_x = anchor_x < cursor_x ? anchor_x : cursor_x;
+            i64 hi_x = anchor_x < cursor_x ? cursor_x : anchor_x;
+            i64 lo_y = anchor_y < cursor_y ? anchor_y : cursor_y;
+            i64 hi_y = anchor_y < cursor_y ? cursor_y : anchor_y;
+            const i64 max_edge = static_cast<i64>(colony::kMaxFootprintEdge);
+            bool clamped_x = false;
+            bool clamped_y = false;
+            if (hi_x - lo_x >= max_edge) {
+                clamped_x = true;
+                if (cursor_x >= anchor_x) {
+                    hi_x = anchor_x + max_edge - 1;
+                } else {
+                    lo_x = anchor_x - max_edge + 1;
+                }
+            }
+            if (hi_y - lo_y >= max_edge) {
+                clamped_y = true;
+                if (cursor_y >= anchor_y) {
+                    hi_y = anchor_y + max_edge - 1;
+                } else {
+                    lo_y = anchor_y - max_edge + 1;
+                }
+            }
+
+            m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
+            m_build_preview.m_min = sim::GlobalCellPos{static_cast<u32>(lo_x), static_cast<u32>(lo_y)};
+            m_build_preview.m_max = sim::GlobalCellPos{static_cast<u32>(hi_x), static_cast<u32>(hi_y)};
+            m_build_preview.m_clamped = clamped_x or clamped_y;
+            m_build_preview.m_clamped_x = clamped_x;
+            m_build_preview.m_clamped_y = clamped_y;
+            m_build_preview.m_reason = "";
+        }
+
+        /// Slice 5 release commit: exactly one direct driver order for the
+        /// preview rect, never through the dig FIFO. Invalid previews post
+        /// their reason; driver rejections post with the driver error code;
+        /// success names the rect and its queue state. No cells mutate on any
+        /// failure path; the caller always clears the gesture after this.
+        void commitBuildGesture_() noexcept {
+            if (not m_build_preview.m_active) {
+                return;
+            }
+            const bool is_wall = m_ui_state.m_tool == colony::EColonyTool::build_wall;
+            if (m_build_preview.m_reason[0] != '\0' or not m_tool.m_footprint_anchor.has_value()) {
+                postNotice_(m_build_preview.m_reason[0] != '\0' ? m_build_preview.m_reason : "no placement to commit",
+                            std::errc::invalid_argument);
+                return;
+            }
+
+            const sim::GlobalCellPos min = m_build_preview.m_min;
+            const u32 width = m_build_preview.m_max.m_x - min.m_x + 1u;
+            const u32 height = m_build_preview.m_max.m_y - min.m_y + 1u;
+            Expected<sim::Entity> placed{std::unexpect, std::make_error_code(std::errc::invalid_argument)};
+            if (is_wall) {
+                placed = m_driver.buildWall(colony::Footprint{
+                        .m_min = min, .m_width = width, .m_height = height, .m_element = colony::kElementRock});
+            } else {
+                placed = m_driver.demolish(min, width, height);
+            }
+            if (not placed) {
+                const std::error_code error = placed.error();
+                const std::errc code = error == std::errc::operation_not_permitted ? std::errc::operation_not_permitted
+                                                                                   : std::errc::invalid_argument;
+                PPR_LOG(Demo, warning, "build order rejected",
+                        {
+                                {"w", width},
+                                {"h", height},
+                                {"error", error.value()},
+                                {"category", error.category().name()},
+                        });
+                postNotice_(is_wall ? "Rock wall order rejected" : "Demolish order rejected", code);
+                return;
+            }
+
+            // Success carries no error code: name the rect and whether it
+            // waits on Step/Resume (paused) or progresses on its own.
+            // Progress after this is driver-side; this never polls errands.
+            try {
+                m_status_scratch =
+                        std::string(is_wall ? "Rock wall " : "Demolish ") + std::to_string(width) + "x" +
+                        std::to_string(height) +
+                        (m_driver.paused() ? " queued (paused - Step or Resume to progress)" : " queued - progressing");
+                m_ui_state.m_notice.m_text = m_status_scratch;
+                m_ui_state.m_notice.m_error = std::error_code{};
+                m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
+            } catch (...) {
+            }
+        }
+
+        void completeToolGesture_() noexcept {
+            // An owned release finalizes exactly once; stray releases no-op.
+            const bool owned = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world;
+            if (not owned) {
+                return;
+            }
+            // Slice 5: footprint tools commit one direct driver order here;
+            // dig orders drain through update() and inspect holds nothing.
+            // cancelToolGesture_() below clears held, so a second release
+            // can never commit twice.
+            if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                m_ui_state.m_tool == colony::EColonyTool::demolish) {
+                updateBuildPreview_();
+                commitBuildGesture_();
+            }
+            cancelToolGesture_();
+        }
+
+        /// Shared screen mapping for one frame: the camera snapshot plus the
+        /// coordinate rect the pick normalizes through. pickCell runs its
+        /// continuous map through this struct and worldToClient is that
+        /// map's exact inverse on continuous plane coordinates (before
+        /// flooring/clamping) — one formula family, no second hand-derived
+        /// mapping. Pointer and marker cannot diverge after pan/zoom/resize
+        /// /DPI: both directions consume the same snapshot and the same
+        /// rect, so a round trip lands back on the source pixel, and the
+        /// overlay draws with the snapshot the scene rendered with.
+        struct ScreenMap {
+            CameraSnapshot m_snapshot{};
+            float2 m_extent{zero_v}; // client px, == ImGui coords (see below)
+            bool m_valid{false};
+
+            /// Continuous pick map, byte-identical to the old pickCell_
+            /// body: client-local input normalizes in client space directly
+            /// (GLFW cursor positions are client-area relative, so dividing
+            /// by the client extent is the whole map; normalized spaces are
+            /// DPI scale-free, so no backend-specific flip applies).
+            [[nodiscard]] std::optional<float2> pickContinuous(const float2 cursor_client) const noexcept {
+                if (not m_valid) {
+                    return std::nullopt;
+                }
+                const int2 client_px{static_cast<int>(cursor_client.x), static_cast<int>(cursor_client.y)};
+                const float2 uv{static_cast<float>(client_px.x) / m_extent.x,
+                                static_cast<float>(client_px.y) / m_extent.y};
+                const bool inside_client = uv.x >= 0.0f and uv.x <= 1.0f and uv.y >= 0.0f and uv.y <= 1.0f;
+                if (not inside_client) {
+                    return std::nullopt;
+                }
+
+                // Row-vector contract: clip = world * view_projection, so the camera
+                // invert maps NDC back to world via mul(clip, m_invert_view_projection).
+                const float2 ndc{uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f};
+                const float4 world_h = float4{ndc.x, ndc.y, 0.0f, 1.0f} * m_snapshot.m_invert_view_projection;
+                const bool degenerate = world_h.w > -1e-6f and world_h.w < 1e-6f;
+                if (degenerate) {
+                    return std::nullopt;
+                }
+                return float2{world_h.x / world_h.w, world_h.y / world_h.w};
+            }
+
+            /// Cell pick: the continuous map above, then floor plus the
+            /// kWorldEdge clamp. Results are unchanged from the old body.
+            [[nodiscard]] std::optional<sim::GlobalCellPos> pickCell(const float2 cursor_client) const noexcept {
+                const std::optional<float2> world = pickContinuous(cursor_client);
+                if (not world.has_value()) {
+                    return std::nullopt;
+                }
+                const bool inside_world = world->x >= 0.0f and world->y >= 0.0f and
+                                          world->x < static_cast<float>(sim::kWorldEdge) and
+                                          world->y < static_cast<float>(sim::kWorldEdge);
+                if (not inside_world) {
+                    return std::nullopt;
+                }
+                return sim::GlobalCellPos{static_cast<u32>(world->x), static_cast<u32>(world->y)};
+            }
+
+            /// Exact inverse of pickContinuous on continuous coordinates:
+            /// world through the snapshot's view-projection to NDC, then
+            /// the pick's uv/client steps backwards. Degenerate w and
+            /// behind-camera (NDC depth outside the [0,1] ortho range)
+            /// projections have no meaningful screen position and are
+            /// rejected; off-screen x/y still projects (the overlay clip
+            /// rect trims it). The result is client px, which ARE ImGui
+            /// coords: the ImGui service sets DisplaySize to the client
+            /// extent and delivers mouse positions in client px, so no
+            /// framebuffer scaling leaks in here (see the framebuffer to
+            /// ImGui conversion at the overlay clip).
+            [[nodiscard]] std::optional<float2> worldToClient(const float2 world) const noexcept {
+                if (not m_valid) {
+                    return std::nullopt;
+                }
+                const float4 clip = float4{world.x, world.y, 0.0f, 1.0f} * m_snapshot.m_view_projection;
+                const bool degenerate = clip.w > -1e-6f and clip.w < 1e-6f;
+                if (degenerate) {
+                    return std::nullopt;
+                }
+                const float rcp_w = 1.0f / clip.w;
+                const float ndc_x = clip.x * rcp_w;
+                const float ndc_y = clip.y * rcp_w;
+                const float ndc_z = clip.z * rcp_w;
+                const bool behind = ndc_z < 0.0f or ndc_z > 1.0f;
+                if (behind) {
+                    return std::nullopt;
+                }
+                const float2 uv{(ndc_x + 1.0f) * 0.5f, (1.0f - ndc_y) * 0.5f};
+                return float2{uv.x * m_extent.x, uv.y * m_extent.y};
+            }
+        };
+
+        /// One mapping per use from the live viewport and camera. Reads no
+        /// ImGui state, so input-event paths (press/drag, possibly before
+        /// the first NewFrame) stay safe; the overlay reads the IO scale
+        /// itself after the panel has run.
+        [[nodiscard]] ScreenMap screenMap_() const noexcept {
+            ScreenMap map{};
+            const safe_ptr<const WindowViewport> viewport = getMainViewport();
+            const safe_ptr<const Camera> camera = getMainCamera();
+            const bool have_view = viewport and camera;
+            if (not have_view) {
+                return map;
+            }
+            const Viewport &view = viewport->getViewport();
+            const int2 extent = view.getClientRect().m_extent;
+            if (extent.x <= 0 or extent.y <= 0) {
+                return map;
+            }
+            map.m_snapshot = camera->getSnapshot();
+            map.m_extent = float2{static_cast<float>(extent.x), static_cast<float>(extent.y)};
+            map.m_valid = true;
+            return map;
         }
 
         [[nodiscard]] std::optional<sim::GlobalCellPos> pickCell_(const float2 cursor_client) const noexcept {
-            const safe_ptr<const WindowViewport> viewport = getMainViewport();
-            const safe_ptr<const Camera> camera = getMainCamera();
-            const bool have_view = viewport and
-                                   camera;
-            if (not have_view) {
-                return std::nullopt;
-            }
-
-            // Client pixels round-trip through screen space so the window/client
-            // origin lands in the normalized lookup; both spaces are pixels, so
-            // DPI cancels with no backend-specific flip.
-            const Viewport &view = viewport->getViewport();
-            const int2 client_px{static_cast<int>(cursor_client.x), static_cast<int>(cursor_client.y)};
-            const float2 uv = view.screenToClientNormalized(view.clientToScreen(client_px));
-            const bool inside_client = uv.x >= 0.0f and
-                                       uv.x <= 1.0f and
-                                       uv.y >= 0.0f and
-                                       uv.y <= 1.0f;
-            if (not inside_client) {
-                return std::nullopt;
-            }
-
-            // Row-vector contract: clip = world * view_projection, so the camera
-            // invert maps NDC back to world via mul(clip, m_invert_view_projection).
-            const float2 ndc{uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f};
-            const CameraSnapshot &snapshot = camera->getSnapshot();
-            const float4 world_h = float4{ndc.x, ndc.y, 0.0f, 1.0f} * snapshot.m_invert_view_projection;
-            const bool degenerate = world_h.w > -1e-6f and
-                                    world_h.w < 1e-6f;
-            if (degenerate) {
-                return std::nullopt;
-            }
-            const float world_x = world_h.x / world_h.w;
-            const float world_y = world_h.y / world_h.w;
-            const bool inside_world = world_x >= 0.0f and
-                                      world_y >= 0.0f and
-                                      world_x < static_cast<float>(sim::kWorldEdge) and
-                                      world_y < static_cast<float>(sim::kWorldEdge);
-            if (not inside_world) {
-                return std::nullopt;
-            }
-            return sim::GlobalCellPos{static_cast<u32>(world_x), static_cast<u32>(world_y)};
+            return screenMap_().pickCell(cursor_client);
         }
 
         void initializeInput_() {
             m_colony_mapping = std::make_unique<InputMapping>("colony_input_mapping");
-            bindAction_(0u, "ColonyPause", InputKey::space_bar,
-                [this](const InputActionEvent &, const InputKey &) noexcept { m_driver.togglePaused(); });
-            bindAction_(1u, "ColonyStep", InputKey::n,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    if (m_driver.paused() and not m_input_error) {
-                        m_input_error = m_driver.stepOne();
-                    }
-                });
-            bindAction_(2u, "ColonySpeed1", InputKey::one,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    if (not m_input_error) { m_input_error = m_driver.setSpeed(1u); }
-                });
-            bindAction_(3u, "ColonySpeed2", InputKey::two,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    if (not m_input_error) { m_input_error = m_driver.setSpeed(2u); }
-                });
-            bindAction_(4u, "ColonySpeed3", InputKey::three,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    if (not m_input_error) { m_input_error = m_driver.setSpeed(3u); }
-                });
-            bindAction_(5u, "ColonyRegenerate", InputKey::r,
-                [this](const InputActionEvent &, const InputKey &) {
-                    if (not m_input_error) { m_input_error = regenerate_(); }
-                });
 
-            // G/H are chord-free toggles: free of the colony keys above and of the
-            // camera set (WASD/QE, arrows, page up/down, wheel, mouse_2d at
-            // Controller.cpp:326), single-hand reachable, mnemonic (ground, highlight).
-            bindAction_(kDigModeAction, "ColonyDigMode", InputKey::g,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    m_dig_mode = not m_dig_mode;
-                    const bool cancel_owned = not m_dig_mode and
-                                              m_tool_gesture;
-                    if (cancel_owned) {
-                        cancelToolGesture_();
-                    }
-                });
-            bindAction_(kHighlightAction, "ColonyHighlight", InputKey::h,
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    m_show_highlight = not m_show_highlight;
-                });
+            // Chord-free keys: the colony set (Space, N, 1-3, R, G, H, V, F,
+            // Esc plus I, B, F1, F3) stays disjoint from the camera set
+            // (WASD/QE, arrows, page keys, MMB/RMB/wheel, gamepad); every
+            // key here was checked repo-wide and is bound nowhere else (F
+            // confirmed free: only the key/ImGui mappings define it, and
+            // Tab stays off-limits to ImGui navigation). UI still gets
+            // first refusal (ImGui capture consumes before this map).
+            // One table, three consumers: the key actions bound below, the
+            // shortcut rows the panel renders, and (through those rows) every
+            // tooltip and Help line - so no second key map can drift.
+            const std::array<Binding, kColonyKeyActions> bindings{{
+                    {.m_kind = colony::EColonyIntent::pause_toggle,
+                     .m_arg = 0u,
+                     .m_key = InputKey::space_bar,
+                     .m_description = "ColonyPause",
+                     .m_label = "Space",
+                     .m_tip = "Pause or resume the simulation"},
+                    {.m_kind = colony::EColonyIntent::step,
+                     .m_arg = 0u,
+                     .m_key = InputKey::n,
+                     .m_description = "ColonyStep",
+                     .m_label = "N",
+                     .m_tip = "Advance one tick (while paused)"},
+                    {.m_kind = colony::EColonyIntent::set_speed,
+                     .m_arg = 1u,
+                     .m_key = InputKey::one,
+                     .m_description = "ColonySpeed1",
+                     .m_label = "1",
+                     .m_tip = "Run at 1x speed"},
+                    {.m_kind = colony::EColonyIntent::set_speed,
+                     .m_arg = 2u,
+                     .m_key = InputKey::two,
+                     .m_description = "ColonySpeed2",
+                     .m_label = "2",
+                     .m_tip = "Run at 2x speed"},
+                    {.m_kind = colony::EColonyIntent::set_speed,
+                     .m_arg = 3u,
+                     .m_key = InputKey::three,
+                     .m_description = "ColonySpeed3",
+                     .m_label = "3",
+                     .m_tip = "Run at 3x speed"},
+                    {.m_kind = colony::EColonyIntent::regenerate,
+                     .m_arg = 0u,
+                     .m_key = InputKey::r,
+                     .m_description = "ColonyRegenerate",
+                     .m_label = "R",
+                     .m_tip = "Ask to replace this world (confirm first)"},
+                    {.m_kind = colony::EColonyIntent::toggle_dig,
+                     .m_arg = 0u,
+                     .m_key = InputKey::g,
+                     .m_description = "ColonyDigMode",
+                     .m_label = "G",
+                     .m_tip = "Arm or stow the dig tool"},
+                    {.m_kind = colony::EColonyIntent::toggle_edit_highlight,
+                     .m_arg = 0u,
+                     .m_key = InputKey::h,
+                     .m_description = "ColonyHighlight",
+                     .m_label = "H",
+                     .m_tip = "Toggle the edit highlight"},
+                    {// V is free repo-wide: no game, camera (WASD/QE,
+                     // arrows, page keys, mouse/wheel, gamepad, modifiers),
+                     // or engine mapping binds it (definition only).
+                     .m_kind = colony::EColonyIntent::toggle_grid_overlay,
+                     .m_arg = 0u,
+                     .m_key = InputKey::v,
+                     .m_description = "ColonyGridOverlay",
+                     .m_label = "V",
+                     .m_tip = "Toggle the chunk grid overlay"},
+                    {.m_kind = colony::EColonyIntent::cancel,
+                     .m_arg = 0u,
+                     .m_key = InputKey::escape,
+                     .m_description = "ColonyCancelGesture",
+                     .m_label = "Esc",
+                     .m_tip = "Stop following, or cancel the gesture, tool, pin, or Help"},
+                    {.m_kind = colony::EColonyIntent::select_tool,
+                     .m_arg = static_cast<u32>(colony::EColonyTool::inspect),
+                     .m_key = InputKey::i,
+                     .m_description = "ColonyInspect",
+                     .m_label = "I",
+                     .m_tip = "Select the inspect tool"},
+                    {.m_kind = colony::EColonyIntent::open_build_menu,
+                     .m_arg = 0u,
+                     .m_key = InputKey::b,
+                     .m_description = "ColonyBuildMenu",
+                     .m_label = "B",
+                     .m_tip = "Open the build menu (no placement yet)"},
+                    {.m_kind = colony::EColonyIntent::find_next,
+                     .m_arg = 0u,
+                     .m_key = InputKey::f,
+                     .m_description = "ColonyFindColonist",
+                     .m_label = "F",
+                     .m_tip = "Select the next colonist in stable-key order"},
+                    {.m_kind = colony::EColonyIntent::help,
+                     .m_arg = 0u,
+                     .m_key = InputKey::f1,
+                     .m_description = "ColonyHelp",
+                     .m_label = "F1",
+                     .m_tip = "Toggle this help window"},
+                    {.m_kind = colony::EColonyIntent::toggle_performance,
+                     .m_arg = 0u,
+                     .m_key = InputKey::f3,
+                     .m_description = "ColonyPerformance",
+                     .m_label = "F3",
+                     .m_tip = "Switch the panel between Colony and Performance"},
+            }};
+
+            for (std::size_t index = 0u; index < bindings.size(); ++index) {
+                const Binding &row = bindings[index];
+                m_shortcut_rows[index] = colony::ColonyShortcut{
+                        .m_kind = row.m_kind, .m_arg = row.m_arg, .m_key = row.m_label, .m_tip = row.m_tip};
+                // Keys and buttons share this one dispatch: the callback
+                // only translates a physical press into the typed intent.
+                bindAction_(index, row.m_description, row.m_key,
+                            [this, kind = row.m_kind, arg = row.m_arg](const InputActionEvent &, const InputKey &) {
+                                dispatchIntent_(colony::ColonyIntent{.m_kind = kind, .m_arg = arg});
+                            });
+            }
 
             // These keys do not overlap the camera mapping; UI still gets first refusal.
             getMainPlayer()->getListener().addInputMapping(m_colony_mapping,
@@ -230,47 +761,665 @@ namespace demo {
             // mouse_2d freezes camera pan/rotate (mouse_2d rotate included) until
             // the completed event or a dig-mode cancel.
             m_tool_mapping = std::make_unique<InputMapping>("colony_tool_mapping");
-            m_actions[kToolPressAction] = std::make_unique<InputAction>("ColonyToolPress",
-                EInputValueType::digital, EInputActionFlags::none);
-            m_actions[kToolPressAction]->setStarted(
-                [this](const InputActionEvent &, const InputKey &) noexcept {
-                    const bool armed = m_dig_mode and
-                                       not m_tool_gesture and
-                                       not m_input_error;
-                    if (not armed) {
-                        return;
-                    }
-                    const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
-                    const bool ui_captured = ui and
-                                             ui->hasMouseCaptureUnlessPopupClose();
-                    if (ui_captured) {
-                        return;
-                    }
-                    m_tool_gesture = true;
-                    m_actions[kToolPressAction]->setConsumeInput(true);
-                    m_actions[kToolCursorAction]->setConsumeInput(true);
-                    m_pending_pick = pickCell_(m_cursor_client);
-                });
-            m_actions[kToolPressAction]->setCompleted(
-                [this](const InputActionEvent &, const InputKey &) noexcept { cancelToolGesture_(); });
+            m_actions[kToolPressAction] =
+                    std::make_unique<InputAction>("ColonyToolPress", EInputValueType::digital, EInputActionFlags::none);
+            m_actions[kToolPressAction]->setStarted([this](const InputActionEvent &, const InputKey &) noexcept {
+                acquireToolGesture_();
+                // Same press, inspect tool: pin/unpin the picked cell
+                // (no-op for dig, which owns the gesture instead).
+                observeInspectPress_();
+            });
+            m_actions[kToolPressAction]->setCompleted([this](const InputActionEvent &, const InputKey &) noexcept {
+                completeToolGesture_();
+            });
             m_tool_mapping->mapInputKey(SharedInputAction(m_actions[kToolPressAction].get()),
                 InputKey::left_mouse_button);
 
-            m_actions[kToolCursorAction] = std::make_unique<InputAction>("ColonyToolCursor",
-                EInputValueType::axis_2d, EInputActionFlags::none);
+            m_actions[kToolCursorAction] = std::make_unique<InputAction>("ColonyToolCursor", EInputValueType::axis_2d,
+                                                                         EInputActionFlags::none);
             m_actions[kToolCursorAction]->setTriggered(
-                [this](const InputActionEvent &event, const InputKey &) noexcept {
-                    m_cursor_client = event.getAxis2DValue().m_absolute;
-                    const bool track_pick = m_tool_gesture and
-                                            not m_input_error;
-                    if (track_pick) {
-                        m_pending_pick = pickCell_(m_cursor_client);
-                    }
-                });
+                    [this](const InputActionEvent &event, const InputKey &) noexcept {
+                        trackToolCursor_(event.getAxis2DValue().m_absolute);
+                    });
             m_tool_mapping->mapInputKey(SharedInputAction(m_actions[kToolCursorAction].get()), InputKey::mouse_2d);
 
             getMainPlayer()->getListener().addInputMapping(m_tool_mapping,
-                static_cast<int>(EInputMappingPriority::camera) - 1);
+                                                           static_cast<int>(EInputMappingPriority::camera) - 1);
+
+            // Focus loss cancels the transient gesture only (the accepted
+            // queue survives). Ownership: the member owns the callable, the
+            // broadcast holds only a view, the handle is reset first in
+            // shutdown(). Absent service leaves it unwired.
+            if (const safe_ptr<IWindowService> windows = getServices().tryGet<IWindowService>(); windows.isValid()) {
+                m_on_window_focused = [this](const Window &, const bool focused) noexcept -> std::error_code {
+                    if (not focused) {
+                        cancelToolGesture_();
+                    }
+                    return default_value_v;
+                };
+                m_focus_handle = windows->whenWindowFocused(m_on_window_focused);
+            }
+        }
+
+        /// The single intent dispatch: every keyboard shortcut (the binding
+        /// table above) and every panel button, menu item, and section tab
+        /// lands here, so button/shortcut parity holds by construction. Not
+        /// noexcept: a confirmed regenerate propagates driver failures the
+        /// way the old R binding did (sticky, aborting at the next frame's
+        /// error check before any further driver use).
+        void dispatchIntent_(const colony::ColonyIntent intent) {
+            switch (intent.m_kind) {
+                case colony::EColonyIntent::pause_toggle: m_driver.togglePaused(); break;
+
+                case colony::EColonyIntent::step:
+                    if (not m_driver.paused()) {
+                        postNotice_("Pause to use Step", std::errc::invalid_argument);
+                        break;
+                    }
+                    if (not m_input_error) {
+                        m_input_error = m_driver.stepOne();
+                    }
+                    break;
+
+                case colony::EColonyIntent::set_speed:
+                    if (intent.m_arg < 1u or intent.m_arg > 3u) {
+                        postNotice_("Speed must be 1x, 2x, or 3x", std::errc::invalid_argument);
+                        break;
+                    }
+                    if (not m_input_error) {
+                        m_input_error = m_driver.setSpeed(intent.m_arg);
+                    }
+                    break;
+
+                case colony::EColonyIntent::regenerate:
+                    if (not intent.m_confirmed) {
+                        // R and "New world" only ask; the modal's Confirm
+                        // re-dispatches the same intent with m_confirmed.
+                        m_ui_state.m_regen_confirm_open = true;
+                        break;
+                    }
+                    // Deferred to the top of the next update(): regenerate +
+                    // translator.reset must run BEFORE that frame's
+                    // present/submit (the phase order the old R key had),
+                    // otherwise reset() clears the tiles this frame already
+                    // submitted and render() shows one blank terrain frame.
+                    m_regen_pending = true;
+                    break;
+
+                case colony::EColonyIntent::select_tool:
+                    if (intent.m_arg <= static_cast<u32>(colony::EColonyTool::demolish)) {
+                        selectTool_(static_cast<colony::EColonyTool>(intent.m_arg));
+                    }
+                    break;
+
+                case colony::EColonyIntent::toggle_dig:
+                    // Same gesture as G: arm dig, or stow back to Inspect.
+                    selectTool_(m_ui_state.m_tool == colony::EColonyTool::dig ? colony::EColonyTool::inspect
+                                                                              : colony::EColonyTool::dig);
+                    break;
+
+                case colony::EColonyIntent::toggle_edit_highlight: m_show_highlight = not m_show_highlight; break;
+
+                case colony::EColonyIntent::toggle_grid_overlay:
+                    // Mirrors the H highlight toggle: a flag flip only. The
+                    // debug submission (submitDebugInstances_) reads
+                    // m_show_grid and draws the chunk-boundary bands while
+                    // it stands; default off.
+                    m_show_grid = not m_show_grid;
+                    break;
+
+                case colony::EColonyIntent::cancel:
+                    // While a popup stood open last frame, Esc belongs to it
+                    // (ImGui's NavUpdateCancelRequest closes non-modal
+                    // popups; the modal handles its own). A non-modal popup
+                    // does NOT raise WantCaptureKeyboard (only an active
+                    // widget or a modal does), so without this gate the chain
+                    // would also advance - clearing a pin the player never
+                    // touched - on the very Esc that just dismissed the menu.
+                    if (not m_ui_state.m_popup_visible_last_frame) {
+                        cancelIntent_();
+                    }
+                    break;
+
+                case colony::EColonyIntent::focus_selection:
+                    // Two-step from a colonist row's Focus button: the
+                    // button parks the row key in the UI state first (the
+                    // intent carries no argument), so adopt it through the
+                    // same selection path a world click uses, then focus.
+                    // The Inspector's Focus button parks no key, so it
+                    // keeps focusing whatever is already selected.
+                    if (const std::optional<u64> requested = m_ui_state.m_focus_agent) {
+                        m_ui_state.m_focus_agent.reset();
+                        if (const std::optional<colony::AgentSummary> row = findAgent_(*requested)) {
+                            selectAgent_(*row);
+                        }
+                    }
+                    focusSelectedAgent_();
+                    break;
+
+                case colony::EColonyIntent::find_next:
+                    // F and the panel's Find colonist button: one intent,
+                    // one handler. Selection only - it never arms a follow;
+                    // the status line names the agent through the same
+                    // selectAgent_ path a world click uses.
+                    selectNextAgent_();
+                    break;
+
+                case colony::EColonyIntent::toggle_performance:
+                    m_ui_state.m_tab = m_ui_state.m_tab == colony::EColonyPanelTab::performance
+                                               ? colony::EColonyPanelTab::colony
+                                               : colony::EColonyPanelTab::performance;
+                    break;
+
+                case colony::EColonyIntent::help: m_ui_state.m_help_open = not m_ui_state.m_help_open; break;
+
+                case colony::EColonyIntent::open_build_menu:
+                    // Opens the menu only; the menu rows select the tool and
+                    // placement commits on release, so B never places by itself.
+                    m_ui_state.m_build_menu_open = true;
+                    break;
+
+                case colony::EColonyIntent::toggle_pin: togglePin_(); break;
+
+                case colony::EColonyIntent::dismiss_notice: m_ui_state.m_notice = {}; break;
+
+                case colony::EColonyIntent::select_tab:
+                    if (intent.m_arg <= static_cast<u32>(colony::EColonyPanelTab::performance)) {
+                        m_ui_state.m_tab = static_cast<colony::EColonyPanelTab>(intent.m_arg);
+                    }
+                    break;
+
+                default:
+                    // Future intents get a handler here; never silent.
+                    break;
+            }
+        }
+
+        /// Standing instruction on the status line (shown when no notice is
+        /// visible); rewritten only on an actual tool change so a repeated
+        /// selection cannot stomp a fresh notice's window.
+        void setStatus_(const char *const text) noexcept {
+            try {
+                m_ui_state.m_instruction = text;
+            } catch (...) {
+            }
+        }
+
+        /// Bounded status-line notice: keeps the originating error code for
+        /// the muted suffix and expires after colony::kNoticeSeconds. It
+        /// never routes through the per-frame frame-message channel (that
+        /// one is cleared every frame, so it cannot hold an error the
+        /// player has time to read).
+        void postNotice_(const char *const text, const std::errc error) noexcept {
+            try {
+                m_ui_state.m_notice.m_text = text;
+                m_ui_state.m_notice.m_error = std::make_error_code(error);
+                m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
+            } catch (...) {
+            }
+        }
+
+        /// Tool selection keeps the dig invariant (armed == tool == dig).
+        /// Build/demolish arm the footprint gesture the release commits.
+        /// Switching tools cancels any held transient gesture; the accepted
+        /// dig queue stays queued per the lifetime policy above.
+        void selectTool_(const colony::EColonyTool tool) noexcept {
+            if (tool == m_ui_state.m_tool) {
+                return;
+            }
+
+            m_ui_state.m_tool = tool;
+            m_tool.m_dig_armed = tool == colony::EColonyTool::dig;
+            if (m_tool.m_held) {
+                cancelToolGesture_();
+            }
+
+            switch (tool) {
+                case colony::EColonyTool::dig: setStatus_("Dig: click a cell to dig it, hold to drag."); break;
+                case colony::EColonyTool::build_wall:
+                    setStatus_("Rock wall: press and drag a rect, release to order.");
+                    break;
+                case colony::EColonyTool::demolish:
+                    setStatus_("Demolish: press and drag a rect, release to order.");
+                    break;
+                case colony::EColonyTool::inspect:
+                default: setStatus_("Inspect: click a cell to pin it in the Inspector."); break;
+            }
+        }
+
+        /// Esc chain - one honest action per press: stop follow first
+        /// (hands the camera back before touching tools or selection),
+        /// then a held world gesture, a non-inspect tool, the cell pin,
+        /// the agent selection, Help, and otherwise no transient state.
+        void cancelIntent_() noexcept {
+            if (m_pan_controller and m_pan_controller->getFollowTarget().has_value()) {
+                stopFollow_();
+                return;
+            }
+            const bool holding_world = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world;
+            if (holding_world) {
+                cancelToolGesture_();
+                return;
+            }
+            if (m_ui_state.m_tool != colony::EColonyTool::inspect) {
+                selectTool_(colony::EColonyTool::inspect);
+                return;
+            }
+            if (m_ui_state.m_pinned.has_value()) {
+                m_ui_state.m_pinned.reset();
+                return;
+            }
+            if (m_selected_agent.has_value()) {
+                clearAgentSelection_();
+                return;
+            }
+            if (m_ui_state.m_help_open) {
+                m_ui_state.m_help_open = false;
+                return;
+            }
+            cancelToolGesture_();
+        }
+
+        /// Inspector pin button: a pure toggle when a target exists, an
+        /// honest notice when the pointer is not over the world. An agent
+        /// selection consumes the press first (single selection model).
+        void togglePin_() noexcept {
+            if (m_ui_state.m_pinned.has_value()) {
+                m_ui_state.m_pinned.reset();
+                return;
+            }
+            if (m_selected_agent.has_value()) {
+                clearAgentSelection_();
+                return;
+            }
+            if (m_hover.m_world) {
+                m_ui_state.m_pinned = m_hover.m_target;
+                return;
+            }
+            postNotice_("Nothing under the pointer to pin", std::errc::invalid_argument);
+        }
+
+        /// Inspect click: runs right after acquireToolGesture_ on the same
+        /// press, so it reuses that function's capture rule (a press over UI
+        /// never touches the world selection). Colonists win over wall
+        /// cells: an agent hit pins the agent key, a wall cell pins the
+        /// cell (releasing any agent), and re-clicking the active selection
+        /// releases it; a click off-world says so instead of silently
+        /// doing nothing.
+        void observeInspectPress_() noexcept {
+            if (m_ui_state.m_tool != colony::EColonyTool::inspect or m_tool.m_dig_armed) {
+                return;
+            }
+
+            const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
+            if (ui and ui->hasMouseCaptureUnlessPopupClose()) {
+                return;
+            }
+
+            const std::optional<sim::GlobalCellPos> cell = pickCell_(m_tool.m_cursor_client);
+            if (not cell.has_value()) {
+                postNotice_("Nothing under the pointer to pin", std::errc::invalid_argument);
+                return;
+            }
+
+            // Cell-center world point against the submitted marker quads.
+            const float2 pointer{static_cast<float>(cell->m_x) + 0.5f, static_cast<float>(cell->m_y) + 0.5f};
+            if (const std::optional<u64> agent = pickAgent_(pointer)) {
+                if (m_selected_agent == agent) {
+                    clearAgentSelection_();
+                } else if (const std::optional<colony::AgentSummary> row = findAgent_(*agent)) {
+                    selectAgent_(*row);
+                }
+                return;
+            }
+
+            if (m_ui_state.m_pinned == cell) {
+                m_ui_state.m_pinned.reset();
+            } else {
+                clearAgentSelection_();
+                m_ui_state.m_pinned = cell;
+            }
+        }
+
+        /// Stable-key agent lookup over the live summaries; nullopt when the
+        /// agent is gone (deletion/regeneration). Copies the row: summaries
+        /// rebuild every tick, so never hold the reference.
+        [[nodiscard]] std::optional<colony::AgentSummary> findAgent_(const u64 key) const noexcept {
+            for (const colony::AgentSummary &row: m_driver.agentSummaries()) {
+                if (row.m_key == key) {
+                    return row;
+                }
+            }
+            return std::nullopt;
+        }
+
+        /// Agent hit-test against the submitted marker quads: same center
+        /// (raw m_x/m_y) and same half-size as submitDebugInstances_
+        /// (0.8 x 1.8 submitted, matching the 0.4/0.9 body halves),
+        /// expanded by the scale-aware pick radius floored at
+        /// kAgentPickMinWorld so the selected outer ring stays covered at
+        /// the closest zoom. Nearest center wins, ties go to the lower key.
+        static constexpr float kAgentPickPx = 8.0f;
+        /// Minimum pick-halo radius in world units: the selected outer ring
+        /// overhangs the body by gap + 1.5 * band + outer_gap, which sits at
+        /// its clamps (0.10 + 1.5 * 0.25 + 0.30 = 0.775) at the closest zoom
+        /// while the pixel-derived halo (kAgentPickPx * scale) keeps
+        /// shrinking, so the halo keeps this floor and the outer ring stays
+        /// clickable there. The inside-test only grows, so body and
+        /// inner-ring clicks still land everywhere; nearest-center wins and
+        /// ties still go to the lower key, and no marker moves.
+        static constexpr float kAgentPickMinWorld = 0.775f;
+
+        [[nodiscard]] std::optional<u64> pickAgent_(const float2 world_xy) const noexcept {
+            if (not m_pan_controller) {
+                return std::nullopt;
+            }
+            const float radius = std::max(kAgentPickPx * m_pan_controller->getOrthoScale(), kAgentPickMinWorld);
+            std::optional<u64> best{};
+            float best_d2 = std::numeric_limits<float>::max();
+            for (const colony::AgentSummary &row: m_driver.agentSummaries()) {
+                const float dx = world_xy.x - row.m_x;
+                const float dy = world_xy.y - row.m_y;
+                const bool inside = std::abs(dx) <= 0.4f + radius and std::abs(dy) <= 0.9f + radius;
+                if (not inside) {
+                    continue;
+                }
+                const float d2 = dx * dx + dy * dy;
+                if (not best.has_value() or d2 < best_d2 or (d2 == best_d2 and row.m_key < *best)) {
+                    best = row.m_key;
+                    best_d2 = d2;
+                }
+            }
+            return best;
+        }
+
+        /// Name a selected agent on the status line (stable key + live cell).
+        void setAgentStatus_(const char *const verb, const colony::AgentSummary &row) noexcept {
+            try {
+                m_status_scratch = std::string(verb) + " colonist #" + std::to_string(row.m_key) + " at (" +
+                                   std::to_string(static_cast<int>(row.m_x)) + ", " +
+                                   std::to_string(static_cast<int>(row.m_y)) + ")";
+                setStatus_(m_status_scratch.c_str());
+            } catch (...) {
+            }
+        }
+
+        /// Pin an agent key: releases any cell pin (single selection) and
+        /// names the agent. Follow is NOT armed here; the focus intent arms
+        /// it, and a live follow retargets through refreshSelection_.
+        void selectAgent_(const colony::AgentSummary &row) noexcept {
+            m_selected_agent = row.m_key;
+            m_ui_state.m_pinned.reset();
+            setAgentStatus_("Inspecting", row);
+        }
+
+        /// Release agent selection and stop follow (Esc step, regen,
+        /// shutdown, deletion share it).
+        void clearAgentSelection_() noexcept {
+            m_selected_agent.reset();
+            stopFollow_();
+        }
+
+        /// Stop follow without touching selection; the controller target is
+        /// the single source of follow state.
+        void stopFollow_() noexcept {
+            if (m_pan_controller) {
+                m_pan_controller->setFollowTarget(std::nullopt);
+            }
+        }
+
+        /// focus_selection: teleport to the selected agent's live position
+        /// at inspection zoom, then arm follow (refreshed every frame).
+        /// Moves no agent entity; view only.
+        void focusSelectedAgent_() noexcept {
+            if (not m_selected_agent.has_value()) {
+                postNotice_("Select a colonist first", std::errc::invalid_argument);
+                return;
+            }
+            const std::optional<colony::AgentSummary> row = findAgent_(*m_selected_agent);
+            if (not row.has_value()) {
+                m_selected_agent.reset();
+                stopFollow_();
+                setStatus_("Selected colonist is gone.");
+                return;
+            }
+            if (not m_pan_controller) {
+                return;
+            }
+
+            // Inspection zoom: keep the current scale when already close
+            // (0.05 shows ~20px/cell, 0.5 keeps context). setOrthoScale
+            // cannot fail inside its own validation range.
+            const float scale = std::clamp(m_pan_controller->getOrthoScale(), 0.05f, 0.5f);
+            (void) m_pan_controller->setOrthoScale(scale);
+            m_pan_controller->focusOn(float2{row->m_x, row->m_y});
+            m_pan_controller->setFollowTarget(float3{row->m_x, row->m_y, 0.0f});
+            setAgentStatus_("Following", *row);
+        }
+
+        /// find_next (F and the panel's Find colonist button): cycle the
+        /// selection through live agents in stable-key order, wrapping, and
+        /// name the result through the same selectAgent_ path a world click
+        /// uses. Selection only - it never arms a follow.
+        void selectNextAgent_() noexcept {
+            const std::span<const colony::AgentSummary> rows = m_driver.agentSummaries();
+            if (rows.empty()) {
+                postNotice_("No colonists to select", std::errc::invalid_argument);
+                return;
+            }
+            u64 first = std::numeric_limits<u64>::max();
+            u64 next = std::numeric_limits<u64>::max();
+            for (const colony::AgentSummary &row: rows) {
+                first = std::min(first, row.m_key);
+                const bool after_current = not m_selected_agent.has_value() or row.m_key > *m_selected_agent;
+                if (after_current) {
+                    next = std::min(next, row.m_key);
+                }
+            }
+            const u64 key = next != std::numeric_limits<u64>::max() ? next : first;
+            if (const std::optional<colony::AgentSummary> row = findAgent_(key)) {
+                selectAgent_(*row);
+            }
+        }
+
+        /// Per-frame selection validation + follow refresh, ahead of the
+        /// controller update in super: a key that no longer resolves means
+        /// deletion or regeneration — clear selection and follow with a
+        /// status note. A live follow target refreshes from the live
+        /// position; a null controller target means cancelled (manual, Esc,
+        /// or focus reset) and is never re-armed here.
+        void refreshSelection_() noexcept {
+            if (not m_selected_agent.has_value()) {
+                return;
+            }
+            const std::optional<colony::AgentSummary> row = findAgent_(*m_selected_agent);
+            if (not row.has_value()) {
+                m_selected_agent.reset();
+                stopFollow_();
+                setStatus_("Selected colonist is gone.");
+                return;
+            }
+            if (m_pan_controller and m_pan_controller->getFollowTarget().has_value()) {
+                m_pan_controller->setFollowTarget(float3{row->m_x, row->m_y, 0.0f});
+            }
+        }
+
+        /// One hover resolution per frame feeding the dig preview outline,
+        /// the status line, and the Inspector: exactly the cell a click
+        /// would act on right now. A world-owned drag keeps hovering across
+        /// panels (gesture contract); any other pointer over chrome
+        /// suppresses the world read so a cell hidden behind a panel is
+        /// never reported as hover.
+        void refreshHover_() noexcept {
+            m_hover = colony::ColonyHover{};
+            // Slice 4 marker hover: cleared first, then re-resolved below.
+            // A pointer over chrome or off-world leaves it empty, so a row
+            // never mirrors a marker the pointer is no longer on.
+            m_hovered_agent.reset();
+
+            const bool world_drag = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world;
+            const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
+            m_hover.m_over_ui = not world_drag and ui and ui->hasMouseCaptureUnlessPopupClose();
+            if (m_hover.m_over_ui) {
+                m_hover.m_reason = "pointer over the panel";
+                return;
+            }
+
+            const std::optional<sim::GlobalCellPos> cell = pickCell_(m_tool.m_cursor_client);
+            if (not cell.has_value()) {
+                m_hover.m_reason = "outside the world";
+                return;
+            }
+            m_hover.m_world = true;
+            m_hover.m_target = *cell;
+
+            // The marker under the pointer is the same pick a click runs
+            // (cell centre first, agent beats wall cell, nearest, ties to
+            // the lower key), so the hovered row and the row a click would
+            // select can never disagree. Read-only: the summaries are
+            // queried, never written.
+            const float2 marker_pointer{static_cast<float>(cell->m_x) + 0.5f, static_cast<float>(cell->m_y) + 0.5f};
+            m_hovered_agent = pickAgent_(marker_pointer);
+
+            // getCell reads a non-resident chunk back as vacuum, so the dig
+            // reason needs a separate residency probe.
+            const bool resident = m_driver.grid().isResident(sim::chunkOf(*cell));
+            u16 element = colony::kElementVacuum;
+            if (const Expected<sim::Cell> read = m_driver.grid().getCell(*cell); read) {
+                element = read->m_element;
+            }
+            m_hover.m_diggable = resident and element != colony::kElementVacuum;
+            if (not m_tool.m_dig_armed) {
+                return;
+            }
+            if (not resident) {
+                m_hover.m_reason = "chunk not resident";
+            } else if (not m_hover.m_diggable) {
+                m_hover.m_reason = "vacuum: nothing to dig";
+            }
+        }
+
+        /// Slice 4 needs read: live O2/rest for the colonist rows, keyed by
+        /// the same stable agent key the summaries and the selection use
+        /// (never a row index). Rebuilt every frame from the registry so the
+        /// values are as fresh as the rows; the panel borrows them for one
+        /// frame only. Read-only: no simulation state is written, so the
+        /// snapshot stays pure.
+        void refreshAgentNeeds_() noexcept {
+            m_agent_needs_rows.clear();
+            sim::Registry &registry = m_driver.registry();
+            for (const auto &[entity, agent]: registry.view<colony::Agent>()) {
+                const colony::Needs *needs = registry.get<colony::Needs>(entity);
+                if (needs == nullptr) {
+                    continue;
+                }
+                m_agent_needs_rows.push_back(colony::AgentNeedsRow{
+                        .m_key = agent.m_key,
+                        .m_o2 = needs->m_o2,
+                        .m_rest = needs->m_rest,
+                });
+            }
+        }
+
+        /// Slice 2 deviation fix: the camera controller's viewport extent
+        /// must follow the client extent every frame (it drives
+        /// cursor-anchored zoom and world bounds). Explicit no-op while the
+        /// extent is degenerate (minimized/zero-sized window), so the last
+        /// valid extent stays in force instead of a zero push, and no-op
+        /// again once the extent is unchanged.
+        void refreshControllerViewport_() noexcept {
+            const safe_ptr<const WindowViewport> viewport = getMainViewport();
+            if (not viewport) {
+                return;
+            }
+            const int2 extent = viewport->getViewport().getClientRect().m_extent;
+            if (extent.x <= 0 or extent.y <= 0) {
+                return;
+            }
+            const float2 next{static_cast<float>(extent.x), static_cast<float>(extent.y)};
+            if (next.x == m_viewport_extent.x and next.y == m_viewport_extent.y) {
+                return;
+            }
+            m_viewport_extent = next;
+            if (m_pan_controller) {
+                m_pan_controller->setViewportSize(next);
+            }
+        }
+
+        /// Per-frame UI observation: the bounded notice countdown plus
+        /// honest inter-frame timing (dt between update() calls) for the
+        /// Performance section - never GPU time, labelled as such there.
+        /// Slice 6 appends the bounded sampler push below; percentile work
+        /// stays on the 15-frame stale cadence in refreshFrameStats_.
+        void observeFrame_(const TimeSpan dt) noexcept {
+            const float seconds = std::chrono::duration<float>(dt).count();
+            if (m_ui_state.m_notice.m_seconds_left > 0.0f) {
+                m_ui_state.m_notice.m_seconds_left -= seconds;
+                if (m_ui_state.m_notice.m_seconds_left < 0.0f) {
+                    m_ui_state.m_notice.m_seconds_left = 0.0f;
+                }
+            }
+
+            const float frame_ms = seconds * 1000.0f;
+            ++m_frame_count;
+            m_frame_ms_last = frame_ms;
+            m_frame_avg += (frame_ms - m_frame_avg) / static_cast<float>(m_frame_count);
+            if (frame_ms > m_frame_max) {
+                m_frame_max = frame_ms;
+            }
+
+            // Slice 6 sampler push (cheap per frame: one store + counters).
+            // Sampling continues while paused - frames still tick; only the
+            // sim step counters freeze, naturally, in the driver.
+            try {
+                if (m_frame_ring.capacity() < kFrameWindow) {
+                    m_frame_ring.reserve(kFrameWindow);
+                }
+                if (m_frame_ring.size() < kFrameWindow) {
+                    m_frame_ring.push_back(frame_ms);
+                } else {
+                    m_frame_ring[m_frame_head] = frame_ms;
+                }
+                m_frame_head = (m_frame_head + 1u) % kFrameWindow;
+                ++m_frame_samples;
+            } catch (...) {
+            }
+            if (m_frame_count - m_frame_stats_frame >= kFrameStatsEvery or
+                (m_frame_stats_frame == 0u and m_frame_samples > 0u)) {
+                refreshFrameStats_();
+            }
+        }
+
+        /// Slice 6 stale-copy refresh: nearest-rank p50/p95 (through the
+        /// shared core helper, same ceil-rank convention as before) plus
+        /// min, max, and over-budget count over the ring window. Runs at
+        /// most every 15 frames; allocation failure - or an empty helper
+        /// result - keeps the previous stale values.
+        void refreshFrameStats_() noexcept {
+            m_frame_stats_frame = m_frame_count;
+            const std::size_t count = m_frame_ring.size();
+            if (count == 0u) {
+                return;
+            }
+            try {
+                m_frame_sort.resize(count);
+                if (const std::optional<float> p50 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.5f)) {
+                    m_frame_p50 = *p50;
+                }
+                if (const std::optional<float> p95 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.95f)) {
+                    m_frame_p95 = *p95;
+                }
+                m_frame_min = m_frame_sort.front();
+                m_frame_window_max = m_frame_sort.back();
+                u64 over = 0u;
+                for (const float sample: m_frame_sort) {
+                    if (sample > kFrameBudgetMs) {
+                        ++over;
+                    }
+                }
+                m_frame_over = over;
+            } catch (...) {
+            }
         }
 
         [[nodiscard]] std::error_code drawPanel_() {
