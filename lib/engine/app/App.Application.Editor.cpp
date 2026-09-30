@@ -435,7 +435,7 @@ namespace pP {
 
         const safe_ptr window_service{getPlatform().getWindowService()};
         window_service->renameWindow(m_main_viewport->getWindow(),
-            std::format("{} - CPU = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
+                                     std::format("{} - Frame = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_camera->getSnapshot()));
