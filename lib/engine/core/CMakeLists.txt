@@ -82,6 +82,7 @@ target_sources(engine.core
         Core.Opaque.cpp
         Core.Service.cpp
         Core.Timer.cpp
+        Core.Utility.cpp
         ${HAL_PLATFORM_SOURCES}
 )
 

@@ -156,4 +156,17 @@ export namespace pP {
             std::forward<F>(f),
             std::make_integer_sequence<T, N>{});
     }
+
+    // ------------------------------------------------------------------
+    // nearest-rank percentile over a caller-owned scratch copy
+    // ------------------------------------------------------------------
+
+    /// Nearest-rank quantile of `samples` at fraction `q` (clamped to
+    /// [0, 1]): sorts the caller-provided `scratch` copy, which must hold
+    /// at least `samples.size()` elements, then returns the ceil-rank
+    /// element with the frame-stats convention (percent = round(q * 100),
+    /// rank = ceil(percent * count / 100), 1-indexed). Empty samples return
+    /// nullopt; only scratch[0, samples.size()) is written and sorted.
+    [[nodiscard]] std::optional<float> percentile_nearest_rank(std::span<const float> samples, std::span<float> scratch,
+                                                               float q) noexcept;
 }

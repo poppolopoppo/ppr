@@ -196,29 +196,111 @@ namespace pP::tests::detail {
             std::error_code ec{42, std::generic_category()};
             PPR_TEST_ASSERT(hasFailed(ec));
         };
+
+        PPR_UNIT_TEST(percentile_empty_nullopt) {
+            std::array<float, 4> scratch{1.0f, 2.0f, 3.0f, 4.0f};
+            const std::optional<float> result = percentile_nearest_rank({}, std::span<float>{scratch}, 0.5f);
+            PPR_TEST_ASSERT(not result.has_value());
+        };
+
+        PPR_UNIT_TEST(percentile_singleton) {
+            const std::array<float, 1> samples{7.0f};
+            std::array<float, 1> scratch{};
+            for (const float q: {0.0f, 0.5f, 0.95f, 1.0f}) {
+                const std::optional<float> result = percentile_nearest_rank(samples, std::span<float>{scratch}, q);
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(*result == 7.0f);
+            }
+        };
+
+        PPR_UNIT_TEST(percentile_odd_unsorted) {
+            const std::array<float, 5> samples{5.0f, 1.0f, 4.0f, 2.0f, 3.0f};
+            std::array<float, 5> scratch{};
+            const std::optional<float> median = percentile_nearest_rank(samples, std::span<float>{scratch}, 0.5f);
+            PPR_TEST_ASSERT(median.has_value());
+            PPR_TEST_ASSERT(*median == 3.0f);
+            // The scratch copy sorts in place: [1, 2, 3, 4, 5].
+            PPR_TEST_ASSERT(scratch[0] == 1.0f);
+            PPR_TEST_ASSERT(scratch[4] == 5.0f);
+        };
+
+        PPR_UNIT_TEST(percentile_even_ranks) {
+            const std::array<float, 4> samples{4.0f, 1.0f, 3.0f, 2.0f};
+            std::array<float, 4> scratch{};
+            // Sorted [1, 2, 3, 4]: ceil(25*4/100)-1 = 0, ceil(50*4/100)-1 = 1,
+            // ceil(75*4/100)-1 = 2, ceil(95*4/100)-1 = 3.
+            for (const auto [q, want]: {std::pair{0.25f, 1.0f}, {0.5f, 2.0f}, {0.75f, 3.0f}, {0.95f, 4.0f}}) {
+                const std::optional<float> result = percentile_nearest_rank(samples, std::span<float>{scratch}, q);
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(*result == want);
+            }
+        };
+
+        PPR_UNIT_TEST(percentile_duplicates) {
+            const std::array<float, 4> samples{3.0f, 1.0f, 3.0f, 1.0f};
+            std::array<float, 4> scratch{};
+            // Sorted [1, 1, 3, 3]: p50 lands on index 1, p95 on index 3.
+            const std::optional<float> half = percentile_nearest_rank(samples, std::span<float>{scratch}, 0.5f);
+            PPR_TEST_ASSERT(half.has_value());
+            PPR_TEST_ASSERT(*half == 1.0f);
+            const std::optional<float> high = percentile_nearest_rank(samples, std::span<float>{scratch}, 0.95f);
+            PPR_TEST_ASSERT(high.has_value());
+            PPR_TEST_ASSERT(*high == 3.0f);
+        };
+
+        PPR_UNIT_TEST(percentile_boundaries_clamp) {
+            const std::array<float, 3> samples{9.0f, 7.0f, 8.0f};
+            std::array<float, 3> scratch{};
+            // q = 0 names the minimum, q = 1 the maximum; out-of-range
+            // fractions clamp to the same ends.
+            for (const auto [q, want]: {std::pair{0.0f, 7.0f}, {-1.0f, 7.0f}, {1.0f, 9.0f}, {2.0f, 9.0f}}) {
+                const std::optional<float> result = percentile_nearest_rank(samples, std::span<float>{scratch}, q);
+                PPR_TEST_ASSERT(result.has_value());
+                PPR_TEST_ASSERT(*result == want);
+            }
+        };
+
+        PPR_UNIT_TEST(percentile_oversized_scratch) {
+            const std::array<float, 3> samples{9.0f, 7.0f, 8.0f};
+            std::array<float, 8> scratch{};
+            scratch[7] = -1.0f;
+            // Sorted [7, 8, 9]: ceil(50*3/100)-1 = 1.
+            const std::optional<float> result = percentile_nearest_rank(samples, std::span<float>{scratch}, 0.5f);
+            PPR_TEST_ASSERT(result.has_value());
+            PPR_TEST_ASSERT(*result == 8.0f);
+            // Elements past the sample count are never touched.
+            PPR_TEST_ASSERT(scratch[7] == -1.0f);
+        };
     }
 } // namespace pP::tests::detail
 
 namespace pP::tests {
     const UnitTest utility = UnitTest::Named("utility") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            detail::Utility::divide_round_up_basic,
-            detail::Utility::align_backward_basic,
-            detail::Utility::align_forward_basic,
-            detail::Utility::align_forward_align_val,
-            detail::Utility::align_pointer_forward,
-            detail::Utility::align_pointer_backward,
-            detail::Utility::alignment_traits,
-            detail::Utility::bit_count,
-            detail::Utility::static_iota_sum,
-            detail::Utility::static_iota_typed,
-            detail::Utility::static_iota_empty,
-            detail::Utility::static_iota_fill_array,
-            detail::Utility::static_iota_compile_types,
-            detail::Utility::shuffle_context_seed,
-            detail::Utility::errc_not_found_is_error,
-            detail::Utility::failed_ec_zero_returns_false,
-            detail::Utility::failed_ec_nonzero_returns_true,
+                detail::Utility::divide_round_up_basic,
+                detail::Utility::align_backward_basic,
+                detail::Utility::align_forward_basic,
+                detail::Utility::align_forward_align_val,
+                detail::Utility::align_pointer_forward,
+                detail::Utility::align_pointer_backward,
+                detail::Utility::alignment_traits,
+                detail::Utility::bit_count,
+                detail::Utility::static_iota_sum,
+                detail::Utility::static_iota_typed,
+                detail::Utility::static_iota_empty,
+                detail::Utility::static_iota_fill_array,
+                detail::Utility::static_iota_compile_types,
+                detail::Utility::shuffle_context_seed,
+                detail::Utility::errc_not_found_is_error,
+                detail::Utility::failed_ec_zero_returns_false,
+                detail::Utility::failed_ec_nonzero_returns_true,
+                detail::Utility::percentile_empty_nullopt,
+                detail::Utility::percentile_singleton,
+                detail::Utility::percentile_odd_unsorted,
+                detail::Utility::percentile_even_ranks,
+                detail::Utility::percentile_duplicates,
+                detail::Utility::percentile_boundaries_clamp,
+                detail::Utility::percentile_oversized_scratch,
         });
     };
 
