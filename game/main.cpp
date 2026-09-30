@@ -1454,19 +1454,122 @@ namespace demo {
             const u32 visible = safe_narrowing(plan->m_tiles.size());
             const colony::PathCounts paths = m_driver.pathCounts();
             const std::span<const sim::ChunkPos> edits = m_driver.lastEditChunks();
-            colony::drawColonyPanel(m_driver, colony::ColonyPanelCounts{
-                .m_visible_chunks = visible,
-                .m_visible_tiles = visible,
-                .m_paths = paths.m_paths,
-                .m_partials = paths.m_partials,
-                .m_blocked = paths.m_blocked,
-                .m_errands = m_driver.errandCount(),
-                .m_dug_total = m_driver.digTotal(),
-                .m_wake_radius = colony::kDigWakeCells,
-                .m_affected_chunks = safe_narrowing(edits.size()),
-                .m_dig_mode = m_dig_mode,
-                .m_show_highlight = m_show_highlight,
-            });
+
+            // Slice 4 read-outs gathered for the panel: live needs keyed by
+            // stable agent key, and the follow flag taken from the one
+            // source of truth (the controller's follow target), so the Stop
+            // following control only exists while a follow is actually armed.
+            refreshAgentNeeds_();
+            const bool following = m_pan_controller and m_pan_controller->getFollowTarget().has_value();
+
+            // Slice 5 preview read-out for the tool strip: only a rect that
+            // would actually commit reports a size - a press outside the
+            // world never produced one, and its stored corners are a
+            // placeholder that would lie about the footprint.
+            const bool preview_rect = m_build_preview.m_active and m_build_preview.m_reason[0] == '\0';
+            const u32 preview_w = preview_rect ? m_build_preview.m_max.m_x - m_build_preview.m_min.m_x + 1u : 0u;
+            const u32 preview_h = preview_rect ? m_build_preview.m_max.m_y - m_build_preview.m_min.m_y + 1u : 0u;
+
+            // Slice 6 simulation read-outs: tick rate is derived from the
+            // driver's own counters (1000 * ticks / simMs); simMs is
+            // SIMULATED time (tick * period), never CPU. The dig pending
+            // estimate is issued-minus-applied clamped at zero (an upper
+            // bound - the driver FIFO sheds under overflow).
+            const u64 tick_count = m_driver.tickCount();
+            const double sim_ms = m_driver.simMs();
+            const double tick_hz =
+                    tick_count > 0u and sim_ms > 0.0 ? 1000.0 * static_cast<double>(tick_count) / sim_ms : 0.0;
+            const u64 window_samples =
+                    m_frame_samples < static_cast<u64>(kFrameWindow) ? m_frame_samples : static_cast<u64>(kFrameWindow);
+            const u64 dig_applied = static_cast<u64>(m_driver.digTotal());
+            const u64 dig_pending_est = m_dig_issued >= dig_applied ? m_dig_issued - dig_applied : 0u;
+
+            // One read-only view assembled from live state; the panel never
+            // touches simulation state and returns at most one intent.
+            const colony::ColonyUiView view{
+                    .m_counts =
+                            colony::ColonyPanelCounts{
+                                    .m_visible_chunks = visible,
+                                    .m_visible_tiles = visible,
+                                    .m_paths = paths.m_paths,
+                                    .m_partials = paths.m_partials,
+                                    .m_blocked = paths.m_blocked,
+                                    .m_errands = m_driver.errandCount(),
+                                    .m_dug_total = m_driver.digTotal(),
+                                    .m_wake_radius = colony::kDigWakeCells,
+                                    .m_affected_chunks = safe_narrowing(edits.size()),
+                                    .m_dig_mode = m_tool.m_dig_armed,
+                                    .m_show_highlight = m_show_highlight,
+                            },
+                    .m_hover = m_hover,
+                    .m_perf =
+                            colony::ColonyPerfView{
+                                    .m_frame_ms = m_frame_ms_last,
+                                    .m_avg_frame_ms = m_frame_avg,
+                                    .m_max_frame_ms = m_frame_max,
+                                    .m_frames = m_frame_count,
+                                    .m_p50_ms = m_frame_p50,
+                                    .m_p95_ms = m_frame_p95,
+                                    .m_min_ms = m_frame_min,
+                                    .m_window_max_ms = m_frame_window_max,
+                                    .m_over_budget = m_frame_over,
+                                    .m_window_samples = window_samples,
+                                    .m_window_def = static_cast<u32>(kFrameWindow),
+                                    .m_tick_hz = tick_hz,
+                                    .m_tick_count = tick_count,
+                                    .m_sim_ms = sim_ms,
+                                    .m_paused = m_driver.paused(),
+                                    .m_speed = m_driver.speed(),
+                                    .m_submitted_chunks = m_translator.submittedChunks(),
+                                    .m_total_chunks = colony::ColonyTranslator::totalChunks(),
+                                    .m_staged_tiles = getGridPass().stagedTileCount(),
+                                    .m_cached_tiles = getGridPass().cachedTileCount(),
+                                    .m_last_edit_chunks = safe_narrowing(edits.size()),
+                                    .m_dirty_chunks = grid.dirtyChunkCount(),
+                                    .m_collider_pending = static_cast<u64>(m_driver.colliderPending()),
+                                    .m_live_errands = m_driver.errandCount(),
+                                    .m_dig_issued = m_dig_issued,
+                                    .m_dig_pending_est = dig_pending_est,
+                                    .m_gpu_validation = IRhiService::get()->isGpuAssistedValidationEnabled(),
+                            },
+                    .m_preview =
+                            colony::ColonyPreviewView{
+                                    .m_active = m_build_preview.m_active,
+                                    .m_clamped = m_build_preview.m_clamped,
+                                    .m_width = preview_w,
+                                    .m_height = preview_h,
+                                    .m_max_edge = colony::kMaxFootprintEdge,
+                                    .m_reason = m_build_preview.m_reason,
+                                    .m_clamped_x = m_build_preview.m_clamped_x,
+                                    .m_clamped_y = m_build_preview.m_clamped_y,
+                            },
+                    .m_selected_agent = m_selected_agent,
+                    .m_hovered_agent = m_hovered_agent,
+                    .m_following = following,
+                    .m_agent_needs = m_agent_needs_rows,
+                    .m_driver_stages = std::span<const colony::StageStat>{m_driver.stageTimings().m_stats},
+                    .m_presentation_stages = std::span<const colony::StageStat>{m_translator.stageTimings().m_stats},
+            };
+
+            const colony::ColonyUiFrame frame = colony::drawColonyUi(m_driver, view, m_shortcut_rows, m_ui_state);
+            if (frame.m_intent.has_value()) {
+                dispatchIntent_(*frame.m_intent);
+            }
+            // Hand the keyboard back after a completed chrome click so the
+            // colony shortcuts regain capture (mirrors the engine's
+            // background-click deselect). The panel never asks while a
+            // popup is open: a null focus request closes every popup.
+            if (frame.m_focus_release) {
+                if (const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>(); ui) {
+                    if (const std::error_code error = ui->clearWindowFocus()) {
+                        return error;
+                    }
+                }
+            }
+            // Screen-space feedback (rings/outlines/preview) draws on the
+            // non-consuming foreground list after chrome, clipped to the
+            // world region; input routing is untouched.
+            drawFeedbackOverlay_(frame);
             return {};
         }
 
@@ -1638,12 +1741,21 @@ namespace demo {
             // Put the temperate world center in the middle of the visible pixel extent.
             const float half_width = static_cast<float>(client.m_extent.x) * ortho_scale * 0.5f;
             const float half_height = static_cast<float>(client.m_extent.y) * ortho_scale * 0.5f;
+            // Slice 2 fixed-plane camera: world bounds keep the colony
+            // on-screen at every zoom; the extent feeds cursor-anchored zoom
+            // and bounds. refreshControllerViewport_() in update() now
+            // follows client-extent changes every frame (Slice 3 fix).
+            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setWorldBounds(
+                                                   float2{0.0f, 0.0f}, float2{static_cast<float>(sim::kWorldEdge),
+                                                                              static_cast<float>(sim::kWorldEdge)}));
+            camera_controller->setViewportSize(
+                    float2{static_cast<float>(client.m_extent.x), static_cast<float>(client.m_extent.y)});
             camera_controller->translate(float3{2048.0f - half_width, 2048.0f - half_height, -0.5f}, true);
             // Stash a non-owning view for the scripted pan route (the editor
             // owns the controller after the move below).
             m_pan_controller.reset(camera_controller.get());
-            PPR_RETURN_ERROR_ON_FAIL(Demo, replaceMainCameraController(std::move(camera_controller),
-                ECameraProjection::orthographic));
+            PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, replaceMainCameraController(std::move(camera_controller), ECameraProjection::orthographic));
 
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
@@ -1701,10 +1813,10 @@ namespace demo {
             const float c = std::cos(angle);
             const float s = std::sin(angle);
             return float4x4{
-                float4{sx * c, sx * s, 0.0f, 0.0f},
-                float4{-sy * s, sy * c, 0.0f, 0.0f},
-                float4{0.0f, 0.0f, 1.0f, 0.0f},
-                float4{x, y, 0.5f, 1.0f},
+                    float4{sx * c, sx * s, 0.0f, 0.0f},
+                    float4{-sy * s, sy * c, 0.0f, 0.0f},
+                    float4{0.0f, 0.0f, 1.0f, 0.0f},
+                    float4{x, y, -0.25f, 1.0f},
             };
         }
 
@@ -1732,6 +1844,302 @@ namespace demo {
             return {};
         }
 
+        /// One band (a single quad) through the shared bag and an existing
+        /// material. Serves the grid overlay and the edit/wake chunk
+        /// outlines that remain in the pass (no new GPU handles).
+        [[nodiscard]] std::error_code submitBand_(TrianglePass &pass, const float cx, const float cy, const float sx,
+                                                  const float sy, const MaterialHandle material) {
+            return pass.submitInstance(m_quad_bag, material, debugModel_(cx, cy, 0.0f, sx, sy));
+        }
+
+        /// Screen-space feedback palette: the same cyan/orange the debug-draw
+        /// materials use, so overlay, chrome, and (remaining) world outlines
+        /// agree. Cyan marks selection and diggable/pinned structure; orange
+        /// marks hover and the footprint preview.
+        inline static const ImU32 kFeedbackCyan = ImGui::ColorConvertFloat4ToU32(ImVec4{0.2f, 0.9f, 0.9f, 1.0f});
+        inline static const ImU32 kFeedbackOrange = ImGui::ColorConvertFloat4ToU32(ImVec4{1.0f, 0.55f, 0.15f, 1.0f});
+
+        /// Projection-derived pixels per world unit at a world point: two
+        /// unit-separated points through the same forward formula the pick
+        /// inverts, so screen-space line weights match the old
+        /// pixel-derived band at every zoom with no second mapping.
+        [[nodiscard]] static std::optional<float> overlayPixelsPerWorld_(const ScreenMap &map,
+                                                                         const float2 at) noexcept {
+            const std::optional<float2> origin = map.worldToClient(at);
+            const std::optional<float2> unit_x = map.worldToClient(float2{at.x + 1.0f, at.y});
+            if (not origin.has_value() or not unit_x.has_value()) {
+                return std::nullopt;
+            }
+            const float ppw = std::abs(unit_x->x - origin->x);
+            if (not (ppw > 0.0f) or not std::isfinite(ppw)) {
+                return std::nullopt;
+            }
+            return ppw;
+        }
+
+        /// Project a world rect to ImGui coords. The ortho map is
+        /// axis-aligned, so projecting two opposite corners is the whole
+        /// rect; false when any corner has no screen position (degenerate
+        /// or behind-camera), and the caller skips that shape.
+        [[nodiscard]] static bool overlayProjectRect_(const ScreenMap &map, const float x0, const float y0,
+                                                      const float x1, const float y1, ImVec2 &min_out,
+                                                      ImVec2 &max_out) noexcept {
+            const std::optional<float2> a = map.worldToClient(float2{x0, y0});
+            const std::optional<float2> b = map.worldToClient(float2{x1, y1});
+            if (not a.has_value() or not b.has_value()) {
+                return false;
+            }
+            min_out = ImVec2{std::min(a->x, b->x), std::min(a->y, b->y)};
+            max_out = ImVec2{std::max(a->x, b->x), std::max(a->y, b->y)};
+            return true;
+        }
+
+        /// One rectangular outline in screen space: an ImGui rect border
+        /// whose thickness centres on the edge, matching the old bands that
+        /// straddled the rect edges half in and half out.
+        static void overlayRectBorder_(ImDrawList *const draw, const ScreenMap &map, const float cx, const float cy,
+                                       const float hx, const float hy, const float band_world,
+                                       const ImU32 color) noexcept {
+            if (draw == nullptr) {
+                return;
+            }
+            ImVec2 min{};
+            ImVec2 max{};
+            if (not overlayProjectRect_(map, cx - hx, cy - hy, cx + hx, cy + hy, min, max)) {
+                return;
+            }
+            const std::optional<float> ppw = overlayPixelsPerWorld_(map, float2{cx, cy});
+            if (not ppw.has_value()) {
+                return;
+            }
+            draw->AddRect(min, max, color, 0.0f, ImDrawFlags_None, band_world * *ppw);
+        }
+
+        /// One hovered/pinned cell outline: the shared rect-border helper at
+        /// the cell centre with half extents 0.5 and the standing 0.5-cell
+        /// band, exactly as before.
+        static void overlayCellBorder_(ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell,
+                                       const ImU32 color) noexcept {
+            overlayRectBorder_(draw, map, static_cast<float>(cell.m_x) + 0.5f, static_cast<float>(cell.m_y) + 0.5f,
+                               0.5f, 0.5f, 0.5f, color);
+        }
+
+        /// Footprint preview in screen space: the inclusive min/max corners
+        /// become one rect outlined at the same pixel-derived band the
+        /// marker rings use, in the build palette's orange, with the same
+        /// three states as before (valid solid, clamped with badges on the
+        /// capped sides, invalid broken with corner gaps). The reason stays
+        /// text in the tool strip, never drawn into the world.
+        void overlayFootprintPreview_(ImDrawList *const draw, const ScreenMap &map) noexcept {
+            if (draw == nullptr) {
+                return;
+            }
+            const bool committable = m_build_preview.m_reason[0] == '\0';
+            if (not committable and not m_tool.m_footprint_anchor.has_value()) {
+                return;
+            }
+
+            const float x0 = static_cast<float>(m_build_preview.m_min.m_x);
+            const float y0 = static_cast<float>(m_build_preview.m_min.m_y);
+            const float x1 = static_cast<float>(m_build_preview.m_max.m_x) + 1.0f;
+            const float y1 = static_cast<float>(m_build_preview.m_max.m_y) + 1.0f;
+            const float cx = (x0 + x1) * 0.5f;
+            const float cy = (y0 + y1) * 0.5f;
+            const float w = x1 - x0;
+            const float h = y1 - y0;
+
+            const float scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
+            const float band = std::clamp(scale * 1.5f, 0.25f, 0.75f);
+            const float gap = std::clamp(scale * 1.0f, 0.10f, 0.50f);
+
+            if (not committable) {
+                // Broken outline: each side at 62% length leaves visible
+                // gaps at the corners, and the thinner band sits below the
+                // solid weight without ever vanishing at any zoom.
+                constexpr float kSpan = 0.62f;
+                const float thin = std::max(band * 0.55f, 0.15f);
+                const std::optional<float> ppw = overlayPixelsPerWorld_(map, float2{cx, cy});
+                if (not ppw.has_value()) {
+                    return;
+                }
+                const float thickness = thin * *ppw;
+                const std::optional<float2> top_a = map.worldToClient(float2{cx - w * kSpan * 0.5f, y0});
+                const std::optional<float2> top_b = map.worldToClient(float2{cx + w * kSpan * 0.5f, y0});
+                const std::optional<float2> bottom_a = map.worldToClient(float2{cx - w * kSpan * 0.5f, y1});
+                const std::optional<float2> bottom_b = map.worldToClient(float2{cx + w * kSpan * 0.5f, y1});
+                const std::optional<float2> left_a = map.worldToClient(float2{x0, cy - h * kSpan * 0.5f});
+                const std::optional<float2> left_b = map.worldToClient(float2{x0, cy + h * kSpan * 0.5f});
+                const std::optional<float2> right_a = map.worldToClient(float2{x1, cy - h * kSpan * 0.5f});
+                const std::optional<float2> right_b = map.worldToClient(float2{x1, cy + h * kSpan * 0.5f});
+                const bool complete = top_a.has_value() and top_b.has_value() and bottom_a.has_value() and
+                                      bottom_b.has_value() and left_a.has_value() and left_b.has_value() and
+                                      right_a.has_value() and right_b.has_value();
+                if (not complete) {
+                    return;
+                }
+                draw->AddLine(ImVec2{top_a->x, top_a->y}, ImVec2{top_b->x, top_b->y}, kFeedbackOrange, thickness);
+                draw->AddLine(ImVec2{bottom_a->x, bottom_a->y}, ImVec2{bottom_b->x, bottom_b->y}, kFeedbackOrange,
+                              thickness);
+                draw->AddLine(ImVec2{left_a->x, left_a->y}, ImVec2{left_b->x, left_b->y}, kFeedbackOrange, thickness);
+                draw->AddLine(ImVec2{right_a->x, right_a->y}, ImVec2{right_b->x, right_b->y}, kFeedbackOrange,
+                              thickness);
+                return;
+            }
+
+            overlayRectBorder_(draw, map, cx, cy, w * 0.5f, h * 0.5f, band, kFeedbackOrange);
+            if (not m_build_preview.m_clamped) {
+                return;
+            }
+
+            // Clamp badges: a 1.8x stroke laid one gap outside each cap
+            // edge (outside = the direction the drag kept wanting to go),
+            // flush with the outline's own ends. An axis is only badged
+            // when it was actually cut back (its own clamped flag) and sits
+            // at the cap, so a naturally full-width axis is never badged;
+            // the badged side is the one away from the anchored corner -
+            // the side the clamp gave back. The strip reports the same cap
+            // in words, so the badge never carries the meaning alone.
+            const bool cap_x = m_build_preview.m_clamped_x and (w == static_cast<float>(colony::kMaxFootprintEdge));
+            const bool cap_y = m_build_preview.m_clamped_y and (h == static_cast<float>(colony::kMaxFootprintEdge));
+            if (not cap_x and not cap_y) {
+                return;
+            }
+
+            const float badge = band * 1.8f;
+            const float offset = band * 0.5f + gap + badge * 0.5f;
+            if (cap_x) {
+                const bool cut_max_x = m_build_preview.m_anchor.m_x == m_build_preview.m_min.m_x;
+                const float edge = cut_max_x ? x1 : x0;
+                const float dir = cut_max_x ? offset : -offset;
+                ImVec2 min{};
+                ImVec2 max{};
+                if (overlayProjectRect_(map, edge + dir - badge * 0.5f, cy - (h + band) * 0.5f,
+                                        edge + dir + badge * 0.5f, cy + (h + band) * 0.5f, min, max)) {
+                    draw->AddRectFilled(min, max, kFeedbackOrange);
+                }
+            }
+            if (cap_y) {
+                const bool cut_max_y = m_build_preview.m_anchor.m_y == m_build_preview.m_min.m_y;
+                const float edge = cut_max_y ? y1 : y0;
+                const float dir = cut_max_y ? offset : -offset;
+                ImVec2 min{};
+                ImVec2 max{};
+                if (overlayProjectRect_(map, cx - (w + band) * 0.5f, edge + dir - badge * 0.5f, cx + (w + band) * 0.5f,
+                                        edge + dir + badge * 0.5f, min, max)) {
+                    draw->AddRectFilled(min, max, kFeedbackOrange);
+                }
+            }
+        }
+
+        /// Screen-space feedback on the non-consuming ImGui foreground draw
+        /// list: no window, no capture, input routing untouched. Bound to
+        /// live agents plus hover, selection, and the active preview.
+        /// Chrome-occlusion policy: feedback is CLIPPED to the world region
+        /// and never drawn over panels. The clip rect outer bounds come from
+        /// the real framebuffer-space viewport rect (client extent times the
+        /// content scale) converted to ImGui coords through
+        /// DisplayFramebufferScale — verified against the ImGui service
+        /// setup, which sets DisplaySize from the client extent and
+        /// DisplayFramebufferScale from the content scale — outward-rounded
+        /// so the clip stays conservative, then inset by this frame's panel
+        /// chrome (top bar, status line, side panel). A viewport/IO mismatch
+        /// skips the overlay rather than misplacing feedback.
+        void drawFeedbackOverlay_(const colony::ColonyUiFrame &frame) noexcept {
+            try {
+                const ScreenMap map = screenMap_();
+                if (not map.m_valid) {
+                    return;
+                }
+                const ImGuiIO &io = ImGui::GetIO();
+                if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
+                    return;
+                }
+                const bool extent_match = std::abs(io.DisplaySize.x - map.m_extent.x) <= 1.0f and
+                                          std::abs(io.DisplaySize.y - map.m_extent.y) <= 1.0f;
+                if (not extent_match) {
+                    return;
+                }
+                if (io.DisplayFramebufferScale.x <= 0.0f or io.DisplayFramebufferScale.y <= 0.0f) {
+                    return;
+                }
+                ImDrawList *draw = ImGui::GetForegroundDrawList();
+                if (draw == nullptr) {
+                    return;
+                }
+
+                // Clip source: framebuffer viewport rect to ImGui coords.
+                const float fb_w = map.m_extent.x * io.DisplayFramebufferScale.x;
+                const float fb_h = map.m_extent.y * io.DisplayFramebufferScale.y;
+                const float ui_w = fb_w / io.DisplayFramebufferScale.x;
+                const float ui_h = fb_h / io.DisplayFramebufferScale.y;
+                const ImVec2 clip_min{0.0f, frame.m_chrome_top};
+                const ImVec2 clip_max{std::ceil(ui_w) - frame.m_chrome_right, std::ceil(ui_h) - frame.m_chrome_bottom};
+                const bool clip_ok = clip_max.x > clip_min.x and clip_max.y > clip_min.y;
+                if (not clip_ok) {
+                    return;
+                }
+                draw->PushClipRect(clip_min, clip_max, true);
+
+                // Colonist outlines, one treatment per agent — a persistent
+                // selection outranks a transient hover, so the two never draw
+                // on top of each other. Band and gaps keep the standing
+                // pixel-derived formulas, so the weights match at every zoom;
+                // the ring centre sits one gap outside the body plus half a
+                // band, derived from the same 0.4 x 0.9 halves the hit-test
+                // uses. The bolder hover band grows inward no further than
+                // the body edge (gap >= 0.4 * band at every clamped zoom), so
+                // it never covers the marker it outlines.
+                const float scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
+                const float band = std::clamp(scale * 1.5f, 0.25f, 0.75f);
+                const float gap = std::clamp(scale * 1.0f, 0.10f, 0.50f);
+                const float outer_gap = std::clamp(scale * 3.0f, 0.30f, 1.50f);
+                for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
+                    // Ring centre sits one gap outside the body, plus half a band.
+                    const float ring_x = 0.4f + gap + band * 0.5f;
+                    const float ring_y = 0.9f + gap + band * 0.5f;
+
+                    if (agent.m_key == m_selected_agent) {
+                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
+                        // Outer ring: one outer_gap clear of the inner ring's
+                        // outer edge, same band width.
+                        const float outer_x = ring_x + outer_gap + band;
+                        const float outer_y = ring_y + outer_gap + band;
+                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
+                    } else if (agent.m_key == m_hovered_agent) {
+                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f,
+                                           kFeedbackOrange);
+                    } else {
+                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
+                    }
+                }
+
+                // Pointer preview in the same order the pass submission used:
+                // a held footprint drag outlines the rect being sized (most
+                // specific state first, dig stays out while a footprint tool
+                // is active); the pinned outline stays independent of the
+                // drag preview (both draw, the preview on top), so a held
+                // drag never hides the pin; while dig is armed, the cell a
+                // click would dig draws (cyan when diggable, agent orange
+                // when it would not land); otherwise the pinned cell draws.
+                const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                            m_ui_state.m_tool == colony::EColonyTool::demolish;
+                if (m_build_preview.m_active and footprint_tool) {
+                    if (m_ui_state.m_pinned.has_value()) {
+                        overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
+                    }
+                    overlayFootprintPreview_(draw, map);
+                } else if (m_tool.m_dig_armed and m_hover.m_world) {
+                    const ImU32 color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
+                    overlayCellBorder_(draw, map, m_hover.m_target, color);
+                } else if (m_ui_state.m_pinned.has_value()) {
+                    overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
+                }
+
+                draw->PopClipRect();
+            } catch (...) {
+            }
+        }
+
         [[nodiscard]] std::error_code submitDebugInstances_() {
             TrianglePass &pass = getTrianglePass();
             pass.clearInstances();
@@ -1739,13 +2147,53 @@ namespace demo {
                 return {};
             }
 
+            // Slice 6 chunk grid overlay (V, off by default): one band
+            // straddling every chunk boundary across the live world, and it
+            // is submitted first so every body, path, and edit outline below
+            // draws on top of it. The weight is half the old marker band's
+            // while still coming from the same pixel-derived clamp, so the
+            // grid stays a quiet reference at
+            // every zoom (it never bloats close-in, never vanishes
+            // zoomed-out, and never outshines a marker), and
+            // cyan keeps it in the structural language shared by paths and
+            // markers. Where it meets an edited
+            // chunk's own outline (H) the two are the same line: that
+            // outline is the fixed 0.5-cell stroke, always the heavier of
+            // the pair, so the edit still reads as the marked one. The
+            // band helper and the shared quad bag/materials are reused -
+            // no new GPU handles.
+            if (m_show_grid) {
+                const float grid_scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
+                const float grid_band = std::max(std::clamp(grid_scale * 1.5f, 0.25f, 0.75f) * 0.5f, 0.10f);
+                const float world_half = static_cast<float>(sim::kWorldEdge) * 0.5f;
+                const float stroke = grid_band * 0.5f;
+                for (u32 line = 0u; line <= sim::kChunksPerEdge; ++line) {
+                    const float at = static_cast<float>(line * sim::kChunkEdge);
+
+                    // Horizontal (y = at) and vertical (x = at) lines, each
+                    // centred on the boundary and spanning the whole world.
+                    if (const std::error_code error =
+                                submitBand_(pass, world_half, at, world_half, stroke, m_path_material)) {
+                        return error;
+                    }
+                    if (const std::error_code error =
+                                submitBand_(pass, at, world_half, stroke, world_half, m_path_material)) {
+                        return error;
+                    }
+                }
+            }
+
             for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
-                if (const std::error_code error =
-                        pass.submitInstance(m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
+                if (const std::error_code error = pass.submitInstance(
+                            m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
                     return error;
                 }
             }
 
+            // Agent rings, hover/selection outlines, and the pointer
+            // preview now draw in the screen-space feedback overlay
+            // (drawFeedbackOverlay_); the pass keeps bodies, paths, the grid
+            // overlay, and the edit/wake outlines below.
             sim::Registry &registry = m_driver.registry();
             for (const auto &[entity, agent]: registry.view<colony::Agent>()) {
                 (void) agent;
@@ -1793,6 +2241,10 @@ namespace demo {
                     }
                 }
             }
+
+            // Pointer preview (dig/pinned outlines, footprint preview) now
+            // draws in the screen-space feedback overlay; the pass keeps the
+            // edit/wake outlines above.
             return {};
         }
 
