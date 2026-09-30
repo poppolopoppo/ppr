@@ -95,7 +95,11 @@ namespace pP {
             static_cast<int>(EInputListenerPriority::player),
             static_cast<int>(EInputListenerPriority::detector));
 
-        m_device_disconnected_handle = input_service->whenDeviceDisconnected([this](const IInputDevice &) noexcept {
+        // Lifetime rule: the broadcast stores a non-owning function_ref
+        // view, so the member below owns the callable; it is assigned
+        // before subscribing a view of it, and the handle is reset in
+        // shutdown() before member destruction.
+        m_on_device_disconnected = [this](const IInputDevice &) noexcept {
             // Session reset (Routing latch) is separate from motion reset (controller).
             if (m_input_background_latch) {
                 m_input_background_latch->resetInputState();
@@ -104,7 +108,8 @@ namespace pP {
                 m_camera_controller->resetInputState();
             }
             return default_value_v;
-        });
+        };
+        m_device_disconnected_handle = input_service->whenDeviceDisconnected(m_on_device_disconnected);
 
         ServicesStore &app_services = getServices();
         const safe_ptr<IRhiService> rhi_service{app_services.inject()};

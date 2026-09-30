@@ -16,6 +16,7 @@ import std;
 export namespace pP {
     class GridPass;
     class ICameraController;
+    class IInputDevice;
     class InputBackgroundLatch;
     class InputMapping;
     class TrianglePass;
@@ -102,6 +103,11 @@ export namespace pP {
         std::unique_ptr<InputBackgroundLatch> m_input_background_latch{};
 
         IInputService::DeviceCallback::Handle m_device_disconnected_handle{};
+        // Lifetime rule: the device-disconnected broadcast stores a
+        // non-owning function_ref view, so this member owns the callable;
+        // initialize() assigns it before subscribing a view of it, and
+        // shutdown() resets the handle before member destruction.
+        std23::move_only_function<std::error_code(const IInputDevice &)> m_on_device_disconnected{};
         bool m_input_latch_initialized{false};
     };
 }
