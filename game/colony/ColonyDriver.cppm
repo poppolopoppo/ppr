@@ -70,7 +70,11 @@ export namespace pP::colony {
         Array<sim::ChunkPos> m_present_dirty{};
         Array<sim::ChunkPos> m_collider_dirty{};
         DigStats m_dig_stats{};
-        std::optional<PendingDig> m_pending_dig{};
+        // Bounded FIFO of accepted dig rects (drop-oldest past
+        // kMaxPendingDigs); drained one rect per tool-system tick in
+        // accept order. Transient intent only — never snapshotted.
+        static constexpr std::size_t kMaxPendingDigs = 256u;
+        Array<PendingDig> m_pending_digs{};
         Array<sim::ChunkPos> m_collider_covered{};
         /// Collider view cache (H1 Slice 6: split expensive preparation from
         /// the cheap per-tick drain). Key = sorted `needed` array +

@@ -575,7 +575,10 @@ namespace pP::colony {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
-        m_pending_dig = PendingDig{.m_min = min, .m_width = width, .m_height = height};
+        if (m_pending_digs.size() >= kMaxPendingDigs) {
+            m_pending_digs.erase(m_pending_digs.begin());
+        }
+        m_pending_digs.push_back(PendingDig{.m_min = min, .m_width = width, .m_height = height});
         return {};
     }
 
@@ -623,12 +626,12 @@ namespace pP::colony {
     void ColonyDriver::applyToolEdits() noexcept {
         const hal::ProfileScope scope_tool{"Colony.Tool"};
         const StageTimer timer_tool{m_timings, Stage::Tool};
-        if (not m_pending_dig) {
+        if (m_pending_digs.empty()) {
             return;
         }
 
-        const PendingDig pending = *m_pending_dig;
-        m_pending_dig.reset();
+        const PendingDig pending = m_pending_digs.front();
+        m_pending_digs.erase(m_pending_digs.begin());
         if (const std::error_code error = applyDig(pending)) {
             if (not m_step_error) {
                 m_step_error = error;
@@ -716,7 +719,7 @@ namespace pP::colony {
     void ColonyDriver::clearToolState() noexcept {
         m_present_dirty = Array<sim::ChunkPos>{};
         m_collider_dirty = Array<sim::ChunkPos>{};
-        m_pending_dig.reset();
+        m_pending_digs.clear();
         m_dig_stats.m_dug_total = 0u;
         m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
         invalidateColliderCache();
@@ -828,13 +831,13 @@ namespace pP::colony {
     void ColonyDriver::refreshAgents() {
         m_agents = Array<AgentSummary>{};
         for (const auto &[entity, agent]: m_registry.view<Agent>()) {
-            (void) agent;
             const sim::BodyState *pose = m_registry.get<sim::BodyState>(entity);
             if (pose == nullptr) {
                 continue;
             }
             const Plan *plan = m_registry.get<Plan>(entity);
             AgentSummary row{};
+            row.m_key = agent.m_key;
             row.m_x = pose->m_x;
             row.m_y = pose->m_y;
             row.m_has_plan = plan != nullptr;
