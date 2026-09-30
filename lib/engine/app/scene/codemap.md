@@ -5,7 +5,10 @@
 The `engine.app:scene.camera` module provides the camera home for the app layer: `Camera` (pose + projection state,
 velocities, jitter, frusta) plus its controller hierarchy, publishing `CameraSnapshot` for downstream consumers.
 This directory provides `engine.app:scene.camera` and `engine.app:scene.camera.controller` only — there is no
-`:scene` partition. Moved here from `lib/engine/app/camera/` (`App.Camera.cpp/.cppm` deleted); the old
+`:scene` partition. `App.Scene.World.cppm` (`engine.app:scene.world`: `IWorld` collision/picking interface with
+`initialize/shutdown/update` + `traceRay` returning `optional<WorldHitResult>`) exists on disk but is registered in
+neither `CMakeLists.txt` nor `App.cppm`, so it is not part of the build and the built module still exposes camera +
+controller only. Moved here from `lib/engine/app/camera/` (`App.Camera.cpp/.cppm` deleted); the old
 location no longer exists.
 
 ## Design
@@ -15,10 +18,11 @@ location no longer exists.
 - **CameraSnapshot** — `CameraModel` plus derived matrices (`m_view`, `m_projection`, `m_view_projection` and
   inverses, jittered variants), basis vectors (`m_right`/`m_up`/`m_forward`), viewport size/aspect, `m_jitter` NDC
   offset, `m_frustum`/`m_ray_frustum`, and `m_revision`.
-- **Camera::updateModel(dt, new_model, viewport)** — asserts normalized basis and valid fov/depth range; returns early
+- **Camera::updateModel(dt, new_model, viewport)** — asserts normalized basis, valid fov/depth range, and finite
+  positive `m_ortho_scale`; returns early
   on degenerate (zero-extent) viewports keeping prior state; shifts previous snapshot, bumps/resets `m_revision` (first
   frame and any cut reset to 0), derives basis vectors via `quaternionTransform`, builds the view matrix via
-  `float4x4::lookat` (`App.Scene.Camera.cpp:83`), selects perspective (`rhi::getPerspectiveMatrix`) / ortho
+  `float4x4::lookat` (`App.Scene.Camera.cpp:93`), selects perspective (`rhi::getPerspectiveMatrix`) / ortho
   (`rhi::getOrthoMatrix`, viewport extents scaled by `m_ortho_scale`) projection, then composes `m_view * m_projection` with inverses; converts the active jitter
   pixel offset to NDC (`pixel / (size / 2)`) and composes `projection * makeJitterMatrix`; pins frusta to the unjittered
   D3D `[0,1]`-remapped VP (`makeZeroToOneFrustum`, `RayFrustum` over the same corrected matrix); zeroes velocities on
@@ -26,6 +30,12 @@ location no longer exists.
   Linux/clang bring-up: mango vector helpers take explicit dims at every call site — `isNan<float, 3u>`,
   `isNormalized<float, 3u>`, `safeNormalize<float, 3u>`, `toFloat<int, 2u>` — because mango deduces `int` where the
   engine boundary expects `u32`, and Clang `-Werror` rejects the silent narrowing.
+- **Camera/matrix contract** — `App.Scene.Camera.cpp` is the app-side canonical implementation of the engine
+  contract (AGENTS.md): row-major, row-vector, left-handed, +Z-forward (`m_forward` from `math::axis_z`), +Y-up
+  (`m_up` from `math::axis_y`), D3D `[0,1]` depth. View comes from `float4x4::lookat`, projection from
+  `rhi::getPerspectiveMatrix`/`rhi::getOrthoMatrix`, view-projection is `m_view * m_projection` (row-vector order),
+  frusta pin the unjittered `[0,1]`-remapped VP; there is no backend-specific transpose or Y flip in this file.
+  Passes consume the published `CameraSnapshot` and never consult the mutable `Camera` while drawing.
 - **Camera modes/extras** — `setCameraMode` and `setJitterSamples` (non-owning `TransformView<float2>` view, empty
   resets) arm `m_has_camera_cut_next_frame`; `signalCameraCutNextFrame()` exposes the same; controller overload
   `updateModel(dt, ICameraController&, viewport)` copies current state, runs `controller.updateCameraModel`, then
@@ -85,3 +95,5 @@ location no longer exists.
 - `App.Scene.Camera.cpp` — `updateModel` (lookat view, view*projection composition, jitter, frusta, velocities)
 - `App.Scene.Camera.Controller.cppm` — `ICameraController`, `DummyCameraController`, `Basic/Free/Pan/OrbitCameraController` declarations
 - `App.Scene.Camera.Controller.cpp` — controller action wiring, pose updates, per-controller key mappings
+- `App.Scene.World.cppm` — `IWorld` collision/picking interface + `WorldHitResult` (on disk only; unregistered in
+  `CMakeLists.txt` and not re-exported from `App.cppm`, so not built)

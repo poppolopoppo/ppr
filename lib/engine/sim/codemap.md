@@ -22,7 +22,9 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   reads back as `Cell{}`. `ChunkPos` arguments are programmer invariants (`PPR_ASSERT`);
   `GlobalCellPos` is validated operationally (`result_out_of_range`, `invalid_argument` for
   non-finite temperature). `setCell` marks its chunk dirty; `markDirty` returns void because
-  allocation failure follows the engine allocator contract.
+  allocation failure follows the engine allocator contract. `dirtyChunks()`/
+  `activeDirtyChunks()` list dirty chunks row-major (the latter restricted to
+  `EChunkActivity::active`); `residentCells()` borrows a resident payload.
 - `:ecs` (registry + views + snapshot dump/restore surface) holds
   `Entity` (slot index + generation; `static_assert` standard-layout, trivially copyable,
   `sizeof == 8`; a handle is valid while `m_generation != 0` and orders slot-first),
@@ -76,8 +78,9 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
      version (`u32`), replay cursor (`u64` fixed ticks), body count (`u32`) and
      sorted rows (`u32` slot, `u32` generation, six LE `f32` bit patterns, `u8`
      awake). ECS already round-trips slot generations and head-to-tail free order.
-     Runtime body IDs never serialize. Bodies are captured from registered
-     `BodyState` views and checked against ECS rows before registry replacement.
+     Runtime body IDs never serialize. Bodies are captured from the registered
+     `BodyState` column of the dumped ECS section (sorted by slot index, not via views)
+     and checked against ECS rows before registry replacement.
      The replay cursor needs original creation order/definitions, chains and
      deterministic tick inputs supplied by the caller; values alone do not
      resume Box2D solver caches.
@@ -122,8 +125,11 @@ injected parameters, and per-call errors isolate without throwing into the run l
   `engine.image`, `engine.mesh`, `engine.shader`, or `engine.rhi`. `engine.math` still propagates
   as a PUBLIC dep through `INTERNAL_PUBLIC_DEPS` although only the `.cpp` files import it — the
   project-setup tool has no narrower mode.
-- Consumed by: `engine.tests.sim` (`sim` suite); later phases attach ECS/physics/scene
-  consumers above `engine.app`'s boundary, never below it.
+- Consumed by: `game` (`app.game`: colony driver, render submissions, chunk colliders)
+  and `engine.tests.sim` (`sim` suite). Production sim never imports physics: the
+  `sim/physics` test group (`Sim.Physics.Tests.cpp`) drives `physics::Scene` pairs against
+  sim state, and both `app.game` and `engine.tests.sim` link PRIVATE `engine.physics`
+  for their driver-owned scenes.
 - Build: `Sim.cppm`, `chunk_grid/Sim.ChunkGrid.cppm`, `ecs/Sim.Ecs.cppm`, `footprint/Sim.Footprint.cppm`, `tick/Sim.Tick.cppm`,
   `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm` in `FILE_SET CXX_MODULES`; the matching `.cpp` files as PRIVATE
   sources; `setup_ppr_project(engine.sim INTERNAL_PUBLIC_DEPS engine.core engine.math)`.

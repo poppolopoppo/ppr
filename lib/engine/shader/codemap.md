@@ -36,9 +36,10 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
   current target (`default_value_v`), else stores the target, nulls `m_session`, and recreates it with the
   same row-major single-target desc; `shutdown()` warns when `m_modules_loaded` (modules are session-owned
   and die with it), then clears the flag and nulls session before global session; `getGlobalSession()`
-  exposes the global session for `engine.rhi` `DeviceDesc` wiring.
-- `loadModuleFromFile(path, name, out)` maps the file via `io::mapFile` (propagates its `error_code` on
-  failure), wraps the `MappedFile` in ref-counted `MappedFileBlob : IBlob` (`queryInterface` for
+  exposes the global session for `engine.rhi` `DeviceDesc` wiring. Lifecycle emits info logs
+  (`Shader service initialized`, `shader target format set`, `Shader service shutdown`).
+- `loadModuleFromFile(path, name, out)` maps the file via `io::mapFile` (on failure logs path +
+  category/value/message and propagates its `error_code`), wraps the `MappedFile` in ref-counted `MappedFileBlob : IBlob` (`queryInterface` for
   `ISlangUnknown`/`ISlangBlob`, atomic-`u32` `addRef`/`release` with self-delete at zero,
   `getBufferPointer() = m_file.c_str()`, `getBufferSize() = m_file.size()`), then calls
   `m_session->loadModuleFromSource(module_name, generic_path, blob, Diagnose::writeRef())`.

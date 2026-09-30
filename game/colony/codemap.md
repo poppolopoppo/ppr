@@ -13,7 +13,10 @@ uploads only unseen/explicitly invalidated chunk materials (vacuum becomes
 `ColonySmoke` is the separate headless `--smoke` entry (`runColonySmoke`).
 `TimeTrials` (`game.colony.timetrials`, `runTimeTrials`) is the deterministic
 headless `--time-trials` runner: S1 steady plus S2 scripted wall-building,
-driver-only CSVs, no renderer or translator.
+driver-only CSVs, no renderer or translator. `ColonySmoke` also exposes
+`runLoad100`, the Slice 6 `--load100` gate: 100-agent sustained driver plus
+translator/GridPass load over 600 fixed-1/60 frames with driver/translator
+timing CSVs.
 `game.colony.pathfinding` is bounded budgeted BFS over vacuum cells, resumable
 across ticks, with counters for the panel.
 
@@ -32,8 +35,13 @@ across ticks, with counters for the panel.
   forwards to `sim::generate`; infallible in practice but keeps the
   `error_code` operational boundary explicit.
 - `ColonyDriver.cppm/.cpp` (`game.colony.driver`) — owns one `Colony` plus the
-  fixed-step accumulator; explicit elapsed-time input, 5-slice clamp, deterministic
-  tick accounting, boundary-owned RNG seeds only. No app/renderer imports; PRIVATE engine.physics via the Slice 4 Oracle grant.
+  fixed-step accumulator (default 60 Hz tick, 5-slice clamp, physics
+  `fixed_dt` 1/60 s); explicit elapsed-time input, deterministic
+  tick accounting, boundary-owned RNG seeds only. Stages record wall-clock
+  `StageTimings` (`StageTiming.h`) under `hal::ProfileScope` `Colony.*`
+  names (observation only, never sim state); the spawn-count override
+  persists across regeneration; collider views are cached derived state
+  (never snapshotted, never compared). No app/renderer imports; PRIVATE engine.physics via the Slice 4 Oracle grant.
 - `ColonyTranslator.cppm/.cpp` (`game.colony.translator`) — render-thread-confined
   presentation revisions separate from sim dirty flags; submits every resident
   chunk descriptor per frame, copies cell materials only for unseen/invalidated
@@ -43,6 +51,9 @@ across ticks, with counters for the panel.
 - `ColonySmoke.cppm/.cpp` (`game.colony.smoke`) — `runColonySmoke(argv)` drives a
   headless rendering-enabled `Application` for one offscreen GridPass frame with
   GPU readback; separate from the interactive `TurboLarbin` editor path.
+  `runLoad100()` drives the Slice 6 sustained-load host (100 agents, 600
+  fixed-1/60 ticked frames, translator submit plus GridPass uploads, stderr
+  diagnostics, driver/translator CSVs; `--load100` only).
 - `Agents.cppm/.cpp` (`game.colony.agents`) — first agents (GOAP-lite):
   durable `Agent` (key/speed/seed-spawn), `Needs` (o2/rest), `Plan`
   (goal/site/bounded actions/pc/replans) + seed-derived `spawnAgents`
@@ -70,6 +81,15 @@ across ticks, with counters for the panel.
   collects non-vacuum cells row-major (temperature kept), then applies via
   `setCell` (auto-dirties); vacuum cells are no-ops; `kMaxDigCells` = 1024
   budget. Validation/budget failure changes nothing. Imports sim+core only.
+- `TimeTrials.cppm/.cpp` (`game.colony.timetrials`) — deterministic headless
+  timing runner (`runTimeTrials`, no renderer): S1 steady world plus S2
+  scripted alternating build/demolish wall schedule (fixed 8x2 rock rects,
+  period 30 ticks), each printing one driver `stage,calls,total_us,mean_us,max_us`
+  CSV per segment to stdout. Imports core+sim+buildings+driver only.
+- `StageTiming.h` — plain header (not a module, `Colony.Elements.h`
+  precedent): `Stage` vocabulary, `StageStat`/`StageTimings` tables,
+  `stageName` (`Colony.*` profile-scope names), and RAII `StageTimer`.
+  Observation side-channel only: never sim state, never snapshotted.
 - `CMakeLists.txt` (parent `game/`) — colony `.cppm` files via
   `FILE_SET CXX_MODULES`, `.cpp` files as PRIVATE sources; `engine.sim`
   added to `app.game` `INTERNAL_PUBLIC_DEPS`. POST_BUILD shader/texture/mesh
@@ -100,7 +120,7 @@ TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
   element ids cross the boundary as opaque `u16` documented against this registry.
 - Game links `engine.sim` plus PRIVATE `engine.physics` (Slice 4 Oracle grant:
   driver-owned Scene/ChunkColliders; box2d types never leak past `engine.physics`).
-- Consumed by: `game/main.cpp` (`TurboLarbin` + `--smoke` dispatch).
+- Consumed by: `game/main.cpp` (`TurboLarbin` + `--smoke`/`--time-trials`/`--load100` dispatch).
 
 ## Key Files
 
@@ -110,6 +130,11 @@ TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
 - `ColonyDriver.cppm` / `ColonyDriver.cpp` — fixed-step driver, pause/step/speed.
 - `ColonyTranslator.cppm` / `ColonyTranslator.cpp` — grid→GridPass presentation.
 - `ColonyPanel.cppm` / `ColonyPanel.cpp` — read-only status overlay.
+- `Agents.cppm` / `Agents.cpp` — GOAP-lite agents (spawn/plan/intent).
+- `Buildings.cppm` / `Buildings.cpp` — edit domain (footprints, errands).
+- `DigTool.cppm` / `DigTool.cpp` — immediate rect-clear dig edits.
+- `TimeTrials.cppm` / `TimeTrials.cpp` — deterministic headless timing runner.
+- `StageTiming.h` — per-stage wall-clock timing vocabulary (plain header).
 - `ColonySmoke.cppm` / `ColonySmoke.cpp` — headless offscreen smoke entry.
   Slice 5 dig smoke aggregates `SMOKE-DIG dug=... result=PASS`: D6 pins
   snapshot v3 with capture-is-not-flush, restore-clear, and matched-command

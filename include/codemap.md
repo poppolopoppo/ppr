@@ -12,7 +12,8 @@ helpers) included by every module partition and the game entry point.
 - Only one shipped file: `pP/Macros.h`. It is NOT a module — preprocessor-only, `#include`d in the global
   fragment (`module; #include "pP/Macros.h"`) before any module scanning.
 - Build-mode detection: `PPR_ENABLE_DEBUG` (`_DEBUG`/`!NDEBUG`) with `PPR_DECL_IF_DEBUG`/`PPR_EXPR_IF_DEBUG`;
-  `PPR_ENABLE_MEMORY_POISONING`/`PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN or debug; `PPR_ENABLE_ASSERTIONS`
+  `PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN (`PPR_ENABLE_SANITIZER_ADDRESS`); `PPR_ENABLE_MEMORY_POISONING`
+  when debug; `PPR_ENABLE_ASSERTIONS`
   follows `PPR_ENABLE_DEBUG`; `PPR_ENABLE_LOGGING` is fixed `1`.
 - Pointer size: `PPR_64BIT`/`PPR_32BIT` + `PPR_32BIT_OR_64BIT` selector (errors on unknown pointer size).
 - Macro helpers: `PPR_EXPAND`/`PPR_EXPAND_VA`, `PPR_COMMA` chain + `PPR_COMMA_PROTECT`, `PPR_STRINGIZE`,
@@ -28,7 +29,7 @@ helpers) included by every module partition and the game entry point.
   routes `Assertion::onFailure` (require/verify) from `.ppr_dbg` with `source_location`; `PPR_ASSERT`/
   `PPR_VERIFY` plus boolean `PPR_ENSURE`; release lowers to `PPR_ASSUME` (+ evaluate for `VERIFY`/`ENSURE`).
 - Logging: `PPR_DECLARE`/`PPR_DEFINE_LOG_CATEGORY`, `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attributes),
-  `PPR_FLUSH_LOG`.
+  `PPR_LOG_ONCE`/`PPR_LOG_ONCE_KEY` (dedup via `Log::Once::claim`), `PPR_FLUSH_LOG`.
 - Error returns (log-and-return, `[[unlikely]]`): generic `PPR_RETURN_ON_FAIL` (`hasFailed` check, returns the
   failed value — covers `std::error_code` and `rhi::Result`); `make_error_code(__VA_ARGS__)` variants
   `PPR_RETURN_ERROR_ON_FAIL` (return code), `PPR_RETAIN_ERROR_ON_FAIL` (retain first failure),

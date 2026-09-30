@@ -99,7 +99,10 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   **Payload ring**: `kPayloadRingSize{3}` (mirrors `m_desired_image_count`) upload buffers at `InstancePayload`
   stride, each created and mapped once in `ensureDirectPayloads_` and kept mapped for its whole life;
   `uploadPayloads_` rotates `m_payload_ring_cursor` once per submit and writes through the persistent mapping
-  (no per-frame map/unmap), and `encodeGroup_` binds the current slot. `releaseDirectPayloads_(device)` drops the
+  (no per-frame map/unmap), and `encodeGroup_` binds the current slot. `resolveInstances_` scratch is
+  GPA-backed by design, never `mem::ScratchPad`: the array grows with submitted instance count while
+  ScratchPad has a 32752 B usable-slab ceiling; lifetime is unchanged per-`render()` scope.
+  `releaseDirectPayloads_(device)` drops the
   whole ring — unmap only when a device is supplied (growth/replacement), `nullptr` from `shutdown()`/
   `notifyDeviceLost()`, which is safe because `SLANG_RHI_DEBUG_ENABLE_BUFFER_MAP_VALIDATION` defaults to 0.
   `pipelineFor_` validates the signature shape (one color format — the sample count is a `SampleCount`, so every
@@ -130,7 +133,11 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 - Residency/receipt/single-load rules (`TrianglePass` + `GpuCaches`): `uploadScene`
   issues one receipt nonce per scene and `releaseScene` consumes it first, so copies
   share the receipt and repeats fail closed (`invalid_argument`) without decrementing
-  a surviving scene's refcounted texture entry. Material slots never recycle and
+  a surviving scene's refcounted texture entry. `UploadedScene` carries the mesh-major join table
+  (`m_mesh_prim_base`, one base per mesh so prims of mesh i occupy `m_primitives[base[i] ..]`
+  contiguously); the static pure-CPU `joinInstancePrim(scene, uploaded, instance, prim_slot)` resolves
+  the (mesh, prim) bag with the instance material override applied, fail-closed (`invalid_argument`)
+  on mesh/table/slot mismatch. Material slots never recycle and
   texture heap slot 0 stays pinned to the white fallback; capacity overflow is
   deterministic fail-closed (`no_buffer_space`), never a partial upload.
 - `hashValue(TrianglePipelineVariant)` seeds the trivial hash with
@@ -160,7 +167,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 ## Integration
 
-- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass`, drives update/render/shutdown)
+- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass` + `GridPass`, drives update/render/shutdown)
 - **Depends on**: `engine.core`, `engine.math`, `engine.rhi` (devices, queues, surfaces, passes, pipelines),
   `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),

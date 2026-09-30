@@ -15,7 +15,7 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   `ICommandBuffer`/`ICommandEncoder`/`ICommandQueue`/`IComputePipeline`/`IComputePassEncoder`/`IDebugCallback`/
   `IDevice`/`IFence`/`IHeap`/`IInputLayout`/`IRenderPipeline`/`IShaderObject`/`IShaderProgram`/`IShaderTable`/
   `ISurface`/`ITexture`/`ITextureView`/`IRenderPassEncoder`/`ISampler`; descriptors `BufferDesc`/`BufferOffsetPair`/
-  `BufferRange`/`BufferUsage`/`ColorClearValue`/`ColorTargetDesc`/`ComputePipelineDesc`/`DeviceAddress`/`DeviceDesc`/
+  `BufferRange`/`BufferUsage`/`ColorClearValue`/`ColorTargetDesc`/`ComparisonFunc`/`ComputePipelineDesc`/`DeviceAddress`/`DeviceDesc`/
   `DeviceInfo`/`DeviceLimits`/`DeviceType`/`DrawArguments`/`Format`/`FormatInfo`/`FormatKind`/`FormatSupport`/
   `IndexFormat`/`InputElementDesc`/`InputLayoutDesc`/`LoadOp`/`LinkingStyle`/`MemoryType`/`PrimitiveTopology`/
   `QueueType`/`RenderPassDesc`/`RenderPassColorAttachment`/`RenderPassDepthStencilAttachment`/`RenderPipelineDesc`/
@@ -24,7 +24,9 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   `SubresourceLayout`/`SubresourceRange`/`TextureAddressingMode`/`TextureDesc`/`TextureFilteringMode`/
   `TextureType`/`TextureUsage`/`TextureViewDesc`/`ShaderProgramDesc`/`StoreOp`/`StructType`/`SubresourceData`/
   `SurfaceConfig`/`SurfaceInfo`/`Viewport`/`ShaderCursor`/`WindowHandle`/`DebugLayerOptions`/`DebugMessageSource`/
-  `DebugMessageType`/`MarkerColor`; functions `getFormatInfo`/`getTextureDimension`.
+  `DebugMessageType`/`MarkerColor`; descriptor seam `DescriptorHandle`/`DescriptorHandleAccess`/
+  `DescriptorHandleType`/`Feature`; indirect seam `FenceDesc`/`SubmitDesc`/`IndirectDispatchArguments`/
+  `IndirectDrawArguments`/`IndirectDrawIndexedArguments`; functions `getFormatInfo`/`getTextureDimension`.
 - Errors: `using errc = shader::errc` (one shared Slang vocabulary); `error_category()`/
   `make_error_code(Result|errc)` over file-local `SlangRhiErrorCategory` (`name() "slang-rhi"`, full `message()`
   switch with `std::format` fallback, `default_error_condition` mapping invalid-arg→`invalid_argument`,
@@ -37,9 +39,9 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   re-export the shader error mapper so `PPR_RETURN_ERROR_ON_FAIL` resolves via ADL on `Slang::Result`;
   the `PPR_RETURN_*_ON_FAIL` failure predicate `Slang::hasFailed(Result)` (`SLANG_FAILED`, `constexpr`) is
   defined in `engine.shader`, not here.
-- Projection helpers encode the engine-wide camera contract (Mango-native left-handed view space, row-major
-  row-vector `mul(float4, matrix)`, `[0,1]` depth, no per-backend dispatch): `getOrthoMatrix(w,h)` →
-  `float4x4::orthoD3D(0,w,0,h,0,1)`; `getPerspectiveMatrix(fov,aspect,near,far)` derives horizontal FOV
+- Projection helpers are the CANONICAL implementation of the engine-wide camera contract (row-major,
+  row-vector `mul(float4, matrix)`, left-handed, +Z-forward, +Y-up, `[0,1]` depth, no per-backend dispatch):
+  `getOrthoMatrix(w,h)` → `float4x4::orthoD3D(0,w,0,h,0,1)`; `getPerspectiveMatrix(fov,aspect,near,far)` derives horizontal FOV
   `x_fov = 2·atan(tan(fov/2)·aspect)` then `float4x4::perspectiveD3D(x_fov,fov,near,far)` (`fov` is vertical).
 - Descriptor seam: the pass-owned GPU caches bind only through the `pP::rhi`
   aliases — app code never reaches past `engine.rhi` into slang-rhi directly.
@@ -95,6 +97,6 @@ shader global session → `createDevice` → `setTargetFormat(toSlangCompileTarg
 
 ## Key Files
 
-- `RHI.cppm` — aliases, projection declarations, error API, `Slang::hasFailed`, `IRhiService`.
+- `RHI.cppm` — aliases, projection declarations, error API, `IRhiService`.
 - `RHI.cpp` — `SlangRhiErrorCategory`, `SlangRhiDebugCallback`, `getDeviceTypeName_`,
   `toSlangCompileTarget_`, projections, `SlangRhiService`, `PPR_DEFINE_LOG_CATEGORY(RHI, info, none)`.

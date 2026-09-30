@@ -15,7 +15,8 @@ application.
 - Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:input.*` (6),
   `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
-  `:renderer` + `:renderer.triangle_pass` + `:renderer.types`, `:ui.imgui`.
+  `:renderer` + `:renderer.gpu_caches` + `:renderer.grid_pass` + `:renderer.triangle_pass` + `:renderer.types`,
+  `:ui.imgui`.
 - `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
   `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerManager`
   `m_application_clock`, `optional<TimeSpan> m_target_frame_time` plus `m_has_background_priority` (background 5 fps
@@ -48,8 +49,9 @@ application.
    with mapping `EInputMappingPriority::camera = 1`.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
   overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
-  implicit-instantiation cost. Linux/clang bring-up: the seven `function_ref<...Window...>` extern templates removed
-  from `:window.handle` are pinned here instead, keeping the header free of per-TU instantiation pins.
+  implicit-instantiation cost. Linux/clang bring-up: the seven `extern template` pins removed
+  from `:window.handle` are covered here by explicit `Delegate` window-event instantiations instead, keeping the header
+  free of per-TU instantiation pins.
 - Linux/clang bring-up summary (detail per area): GLFW native headers gated per OS + complete-type partition imports
   (`platform/glfw`); `[[nodiscard]]`-free friend declarations with namespace-scope attribute declarations (`input.key`);
   `:input.action` imported by the scene controller (`scene`); conditional `std23::move_only_function` callback aliases
@@ -58,9 +60,10 @@ application.
   `static_cast<double/u32/u64>` conversions (`input`, `platform/glfw`, `ui`); `.indexBuffer = {}` (`renderer`);
   `[[maybe_unused]]` debug helpers (`ui`).
 - CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (6, incl. new `:input.routing`), platform (5),
-  player (2), renderer (3, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
+  player (2), renderer (5, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2 — `App.Scene.World.cppm` exists on
+  disk but is unregistered, see `scene/codemap.md`), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
   (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
-  privately. Links `engine.core/math/shader/rhi` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
+  privately. Links `engine.core/math/shader/rhi/image/mesh` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
   public (so `import imgui;` resolves for importers).
 - Linux bring-up conformance (no lifecycle/renderer contract change): call sites spell the same explicit dim
   args math requires (`opaqueValue<float,2u/3u>` on the axis structs — same mango `int`-dim vs engine
@@ -96,7 +99,8 @@ application.
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
    `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("<name> - CPU = <ms> ms")` →
-    `triangle_pass->update(dt, camera->getSnapshot())` + `grid_pass->update(dt, camera->getSnapshot())` →
+    `triangle_pass->update(dt, camera->getSnapshot())` + `grid_pass->update(dt, camera->getSnapshot())` (snapshot-only;
+    passes never consult the mutable `Camera` while drawing) + `submitSceneInstances_()` when a scene is loaded →
    `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` → two explicit surface passes:
     GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
     renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
@@ -114,7 +118,7 @@ application.
 - **Depends on**: `engine.core` (services, context, delegates), `engine.math`, `engine.rhi`, `engine.shader`
   (via renderer/UI pass), external `glfw`/`mango`/`imgui`.
 - **Provides**: every `engine.app:*` namespace; `Application` lifecycle + service-store accessors
-  (`getServices()`, `getPlatform()`, `getRenderer()`, `getDomain()`, `getTimerClock()`); `ApplicationEditor` client
+  (`getServices()`, `getPlatform()`, `getRenderer()`, `getDomain()`, `getTimerManager()`); `ApplicationEditor` client
   ownership via `IClientService`.
 
 ## Key Files

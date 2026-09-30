@@ -9,7 +9,8 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
 ## Design
 
 - **Build-mode detection**: `PPR_ENABLE_DEBUG` (`_DEBUG`/`!NDEBUG`) with `PPR_DECL_IF_DEBUG`/`PPR_EXPR_IF_DEBUG`;
-  `PPR_ENABLE_MEMORY_POISONING`/`PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN or debug; `PPR_ENABLE_ASSERTIONS`
+  `PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN (`PPR_ENABLE_SANITIZER_ADDRESS`);
+  `PPR_ENABLE_MEMORY_POISONING` when debug; `PPR_ENABLE_ASSERTIONS`
   = `PPR_ENABLE_DEBUG`; `PPR_ENABLE_LOGGING` fixed `1`.
 - **Pointer size**: `PPR_64BIT`/`PPR_32BIT` + `PPR_32BIT_OR_64BIT` selector (errors on unknown pointer size).
 - **Macro helpers**: `PPR_EXPAND`/`PPR_EXPAND_VA` (indirection + `, ##__VA_ARGS__` passthrough),
@@ -31,7 +32,8 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
   routes failures to `Assertion::onFailure` from a `.ppr_dbg` code segment with `source_location`;
   `PPR_ASSERT`/`PPR_VERIFY` (require/verify), boolean `PPR_ENSURE`; release lowers to `PPR_ASSUME` (+ evaluate).
 - **Logging**: `PPR_DECLARE/DEFINE_LOG_CATEGORY` (define wrapped in ReSharper internal-linkage guards),
-  `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attribute list), `PPR_FLUSH_LOG`.
+  `PPR_LOG`/`PPR_LOG_RAW` (emitter + message + attribute list), `PPR_LOG_ONCE`/`PPR_LOG_ONCE_KEY`
+  (dedup via `Log::Once::claim`), `PPR_FLUSH_LOG`.
 - **Error returns** (log-and-return, `[[unlikely]]`, if-with-initializer + line-unique binding):
   `PPR_RETURN_ON_FAIL` (generic `hasFailed` check, returns the failed value — covers `std::error_code` and
   `rhi::Result`); `PPR_RETURN_ERROR_ON_FAIL`, `PPR_RETAIN_ERROR_ON_FAIL`, `PPR_RETURN_UNEXPECTED_ON_FAIL`,

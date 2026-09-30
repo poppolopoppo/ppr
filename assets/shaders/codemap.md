@@ -2,9 +2,10 @@
 
 ## Responsibility
 
-Slang shader assets for application render passes. `mesh_bindless.slang` is the live `TrianglePass`
-program and is currently the only shader in this directory. The former `triangle.slang` reference
-asset was deleted; nothing loads a shader from this directory other than `TrianglePass`.
+Slang shader assets for application render passes. Two live programs: `mesh_bindless.slang` is the
+`TrianglePass` static-mesh program, and `grid_tiles.slang` is the `GridPass` debug-grid program (flat
+tinted or per-cell quads, one instance per visible chunk-sized tile). The former `triangle.slang`
+reference asset was deleted; `TrianglePass` and `GridPass` are the only loaders from this directory.
 
 ## Design
 
@@ -39,6 +40,19 @@ asset was deleted; nothing loads a shader from this directory other than `Triang
 - Entry points: `[shader("vertex")] vertexIndirectMain` (the only vertex entry) and
   `[shader("fragment")] fragmentMain`. The name is `vertexIndirectMain`, not `vertexMain`; the C++
   looks it up by string.
+- `grid_tiles.slang` shares the row-major, row-vector convention (`mul(world, m_view_projection)`,
+  `view * projection`, `[0,1]` depth, no transpose/Y flip) on the z = 0 plane; no lighting, texturing,
+  or GI inputs. `ConstantBuffer<GridFrame> g_grid_frame` carries only the unjittered `m_view_projection`.
+- `grid_tiles.slang` draws six non-indexed verts (two triangles) per tile rect from
+  `StructuredBuffer<GridTilePayload> g_tiles` (CPU-mirrored 32 B: rect + material + cell-word base +
+  flags + pad); rasterizer culling is off. The per-draw base is entry-point `uniform uint g_tile_base`
+  for the same globalParams-overlap reason as the mesh shader.
+- `grid_tiles.slang` per-cell lane: when payload flag bit 0 is set, the fragment resolves the cell
+  through packed `StructuredBuffer<uint> g_cell_materials` (8192 words per chunk, halfword per cell,
+  `0xFFFF` discards); otherwise the payload material is used. Tint is deterministic from the low 3
+  material bits (8 dim/bright cube corners), with no palette table or texture.
+- `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
+  `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
 - The ImGui shader remains embedded in `App.UI.ImGui.cpp`, not under this asset directory.
 - CMake stages the whole shader directory beside application and relevant test executables, so
@@ -50,15 +64,18 @@ asset was deleted; nothing loads a shader from this directory other than `Triang
 -> `io::mapFile` -> `MappedFileBlob` -> `ISession::loadModuleFromSource` -> `vertexIndirectMain` +
 `fragmentMain` linked into the pass-owned program and pipeline variants; `ShaderCursor` binds frame
 data, the structured buffers, the `g_payload_base` per draw group, and the descriptor heap before
-each draw.
+each draw. `GridPass::initialize` follows the same chain for `<content_dir>/shaders/grid_tiles.slang`
+(`vertexGridMain` + `fragmentGridMain`), binding `g_grid_frame`, `g_tiles`, `g_cell_materials`, and the
+`g_tile_base` per draw group.
 
 ## Integration
 
-- **Consumers**: `engine.shader` (compile), `engine.rhi` + `TrianglePass` (pipeline + constants),
-  `game` demo.
+- **Consumers**: `engine.shader` (compile), `engine.rhi` + `TrianglePass`/`GridPass` (pipelines +
+  constants), `game` demo.
 - **Depends on**: Slang compiler; `engine.math` matrix-layout/handedness conventions (row-major,
   row-vector, left-handed +Z forward, [0,1] depth).
-- **Provides**: the runtime bindless mesh shader asset for the scene pass.
+- **Provides**: the runtime bindless mesh shader asset for the scene pass and the grid-tile shader
+  asset for the debug-grid pass.
 - **Known limitations (documented in-shader, deliberately unfixed)**: the model matrix must be a
   rigid transform or a uniform scale, since directions are rotated with `mul()` rather than the
   inverse-transpose; and `FrameConstants` carries four fields (`m_view`, `m_projection`,
@@ -68,3 +85,4 @@ each draw.
 ## Key Files
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
+- `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).

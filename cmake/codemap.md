@@ -25,14 +25,18 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
   `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
   hidden `gcc-dev`/`gcc-rel` (**no modules**).
-- **`MSVCToolchain.cmake`** (included before `VCPkg.cmake` and `project()` for native `msvc-*` only): validates
-  VS 18 Insiders x64 vcvars, MSVC 14.51+, segment heap, and pinned compiler/linker/librarian paths; checks
-  vcpkg's VS selection matches the activated installation and removes its trailing slash before manifest install.
+- **`MSVCToolchain.cmake`** (gated by `PPR_REQUIRE_MSVC_TOOLCHAIN`, set only by the hidden
+  `windows-msvc-toolchain` preset; included before `VCPkg.cmake` and `project()` for native `msvc-*` only):
+  requires a Windows host on x64 vcvars64 (`VSCMD_ARG_HOST_ARCH`/`VSCMD_ARG_TGT_ARCH` = `x64`), VS 18
+  Insiders paths, MSVC 14.51+, an existing `SegmentHeap.cmake` matching `CMAKE_PROJECT_TOP_LEVEL_INCLUDES`,
+  and pinned `cl`/`link`/`lib` paths for `CMAKE_C/CXX_COMPILER`, `CMAKE_LINKER`, `CMAKE_AR`; normalizes
+  `VCPKG_VISUAL_STUDIO_PATH` to the activated installation (trailing slashes stripped, mismatch is fatal).
+  It selects no CRT — `/MD` vs `/MDd` comes from the triplet in `VCPkg.cmake`.
 - **`setup_ppr_project(target INTERNAL_PUBLIC_DEPS … EXTERNAL_SYSTEM_PRIVATE_DEPS … EXTERNAL_SYSTEM_PUBLIC_DEPS …)`**
   (`cmake/Compilers.cmake`): the single helper every PPR target uses — applies target-local
   `cxx_std_23`/`CXX_MODULE_STD` opt-in (never global, per contract),
   warning sets, PUBLIC `include/` (Macros.h) exposure, the `enable_sanitizers()` hook, and link edges.
-  `app.game` links all five engine modules; `engine.app` additionally links
+  `app.game` links all six engine modules (`engine.core engine.app engine.math engine.shader engine.rhi engine.sim`); `engine.app` additionally links
   `imgui` PUBLIC so `import imgui;` resolves from importers. Applies the live-only EnC link contract per target
   (no-op unless `PPR_EDIT_AND_CONTINUE` is ON, so `msvc-rel` static+LTCG is untouched) and opts every PPR
   target out of the compiler-cache launcher via `ppr_disable_compiler_cache()` (module BMIs are uncacheable).
@@ -52,7 +56,10 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `CMAKE_PREFIX_PATH` and prefers Config packages (`CMAKE_FIND_PACKAGE_PREFER_CONFIG ON`).
 - **Runtime/shader delivery** (`cmake/RuntimeDlls.cmake` and `game/CMakeLists.txt`):
   `ppr_stage_runtime_dlls()` copies `$<TARGET_RUNTIME_DLLS:...>` next to each executable with a guarded
-  `copy_if_different` command; the gate is Windows-only because the genex is empty elsewhere. Shader, texture,
+  `copy_if_different` command; the gate is Windows-only because the genex is empty elsewhere.
+  `ppr_stage_winpix_event_runtime()` additionally stages `WinPixEventRuntime.dll` from `slang-rhi`
+  (ordered after `slang-rhi-copy-files`) when `WIN32` with target `slang-rhi` and `SLANG_RHI_ENABLE_D3D12`.
+  Shader, texture,
   and mesh assets remain separately staged by `game/CMakeLists.txt`.
 
 ## Flow

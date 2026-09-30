@@ -8,9 +8,9 @@ module bindings for third-party libraries consumed by the engine.
 ## Design
 
 - **CPM packages** (`cmake/Dependencies.cmake` + per-lib files): GLFW (`find_package(glfw3)`, SYSTEM includes),
-  Mango (poppolopoppo/mango pin, vcpkg prefix path + triplet passthrough, AVX/AVX2/SSE2/SSE4, `BUILD_IMPORT3D ON`,
+  Mango (poppolopoppo/mango `main` branch, vcpkg prefix path + triplet passthrough, AVX/AVX2/SSE2/SSE4, `BUILD_IMPORT3D ON`,
   `BUILD_TESTS OFF` + `BUILD_TOOLS OFF` (Linux bring-up: skip unneeded Mango tests/tools), no examples/OpenGL/Vulkan/shared-libs; ASan adds `/D_ANNOTATE_STL` via `CMAKE_CXX_FLAGS`), rapidhash (interface
-  target), SlangRHI (`SLANG_RHI_FETCH_SLANG ON`, unity build, D3D11/Optix/CUDA off), and STB (interface target).
+  target), SlangRHI (pinned `ad1b92f`, `SLANG_RHI_FETCH_SLANG ON` + `SLANG_RHI_FETCH_SLANG_VERSION 2026.17.1`, unity build, CPU/D3D11/Optix/CUDA off, `CXX_MODULE_STD OFF`), and STB (interface target).
 - **Mango normalization** (`Mango.cmake`): each concrete `mango*` target (`mango`, `mango-core`, `mango-image`,
   `mango-import3d`, `mango-window`, `mango-opengl`, `mango-vulkan`) sets `CXX_MODULE_STD OFF` locally and strips
   `/MP`, `/arch:AVX*`, `/Ox` (genex-wrapped) plus Clang `-m(avx512|avx|sse|bmi|fma|sha|aes|pclmul|popcnt|f16c|lzcnt)`
@@ -47,7 +47,7 @@ module bindings for third-party libraries consumed by the engine.
 2. CPM fetches sources (or vcpkg supplies installed trees); ImGui module bindings download once into the shared
   dir.
 3. `imgui.base` builds static; `imgui` builds the two module units and links `imgui.base` PUBLIC.
-4. Engine targets link via `setup_ppr_project` (`engine.app` links `imgui.base` private + `imgui` PUBLIC).
+4. Engine targets link via `setup_ppr_project` (`engine.app` links `imgui.base` PUBLIC + `imgui` PUBLIC).
 
 ## Integration
 

@@ -24,7 +24,7 @@ GPU readback; the editor keeps its `TrianglePass` initialized but has no fixture
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; dispatches `--smoke` to `game.colony.smoke::runColonySmoke(argv)` before constructing the editor. Otherwise `demo::TurboLarbin : ApplicationEditor` initializes a seeded `ColonyDriver`, orthographic pan camera, game input mapping, and `ColonyTranslator`; per frame it stages generated tiles and draws the Colony panel. Both paths return the resulting `std::error_code::value()`.
+- `game/main.cpp` — Process entry point; dispatches `--smoke` to `game.colony.smoke::runColonySmoke(argv)`, `--load100` to `runLoad100()`, and `--time-trials` to `runTimeTrials()` before constructing the editor; the `--profile*` flags (`--profile100`, `--profile-csv`, `--profile-label`, `--profile-skip`, `--profile-edits`, `--profile-pan`) instead configure the editor path. Otherwise `demo::TurboLarbin : ApplicationEditor` initializes a seeded `ColonyDriver`, orthographic pan camera, game input mapping, and `ColonyTranslator`; per frame it stages generated tiles and draws the Colony panel. Every path returns the resulting `std::error_code::value()`. Per-stage timings are an observation side-channel in `game/colony/StageTiming.h` (`StageTimings` under `hal::ProfileScope` `Colony.*` names), not a module.
 - `game/colony/ColonySmoke.cppm` / `game/colony/ColonySmoke.cpp` — Separate headless `Application` host for one offscreen `GridPass` frame and generated-cell GPU readback; no editor window or UI.
 - `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Public presets
   include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
@@ -86,7 +86,7 @@ game/main.cpp → game.colony.driver / game.colony.translator / game.colony.pane
 | `lib/engine/core/concurrency/`  | RawChannel (lock-free MPSC), Signal/select, IContext cancellation tree.                               | [View Map](lib/engine/core/concurrency/codemap.md)  |
 | `lib/engine/core/io/`           | IoPort async I/O, MappedFile, DirectoryWatcher, IoEvent/IoResult.                                     | [View Map](lib/engine/core/io/codemap.md)           |
 | `lib/engine/core/function/`     | std23::function_ref, Delegate/BroadcastCallback + Handle dispatch.                                    | [View Map](lib/engine/core/function/codemap.md)     |
-| `lib/engine/core/hal/`          | HAL umbrella: page memory, ring buffer, I/O, process, timers, native transcoding.                     | [View Map](lib/engine/core/hal/codemap.md)          |
+| `lib/engine/core/hal/`          | HAL umbrella: 10 areas — page memory, ring buffer, I/O (map/watch), process, timers, native transcoding, filesystem, debugger + profiling markers, system/RNG. `Random`/`RingBuffer` exist only on windows + linux. | [View Map](lib/engine/core/hal/codemap.md)          |
 | `lib/engine/core/hal/windows/`  | Win32 HAL: VirtualAlloc2, IOCP, ReadDirectoryChangesW, CreateProcessW.                                | [View Map](lib/engine/core/hal/windows/codemap.md)  |
 | `lib/engine/core/hal/linux/`    | POSIX HAL: mmap/mprotect, inotify, fork+execvp, timer_create, raw-syscall io_uring, memfd ring buffer. | [View Map](lib/engine/core/hal/linux/codemap.md)    |
 | `lib/engine/core/hal/darwin/`   | XNU HAL: mmap/MAP_ANON, fork+execvp, Mach sysctl debugger.                                            | [View Map](lib/engine/core/hal/darwin/codemap.md)   |
@@ -96,8 +96,8 @@ game/main.cpp → game.colony.driver / game.colony.translator / game.colony.pane
 | `lib/engine/mesh/`              | CPU static mesh assets (`:types` frozen vocabulary + `:convert` glTF/GLB import).      | [View Map](lib/engine/mesh/codemap.md)              |
 | `lib/engine/rhi/`               | Wraps Slang-RHI: GPU types, common projection helpers, IRhiService.                                   | [View Map](lib/engine/rhi/codemap.md)               |
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
-| `lib/engine/sim/`               | Deterministic simulation: 4096x4096 cell chunk grid, fixed-timestep tick driver, snapshot save/load, ECS, worldgen.  | [View Map](lib/engine/sim/codemap.md)               |
-| `lib/engine/physics/`           | Box2D boundary: Scene world, ChunkColliders, Coupling. | [View Map](lib/engine/physics/codemap.md)           |
+| `lib/engine/sim/`               | Deterministic simulation: 4096x4096-cell world as 32x32 chunks of 128x128 (1024 chunks), fixed-timestep tick driver with a step registry, versioned snapshot save/load, ECS columns, footprint, worldgen. Renderer-independent.  | [View Map](lib/engine/sim/codemap.md)               |
+| `lib/engine/physics/`           | Box2D boundary — box2d types never leak past it: `Scene` world, indexed/diffed `ChunkColliders` rebuild, `Coupling` publish (used by `engine.tests.sim` only). | [View Map](lib/engine/physics/codemap.md)           |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
 | `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer + Routing background-drag latch (12 files, 6 partitions).                      | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
@@ -114,12 +114,21 @@ game/main.cpp → game.colony.driver / game.colony.translator / game.colony.pane
 | `game/`                         | Demo exe (`app.game`): editor-driven generated colony with `GridPass` + panel and a separate headless `--smoke` path; POST_BUILD stages shaders/textures/meshes (and DLLs where configured). | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime asset root: shaders + textures + meshes; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
-| `assets/shaders/`               | Slang shader sources (including `mesh_bindless.slang`).                                                     | [View Map](assets/shaders/codemap.md)               |
+| `assets/shaders/`               | Slang shader sources, compiled at startup by `engine.shader`: `mesh_bindless.slang` (`TrianglePass`) and `grid_tiles.slang` (`GridPass`). | [View Map](assets/shaders/codemap.md)               |
+| `lib/`                          | Umbrella for `lib/engine/*`; module graph overview.                                                            | [View Map](lib/codemap.md)                          |
+| `lib/engine/`                   | Umbrella for the engine modules; authoritative module inventory + dependency edges.                          | [View Map](lib/engine/codemap.md)                   |
+| `include/`                      | Umbrella for the single public non-module header.                                                             | [View Map](include/codemap.md)                      |
+| `lib/engine/tests/asset/`       | Asset-pipeline test suite (image/mesh/staging/gpu/gate).                                                     | [View Map](lib/engine/tests/asset/codemap.md)       |
 
 > Removed locations (do not look here): `lib/engine/app/camera/` → moved to `lib/engine/app/scene/`;
 > `lib/engine/app/input/device/` → consolidated into the unified `:input.device` partition; renderer `App.Viewport`
 > → moved to `:window.viewport`; `App.Input.Mapping`/`App.Input.Replay` partitions deleted (mapping merged into
 > `:input.action`).
+>
+> On disk but NOT built: `lib/engine/app/scene/App.Scene.World.cppm` (`IWorld` +
+> `WorldHitResult`) is in neither `lib/engine/app/CMakeLists.txt` nor the
+> `App.cppm` re-export list, so it is dead code today. Register it (with its
+> `.cpp`) or delete it; either way `app/scene` and `app` need a follow-up.
 
 ## Test Infrastructure
 
@@ -127,11 +136,11 @@ game/main.cpp → game.colony.driver / game.colony.translator / game.colony.pane
   sit behind `BUILD_TESTING` (undefined-tolerant: present unless explicitly `OFF`; `msvc-rel` sets `OFF`).
   The editor partition ships — `game/main.cpp` imports `ApplicationEditor` unconditionally.
 - `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
-  services, enums. Thematic private groups (26 files: per-area splits such as `Core.Allocator.Tests.cpp`,
+  services, enums. Thematic private groups (27 `*Tests.cpp` files: per-area splits such as `Core.Allocator.Tests.cpp`,
   `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
    `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`16` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
 - `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
-  (17 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
+  (18 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
   `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
   `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
@@ -163,4 +172,4 @@ game/main.cpp → game.colony.driver / game.colony.translator / game.colony.pane
 Keep this document focused on finding code. Update links and summaries with
 their corresponding source changes; put durable rules in `AGENTS.md` instead.
 
-- Diagrams: rendered PlantUML galleries under `docs/diagrams/` (e.g. `docs/diagrams/engine.app/`).
+- Diagrams: rendered PlantUML galleries under `docs/diagrams/` — `app-game-engine-arch/`, `engine.app/`, and `readme/`.

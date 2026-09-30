@@ -41,7 +41,8 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   `IndexBuffer|CopySource`), uploaded per-frame in `uploadDrawData_()` via map/`memcpy`/unmap (no-op when
   `TotalVtx/IdxCount == 0`); font texture built once from `GetTexDataAsRGBA32` (`DeviceLocal` RGBA8 `Texture2D` with
   `ShaderResource|CopyDestination`, `Upload` staging buffer, `copyBufferToTexture` + `setTextureState(ShaderResource)`
-  + `submit`/`waitOnHost`, `getDefaultView`, `SetTexID` to the view).
+  + `submit`/`waitOnHost`, `getDefaultView`, `SetTexID` to the view; null pixels or non-positive atlas dims log and
+  return `invalid_argument` instead of faulting the staging row-pitch division).
 - `initialize(WindowInputContext&, IRhiService&, IShaderService&, priority)` creates the context (`not_supported` when
   null), installs `ErrorCallback` → `PPR_LOG_RAW` with `ConfigErrorRecovery=true`, `EnableAssert=false`,
   `EnableDebugLog=true`, `EnableTooltip=PPR_ENABLE_DEBUG`, sets backend names (`pP_IUIService` / `pP_SlangRHI`,
@@ -55,7 +56,8 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
    last frame's widgets (`WantCaptureKeyboard`/`WantCaptureMouseUnlessPopupClose`/gamepad nav), then
    `drainPendingDeselect_()`. `render(DrawContext)`
   (`not_connected` when no context; no-op when `draw_data` null/invalid) lazily rebuilds the pipeline per
-  `RenderPipelineKey` via `createRenderPipeline_` (rejects anything but single color target, no depth, sample count 1;
+  `RenderPipelineKey` via `createRenderPipeline_` (rejects anything but a single color target with no depth
+  attachment — every `SampleCount` enumerator is accepted and forwarded; mismatch → `invalid_argument`;
   SrcAlpha/InvSrcAlpha color blend, One/InvSrcAlpha alpha blend, `CullMode::None`, scissor on, no depth test/write,
   label `render_imgui`), binds `g_scale` (`2/DisplaySize`, Y negated) / `g_offset` (`-1,1`) / font sampler/texture via
   `ShaderCursor` (`broken_pipe` when `bindPipeline` fails), uploads draw data, then issues one indexed draw per command

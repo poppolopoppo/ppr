@@ -11,20 +11,27 @@ decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8
 
 - Partitioned umbrella: `Image.cppm` re-exports `:types` + `:decode` + `:mips`.
 - `:types` holds `image::errc` (+ category, `function_not_supported`/`invalid_argument` map to
-  `std::errc`), `BlockTag`, `NativeImageFormat`, `ImageUsage`, `ImageDimension`, `ImageDecodeDesc`
-  (multithread=false policy, flip_v=false), `ImageAsset` (frozen `SharedBuffer` storage +
-  `ImageSubresource` views with positive pitches), block-geometry helpers, and `contentHash`
-  (`hash::contiguousRange` — never owner identity). P0 Gate-1 `GpuU32TestTag` asserts stay put.
-  Declare error-category instances as `static const Category g_...{};` — `std::error_category` is
-  polymorphic/non-literal (virtuals + `std::string`, cf. `Image.Types.cpp:12-33`,
-  `Mesh.Convert.cpp:1384-1404`), so `constexpr` (still present at `Image.Types.cpp:37`,
-  `Mesh.Convert.cpp:1406`) is the same non-literal pattern fixed in `Shader.cpp:62`/`RHI.cpp:69`;
-  use `static const` for consistency/portability.
-- `:decode` declares `decodeToRgba8`/`decodeToBlocks` (passthrough/transcode only — PNG/JPG are
-  never recompressed); `Image.Decode.cpp` implements them on a per-job Mango `ImageDecoder` +
-  `UniqueBuffer` (materialize → checked view → `moveToShared` freeze, blob cloned immediately
-  while the decoder lives — no shared lock; decoders are never shared across jobs), sRGB from
-  `!header.linear` (data usage forces linear).
+  `std::errc`), `EBlockTag`, `ENativeImageFormat`, `EImageUsage`, `EImageDimension`, `ImageLimits`/
+  `kDefaultImageLimits` (8K / 256 MiB production caps — over-limit inputs fail closed with
+  `invalid_argument`), `ImageDecodeDesc` (`m_limits`, `m_use_simd`, `m_use_flip_v`),
+  `ImageAsset` (frozen `SharedBuffer` storage +
+  `ImageSubresource` views with positive pitches), block-geometry helpers (`isSrgb`/`isBlocked`/
+  `blockTagOf`/`blockWidthOf`/`blockHeightOf`/`bytesPerBlockOf`/`rowPitchFor`/`slicePitchFor`),
+  decode-invariant docs, and `contentHash`
+  (`hash::contiguousRange` — never owner identity).
+  Declare error-category instances `static const` — `std::error_category` is polymorphic/non-literal
+  (virtuals + `std::string`); `Image.Types.cpp` keeps its instance function-local
+  (`static const ImageErrorCategory g_image_error_category{}` inside `error_category()`), the same
+  non-literal pattern fixed in `Shader.cpp`/`RHI.cpp` — use `static const` for consistency/portability.
+- `:decode` declares `decodeToRgba8` (any supported source → RGBA8)/`decodeToBlocks`
+  (KTX2/DDS passthrough/transcode only — PNG/JPG are never recompressed, callers fall back to RGBA8);
+  `Image.Decode.cpp` implements them on a per-job Mango decoder +
+  `UniqueBuffer` (materialize → `moveToShared` freeze, no shared lock; decoders are never shared
+  across jobs), sRGB from `!header.linear` (`EImageUsage::data` forces linear),
+  `options.simd = desc.m_use_simd` with `options.multithread` hard `false` (engine policy — no Mango
+  pool in the RT path, not caller-selectable), Y-flip as a positive-pitch CPU blit when `m_use_flip_v`, production
+  `m_limits` checks bounding input/header/decoded bytes before allocation, and `checkInvariants_`
+  (`PPR_ASSERT` + `invalid_argument` on violation) at return.
 - `:mips` declares `mipCountFor`/`mipExtentAt`/`generateMipChain` (`MipGenDesc`: incremental
   default, HQ-from-top opt-in, coverage preserve, alpha cutoff, limits); `Image.Mips.cpp`
   implements them in a float-linear workspace via `stbir_resize_float_linear` (vendored `stb`

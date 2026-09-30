@@ -9,21 +9,24 @@ compilation) → `engine.rhi` (GPU abstraction) → `engine.image`/`engine.mesh`
 `engine.core` is the umbrella foundation re-exporting ~30 partitions into a single `pP` namespace
 (`import engine.core;`). `engine.app` is the single compile-time aggregation point (`import engine.app;`):
 slim `Application` lifecycle base + `ApplicationEditor` interactive-client subclass owning window, viewport,
-input, player, camera, triangle pass, and ImGui service via `IClientService`.
+input, player, camera, triangle pass, grid pass, and ImGui service via `IClientService`.
 
 ## Design
 
 - **Layered acyclic dependency chain** (mirrored in each `CMakeLists.txt` via `setup_ppr_project`, no upward
-  or cyclic edges): `engine.app` → core + math + shader + rhi (+ `glfw`, `mango` private, `imgui.base`/`imgui`
-  public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public); `engine.sim` →
+  or cyclic edges): `engine.app` → core + math + shader + rhi + image + mesh (+ `glfw`, `mango` private,
+  `imgui.base`/`imgui` public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public);
+  `engine.sim` →
   core + math (public); `engine.physics` → core + math (public) + box2d::box2d (private); physics/sim siblings, no cross-import; `engine.shader` → core
-  (public) + `slang` (private); `engine.math` → core (public) + `mango` (private); `engine.core` → `rapidhash`
+  (public) + `slang` (private); `engine.math` → core (public) + `mango` (private); `engine.image` → core +
+  math (public) + `mango-image`/`stb` (private); `engine.mesh` → core + math (public) + `mango-import3d`
+  (private); `engine.core` → `rapidhash`
   (private) + per-platform HAL sources (windows + linux `Random`/`RingBuffer` (11 shared HAL areas + per-platform `Random`/`RingBuffer` pairs)).
 - **Module convention**: `.cppm` = interface (exports), `.cpp` = implementation; single-module libraries
   (`math`, `shader`, `rhi`) vs partitioned umbrellas (`core`, `app`); implementations use `module engine.<lib>;`
   + `import :partition;`. App umbrella `App.cppm` only re-exports (`:application` + `:application_editor`,
   `:input.*`, `:player` + `:player.graph`, `:scene.camera` + controller, five `:service.*`, `:window.*`,
-  `:platform`, `:renderer` + triangle_pass + types, `:ui.imgui`).
+  `:platform`, `:renderer` + triangle_pass + grid_pass + types, `:ui.imgui`).
 - **Application lifecycle types**: `ApplicationDomain` immutable-after-construction bitfield
   (`m_is_headless`/`m_is_interactive`/`m_needs_presence`/`m_needs_rendering`/`m_needs_user_interface`);
   `Application` (`:application`) is a `safe_object` subclass with virtual
@@ -57,7 +60,7 @@ input, player, camera, triangle pass, and ImGui service via `IClientService`.
 
 ## Flow
 
-`game/main.cpp` (`app.game`: core + app + math + shader + rhi + sim, no physics) → `import engine.app` pulls the engine modules transitively → concrete `Application`/`ApplicationEditor` constructs → `run()` (torn-down guard →
+`game/main.cpp` (`app.game`: core + app + math + shader + rhi + sim, plus PRIVATE physics for the driver-owned Scene) → `import engine.app` pulls the engine modules transitively → concrete `Application`/`ApplicationEditor` constructs → `run()` (torn-down guard →
 `initialize()` → `PPR_DEFER shutdown()` → loop `while (not m_lifecycle->error())`: clock tick, sleep-throttle
 to target frame duration, `update(dt)` + `render()` with first-error-wins exit via request-exit clause):
 platform init, directory resolution (`content/install` = executable parent, `working` = `current_path`),
@@ -89,6 +92,8 @@ messaging via `producerReserve`/`producerSubmit` → `consumerAcquire`/`consumer
 - `math/` — mango re-export, constants, math helpers (`Math.cppm` only). See [math/codemap.md](math/codemap.md).
 - `shader/` — Slang session + module loading. See [shader/codemap.md](shader/codemap.md).
 - `rhi/` — GPU abstraction + projections + `IRhiService`. See [rhi/codemap.md](rhi/codemap.md).
+- `image/` — CPU image decode + mip generation (Mango/private). See [image/codemap.md](image/codemap.md).
+- `mesh/` — GLB/gltf import + conversion to render meshes (mango-import3d/private). See [mesh/codemap.md](mesh/codemap.md).
 - `sim/` — deterministic simulation state: chunk grid, fixed-timestep tick + step registry, snapshot
   save/load. See [sim/codemap.md](sim/codemap.md).
 - `physics/` — Box2D Scene/ChunkColliders/Coupling. See [physics/codemap.md](physics/codemap.md).

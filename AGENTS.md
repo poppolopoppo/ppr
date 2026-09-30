@@ -17,8 +17,9 @@ The dependency graph is directional and must remain acyclic (see `codemap.md`;
 on conflict `CMakeLists.txt` wins over this file). `engine.physics` exposes
 PUBLIC `core, math` and PRIVATE `box2d::box2d`
 (`lib/engine/physics/CMakeLists.txt`); `engine.app` links neither `sim` nor
-`physics`; `game` links `sim`, not `physics` (`game/CMakeLists.txt`); the sole
-physics consumer is `engine.tests.sim` via PRIVATE link (`lib/engine/tests/sim/CMakeLists.txt`).
+`physics`; `game` links `sim` plus PRIVATE `physics` for its driver-owned
+Scene and chunk colliders (`game/CMakeLists.txt`); the other physics consumer
+is `engine.tests.sim` via PRIVATE link (`lib/engine/tests/sim/CMakeLists.txt`).
 
 `engine.core` supplies types, allocators, containers, concurrency, services,
 I/O, and HAL. `engine.math` wraps Mango math. `engine.shader` compiles Slang

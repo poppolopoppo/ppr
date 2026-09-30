@@ -14,21 +14,30 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
 - `:types` holds the frozen §2.3 vocabulary: `StaticMeshVertex` (64 B plain-float
   arrays), `EMeshAttribute`
   (no joints/weights), `MeshPrimitiveRange` (stored base honoured), `StaticMeshAsset`,
-  `UvTransformAsset`, `MaterialImageSlot::enabled()`, `MaterialAsset` (split MR maps,
-  emissive map, occlusion/normal scalars, opaque/mask only), `ImageRef` (local duplicate —
-  no mesh→image dependency), `SceneNodeAsset`/`SceneInstance`/`SceneAsset`, typed index IDs
-  (`ImageAssetId`/`MaterialAssetId`/`MeshAssetId`/`NodeId`/`UvSetId` + invalid sentinels),
-  and `mesh::errc` + `make_error_code`. Declare error-category instances as
-  `static const Category g_...{};` — `std::error_category` is polymorphic/non-literal (virtuals +
-  `std::string`, cf. `Image.Types.cpp:12-33`, `Mesh.Convert.cpp:1384-1404`), so `constexpr` (still
-  present at `Image.Types.cpp:37`, `Mesh.Convert.cpp:1406`) is the same non-literal pattern fixed in
-  `Shader.cpp:62`/`RHI.cpp:69`; use `static const` for consistency/portability.
+  `UvTransformAsset`, `MaterialImageSlot::enabled()`, `MaterialAsset` (split MR maps —
+  roughness=`.g`/metallic=`.b` linear — emissive map, occlusion/normal scalars, `EAlphaMode`
+  opaque/mask only with blend rejected), `ImageRef` (local duplicate —
+  no mesh→image dependency), `SceneNodeAsset` (`math::Transform` `m_local`/`m_world` + parent),
+  `SceneInstance`/`SceneAsset`, typed index IDs
+  (`ImageAssetId`/`MaterialAssetId`/`MeshAssetId`/`NodeId`/`UvSetId` + `none_v` sentinels),
+  `MeshLimits`/`kDefaultMeshLimits` (GLB container + scene/allocation caps, over-limit fail-closed
+  with `invalid_argument`), and `mesh::errc` + `make_error_code`. The error-category instance is
+  namespace-scope `const MeshErrorCategory g_mesh_error_category{}` (`Mesh.Convert.cpp`) —
+  `std::error_category` is polymorphic/non-literal, so never `constexpr` (same non-literal pattern
+  fixed in `Shader.cpp`/`RHI.cpp`).
 - `:convert` (`Mesh.Convert.cppm` decl + `Mesh.Convert.cpp` impl) is the synchronous
-  thread-safe `importAndConvert(dir, file)`: Mango `importScene` per call, verbatim LH copy
+  thread-safe `importAndConvert(dir, file, limits = kDefaultMeshLimits)`: Mango `importScene` per call
+  (GLB embeds re-resolved from PPR's own `mapFile` mapping via `resolveGlbEmbeds`; file refs mapped
+  once per convert with `file_cache` dedupe by resolved path), verbatim LH copy
   (file-tangent `w` negated, missing tangents via in-fork MikkTSpace regen gated on the
-  material normal map), file-order indices + base honour, V-down no-flip, row-vector
-  `S*R*T` / `parent*local`, MR split
-  (roughness=g/metallic=b Linear), strip/fan expanded to lists mirroring Mango winding.
+  material normal map), file-order indices + base honour, V-down no-flip, MR split
+  (roughness=`.g`/metallic=`.b` linear), strip/fan expanded to lists mirroring Mango winding.
+  Nodes become `math::Transform`s (`fromMatrix` per node, worlds via `multiply(local, parentWorld)`
+  BFS from parentless roots — unreached cyclic nodes fail closed; skinned nodes reject).
+  One shared non-identity UV transform bakes into texcoords (`resolveBakedUvTransform`/
+  `bakeUvTransform`, slots reset); non-uniform node scales bake per instance (positions by the
+  world matrix, normals/tangents by its inverse-transpose + `orthonormalize`, node world reset
+  to identity).
 - Draw-range base convention (`MeshPrimitiveRange`): append-path primitives carry
   base=0 with remapped global indices, direct-glTF primitives carry
   base=vert_count with file-local indices; the resolved index is always
@@ -42,7 +51,8 @@ per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:con
   `import_failed`. GLB embeds re-resolve from PPR's own `mapFile` mapping (`resolveGlbEmbeds`;
   mango blob views dangle — never read, unresolvable embeds fail closed); file refs map once
   per convert (`file_cache` dedupe by resolved path). Mango `Verbose` import chatter is
-  silenced once at entry (`printEnable`, Error and above stay visible). Mango headers stay
+  silenced once at entry (`printEnable`, Error and above stay visible; `std::call_once` serializes the
+  single process-global write so parallel imports never race restores). Mango headers stay
   in the `.cpp` global fragment (PRIVATE dep, never exported).
 
 ## Flow

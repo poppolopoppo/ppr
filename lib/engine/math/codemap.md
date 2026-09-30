@@ -5,7 +5,9 @@
 `engine.math` re-exports `mango::math` into `namespace pP` as a single C++20 module (`export module engine.math;`
 — no partitions, header-shaped `Math.cppm`). Provides SIMD vector/matrix aliases, scalar/vector math and
 quaternion re-exports, geometry primitives, `Intersect*`/`easeIn/Out/InOut*` utilities, polymorphic math constants,
-integer/float conversion helpers, predicates, and `hashValue`/`opaqueValue` integration for mango vectors.
+integer/float conversion helpers, predicates, `hashValue`/`opaqueValue` integration for mango vectors, and a
+row-vector TRS `math::Transform` node transform (scale → rotate → translate, quaternion composition plus
+`toMatrix`/`fromMatrix` materialization).
 
 ## Design
 
@@ -13,10 +15,11 @@ integer/float conversion helpers, predicates, and `hashValue`/`opaqueValue` inte
   `export namespace pP { using namespace mango::math; }` plus explicit aliases: `int2/3/4` = `int32x2/3/4`,
   `uint2/3/4` = `uint32x2/3/4`, `float2/3/4` = `float32x2/3/4`, `double2/3/4` = `float64x2/3/4`,
   `float3x3` = `Matrix3x3`, `float4x4` = `Matrix4x4`.
-- Scalar/vector `using mango::math::X` re-exports: `abs`/`ceil`/`clamp`/`cross`/`distance`/`dot`/`floor`/`fract`/
-  `hmax`/`hmin`/`inverse`/`length`/`lerp`/`max`/`min`/`mod`/`normalize`/`rcp`/`reflect`/`refract`/`round`/`rsqrt`/
-  `sign`/`smoothstep`/`sqrt`/`square`/`transpose`/`trunc`; rotation `AngleAxis`/`EulerAngles`/`Quaternion` +
-  `conjugate`/`slerp`/`squad`; geometry `Box`/`Cone`/`FastRay`/`Frustum`/`Plane`/`Quadratic`/`Ray`/`RayFrustum`/
+- Scalar/vector `using mango::math::X` re-exports: `abs`/`acos`/`asin`/`atan`/`atan2`/`ceil`/`clamp`/`cos`/
+  `cross`/`distance`/`dot`/`exp`/`exp2`/`floor`/`fract`/
+  `hmax`/`hmin`/`inverse`/`length`/`lerp`/`log`/`log2`/`max`/`min`/`mod`/`normalize`/`pow`/`rcp`/`reflect`/
+  `refract`/`round`/`rsqrt`/`sign`/`sin`/`smoothstep`/`sqrt`/`square`/`tan`/`transpose`/`trunc`; rotation
+  `AngleAxis`/`EulerAngles`/`Quaternion` + `conjugate`/`packQuaternion`/`unpackQuaternion`/`slerp`/`squad`; geometry `Box`/`Cone`/`FastRay`/`Frustum`/`Plane`/`Quadratic`/`Ray`/`RayFrustum`/
   `Rectangle`/`Sphere`/`Triangle`; all arithmetic/comparison/bitwise `operator*`/`==`/etc. re-exports.
 - `pP::math` sub-namespace: left-handed axis constants (`axis_x/y/z`, `right/left`, `up/down`,
   `forward(+Z)/backward` as `inline const float3`); `Intersect`/`IntersectBarycentric`/
@@ -57,6 +60,19 @@ integer/float conversion helpers, predicates, and `hashValue`/`opaqueValue` inte
   `Vector` `static_iota` fold, `Matrix` per-`column<idx>()` fold); `isNormalized` (`|1−dot2|<epsilon`, vector +
   quaternion overloads defaulting to `epsilon_v`); `safeNormalize(v,fallback,epsilon)`
   (`dot>epsilon ? v/sqrt(norm_sq) : fallback`).
+- `math::Transform` is the row-vector TRS node transform (`m_rotate` unit quaternion, `m_translate`,
+  `m_scale`; `transformPosition(p) = quaternionTransform(m_rotate, p * m_scale) + m_translate`). Per-point
+  apply/invert families (`transformPosition/Normal/Vector` + `invertTransform*` conjugates, each with a
+  `NoScale` twin); `accumulate`/`accumulateWithAdditiveScale`/`accumulateWithShortestRotation` deltas;
+  `invert()` (exact for uniform scale — `PPR_ASSERT(hasUniformScale())`, approximate otherwise) and
+  `invertNoScale()`; `toMatrix()` (`scale * (quaternion * translate)`, materialize once per node at the
+  draw leaf) / `toMatrixNoScale()`; shear-free `fromMatrix()` (basis-row extents, collapsed rows saturated
+  to 0 with a basis-axis substitute, mirrored upper-3x3 folded into negative X so the quaternion sees a
+  proper basis); `blend(a,b,alpha)` (shortest-arc lerp); `multiply(a,b)` and `relativeTransform(from,to)`
+  with a matrix fallback on the mirrored (`getDeterminantSign() < 0`) path; free `isInf`/`isNan`/`inverse`/
+  `swap` plus `fallbackPerpendicular`/`orthonormalize` helpers. Batch rule from the code comment: compose
+  `Transform`s per node with `multiply()`, hoist one cached `invert()` per dirty node, never invert or
+  transform per vertex.
 - `export namespace mango::math`: `hashValue(Vector)` → `hash::contiguousRange(span<T,DimV>(data,DimV))`;
   `opaqueValue(Vector)` → `pP::opaqueValue(span)` (span captured by value so the `TransformView` never dangles).
 
@@ -70,6 +86,8 @@ easing curves, `TArithmetic`/`TValueGenerator`/`PolymorphicConstant`/`Number`/`I
 `epsilon_v`, `infinity_v`, `identity_v`) → runtime helpers (`makeJitterMatrix`, `makeZeroToOneFrustum`,
 `quaternionTransform`, `angularVelocity`) → operator re-exports → `dot2` overloads, `checked_cast<Vector>`,
 `ceil/floor/round/trunc ToInt/ToUInt`, `toFloat`, `saturate`, `isNan`, `isNormalized`, `safeNormalize` →
+`math::Transform` (apply/invert families → `invert`/`toMatrix`/`fromMatrix`/`blend`/`multiply`/
+`relativeTransform`, consumed by `engine.mesh` scene nodes) → `fallbackPerpendicular`/`orthonormalize` →
 `mango::math` `hashValue`/`opaqueValue` injection. Conversion helpers always spell `<T,DimV>` explicitly
 and forward them inward, so the mango `int`-dim / engine `u32`-dim boundary never depends on deduction.
 Consumers `import engine.math;` and call
@@ -82,7 +100,7 @@ Consumers `import engine.math;` and call
 - Depends on: `engine.core` (public — `u32/i32`, `checked_cast`, `safe_narrowing`, `hash_t`,
   `hash::contiguousRange`, `opaque::Value`, `static_iota`, `PPR_ASSUME`), `mango` headers (private system dep).
 - Consumed by: `engine.rhi` (matrix types for projection helpers), `engine.app` (camera/transform math),
-  `game`, tests (`Core.Math.Tests.cpp` spells the explicit `<T,DimV>` args, e.g. `ceilToInt<float,2u>`).
+  `engine.mesh` (`math::Transform` scene nodes), `game`, tests (`Core.Math.Tests.cpp` spells the explicit `<T,DimV>` args, e.g. `ceilToInt<float,2u>`).
 - Build: single `Math.cppm` in `FILE_SET CXX_MODULES`; `setup_ppr_project(engine.math
   INTERNAL_PUBLIC_DEPS engine.core EXTERNAL_SYSTEM_PRIVATE_DEPS mango)`. Mango's SIMD codegen flags
   (`-m(avx512|avx|sse|bmi|fma|…)` filtered from its `INTERFACE_COMPILE_OPTIONS` alongside `/arch:AVX*`)
