@@ -40,17 +40,33 @@ export namespace pP {
             : m_origin(origin), m_extent(extent) {
         }
 
-        [[nodiscard]] constexpr T getLeft() const noexcept { return m_origin.x; }
-        [[nodiscard]] constexpr T getRight() const noexcept { return m_origin.x + m_extent.x; }
-        [[nodiscard]] constexpr T getTop() const noexcept { return m_origin.y; }
-        [[nodiscard]] constexpr T getBottom() const noexcept { return m_origin.y + m_extent.y; }
-        [[nodiscard]] constexpr T getWidth() const noexcept { return m_extent.x; }
-        [[nodiscard]] constexpr T getHeight() const noexcept { return m_extent.y; }
+        [[nodiscard]] constexpr T getLeft() const noexcept {
+            return m_origin.x;
+        }
+        [[nodiscard]] constexpr T getRight() const noexcept {
+            return m_origin.x + m_extent.x;
+        }
+        [[nodiscard]] constexpr T getTop() const noexcept {
+            return m_origin.y;
+        }
+        [[nodiscard]] constexpr T getBottom() const noexcept {
+            return m_origin.y + m_extent.y;
+        }
+        [[nodiscard]] constexpr T getWidth() const noexcept {
+            return m_extent.x;
+        }
+        [[nodiscard]] constexpr T getHeight() const noexcept {
+            return m_extent.y;
+        }
 
         [[nodiscard]] float getAspectRatio() const noexcept;
 
-        [[nodiscard]] constexpr const vector_type &min() const noexcept { return m_origin; }
-        [[nodiscard]] constexpr vector_type max() const noexcept { return m_origin + m_extent; }
+        [[nodiscard]] constexpr const vector_type &min() const noexcept {
+            return m_origin;
+        }
+        [[nodiscard]] constexpr vector_type max() const noexcept {
+            return m_origin + m_extent;
+        }
 
         [[nodiscard]] constexpr vector_type getCenter() const noexcept {
             // NOTE: component-wise (see operator==).
@@ -82,25 +98,22 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr bool contains(const math::Vector<T, 2> &point) const noexcept {
-            return point.x >= m_origin.x && point.y >= m_origin.y && point.x <= m_origin.x + m_extent.x &&
+            return point.x >= m_origin.x &&
+                   point.y >= m_origin.y &&
+                   point.x <= m_origin.x + m_extent.x &&
                    point.y <= m_origin.y + m_extent.y;
         }
 
         [[nodiscard]] constexpr bool contains(const BasicRect &other) const noexcept {
-            return other.m_origin.x >= m_origin.x && other.m_origin.y >= m_origin.y &&
+            return other.m_origin.x >= m_origin.x &&
+                   other.m_origin.y >= m_origin.y &&
                    other.m_origin.x + other.m_extent.x <= m_origin.x + m_extent.x &&
                    other.m_origin.y + other.m_extent.y <= m_origin.y + m_extent.y;
         }
 
         [[nodiscard]] constexpr float2 normalize(const vector_type &pos) const noexcept {
-            const float2 delta{
-                static_cast<float>(pos.x - m_origin.x),
-                static_cast<float>(pos.y - m_origin.y)
-            };
-            const float2 extent{
-                static_cast<float>(m_extent.x),
-                static_cast<float>(m_extent.y)
-            };
+            const float2 delta{static_cast<float>(pos.x - m_origin.x), static_cast<float>(pos.y - m_origin.y)};
+            const float2 extent{static_cast<float>(m_extent.x), static_cast<float>(m_extent.y)};
 #if PPR_ENABLE_ASSERTIONS
             PPR_ASSERT(dot2(extent) > epsilon_v<float>);
 #endif
@@ -114,17 +127,18 @@ export namespace pP {
         [[nodiscard]] constexpr vector_type denormalize(const float2 &uv) const noexcept {
             return vector_type{
                 static_cast<T>(uv.x * static_cast<float>(m_extent.x)) + m_origin.x,
-                static_cast<T>(uv.y * static_cast<float>(m_extent.y)) + m_origin.y
-            };
+                static_cast<T>(uv.y * static_cast<float>(m_extent.y)) + m_origin.y};
         }
 
         [[nodiscard]] constexpr vector_type denormalizeClamp(const float2 &uv) const noexcept {
             return denormalize(saturate<float, 2u>(uv));
         }
 
-        [[nodiscard]] constexpr bool operator ==(const BasicRect &other) const noexcept {
-            return m_origin.x == other.m_origin.x && m_origin.y == other.m_origin.y &&
-                   m_extent.x == other.m_extent.x && m_extent.y == other.m_extent.y;
+        [[nodiscard]] constexpr bool operator==(const BasicRect &other) const noexcept {
+            return m_origin.x == other.m_origin.x &&
+                   m_origin.y == other.m_origin.y &&
+                   m_extent.x == other.m_extent.x &&
+                   m_extent.y == other.m_extent.y;
         }
     };
 
@@ -139,29 +153,25 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     struct ViewportLayout {
-        struct FullWindow final {
-        };
+        struct FullWindow final {};
 
         struct Centered final {
             int2 m_extent{};
         };
 
-        struct WindowRect final : PixelRect {
-        };
+        struct WindowRect final : PixelRect {};
 
-        struct NormalizedWindowRect final : NormalizedRect {
-        };
+        struct NormalizedWindowRect final : NormalizedRect {};
 
         std::variant<FullWindow, Centered, WindowRect, NormalizedWindowRect> m_variant{FullWindow{}};
 
         constexpr ViewportLayout() noexcept = default;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr ViewportLayout(const decltype(m_variant) &variant) noexcept
-            : m_variant(variant) {
+        constexpr ViewportLayout(const decltype(m_variant) &variant) noexcept : m_variant(variant) {
         }
 
-        ViewportLayout &operator =(const decltype(m_variant) &variant) noexcept {
+        ViewportLayout &operator=(const decltype(m_variant) &variant) noexcept {
             m_variant = variant;
             return *this;
         }
@@ -187,8 +197,12 @@ export namespace pP {
 
         explicit Viewport(const PixelRect &window_rect, const ViewportLayout &layout = {}) noexcept;
 
-        [[nodiscard]] const PixelRect &getWindowRect() const noexcept { return m_window_rect; }
-        [[nodiscard]] const PixelRect &getClientRect() const noexcept { return m_client_rect; }
+        [[nodiscard]] const PixelRect &getWindowRect() const noexcept {
+            return m_window_rect;
+        }
+        [[nodiscard]] const PixelRect &getClientRect() const noexcept {
+            return m_client_rect;
+        }
 
         [[nodiscard]] NormalizedRect getNormalizedClientRect() const noexcept;
 
@@ -239,10 +253,18 @@ export namespace pP {
 
         WindowViewport(SharedWindow window, ViewportLayout layout) noexcept;
 
-        [[nodiscard]] const Window &getWindow() const noexcept { return *m_window; }
-        [[nodiscard]] const ViewportLayout &getLayout() const noexcept { return m_layout; }
-        [[nodiscard]] const Viewport &getViewport() const noexcept { return m_viewport; }
-        [[nodiscard]] ViewportRevision getViewportRevision() const noexcept { return m_viewport_revision; }
+        [[nodiscard]] const Window &getWindow() const noexcept {
+            return *m_window;
+        }
+        [[nodiscard]] const ViewportLayout &getLayout() const noexcept {
+            return m_layout;
+        }
+        [[nodiscard]] const Viewport &getViewport() const noexcept {
+            return m_viewport;
+        }
+        [[nodiscard]] ViewportRevision getViewportRevision() const noexcept {
+            return m_viewport_revision;
+        }
 
         void setLayout(ViewportLayout layout) noexcept;
 

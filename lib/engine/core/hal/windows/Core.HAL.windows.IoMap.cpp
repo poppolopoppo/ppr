@@ -17,7 +17,7 @@ import std;
 namespace pP::hal::io {
     struct MapHandleData {
         ::HANDLE m_mapping{nullptr};
-        void    *m_data{nullptr};
+        void *m_data{nullptr};
         std::size_t m_size{0};
     };
 
@@ -35,25 +35,19 @@ namespace pP::hal::io {
         }
 
         const ::HANDLE file = ::CreateFileW(
-            path.c_str(),
-            desired_access,
-            share,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
+            path.c_str(), desired_access, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
-        PPR_DEFER { ::CloseHandle(file); };
+        PPR_DEFER {
+            ::CloseHandle(file);
+        };
 
         ::LARGE_INTEGER file_size{};
-        if (not::GetFileSizeEx(file, &file_size)) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+        if (not ::GetFileSizeEx(file, &file_size)) [[unlikely]] {
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         if (file_size.QuadPart == 0) [[unlikely]] {
@@ -64,28 +58,18 @@ namespace pP::hal::io {
         }
 
         const ::HANDLE mapping = ::CreateFileMappingW(
-            file,
-            nullptr,
-            protection,
-            static_cast<::DWORD>(file_size.QuadPart >> 32u),
-            static_cast<::DWORD>(file_size.QuadPart & 0xFFFFFFFFu),
-            nullptr);
+            file, nullptr, protection, static_cast<::DWORD>(file_size.QuadPart >> 32u),
+            static_cast<::DWORD>(file_size.QuadPart & 0xFFFFFFFFu), nullptr);
 
         if (mapping == nullptr) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
-        void *const data = ::MapViewOfFile(
-            mapping,
-            map_access,
-            0, 0,
-            static_cast<std::size_t>(file_size.QuadPart));
+        void *const data = ::MapViewOfFile(mapping, map_access, 0, 0, static_cast<std::size_t>(file_size.QuadPart));
 
         if (data == nullptr) [[unlikely]] {
             ::CloseHandle(mapping);
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *md = new MapHandleData();

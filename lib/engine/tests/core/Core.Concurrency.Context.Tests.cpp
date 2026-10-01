@@ -25,14 +25,12 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (background){
+        PPR_UNIT_TEST (background) {
             _.recurse({
                 Background::done_is_never_event,
                 Background::error_is_none,
                 Background::value_is_none,
             });
-
-
         };
 
         namespace Cancel {
@@ -82,7 +80,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (cancel){
+        PPR_UNIT_TEST (cancel) {
             _.recurse({
                 Cancel::done_initially_empty,
                 Cancel::manual_cancel_fires_done,
@@ -91,8 +89,6 @@ namespace pP::tests::detail {
                 Cancel::grandparent_cancel_propagates,
                 Cancel::child_cancel_does_not_affect_parent,
             });
-
-
         };
 
         namespace CancelClause {
@@ -114,13 +110,11 @@ namespace pP::tests::detail {
         }
 
 
-        PPR_UNIT_TEST (cancel_clause){
+        PPR_UNIT_TEST (cancel_clause) {
             _.recurse({
                 CancelClause::clause_fires_done_with_error,
                 CancelClause::clause_error_matches,
             });
-
-
         };
 
         namespace WithoutCancel {
@@ -139,13 +133,11 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (without_cancel){
+        PPR_UNIT_TEST (without_cancel) {
             _.recurse({
                 WithoutCancel::done_never_fires,
                 WithoutCancel::error_always_none,
             });
-
-
         };
 
         namespace AfterFunc {
@@ -163,9 +155,7 @@ namespace pP::tests::detail {
                 const SharedContext parent = context::background();
                 const IContext *received = nullptr;
                 SharedContext ctx = context::withAfterFunc(
-                    parent, [&received](const IContext &c) noexcept {
-                        received = &c;
-                    });
+                    parent, [&received](const IContext &c) noexcept { received = &c; });
                 const IContext *expected = ctx.get();
                 ctx.reset(); // destroys the AfterContext, firing the callback
                 PPR_TEST_ASSERT(received != nullptr);
@@ -173,13 +163,11 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (after_func){
+        PPR_UNIT_TEST (after_func) {
             _.recurse({
                 AfterFunc::callback_called_on_destruction,
                 AfterFunc::callback_receives_context,
             });
-
-
         };
 
         namespace Value {
@@ -198,23 +186,19 @@ namespace pP::tests::detail {
             };
 
             PPR_UNIT_TEST (values_from_parent_fallback) {
-                const SharedContext parent = context::withValue(
-                    context::background(), "parent_key", 99);
-                const SharedContext child = context::withValue(
-                    parent, "child_key", 42);
+                const SharedContext parent = context::withValue(context::background(), "parent_key", 99);
+                const SharedContext child = context::withValue(parent, "child_key", 42);
                 const auto parent_val = child->value("parent_key");
                 PPR_TEST_ASSERT(parent_val.has_value());
             };
         }
 
-        PPR_UNIT_TEST (value){
+        PPR_UNIT_TEST (value) {
             _.recurse({
                 Value::value_is_retrievable,
                 Value::missing_key_returns_none,
                 Value::values_from_parent_fallback,
             });
-
-
         };
 
         namespace Deadline {
@@ -252,14 +236,12 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (deadline){
+        PPR_UNIT_TEST (deadline) {
             _.recurse({
                 Deadline::deadline_is_set,
                 Deadline::parent_cancel_overrides_deadline,
                 Deadline::timeout_sets_deadline,
             });
-
-
         };
     }
 } // namespace pP::tests::detail

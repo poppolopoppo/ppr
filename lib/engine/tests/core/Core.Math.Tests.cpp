@@ -82,13 +82,29 @@ namespace pP::tests::detail {
             const uint4 unsigned_tie_round = roundToUInt<float, 4u>(unsigned_tie_value);
 
             PPR_TEST_ASSERT(signed_ceil.x == -1 and signed_ceil.y == -2 and signed_ceil.z == 4 and signed_ceil.w == 5);
-            PPR_TEST_ASSERT(signed_floor.x == -2 and signed_floor.y == -3 and signed_floor.z == 3 and signed_floor.w == 4);
-            PPR_TEST_ASSERT(signed_round.x == -1 and signed_round.y == -3 and signed_round.z == 4 and signed_round.w == 4);
-            PPR_TEST_ASSERT(signed_trunc.x == -1 and signed_trunc.y == -2 and signed_trunc.z == 3 and signed_trunc.w == 4);
-            PPR_TEST_ASSERT(unsigned_ceil.x == 2u and unsigned_ceil.y == 3u and unsigned_ceil.z == 4u and unsigned_ceil.w == 5u);
-            PPR_TEST_ASSERT(unsigned_floor.x == 1u and unsigned_floor.y == 2u and unsigned_floor.z == 3u and unsigned_floor.w == 4u);
-            PPR_TEST_ASSERT(unsigned_round.x == 1u and unsigned_round.y == 3u and unsigned_round.z == 4u and unsigned_round.w == 4u);
-            PPR_TEST_ASSERT(unsigned_trunc.x == 1u and unsigned_trunc.y == 2u and unsigned_trunc.z == 3u and unsigned_trunc.w == 4u);
+            PPR_TEST_ASSERT(
+                signed_floor.x == -2 and signed_floor.y == -3 and signed_floor.z == 3 and signed_floor.w == 4);
+            PPR_TEST_ASSERT(
+                signed_round.x == -1 and signed_round.y == -3 and signed_round.z == 4 and signed_round.w == 4);
+            PPR_TEST_ASSERT(
+                signed_trunc.x == -1 and signed_trunc.y == -2 and signed_trunc.z == 3 and signed_trunc.w == 4);
+            PPR_TEST_ASSERT(
+                unsigned_ceil.x == 2u and unsigned_ceil.y == 3u and unsigned_ceil.z == 4u and unsigned_ceil.w == 5u);
+            PPR_TEST_ASSERT(
+                unsigned_floor.x == 1u and
+                unsigned_floor.y == 2u and
+                unsigned_floor.z == 3u and
+                unsigned_floor.w == 4u);
+            PPR_TEST_ASSERT(
+                unsigned_round.x == 1u and
+                unsigned_round.y == 3u and
+                unsigned_round.z == 4u and
+                unsigned_round.w == 4u);
+            PPR_TEST_ASSERT(
+                unsigned_trunc.x == 1u and
+                unsigned_trunc.y == 2u and
+                unsigned_trunc.z == 3u and
+                unsigned_trunc.w == 4u);
             PPR_TEST_ASSERT(signed_tie_round.x == 3 and signed_tie_round.y == -3);
             PPR_TEST_ASSERT(unsigned_tie_round.x == 3u);
         };
@@ -110,10 +126,23 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(signed_floor.x == -2 and signed_floor.y == 2);
             PPR_TEST_ASSERT(signed_round.x == -1 and signed_round.y == 3);
             PPR_TEST_ASSERT(signed_trunc.x == -1 and signed_trunc.y == 2);
-            PPR_TEST_ASSERT(unsigned_ceil.x == 2u and unsigned_ceil.y == 3u and unsigned_ceil.z == 4u and unsigned_ceil.w == 5u);
-            PPR_TEST_ASSERT(unsigned_floor.x == 1u and unsigned_floor.y == 2u and unsigned_floor.z == 3u and unsigned_floor.w == 4u);
-            PPR_TEST_ASSERT(unsigned_round.x == 1u and unsigned_round.y == 3u and unsigned_round.z == 4u and unsigned_round.w == 4u);
-            PPR_TEST_ASSERT(unsigned_trunc.x == 1u and unsigned_trunc.y == 2u and unsigned_trunc.z == 3u and unsigned_trunc.w == 4u);
+            PPR_TEST_ASSERT(
+                unsigned_ceil.x == 2u and unsigned_ceil.y == 3u and unsigned_ceil.z == 4u and unsigned_ceil.w == 5u);
+            PPR_TEST_ASSERT(
+                unsigned_floor.x == 1u and
+                unsigned_floor.y == 2u and
+                unsigned_floor.z == 3u and
+                unsigned_floor.w == 4u);
+            PPR_TEST_ASSERT(
+                unsigned_round.x == 1u and
+                unsigned_round.y == 3u and
+                unsigned_round.z == 4u and
+                unsigned_round.w == 4u);
+            PPR_TEST_ASSERT(
+                unsigned_trunc.x == 1u and
+                unsigned_trunc.y == 2u and
+                unsigned_trunc.z == 3u and
+                unsigned_trunc.w == 4u);
         };
 
         PPR_UNIT_TEST (to_float_from_integral_vectors) {
@@ -130,10 +159,22 @@ namespace pP::tests::detail {
             const float4 unsigned_float = toFloat<u32, 4u>(unsigned_value);
             const math::Vector<float, 5> fallback_float = toFloat<i32, 5u>(fallback_value);
 
-            PPR_TEST_ASSERT(signed_float.x == -1.0f and signed_float.y == 2.0f and signed_float.z == -3.0f and signed_float.w == 4.0f);
-            PPR_TEST_ASSERT(unsigned_float.x == 1.0f and unsigned_float.y == 2.0f and unsigned_float.z == 3.0f and unsigned_float.w == 4.0f);
             PPR_TEST_ASSERT(
-                fallback_float[0] == -1.0f and fallback_float[1] == 2.0f and fallback_float[2] == -3.0f and fallback_float[3] == 4.0f and fallback_float[4] == -5.0f);
+                signed_float.x == -1.0f and
+                signed_float.y == 2.0f and
+                signed_float.z == -3.0f and
+                signed_float.w == 4.0f);
+            PPR_TEST_ASSERT(
+                unsigned_float.x == 1.0f and
+                unsigned_float.y == 2.0f and
+                unsigned_float.z == 3.0f and
+                unsigned_float.w == 4.0f);
+            PPR_TEST_ASSERT(
+                fallback_float[0] == -1.0f and
+                fallback_float[1] == 2.0f and
+                fallback_float[2] == -3.0f and
+                fallback_float[3] == 4.0f and
+                fallback_float[4] == -5.0f);
         };
 
         PPR_UNIT_TEST (generic_vector_rounding_fallback) {
@@ -145,7 +186,8 @@ namespace pP::tests::detail {
             value[4] = 5.75f;
             const math::Vector<i32, 5> result = truncToInt<float, 5u>(value);
 
-            PPR_TEST_ASSERT(result[0] == -1 and result[1] == -2 and result[2] == 3 and result[3] == 4 and result[4] == 5);
+            PPR_TEST_ASSERT(
+                result[0] == -1 and result[1] == -2 and result[2] == 3 and result[3] == 4 and result[4] == 5);
         };
     }
 } // namespace pP::tests::detail

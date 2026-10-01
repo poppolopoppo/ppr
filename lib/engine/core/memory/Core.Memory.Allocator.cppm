@@ -15,16 +15,23 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     // test if a pointer overlaps the given memory range
-    [[nodiscard]] constexpr bool overlap(const void *const storage, const std::size_t bytes, const void *const ptr) noexcept {
-        return (static_cast<const std::byte *>(ptr) >= static_cast<const std::byte *>(storage) &&
-                static_cast<const std::byte *>(ptr) < static_cast<const std::byte *>(storage) + bytes);
+    [[nodiscard]] constexpr bool overlap(
+        const void *const storage, const std::size_t bytes, const void *const ptr) noexcept {
+        return (
+            static_cast<const std::byte *>(ptr) >= static_cast<const std::byte *>(storage) &&
+            static_cast<const std::byte *>(ptr) < static_cast<const std::byte *>(storage) + bytes);
     }
 
     // test if a memory range overlaps another given memory range
-    [[nodiscard]] constexpr bool overlap(const void *const storage, const std::size_t storage_size, const void *const ptr, const std::size_t ptr_size) noexcept {
-        PPR_ASSERT(!overlap(storage, storage_size, ptr) || static_cast<const std::byte *>(ptr) + ptr_size <= static_cast<const std::byte *>(storage) + storage_size);
-        return (static_cast<const std::byte *>(ptr) >= static_cast<const std::byte *>(storage) &&
-                static_cast<const std::byte *>(ptr) + ptr_size <= static_cast<const std::byte *>(storage) + storage_size);
+    [[nodiscard]] constexpr bool overlap(
+        const void *const storage, const std::size_t storage_size, const void *const ptr,
+        const std::size_t ptr_size) noexcept {
+        PPR_ASSERT(
+            !overlap(storage, storage_size, ptr) ||
+            static_cast<const std::byte *>(ptr) + ptr_size <= static_cast<const std::byte *>(storage) + storage_size);
+        return (
+            static_cast<const std::byte *>(ptr) >= static_cast<const std::byte *>(storage) &&
+            static_cast<const std::byte *>(ptr) + ptr_size <= static_cast<const std::byte *>(storage) + storage_size);
     }
 
     // ------------------------------------------------------------------
@@ -33,42 +40,41 @@ export namespace pP::mem {
 
     namespace details {
         template<typename T>
-        concept TAllocator = requires(std::remove_cvref_t<T> &al, const std::size_t bytes, const std::align_val_t alignment, void *const ptr)
-        {
-            { al.allocateRaw(bytes, alignment) } -> std::convertible_to<std::allocation_result<void *> >;
+        concept TAllocator = requires (
+            std::remove_cvref_t<T> &al, const std::size_t bytes, const std::align_val_t alignment, void *const ptr) {
+            { al.allocateRaw(bytes, alignment) } -> std::convertible_to<std::allocation_result<void *>>;
             { al.deallocateRaw(ptr, bytes, alignment) };
         };
 
         template<typename T>
-        concept TOwningAllocator = requires(const std::remove_cvref_t<T> &al, const void *const ptr, const std::size_t size)
-        {
+        concept TOwningAllocator = requires (
+                                       const std::remove_cvref_t<T> &al, const void *const ptr,
+                                       const std::size_t size) {
             { al.owns(ptr, size) } -> std::convertible_to<bool>;
         } && TAllocator<T>;
 
         template<typename T>
-        concept TResizableAllocator = requires(std::remove_cvref_t<T> &al, void *const ptr, const std::size_t old_size, std::size_t &new_size)
-        {
+        concept TResizableAllocator = requires (
+                                          std::remove_cvref_t<T> &al, void *const ptr, const std::size_t old_size,
+                                          std::size_t &new_size) {
             { al.resizeRaw(ptr, old_size, new_size) } -> std::convertible_to<bool>;
         } && TAllocator<T>;
 
         template<typename T>
-        concept TBlockAllocator = requires()
-        {
+        concept TBlockAllocator = requires () {
             { T::block_size_v } -> std::convertible_to<std::size_t>;
         } && TAllocator<T>;
 
         template<typename T>
-        concept TArenaAllocator = requires(std::remove_cvref_t<T> &al, const void *const mark)
-        {
+        concept TArenaAllocator = requires (std::remove_cvref_t<T> &al, const void *const mark) {
             { al.watermark() } -> std::convertible_to<const void *>;
             { al.restore(mark) };
             { al.reset() };
         } && TOwningAllocator<T> && TResizableAllocator<T>;
 
         template<typename T>
-        concept TSlabAllocator = requires(std::remove_cvref_t<T> &al)
-        {
-            { al.data() } -> std::convertible_to<std::allocation_result<void *> >;
+        concept TSlabAllocator = requires (std::remove_cvref_t<T> &al) {
+            { al.data() } -> std::convertible_to<std::allocation_result<void *>>;
         } && TArenaAllocator<T>;
     }
 
@@ -76,8 +82,8 @@ export namespace pP::mem {
     // allocation holds an allocation result managed by an external allocator
     // ------------------------------------------------------------------
 
-    template<typename T, details::TAllocator AllocatorT,
-        std::align_val_t AlignmentV = alignof_v<T>,
+    template<
+        typename T, details::TAllocator AllocatorT, std::align_val_t AlignmentV = alignof_v<T>,
         std::unsigned_integral Size_T = std::size_t>
     class Allocation {
     public:
@@ -90,14 +96,14 @@ export namespace pP::mem {
 
         constexpr Allocation() noexcept = default;
 
-        constexpr Allocation(Allocation &&rvalue) noexcept
-            : m_block(std::move(rvalue.m_block)) {
+        constexpr Allocation(Allocation &&rvalue) noexcept : m_block(std::move(rvalue.m_block)) {
             rvalue.m_block = {};
         }
 
         // can't implement since the allocator is not accessible here
-        Allocation &operator =(Allocation &&rvalue) noexcept
-            requires is_stateless_v {
+        Allocation &operator=(Allocation &&rvalue) noexcept
+            requires is_stateless_v
+        {
             if (m_block.ptr != nullptr) {
                 deallocate();
             }
@@ -109,7 +115,7 @@ export namespace pP::mem {
 
         Allocation(const Allocation &) = delete;
 
-        Allocation &operator =(const Allocation &) = delete;
+        Allocation &operator=(const Allocation &) = delete;
 
         constexpr Allocation(const std::size_t n, AllocatorT &al) noexcept {
             allocate(al, n);
@@ -120,7 +126,8 @@ export namespace pP::mem {
         }
 
         explicit constexpr Allocation(const std::size_t n) noexcept
-            requires is_stateless_v {
+            requires is_stateless_v
+        {
             allocate(n);
         }
 
@@ -164,7 +171,8 @@ export namespace pP::mem {
             return static_cast<T *>(m_block.ptr)[index];
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(
+            const void *const ptr, const std::size_t size) const noexcept {
             return overlap(data(), size_bytes(), ptr, size);
         }
 
@@ -183,8 +191,8 @@ export namespace pP::mem {
             return discarded;
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *>
-        allocate(AllocatorT &al, const std::size_t n = 1u) noexcept {
+        [[maybe_unused]] constexpr std::allocation_result<T *> allocate(
+            AllocatorT &al, const std::size_t n = 1u) noexcept {
             PPR_ASSERT(!isValid() && "Allocation is already valid");
             const std::allocation_result<void *> blk = al.allocateRaw(sizeof(T) * n, AlignmentV);
             m_block.ptr = blk.ptr;
@@ -192,16 +200,16 @@ export namespace pP::mem {
             return {static_cast<T *>(m_block.ptr), m_block.count / sizeof(T)};
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *>
-        allocate(const std::size_t n = 1u) noexcept
-            requires is_stateless_v {
+        [[maybe_unused]] constexpr std::allocation_result<T *> allocate(const std::size_t n = 1u) noexcept
+            requires is_stateless_v
+        {
             AllocatorT al{};
             return allocate(al, n);
         }
 
-        [[nodiscard]] constexpr bool
-        resize(AllocatorT &al, const std::size_t new_size) noexcept
-            requires details::TResizableAllocator<AllocatorT> {
+        [[nodiscard]] constexpr bool resize(AllocatorT &al, const std::size_t new_size) noexcept
+            requires details::TResizableAllocator<AllocatorT>
+        {
             if (isValid()) [[likely]] {
                 if (const std::size_t raw_size = new_size * sizeof(T);
                     al.resizeRaw(m_block.ptr, m_block.count, raw_size)) {
@@ -218,14 +226,16 @@ export namespace pP::mem {
         }
 
         [[nodiscard]] constexpr bool resize(const std::size_t new_size) noexcept
-            requires is_stateless_v {
+            requires is_stateless_v
+        {
             AllocatorT al{};
             return resize(al, new_size);
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *>
-        relocate(AllocatorT &al, const std::size_t new_size) noexcept
-            requires pP::details::is_relocatable_v<T> {
+        [[maybe_unused]] constexpr std::allocation_result<T *> relocate(
+            AllocatorT &al, const std::size_t new_size) noexcept
+            requires pP::details::is_relocatable_v<T>
+        {
             if (m_block.ptr) [[likely]] {
                 if (new_size == 0u) [[unlikely]] {
                     deallocate(al);
@@ -252,9 +262,9 @@ export namespace pP::mem {
             return allocate(al, new_size);
         }
 
-        [[maybe_unused]] constexpr std::allocation_result<T *>
-        relocate(const std::size_t new_size) noexcept
-            requires is_stateless_v && pP::details::is_relocatable_v<T> {
+        [[maybe_unused]] constexpr std::allocation_result<T *> relocate(const std::size_t new_size) noexcept
+            requires is_stateless_v && pP::details::is_relocatable_v<T>
+        {
             AllocatorT al{};
             return relocate(al, new_size);
         }
@@ -266,7 +276,9 @@ export namespace pP::mem {
             }
         }
 
-        constexpr void deallocate() noexcept requires is_stateless_v {
+        constexpr void deallocate() noexcept
+            requires is_stateless_v
+        {
             AllocatorT al{};
             deallocate(al);
         }
@@ -276,23 +288,27 @@ export namespace pP::mem {
             m_block = {};
         }
 
-        constexpr void deallocateAssumeNotEmpty() noexcept requires is_stateless_v {
+        constexpr void deallocateAssumeNotEmpty() noexcept
+            requires is_stateless_v
+        {
             AllocatorT al{};
             deallocateAssumeNotEmpty(al);
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] constexpr T *create(AllocatorT &al, ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        [[nodiscard]] constexpr T *create(AllocatorT &al, ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             allocate(al, 1u);
             PPR_ASSERT(m_block.ptr);
             return std::construct_at(static_cast<T *>(m_block.ptr), std::forward<ArgsT>(args)...);
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] constexpr T *create(ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
-            requires is_stateless_v {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        [[nodiscard]] constexpr T *create(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires is_stateless_v
+        {
             AllocatorT al{};
             return create(al, std::forward<ArgsT>(args)...);
         }
@@ -306,14 +322,15 @@ export namespace pP::mem {
         }
 
         constexpr void destroy() noexcept(std::is_nothrow_destructible_v<T>)
-            requires is_stateless_v {
+            requires is_stateless_v
+        {
             AllocatorT al{};
             destroy(al);
         }
 
-        [[nodiscard]] constexpr bool operator ==(const Allocation &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator==(const Allocation &other) const noexcept = default;
 
-        [[nodiscard]] constexpr bool operator !=(const Allocation &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator!=(const Allocation &other) const noexcept = default;
     };
 
     // ------------------------------------------------------------------
@@ -327,31 +344,35 @@ export namespace pP::mem {
         // ------------------------------------------------------------------
 
         template<typename T>
-        [[nodiscard]] constexpr T *
-        allocate(this AllocatorT &al, const std::size_t n = 1u,
-                 const std::align_val_t alignment = alignof_v<T>) noexcept
-            requires details::TAllocator<AllocatorT> {
+        [[nodiscard]] constexpr T *allocate(
+            this AllocatorT &al, const std::size_t n = 1u, const std::align_val_t alignment = alignof_v<T>) noexcept
+            requires details::TAllocator<AllocatorT>
+        {
             return std::launder(static_cast<T *>(al.allocateRaw(sizeof(T) * n, alignment).ptr));
         }
 
         template<typename T>
-        [[nodiscard]] constexpr auto
-        allocate_at_least(this AllocatorT &al, const std::size_t n = 1u,
-                          const std::align_val_t alignment = alignof_v<T>) noexcept -> std::allocation_result<T *> {
+        [[nodiscard]] constexpr auto allocate_at_least(
+            this AllocatorT &al, const std::size_t n = 1u, const std::align_val_t alignment = alignof_v<T>) noexcept
+            -> std::allocation_result<T *> {
             const std::allocation_result<void *> raw = al.allocateRaw(sizeof(T) * n, alignment);
             return std::allocation_result<T *>(static_cast<T *>(raw.ptr), raw.count / sizeof(T));
         }
 
         template<typename T>
-        constexpr void deallocate(this AllocatorT &al, T *const ptr, const std::size_t n = 1u,
-                                  const std::align_val_t alignment = alignof_v<T>) noexcept
-            requires details::TAllocator<AllocatorT> {
+        constexpr void deallocate(
+            this AllocatorT &al, T *const ptr, const std::size_t n = 1u,
+            const std::align_val_t alignment = alignof_v<T>) noexcept
+            requires details::TAllocator<AllocatorT>
+        {
             al.deallocateRaw(ptr, sizeof(T) * n, alignment);
         }
 
         template<typename T>
-        [[nodiscard]] constexpr bool resize(this AllocatorT &al, T *const ptr, const std::size_t old_n, const std::size_t new_n) noexcept
-            requires details::TResizableAllocator<AllocatorT> {
+        [[nodiscard]] constexpr bool resize(
+            this AllocatorT &al, T *const ptr, const std::size_t old_n, const std::size_t new_n) noexcept
+            requires details::TResizableAllocator<AllocatorT>
+        {
             return al.resizeRaw(ptr, sizeof(T) * old_n, sizeof(T) * new_n);
         }
 
@@ -359,11 +380,13 @@ export namespace pP::mem {
         // fast relocation, overload Relocatable<> to enable for your types
         // ------------------------------------------------------------------
 
-        template<typename T> requires pP::details::is_relocatable_v<T>
-        [[nodiscard]] constexpr std::allocation_result<T *>
-        relocate(this AllocatorT &al, T *const ptr, const std::size_t old_n, const std::size_t new_n,
-                 const std::align_val_t alignment = alignof_v<T>) noexcept
-            requires pP::details::is_relocatable_v<T> {
+        template<typename T>
+            requires pP::details::is_relocatable_v<T>
+        [[nodiscard]] constexpr std::allocation_result<T *> relocate(
+            this AllocatorT &al, T *const ptr, const std::size_t old_n, const std::size_t new_n,
+            const std::align_val_t alignment = alignof_v<T>) noexcept
+            requires pP::details::is_relocatable_v<T>
+        {
             if (ptr) [[likely]] {
                 if (new_n == 0u) [[unlikely]] {
                     al.deallocate(ptr, old_n, alignment);
@@ -399,9 +422,8 @@ export namespace pP::mem {
 
         template<typename T, typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] constexpr T *
-        create(this AllocatorT &al, ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        [[nodiscard]] constexpr T *create(this AllocatorT &al, ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             if (T *const ptr = al.template allocate<T>()) [[likely]] {
                 std::construct_at(ptr, std::forward<ArgsT>(args)...);
                 return ptr;
@@ -411,23 +433,21 @@ export namespace pP::mem {
 
         template<typename T>
             requires std::is_copy_constructible_v<T>
-        [[nodiscard]] constexpr Allocation<T, AllocatorT>
-        create(this AllocatorT &al, const T &copy)
-            noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        [[nodiscard]] constexpr Allocation<T, AllocatorT> create(this AllocatorT &al, const T &copy) noexcept(
+            std::is_nothrow_copy_constructible_v<T>) {
             return al.template construct<T>(copy);
         }
 
         template<typename T>
             requires std::is_move_constructible_v<T>
-        [[nodiscard]] constexpr Allocation<T, AllocatorT>
-        create(this AllocatorT &al, T &&move)
-            noexcept(std::is_nothrow_move_constructible_v<T>) {
+        [[nodiscard]] constexpr Allocation<T, AllocatorT> create(this AllocatorT &al, T &&move) noexcept(
+            std::is_nothrow_move_constructible_v<T>) {
             return al.template construct<T>(std::move(move));
         }
 
-        template<typename T> requires std::is_destructible_v<T>
-        constexpr void destroy(this AllocatorT &al, T *ptr)
-            noexcept(std::is_nothrow_destructible_v<T>) {
+        template<typename T>
+            requires std::is_destructible_v<T>
+        constexpr void destroy(this AllocatorT &al, T *ptr) noexcept(std::is_nothrow_destructible_v<T>) {
             if (PPR_ENSURE(ptr != nullptr)) [[likely]] {
                 std::destroy_at(ptr);
                 al.deallocate(ptr);
@@ -440,18 +460,21 @@ export namespace pP::mem {
 
         template<typename T>
             requires pP::details::is_relocatable_v<T>
-        [[nodiscard]] constexpr std::span<T>
-        span(this AllocatorT &al, const std::size_t n, const std::align_val_t alignment = alignof_v<T>) noexcept
-            requires details::TAllocator<AllocatorT> {
+        [[nodiscard]] constexpr std::span<T> span(
+            this AllocatorT &al, const std::size_t n, const std::align_val_t alignment = alignof_v<T>) noexcept
+            requires details::TAllocator<AllocatorT>
+        {
             const std::allocation_result<T *> block = al.template allocate_at_least<T>(n, alignment);
             return std::span<T>(block.ptr, block.count);
         }
 
         template<std::ranges::contiguous_range RangeT>
-            requires pP::details::is_relocatable_v<std::ranges::range_value_t<RangeT> >
-        [[nodiscard]] constexpr std::span<std::ranges::range_value_t<RangeT> >
-        dup(this AllocatorT &al, RangeT &&values, const std::align_val_t alignment = alignof_v<std::ranges::range_value_t<RangeT> >) noexcept
-            requires details::TAllocator<AllocatorT> {
+            requires pP::details::is_relocatable_v<std::ranges::range_value_t<RangeT>>
+        [[nodiscard]] constexpr std::span<std::ranges::range_value_t<RangeT>> dup(
+            this AllocatorT &al, RangeT &&values,
+            const std::align_val_t alignment = alignof_v<std::ranges::range_value_t<RangeT>>) noexcept
+            requires details::TAllocator<AllocatorT>
+        {
             using value_type = std::ranges::range_value_t<RangeT>;
             const std::size_t n = std::ranges::size(values);
             const std::span<value_type> dst{al.template allocate<value_type>(n, alignment), n};
@@ -469,7 +492,7 @@ export namespace pP::mem {
 
     template<details::TAllocator AllocatorT>
     struct Inplace : AllocatorT {
-        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
+        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT>>);
 
         using allocator_type = AllocatorT;
         using allocator_type::allocator_type;
@@ -484,37 +507,30 @@ export namespace pP::mem {
 
     namespace details {
         template<TAllocator AllocatorT>
-        struct use_inplace : std::is_empty<AllocatorT> {
-        };
+        struct use_inplace : std::is_empty<AllocatorT> {};
 
         template<TAllocator AllocatorT>
-        struct use_inplace<Inplace<AllocatorT> > : std::true_type {
-        };
+        struct use_inplace<Inplace<AllocatorT>> : std::true_type {};
 
         template<TAllocator AllocatorT>
         inline constexpr bool use_inplace_v = use_inplace<AllocatorT>::value;
 
         template<TAllocator AllocatorT>
-        struct unwrap_inplace : std::type_identity<AllocatorT> {
-        };
+        struct unwrap_inplace : std::type_identity<AllocatorT> {};
 
         template<TAllocator AllocatorT>
-        struct unwrap_inplace<Inplace<AllocatorT> > : std::type_identity<AllocatorT> {
-        };
+        struct unwrap_inplace<Inplace<AllocatorT>> : std::type_identity<AllocatorT> {};
 
         template<TAllocator AllocatorT>
         using unwrap_inplace_t = unwrap_inplace<AllocatorT>::type;
 
         template<TAllocator AllocatorT>
         struct allocator_ref {
-            using type = std::conditional_t<
-                use_inplace_v<AllocatorT>,
-                AllocatorT,
-                std::reference_wrapper<AllocatorT> >;
+            using type = std::conditional_t<use_inplace_v<AllocatorT>, AllocatorT, std::reference_wrapper<AllocatorT>>;
         };
 
         template<TAllocator AllocatorT>
-        struct allocator_ref<Allocator<AllocatorT> > {
+        struct allocator_ref<Allocator<AllocatorT>> {
             using type = allocator_ref<AllocatorT>::type;
         };
 
@@ -523,47 +539,45 @@ export namespace pP::mem {
     }
 
     template<details::TAllocator AllocatorT>
-    using AllocatorForceRef = Allocator<details::unwrap_inplace_t<AllocatorT> >;
+    using AllocatorForceRef = Allocator<details::unwrap_inplace_t<AllocatorT>>;
 
     // compliant with std::allocator requirements from C++23
     template<details::TAllocator AllocatorT>
     class PPR_EMPTY_BASES Allocator : details::allocator_ref_t<AllocatorT>,
-                                      public AllocatorTraits<Allocator<AllocatorT> > {
-        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
+                                      public AllocatorTraits<Allocator<AllocatorT>> {
+        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT>>);
 
     public:
         static constexpr bool is_stateless_v = std::is_empty_v<AllocatorT>;
 
         using reference = details::allocator_ref_t<AllocatorT>;
 
-        constexpr Allocator()
-            noexcept(std::is_nothrow_default_constructible_v<reference>)
-            requires std::is_default_constructible_v<reference> = default;
+        constexpr Allocator() noexcept(std::is_nothrow_default_constructible_v<reference>)
+            requires std::is_default_constructible_v<reference>
+        = default;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Allocator(AllocatorT &value)
-            noexcept(std::is_nothrow_constructible_v<reference, AllocatorT &>)
+        constexpr Allocator(AllocatorT &value) noexcept(std::is_nothrow_constructible_v<reference, AllocatorT &>)
             requires std::is_constructible_v<reference, AllocatorT &>
             : reference(value) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Allocator(const AllocatorT &value)
-            noexcept(std::is_nothrow_constructible_v<reference, const AllocatorT &>)
+        constexpr Allocator(const AllocatorT &value) noexcept(
+            std::is_nothrow_constructible_v<reference, const AllocatorT &>)
             requires std::is_constructible_v<reference, const AllocatorT &>
             : reference(value) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Allocator(AllocatorT &&value)
-            noexcept(std::is_nothrow_constructible_v<reference, AllocatorT &&>)
+        constexpr Allocator(AllocatorT &&value) noexcept(std::is_nothrow_constructible_v<reference, AllocatorT &&>)
             requires std::is_constructible_v<reference, AllocatorT &&>
             : reference(std::move(value)) {
         }
 
         template<typename... ArgsT>
-        explicit constexpr Allocator([[maybe_unused]] std::in_place_t, ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<reference, ArgsT &&...>)
+        explicit constexpr Allocator([[maybe_unused]] std::in_place_t, ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<reference, ArgsT &&...>)
             requires std::is_constructible_v<reference, ArgsT &&...>
             : reference(std::forward<ArgsT>(args)...) {
         }
@@ -598,48 +612,53 @@ export namespace pP::mem {
             return AllocatorForceRef<AllocatorT>(materialize());
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment = max_align_v) noexcept {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment = max_align_v) noexcept {
             return materialize().allocateRaw(bytes, alignment);
         }
 
-        constexpr auto deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment = max_align_v) noexcept {
+        constexpr auto deallocateRaw(
+            void *const ptr, const std::size_t bytes, const std::align_val_t alignment = max_align_v) noexcept {
             return materialize().deallocateRaw(ptr, bytes, alignment);
         }
 
         [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept
-            requires details::TOwningAllocator<AllocatorT> {
+            requires details::TOwningAllocator<AllocatorT>
+        {
             return materialize().owns(ptr, size);
         }
 
-        [[nodiscard]] constexpr bool
-        resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
-            requires details::TResizableAllocator<AllocatorT> {
+        [[nodiscard]] constexpr bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
+            requires details::TResizableAllocator<AllocatorT>
+        {
             return materialize().resizeRaw(ptr, old_size, new_size);
         }
 
-        [[nodiscard]] constexpr const void *
-        watermark() const noexcept
-            requires details::TArenaAllocator<AllocatorT> {
+        [[nodiscard]] constexpr const void *watermark() const noexcept
+            requires details::TArenaAllocator<AllocatorT>
+        {
             return materialize().watermark();
         }
 
         void restore(const void *const mark) noexcept
-            requires details::TArenaAllocator<AllocatorT> {
+            requires details::TArenaAllocator<AllocatorT>
+        {
             materialize().restore(mark);
         }
 
         void reset() noexcept
-            requires details::TArenaAllocator<AllocatorT> {
+            requires details::TArenaAllocator<AllocatorT>
+        {
             materialize().reset();
         }
     };
 
     template<details::TAllocator AllocatorT>
-    Allocator(AllocatorT &al) -> Allocator<std::remove_cvref_t<AllocatorT> >;
+    Allocator(AllocatorT &al) -> Allocator<std::remove_cvref_t<AllocatorT>>;
 
     template<details::TAllocator AllocatorT>
-    Allocator(const AllocatorT &al) -> Allocator<std::remove_cvref_t<AllocatorT> >;
+    Allocator(const AllocatorT &al) -> Allocator<std::remove_cvref_t<AllocatorT>>;
 
     // ------------------------------------------------------------------
     // fallback to secondary if primary fails, and deallocate from the owning allocator
@@ -648,60 +667,61 @@ export namespace pP::mem {
     template<details::TOwningAllocator PrimaryT, details::TAllocator SecondaryT>
     class PPR_EMPTY_BASES Fallback : PrimaryT, SecondaryT {
     public:
-        constexpr Fallback() requires std::is_default_constructible_v<PrimaryT> &&
-                                      std::is_default_constructible_v<SecondaryT> = default;
+        constexpr Fallback()
+            requires std::is_default_constructible_v<PrimaryT> && std::is_default_constructible_v<SecondaryT>
+        = default;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Fallback(PrimaryT &&primary)
-            noexcept(std::is_nothrow_move_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
+        constexpr Fallback(PrimaryT &&primary) noexcept(
+            std::is_nothrow_move_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
             requires std::is_move_constructible_v<PrimaryT> && std::is_default_constructible_v<SecondaryT>
             : PrimaryT(std::move(primary)) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Fallback(SecondaryT &&secondary)
-            noexcept(std::is_nothrow_move_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
+        constexpr Fallback(SecondaryT &&secondary) noexcept(
+            std::is_nothrow_move_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
             requires std::is_move_constructible_v<SecondaryT> && std::is_default_constructible_v<PrimaryT>
             : SecondaryT(std::move(secondary)) {
         }
 
-        constexpr Fallback(PrimaryT &&primary, SecondaryT &&secondary)
-            noexcept(std::is_nothrow_move_constructible_v<PrimaryT> && std::is_nothrow_move_constructible_v<SecondaryT>)
+        constexpr Fallback(PrimaryT &&primary, SecondaryT &&secondary) noexcept(
+            std::is_nothrow_move_constructible_v<PrimaryT> && std::is_nothrow_move_constructible_v<SecondaryT>)
             requires std::is_move_constructible_v<PrimaryT> && std::is_move_constructible_v<SecondaryT>
-            : PrimaryT(std::move(primary)),
-              SecondaryT(std::move(secondary)) {
+            : PrimaryT(std::move(primary)), SecondaryT(std::move(secondary)) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Fallback(const PrimaryT &primary)
-            noexcept(std::is_nothrow_copy_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
+        constexpr Fallback(const PrimaryT &primary) noexcept(
+            std::is_nothrow_copy_constructible_v<PrimaryT> && std::is_nothrow_default_constructible_v<SecondaryT>)
             requires std::is_copy_constructible_v<PrimaryT> && std::is_default_constructible_v<SecondaryT>
             : PrimaryT(primary) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Fallback(const SecondaryT &secondary)
-            noexcept(std::is_nothrow_copy_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
+        constexpr Fallback(const SecondaryT &secondary) noexcept(
+            std::is_nothrow_copy_constructible_v<SecondaryT> && std::is_nothrow_default_constructible_v<PrimaryT>)
             requires std::is_copy_constructible_v<SecondaryT> && std::is_default_constructible_v<PrimaryT>
             : SecondaryT(secondary) {
         }
 
-        constexpr Fallback(const PrimaryT &primary, const SecondaryT &secondary)
-            noexcept(std::is_nothrow_copy_constructible_v<PrimaryT> && std::is_nothrow_copy_constructible_v<SecondaryT>)
+        constexpr Fallback(const PrimaryT &primary, const SecondaryT &secondary) noexcept(
+            std::is_nothrow_copy_constructible_v<PrimaryT> && std::is_nothrow_copy_constructible_v<SecondaryT>)
             requires std::is_copy_constructible_v<PrimaryT> && std::is_copy_constructible_v<SecondaryT>
-            : PrimaryT(primary),
-              SecondaryT(secondary) {
+            : PrimaryT(primary), SecondaryT(secondary) {
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
-            if (const std::allocation_result<void *> block = PrimaryT::allocateRaw(bytes, alignment); block.ptr) [[likely]] {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
+            if (const std::allocation_result<void *> block = PrimaryT::allocateRaw(bytes, alignment); block.ptr)
+                [[likely]] {
                 return block;
             }
             return SecondaryT::allocateRaw(bytes, alignment);
         }
 
-        constexpr void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        constexpr void deallocateRaw(
+            void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
             if (PrimaryT::owns(ptr, bytes)) [[likely]] {
                 PrimaryT::deallocateRaw(ptr, bytes, alignment);
             } else {
@@ -709,10 +729,10 @@ export namespace pP::mem {
             }
         }
 
-        [[nodiscard]] constexpr bool
-        resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
-            requires details::TResizableAllocator<PrimaryT> ||
-                     details::TResizableAllocator<SecondaryT> {
+        [[nodiscard]] constexpr bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
+            requires details::TResizableAllocator<PrimaryT> || details::TResizableAllocator<SecondaryT>
+        {
             if (PrimaryT::owns(ptr, old_size)) [[likely]] {
                 if constexpr (details::TResizableAllocator<PrimaryT>) {
                     return PrimaryT::resizeRaw(ptr, old_size, new_size);
@@ -737,50 +757,50 @@ export namespace pP::mem {
     public:
         static constexpr std::size_t size_threshold = SizeThresholdV;
 
-        constexpr Threshold() requires std::is_default_constructible_v<UnderT> &&
-                                       std::is_default_constructible_v<AboveT> = default;
+        constexpr Threshold()
+            requires std::is_default_constructible_v<UnderT> && std::is_default_constructible_v<AboveT>
+        = default;
 
-        explicit constexpr Threshold(UnderT &&under)
-            noexcept(std::is_nothrow_move_constructible_v<UnderT> && std::is_nothrow_default_constructible_v<AboveT>)
+        explicit constexpr Threshold(UnderT &&under) noexcept(
+            std::is_nothrow_move_constructible_v<UnderT> && std::is_nothrow_default_constructible_v<AboveT>)
             requires std::is_move_constructible_v<UnderT> && std::is_default_constructible_v<AboveT>
             : UnderT(std::move(under)) {
         }
 
-        explicit constexpr Threshold(AboveT &&above)
-            noexcept(std::is_nothrow_move_constructible_v<AboveT> && std::is_nothrow_default_constructible_v<UnderT>)
+        explicit constexpr Threshold(AboveT &&above) noexcept(
+            std::is_nothrow_move_constructible_v<AboveT> && std::is_nothrow_default_constructible_v<UnderT>)
             requires std::is_move_constructible_v<AboveT> && std::is_default_constructible_v<UnderT>
             : AboveT(std::move(above)) {
         }
 
-        constexpr Threshold(UnderT &&under, AboveT &&above)
-            noexcept(std::is_nothrow_move_constructible_v<UnderT> && std::is_nothrow_move_constructible_v<AboveT>)
+        constexpr Threshold(UnderT &&under, AboveT &&above) noexcept(
+            std::is_nothrow_move_constructible_v<UnderT> && std::is_nothrow_move_constructible_v<AboveT>)
             requires std::is_move_constructible_v<UnderT> && std::is_move_constructible_v<AboveT>
-            : UnderT(std::move(under)),
-              AboveT(std::move(above)) {
+            : UnderT(std::move(under)), AboveT(std::move(above)) {
         }
 
-        explicit constexpr Threshold(const UnderT &under)
-            noexcept(std::is_nothrow_copy_constructible_v<UnderT> && std::is_nothrow_default_constructible_v<AboveT>)
+        explicit constexpr Threshold(const UnderT &under) noexcept(
+            std::is_nothrow_copy_constructible_v<UnderT> && std::is_nothrow_default_constructible_v<AboveT>)
             requires std::is_copy_constructible_v<UnderT> && std::is_default_constructible_v<AboveT>
             : UnderT(under) {
         }
 
-        constexpr Threshold(const UnderT &under, const AboveT &above)
-            noexcept(std::is_nothrow_copy_constructible_v<UnderT> && std::is_nothrow_copy_constructible_v<AboveT>)
+        constexpr Threshold(const UnderT &under, const AboveT &above) noexcept(
+            std::is_nothrow_copy_constructible_v<UnderT> && std::is_nothrow_copy_constructible_v<AboveT>)
             requires std::is_copy_constructible_v<UnderT> && std::is_copy_constructible_v<AboveT>
-            : UnderT(under),
-              AboveT(above) {
+            : UnderT(under), AboveT(above) {
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             if (bytes <= size_threshold) {
                 return UnderT::allocateRaw(bytes, alignment);
             }
             return AboveT::allocateRaw(bytes, alignment);
         }
 
-        constexpr void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        constexpr void deallocateRaw(
+            void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
             if (bytes <= size_threshold) {
                 UnderT::deallocateRaw(ptr, bytes, alignment);
             } else {
@@ -788,10 +808,10 @@ export namespace pP::mem {
             }
         }
 
-        [[nodiscard]] constexpr bool
-        resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
-            requires details::TResizableAllocator<UnderT> ||
-                     details::TResizableAllocator<AboveT> {
+        [[nodiscard]] constexpr bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
+            requires details::TResizableAllocator<UnderT> || details::TResizableAllocator<AboveT>
+        {
             if (old_size <= size_threshold) {
                 if constexpr (details::TResizableAllocator<UnderT>) {
                     if (new_size <= size_threshold) {
@@ -848,8 +868,8 @@ export namespace pP::mem {
             return owned;
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             if (m_status == status_used_) [[unlikely]] {
                 return {}; // OOM — let caller decide
             }
@@ -865,22 +885,27 @@ export namespace pP::mem {
             return {aligned_ptr, space};
         }
 
-        constexpr void deallocateRaw(const void *const ptr,
-                                     const std::size_t bytes,
-                                     [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        constexpr void deallocateRaw(
+            const void *const ptr, const std::size_t bytes,
+            [[maybe_unused]] const std::align_val_t alignment) noexcept {
             PPR_ASSERT(m_status == status_used_ && "Trying to deallocate an in-situ buffer that isn't exhausted");
-            PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, bytes) && "Trying to deallocate a pointer outside of the in-situ buffer");
+            PPR_ASSERT(
+                overlap(m_storage, InSituSizeV, ptr, bytes) &&
+                "Trying to deallocate a pointer outside of the in-situ buffer");
 
             m_status = status_free_;
             poisonReserved(const_cast<void *>(ptr), bytes);
         }
 
-        [[nodiscard]] constexpr bool
-        resizeRaw(void *const ptr, [[maybe_unused]] const std::size_t old_size, const std::size_t new_size) noexcept {
+        [[nodiscard]] constexpr bool resizeRaw(
+            void *const ptr, [[maybe_unused]] const std::size_t old_size, const std::size_t new_size) noexcept {
             PPR_ASSERT(ptr && m_status == status_used_);
-            PPR_ASSERT(overlap(m_storage, InSituSizeV, ptr, old_size) && "Trying to resize a pointer outside of the in-situ buffer");
+            PPR_ASSERT(
+                overlap(m_storage, InSituSizeV, ptr, old_size) &&
+                "Trying to resize a pointer outside of the in-situ buffer");
             PPR_ASSUME(ptr != nullptr);
-            if (static_cast<const std::byte *>(ptr) + new_size <= static_cast<const std::byte *>(m_storage) + InSituSizeV) {
+            if (static_cast<const std::byte *>(ptr) + new_size <=
+                static_cast<const std::byte *>(m_storage) + InSituSizeV) {
                 if (old_size < new_size) {
                     unpoisonUninitialized(static_cast<std::byte *>(ptr) + old_size, new_size - old_size);
                 }
@@ -890,23 +915,21 @@ export namespace pP::mem {
         }
     };
 
-    template<std::size_t InSituSizeV,
-        details::TAllocator FallbackT,
-        std::align_val_t AlignmentV = max_align_v>
+    template<std::size_t InSituSizeV, details::TAllocator FallbackT, std::align_val_t AlignmentV = max_align_v>
         requires (InSituSizeV > 0)
-    using InSituFallback = Inplace<Fallback<InSitu<InSituSizeV, AlignmentV>, FallbackT> >;
+    using InSituFallback = Inplace<Fallback<InSitu<InSituSizeV, AlignmentV>, FallbackT>>;
 
-    template<std::size_t InSituSizeV,
-        details::TAllocator FallbackT,
-        std::align_val_t AlignmentV = max_align_v>
+    template<std::size_t InSituSizeV, details::TAllocator FallbackT, std::align_val_t AlignmentV = max_align_v>
         requires (InSituSizeV > 0)
-    using InSituThreshold = Inplace<Threshold<InSitu<InSituSizeV, AlignmentV>, InSituSizeV, FallbackT> >;
+    using InSituThreshold = Inplace<Threshold<InSitu<InSituSizeV, AlignmentV>, InSituSizeV, FallbackT>>;
 
     // ------------------------------------------------------------------
     // Most Recently Used block cache
     // ------------------------------------------------------------------
 
-    template<std::size_t BlockSizeV, details::TAllocator AllocatorT, std::size_t MaxNumBlocks = 2u, std::align_val_t AlignmentV = max_align_v>
+    template<
+        std::size_t BlockSizeV, details::TAllocator AllocatorT, std::size_t MaxNumBlocks = 2u,
+        std::align_val_t AlignmentV = max_align_v>
         requires (BlockSizeV > 0u && MaxNumBlocks > 0u)
     class LocalCache : AllocatorT {
         RingBuffer<void *, MaxNumBlocks> m_mru{};
@@ -916,13 +939,12 @@ export namespace pP::mem {
 
         constexpr LocalCache() noexcept(std::is_nothrow_constructible_v<AllocatorT>) = default;
 
-        explicit constexpr LocalCache(const AllocatorT &alloc)
-            noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+        explicit constexpr LocalCache(const AllocatorT &alloc) noexcept(
+            std::is_nothrow_copy_constructible_v<AllocatorT>)
             : AllocatorT(alloc) {
         }
 
-        explicit constexpr LocalCache(AllocatorT &&alloc)
-            noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+        explicit constexpr LocalCache(AllocatorT &&alloc) noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
             : AllocatorT(std::move(alloc)) {
         }
 
@@ -940,12 +962,13 @@ export namespace pP::mem {
         }
 
         [[nodiscard]] constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept
-            requires details::TOwningAllocator<AllocatorT> {
+            requires details::TOwningAllocator<AllocatorT>
+        {
             return AllocatorT::owns(ptr, size);
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignment <= AlignmentV);
 
@@ -958,9 +981,9 @@ export namespace pP::mem {
             return AllocatorT::allocateRaw(bytes, AlignmentV);
         }
 
-        constexpr void deallocateRaw(void *const ptr,
-                                     [[maybe_unused]] const std::size_t bytes,
-                                     [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        constexpr void deallocateRaw(
+            void *const ptr, [[maybe_unused]] const std::size_t bytes,
+            [[maybe_unused]] const std::align_val_t alignment) noexcept {
             PPR_ASSERT(ptr && bytes == block_size_v);
             PPR_ASSERT(alignment <= AlignmentV);
 
@@ -978,9 +1001,8 @@ export namespace pP::mem {
     // pooling allocator for fixed-size blocks with out-of-band metadata
     // ------------------------------------------------------------------
 
-    template<std::size_t BlockSizeV,
-        details::TAllocator BlockAllocatorT,
-        std::size_t MaxNumBlocksV,
+    template<
+        std::size_t BlockSizeV, details::TAllocator BlockAllocatorT, std::size_t MaxNumBlocksV,
         std::align_val_t AlignmentV = max_align_v>
         requires (BlockSizeV > 0u && MaxNumBlocksV > 0u && (MaxNumBlocksV & bit_count_v<std::size_t>) == 0u)
     class Pooling : BlockAllocatorT {
@@ -1000,8 +1022,9 @@ export namespace pP::mem {
                 const u32 block_index = desired_blocks.popAssumeNotEmpty();
 
                 if (const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
-                    atomic_blocks.compare_exchange_strong(expected_blocks.m_bits, desired_blocks.m_bits,
-                                                          std::memory_order_acquire, std::memory_order_relaxed)) [[likely]] {
+                    atomic_blocks.compare_exchange_strong(
+                        expected_blocks.m_bits, desired_blocks.m_bits, std::memory_order_acquire,
+                        std::memory_order_relaxed)) [[likely]] {
                     PPR_ASSERT(m_pools[pool_index]);
                     m_num_free_blocks.fetch_sub(1u);
                     return m_pools[pool_index] + block_index * block_size_v;
@@ -1012,7 +1035,8 @@ export namespace pP::mem {
         }
 
         void deallocateLockFree_(const u32 pool_index, const void *const ptr) noexcept {
-            const std::size_t byte_offset = checked_cast<std::size_t>(static_cast<const std::byte *>(ptr) - m_pools[pool_index]);
+            const std::size_t byte_offset = checked_cast<std::size_t>(
+                static_cast<const std::byte *>(ptr) - m_pools[pool_index]);
             const u32 block_index = checked_cast<u32>(byte_offset / block_size_v);
             PPR_ASSERT(Bitmask<page_mask_t>::bit_count_v > block_index);
             PPR_ASSERT(Bitmask<page_mask_t>{m_blocks[pool_index]}.test(block_index) == false);
@@ -1036,8 +1060,7 @@ export namespace pP::mem {
             // check if the pools is still empty to avoid race-conditions
             if (m_num_free_blocks.load(std::memory_order_relaxed) != 0u) {
                 for (u32 pool_index = 0u; pool_index < m_pools.size(); pool_index++) {
-                    if (void *const pool_block = allocateLockFree_(pool_index);
-                        pool_block != nullptr) {
+                    if (void *const pool_block = allocateLockFree_(pool_index); pool_block != nullptr) {
                         if (p_hint != nullptr) {
                             *p_hint = pool_index;
                         }
@@ -1062,7 +1085,8 @@ export namespace pP::mem {
             PPR_ASSERT(m_pools[free_pool_index] == nullptr);
             PPR_ASSERT(m_blocks[free_pool_index] == 0u);
 
-            m_pools[free_pool_index] = static_cast<std::byte *>(BlockAllocatorT::allocateRaw(pool_size_v, AlignmentV).ptr);
+            m_pools[free_pool_index] = static_cast<std::byte *>(
+                BlockAllocatorT::allocateRaw(pool_size_v, AlignmentV).ptr);
             if (m_pools[free_pool_index] == nullptr) {
                 throw std::bad_alloc();
             }
@@ -1093,8 +1117,8 @@ export namespace pP::mem {
             const std::atomic_ref<page_mask_t> atomic_blocks(std::ref(m_blocks[pool_index]));
 
             if (not atomic_blocks.compare_exchange_strong(
-                expected_blocks.m_bits, all_blocks_reserved.m_bits,
-                std::memory_order_acquire, std::memory_order_relaxed)) [[unlikely]] {
+                    expected_blocks.m_bits, all_blocks_reserved.m_bits, std::memory_order_acquire,
+                    std::memory_order_relaxed)) [[unlikely]] {
                 return;
             }
 
@@ -1110,7 +1134,8 @@ export namespace pP::mem {
         alignas(hal::cacheline_size_v) std::mutex m_barrier_for_pools{};
 
         [[maybe_unused]]
-        const std::byte m_padding_for_alignment[hal::cacheline_size_v - sizeof(m_barrier_for_pools) % hal::cacheline_size_v]{};
+        const std::byte
+            m_padding_for_alignment[hal::cacheline_size_v - sizeof(m_barrier_for_pools) % hal::cacheline_size_v]{};
 
         std::atomic<std::size_t> m_num_free_blocks{0u};
 
@@ -1120,13 +1145,13 @@ export namespace pP::mem {
     public:
         constexpr Pooling() noexcept(std::is_nothrow_constructible_v<BlockAllocatorT>) = default;
 
-        explicit constexpr Pooling(const BlockAllocatorT &alloc)
-            noexcept(std::is_nothrow_copy_constructible_v<BlockAllocatorT>)
+        explicit constexpr Pooling(const BlockAllocatorT &alloc) noexcept(
+            std::is_nothrow_copy_constructible_v<BlockAllocatorT>)
             : BlockAllocatorT(alloc) {
         }
 
-        explicit constexpr Pooling(BlockAllocatorT &&alloc)
-            noexcept(std::is_nothrow_move_constructible_v<BlockAllocatorT>)
+        explicit constexpr Pooling(BlockAllocatorT &&alloc) noexcept(
+            std::is_nothrow_move_constructible_v<BlockAllocatorT>)
             : BlockAllocatorT(std::move(alloc)) {
         }
 
@@ -1138,7 +1163,8 @@ export namespace pP::mem {
                     continue;
                 }
 
-                PPR_ASSERT(Bitmask<page_mask_t>(m_blocks[pool_index]).all() &&
+                PPR_ASSERT(
+                    Bitmask<page_mask_t>(m_blocks[pool_index]).all() &&
                     "Destroying a Pooling allocator with live allocations");
 
                 poisonDestroyed(m_pools[pool_index], pool_size_v);
@@ -1148,13 +1174,11 @@ export namespace pP::mem {
             }
         }
 
-        [[nodiscard]] constexpr bool owns(const void *const ptr,
-                                          const std::size_t size,
-                                          u32 *p_hint = nullptr) const noexcept {
+        [[nodiscard]] constexpr bool owns(
+            const void *const ptr, const std::size_t size, u32 *p_hint = nullptr) const noexcept {
             PPR_ASSERT(ptr != nullptr);
 
-            if (p_hint && *p_hint < num_pools_v &&
-                overlap(m_pools[*p_hint], pool_size_v, ptr)) [[likely]] {
+            if (p_hint && *p_hint < num_pools_v && overlap(m_pools[*p_hint], pool_size_v, ptr)) [[likely]] {
                 return true;
             }
 
@@ -1163,10 +1187,9 @@ export namespace pP::mem {
             });
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *>
-        allocateRaw([[maybe_unused]] const std::size_t bytes,
-                    [[maybe_unused]] const std::align_val_t alignment,
-                    u32 *p_hint = nullptr) noexcept {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            [[maybe_unused]] const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment,
+            u32 *p_hint = nullptr) noexcept {
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignForward(static_cast<std::size_t>(alignment), block_size_v) == block_size_v);
 
@@ -1204,10 +1227,9 @@ export namespace pP::mem {
             return {pool_block, block_size_v};
         }
 
-        constexpr void deallocateRaw(const void *const ptr,
-                                     [[maybe_unused]] const std::size_t bytes,
-                                     [[maybe_unused]] const std::align_val_t alignment,
-                                     u32 *p_hint = nullptr) noexcept {
+        constexpr void deallocateRaw(
+            const void *const ptr, [[maybe_unused]] const std::size_t bytes,
+            [[maybe_unused]] const std::align_val_t alignment, u32 *p_hint = nullptr) noexcept {
             PPR_ASSERT(ptr != nullptr);
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignForward(static_cast<std::size_t>(alignment), block_size_v) == block_size_v);
@@ -1237,17 +1259,14 @@ export namespace pP::mem {
 
     namespace details {
         template<typename T>
-        concept TPoolingHint = requires()
-        {
+        concept TPoolingHint = requires () {
             { T::value } -> std::convertible_to<u32 &>;
         };
     }
 
-    template<std::size_t BlockSizeV,
-        details::TAllocator BlockAllocatorT,
-        std::size_t MaxNumBlocksV,
-        details::TPoolingHint PoolingHintT,
-        std::align_val_t AlignmentV = max_align_v>
+    template<
+        std::size_t BlockSizeV, details::TAllocator BlockAllocatorT, std::size_t MaxNumBlocksV,
+        details::TPoolingHint PoolingHintT, std::align_val_t AlignmentV = max_align_v>
         requires (BlockSizeV > 0u && MaxNumBlocksV > 0u && (MaxNumBlocksV & bit_count_v<std::size_t>) == 0u)
     class HintedPooling : Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV> {
         using super_t = Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV>;
@@ -1266,7 +1285,8 @@ export namespace pP::mem {
             return super_t::owns(ptr, bytes, getHintPtr());
         }
 
-        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
+        [[nodiscard]] constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) {
             return super_t::allocateRaw(bytes, alignment, getHintPtr());
         }
 
@@ -1282,31 +1302,28 @@ export namespace pP::mem {
     template<details::TAllocator AllocatorT, AllocatorT &(*GetAllocatorF)() noexcept>
     class Accessor {
     public:
-        [[nodiscard]] PPR_FORCE_INLINE
-        static constexpr std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE static constexpr std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             return GetAllocatorF().allocateRaw(bytes, alignment);
         }
 
         PPR_FORCE_INLINE
-        static constexpr void
-        deallocateRaw(const void *const ptr,
-                      const std::size_t bytes,
-                      const std::align_val_t alignment) noexcept {
+        static constexpr void deallocateRaw(
+            const void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
             return GetAllocatorF().deallocateRaw(ptr, bytes, alignment);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static constexpr bool
-        owns(const void *const ptr, const std::size_t size) noexcept
-            requires details::TOwningAllocator<AllocatorT> {
+        [[nodiscard]] PPR_FORCE_INLINE static constexpr bool owns(
+            const void *const ptr, const std::size_t size) noexcept
+            requires details::TOwningAllocator<AllocatorT>
+        {
             return GetAllocatorF().owns(ptr, size);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static constexpr bool
-        resizeRaw(const void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
-            requires details::TResizableAllocator<AllocatorT> {
+        [[nodiscard]] PPR_FORCE_INLINE static constexpr bool resizeRaw(
+            const void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept
+            requires details::TResizableAllocator<AllocatorT>
+        {
             return GetAllocatorF().resizeRaw(ptr, old_size, new_size);
         }
     };
@@ -1335,42 +1352,41 @@ export namespace pP::mem {
         using allocator_type::operator=;
 
         template<typename U>
-        explicit constexpr STL(const STL<U, AllocatorT> &other)
-            noexcept(std::is_nothrow_copy_constructible_v<allocator_type>)
+        explicit constexpr STL(const STL<U, AllocatorT> &other) noexcept(
+            std::is_nothrow_copy_constructible_v<allocator_type>)
             requires std::is_copy_constructible_v<allocator_type>
             : allocator_type(other) {
         }
 
         template<typename U>
-        constexpr STL &operator=(const STL<U, AllocatorT> &other)
-            noexcept(std::is_nothrow_copy_assignable_v<allocator_type>)
-            requires std::is_copy_assignable_v<allocator_type> {
+        constexpr STL &operator=(const STL<U, AllocatorT> &other) noexcept(
+            std::is_nothrow_copy_assignable_v<allocator_type>)
+            requires std::is_copy_assignable_v<allocator_type>
+        {
             allocator_type::operator=(other);
             return *this;
         }
 
         template<typename U>
-        explicit constexpr STL(STL<U, AllocatorT> &&other)
-            noexcept(std::is_nothrow_move_constructible_v<allocator_type>)
+        explicit constexpr STL(STL<U, AllocatorT> &&other) noexcept(
+            std::is_nothrow_move_constructible_v<allocator_type>)
             requires std::is_move_constructible_v<allocator_type>
             : allocator_type(std::move(other)) {
         }
 
         template<typename U>
-        constexpr STL &operator=(STL<U, AllocatorT> &&other)
-            noexcept(std::is_nothrow_move_assignable_v<allocator_type>)
-            requires std::is_move_assignable_v<allocator_type> {
+        constexpr STL &operator=(STL<U, AllocatorT> &&other) noexcept(std::is_nothrow_move_assignable_v<allocator_type>)
+            requires std::is_move_assignable_v<allocator_type>
+        {
             allocator_type::operator=(std::move(other));
             return *this;
         }
 
-        [[nodiscard]] constexpr
-        value_type *allocate(const size_type n) {
+        [[nodiscard]] constexpr value_type *allocate(const size_type n) {
             return allocator_type::template allocate<value_type>(n);
         }
 
-        [[nodiscard]] constexpr
-        std::allocation_result<value_type *> allocate_at_least(const size_type n) {
+        [[nodiscard]] constexpr std::allocation_result<value_type *> allocate_at_least(const size_type n) {
             return allocator_type::template allocate_at_least<value_type>(n);
         }
 
@@ -1388,8 +1404,7 @@ export namespace pP::mem {
     };
 
     template<typename T, details::TAllocator AllocatorT>
-    struct details::use_inplace<STL<T, AllocatorT> > : use_inplace<Allocator<AllocatorT> > {
-    };
+    struct details::use_inplace<STL<T, AllocatorT>> : use_inplace<Allocator<AllocatorT>> {};
 }
 
 // ------------------------------------------------------------------

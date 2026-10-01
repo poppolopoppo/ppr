@@ -82,50 +82,106 @@ export namespace pP {
     public:
         explicit Camera(ECameraProjection projection = ECameraProjection::perspective) noexcept;
 
-        [[nodiscard]] const CameraSnapshot &getSnapshot() const noexcept { return m_actual_state; }
-        [[nodiscard]] const std::optional<CameraSnapshot> &getPreviousSnapshot() const noexcept { return m_previous_state; }
+        [[nodiscard]] const CameraSnapshot &getSnapshot() const noexcept {
+            return m_actual_state;
+        }
+        [[nodiscard]] const std::optional<CameraSnapshot> &getPreviousSnapshot() const noexcept {
+            return m_previous_state;
+        }
 
-        [[nodiscard]] bool hasCameraCut() const noexcept { return m_actual_state.m_has_camera_cut; }
+        [[nodiscard]] bool hasCameraCut() const noexcept {
+            return m_actual_state.m_has_camera_cut;
+        }
 
-        [[nodiscard]] std::size_t getRevision() const noexcept { return m_actual_state.m_revision; }
+        [[nodiscard]] std::size_t getRevision() const noexcept {
+            return m_actual_state.m_revision;
+        }
 
-        [[nodiscard]] ECameraProjection getCameraMode() const noexcept { return m_actual_state.m_camera_mode; }
+        [[nodiscard]] ECameraProjection getCameraMode() const noexcept {
+            return m_actual_state.m_camera_mode;
+        }
 
         void setCameraMode(ECameraProjection projection) noexcept;
 
-        [[nodiscard]] const float3 &getOrigin() const noexcept { return m_actual_state.m_origin; }
-        [[nodiscard]] const Quaternion &getBasis() const noexcept { return m_actual_state.m_basis; }
+        [[nodiscard]] const float3 &getOrigin() const noexcept {
+            return m_actual_state.m_origin;
+        }
+        [[nodiscard]] const Quaternion &getBasis() const noexcept {
+            return m_actual_state.m_basis;
+        }
 
-        [[nodiscard]] const float3 &getUp() const noexcept { return m_actual_state.m_up; }
-        [[nodiscard]] const float3 &getForward() const noexcept { return m_actual_state.m_forward; }
-        [[nodiscard]] const float3 &getRight() const noexcept { return m_actual_state.m_right; }
+        [[nodiscard]] const float3 &getUp() const noexcept {
+            return m_actual_state.m_up;
+        }
+        [[nodiscard]] const float3 &getForward() const noexcept {
+            return m_actual_state.m_forward;
+        }
+        [[nodiscard]] const float3 &getRight() const noexcept {
+            return m_actual_state.m_right;
+        }
 
-        [[nodiscard]] float getFov() const noexcept { return m_actual_state.m_fov; }
-        [[nodiscard]] float getFarZ() const noexcept { return m_actual_state.m_z_far; }
-        [[nodiscard]] float getNearZ() const noexcept { return m_actual_state.m_z_near; }
+        [[nodiscard]] float getFov() const noexcept {
+            return m_actual_state.m_fov;
+        }
+        [[nodiscard]] float getFarZ() const noexcept {
+            return m_actual_state.m_z_far;
+        }
+        [[nodiscard]] float getNearZ() const noexcept {
+            return m_actual_state.m_z_near;
+        }
 
-        [[nodiscard]] const float4x4 &getProjection() const noexcept { return m_actual_state.m_projection; }
-        [[nodiscard]] const float4x4 &getView() const noexcept { return m_actual_state.m_view; }
-        [[nodiscard]] const float4x4 &getViewProjection() const noexcept { return m_actual_state.m_view_projection; }
-        [[nodiscard]] const float4x4 &getInvertProjection() const noexcept { return m_actual_state.m_invert_projection; }
-        [[nodiscard]] const float4x4 &getInvertView() const noexcept { return m_actual_state.m_invert_view; }
-        [[nodiscard]] const float4x4 &getInvertViewProjection() const noexcept { return m_actual_state.m_invert_view_projection; }
+        [[nodiscard]] const float4x4 &getProjection() const noexcept {
+            return m_actual_state.m_projection;
+        }
+        [[nodiscard]] const float4x4 &getView() const noexcept {
+            return m_actual_state.m_view;
+        }
+        [[nodiscard]] const float4x4 &getViewProjection() const noexcept {
+            return m_actual_state.m_view_projection;
+        }
+        [[nodiscard]] const float4x4 &getInvertProjection() const noexcept {
+            return m_actual_state.m_invert_projection;
+        }
+        [[nodiscard]] const float4x4 &getInvertView() const noexcept {
+            return m_actual_state.m_invert_view;
+        }
+        [[nodiscard]] const float4x4 &getInvertViewProjection() const noexcept {
+            return m_actual_state.m_invert_view_projection;
+        }
 
-        [[nodiscard]] const Frustum &getFrustum() const noexcept { return m_actual_state.m_frustum; }
-        [[nodiscard]] const RayFrustum &getRayFrustum() const noexcept { return m_actual_state.m_ray_frustum; }
+        [[nodiscard]] const Frustum &getFrustum() const noexcept {
+            return m_actual_state.m_frustum;
+        }
+        [[nodiscard]] const RayFrustum &getRayFrustum() const noexcept {
+            return m_actual_state.m_ray_frustum;
+        }
 
-        [[nodiscard]] const float3 &getAngularVelocity() const noexcept { return m_angular_velocity; }
-        [[nodiscard]] const float3 &getTranslationalVelocity() const noexcept { return m_translational_velocity; }
-        [[nodiscard]] float3 getCameraVelocity() const noexcept { return m_angular_velocity + m_translational_velocity; }
+        [[nodiscard]] const float3 &getAngularVelocity() const noexcept {
+            return m_angular_velocity;
+        }
+        [[nodiscard]] const float3 &getTranslationalVelocity() const noexcept {
+            return m_translational_velocity;
+        }
+        [[nodiscard]] float3 getCameraVelocity() const noexcept {
+            return m_angular_velocity + m_translational_velocity;
+        }
 
-        [[nodiscard]] const float2 &getJitter() const noexcept { return m_actual_state.m_jitter; }
+        [[nodiscard]] const float2 &getJitter() const noexcept {
+            return m_actual_state.m_jitter;
+        }
 
         // Non-owning view: caller backing storage must outlive updateModel.
         void setJitterSamples(std::optional<CameraJitterSamples> pixel_offsets) noexcept;
 
-        [[nodiscard]] const float4x4 &getJitteredProjection() const noexcept { return m_actual_state.m_jittered_projection; }
-        [[nodiscard]] const float4x4 &getJitteredViewProjection() const noexcept { return m_actual_state.m_jittered_view_projection; }
-        [[nodiscard]] const float4x4 &getInvertJitteredViewProjection() const noexcept { return m_actual_state.m_invert_jittered_view_projection; }
+        [[nodiscard]] const float4x4 &getJitteredProjection() const noexcept {
+            return m_actual_state.m_jittered_projection;
+        }
+        [[nodiscard]] const float4x4 &getJitteredViewProjection() const noexcept {
+            return m_actual_state.m_jittered_view_projection;
+        }
+        [[nodiscard]] const float4x4 &getInvertJitteredViewProjection() const noexcept {
+            return m_actual_state.m_invert_jittered_view_projection;
+        }
 
         void signalCameraCutNextFrame() noexcept {
             m_has_camera_cut_next_frame = true;

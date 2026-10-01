@@ -14,8 +14,14 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (all_backends_use_one_projection) {
             const auto perspective = rhi::getPerspectiveMatrix(0.75f, 16.0f / 9.0f, 0.1f, 1000.0f);
             const auto ortho = rhi::getOrthoMatrix(800.0f, 600.0f);
-            PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(perspective.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
-            PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(ortho.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
+            PPR_TEST_ASSERT(
+                std::ranges::all_of(std::span<const float, 16>(perspective.data(), 16), [](const float value) noexcept {
+                    return std::isfinite(value);
+                }));
+            PPR_TEST_ASSERT(
+                std::ranges::all_of(std::span<const float, 16>(ortho.data(), 16), [](const float value) noexcept {
+                    return std::isfinite(value);
+                }));
             PPR_TEST_ASSERT(std::abs(perspective(2, 3) - 1.0f) < 1e-4f);
             PPR_TEST_ASSERT(std::abs(ortho(0, 0) - 2.0f / 800.0f) < 1e-7f);
             PPR_TEST_ASSERT(ortho(1, 1) > 0.0f);
@@ -27,8 +33,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (window_viewport_layout_switch_bumps_revision) {
             Window window{
                 WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
-                WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}
-            };
+                WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
             WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
             PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{800, 600}});
             const auto base_revision = viewport.getViewportRevision();
@@ -50,11 +55,13 @@ namespace pP::tests::detail {
             Camera cam;
             cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, valid);
             cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, valid);
-            PPR_TEST_ASSERT(cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
+            PPR_TEST_ASSERT(
+                cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
             const auto revision = cam.getRevision();
 
             cam.updateModel(std::chrono::milliseconds{16}, CameraModel{}, zero);
-            PPR_TEST_ASSERT(cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
+            PPR_TEST_ASSERT(
+                cam.getSnapshot().m_viewport_size.x == 800.0f && cam.getSnapshot().m_viewport_size.y == 600.0f);
             PPR_TEST_ASSERT(cam.getRevision() == revision);
         };
     }
@@ -122,7 +129,8 @@ namespace pP::tests::detail {
             ViewportLayout::WindowRect fixed;
             fixed.m_origin = int2{120, 70};
             fixed.m_extent = int2{200, 100};
-            PPR_TEST_ASSERT(Viewport{window, ViewportLayout{fixed}}.getClientRect() == PixelRect{int2{120, 70}, int2{200, 100}});
+            PPR_TEST_ASSERT(
+                Viewport{window, ViewportLayout{fixed}}.getClientRect() == PixelRect{int2{120, 70}, int2{200, 100}});
 
             ViewportLayout::NormalizedWindowRect normalized;
             normalized.m_origin = float2{0.25f, 0.25f};
@@ -184,15 +192,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(minimized.getClientRect().m_extent.x == 0 && minimized.getClientRect().m_extent.y == 0);
 
             const Viewport degenerate = minimized;
-            PPR_TEST_ASSERT(degenerate.getNormalizedClientRect().m_extent.x == 0.0f
-                            && degenerate.getNormalizedClientRect().m_extent.y == 0.0f);
+            PPR_TEST_ASSERT(
+                degenerate.getNormalizedClientRect().m_extent.x == 0.0f &&
+                degenerate.getNormalizedClientRect().m_extent.y == 0.0f);
         };
 
         PPR_UNIT_TEST (window_viewport_tracks_shared_window) {
             Window window{
                 WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
-                WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}
-            };
+                WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
             {
                 WindowViewport viewport{SharedWindow{&window}, ViewportLayout{}};
                 PPR_TEST_ASSERT(viewport.getViewport().getClientRect() == PixelRect{int2{10, 20}, int2{800, 600}});
@@ -204,8 +212,9 @@ namespace pP::tests::detail {
 
                 window.m_window_size = int2{0, 0};
                 PPR_TEST_ASSERT(viewport.updateFromWindow());
-                PPR_TEST_ASSERT(viewport.getViewport().getClientRect().m_extent.x == 0
-                                && viewport.getViewport().getClientRect().m_extent.y == 0);
+                PPR_TEST_ASSERT(
+                    viewport.getViewport().getClientRect().m_extent.x == 0 &&
+                    viewport.getViewport().getClientRect().m_extent.y == 0);
             }
             std::ignore = window.release();
         };
@@ -281,7 +290,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::abs(clamped.x - 0.75f) < 1e-5f && std::abs(clamped.y - 0.25f) < 1e-5f);
         };
 
-        PPR_UNIT_TEST(normalize_zero_extent_fails, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (normalize_zero_extent_fails, UnitTest::expect_crash) {
             if constexpr (PPR_ENABLE_DEBUG) {
                 const PixelRect empty{int2{5, 5}, int2{0, 0}};
                 std::ignore = empty.normalize(int2{5, 5});

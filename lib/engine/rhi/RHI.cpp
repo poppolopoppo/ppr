@@ -23,26 +23,33 @@ namespace pP {
 
         class SlangRhiErrorCategory final : public std::error_category {
         public:
-            [[nodiscard]] const char *name() const noexcept override { return "slang-rhi"; }
+            [[nodiscard]] const char *name() const noexcept override {
+                return "slang-rhi";
+            }
 
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<Slang::Result>(ev)) {
                     case SLANG_OK: return "indicates success";
-                    case SLANG_FAIL: return "generic failure code - meaning a serious error occurred and the call couldn't complete";
+                    case SLANG_FAIL:
+                        return "generic failure code - meaning a serious error occurred and the call couldn't complete";
                     case SLANG_E_NOT_IMPLEMENTED: return "functionality is not implemented";
                     case SLANG_E_NO_INTERFACE: return "interface not be found";
                     case SLANG_E_ABORT: return "operation was aborted (did not correctly complete)";
-                    case SLANG_E_INVALID_HANDLE: return "indicates that a handle passed in as parameter to a method is invalid";
-                    case SLANG_E_INVALID_ARG: return "indicates that an argument passed in as parameter to a method is invalid";
+                    case SLANG_E_INVALID_HANDLE:
+                        return "indicates that a handle passed in as parameter to a method is invalid";
+                    case SLANG_E_INVALID_ARG:
+                        return "indicates that an argument passed in as parameter to a method is invalid";
                     case SLANG_E_OUT_OF_MEMORY: return "operation could not complete - ran out of memory";
                     case SLANG_E_BUFFER_TOO_SMALL: return "supplied buffer is too small to be able to complete";
                     case SLANG_E_UNINITIALIZED: return "used to identify a Result that has yet to be initialized";
-                    case SLANG_E_PENDING: return
-                            "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
+                    case SLANG_E_PENDING:
+                        return "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
                     case SLANG_E_CANNOT_OPEN: return "indicates a file/resource could not be opened";
                     case SLANG_E_NOT_FOUND: return "indicates that a file/resource could not be found";
-                    case SLANG_E_INTERNAL_FAIL: return "an unhandled internal failure (typically from unhandled exception)";
-                    case SLANG_E_NOT_AVAILABLE: return "could not complete because some underlying feature (hardware or software) was not available";
+                    case SLANG_E_INTERNAL_FAIL:
+                        return "an unhandled internal failure (typically from unhandled exception)";
+                    case SLANG_E_NOT_AVAILABLE:
+                        return "could not complete because some underlying feature (hardware or software) was not available";
                     case SLANG_E_TIME_OUT: return "could not complete because the operation times out";
 
                     default: return std::format("unknown slang-rhi result ({})", ev);
@@ -53,7 +60,8 @@ namespace pP {
                 return slangRhiErrorCondition_(*this, ev);
             }
 
-            [[nodiscard]] static std::error_condition slangRhiErrorCondition_(const std::error_category &category, const int ev) noexcept {
+            [[nodiscard]] static std::error_condition slangRhiErrorCondition_(
+                const std::error_category &category, const int ev) noexcept {
                 switch (static_cast<Slang::Result>(ev)) {
                     case SLANG_E_INVALID_ARG: return std::errc::invalid_argument;
                     case SLANG_E_OUT_OF_MEMORY: return std::errc::not_enough_memory;
@@ -98,38 +106,24 @@ namespace pP {
             }
 
             void handleMessage(
-                rhi::DebugMessageType type,
-                rhi::DebugMessageSource source,
-                const char *message) override {
+                rhi::DebugMessageType type, rhi::DebugMessageSource source, const char *message) override {
                 const std::source_location loc = std::source_location::current();
                 auto &category = details::log::RHI();
 
                 std::string_view source_name{};
                 switch (source) {
-                        using enum rhi::DebugMessageSource;
-                    case Layer:
-                        source_name = "layer";
-                        break;
-                    case Driver:
-                        source_name = "driver";
-                        break;
-                    case Slang:
-                        source_name = "slang";
-                        break;
+                    using enum rhi::DebugMessageSource;
+                    case Layer: source_name = "layer"; break;
+                    case Driver: source_name = "driver"; break;
+                    case Slang: source_name = "slang"; break;
                 }
 
                 auto level = Log::ELevel::info;
                 switch (type) {
-                        using enum rhi::DebugMessageType;
-                    case Info:
-                        level = Log::ELevel::info;
-                        break;
-                    case Warning:
-                        level = Log::ELevel::warning;
-                        break;
-                    case Error:
-                        level = Log::ELevel::error;
-                        break;
+                    using enum rhi::DebugMessageType;
+                    case Info: level = Log::ELevel::info; break;
+                    case Warning: level = Log::ELevel::warning; break;
+                    case Error: level = Log::ELevel::error; break;
                 }
 
                 Log::logRaw({category, level, loc}, message, {{"source", source_name}});
@@ -138,23 +132,15 @@ namespace pP {
 
         [[nodiscard]] string_literal getDeviceTypeName_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                    using enum rhi::DeviceType;
-                case Default:
-                    return "default";
-                case D3D11:
-                    return "d3d11";
-                case D3D12:
-                    return "d3d12";
-                case Vulkan:
-                    return "vulkan";
-                case Metal:
-                    return "metal";
-                case CPU:
-                    return "cpu";
-                case CUDA:
-                    return "cuda";
-                case WGPU:
-                    return "wgpu";
+                using enum rhi::DeviceType;
+                case Default: return "default";
+                case D3D11: return "d3d11";
+                case D3D12: return "d3d12";
+                case Vulkan: return "vulkan";
+                case Metal: return "metal";
+                case CPU: return "cpu";
+                case CUDA: return "cuda";
+                case WGPU: return "wgpu";
             }
             std::unreachable();
         }
@@ -164,21 +150,15 @@ namespace pP {
     namespace {
         [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
-                    using enum rhi::DeviceType;
+                using enum rhi::DeviceType;
                 case Default:
-                case D3D12:
-                    return SLANG_DXIL;
-                case D3D11:
-                    return SLANG_DXBC;
+                case D3D12: return SLANG_DXIL;
+                case D3D11: return SLANG_DXBC;
                 case Vulkan:
-                case WGPU:
-                    return SLANG_SPIRV;
-                case Metal:
-                    return SLANG_METAL;
-                case CPU:
-                    return SLANG_SHADER_HOST_CALLABLE;
-                case CUDA:
-                    return SLANG_CUDA_OBJECT_CODE;
+                case WGPU: return SLANG_SPIRV;
+                case Metal: return SLANG_METAL;
+                case CPU: return SLANG_SHADER_HOST_CALLABLE;
+                case CUDA: return SLANG_CUDA_OBJECT_CODE;
             }
             std::unreachable();
         }
@@ -188,17 +168,12 @@ namespace pP {
     // projection free functions
     // ------------------------------------------------------------------
 
-    [[nodiscard]] float4x4 rhi::getOrthoMatrix(
-        const float width,
-        const float height) noexcept {
+    [[nodiscard]] float4x4 rhi::getOrthoMatrix(const float width, const float height) noexcept {
         return float4x4::orthoD3D(0.0f, width, 0.0f, height, 0.0f, 1.0f);
     }
 
     [[nodiscard]] float4x4 rhi::getPerspectiveMatrix(
-        const float fov,
-        const float aspect,
-        const float near_,
-        const float far_) noexcept {
+        const float fov, const float aspect, const float near_, const float far_) noexcept {
         const float x_fov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
         return float4x4::perspectiveD3D(x_fov, fov, near_, far_);
     }
@@ -231,8 +206,7 @@ namespace pP {
             }
 
             [[nodiscard]] std::error_code initialize(
-                const rhi::DeviceType device_type,
-                IShaderService &shader_service) override {
+                const rhi::DeviceType device_type, IShaderService &shader_service) override {
                 if (m_device) {
                     PPR_LOG(RHI, warning, "RHI already initialized");
                     return rhi::errc::ok;
@@ -252,9 +226,9 @@ namespace pP {
                         const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
                         const std::error_code cleanup_error = make_error_code(result);
                         if (cleanup_error) {
-                            PPR_LOG(RHI, error, "RHI initialization cleanup failed",
-                                    {{"category", cleanup_error.category().name()},
-                                     {"cause", cleanup_error.message()}});
+                            PPR_LOG(
+                                RHI, error, "RHI initialization cleanup failed",
+                                {{"category", cleanup_error.category().name()}, {"cause", cleanup_error.message()}});
                         }
                     }
                 };
@@ -263,20 +237,20 @@ namespace pP {
                 // Effective opt-in state: off unless the application boundary
                 // set it before initialize() (--gpu-validation).
                 const bool gpu_assisted = m_gpu_assisted_validation;
-                PPR_LOG(RHI, info, "enabled Slang RHI debug layers",
-                        {{"coreValidation", true}, {"GPUAssistedValidation", gpu_assisted}});
+                PPR_LOG(
+                    RHI, info, "enabled Slang RHI debug layers",
+                    {{"coreValidation", true}, {"GPUAssistedValidation", gpu_assisted}});
 
                 PPR_RETURN_ERROR_ON_FAIL(
-                        RHI,
-                        p_instance->setDebugLayerOptions(
-                                {.required = true, .coreValidation = true, .GPUAssistedValidation = gpu_assisted}));
+                    RHI, p_instance->setDebugLayerOptions(
+                             {.required = true, .coreValidation = true, .GPUAssistedValidation = gpu_assisted}));
 
                 p_instance->enableDebugLayers();
 #endif
 
                 constexpr slang_rhi::Feature required_features[] = {
-                        slang_rhi::Feature::Surface,
-                        slang_rhi::Feature::Rasterization,
+                    slang_rhi::Feature::Surface,
+                    slang_rhi::Feature::Rasterization,
                 };
 
                 rhi::DeviceDesc desc{};
@@ -304,9 +278,9 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
 
                 if (not device->hasFeature(rhi::Feature::Bindless)) {
-                    PPR_LOG(RHI, warning, "device lacks bindless support; GPU caches will fail at init", {
-                        {"device_type", getDeviceTypeName_(device_type)}
-                        });
+                    PPR_LOG(
+                        RHI, warning, "device lacks bindless support; GPU caches will fail at init",
+                        {{"device_type", getDeviceTypeName_(device_type)}});
                 }
 
                 const SlangCompileTarget compile_target = toSlangCompileTarget_(device->getDeviceType());
@@ -315,13 +289,15 @@ namespace pP {
 
                 m_device = std::move(device);
                 initialized = true;
-                PPR_LOG(RHI, info, "RHI device created successfully", {
-                    {"device_type", getDeviceTypeName_(device_type)},
-                    {"compile_target", static_cast<int>(compile_target)},
-                    {"bindless_textures", rhi::kBindlessTextureBudget},
-                    {"bindless_combined", rhi::kBindlessCombinedBudget},
-                    {"bindless_samplers", rhi::kBindlessSamplerBudget},
-                    {"bindless_buffers", rhi::kBindlessBufferBudget},
+                PPR_LOG(
+                    RHI, info, "RHI device created successfully",
+                    {
+                        {"device_type", getDeviceTypeName_(device_type)},
+                        {"compile_target", static_cast<int>(compile_target)},
+                        {"bindless_textures", rhi::kBindlessTextureBudget},
+                        {"bindless_combined", rhi::kBindlessCombinedBudget},
+                        {"bindless_samplers", rhi::kBindlessSamplerBudget},
+                        {"bindless_buffers", rhi::kBindlessBufferBudget},
                     });
                 return make_error_code(SLANG_OK);
             }
@@ -332,9 +308,7 @@ namespace pP {
                 }
 
                 const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
-                PPR_LOG(RHI, info, "RHI instance teardown", {
-                    {"result", static_cast<int>(result)}
-                    });
+                PPR_LOG(RHI, info, "RHI instance teardown", {{"result", static_cast<int>(result)}});
                 PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
 
                 PPR_LOG(RHI, info, "RHI service shut down");
@@ -342,8 +316,7 @@ namespace pP {
             }
 
             [[nodiscard]] rhi::Result createRenderPipeline(
-                const rhi::RenderPipelineDesc &desc,
-                rhi::IRenderPipeline **outPipeline) override {
+                const rhi::RenderPipelineDesc &desc, rhi::IRenderPipeline **outPipeline) override {
                 return m_device->createRenderPipeline(desc, outPipeline);
             }
         };

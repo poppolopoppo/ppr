@@ -150,13 +150,16 @@ keep validation guards together, the success path contiguous, phases separated,
 and distinct domain operations in named helpers.
 Separate distinct logical phases (setup, validation, iteration, submission, logging) with blank lines;
 do not put a blank line between every statement.
-Mechanical reformat_file does not satisfy this pass: it only handles indentation, wrapping, spacing,
-and braces — it never inserts blank lines, never rebreaks and/or/not chains, and never spaces
-alternative tokens (and(, or(, x<). The semantic pass owns all three.
+Some parts of this pass are mechanical and some are not, and the difference is not
+"what the formatter can do". `scripts/Format-Cpp.ps1` owns every layout decision,
+including line breaks (see Source format). You own the logical decomposition into
+named helpers and phases, and `code-reviewer` owns whether the result is readable.
+Telling "setup" from "submission" is design review, not formatting.
 Any boolean-operator expression — `if`/`while`/`for` conditions, returns, assignments,
-assertions — MUST stay on one line when it fits. Break it ONLY when it exceeds the
-column limit, and then break AFTER the operator, never before it:
-- MUST: the operator ends its line and the next operand starts the next line, one operand per line.
+assertions — SHOULD stay on one line when it fits, where "fits" means it stays
+within about 120 columns, matching the configured `ColumnLimit`. Wrap it only when
+it overflows, and then break AFTER the operator, never before it:
+- MUST: the operator ends its line; the next operand starts the next line.
 - NEVER: a continuation line starting with `and`/`or`.
 - NEVER: an operator stranded alone on its line.
 - NEVER: `and(`/`or(`/`not(` without a trailing space.
@@ -165,12 +168,49 @@ column limit, and then break AFTER the operator, never before it:
 
 ## Source format
 
-The active project CLion C/C++ Code Style (`Project.xml`) is canonical for
-mechanical formatting; the repository-root `.clang-format` is a tracked
-reference/configuration only and `Project.xml` wins on conflict. Reformat every
-touched C++ file after functional writes via `execute_tool` with
-`command="reformat_file --files '["E:/Code/ppr/<project-relative path>"]'"`
-and `projectPath="E:/Code/ppr"`.
+The repository-root `.clang-format` is the single canonical formatting authority.
+The CLion project style (`Project.xml`) is demoted to IDE convenience only and
+never overrides it, and the IDE must be configured to format C/C++ through the
+external `clang-format` binary rather than its own engine. Formatting is applied
+by script, never by hand:
+
+- `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` rewrites the lines the
+  working tree changes.
+- `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (Check) is the gate. It exits 0
+  only when the working tree already holds the canonical output, the case-sensitive
+  code token stream (including string and char literal contents) is unchanged, and
+  repeated formatting is a fixed point. Run it on touched C++ before finishing.
+- `pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files '<a.cpp,b.cpp>'`
+  checks the alternative-token rules on those files. Blocking classes are
+  A-STRANDED, B-OP, and C-LEADING; `-Strict` also fails on advisory findings.
+  Run it repo-wide only as a deliberate audit, never as a per-change gate.
+
+`ColumnLimit` is `120`, so the formatter performs real column-driven wrapping: it
+joins and splits statements, and it re-flows them. It does not preserve the line
+breaks you wrote — structural rules normalize them (collapsing
+`void f() { foo(); }` onto one line, joining a detached opening brace) and the
+column limit then decides the rest. Division of labour:
+
+- **The script owns** every layout decision: indentation, spacing, alignment,
+  blank-line limits, and line wrapping and breaking. Do not hand-tune any of
+  them, and do not hand-adjust whitespace to satisfy a layout rule.
+- **You own** the logical decomposition of a statement into named helpers and
+  phases, comments that state intent or invariants, and whether the result is
+  readable. Line breaks are not yours to choose.
+- **`code-reviewer` owns** whether the result reads clearly.
+
+Do not use the CLion `reformat_file` router, and do not hand-adjust whitespace to
+satisfy a layout rule either — run the script. CLion's internal engine does not
+consistently apply the project style, reflows `and`/`or`/`not` chains away from the
+trailing-operator rule, and injects namespace end-comments; non-idempotent
+reformatting is a confirmed upstream defect class. The IDE is configured to
+delegate C/C++ formatting to the external `clang-format` binary so the script and
+the editor cannot disagree.
+
+Because the script owns line breaks, the alternative-token rules above are not
+enforced by the formatter: clang-format re-flows these chains but has no option to
+normalise their spacing or operator placement. `scripts/Check-SemanticStyle.ps1` is
+that enforcement. Run it on any file where you wrote or changed `and`/`or`/`not`.
 
 ## Specialist authorities and workflow
 

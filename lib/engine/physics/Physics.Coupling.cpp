@@ -6,11 +6,10 @@ import :coupling;
 import std;
 
 namespace pP::physics {
-    std::error_code Coupling::publishUpdates(Scene &scene, const std::span<const BodyHandle> handles,
-                                             const std::span<BodyState> states, const std::span<SensorEvent> sensors,
-                                             std::size_t &sensor_count, const std::span<WakeRecord> wakes,
-                                             std::size_t &wake_count, const std::span<ContactRecord> contacts,
-                                             std::size_t &contact_count) noexcept {
+    std::error_code Coupling::publishUpdates(
+        Scene &scene, const std::span<const BodyHandle> handles, const std::span<BodyState> states,
+        const std::span<SensorEvent> sensors, std::size_t &sensor_count, const std::span<WakeRecord> wakes,
+        std::size_t &wake_count, const std::span<ContactRecord> contacts, std::size_t &contact_count) noexcept {
         sensor_count = 0u;
         wake_count = 0u;
         contact_count = 0u;
@@ -39,9 +38,8 @@ namespace pP::physics {
                 }
                 pending.push_back(*state);
                 next.push_back({handle, *awake});
-                const auto previous = std::ranges::find_if(m_previous, [handle](const PreviousAwake &entry) {
-                    return entry.m_handle == handle;
-                });
+                const auto previous = std::ranges::find_if(
+                    m_previous, [handle](const PreviousAwake &entry) { return entry.m_handle == handle; });
                 if (previous != m_previous.end() and previous->m_awake != *awake) {
                     transitions.push_back({handle.m_entity, *awake});
                 }

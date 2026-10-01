@@ -5,17 +5,20 @@ export module engine.core:enums;
 import std;
 
 export namespace pP {
-    template<typename EnumT> requires std::is_enum_v<EnumT>
+    template<typename EnumT>
+        requires std::is_enum_v<EnumT>
     [[nodiscard]] constexpr std::underlying_type_t<EnumT> enumOrd(const EnumT value) noexcept {
         return std::underlying_type_t<EnumT>(value);
     }
 
-    template<typename EnumT> requires std::is_enum_v<EnumT>
+    template<typename EnumT>
+        requires std::is_enum_v<EnumT>
     [[nodiscard]] constexpr EnumT enumCombine(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) | enumOrd(rhs));
     }
 
-    template<typename EnumT> requires std::is_enum_v<EnumT>
+    template<typename EnumT>
+        requires std::is_enum_v<EnumT>
     [[nodiscard]] constexpr bool enumContains(const EnumT flags, const EnumT value) noexcept {
         return (enumOrd(flags) & enumOrd(value)) == enumOrd(value);
     }
@@ -26,8 +29,7 @@ export namespace pP {
 
     namespace details {
         template<typename EnumT>
-        concept TEnumFlags = requires()
-        {
+        concept TEnumFlags = requires () {
             { EnumT::none } -> std::convertible_to<EnumT>;
             { EnumT::all } -> std::convertible_to<EnumT>;
         } && std::is_enum_v<EnumT>;
@@ -47,57 +49,57 @@ export namespace pP {
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator ~(const EnumT flags) noexcept {
+    [[nodiscard]] constexpr EnumT operator~(const EnumT flags) noexcept {
         return static_cast<EnumT>(~enumOrd(flags));
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator &(const EnumT lhs, const EnumT rhs) noexcept {
+    [[nodiscard]] constexpr EnumT operator&(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) & enumOrd(rhs));
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator |(const EnumT lhs, const EnumT rhs) noexcept {
+    [[nodiscard]] constexpr EnumT operator|(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) | enumOrd(rhs));
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator ^(const EnumT lhs, const EnumT rhs) noexcept {
+    [[nodiscard]] constexpr EnumT operator^(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) ^ enumOrd(rhs));
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator +(const EnumT lhs, const EnumT rhs) noexcept {
+    [[nodiscard]] constexpr EnumT operator+(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) | enumOrd(rhs));
     }
 
     template<details::TEnumFlags EnumT>
-    [[nodiscard]] constexpr EnumT operator -(const EnumT lhs, const EnumT rhs) noexcept {
+    [[nodiscard]] constexpr EnumT operator-(const EnumT lhs, const EnumT rhs) noexcept {
         return static_cast<EnumT>(enumOrd(lhs) & ~enumOrd(rhs));
     }
 
     template<details::TEnumFlags EnumT>
-    constexpr EnumT &operator &=(EnumT &lhs, const EnumT rhs) noexcept {
+    constexpr EnumT &operator&=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs & rhs;
     }
 
     template<details::TEnumFlags EnumT>
-    constexpr EnumT &operator |=(EnumT &lhs, const EnumT rhs) noexcept {
+    constexpr EnumT &operator|=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs | rhs;
     }
 
     template<details::TEnumFlags EnumT>
-    constexpr EnumT &operator ^=(EnumT &lhs, const EnumT rhs) noexcept {
+    constexpr EnumT &operator^=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs ^ rhs;
     }
 
     template<details::TEnumFlags EnumT>
-    constexpr EnumT &operator +=(EnumT &lhs, const EnumT rhs) noexcept {
+    constexpr EnumT &operator+=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs + rhs;
     }
 
     template<details::TEnumFlags EnumT>
-    constexpr EnumT &operator -=(EnumT &lhs, const EnumT rhs) noexcept {
+    constexpr EnumT &operator-=(EnumT &lhs, const EnumT rhs) noexcept {
         return lhs = lhs - rhs;
     }
 
@@ -110,7 +112,7 @@ export namespace pP {
     // enum value to string view
     // ------------------------------------------------------------------
 
-    template <auto EnumV>
+    template<auto EnumV>
         requires std::is_enum_v<decltype(EnumV)>
     [[nodiscard]] consteval std::string_view enumToString() noexcept {
         // This relies on the compiler's internal representation of the function signature

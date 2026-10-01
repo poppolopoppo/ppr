@@ -142,8 +142,7 @@ export namespace pP {
     // Shader fallbacks when slot = : albedo→m_base_color, mr→factors,
     // normal→geometric normal, emissive→m_emissive factor over black.
     [[nodiscard]] Expected<GpuMaterial> buildGpuMaterial(
-        const mesh::MaterialAsset &asset,
-        GpuTextureRefs resolved) noexcept;
+        const mesh::MaterialAsset &asset, GpuTextureRefs resolved) noexcept;
 
     // Pipeline-variant key (plan §7): target signature + twosided cull +
     // opaque/mask alpha. BLEND is deferred: rejected with
@@ -226,8 +225,8 @@ export namespace pP {
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
         template<typename V>
-        [[nodiscard]] Expected<TriangleBagHandle> upload(const std::span<const V> verts,
-                                                         const std::span<const u32> idx) {
+        [[nodiscard]] Expected<TriangleBagHandle> upload(
+            const std::span<const V> verts, const std::span<const u32> idx) {
             return upload(verts, idx, 0);
         }
 
@@ -235,8 +234,8 @@ export namespace pP {
         // (file-local + base in all cases) rides the range into
         // TriangleBagRange::m_base.
         template<typename V>
-        [[nodiscard]] Expected<TriangleBagHandle> upload(const std::span<const V> verts, const std::span<const u32> idx,
-                                                         const i32 base) {
+        [[nodiscard]] Expected<TriangleBagHandle> upload(
+            const std::span<const V> verts, const std::span<const u32> idx, const i32 base) {
             static_assert(std::is_trivially_copyable_v<V>);
             if (verts.empty() or idx.empty()) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
@@ -287,8 +286,8 @@ export namespace pP {
             SparseHandle m_identity{};
         };
 
-        [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(std::span<const std::byte> vert_bytes, u64 stride,
-                                                               std::span<const u32> idx, i32 base);
+        [[nodiscard]] Expected<TriangleBagHandle> uploadBytes_(
+            std::span<const std::byte> vert_bytes, u64 stride, std::span<const u32> idx, i32 base);
 
         [[nodiscard]] const BagRangeRecord *findRecord_(SparseHandle key) const noexcept;
 
@@ -322,8 +321,8 @@ export namespace pP {
     // ONE shared sampler.
     class BindlessTextureCache {
     public:
-        [[nodiscard]] std::error_code initialize(rhi::IDevice &device, u32 texture_budget,
-                                                 rhi::DescriptorHandle fallback_descriptor);
+        [[nodiscard]] std::error_code initialize(
+            rhi::IDevice &device, u32 texture_budget, rhi::DescriptorHandle fallback_descriptor);
 
         [[nodiscard]] std::error_code shutdown();
 
@@ -365,8 +364,11 @@ export namespace pP {
 
             // Hand-written (no defaulted comparisons: MSVC module ICE family).
             [[nodiscard]] bool operator==(const DedupKey &other) const noexcept {
-                return m_hash == other.m_hash and m_width == other.m_width and m_height == other.m_height and
-                       m_format == other.m_format and m_mips == other.m_mips;
+                return m_hash == other.m_hash and
+                       m_width == other.m_width and
+                       m_height == other.m_height and
+                       m_format == other.m_format and
+                       m_mips == other.m_mips;
             }
 
             [[nodiscard]] bool operator<(const DedupKey &other) const noexcept {

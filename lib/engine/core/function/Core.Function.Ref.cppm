@@ -493,7 +493,7 @@ namespace std23 {
 
     template<class R, class F, class... Args>
         requires std::is_invocable_r_v<R, F, Args...>
-    constexpr R invoke_r(F &&f, Args &&... args) // freestanding
+    constexpr R invoke_r(F &&f, Args &&...args) // freestanding
         noexcept(std::is_nothrow_invocable_r_v<R, F, Args...>) {
         if constexpr (std::is_void_v<R>)
             std::invoke(std::forward<F>(f), std::forward<Args>(args)...);
@@ -514,32 +514,30 @@ namespace std23 {
     using _param_t = std::invoke_result_t<decltype(_select_param_type<T>)>::type;
 
     template<class T, class Self>
-    inline constexpr bool _is_not_self =
-            not std::is_same_v<std::remove_cvref_t<T>, Self>;
+    inline constexpr bool _is_not_self = not std::is_same_v<std::remove_cvref_t<T>, Self>;
 
     template<class T, template<class...> class>
     inline constexpr bool _looks_nullable_to_impl = std::is_member_pointer_v<T>;
 
     template<class F, template<class...> class Self>
-    inline constexpr bool _looks_nullable_to_impl<F *, Self> =
-            std::is_function_v<F>;
+    inline constexpr bool _looks_nullable_to_impl<F *, Self> = std::is_function_v<F>;
 
     template<class... S, template<class...> class Self>
     inline constexpr bool _looks_nullable_to_impl<Self<S...>, Self> = true;
 
     template<class S, template<class...> class Self>
-    inline constexpr bool _looks_nullable_to =
-            _looks_nullable_to_impl<std::remove_cvref_t<S>, Self>;
+    inline constexpr bool _looks_nullable_to = _looks_nullable_to_impl<std::remove_cvref_t<S>, Self>;
 
     template<class T>
     inline constexpr bool _is_not_nontype_t = true;
     template<auto f>
-    inline constexpr bool _is_not_nontype_t<nontype_t<f> > = false;
+    inline constexpr bool _is_not_nontype_t<nontype_t<f>> = false;
 
     template<class T>
     struct _adapt_signature;
 
-    template<class F> requires std::is_function_v<F>
+    template<class F>
+        requires std::is_function_v<F>
     struct _adapt_signature<F *> {
         using type = F;
     };
@@ -548,8 +546,7 @@ namespace std23 {
     using _adapt_signature_t = _adapt_signature<Fp>::type;
 
     template<class S>
-    struct _not_qualifying_this {
-    };
+    struct _not_qualifying_this {};
 
     template<class R, class... Args>
     struct _not_qualifying_this<R(Args...)> {
@@ -562,111 +559,70 @@ namespace std23 {
     };
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const> : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) &> : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) &> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const &>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const &> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile &>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile &> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile &>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile &> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) &&> : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) &&> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const &&>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const &&> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile &&>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile &&> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile &&>
-            : _not_qualifying_this<R(Args...)> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile &&> : _not_qualifying_this<R(Args...)> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) & noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) & noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const & noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const & noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile & noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile & noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile & noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile & noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) && noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) && noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const && noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const && noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) volatile && noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) volatile && noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class R, class... Args>
-    struct _not_qualifying_this<R(Args...) const volatile && noexcept>
-            : _not_qualifying_this<R(Args...) noexcept> {
-    };
+    struct _not_qualifying_this<R(Args...) const volatile && noexcept> : _not_qualifying_this<R(Args...) noexcept> {};
 
     template<class F, class T>
     struct _drop_first_arg_to_invoke;
@@ -681,14 +637,15 @@ namespace std23 {
         using type = R(Args...) noexcept;
     };
 
-    template<class T, class M, class G> requires std::is_object_v<M>
+    template<class T, class M, class G>
+        requires std::is_object_v<M>
     struct _drop_first_arg_to_invoke<M G::*, T> {
         using type = std::invoke_result_t<M G::*, T>() noexcept;
     };
 
-    template<class T, class M, class G> requires std::is_function_v<M>
-    struct _drop_first_arg_to_invoke<M G::*, T> : _not_qualifying_this<M> {
-    };
+    template<class T, class M, class G>
+        requires std::is_function_v<M>
+    struct _drop_first_arg_to_invoke<M G::*, T> : _not_qualifying_this<M> {};
 
     template<class F, class T>
     using _drop_first_arg_to_invoke_t = _drop_first_arg_to_invoke<F, T>::type;
@@ -707,8 +664,7 @@ export namespace std23 {
         static constexpr bool is_noexcept = false;
 
         template<class... T>
-        static constexpr bool is_invocable_using =
-                std::is_invocable_r_v<R, T..., Args...>;
+        static constexpr bool is_invocable_using = std::is_invocable_r_v<R, T..., Args...>;
 
         template<class T>
         using cv = T;
@@ -722,8 +678,7 @@ export namespace std23 {
         static constexpr bool is_noexcept = true;
 
         template<class... T>
-        static constexpr bool is_invocable_using =
-                std::is_nothrow_invocable_r_v<R, T..., Args...>;
+        static constexpr bool is_invocable_using = std::is_nothrow_invocable_r_v<R, T..., Args...>;
 
         template<class T>
         using cv = T;
@@ -737,8 +692,7 @@ export namespace std23 {
     };
 
     template<class R, class... Args>
-    struct _qual_fn_sig<R(Args...) const noexcept>
-            : _qual_fn_sig<R(Args...) noexcept> {
+    struct _qual_fn_sig<R(Args...) const noexcept> : _qual_fn_sig<R(Args...) noexcept> {
         template<class T>
         using cv = T const;
         using without_noexcept = R(Args...) const;
@@ -753,17 +707,19 @@ export namespace std23 {
 
             constexpr storage() noexcept = default;
 
-            template<class T> requires std::is_object_v<T>
+            template<class T>
+                requires std::is_object_v<T>
             constexpr explicit storage(T *p PPR_LIFETIME_BOUND) noexcept : p_(p) {
             }
 
-            template<class T> requires std::is_object_v<T>
+            template<class T>
+                requires std::is_object_v<T>
             constexpr explicit storage(T const *p PPR_LIFETIME_BOUND) noexcept : cp_(p) {
             }
 
-            template<class T> requires std::is_function_v<T>
-            constexpr explicit storage(T *p PPR_LIFETIME_BOUND) noexcept
-                : fp_(reinterpret_cast<decltype(fp_)>(p)) {
+            template<class T>
+                requires std::is_function_v<T>
+            constexpr explicit storage(T *p PPR_LIFETIME_BOUND) noexcept : fp_(reinterpret_cast<decltype(fp_)>(p)) {
             }
         };
 
@@ -785,21 +741,19 @@ export namespace std23 {
     inline constexpr bool _is_ref_convertible = false;
 
     template<class T, class U>
-    inline constexpr bool _is_ref_convertible<function_ref<T>, function_ref<U> > =
-            std::is_convertible_v<typename _not_qualifying_this<T>::type &,
-                typename _not_qualifying_this<U>::type &>;
+    inline constexpr bool _is_ref_convertible<function_ref<T>, function_ref<U>> =
+        std::is_convertible_v<typename _not_qualifying_this<T>::type &, typename _not_qualifying_this<U>::type &>;
 
     template<class From, class To>
     inline constexpr bool _is_as_immutable_as = false;
 
     template<class T, class U>
-    inline constexpr bool _is_as_immutable_as<function_ref<T>, function_ref<U> > =
-            std::is_convertible_v<typename _qual_fn_sig<U>::template cv<int> &,
-                typename _qual_fn_sig<T>::template cv<int> &>;
+    inline constexpr bool _is_as_immutable_as<function_ref<T>, function_ref<U>> = std::is_convertible_v<
+        typename _qual_fn_sig<U>::template cv<int> &, typename _qual_fn_sig<T>::template cv<int> &>;
 
     template<class Sig, class R, class... Args>
     class function_ref<Sig, R(Args...)> // freestanding
-            : _function_ref_base {
+        : _function_ref_base {
         using signature = _qual_fn_sig<Sig>;
 
         template<class T>
@@ -809,13 +763,11 @@ export namespace std23 {
         static constexpr bool noex = signature::is_noexcept;
 
         template<class... T>
-        static constexpr bool is_invocable_using =
-                signature::template is_invocable_using<T...>;
+        static constexpr bool is_invocable_using = signature::template is_invocable_using<T...>;
 
         template<class F>
-        static constexpr bool is_convertible_from_specialization =
-                _is_ref_convertible<F, function_ref> and
-                _is_as_immutable_as<F, function_ref>;
+        static constexpr bool is_convertible_from_specialization = _is_ref_convertible<F, function_ref> and
+                                                                   _is_as_immutable_as<F, function_ref>;
 
         typedef R fwd_t(storage, _param_t<Args>...) noexcept(noex);
 
@@ -830,69 +782,60 @@ export namespace std23 {
         template<class F>
         function_ref(F *f PPR_LIFETIME_BOUND) noexcept
             requires std::is_function_v<F> and is_invocable_using<F>
-            : fptr_(
-                  [](storage fn_, _param_t<Args>... args) noexcept(noex) -> R {
-                      if constexpr (std::is_void_v<R>)
-                          get<F>(fn_)(static_cast<decltype(args)>(args)...);
-                      else
-                          return get<F>(fn_)(static_cast<decltype(args)>(args)...);
-                  }),
+            : fptr_([](storage fn_, _param_t<Args>... args) noexcept(noex) -> R {
+                  if constexpr (std::is_void_v<R>)
+                      get<F>(fn_)(static_cast<decltype(args)>(args)...);
+                  else
+                      return get<F>(fn_)(static_cast<decltype(args)>(args)...);
+              }),
               obj_(f) {
             PPR_ASSUME(f != nullptr);
         }
 
-        template<class F, class T = std::remove_reference_t<F> >
+        template<class F, class T = std::remove_reference_t<F>>
         constexpr function_ref(F &&f PPR_LIFETIME_BOUND) noexcept
-            requires(not is_convertible_from_specialization<std::remove_cv_t<T> > and
-                     not std::is_member_pointer_v<T> and
-                     is_invocable_using<cvref<T> >)
-            : fptr_(
-                  [](storage fn_, _param_t<Args>... args) noexcept(noex) -> R {
-                      cvref<T> obj = *get<T>(fn_);
-                      if constexpr (std::is_void_v<R>)
-                          obj(static_cast<decltype(args)>(args)...);
-                      else
-                          return obj(static_cast<decltype(args)>(args)...);
-                  }),
+            requires (not is_convertible_from_specialization<std::remove_cv_t<T>> and
+                         not std::is_member_pointer_v<T> and
+                         is_invocable_using<cvref<T>>)
+            : fptr_([](storage fn_, _param_t<Args>... args) noexcept(noex) -> R {
+                  cvref<T> obj = *get<T>(fn_);
+                  if constexpr (std::is_void_v<R>)
+                      obj(static_cast<decltype(args)>(args)...);
+                  else
+                      return obj(static_cast<decltype(args)>(args)...);
+              }),
               obj_(std::addressof(f)) {
         }
 
         template<class F>
         constexpr function_ref(F f) noexcept
-            requires(_is_not_self<F, function_ref> and
-                     is_convertible_from_specialization<F>)
+            requires (_is_not_self<F, function_ref> and is_convertible_from_specialization<F>)
             : fptr_(f.fptr_), obj_(f.obj_) {
         }
 
         template<class T>
         function_ref &operator=(T)
-            requires(not is_convertible_from_specialization<T> and
-                     not std::is_pointer_v<T> and _is_not_nontype_t<T>)
+            requires (not is_convertible_from_specialization<T> and not std::is_pointer_v<T> and _is_not_nontype_t<T>)
         = delete;
 
         template<auto f>
         constexpr function_ref(nontype_t<f>) noexcept
             requires is_invocable_using<decltype((f))>
-            : fptr_(
-                [](storage, _param_t<Args>... args) noexcept(noex) -> R {
-                    return std23::invoke_r<R>(
-                        f, static_cast<decltype(args)>(args)...);
-                }) {
+            : fptr_([](storage, _param_t<Args>... args) noexcept(noex) -> R {
+                  return std23::invoke_r<R>(f, static_cast<decltype(args)>(args)...);
+              }) {
             using F = decltype(f);
             if constexpr (std::is_pointer_v<F> or std::is_member_pointer_v<F>)
                 static_assert(f != nullptr, "NTTP callable must be usable");
         }
 
-        template<auto f, class U, class T = std::remove_reference_t<U> >
+        template<auto f, class U, class T = std::remove_reference_t<U>>
         constexpr function_ref(nontype_t<f>, U &&obj PPR_LIFETIME_BOUND) noexcept
-            requires(not std::is_rvalue_reference_v<U &&> and
-                     is_invocable_using<decltype((f)), cvref<T> >)
-            : fptr_(
-                  [](storage this_, _param_t<Args>... args) noexcept(noex) -> R {
-                      cvref<T> obj = *get<T>(this_);
-                      return std23::invoke_r<R>(
-                          f, obj, static_cast<decltype(args)>(args)...);
-                  }),
+            requires (not std::is_rvalue_reference_v<U &&> and is_invocable_using<decltype((f)), cvref<T>>)
+            : fptr_([](storage this_, _param_t<Args>... args) noexcept(noex) -> R {
+                  cvref<T> obj = *get<T>(this_);
+                  return std23::invoke_r<R>(f, obj, static_cast<decltype(args)>(args)...);
+              }),
               obj_(std::addressof(obj)) {
             using F = decltype(f);
             if constexpr (std::is_pointer_v<F> or std::is_member_pointer_v<F>)
@@ -902,12 +845,9 @@ export namespace std23 {
         template<auto f, class T>
         constexpr function_ref(nontype_t<f>, cv<T> *obj PPR_LIFETIME_BOUND) noexcept
             requires is_invocable_using<decltype((f)), decltype(obj)>
-            : fptr_(
-                  [](storage this_, _param_t<Args>... args) noexcept(noex) -> R {
-                      return std23::invoke_r<R>(
-                          f, get<cv<T> >(this_),
-                          static_cast<decltype(args)>(args)...);
-                  }),
+            : fptr_([](storage this_, _param_t<Args>... args) noexcept(noex) -> R {
+                  return std23::invoke_r<R>(f, get<cv<T>>(this_), static_cast<decltype(args)>(args)...);
+              }),
               obj_(obj) {
             using F = decltype(f);
             if constexpr (std::is_pointer_v<F> or std::is_member_pointer_v<F>)
@@ -923,15 +863,15 @@ export namespace std23 {
         }
     };
 
-    template<class F> requires std::is_function_v<F>
+    template<class F>
+        requires std::is_function_v<F>
     function_ref(F *) -> function_ref<F>;
 
     template<auto V>
-    function_ref(nontype_t<V>) -> function_ref<_adapt_signature_t<decltype(V)> >;
+    function_ref(nontype_t<V>) -> function_ref<_adapt_signature_t<decltype(V)>>;
 
     template<auto V, class T>
-    function_ref(nontype_t<V>, T &&)
-        -> function_ref<_drop_first_arg_to_invoke_t<decltype(V), T &> >;
+    function_ref(nontype_t<V>, T &&) -> function_ref<_drop_first_arg_to_invoke_t<decltype(V), T &>>;
 
     // ------------------------------------------------------------------
     // owning callable (move_only_function where available, function fallback)

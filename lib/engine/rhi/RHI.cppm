@@ -168,8 +168,7 @@ export namespace pP {
         [[nodiscard]] static safe_ptr<IRhiService> get() noexcept;
 
         [[nodiscard]] virtual std::error_code initialize(
-            rhi::DeviceType device_type,
-            IShaderService &shader_service) = 0;
+            rhi::DeviceType device_type, IShaderService &shader_service) = 0;
 
         /// Opt-in GPU-assisted validation for the next initialize() call.
         /// Default off; meaningful only where the debug block compiles
@@ -185,7 +184,6 @@ export namespace pP {
         [[nodiscard]] virtual rhi::IDevice &getDevice() const noexcept = 0;
 
         [[nodiscard]] virtual rhi::Result createRenderPipeline(
-            const rhi::RenderPipelineDesc &desc,
-            rhi::IRenderPipeline **outPipeline) = 0;
+            const rhi::RenderPipelineDesc &desc, rhi::IRenderPipeline **outPipeline) = 0;
     };
 }

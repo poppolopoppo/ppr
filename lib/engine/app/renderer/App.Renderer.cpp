@@ -33,8 +33,7 @@ namespace pP {
         inline constexpr u32 kAllRemaining = 0xFFFFFFFFu;
 
         [[nodiscard]] std::error_code inspectAttachment_(
-            rhi::ITextureView *const view,
-            AttachmentInfo *const out_info) noexcept {
+            rhi::ITextureView *const view, AttachmentInfo *const out_info) noexcept {
             if (view == nullptr or out_info == nullptr) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -53,7 +52,7 @@ namespace pP {
             // such textures. Engine attachment sources are single-mip 2D
             // targets, so their default views keep passing.
             if ((texture_desc.type != rhi::TextureType::Texture2D and
-                 texture_desc.type != rhi::TextureType::Texture2DMS) or
+                    texture_desc.type != rhi::TextureType::Texture2DMS) or
                 texture_desc.arrayLength != 1u or
                 texture_desc.size.depth != 1u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
@@ -63,10 +62,9 @@ namespace pP {
             if (range.mip >= texture_desc.mipCount or range.layer >= texture_desc.arrayLength) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
-            const u32 mip_span =
-                range.mipCount == kAllRemaining ? texture_desc.mipCount - range.mip : range.mipCount;
-            const u32 layer_span =
-                range.layerCount == kAllRemaining ? texture_desc.arrayLength - range.layer : range.layerCount;
+            const u32 mip_span = range.mipCount == kAllRemaining ? texture_desc.mipCount - range.mip : range.mipCount;
+            const u32 layer_span = range.layerCount == kAllRemaining ? texture_desc.arrayLength - range.layer
+                                                                     : range.layerCount;
             if (mip_span != 1u or layer_span != 1u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -79,10 +77,8 @@ namespace pP {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
-            const rhi::Format format =
-                    view_desc.format == rhi::Format::Undefined
-                        ? texture_desc.format
-                        : view_desc.format;
+            const rhi::Format format = view_desc.format == rhi::Format::Undefined ? texture_desc.format
+                                                                                  : view_desc.format;
 
             if (format == rhi::Format::Undefined or texture_desc.sampleCount == 0u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
@@ -90,19 +86,20 @@ namespace pP {
 
             *out_info = AttachmentInfo{
                 .m_format = format,
-                .m_extent = int2{
-                    safe_narrowing(width),
-                    safe_narrowing(height),
-                },
+                .m_extent =
+                    int2{
+                        safe_narrowing(width),
+                        safe_narrowing(height),
+                    },
                 .m_sample_count = texture_desc.sampleCount,
             };
             return default_value_v;
         }
 
         [[nodiscard]] std::error_code validateMatchingAttachment_(
-            const AttachmentInfo &reference,
-            const AttachmentInfo &candidate) noexcept {
-            if (reference.m_extent.x != candidate.m_extent.x or reference.m_extent.y != candidate.m_extent.y or
+            const AttachmentInfo &reference, const AttachmentInfo &candidate) noexcept {
+            if (reference.m_extent.x != candidate.m_extent.x or
+                reference.m_extent.y != candidate.m_extent.y or
                 reference.m_sample_count != candidate.m_sample_count) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -110,8 +107,7 @@ namespace pP {
         }
 
         void applyColorAttachmentOps_(
-            rhi::RenderPassColorAttachment &attachment,
-            const ColorAttachmentOps &ops) noexcept {
+            rhi::RenderPassColorAttachment &attachment, const ColorAttachmentOps &ops) noexcept {
             attachment.loadOp = ops.m_load_op;
             attachment.storeOp = ops.m_store_op;
             attachment.clearValue[0] = ops.m_clear_color.x;
@@ -125,9 +121,7 @@ namespace pP {
         // and queue-free, so a caller validates before touching an encoder and
         // keeps an invalid pass out of command recording entirely.
         [[nodiscard]] std::error_code buildRenderSignature_(
-            const rhi::RenderPassDesc &render_pass,
-            RenderPipelineSignature &out_signature,
-            int2 &out_target_extent) {
+            const rhi::RenderPassDesc &render_pass, RenderPipelineSignature &out_signature, int2 &out_target_extent) {
             if (render_pass.colorAttachmentCount != 0u and render_pass.colorAttachments == nullptr) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -177,8 +171,8 @@ namespace pP {
 
             if (render_pass.depthStencilAttachment != nullptr) {
                 AttachmentInfo depth_stencil_info{};
-                PPR_RETURN_ERROR_ON_FAIL(Renderer, inspectAttachment_(
-                    render_pass.depthStencilAttachment->view, &depth_stencil_info));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Renderer, inspectAttachment_(render_pass.depthStencilAttachment->view, &depth_stencil_info));
 
                 PPR_RETURN_ERROR_ON_FAIL(Renderer, validate_attachment(depth_stencil_info));
                 signature.m_depth_stencil_format = depth_stencil_info.m_format;
@@ -191,8 +185,7 @@ namespace pP {
             // The only u32 -> SampleCount seam: a non-power-of-two backbuffer
             // or attachment count fails closed here, before the signature is
             // published to any cache or pipeline.
-            const Expected<SampleCount> sample_count =
-                    makeSampleCount(reference_attachment->m_sample_count);
+            const Expected<SampleCount> sample_count = makeSampleCount(reference_attachment->m_sample_count);
             if (not sample_count) [[unlikely]] {
                 return sample_count.error();
             }
@@ -225,17 +218,15 @@ namespace pP {
         // hand the same encoder to the next pass or abandon it without
         // finish(). Failures are already logged at their innermost site.
         [[nodiscard]] std::error_code encodeRenderPass_(
-            rhi::ICommandEncoder &encoder,
-            string_literal description,
-            const rhi::RenderPassDesc &render_pass,
-            const RenderPipelineSignature &pipeline_signature,
-            const int2 &target_extent,
-            const std::span<const DrawSubmission> draws,
-            rhi::IDevice &device) {
+            rhi::ICommandEncoder &encoder, string_literal description, const rhi::RenderPassDesc &render_pass,
+            const RenderPipelineSignature &pipeline_signature, const int2 &target_extent,
+            const std::span<const DrawSubmission> draws, rhi::IDevice &device) {
             rhi::IRenderPassEncoder *const pass = encoder.beginRenderPass(render_pass);
             if (pass == nullptr) [[unlikely]] {
-                PPR_LOG(Renderer, error, "beginRenderPass returned null", {
-                    {"description", description.data()},
+                PPR_LOG(
+                    Renderer, error, "beginRenderPass returned null",
+                    {
+                        {"description", description.data()},
                     });
                 return std::make_error_code(std::errc::io_error);
             }
@@ -252,11 +243,9 @@ namespace pP {
                 const RenderPipelineKey signature(pipeline_signature);
 
                 const rhi::Viewport default_viewport = rhi::Viewport::fromSize(
-                    static_cast<float>(target_extent.x),
-                    static_cast<float>(target_extent.y));
+                    static_cast<float>(target_extent.x), static_cast<float>(target_extent.y));
                 const rhi::ScissorRect default_scissor = rhi::ScissorRect::fromSize(
-                    safe_narrowing(target_extent.x),
-                    safe_narrowing(target_extent.y));
+                    safe_narrowing(target_extent.x), safe_narrowing(target_extent.y));
 
                 rhi::MarkerColor submission_color{.r = 0.9f, .g = 0.3f, .b = 0.6f};
                 for (const DrawSubmission &submission: draws) {
@@ -279,14 +268,16 @@ namespace pP {
                     state.scissorRectCount = 1u;
                     pass->setRenderState(state);
 
-                    PPR_RETURN_ERROR_ON_FAIL(Renderer, submission.m_encode_draws(DrawContext{
-                        .m_device = device,
-                        .m_pass = *pass,
-                        .m_render_pipeline_key = signature,
-                        .m_viewport = viewport,
-                        .m_scissor = scissor,
-                        .m_target_extent = target_extent,
-                        }));
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Renderer, submission.m_encode_draws(
+                                      DrawContext{
+                                          .m_device = device,
+                                          .m_pass = *pass,
+                                          .m_render_pipeline_key = signature,
+                                          .m_viewport = viewport,
+                                          .m_scissor = scissor,
+                                          .m_target_extent = target_extent,
+                                      }));
                 }
             }
             return default_value_v;
@@ -319,8 +310,10 @@ namespace pP {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 
-        PPR_LOG(Renderer, info, "Renderer shut down", {
-            {"surfaces", m_surfaces.size()},
+        PPR_LOG(
+            Renderer, info, "Renderer shut down",
+            {
+                {"surfaces", m_surfaces.size()},
             });
 
         std::error_code first_err{};
@@ -361,8 +354,7 @@ namespace pP {
     }
 
     std::error_code Renderer::render(
-        string_literal description,
-        const rhi::RenderPassDesc &render_pass,
+        string_literal description, const rhi::RenderPassDesc &render_pass,
         const std::initializer_list<DrawSubmission> draws) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
@@ -371,8 +363,9 @@ namespace pP {
         return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()});
     }
 
-    std::error_code Renderer::renderDraws_(string_literal description, const rhi::RenderPassDesc &render_pass,
-                                           const std::span<const DrawSubmission> draws) {
+    std::error_code Renderer::renderDraws_(
+        string_literal description, const rhi::RenderPassDesc &render_pass,
+        const std::span<const DrawSubmission> draws) {
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
@@ -381,17 +374,17 @@ namespace pP {
 
         RenderPipelineSignature pipeline_signature{};
         int2 target_extent{zero_v};
-        if (const std::error_code signature_err =
-                buildRenderSignature_(render_pass, pipeline_signature, target_extent)) [[unlikely]] {
+        if (const std::error_code signature_err = buildRenderSignature_(render_pass, pipeline_signature, target_extent))
+            [[unlikely]] {
             return signature_err;
         }
 
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
-        if (const std::error_code encode_err = encodeRenderPass_(*encoder, description, render_pass,
-            pipeline_signature, target_extent, draws,
-            m_rhi_service->getDevice())) [[unlikely]] {
+        if (const std::error_code encode_err = encodeRenderPass_(
+                *encoder, description, render_pass, pipeline_signature, target_extent, draws,
+                m_rhi_service->getDevice())) [[unlikely]] {
             return encode_err;
         }
 
@@ -402,8 +395,7 @@ namespace pP {
     }
 
     std::error_code Renderer::renderToTexture(
-        rhi::ITexture &render_target,
-        const std::initializer_list<DrawSubmission> draws,
+        rhi::ITexture &render_target, const std::initializer_list<DrawSubmission> draws,
         const ColorAttachmentOps &options) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
@@ -417,10 +409,13 @@ namespace pP {
         applyColorAttachmentOps_(color_attachment, options);
 
         const string_literal description{std::in_place, render_target.getDesc().label};
-        return render(description, rhi::RenderPassDesc{
-            .colorAttachments = &color_attachment,
-            .colorAttachmentCount = 1u,
-        }, draws);
+        return render(
+            description,
+            rhi::RenderPassDesc{
+                .colorAttachments = &color_attachment,
+                .colorAttachmentCount = 1u,
+            },
+            draws);
     }
 
     // ------------------------------------------------------------------
@@ -444,28 +439,25 @@ namespace pP {
     // change that never went through a resize, so the entry is recomputed
     // (fail-safe) instead of a stale value being published.
     std::error_code Renderer::surfaceSignature_(
-        SurfaceRecord &record,
-        const SurfaceRenderPass &surface_pass,
-        const rhi::RenderPassDesc &render_pass,
-        RenderPipelineSignature &out_signature,
-        int2 &out_target_extent) {
+        SurfaceRecord &record, const SurfaceRenderPass &surface_pass, const rhi::RenderPassDesc &render_pass,
+        RenderPipelineSignature &out_signature, int2 &out_target_extent) {
         RenderPipelineSignature validated{};
         int2 validated_extent{zero_v};
         PPR_RETURN_ERROR_ON_FAIL(Renderer, buildRenderSignature_(render_pass, validated, validated_extent));
 
         SurfaceSignatureCache *cache = nullptr;
-        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and
-            surface_pass.m_additional_colors.empty()) {
-            cache = std::addressof(
-                record.m_signatures[static_cast<std::size_t>(surface_pass.m_depth_policy)]);
+        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and surface_pass.m_additional_colors.empty()) {
+            cache = std::addressof(record.m_signatures[static_cast<std::size_t>(surface_pass.m_depth_policy)]);
         }
 
-        const bool reusable =
-                cache != nullptr and cache->m_valid and
-                cache->m_depth_policy == surface_pass.m_depth_policy and
-                cache->m_extent.x == record.m_extent.x and cache->m_extent.y == record.m_extent.y and
-                cache->m_extent.x == validated_extent.x and cache->m_extent.y == validated_extent.y and
-                cache->m_signature == validated;
+        const bool reusable = cache != nullptr and
+                              cache->m_valid and
+                              cache->m_depth_policy == surface_pass.m_depth_policy and
+                              cache->m_extent.x == record.m_extent.x and
+                              cache->m_extent.y == record.m_extent.y and
+                              cache->m_extent.x == validated_extent.x and
+                              cache->m_extent.y == validated_extent.y and
+                              cache->m_signature == validated;
         if (reusable) {
             out_signature = cache->m_signature;
             out_target_extent = cache->m_extent;
@@ -484,8 +476,7 @@ namespace pP {
     }
 
     std::error_code Renderer::renderAndPresent(
-        const Window &window,
-        const std::initializer_list<SurfaceRenderPass> passes) {
+        const Window &window, const std::initializer_list<SurfaceRenderPass> passes) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -500,13 +491,15 @@ namespace pP {
         if (const auto it = m_surfaces.find(window.m_handle); it == m_surfaces.end()) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Renderer, createWindowSurface_(window, &record));
         } else {
-            if (it->second.m_extent.x != window.m_framebuffer_size.x or it->second.m_extent.y != window.m_framebuffer_size.y) [[unlikely]] {
+            if (it->second.m_extent.x != window.m_framebuffer_size.x or
+                it->second.m_extent.y != window.m_framebuffer_size.y) [[unlikely]] {
                 PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(it->second, window.m_framebuffer_size));
             }
             record = std::addressof(it->second);
         }
 
-        // m_configured is the in-flight-work token: no claim means nothing was submitted, so restore may skip the fence.
+        // m_configured is the in-flight-work token: no claim means nothing was submitted, so restore may skip the
+        // fence.
         if (not PPR_ENSURE(record->m_configured)) {
             return make_error_code(std::errc::resource_unavailable_try_again);
         }
@@ -517,10 +510,10 @@ namespace pP {
 
         for (const SurfaceRenderPass &surface_pass: passes) {
             const bool invalid_depth_policy =
-                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::none and surface_pass.m_depth_stencil) or
-                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::renderer_owned and (
-                         surface_pass.m_depth_stencil or not record->m_depth_texture or not record->m_depth_view)) or
-                    (surface_pass.m_depth_policy == ESurfaceDepthPolicy::external and not surface_pass.m_depth_stencil);
+                (surface_pass.m_depth_policy == ESurfaceDepthPolicy::none and surface_pass.m_depth_stencil) or
+                (surface_pass.m_depth_policy == ESurfaceDepthPolicy::renderer_owned and
+                    (surface_pass.m_depth_stencil or not record->m_depth_texture or not record->m_depth_view)) or
+                (surface_pass.m_depth_policy == ESurfaceDepthPolicy::external and not surface_pass.m_depth_stencil);
             if (invalid_depth_policy) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -585,15 +578,12 @@ namespace pP {
             }
 
             switch (surface_pass.m_depth_policy) {
-                case ESurfaceDepthPolicy::none:
-                    break;
+                case ESurfaceDepthPolicy::none: break;
                 case ESurfaceDepthPolicy::renderer_owned:
                     built.m_depth_stencil = rhi::RenderPassDepthStencilAttachment{};
                     built.m_depth_stencil->view = record->m_depth_view.get();
                     break;
-                case ESurfaceDepthPolicy::external:
-                    built.m_depth_stencil = *surface_pass.m_depth_stencil;
-                    break;
+                case ESurfaceDepthPolicy::external: built.m_depth_stencil = *surface_pass.m_depth_stencil; break;
             }
 
             built.m_desc = rhi::RenderPassDesc{
@@ -601,12 +591,9 @@ namespace pP {
                 .colorAttachmentCount = safe_narrowing(built.m_color_attachments.size()),
                 .depthStencilAttachment = built.m_depth_stencil ? std::addressof(*built.m_depth_stencil) : nullptr,
             };
-            built.m_draws = std::span<const DrawSubmission>{
-                surface_pass.m_draws.begin(), surface_pass.m_draws.size()
-            };
+            built.m_draws = std::span<const DrawSubmission>{surface_pass.m_draws.begin(), surface_pass.m_draws.size()};
 
-            first_err = surfaceSignature_(*record, surface_pass, built.m_desc,
-                built.m_signature, built.m_extent);
+            first_err = surfaceSignature_(*record, surface_pass, built.m_desc, built.m_signature, built.m_extent);
             if (first_err) {
                 break;
             }
@@ -621,15 +608,14 @@ namespace pP {
         // the encoder is destroyed, while the present below still runs.
         if (not first_err) {
             rhi::ComPtr<rhi::ICommandEncoder> encoder;
-            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err,
-                m_graphics_queue->createCommandEncoder(encoder.writeRef()));
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
             for (const BuiltSurfacePass &built: built_passes) {
                 if (first_err) {
                     break;
                 }
-                first_err = encodeRenderPass_(*encoder, description, built.m_desc, built.m_signature,
-                    built.m_extent, built.m_draws,
+                first_err = encodeRenderPass_(
+                    *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
                     m_rhi_service->getDevice());
             }
 
@@ -666,9 +652,8 @@ namespace pP {
 
         rhi::ComPtr<rhi::ISurface> surface;
         rhi::IDevice &device = m_rhi_service->getDevice();
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, device.createSurface(
-            rhi::WindowHandle::fromHwnd(window.m_native),
-            surface.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, device.createSurface(rhi::WindowHandle::fromHwnd(window.m_native), surface.writeRef()));
 
         SurfaceRecord record{};
         record.m_surface = std::move(surface);
@@ -680,10 +665,12 @@ namespace pP {
         }
         *out_record = std::addressof(it->second);
 
-        PPR_LOG(Renderer, info, "window surface created", {
-            {"description", window.m_title},
-            {"width", it->second.m_extent.x},
-            {"height", it->second.m_extent.y},
+        PPR_LOG(
+            Renderer, info, "window surface created",
+            {
+                {"description", window.m_title},
+                {"width", it->second.m_extent.x},
+                {"height", it->second.m_extent.y},
             });
         return default_value_v;
     }
@@ -748,10 +735,12 @@ namespace pP {
         // they can change — instead of being rebuilt on every frame.
         recomputeSurfaceSignatures_(record);
 
-        PPR_LOG(Renderer, info, "window surface resized", {
-            {"format", rhi::getFormatInfo(record.m_surface->getInfo().preferredFormat).name},
-            {"width", record.m_extent.x},
-            {"height", record.m_extent.y},
+        PPR_LOG(
+            Renderer, info, "window surface resized",
+            {
+                {"format", rhi::getFormatInfo(record.m_surface->getInfo().preferredFormat).name},
+                {"width", record.m_extent.x},
+                {"height", record.m_extent.y},
             });
         return default_value_v;
     }
@@ -764,10 +753,9 @@ namespace pP {
     // per-frame validation is caught by the reuse comparison and recomputed
     // there instead of being published stale.
     void Renderer::recomputeSurfaceSignatures_(SurfaceRecord &record) {
-        const rhi::Format surface_format =
-                m_preferred_surface_format == rhi::Format::Undefined
-                    ? record.m_surface->getInfo().preferredFormat
-                    : m_preferred_surface_format;
+        const rhi::Format surface_format = m_preferred_surface_format == rhi::Format::Undefined
+                                               ? record.m_surface->getInfo().preferredFormat
+                                               : m_preferred_surface_format;
         if (surface_format == rhi::Format::Undefined) [[unlikely]] {
             return;
         }
@@ -792,8 +780,8 @@ namespace pP {
         }
     }
 
-    std::error_code Renderer::createSurfaceDepth_(const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
-                                                  rhi::ComPtr<rhi::ITextureView> &out_view) const {
+    std::error_code Renderer::createSurfaceDepth_(
+        const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture, rhi::ComPtr<rhi::ITextureView> &out_view) const {
         rhi::TextureDesc depth_desc{};
         depth_desc.type = rhi::TextureType::Texture2D;
         depth_desc.size = {safe_narrowing<u32>(extent.x), safe_narrowing<u32>(extent.y), 1u};
@@ -806,8 +794,8 @@ namespace pP {
         depth_desc.defaultState = rhi::ResourceState::DepthWrite;
         depth_desc.label = "window surface depth";
 
-        PPR_RETURN_ERROR_ON_FAIL(Renderer,
-            m_rhi_service->getDevice().createTexture(depth_desc, nullptr, out_texture.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, m_rhi_service->getDevice().createTexture(depth_desc, nullptr, out_texture.writeRef()));
         out_view = out_texture->getDefaultView();
         if (not out_view) [[unlikely]] {
             out_texture.setNull();

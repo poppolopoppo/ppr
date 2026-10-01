@@ -15,8 +15,8 @@ export namespace pP::mem {
 
     class GPA {
     public:
-        [[nodiscard]] static std::allocation_result<void *>
-        allocateRaw(std::size_t bytes, std::align_val_t alignment) noexcept;
+        [[nodiscard]] static std::allocation_result<void *> allocateRaw(
+            std::size_t bytes, std::align_val_t alignment) noexcept;
 
         static void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment) noexcept;
     };
@@ -29,8 +29,7 @@ export namespace pP::mem {
 
     class OS {
     public:
-        [[nodiscard]] static std::allocation_result<void *>
-        allocateRaw(std::size_t bytes, std::align_val_t alignment);
+        [[nodiscard]] static std::allocation_result<void *> allocateRaw(std::size_t bytes, std::align_val_t alignment);
 
         static void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment);
     };
@@ -44,7 +43,8 @@ export namespace pP::mem {
 
     class PMR {
         struct VTable {
-            std::allocation_result<void *> (*m_allocateRaw)(void *context, std::size_t bytes, std::align_val_t alignment){};
+            std::allocation_result<void *> (*m_allocateRaw)(
+                void *context, std::size_t bytes, std::align_val_t alignment){};
 
             void (*m_deallocateRaw)(void *context, void *ptr, std::size_t bytes, std::align_val_t alignment){};
 
@@ -57,16 +57,18 @@ export namespace pP::mem {
     public:
         template<details::TAllocator AllocatorT = GPA>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        PMR(AllocatorT = {}) noexcept requires std::is_empty_v<AllocatorT> {
+        PMR(AllocatorT = {}) noexcept
+            requires std::is_empty_v<AllocatorT>
+        {
             static constexpr VTable g_vtable{
-                .m_allocateRaw = [](void *const, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
-                    return AllocatorT{}.allocateRaw(bytes, alignment);
-                },
-                .m_deallocateRaw = [](void *const, void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-                    AllocatorT{}.deallocateRaw(ptr, bytes, alignment);
-                },
+                .m_allocateRaw = [](void *const, const std::size_t bytes, const std::align_val_t alignment)
+                    -> std::allocation_result<void *> { return AllocatorT{}.allocateRaw(bytes, alignment); },
+                .m_deallocateRaw =
+                    [](void *const, void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
+                        AllocatorT{}.deallocateRaw(ptr, bytes, alignment);
+                    },
                 .m_resizeRaw = [](void *, [[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t old_size,
-                                  [[maybe_unused]] const std::size_t new_size) -> bool {
+                                   [[maybe_unused]] const std::size_t new_size) -> bool {
                     if constexpr (details::TResizableAllocator<AllocatorT>) {
                         return AllocatorT{}.resizeRaw(ptr, old_size, new_size);
                     } else {
@@ -79,17 +81,22 @@ export namespace pP::mem {
 
         template<details::TAllocator AllocatorT>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        PMR(AllocatorT &al) noexcept requires (!std::is_empty_v<AllocatorT>)
+        PMR(AllocatorT &al) noexcept
+            requires (!std::is_empty_v<AllocatorT>)
             : m_context(std::addressof(al)) {
             static constexpr VTable g_vtable{
-                .m_allocateRaw = [](void *const context, const std::size_t bytes, const std::align_val_t alignment) -> std::allocation_result<void *> {
+                .m_allocateRaw = [](void *const context, const std::size_t bytes,
+                                     const std::align_val_t alignment) -> std::allocation_result<void *> {
                     return static_cast<AllocatorT *>(context)->allocateRaw(bytes, alignment);
                 },
-                .m_deallocateRaw = [](void *const context, void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
-                    static_cast<AllocatorT *>(context)->deallocateRaw(ptr, bytes, alignment);
-                },
-                .m_resizeRaw = []([[maybe_unused]] void *const context, [[maybe_unused]] void *const ptr, [[maybe_unused]] const std::size_t old_size,
-                                  [[maybe_unused]] const std::size_t new_size) -> bool {
+                .m_deallocateRaw =
+                    [](void *const context, void *const ptr, const std::size_t bytes,
+                        const std::align_val_t alignment) {
+                        static_cast<AllocatorT *>(context)->deallocateRaw(ptr, bytes, alignment);
+                    },
+                .m_resizeRaw = []([[maybe_unused]] void *const context, [[maybe_unused]] void *const ptr,
+                                   [[maybe_unused]] const std::size_t old_size,
+                                   [[maybe_unused]] const std::size_t new_size) -> bool {
                     if constexpr (details::TResizableAllocator<AllocatorT>) {
                         return static_cast<AllocatorT *>(context)->resizeRaw(ptr, old_size, new_size);
                     } else {
@@ -102,12 +109,11 @@ export namespace pP::mem {
 
         template<details::TAllocator AllocatorT>
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        PMR(Allocator<AllocatorT> al) noexcept
-            : PMR(al.materialize()) {
+        PMR(Allocator<AllocatorT> al) noexcept : PMR(al.materialize()) {
         }
 
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) const {
+        [[nodiscard]] std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) const {
             return m_vtable->m_allocateRaw(m_context, bytes, alignment);
         }
 
@@ -115,8 +121,8 @@ export namespace pP::mem {
             m_vtable->m_deallocateRaw(m_context, ptr, bytes, alignment);
         }
 
-        [[nodiscard]] bool
-        resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) const noexcept {
+        [[nodiscard]] bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) const noexcept {
             return m_vtable->m_resizeRaw(m_context, ptr, old_size, new_size);
         }
 
@@ -124,8 +130,7 @@ export namespace pP::mem {
     };
 
     template<>
-    struct details::use_inplace<PMR> : std::true_type {
-    };
+    struct details::use_inplace<PMR> : std::true_type {};
 
     // ------------------------------------------------------------------
     // pooled 2MiB "huge" pages, serves as backend allocator
@@ -139,19 +144,17 @@ export namespace pP::mem {
 
         [[nodiscard]] static PagePool &getGlobalPool() noexcept;
 
-        using local_block_cache_t = LocalCache<block_size_v, Static<&getGlobalPool> >;
+        using local_block_cache_t = LocalCache<block_size_v, Static<&getGlobalPool>>;
 
         [[nodiscard]] static local_block_cache_t &getThreadLocalCache() noexcept;
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static std::allocation_result<void *>
-        owns(const std::size_t bytes, const std::align_val_t alignment) {
+        [[nodiscard]] PPR_FORCE_INLINE static std::allocation_result<void *> owns(
+            const std::size_t bytes, const std::align_val_t alignment) {
             return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
+        [[nodiscard]] PPR_FORCE_INLINE static std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) {
             return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
@@ -189,15 +192,13 @@ export namespace pP::mem {
 
         [[nodiscard]] static local_block_cache_t &getThreadLocalCache() noexcept;
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static std::allocation_result<void *>
-        owns(const std::size_t bytes, const std::align_val_t alignment) {
+        [[nodiscard]] PPR_FORCE_INLINE static std::allocation_result<void *> owns(
+            const std::size_t bytes, const std::align_val_t alignment) {
             return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        static std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
+        [[nodiscard]] PPR_FORCE_INLINE static std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) {
             return getThreadLocalCache().allocateRaw(bytes, alignment);
         }
 

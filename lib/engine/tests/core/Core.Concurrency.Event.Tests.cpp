@@ -12,8 +12,7 @@ namespace pP::tests::detail {
         public:
             std::size_t m_expected_tag{0u};
 
-            explicit DummySignal(const std::size_t expected_tag) noexcept
-                : m_expected_tag{expected_tag} {
+            explicit DummySignal(const std::size_t expected_tag) noexcept : m_expected_tag{expected_tag} {
             }
 
             void notify([[maybe_unused]] const std::size_t event_tag) noexcept override {
@@ -225,17 +224,16 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (never_event){
+        PPR_UNIT_TEST (never_event) {
             _.recurse({
                 Never::poll_returns_false,
                 Never::subscribe_returns_default,
                 Never::unsubscribe_noop,
                 Never::reset_noop,
             });
-
         };
 
-        PPR_UNIT_TEST (pulse_event){
+        PPR_UNIT_TEST (pulse_event) {
             _.recurse({
                 Pulse::poll_initially_false,
                 Pulse::emit_sets_flag,
@@ -245,10 +243,9 @@ namespace pP::tests::detail {
                 Pulse::subscribe_returns_previous,
                 Pulse::unsubscribe_restores_previous,
             });
-
         };
 
-        PPR_UNIT_TEST (broadcast_event){
+        PPR_UNIT_TEST (broadcast_event) {
             _.recurse({
                 Broadcast::poll_initially_false,
                 Broadcast::emit_sets_flag,
@@ -256,27 +253,24 @@ namespace pP::tests::detail {
                 Broadcast::subscribe_returns_default,
                 Broadcast::unsubscribe_removes_subscriber,
             });
-
         };
 
-        PPR_UNIT_TEST (signal_single){
+        PPR_UNIT_TEST (signal_single) {
             _.recurse({
                 SignalSingle::poll_empty_returns_nullopt,
                 SignalSingle::poll_after_emit_returns_event,
                 SignalSingle::reset_clears_pending,
                 SignalSingle::iterator_sentinel,
             });
-
         };
 
-        PPR_UNIT_TEST (signal_multi){
+        PPR_UNIT_TEST (signal_multi) {
             _.recurse({
                 SignalMulti::poll_two_events_emits_first,
                 SignalMulti::poll_two_events_emits_second,
                 SignalMulti::reset_clears_specific_event,
                 SignalMulti::both_events_set,
             });
-
         };
     }
 } // namespace pP::tests::detail

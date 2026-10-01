@@ -25,16 +25,18 @@ namespace pP::tests::detail {
 
         [[nodiscard]] bool nearEqual(const float3 &expected, const float3 &actual, const float eps = kEps) noexcept {
             return nearEqual(expected.x, actual.x, eps) and
-                nearEqual(expected.y, actual.y, eps) and
-                nearEqual(expected.z, actual.z, eps);
+                   nearEqual(expected.y, actual.y, eps) and
+                   nearEqual(expected.z, actual.z, eps);
         }
 
         // Quaternions double-cover SO(3): compare the rotation, never the raw components.
-        [[nodiscard]] bool nearEqual(const Quaternion &expected, const Quaternion &actual, const float eps = kEps) noexcept {
+        [[nodiscard]] bool nearEqual(
+            const Quaternion &expected, const Quaternion &actual, const float eps = kEps) noexcept {
             return nearEqual(std::abs(dot(expected, actual)), 1.0f, eps);
         }
 
-        [[nodiscard]] bool nearEqual(const float4x4 &expected, const float4x4 &actual, const float eps = kEps) noexcept {
+        [[nodiscard]] bool nearEqual(
+            const float4x4 &expected, const float4x4 &actual, const float eps = kEps) noexcept {
             for (std::size_t row = 0; row < 4; ++row) {
                 for (std::size_t column = 0; column < 4; ++column) {
                     if (not nearEqual(expected(row, column), actual(row, column), eps)) {
@@ -50,7 +52,9 @@ namespace pP::tests::detail {
             return nearEqual(std::abs(dot(value, value)), 1.0f, eps);
         }
 
-        [[nodiscard]] bool rowEquals(const float4x4 &matrix, const std::size_t row, const float x, const float y, const float z, const float w) noexcept {
+        [[nodiscard]] bool rowEquals(
+            const float4x4 &matrix, const std::size_t row, const float x, const float y, const float z,
+            const float w) noexcept {
             return matrix(row, 0) == x and matrix(row, 1) == y and matrix(row, 2) == z and matrix(row, 3) == w;
         }
 
@@ -65,15 +69,15 @@ namespace pP::tests::detail {
 
         [[nodiscard]] bool allFinite(const Transform &value) noexcept {
             return std::isfinite(value.m_rotate.x) and
-                std::isfinite(value.m_rotate.y) and
-                std::isfinite(value.m_rotate.z) and
-                std::isfinite(value.m_rotate.w) and
-                std::isfinite(value.m_translate.x) and
-                std::isfinite(value.m_translate.y) and
-                std::isfinite(value.m_translate.z) and
-                std::isfinite(value.m_scale.x) and
-                std::isfinite(value.m_scale.y) and
-                std::isfinite(value.m_scale.z);
+                   std::isfinite(value.m_rotate.y) and
+                   std::isfinite(value.m_rotate.z) and
+                   std::isfinite(value.m_rotate.w) and
+                   std::isfinite(value.m_translate.x) and
+                   std::isfinite(value.m_translate.y) and
+                   std::isfinite(value.m_translate.z) and
+                   std::isfinite(value.m_scale.x) and
+                   std::isfinite(value.m_scale.y) and
+                   std::isfinite(value.m_scale.z);
         }
 
         // isInfOrNan/isFinite take a non-deduced param_lvref_t<T>: the template
@@ -123,7 +127,11 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (identity) {
             const Transform value;
 
-            PPR_TEST_ASSERT(value.m_rotate.x == 0.0f and value.m_rotate.y == 0.0f and value.m_rotate.z == 0.0f and value.m_rotate.w == 1.0f);
+            PPR_TEST_ASSERT(
+                value.m_rotate.x == 0.0f and
+                value.m_rotate.y == 0.0f and
+                value.m_rotate.z == 0.0f and
+                value.m_rotate.w == 1.0f);
             PPR_TEST_ASSERT(nearEqual(value.m_translate, float3{0.0f, 0.0f, 0.0f}));
             PPR_TEST_ASSERT(nearEqual(value.m_scale, float3{1.0f, 1.0f, 1.0f}));
             PPR_TEST_ASSERT(value.getDeterminant() == 1.0f);
@@ -188,7 +196,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(nearEqual(rowOf(spin_matrix, 0), float3{0.0f, 1.0f, 0.0f}));
             PPR_TEST_ASSERT(nearEqual(rowOf(spin_matrix, 1), float3{-1.0f, 0.0f, 0.0f}));
             PPR_TEST_ASSERT(nearEqual(rowOf(spin_matrix, 2), float3{0.0f, 0.0f, 1.0f}));
-            PPR_TEST_ASSERT(nearEqual(rowOf(spin_matrix, 0), quaternionTransform(spun.m_rotate, float3{1.0f, 0.0f, 0.0f})));
+            PPR_TEST_ASSERT(
+                nearEqual(rowOf(spin_matrix, 0), quaternionTransform(spun.m_rotate, float3{1.0f, 0.0f, 0.0f})));
             PPR_TEST_ASSERT(rowEquals(spin_matrix, 3, 0.0f, 0.0f, 0.0f, 1.0f));
 
             // Combined S*R*T: the translation row is untouched by scale, and the matrix
@@ -360,8 +369,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(from_zero_all.getDeterminantSign() == 1.0f);
 
             // A collapsed row under a real rotation and translation still saturates to 0.
-            const float4x4 with_rotation = float4x4::scale(0.0f, 3.0f, 4.0f) * float4x4(Quaternion::rotateXYZ(0.3f, 0.4f, 0.5f)) * float4x4::translate(2.0f, -3.0f,
-                                               4.0f);
+            const float4x4 with_rotation = float4x4::scale(0.0f, 3.0f, 4.0f) *
+                                           float4x4(Quaternion::rotateXYZ(0.3f, 0.4f, 0.5f)) *
+                                           float4x4::translate(2.0f, -3.0f, 4.0f);
             const Transform under_rotation = Transform::fromMatrix(with_rotation);
 
             PPR_TEST_ASSERT(allFinite(under_rotation) and not isNan(under_rotation));
@@ -467,7 +477,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(nearEqual(composed.transformPosition(probe), applyToPoint(probe, expected)));
 
             // Apply-a-then-b point order.
-            PPR_TEST_ASSERT(nearEqual(composed.transformPosition(probe), b.transformPosition(a.transformPosition(probe))));
+            PPR_TEST_ASSERT(
+                nearEqual(composed.transformPosition(probe), b.transformPosition(a.transformPosition(probe))));
 
             // Non-uniform scale with identity rotations is exact too (S commutes with I).
             Transform plain_a;
@@ -481,7 +492,8 @@ namespace pP::tests::detail {
 
             PPR_TEST_ASSERT(nearEqual(plain.m_scale, float3{1.0f, 6.0f, 6.0f}));
             PPR_TEST_ASSERT(nearEqual(plain.toMatrix(), plain_a.toMatrix() * plain_b.toMatrix()));
-            PPR_TEST_ASSERT(nearEqual(plain.transformPosition(probe), plain_b.transformPosition(plain_a.transformPosition(probe))));
+            PPR_TEST_ASSERT(
+                nearEqual(plain.transformPosition(probe), plain_b.transformPosition(plain_a.transformPosition(probe))));
         };
 
         PPR_UNIT_TEST (multiply_mirror_uses_matrix_fallback) {
@@ -557,7 +569,8 @@ namespace pP::tests::detail {
 
             PPR_TEST_ASSERT(nearEqual(relative.toMatrix(), expected));
             PPR_TEST_ASSERT(nearEqual(relative.transformPosition(probe), applyToPoint(probe, expected)));
-            PPR_TEST_ASSERT(nearEqual(relative.transformPosition(probe), to.invert().transformPosition(from.transformPosition(probe))));
+            PPR_TEST_ASSERT(nearEqual(
+                relative.transformPosition(probe), to.invert().transformPosition(from.transformPosition(probe))));
             PPR_TEST_ASSERT(relative.getDeterminantSign() == 1.0f);
 
             // Mirrored `from` routes through the matrix fallback with the same semantics.
@@ -568,7 +581,8 @@ namespace pP::tests::detail {
             const Transform mirrored_relative = Transform::relativeTransform(mirrored, to);
 
             PPR_TEST_ASSERT(nearEqual(mirrored_relative.toMatrix(), mirrored_expected));
-            PPR_TEST_ASSERT(nearEqual(mirrored_relative.transformPosition(probe), applyToPoint(probe, mirrored_expected)));
+            PPR_TEST_ASSERT(
+                nearEqual(mirrored_relative.transformPosition(probe), applyToPoint(probe, mirrored_expected)));
             PPR_TEST_ASSERT(mirrored_relative.getDeterminantSign() == -1.0f);
         };
 
@@ -595,7 +609,8 @@ namespace pP::tests::detail {
             const Transform no_scale_inverse = no_scale_source.invertNoScale();
 
             PPR_TEST_ASSERT(nearEqual(no_scale_inverse.m_scale, float3{1.0f, 1.0f, 1.0f}));
-            PPR_TEST_ASSERT(nearEqual(no_scale_inverse.transformPositionNoScale(no_scale_source.transformPositionNoScale(probe)), probe));
+            PPR_TEST_ASSERT(nearEqual(
+                no_scale_inverse.transformPositionNoScale(no_scale_source.transformPositionNoScale(probe)), probe));
             PPR_TEST_ASSERT(nearEqual(no_scale_inverse.invertNoScale().m_rotate, no_scale_source.m_rotate));
 
             // Non-uniform scale: the per-call point inverse stays exact.
@@ -604,14 +619,16 @@ namespace pP::tests::detail {
             non_uniform.m_rotate = Quaternion::rotateZ(kHalfPi);
             non_uniform.m_translate = float3{1.0f, -2.0f, 3.0f};
 
-            PPR_TEST_ASSERT(nearEqual(non_uniform.invertTransformPosition(non_uniform.transformPosition(probe)), probe));
+            PPR_TEST_ASSERT(
+                nearEqual(non_uniform.invertTransformPosition(non_uniform.transformPosition(probe)), probe));
 
             // ...but S and R do not commute, so a naive TRS inverse is only approximate.
             // invert() asserts uniform scale, so replicate its construction locally here.
             Transform naive_inverse;
             naive_inverse.m_rotate = conjugate(non_uniform.m_rotate);
             naive_inverse.m_scale = rcp(non_uniform.m_scale);
-            naive_inverse.m_translate = quaternionTransform(naive_inverse.m_rotate, -non_uniform.m_translate * naive_inverse.m_scale);
+            naive_inverse.m_translate = quaternionTransform(
+                naive_inverse.m_rotate, -non_uniform.m_translate * naive_inverse.m_scale);
 
             const float3 axis_probe{1.0f, 0.0f, 0.0f};
             const float3 residue = applyToPoint(axis_probe, non_uniform.toMatrix() * naive_inverse.toMatrix());
@@ -630,17 +647,22 @@ namespace pP::tests::detail {
             value.m_scale = scale;
 
             // Forward: scale, then rotate, then translate (points) / scale+rotate (vectors).
-            PPR_TEST_ASSERT(nearEqual(value.transformPosition(probe), quaternionTransform(spin, probe * scale) + translation));
-            PPR_TEST_ASSERT(nearEqual(value.transformPositionNoScale(probe), quaternionTransform(spin, probe) + translation));
+            PPR_TEST_ASSERT(
+                nearEqual(value.transformPosition(probe), quaternionTransform(spin, probe * scale) + translation));
+            PPR_TEST_ASSERT(
+                nearEqual(value.transformPositionNoScale(probe), quaternionTransform(spin, probe) + translation));
             PPR_TEST_ASSERT(nearEqual(value.transformVector(probe), quaternionTransform(spin, probe * scale)));
             PPR_TEST_ASSERT(nearEqual(value.transformVectorNoScale(probe), quaternionTransform(spin, probe)));
 
             // Inverse: undo the translation, rotate back, then undo the scale.
             const Quaternion back = inverse(spin);
 
-            PPR_TEST_ASSERT(nearEqual(value.invertTransformPosition(probe), quaternionTransform(back, probe - translation) * rcp(scale)));
-            PPR_TEST_ASSERT(nearEqual(value.invertTransformPositionNoScale(probe), quaternionTransform(back, probe - translation)));
-            PPR_TEST_ASSERT(nearEqual(value.invertTransformVector(probe), quaternionTransform(back, probe) * rcp(scale)));
+            PPR_TEST_ASSERT(nearEqual(
+                value.invertTransformPosition(probe), quaternionTransform(back, probe - translation) * rcp(scale)));
+            PPR_TEST_ASSERT(
+                nearEqual(value.invertTransformPositionNoScale(probe), quaternionTransform(back, probe - translation)));
+            PPR_TEST_ASSERT(
+                nearEqual(value.invertTransformVector(probe), quaternionTransform(back, probe) * rcp(scale)));
             PPR_TEST_ASSERT(nearEqual(value.invertTransformVectorNoScale(probe), quaternionTransform(back, probe)));
 
             // conjugate() (the fast path) agrees with the general inverse on a unit quaternion.
@@ -648,7 +670,8 @@ namespace pP::tests::detail {
 
             // Every inverse variant round-trips its matching forward variant.
             PPR_TEST_ASSERT(nearEqual(value.invertTransformPosition(value.transformPosition(probe)), probe));
-            PPR_TEST_ASSERT(nearEqual(value.invertTransformPositionNoScale(value.transformPositionNoScale(probe)), probe));
+            PPR_TEST_ASSERT(
+                nearEqual(value.invertTransformPositionNoScale(value.transformPositionNoScale(probe)), probe));
             PPR_TEST_ASSERT(nearEqual(value.invertTransformVector(value.transformVector(probe)), probe));
             PPR_TEST_ASSERT(nearEqual(value.invertTransformVectorNoScale(value.transformVectorNoScale(probe)), probe));
 
@@ -656,10 +679,14 @@ namespace pP::tests::detail {
             Transform uniform = value;
             uniform.m_scale = float3{2.0f, 2.0f, 2.0f};
 
-            PPR_TEST_ASSERT(nearEqual(uniform.invert().transformPosition(probe), uniform.invertTransformPosition(probe)));
-            PPR_TEST_ASSERT(nearEqual(uniform.invertNoScale().transformPositionNoScale(probe), uniform.invertTransformPositionNoScale(probe)));
+            PPR_TEST_ASSERT(
+                nearEqual(uniform.invert().transformPosition(probe), uniform.invertTransformPosition(probe)));
+            PPR_TEST_ASSERT(nearEqual(
+                uniform.invertNoScale().transformPositionNoScale(probe),
+                uniform.invertTransformPositionNoScale(probe)));
             PPR_TEST_ASSERT(nearEqual(uniform.invert().transformVector(probe), uniform.invertTransformVector(probe)));
-            PPR_TEST_ASSERT(nearEqual(uniform.invertNoScale().transformVectorNoScale(probe), uniform.invertTransformVectorNoScale(probe)));
+            PPR_TEST_ASSERT(nearEqual(
+                uniform.invertNoScale().transformVectorNoScale(probe), uniform.invertTransformVectorNoScale(probe)));
         };
 
         PPR_UNIT_TEST (accumulate_variants) {
@@ -895,7 +922,8 @@ namespace pP::tests::detail {
             uniform.m_scale = float3{3.0f, 3.0f, 3.0f};
 
             const float3 spin_probe = normalize(float3{0.25f, 1.0f, -0.5f});
-            PPR_TEST_ASSERT(nearEqual(uniform.transformNormal(spin_probe), quaternionTransform(uniform.m_rotate, spin_probe)));
+            PPR_TEST_ASSERT(
+                nearEqual(uniform.transformNormal(spin_probe), quaternionTransform(uniform.m_rotate, spin_probe)));
         };
 
         PPR_UNIT_TEST (invert_transform_normal_round_trip) {
@@ -918,7 +946,8 @@ namespace pP::tests::detail {
             }
 
             // Ground truth: conjugate rotation as a transposed basis matrix, then scale.
-            const float4x4 back_basis = transpose(float4x4(value.m_rotate)) * float4x4::scale(value.m_scale.x, value.m_scale.y, value.m_scale.z);
+            const float4x4 back_basis = transpose(float4x4(value.m_rotate)) *
+                                        float4x4::scale(value.m_scale.x, value.m_scale.y, value.m_scale.z);
 
             for (const float3 probe: probes) {
                 const float3 direction = normalize(probe);
@@ -929,7 +958,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (orthonormalize_variants) {
             // Already orthonormal: the tangent survives unchanged.
-            PPR_TEST_ASSERT(nearEqual(orthonormalize(float3{0.0f, 1.0f, 0.0f}, float3{1.0f, 0.0f, 0.0f}), float3{1.0f, 0.0f, 0.0f}));
+            PPR_TEST_ASSERT(nearEqual(
+                orthonormalize(float3{0.0f, 1.0f, 0.0f}, float3{1.0f, 0.0f, 0.0f}), float3{1.0f, 0.0f, 0.0f}));
 
             // Non-unit normal, skewed tangent: Gram-Schmidt projection, then normalize.
             const float3 skewed = orthonormalize(float3{0.0f, 2.0f, 0.0f}, float3{1.0f, 1.0f, 0.0f});
@@ -945,7 +975,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::abs(dot(float3{0.0f, 1.0f, 0.0f}, fallback)) < kEps);
 
             // Degenerate normal: safeNormalize substitutes +Y before orthogonalizing.
-            PPR_TEST_ASSERT(nearEqual(orthonormalize(float3{0.0f, 0.0f, 0.0f}, float3{1.0f, 0.0f, 0.0f}), float3{1.0f, 0.0f, 0.0f}));
+            PPR_TEST_ASSERT(nearEqual(
+                orthonormalize(float3{0.0f, 0.0f, 0.0f}, float3{1.0f, 0.0f, 0.0f}), float3{1.0f, 0.0f, 0.0f}));
         };
 
         PPR_UNIT_TEST (fallback_perpendicular_variants) {
@@ -994,22 +1025,28 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (angular_velocity_variants) {
             // No rotation change: zero velocity.
-            PPR_TEST_ASSERT(nearEqual(angularVelocity(1.0f, Quaternion::identity(), Quaternion::identity()), float3{0.0f, 0.0f, 0.0f}));
+            PPR_TEST_ASSERT(nearEqual(
+                angularVelocity(1.0f, Quaternion::identity(), Quaternion::identity()), float3{0.0f, 0.0f, 0.0f}));
 
             // 90 deg about +Z in one second: pi/2 rad/s about +Z.
-            PPR_TEST_ASSERT(nearEqual(angularVelocity(1.0f, Quaternion::identity(), Quaternion::rotateZ(kHalfPi)), float3{0.0f, 0.0f, kHalfPi}));
+            PPR_TEST_ASSERT(nearEqual(
+                angularVelocity(1.0f, Quaternion::identity(), Quaternion::rotateZ(kHalfPi)),
+                float3{0.0f, 0.0f, kHalfPi}));
 
             // Half the time budget doubles the rate.
-            PPR_TEST_ASSERT(
-                nearEqual(angularVelocity(0.5f, Quaternion::identity(), Quaternion::rotateZ(kHalfPi)), float3{0.0f, 0.0f, 2.0f * kHalfPi}));
+            PPR_TEST_ASSERT(nearEqual(
+                angularVelocity(0.5f, Quaternion::identity(), Quaternion::rotateZ(kHalfPi)),
+                float3{0.0f, 0.0f, 2.0f * kHalfPi}));
 
             // Antipodal target flips onto the shortest arc: -identity is the same rotation.
-            PPR_TEST_ASSERT(nearEqual(angularVelocity(1.0f, Quaternion::identity(), -Quaternion::identity()), float3{0.0f, 0.0f, 0.0f}));
+            PPR_TEST_ASSERT(nearEqual(
+                angularVelocity(1.0f, Quaternion::identity(), -Quaternion::identity()), float3{0.0f, 0.0f, 0.0f}));
         };
 
         PPR_UNIT_TEST (is_nan_and_free_inverse) {
             // Uniform scale keeps the free inverse() an exact point inverse.
-            const Transform value{Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
+            const Transform value{
+                Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
             const float3 probe{1.0f, -2.0f, 3.0f};
             const float nan = std::numeric_limits<float>::quiet_NaN();
 
@@ -1039,7 +1076,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (is_nan_remaining_lanes) {
             // The remaining 7 of 10 lanes (mirrors the 3 covered by is_nan_and_free_inverse).
-            const Transform value{Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
+            const Transform value{
+                Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
             const float nan = std::numeric_limits<float>::quiet_NaN();
 
             Transform broken = value;
@@ -1228,7 +1266,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (is_inf_transform_first_lanes) {
             // First 3 of 10 lanes (mirrors the 3 covered by is_nan_and_free_inverse).
-            const Transform value{Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
+            const Transform value{
+                Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
             const float inf = std::numeric_limits<float>::infinity();
             const float nan = std::numeric_limits<float>::quiet_NaN();
 
@@ -1262,7 +1301,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (is_inf_transform_remaining_lanes) {
             // The remaining 7 of 10 lanes (mirrors is_nan_remaining_lanes).
-            const Transform value{Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
+            const Transform value{
+                Quaternion::rotateXYZ(0.2f, 0.4f, 0.6f), float3{1.0f, 2.0f, 3.0f}, float3{2.0f, 2.0f, 2.0f}};
             const float inf = std::numeric_limits<float>::infinity();
             const float nan = std::numeric_limits<float>::quiet_NaN();
 

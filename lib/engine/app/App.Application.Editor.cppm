@@ -58,17 +58,23 @@ export namespace pP {
 
         [[nodiscard]] std::error_code unloadScene();
 
-        [[nodiscard]] TrianglePass &getTrianglePass() noexcept { return *m_triangle_pass; }
-        [[nodiscard]] GridPass &getGridPass() noexcept { return *m_grid_pass; }
+        [[nodiscard]] TrianglePass &getTrianglePass() noexcept {
+            return *m_triangle_pass;
+        }
+        [[nodiscard]] GridPass &getGridPass() noexcept {
+            return *m_grid_pass;
+        }
 
         // Post-initialize only. Rebuilds the camera input mapping before
         // releasing the previous controller; the editor keeps camera ownership.
-        [[nodiscard]] std::error_code replaceMainCameraController(std::unique_ptr<ICameraController> controller,
-                                                                  ECameraProjection projection);
+        [[nodiscard]] std::error_code replaceMainCameraController(
+            std::unique_ptr<ICameraController> controller, ECameraProjection projection);
 
     protected:
         // ReSharper disable once CppOverrideWithDifferentVisibility
-        [[nodiscard]] safe_ptr<const Application> getApplication() const noexcept override { return this; }
+        [[nodiscard]] safe_ptr<const Application> getApplication() const noexcept override {
+            return this;
+        }
 
         // Application:
         [[nodiscard]] std::error_code initialize() override;

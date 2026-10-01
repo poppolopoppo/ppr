@@ -8,7 +8,7 @@ import engine.app;
 import std;
 
 namespace pP::tests::detail {
-    PPR_UNIT_TEST(player_id_ordering) {
+    PPR_UNIT_TEST (player_id_ordering) {
         constexpr PlayerIdentity keyboard{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
@@ -21,14 +21,15 @@ namespace pP::tests::detail {
             .m_device_id = default_value_v,
             .m_local_index = 0u,
             .m_kind = EPlayerKind::gamepad,
-        };;
+        };
+        ;
 
         PPR_TEST_ASSERT(keyboard == keyboard);
         PPR_TEST_ASSERT(keyboard != gamepad);
         PPR_TEST_ASSERT(keyboard < gamepad);
     };
 
-    PPR_UNIT_TEST(player_construction_and_device_views) {
+    PPR_UNIT_TEST (player_construction_and_device_views) {
         constexpr PlayerIdentity id{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
@@ -47,7 +48,7 @@ namespace pP::tests::detail {
     };
 
 
-    PPR_UNIT_TEST(player_mapping_to_action) {
+    PPR_UNIT_TEST (player_mapping_to_action) {
         constexpr PlayerIdentity id{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,
@@ -77,7 +78,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(std::get<InputDigital>(*value) == InputDigital{true});
     };
 
-    PPR_UNIT_TEST(is_any_key_returns_unhandled) {
+    PPR_UNIT_TEST (is_any_key_returns_unhandled) {
         const InputMessage message{
             InputKey::any_digital,
             InputDigital{true},
@@ -91,7 +92,7 @@ namespace pP::tests::detail {
     };
 
 
-    PPR_UNIT_TEST(captures_frame_messages) {
+    PPR_UNIT_TEST (captures_frame_messages) {
         constexpr PlayerIdentity id{
             .m_user_id = default_value_v,
             .m_device_id = default_value_v,

@@ -64,13 +64,13 @@ export namespace pP::sim {
             const BodyState &a = m_state;
             const BodyState &b = other.m_state;
             return m_entity == other.m_entity and
-                m_awake == other.m_awake and
-                a.m_x == b.m_x and
-                a.m_y == b.m_y and
-                a.m_angle == b.m_angle and
-                a.m_velocity_x == b.m_velocity_x and
-                a.m_velocity_y == b.m_velocity_y and
-                a.m_angular_velocity == b.m_angular_velocity;
+                   m_awake == other.m_awake and
+                   a.m_x == b.m_x and
+                   a.m_y == b.m_y and
+                   a.m_angle == b.m_angle and
+                   a.m_velocity_x == b.m_velocity_x and
+                   a.m_velocity_y == b.m_velocity_y and
+                   a.m_angular_velocity == b.m_angular_velocity;
         }
     };
 
@@ -117,7 +117,7 @@ export namespace pP::sim {
 
     /// Little-endian v3 encoding: the ECS tail is followed by a versioned,
     /// entity-keyed bodies section and a fixed-tick replay cursor.
-    [[nodiscard]] Expected<Array<u8> > save(const Snapshot &snapshot);
+    [[nodiscard]] Expected<Array<u8>> save(const Snapshot &snapshot);
 
     /// Fail-closed inverse of `save`: version mismatch, short input, and
     /// malformed payloads are distinguishable through `errc`.

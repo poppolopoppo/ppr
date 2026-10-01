@@ -17,11 +17,10 @@ namespace pP::colony {
             return {min_x, min_y, min_x + static_cast<i32>(sim::kChunkEdge), min_y + static_cast<i32>(sim::kChunkEdge)};
         }
 
-        [[nodiscard]] std::error_code uploadChunk(const sim::ChunkGrid &grid, GridPass &pass,
-                                                  const sim::ChunkPos pos, Array<u16> &scratch) {
+        [[nodiscard]] std::error_code uploadChunk(
+            const sim::ChunkGrid &grid, GridPass &pass, const sim::ChunkPos pos, Array<u16> &scratch) {
             const auto cells = grid.residentCells(pos);
-            if (not cells or cells->size() != sim::kCellsPerChunk)
-            [[unlikely]] {
+            if (not cells or cells->size() != sim::kCellsPerChunk) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -42,11 +41,12 @@ namespace pP::colony {
             payload.m_rect[3] = static_cast<float>(range.m_max_y);
             payload.m_material = 0u;
 
-            const auto uploaded = pass.requestUpload(GridUploadRequest{
-                .m_chunk_id = sim::chunkIndexOf(pos),
-                .m_tile_data_view = std::span<const GridTilePayload>{&payload, 1u},
-                .m_cell_materials = std::span<const u16>{scratch.data(), scratch.size()},
-            });
+            const auto uploaded = pass.requestUpload(
+                GridUploadRequest{
+                    .m_chunk_id = sim::chunkIndexOf(pos),
+                    .m_tile_data_view = std::span<const GridTilePayload>{&payload, 1u},
+                    .m_cell_materials = std::span<const u16>{scratch.data(), scratch.size()},
+                });
             if (not uploaded) [[unlikely]] {
                 return uploaded.error();
             }
@@ -65,9 +65,7 @@ namespace pP::colony {
     }
 
     std::error_code ColonyTranslator::markChunkChanged(const sim::ChunkPos pos) noexcept {
-        if (pos.m_x >= sim::kChunksPerEdge or
-            pos.m_y >= sim::kChunksPerEdge)
-        [[unlikely]] {
+        if (pos.m_x >= sim::kChunksPerEdge or pos.m_y >= sim::kChunksPerEdge) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
         m_presented[sim::chunkIndexOf(pos)] = false;
@@ -88,12 +86,13 @@ namespace pP::colony {
                         continue;
                     }
                     const u32 chunk_id = sim::chunkIndexOf(pos);
-                    tiles.push_back(GridTileSubmission{
-                        .m_chunk_id = chunk_id,
-                        .m_tile_range = tileRange(pos),
-                        .m_dirty_mask = m_presented[chunk_id] ? 0u : 1u,
-                        .m_material_id = 0u,
-                    });
+                    tiles.push_back(
+                        GridTileSubmission{
+                            .m_chunk_id = chunk_id,
+                            .m_tile_range = tileRange(pos),
+                            .m_dirty_mask = m_presented[chunk_id] ? 0u : 1u,
+                            .m_material_id = 0u,
+                        });
                 }
             }
         }
@@ -132,7 +131,7 @@ namespace pP::colony {
         return m_submitted_chunks;
     }
 
-    const StageTimings& ColonyTranslator::stageTimings() const noexcept {
+    const StageTimings &ColonyTranslator::stageTimings() const noexcept {
         return m_timings;
     }
 

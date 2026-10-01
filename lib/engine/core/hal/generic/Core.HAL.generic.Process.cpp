@@ -13,9 +13,10 @@ namespace pP::hal::process {
         throw std::runtime_error("currentExecutablePath not implemented for generic platform");
     }
 
-    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
-        (void)executable;
-        (void)args;
+    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(
+        false) {
+        (void) executable;
+        (void) args;
         throw std::runtime_error("spawnAndWait not implemented for generic platform");
     }
 }

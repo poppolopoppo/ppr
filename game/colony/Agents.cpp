@@ -58,13 +58,13 @@ namespace pP::colony {
             u32 m_op{kOpMove};
         };
 
-        [[nodiscard]] Desired desiredGoal(const sim::ChunkGrid &grid, const Agent &agent, const Needs &needs,
-                                          const sim::BodyState &pose, sim::Registry &registry) {
+        [[nodiscard]] Desired desiredGoal(
+            const sim::ChunkGrid &grid, const Agent &agent, const Needs &needs, const sim::BodyState &pose,
+            sim::Registry &registry) {
             Desired want{};
             const sim::GlobalCellPos here{static_cast<u32>(pose.m_x), static_cast<u32>(pose.m_y)};
             const auto here_cell = grid.getCell(here);
-            if (here_cell and here_cell->m_element == kElementCaustic)
-            {
+            if (here_cell and here_cell->m_element == kElementCaustic) {
                 want.m_goal = EGoal::flee;
                 want.m_op = kOpMove;
                 for (u32 radius = 10u; radius < 200u; radius += 5u) {
@@ -134,10 +134,8 @@ namespace pP::colony {
                     for (u32 step_y = 0u; step_y <= radius and not staged; ++step_y) {
                         const u32 step_x = radius - step_y;
                         const sim::GlobalCellPos candidates[4] = {
-                            {center.m_x + step_x, center.m_y + step_y},
-                            {center.m_x - step_x, center.m_y + step_y},
-                            {center.m_x + step_x, center.m_y - step_y},
-                            {center.m_x - step_x, center.m_y - step_y}};
+                            {center.m_x + step_x, center.m_y + step_y}, {center.m_x - step_x, center.m_y + step_y},
+                            {center.m_x + step_x, center.m_y - step_y}, {center.m_x - step_x, center.m_y - step_y}};
                         for (const sim::GlobalCellPos candidate: candidates) {
                             if (isWalkable(grid, candidate)) {
                                 want.m_site = candidate;
@@ -177,8 +175,7 @@ namespace pP::colony {
         return {};
     }
 
-    std::error_code spawnAgents(
-        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count) {
+    std::error_code spawnAgents(const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count) {
         // Phase: normalize the profiling override. Fail closed to the
         // production default on empty, reject above the named ceiling.
         if (count == 0u) {
@@ -212,19 +209,18 @@ namespace pP::colony {
             const u64 key = (static_cast<u64>(entity.m_generation) << 32u) | entity.m_index;
             registry.emplace<Agent>(entity, Agent{.m_key = key, .m_spawn = spawn});
             registry.emplace<Needs>(entity, Needs{});
-            registry.emplace<sim::BodyState>(entity,
-                sim::BodyState{
-                    static_cast<float>(spawn.m_x) + 0.5f, static_cast<float>(spawn.m_y) + 0.5f, 0.0f, 0.0f, 0.0f, 0.0f
-                });
-            registry.emplace<sim::BodyDefinition>(entity,
-                sim::BodyDefinition{
-                    .m_motion = sim::EMotionKind::dynamic,
-                    .m_geometry = sim::EBodyGeometry::box,
-                    .m_half_width = 0.4f,
-                    .m_half_height = 0.9f,
-                    .m_enable_sleep = false,
-                    .m_fixed_rotation = true
-                });
+            registry.emplace<sim::BodyState>(
+                entity, sim::BodyState{
+                            static_cast<float>(spawn.m_x) + 0.5f, static_cast<float>(spawn.m_y) + 0.5f, 0.0f, 0.0f,
+                            0.0f, 0.0f});
+            registry.emplace<sim::BodyDefinition>(
+                entity, sim::BodyDefinition{
+                            .m_motion = sim::EMotionKind::dynamic,
+                            .m_geometry = sim::EBodyGeometry::box,
+                            .m_half_width = 0.4f,
+                            .m_half_height = 0.9f,
+                            .m_enable_sleep = false,
+                            .m_fixed_rotation = true});
         }
         return {};
     }

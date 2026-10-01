@@ -31,7 +31,9 @@ namespace pP::tests::detail {
             g_writer_probe_hit.store(false, std::memory_order_relaxed);
 
             const Log::Policy previous = Log::setWriterPolicy({std23::nontype<&writerProbe_>});
-            PPR_DEFER{ std::ignore = Log::setWriterPolicy(previous); };
+            PPR_DEFER {
+                std::ignore = Log::setWriterPolicy(previous);
+            };
 
             _.recurse({nested_logging_probe});
 

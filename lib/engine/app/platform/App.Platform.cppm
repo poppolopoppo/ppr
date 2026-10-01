@@ -66,5 +66,4 @@ export namespace pP {
 }
 
 export template<>
-struct std::is_error_code_enum<pP::platform::errc> : true_type {
-};
+struct std::is_error_code_enum<pP::platform::errc> : true_type {};

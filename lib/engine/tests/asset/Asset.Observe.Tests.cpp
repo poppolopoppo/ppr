@@ -33,11 +33,12 @@ namespace pP::tests::detail {
 
             static void push_(const Log::Entry &entry) noexcept {
                 try {
-                    s_entries.push_back(Captured{
-                        entry.m_site.m_verbosity,
-                        std::string(entry.m_site.m_category.m_name.view()),
-                        std::string(entry.m_message),
-                    });
+                    s_entries.push_back(
+                        Captured{
+                            entry.m_site.m_verbosity,
+                            std::string(entry.m_site.m_category.m_name.view()),
+                            std::string(entry.m_message),
+                        });
                 } catch (...) {
                 }
             }
@@ -74,8 +75,7 @@ namespace pP::tests::detail {
             u64 found = 0u;
             try {
                 for (const Captured &entry: LogCapture::s_entries) {
-                    if (entry.m_level == level and
-                        entry.m_message.find(needle) != std::string::npos) {
+                    if (entry.m_level == level and entry.m_message.find(needle) != std::string::npos) {
                         ++found;
                     }
                 }
@@ -89,19 +89,19 @@ namespace pP::tests::detail {
             const std::vector<std::byte> tiny(4u, std::byte{0x00});
             const mem::SharedBufferView tiny_view{tiny.data(), tiny.size()};
             for (int i = 0; i < 2; ++i) {
-                const Expected<image::ImageAsset> bad_ext =
-                        image::decodeToRgba8(tiny_view, ".tga", image::ImageDecodeDesc{}, image::EImageUsage::color);
+                const Expected<image::ImageAsset> bad_ext = image::decodeToRgba8(
+                    tiny_view, ".tga", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not bad_ext.has_value());
-                const Expected<image::ImageAsset> empty =
-                        image::decodeToRgba8(tiny_view.subspan(0u, 0u), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
+                const Expected<image::ImageAsset> empty = image::decodeToRgba8(
+                    tiny_view.subspan(0u, 0u), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not empty.has_value());
             }
             // Below-floor input and an unsound PNG chain reject deterministically.
             const std::vector<std::byte> zeros(40u, std::byte{0x00});
             const mem::SharedBufferView zeros_view{zeros.data(), zeros.size()};
             for (int i = 0; i < 2; ++i) {
-                const Expected<image::ImageAsset> bad_chain =
-                        image::decodeToRgba8(zeros_view, ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
+                const Expected<image::ImageAsset> bad_chain = image::decodeToRgba8(
+                    zeros_view, ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
                 PPR_TEST_ASSERT(not bad_chain.has_value());
             }
             std::ignore = Log::flush(true);
@@ -118,7 +118,11 @@ namespace pP::tests::detail {
             std::filesystem::create_directories(dir, ec);
             const std::filesystem::path path = dir / name;
             const mango::image::Surface surface{
-                2, 2, Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8), 8u, rgba.data(),
+                2,
+                2,
+                Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8),
+                8u,
+                rgba.data(),
             };
             if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
@@ -132,10 +136,22 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (decode_data_usage_coerces_srgb_to_linear) {
             CaptureGuard capture{};
             constexpr std::byte kRed[16] = {
-                std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
-                std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
-                std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
-                std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+                std::byte{0xFF},
+                std::byte{0x00},
+                std::byte{0x00},
+                std::byte{0xFF},
+                std::byte{0xFF},
+                std::byte{0x00},
+                std::byte{0x00},
+                std::byte{0xFF},
+                std::byte{0xFF},
+                std::byte{0x00},
+                std::byte{0x00},
+                std::byte{0xFF},
+                std::byte{0xFF},
+                std::byte{0x00},
+                std::byte{0x00},
+                std::byte{0xFF},
             };
             const mem::SharedBuffer file = encodeLoggingPng_("coerce.png", kRed);
             PPR_TEST_ASSERT(file.isValid());
@@ -153,8 +169,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (glb_import_logs_success_with_embeds) {
             CaptureGuard capture{};
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(loggingMeshDir(), "textured_quad.glb");
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(loggingMeshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
             std::ignore = Log::flush(true);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "GLB import succeeded") == 1u);
@@ -171,17 +186,17 @@ namespace pP::tests::detail {
             // the texture-file dedup cache. Geometry/materials mirror
             // textured_box.gltf otherwise.
             const std::string gltf =
-                    R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
-                    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],)"
-                    R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.0,"roughnessFactor":0.9}}],)"
-                    R"("textures":[{"source":0}],"images":[{"uri":"textured_box.png"},{"uri":"textured_box.png"}],)"
-                    R"("buffers":[{"byteLength":840,"uri":"textured_box.bin"}],)"
-                    R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":288},{"buffer":0,"byteOffset":288,"byteLength":288},)"
-                    R"({"buffer":0,"byteOffset":576,"byteLength":192},{"buffer":0,"byteOffset":768,"byteLength":72}],)"
-                    R"("accessors":[{"bufferView":0,"count":24,"type":"VEC3","componentType":5126},)"
-                    R"({"bufferView":1,"count":24,"type":"VEC3","componentType":5126},)"
-                    R"({"bufferView":2,"count":24,"type":"VEC2","componentType":5126},)"
-                    R"({"bufferView":3,"count":36,"type":"SCALAR","componentType":5123}]})";
+                R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],)"
+                R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.0,"roughnessFactor":0.9}}],)"
+                R"("textures":[{"source":0}],"images":[{"uri":"textured_box.png"},{"uri":"textured_box.png"}],)"
+                R"("buffers":[{"byteLength":840,"uri":"textured_box.bin"}],)"
+                R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":288},{"buffer":0,"byteOffset":288,"byteLength":288},)"
+                R"({"buffer":0,"byteOffset":576,"byteLength":192},{"buffer":0,"byteOffset":768,"byteLength":72}],)"
+                R"("accessors":[{"bufferView":0,"count":24,"type":"VEC3","componentType":5126},)"
+                R"({"bufferView":1,"count":24,"type":"VEC3","componentType":5126},)"
+                R"({"bufferView":2,"count":24,"type":"VEC2","componentType":5126},)"
+                R"({"bufferView":3,"count":36,"type":"SCALAR","componentType":5123}]})";
             std::filesystem::copy_file(
                 loggingMeshDir() / "textured_box.bin", dir / "textured_box.bin",
                 std::filesystem::copy_options::overwrite_existing, ec);
@@ -209,15 +224,15 @@ namespace pP::tests::detail {
             // A primitive without POSITION leaves an empty Mango mesh:
             // convert keeps no empty asset and warns instead.
             const std::string gltf =
-                    R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
-                    R"("meshes":[{"primitives":[{"attributes":{"NORMAL":0},"indices":1,"material":0}]}],)"
-                    R"("materials":[{"pbrMetallicRoughness":{"metallicFactor":0.0,"roughnessFactor":0.9}}],)"
-                    R"("textures":[],"images":[],)"
-                    R"("buffers":[{"byteLength":840,"uri":"textured_box.bin"}],)"
-                    R"("bufferViews":[{"buffer":0,"byteOffset":288,"byteLength":288},)"
-                    R"({"buffer":0,"byteOffset":768,"byteLength":72}],)"
-                    R"("accessors":[{"bufferView":0,"count":24,"type":"VEC3","componentType":5126},)"
-                    R"({"bufferView":1,"count":36,"type":"SCALAR","componentType":5123}]})";
+                R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                R"("meshes":[{"primitives":[{"attributes":{"NORMAL":0},"indices":1,"material":0}]}],)"
+                R"("materials":[{"pbrMetallicRoughness":{"metallicFactor":0.0,"roughnessFactor":0.9}}],)"
+                R"("textures":[],"images":[],)"
+                R"("buffers":[{"byteLength":840,"uri":"textured_box.bin"}],)"
+                R"("bufferViews":[{"buffer":0,"byteOffset":288,"byteLength":288},)"
+                R"({"buffer":0,"byteOffset":768,"byteLength":72}],)"
+                R"("accessors":[{"bufferView":0,"count":24,"type":"VEC3","componentType":5126},)"
+                R"({"bufferView":1,"count":36,"type":"SCALAR","componentType":5123}]})";
             std::filesystem::copy_file(
                 loggingMeshDir() / "textured_box.bin", dir / "textured_box.bin",
                 std::filesystem::copy_options::overwrite_existing, ec);

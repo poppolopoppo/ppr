@@ -50,9 +50,10 @@ export namespace pP {
     PPR_PRAGMA_WARNING_DISABLE_MSVC(4324) //  'pP::Signal<>': structure was padded due to alignment specifier
 
     template<typename... EventsT>
-        requires (sizeof...(EventsT) > 0 &&
-                  sizeof...(EventsT) <= bit_count_v<std::size_t> &&
-                  std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
+        requires (
+            sizeof...(EventsT) > 0 &&
+            sizeof...(EventsT) <= bit_count_v<std::size_t> &&
+            std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
     class [[nodiscard]] alignas(hal::cacheline_size_v) Signal final : public ISignal {
         std::counting_semaphore<> m_semaphore{0};
         std::atomic<std::size_t> m_pending{0};
@@ -63,17 +64,19 @@ export namespace pP {
     public:
         using Event = std::variant<EventsT *...>;
 
-        explicit Signal(EventsT &... events PPR_LIFETIME_BOUND) noexcept
-            : m_events(events...) {
+        explicit Signal(EventsT &...events PPR_LIFETIME_BOUND) noexcept : m_events(events...) {
             static_iota<sizeof...(EventsT)>([&](auto... event_index) noexcept {
                 ((m_parents[event_index] = std::get<event_index>(m_events).subscribeEvent(
-                      TagPtr<ISignal>{this, event_index})), ...);
+                      TagPtr<ISignal>{this, event_index})),
+                    ...);
             });
         }
 
         ~Signal() noexcept {
             static_iota<sizeof...(EventsT)>([&](auto... event_index) noexcept {
-                ((std::get<event_index>(m_events).unsubscribeEvent(TagPtr<ISignal>{this, event_index}, m_parents[event_index])), ...);
+                ((std::get<event_index>(m_events).unsubscribeEvent(
+                     TagPtr<ISignal>{this, event_index}, m_parents[event_index])),
+                    ...);
             });
         }
 
@@ -95,11 +98,13 @@ export namespace pP {
         }
 
         void reset(const Event &source) noexcept {
-            std::visit([](IEvent *const p_event) noexcept {
-                if (PPR_ENSURE(p_event != nullptr)) [[likely]] {
-                    p_event->resetEvent();
-                }
-            }, source);
+            std::visit(
+                [](IEvent *const p_event) noexcept {
+                    if (PPR_ENSURE(p_event != nullptr)) [[likely]] {
+                        p_event->resetEvent();
+                    }
+                },
+                source);
         }
 
         [[nodiscard]] std::optional<Event> poll() noexcept {
@@ -111,8 +116,7 @@ export namespace pP {
 
                 const std::size_t desired_pending = pending & (pending - 1u);
                 if (m_pending.compare_exchange_weak(
-                    pending, desired_pending,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) [[likely]] {
+                        pending, desired_pending, std::memory_order_acq_rel, std::memory_order_acquire)) [[likely]] {
                     break;
                 }
             };
@@ -144,8 +148,7 @@ export namespace pP {
             using pointer = Event *;
             using reference = Event &;
 
-            explicit iterator(Signal &signal) noexcept
-                : m_signal(std::addressof(signal)) {
+            explicit iterator(Signal &signal) noexcept : m_signal(std::addressof(signal)) {
                 advance_();
             }
 
@@ -220,8 +223,7 @@ export namespace pP {
                 ([&]() noexcept -> bool {
                     if (event_index == ready_index) {
                         ready_event = Event(
-                            std::in_place_index<event_index>,
-                            std::addressof(std::get<event_index>(m_events)));
+                            std::in_place_index<event_index>, std::addressof(std::get<event_index>(m_events)));
                         return true;
                     }
                     return false;
@@ -235,9 +237,10 @@ export namespace pP {
     PPR_PRAGMA_WARNING_POP()
 
     template<typename... EventsT>
-        requires (sizeof...(EventsT) > 0 &&
-                  sizeof...(EventsT) <= bit_count_v<std::size_t> &&
-                  std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
+        requires (
+            sizeof...(EventsT) > 0 &&
+            sizeof...(EventsT) <= bit_count_v<std::size_t> &&
+            std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
     Signal(EventsT &...) -> Signal<EventsT...>;
 
     // ------------------------------------------------------------------
@@ -257,8 +260,7 @@ export namespace pP {
 
     public:
         explicit Signal(EventT &event PPR_LIFETIME_BOUND) noexcept
-            : m_event(event),
-              m_restore(m_event.subscribeEvent(TagPtr<ISignal>{this, 0u})) {
+            : m_event(event), m_restore(m_event.subscribeEvent(TagPtr<ISignal>{this, 0u})) {
         }
 
         ~Signal() noexcept {
@@ -308,8 +310,7 @@ export namespace pP {
             using pointer = EventT *;
             using reference = EventT &;
 
-            explicit iterator(Signal &signal PPR_LIFETIME_BOUND) noexcept
-                : m_signal(std::addressof(signal)) {
+            explicit iterator(Signal &signal PPR_LIFETIME_BOUND) noexcept : m_signal(std::addressof(signal)) {
                 advance_();
             }
 
@@ -377,10 +378,11 @@ export namespace pP {
     //  }
 
     template<typename... EventsT>
-        requires (sizeof...(EventsT) > 0 &&
-                  sizeof...(EventsT) <= bit_count_v<std::size_t> &&
-                  std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
-    [[nodiscard]] Signal<EventsT...> select(EventsT &... events) noexcept {
+        requires (
+            sizeof...(EventsT) > 0 &&
+            sizeof...(EventsT) <= bit_count_v<std::size_t> &&
+            std::conjunction_v<std::is_base_of<IEvent, EventsT>...>)
+    [[nodiscard]] Signal<EventsT...> select(EventsT &...events) noexcept {
         return Signal(events...);
     }
 
@@ -412,7 +414,8 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     class [[nodiscard]] PulseEvent final : public IEvent {
-        static constexpr std::uintptr_t signal_bit_v = static_cast<std::uintptr_t>(1u) << (bit_count_v<std::size_t> - 1u);
+        static constexpr std::uintptr_t signal_bit_v = static_cast<std::uintptr_t>(1u)
+                                                       << (bit_count_v<std::size_t> - 1u);
 
         std::atomic<std::uintptr_t> m_signal{};
 
@@ -438,8 +441,7 @@ export namespace pP {
     public:
         BroadcastEvent() noexcept = default;
 
-        explicit BroadcastEvent(const mem::PMR &allocator) noexcept
-            : m_subscriptions(allocator) {
+        explicit BroadcastEvent(const mem::PMR &allocator) noexcept : m_subscriptions(allocator) {
         }
 
         TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;

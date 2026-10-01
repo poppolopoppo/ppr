@@ -26,7 +26,7 @@ namespace pP::tests::detail {
             pP::HashMap<int, int> m{{1, 10}};
             int count = 0;
             int sum = 0;
-            for (auto [k,v]: m) {
+            for (auto [k, v]: m) {
                 count += k;
                 sum += v;
             }
@@ -35,7 +35,7 @@ namespace pP::tests::detail {
             m.clear();
             count = 0;
             sum = 0;
-            for (auto [k,v]: m) {
+            for (auto [k, v]: m) {
                 count += k;
                 sum += v;
             }
@@ -101,7 +101,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(hb != hc);
         };
 
-        PPR_UNIT_TEST(stale_iterator_after_reserve_crashes, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (stale_iterator_after_reserve_crashes, UnitTest::expect_crash) {
             pP::HashMap<int, int> m{{1, 10}};
             auto it = m.find(1);
             PPR_TEST_ASSERT(it != m.end());

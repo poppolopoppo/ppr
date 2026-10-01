@@ -28,39 +28,69 @@ export namespace pP {
 
     class Application : public safe_object {
     public:
-        Application(ApplicationDomain domain, std::string_view name, std::span<const char * const> argv);
+        Application(ApplicationDomain domain, std::string_view name, std::span<const char *const> argv);
 
         // ReSharper disable once CppHidingFunction - safe_object dtor is non-virtual; hiding is benign
         virtual ~Application() noexcept;
 
         Application(const Application &) = delete;
 
-        Application &operator =(const Application &) = delete;
+        Application &operator=(const Application &) = delete;
 
         Application(Application &&) = delete;
 
-        Application &operator =(Application &&) = delete;
+        Application &operator=(Application &&) = delete;
 
-        [[nodiscard]] const std::string &getName() const noexcept { return m_name; }
-        [[nodiscard]] std::span<const std::string> getArguments() const noexcept { return m_arguments; }
+        [[nodiscard]] const std::string &getName() const noexcept {
+            return m_name;
+        }
+        [[nodiscard]] std::span<const std::string> getArguments() const noexcept {
+            return m_arguments;
+        }
 
-        [[nodiscard]] const ApplicationDomain &getDomain() const noexcept { return m_domain; }
-        [[nodiscard]] const IPlatform &getPlatform() const noexcept { return *m_platform; }
-        [[nodiscard]] const SharedContext &getLifecycle() const noexcept { return m_lifecycle; }
-        [[nodiscard]] const Renderer &getRenderer() const noexcept { return *m_renderer; }
-        [[nodiscard]] const ServicesStore &getServices() const noexcept { return m_services; }
-        [[nodiscard]] const TimerManager &getTimerManager() const noexcept { return m_application_clock; }
+        [[nodiscard]] const ApplicationDomain &getDomain() const noexcept {
+            return m_domain;
+        }
+        [[nodiscard]] const IPlatform &getPlatform() const noexcept {
+            return *m_platform;
+        }
+        [[nodiscard]] const SharedContext &getLifecycle() const noexcept {
+            return m_lifecycle;
+        }
+        [[nodiscard]] const Renderer &getRenderer() const noexcept {
+            return *m_renderer;
+        }
+        [[nodiscard]] const ServicesStore &getServices() const noexcept {
+            return m_services;
+        }
+        [[nodiscard]] const TimerManager &getTimerManager() const noexcept {
+            return m_application_clock;
+        }
 
         [[nodiscard]] std::optional<TimeSpan> getTargetFrameTime() const noexcept;
 
-        [[nodiscard]] Renderer &getRenderer() noexcept { return *m_renderer; }
-        [[nodiscard]] ServicesStore &getServices() noexcept { return m_services; }
-        [[nodiscard]] TimerManager &getTimerManager() noexcept { return m_application_clock; }
+        [[nodiscard]] Renderer &getRenderer() noexcept {
+            return *m_renderer;
+        }
+        [[nodiscard]] ServicesStore &getServices() noexcept {
+            return m_services;
+        }
+        [[nodiscard]] TimerManager &getTimerManager() noexcept {
+            return m_application_clock;
+        }
 
-        [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept { return m_install_dir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept { return m_config_dir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept { return m_content_dir; }
-        [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept { return m_working_dir; }
+        [[nodiscard]] const std::filesystem::directory_entry &getInstallDir() const noexcept {
+            return m_install_dir;
+        }
+        [[nodiscard]] const std::filesystem::directory_entry &getConfigDir() const noexcept {
+            return m_config_dir;
+        }
+        [[nodiscard]] const std::filesystem::directory_entry &getContentDir() const noexcept {
+            return m_content_dir;
+        }
+        [[nodiscard]] const std::filesystem::directory_entry &getWorkingDir() const noexcept {
+            return m_working_dir;
+        }
 
         void requestExit(std::error_code clause = {}) const noexcept;
 

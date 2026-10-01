@@ -50,9 +50,7 @@ namespace pP::sim {
 
         // Clamp discards everything past the budget; defer keeps it as backlog.
         const bool keep_overrun = report.m_overran and m_policy == EOverrunPolicy::defer;
-        m_backlog = keep_overrun
-                        ? total - m_period * static_cast<decltype(whole)>(report.m_slices)
-                        : total % m_period;
+        m_backlog = keep_overrun ? total - m_period * static_cast<decltype(whole)>(report.m_slices) : total % m_period;
         report.m_backlog = m_backlog;
 
         if (report.m_overran and m_overrun_hook) {
@@ -139,8 +137,7 @@ namespace pP::sim {
     }
 
     Expected<void> StepRegistry::addSystem(const u32 step, SystemFn fn) {
-        if (step >= m_steps.size() or not m_steps[step].m_declared or not fn or m_systems[step])
-        [[unlikely]] {
+        if (step >= m_steps.size() or not m_steps[step].m_declared or not fn or m_systems[step]) [[unlikely]] {
             return std::unexpected{make_error_code(std::errc::invalid_argument)};
         }
 

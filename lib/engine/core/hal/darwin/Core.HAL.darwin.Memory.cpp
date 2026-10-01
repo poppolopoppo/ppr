@@ -42,9 +42,7 @@ namespace pP::hal {
     }
 
     [[nodiscard]] std::allocation_result<void *> pageAlloc(
-        const std::size_t size,
-        [[maybe_unused]] const bool commit,
-        const PageProtection allowed,
+        const std::size_t size, [[maybe_unused]] const bool commit, const PageProtection allowed,
         [[maybe_unused]] const std::align_val_t alignment) noexcept(false) {
         PPR_ASSERT(alignment == page_granularity);
         const std::size_t aligned_size = alignForward(size, static_cast<std::size_t>(page_granularity));

@@ -48,19 +48,16 @@ export namespace pP {
         // IInputService overrides
         // ------------------------------------------------------------------
 
-        [[nodiscard]] const KeyboardDevice &
-        getKeyboard() const noexcept override;
+        [[nodiscard]] const KeyboardDevice &getKeyboard() const noexcept override;
 
-        [[nodiscard]] const MouseDevice &
-        getMouse() const noexcept override;
+        [[nodiscard]] const MouseDevice &getMouse() const noexcept override;
 
-        [[nodiscard]] const GamepadDevice &
-        getGamepad(int controller_index) const noexcept override;
+        [[nodiscard]] const GamepadDevice &getGamepad(int controller_index) const noexcept override;
 
-        [[nodiscard]] SharedInputDevice
-        getInputDeviceByID(const InputDeviceID &device_id) const noexcept override;
+        [[nodiscard]] SharedInputDevice getInputDeviceByID(const InputDeviceID &device_id) const noexcept override;
 
-        [[nodiscard]] std::error_code enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept override;
+        [[nodiscard]] std::error_code enumerateInputDevices(
+            Collector<SharedInputDevice> each_device) const noexcept override;
 
         [[nodiscard]] std::error_code enumerateInputKeysSupported(Collector<InputKey> supports_key) const override;
 
@@ -79,7 +76,8 @@ export namespace pP {
 
         [[nodiscard]] std::error_code enumerateInputContexts(Collector<InputContext> each_context) const override;
 
-        [[nodiscard]] std::error_code enumerateInputContextDeviceAssignments(Collector<IInputDevice, InputContext> each_assignment) const override;
+        [[nodiscard]] std::error_code enumerateInputContextDeviceAssignments(
+            Collector<IInputDevice, InputContext> each_assignment) const override;
 
         // input events:
         [[nodiscard]] std::error_code pollInputDevices(TimeSpan dt) override;

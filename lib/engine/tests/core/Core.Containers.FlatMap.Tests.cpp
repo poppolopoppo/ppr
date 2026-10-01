@@ -180,7 +180,7 @@ namespace pP::tests::detail {
             m.insert({1, 10});
             m.insert({3, 30});
 
-            pP::Array<std::pair<int, int> > more{{2, 20}, {4, 40}, {5, 50}};
+            pP::Array<std::pair<int, int>> more{{2, 20}, {4, 40}, {5, 50}};
             m.insert(more.begin(), more.end());
 
             PPR_TEST_ASSERT(m.size() == 5u);
@@ -196,7 +196,7 @@ namespace pP::tests::detail {
             m.insert({1, 10});
             m.insert({2, 20});
 
-            pP::Array<std::pair<int, int> > dups{{2, 99}, {3, 30}};
+            pP::Array<std::pair<int, int>> dups{{2, 99}, {3, 30}};
             m.insert(dups.begin(), dups.end());
 
             PPR_TEST_ASSERT(m.size() == 3u);
@@ -207,7 +207,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (range_insert_empty) {
             pP::FlatMap<int, int> m;
             m.insert({1, 10});
-            pP::Array<std::pair<int, int> > no_entries;
+            pP::Array<std::pair<int, int>> no_entries;
             m.insert(no_entries.begin(), no_entries.end());
             PPR_TEST_ASSERT(m.size() == 1u);
             PPR_TEST_ASSERT(m.find(1)->second == 10);

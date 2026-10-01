@@ -23,8 +23,10 @@ namespace pP::image {
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<errc>(ev)) {
                     case errc::ok: return "indicates success";
-                    case errc::invalid_argument: return "indicates that an argument passed in as parameter to a method is invalid";
-                    case errc::function_not_supported: return "indicates that the requested image operation is not supported for this source";
+                    case errc::invalid_argument:
+                        return "indicates that an argument passed in as parameter to a method is invalid";
+                    case errc::function_not_supported:
+                        return "indicates that the requested image operation is not supported for this source";
                     default: return "unknown image result (" + std::to_string(ev) + ")";
                 }
             }

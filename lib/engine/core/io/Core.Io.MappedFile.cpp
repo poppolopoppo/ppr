@@ -23,20 +23,14 @@ namespace pP {
 
     std::span<const std::byte> MappedFile::span() const noexcept {
         if (m_map != nullptr) [[likely]] {
-            return {
-                static_cast<const std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map)
-            };
+            return {static_cast<const std::byte *>(hal::io::mapData(m_map)), hal::io::mapSize(m_map)};
         }
         return default_value_v;
     }
 
     std::span<std::byte> MappedFile::span() noexcept {
         if (m_map != nullptr) [[likely]] {
-            return {
-                static_cast<std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map)
-            };
+            return {static_cast<std::byte *>(hal::io::mapData(m_map)), hal::io::mapSize(m_map)};
         }
         return default_value_v;
     }
@@ -56,22 +50,20 @@ namespace pP {
         return std::exchange(m_map, nullptr);
     }
 
-    MappedFile::MappedFile(const hal::io::MapHandle map) noexcept
-        : m_map(map) {
+    MappedFile::MappedFile(const hal::io::MapHandle map) noexcept : m_map(map) {
 #if PPR_ENABLE_SANITIZER_ADDRESS
-        // Mapped memory is initialized by definition; only unpoison ASAN shadow — flooding real bytes faults read-only views and clobbers content.
+        // Mapped memory is initialized by definition; only unpoison ASAN shadow — flooding real bytes faults read-only
+        // views and clobbers content.
         if (m_map != nullptr) {
-            mem::unpoisonUninitialized(
-                static_cast<std::byte *>(hal::io::mapData(m_map)),
-                hal::io::mapSize(m_map));
+            mem::unpoisonUninitialized(static_cast<std::byte *>(hal::io::mapData(m_map)), hal::io::mapSize(m_map));
         }
 #endif
     }
 } // namespace pP
 
 namespace pP::io {
-    std::expected<MappedFile, std::error_code> mapFile(const std::filesystem::path &path,
-                                                       const hal::io::OpenFlags flags) noexcept {
+    std::expected<MappedFile, std::error_code> mapFile(
+        const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept {
         try {
             return MappedFile(hal::io::mapFile(path, flags));
         } catch (const std::system_error &e) {

@@ -29,7 +29,8 @@ export namespace pP {
 
     using InputActionCallback = std23::move_only_function<void(const InputActionEvent &event, const InputKey &trigger)>;
     using InputCharacterInputCallback = std23::move_only_function<EInputMessageResponse(hal::native::char_t codepoint)>;
-    using InputRawKeyCallback = std23::move_only_function<EInputMessageResponse(TimeSpan dt, const InputMessage &message)>;
+    using InputRawKeyCallback =
+        std23::move_only_function<EInputMessageResponse(TimeSpan dt, const InputMessage &message)>;
 
     class InputListener final : public safe_object {
         using InputMappingIndex = Numeric<u32, SharedInputMapping>;
@@ -102,7 +103,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     class InputContext final : public safe_object {
-        PrioritySet<safe_ptr<InputListener> > m_listeners{};
+        PrioritySet<safe_ptr<InputListener>> m_listeners{};
 
         const safe_ptr<InputContext> m_parent{};
 

@@ -16,26 +16,33 @@ namespace pP {
     namespace shader {
         class SlangErrorCategory final : public std::error_category {
         public:
-            [[nodiscard]] const char *name() const noexcept override { return "slang"; }
+            [[nodiscard]] const char *name() const noexcept override {
+                return "slang";
+            }
 
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<Result>(ev)) {
                     case SLANG_OK: return "indicates success";
-                    case SLANG_FAIL: return "generic failure code - meaning a serious error occurred and the call couldn't complete";
+                    case SLANG_FAIL:
+                        return "generic failure code - meaning a serious error occurred and the call couldn't complete";
                     case SLANG_E_NOT_IMPLEMENTED: return "functionality is not implemented";
                     case SLANG_E_NO_INTERFACE: return "interface not be found";
                     case SLANG_E_ABORT: return "operation was aborted (did not correctly complete)";
-                    case SLANG_E_INVALID_HANDLE: return "indicates that a handle passed in as parameter to a method is invalid";
-                    case SLANG_E_INVALID_ARG: return "indicates that an argument passed in as parameter to a method is invalid";
+                    case SLANG_E_INVALID_HANDLE:
+                        return "indicates that a handle passed in as parameter to a method is invalid";
+                    case SLANG_E_INVALID_ARG:
+                        return "indicates that an argument passed in as parameter to a method is invalid";
                     case SLANG_E_OUT_OF_MEMORY: return "operation could not complete - ran out of memory";
                     case SLANG_E_BUFFER_TOO_SMALL: return "supplied buffer is too small to be able to complete";
                     case SLANG_E_UNINITIALIZED: return "used to identify a Result that has yet to be initialized";
-                    case SLANG_E_PENDING: return
-                                "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
+                    case SLANG_E_PENDING:
+                        return "returned from an async method meaning the output is invalid (thus an error), but a result for the request is pending, and will be returned on a subsequent call with the async handle.";
                     case SLANG_E_CANNOT_OPEN: return "indicates a file/resource could not be opened";
                     case SLANG_E_NOT_FOUND: return "indicates a file/resource could not be found";
-                    case SLANG_E_INTERNAL_FAIL: return "an unhandled internal failure (typically from unhandled exception)";
-                    case SLANG_E_NOT_AVAILABLE: return "could not complete because some underlying feature (hardware or software) was not available";
+                    case SLANG_E_INTERNAL_FAIL:
+                        return "an unhandled internal failure (typically from unhandled exception)";
+                    case SLANG_E_NOT_AVAILABLE:
+                        return "could not complete because some underlying feature (hardware or software) was not available";
                     case SLANG_E_TIME_OUT: return "could not complete because the operation times out";
 
                     default: return std::format("unknown slang result ({})", ev);
@@ -46,7 +53,8 @@ namespace pP {
                 return slang_error_condition(*this, ev);
             }
 
-            [[nodiscard]] static std::error_condition slang_error_condition(const std::error_category &category, const int ev) noexcept {
+            [[nodiscard]] static std::error_condition slang_error_condition(
+                const std::error_category &category, const int ev) noexcept {
                 switch (static_cast<Result>(ev)) {
                     case SLANG_E_INVALID_ARG: return std::errc::invalid_argument;
                     case SLANG_E_OUT_OF_MEMORY: return std::errc::not_enough_memory;
@@ -77,8 +85,7 @@ namespace pP {
             if (diagnostic_blob) {
                 const std::string_view message{
                     static_cast<const char *>(diagnostic_blob->getBufferPointer()),
-                    safe_narrowing(diagnostic_blob->getBufferSize())
-                };
+                    safe_narrowing(diagnostic_blob->getBufferSize())};
                 PPR_LOG_RAW(Shader, error, message);
             }
         }
@@ -92,16 +99,14 @@ namespace pP {
             std::atomic<u32> m_ref_count{0};
 
         public:
-            explicit MappedFileBlob(MappedFile file) noexcept
-                : m_file(std::move(file)) {
+            explicit MappedFileBlob(MappedFile file) noexcept : m_file(std::move(file)) {
             }
 
             // ISlangUnknown
             SLANG_NO_THROW SlangResult SLANG_MCALL
 
             queryInterface(const SlangUUID &uuid, void **out_object) override {
-                if (uuid == ISlangUnknown::getTypeGuid() or uuid == ISlangBlob::getTypeGuid())
-                {
+                if (uuid == ISlangUnknown::getTypeGuid() or uuid == ISlangBlob::getTypeGuid()) {
                     addRef();
                     *out_object = static_cast<IBlob *>(this);
                     return SLANG_OK;
@@ -189,9 +194,7 @@ namespace pP {
                 m_global_session = std::move(global_session);
                 m_session = std::move(session);
 
-                PPR_LOG(Shader, info, "Shader service initialized", {
-                    {"target", static_cast<int>(m_target_format)}
-                });
+                PPR_LOG(Shader, info, "Shader service initialized", {{"target", static_cast<int>(m_target_format)}});
                 return errc::ok;
             }
 
@@ -224,15 +227,15 @@ namespace pP {
 
                 PPR_RETURN_ERROR_ON_FAIL(Shader, m_global_session->createSession(session_desc, m_session.writeRef()));
 
-                PPR_LOG(Shader, info, "shader target format set", {
-                    {"target", static_cast<int>(m_target_format)}
-                });
+                PPR_LOG(Shader, info, "shader target format set", {{"target", static_cast<int>(m_target_format)}});
                 return default_value_v;
             }
 
             std::error_code shutdown() override {
                 if (m_modules_loaded) {
-                    PPR_LOG(Shader, warning, "shutting down with loaded modules — modules are owned by the session and will be destroyed with it");
+                    PPR_LOG(
+                        Shader, warning,
+                        "shutting down with loaded modules — modules are owned by the session and will be destroyed with it");
                 }
 
                 m_modules_loaded = false;
@@ -248,17 +251,13 @@ namespace pP {
             }
 
             std::error_code loadModuleFromFile(
-                const std::filesystem::path &path,
-                const char *module_name,
-                IModule **out_module) override {
+                const std::filesystem::path &path, const char *module_name, IModule **out_module) override {
                 auto mapped = io::mapFile(path);
                 if (not mapped) {
-                    PPR_LOG(Shader, error, "failed to map shader file", {
-                        {"path", path.generic_string()},
-                        {"category", mapped.error().category().name()},
-                        {"value", mapped.error().value()},
-                        {"message", mapped.error().message()}
-                    });
+                    PPR_LOG(
+                        Shader, error, "failed to map shader file",
+                        {{"path", path.generic_string()}, {"category", mapped.error().category().name()},
+                            {"value", mapped.error().value()}, {"message", mapped.error().message()}});
                     return mapped.error();
                 }
 
@@ -267,54 +266,37 @@ namespace pP {
 
                 Diagnose diagnostics;
                 *out_module = m_session->loadModuleFromSource(
-                    module_name,
-                    path_string.c_str(),
-                    source_blob,
-                    diagnostics.writeRef());
+                    module_name, path_string.c_str(), source_blob, diagnostics.writeRef());
 
-                if (not * out_module) {
+                if (not *out_module) {
                     diagnoseIfNeeded(diagnostics.m_diagnostics.get());
                     diagnostics.m_diagnostics.setNull();
-                    PPR_LOG(Shader, error, "failed to compile shader module from file", {
-                        {"name", module_name},
-                        {"path", path_string}
-                    });
+                    PPR_LOG(
+                        Shader, error, "failed to compile shader module from file",
+                        {{"name", module_name}, {"path", path_string}});
                     return make_error_code(errc::invalid_arg);
                 }
 
                 m_modules_loaded = true;
-                PPR_LOG(Shader, info, "shader module loaded from file", {
-                    {"name", module_name},
-                    {"path", path_string}
-                });
+                PPR_LOG(Shader, info, "shader module loaded from file", {{"name", module_name}, {"path", path_string}});
                 return errc::ok;
             }
 
             std::error_code loadModuleFromSource(
-                const char *module_name,
-                const char *path,
-                const string_literal source,
-                IModule **out_module) override {
+                const char *module_name, const char *path, const string_literal source, IModule **out_module) override {
                 Diagnose diagnostics;
                 *out_module = m_session->loadModuleFromSourceString(
-                    module_name,
-                    path,
-                    source.data(),
-                    diagnostics.writeRef());
+                    module_name, path, source.data(), diagnostics.writeRef());
 
-                if (not * out_module) {
-                    PPR_LOG(Shader, error, "failed to compile shader module from source", {
-                        {"name", module_name},
-                        {"path", path}
-                    });
+                if (not *out_module) {
+                    PPR_LOG(
+                        Shader, error, "failed to compile shader module from source",
+                        {{"name", module_name}, {"path", path}});
                     return make_error_code(errc::invalid_arg);
                 }
 
                 m_modules_loaded = true;
-                PPR_LOG(Shader, info, "shader module loaded from source", {
-                    {"name", module_name},
-                    {"path", path}
-                });
+                PPR_LOG(Shader, info, "shader module loaded from source", {{"name", module_name}, {"path", path}});
                 return errc::ok;
             }
         };

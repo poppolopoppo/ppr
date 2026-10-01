@@ -92,14 +92,17 @@ namespace pP::hal {
         std::ignore = ::prctl(PR_SET_NAME, buffer, 0u, 0u, 0u);
     }
 
-    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+    [[nodiscard]] std::size_t getThreadName(
+        const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         const std::string comm_path = "/proc/" + std::to_string(thread_id.m_value) + "/comm";
 
         const int fd = ::open(comm_path.c_str(), O_RDONLY);
         if (fd < 0) {
             return 0u;
         }
-        PPR_DEFER{::close(fd); };
+        PPR_DEFER {
+            ::close(fd);
+        };
 
         char raw[16]{};
         const auto result = ::read(fd, raw, sizeof(raw) - 1u);

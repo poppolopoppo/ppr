@@ -40,9 +40,7 @@ namespace pP::hal {
     }
 
     [[nodiscard]] std::allocation_result<void *> pageAlloc(
-        const std::size_t size,
-        const bool commit,
-        const PageProtection allowed,
+        const std::size_t size, const bool commit, const PageProtection allowed,
         const std::align_val_t alignment) noexcept(false) {
         const std::size_t granularity = static_cast<std::size_t>(page_granularity);
         const std::size_t align_bytes = static_cast<std::size_t>(alignment);
@@ -144,8 +142,8 @@ namespace pP::hal {
     }
 
     [[nodiscard]] bool pageReclaimFromOS(const void *const ptr, const std::size_t size) noexcept {
-        (void)ptr;
-        (void)size;
+        (void) ptr;
+        (void) size;
         return true;
     }
 

@@ -17,25 +17,18 @@ namespace pP {
 
         [[nodiscard]] std::string message(const int ev) const override {
             switch (static_cast<RawChannel::errc>(ev)) {
-                case RawChannel::error_closed:
-                    return "channel is closed";
-                case RawChannel::error_empty:
-                    return "channel is empty";
-                case RawChannel::error_full:
-                    return "channel is full";
-                case RawChannel::error_invalid:
-                    return "invalid channel argument";
-                default:
-                    return std::format("unknown channel result ({})", ev);
+                case RawChannel::error_closed: return "channel is closed";
+                case RawChannel::error_empty: return "channel is empty";
+                case RawChannel::error_full: return "channel is full";
+                case RawChannel::error_invalid: return "invalid channel argument";
+                default: return std::format("unknown channel result ({})", ev);
             }
         }
 
         [[nodiscard]] std::error_condition default_error_condition(const int ev) const noexcept override {
             switch (static_cast<RawChannel::errc>(ev)) {
-                case RawChannel::error_invalid:
-                    return std::errc::invalid_argument;
-                default:
-                    return {ev, *this};
+                case RawChannel::error_invalid: return std::errc::invalid_argument;
+                default: return {ev, *this};
             }
         }
     };
@@ -51,19 +44,16 @@ namespace pP {
     }
 
     RawChannel::RawChannel(const std::size_t buffer_size) noexcept
-        : m_data{hal::ringBufferAlloc(buffer_size)},
-          m_capacity(buffer_size) {
+        : m_data{hal::ringBufferAlloc(buffer_size)}, m_capacity(buffer_size) {
         PPR_ASSERT(std::has_single_bit(m_capacity) && "buffer size must be a power of 2");
         mem::poisonReserved(m_data, m_capacity);
     }
 
-    RawChannel::RawChannel() noexcept
-        : RawChannel(static_cast<std::size_t>(hal::page_granularity)) {
+    RawChannel::RawChannel() noexcept : RawChannel(static_cast<std::size_t>(hal::page_granularity)) {
     }
 
     RawChannel::RawChannel(const std::size_t num_elements, const std::size_t element_size) noexcept
-        : RawChannel(std::bit_ceil(alignForward(
-            num_elements * alignSize(element_size), hal::page_granularity))) {
+        : RawChannel(std::bit_ceil(alignForward(num_elements * alignSize(element_size), hal::page_granularity))) {
     }
 
     RawChannel::~RawChannel() noexcept {
@@ -102,8 +92,8 @@ namespace pP {
     }
 
     bool RawChannel::pollEvent() noexcept {
-        return m_on_produced.pollEvent()
-               || m_read.load(std::memory_order_acquire) != m_commit.load(std::memory_order_acquire);
+        return m_on_produced.pollEvent() ||
+               m_read.load(std::memory_order_acquire) != m_commit.load(std::memory_order_acquire);
     }
 
     void RawChannel::resetEvent() noexcept {
@@ -124,7 +114,7 @@ namespace pP {
 
         // C++23 std::start_lifetime_as is unavailable in this libc++; launder over
         // reinterpreted storage is the portable spelling (MSVC accepts both).
-        //noinspection ClangdErrorsAndWarnings
+        // noinspection ClangdErrorsAndWarnings
         *std::launder(reinterpret_cast<std::atomic_flag **>(hdr->data())) = &flush_signal;
         hdr->m_header.get().m_flags |= RecordHeader::flag_flush;
 
@@ -135,9 +125,8 @@ namespace pP {
     }
 
     auto RawChannel::close() noexcept -> std::error_code {
-        if (int expected_status = status_opened;
-            not m_status.compare_exchange_strong(expected_status, status_closing,
-                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        if (int expected_status = status_opened; not m_status.compare_exchange_strong(
+                expected_status, status_closing, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             return make_error_code(error_closed);
         }
 
@@ -176,8 +165,7 @@ namespace pP {
             if (const std::size_t used = m_write - m_read.load(std::memory_order_acquire);
                 used + record_size > m_capacity) [[unlikely]] {
                 switch (policy) {
-                    case drop_if_full:
-                        return std::unexpected(error_full);
+                    case drop_if_full: return std::unexpected(error_full);
                     case wait_if_full:
                         m_read.wait(m_read.load(std::memory_order_acquire), std::memory_order_acquire);
                         continue;
@@ -195,12 +183,9 @@ namespace pP {
 
             mem::unpoisonUninitialized(p_reserved_block, record_size);
 
-            return Record{
-                *new(p_reserved_block) RecordHeader{
-                    .m_flags = RecordHeader::flag_busy,
-                    .m_available_size = safe_narrowing{record_size - sizeof(RecordHeader)}
-                }
-            };
+            return Record{*new (p_reserved_block) RecordHeader{
+                .m_flags = RecordHeader::flag_busy,
+                .m_available_size = safe_narrowing{record_size - sizeof(RecordHeader)}}};
         }
     }
 
@@ -209,9 +194,8 @@ namespace pP {
 
         while (commit < m_write) {
             const std::size_t offset = commit & (m_capacity - 1u);
-            //noinspection ClangdErrorsAndWarnings
-            const auto *hdr = std::launder(reinterpret_cast<RecordHeader *>(
-                static_cast<std::byte *>(m_data) + offset));
+            // noinspection ClangdErrorsAndWarnings
+            const auto *hdr = std::launder(reinterpret_cast<RecordHeader *>(static_cast<std::byte *>(m_data) + offset));
 
             if (hdr->m_flags & RecordHeader::flag_busy) {
                 break;
@@ -238,26 +222,21 @@ namespace pP {
         advanceCommit_();
     }
 
-    auto RawChannel::consumerAcquire(const EPolling policy) noexcept
-        -> std::expected<Record, errc> {
+    auto RawChannel::consumerAcquire(const EPolling policy) noexcept -> std::expected<Record, errc> {
         while (true) {
             const std::size_t read_pos = m_read.load(std::memory_order_relaxed);
             const std::size_t commit_pos = m_commit.load(std::memory_order_acquire);
 
             if (read_pos == commit_pos) {
                 switch (policy) {
-                    case block_until_available:
-                        m_commit.wait(commit_pos, std::memory_order_acquire);
-                        continue;
-                    case peek_without_blocking:
-                        return std::unexpected(error_empty);
+                    case block_until_available: m_commit.wait(commit_pos, std::memory_order_acquire); continue;
+                    case peek_without_blocking: return std::unexpected(error_empty);
                 }
             }
 
             const std::size_t offset = read_pos & (m_capacity - 1u);
-            //noinspection ClangdErrorsAndWarnings
-            auto *const hdr = std::launder(reinterpret_cast<RecordHeader *>(
-                static_cast<std::byte *>(m_data) + offset));
+            // noinspection ClangdErrorsAndWarnings
+            auto *const hdr = std::launder(reinterpret_cast<RecordHeader *>(static_cast<std::byte *>(m_data) + offset));
 
             const std::uint32_t f = hdr->m_flags;
             PPR_ASSERT(!(f & RecordHeader::flag_busy));
@@ -268,9 +247,9 @@ namespace pP {
 
                 if (f & RecordHeader::flag_flush) {
                     PPR_ASSERT(hdr->m_available_size >= sizeof(std::atomic_flag));
-                    //noinspection ClangdErrorsAndWarnings
-                    auto *const p_atomic_signal = *std::launder(reinterpret_cast<std::atomic_flag *const *>(
-                        hdr->data()));
+                    // noinspection ClangdErrorsAndWarnings
+                    auto *const p_atomic_signal = *std::launder(
+                        reinterpret_cast<std::atomic_flag *const *>(hdr->data()));
 
                     p_atomic_signal->test_and_set(std::memory_order_release);
                     p_atomic_signal->notify_all();

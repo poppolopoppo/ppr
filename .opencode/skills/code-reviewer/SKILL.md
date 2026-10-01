@@ -94,10 +94,10 @@ verdict.
   an arbitrary line-count threshold, and side effects and submissions stay in
   the caller. Structured logging fields remain one logical block and do not
   justify flattening surrounding control flow.
-- For the lexical tripwire (leading `and`/`or`, `and(`/`or(`/`not(` spacing, genuine
-  `x<max` comparison spacing, detached `{`, dense zero-blank functions), defer to the
-  `scripts/Check-SemanticStyle.ps1` result produced by validation; do not re-derive
-  its taxonomy here.
+- For the lexical tripwire, defer to the `scripts/Check-SemanticStyle.ps1` result
+  produced by validation; do not re-derive its taxonomy here. Blocking classes are
+  A-STRANDED, B-OP, and C-LEADING. B-CMP, C-DETACHED, and D-DENSE are advisory
+  and are formatter-owned or heuristic, so do not raise them as review findings.
 
 #### Application and rendering boundary checks
 - A platform/application client owns application-facing window, viewport, and
@@ -119,8 +119,11 @@ verdict.
   not private implementation structure.
 
 ### 7. Project formatting and local conventions
-- Changes follow the active project CLion C/C++ Code Style, `AGENTS.md`, naming, module split, macro, and
-  comment conventions. Flag only material inconsistencies, not unrelated style
+- Changes follow the repository-root `.clang-format` as enforced by
+  `scripts/Format-Cpp.ps1`, plus `AGENTS.md`, naming, module split, macro, and
+  comment conventions. The mechanical gates own indentation, spacing, and
+  alignment; this review owns whether *logical* line breaks and phase separation
+  read clearly. Flag only material inconsistencies, not unrelated style
   preferences.
 
 ## Proportional gates

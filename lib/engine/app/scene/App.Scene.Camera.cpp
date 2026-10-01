@@ -12,8 +12,7 @@ import engine.math;
 import std;
 
 namespace pP {
-    Camera::Camera(const ECameraProjection projection) noexcept
-        : m_camera_mode(projection) {
+    Camera::Camera(const ECameraProjection projection) noexcept : m_camera_mode(projection) {
     }
 
     void Camera::setCameraMode(const ECameraProjection projection) noexcept {
@@ -91,17 +90,12 @@ namespace pP {
         m_actual_state.m_forward = quaternionTransform(new_model.m_basis, math::axis_z);
 
         m_actual_state.m_view = float4x4::lookat(
-            new_model.m_origin + m_actual_state.m_forward,
-            new_model.m_origin,
-            m_actual_state.m_up);
+            new_model.m_origin + m_actual_state.m_forward, new_model.m_origin, m_actual_state.m_up);
 
         switch (m_actual_state.m_camera_mode) {
             case ECameraProjection::perspective:
                 m_actual_state.m_projection = rhi::getPerspectiveMatrix(
-                    new_model.m_fov,
-                    m_actual_state.m_aspect_ratio,
-                    new_model.m_z_near,
-                    new_model.m_z_far);
+                    new_model.m_fov, m_actual_state.m_aspect_ratio, new_model.m_z_near, new_model.m_z_far);
                 break;
             case ECameraProjection::orthographic:
                 m_actual_state.m_projection = rhi::getOrthoMatrix(
@@ -131,7 +125,8 @@ namespace pP {
 
         // NDC offset pixel_offset * 2 / size in division form: single componentwise op,
         // bit-identical since s / 2 is exact for binary floating point.
-        m_actual_state.m_jitter = pixel_offset / (m_actual_state.m_viewport_size / 2.0f); // convert pixel offset to ndc offset with aspect-ratio
+        m_actual_state.m_jitter = pixel_offset / (m_actual_state.m_viewport_size /
+                                                     2.0f); // convert pixel offset to ndc offset with aspect-ratio
         m_actual_state.m_jittered_projection = m_actual_state.m_projection * makeJitterMatrix(m_actual_state.m_jitter);
         m_actual_state.m_jittered_view_projection = m_actual_state.m_view * m_actual_state.m_jittered_projection;
         m_actual_state.m_invert_jittered_view_projection = inverse(m_actual_state.m_jittered_view_projection);
@@ -146,11 +141,11 @@ namespace pP {
         // makeZeroToOneFrustum in Math.cppm).
         m_actual_state.m_frustum = makeZeroToOneFrustum(m_actual_state.m_view_projection);
         const float4x4 zero_to_one_vp = m_actual_state.m_view_projection * float4x4{
-                                            float4{1.0f, 0.0f, 0.0f, 0.0f},
-                                            float4{0.0f, 1.0f, 0.0f, 0.0f},
-                                            float4{0.0f, 0.0f, 2.0f, 0.0f},
-                                            float4{0.0f, 0.0f, -1.0f, 1.0f},
-                                        };
+                                                                               float4{1.0f, 0.0f, 0.0f, 0.0f},
+                                                                               float4{0.0f, 1.0f, 0.0f, 0.0f},
+                                                                               float4{0.0f, 0.0f, 2.0f, 0.0f},
+                                                                               float4{0.0f, 0.0f, -1.0f, 1.0f},
+                                                                           };
         m_actual_state.m_ray_frustum = RayFrustum(zero_to_one_vp);
 
         // conditionally computes camera velocity, skipped if:

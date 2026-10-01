@@ -14,31 +14,35 @@ namespace pP {
     // ------------------------------------------------------------------
 
     InputValue::InputValue(const InputAxis1D &x, const InputAxis1D &y) noexcept
-        : InputValue(InputAxis2D{
-            .m_absolute = float2(x.m_absolute, y.m_absolute),
-            .m_relative = float2(x.m_relative, y.m_relative),
-        }) {
+        : InputValue(
+              InputAxis2D{
+                  .m_absolute = float2(x.m_absolute, y.m_absolute),
+                  .m_relative = float2(x.m_relative, y.m_relative),
+              }) {
     }
 
     InputValue::InputValue(const InputAxis1D &x, const InputAxis1D &y, const InputAxis1D &z) noexcept
-        : InputValue(InputAxis3D{
-            .m_absolute = float3(x.m_absolute, y.m_absolute, z.m_absolute),
-            .m_relative = float3(x.m_relative, y.m_relative, z.m_relative),
-        }) {
+        : InputValue(
+              InputAxis3D{
+                  .m_absolute = float3(x.m_absolute, y.m_absolute, z.m_absolute),
+                  .m_relative = float3(x.m_relative, y.m_relative, z.m_relative),
+              }) {
     }
 
     InputValue::InputValue(const InputAxis1D &x, const InputAxis2D &yz) noexcept
-        : InputValue(InputAxis3D{
-            .m_absolute = float3(x.m_absolute, yz.m_absolute),
-            .m_relative = float3(x.m_relative, yz.m_relative),
-        }) {
+        : InputValue(
+              InputAxis3D{
+                  .m_absolute = float3(x.m_absolute, yz.m_absolute),
+                  .m_relative = float3(x.m_relative, yz.m_relative),
+              }) {
     }
 
     InputValue::InputValue(const InputAxis2D &xy, const InputAxis1D &z) noexcept
-        : InputValue(InputAxis3D{
-            .m_absolute = float3(xy.m_absolute, z.m_absolute),
-            .m_relative = float3(xy.m_relative, z.m_relative),
-        }) {
+        : InputValue(
+              InputAxis3D{
+                  .m_absolute = float3(xy.m_absolute, z.m_absolute),
+                  .m_relative = float3(xy.m_relative, z.m_relative),
+              }) {
     }
 
     InputValue InputValue::modulate(const float value) const noexcept {
@@ -164,11 +168,7 @@ namespace pP {
     }
 
     hash_t hashValue(const InputValue &value) noexcept {
-        return std::visit(
-            [](const auto &inner_value) noexcept -> hash_t {
-                return hashValue(inner_value);
-            },
-            value);
+        return std::visit([](const auto &inner_value) noexcept -> hash_t { return hashValue(inner_value); }, value);
     }
 
     static void opaqueStruct1D(const InputAxis1D &axis, opaque::StructVisitor &struct_) noexcept {
@@ -187,19 +187,19 @@ namespace pP {
     }
 
     opaque::Value opaqueValue(const InputValue &value) noexcept {
-        return std::visit(overloaded(
-            [](const InputDigital digital) constexpr noexcept -> opaque::Value {
-                return *digital;
-            },
-            [](const InputAxis1D &axis1d) constexpr noexcept -> opaque::Value {
-                return opaque::Struct{std23::nontype<&opaqueStruct1D>, axis1d};
-            },
-            [](const InputAxis2D &axis2d) constexpr noexcept -> opaque::Value {
-                return opaque::Struct{std23::nontype<&opaqueStruct2D>, axis2d};
-            },
-            [](const InputAxis3D &axis3d) constexpr noexcept -> opaque::Value {
-                return opaque::Struct{std23::nontype<&opaqueStruct3D>, axis3d};
-            }), value);
+        return std::visit(
+            overloaded(
+                [](const InputDigital digital) constexpr noexcept -> opaque::Value { return *digital; },
+                [](const InputAxis1D &axis1d) constexpr noexcept -> opaque::Value {
+                    return opaque::Struct{std23::nontype<&opaqueStruct1D>, axis1d};
+                },
+                [](const InputAxis2D &axis2d) constexpr noexcept -> opaque::Value {
+                    return opaque::Struct{std23::nontype<&opaqueStruct2D>, axis2d};
+                },
+                [](const InputAxis3D &axis3d) constexpr noexcept -> opaque::Value {
+                    return opaque::Struct{std23::nontype<&opaqueStruct3D>, axis3d};
+                }),
+            value);
     }
 
     // ------------------------------------------------------------------
@@ -207,55 +207,38 @@ namespace pP {
     // ------------------------------------------------------------------
 
     bool InputKey::isKeyboard() const noexcept {
-        return std::visit(overloaded(
-            [](const EAnyKey any_key) constexpr noexcept -> bool {
-                return any(any_key & EAnyKey::keyboard);
-            },
-            [](EKeyboardKey) constexpr noexcept -> bool {
-                return true;
-            },
-            [](auto) constexpr noexcept -> bool {
-                return false;
-            }), m_code);
+        return std::visit(
+            overloaded(
+                [](const EAnyKey any_key) constexpr noexcept -> bool { return any(any_key & EAnyKey::keyboard); },
+                [](EKeyboardKey) constexpr noexcept -> bool { return true; },
+                [](auto) constexpr noexcept -> bool { return false; }),
+            m_code);
     }
 
     bool InputKey::isGamepad() const noexcept {
-        return std::visit(overloaded(
-            [](const EAnyKey any_key) constexpr noexcept -> bool {
-                return any(any_key & EAnyKey::gamepad);
-            },
-            [](EGamepadAxis) constexpr noexcept -> bool {
-                return true;
-            },
-            [](EGamepadButton) constexpr noexcept -> bool {
-                return true;
-            },
-            [](auto) constexpr noexcept -> bool {
-                return false;
-            }), m_code);
+        return std::visit(
+            overloaded(
+                [](const EAnyKey any_key) constexpr noexcept -> bool { return any(any_key & EAnyKey::gamepad); },
+                [](EGamepadAxis) constexpr noexcept -> bool { return true; },
+                [](EGamepadButton) constexpr noexcept -> bool { return true; },
+                [](auto) constexpr noexcept -> bool { return false; }),
+            m_code);
     }
 
     bool InputKey::isMouse() const noexcept {
-        return std::visit(overloaded(
-            [](const EAnyKey any_key) constexpr noexcept -> bool {
-                return any(any_key & EAnyKey::mouse);
-            },
-            [](EMouseAxis) constexpr noexcept -> bool {
-                return true;
-            },
-            [](EMouseButton) constexpr noexcept -> bool {
-                return true;
-            },
-            [](auto) constexpr noexcept -> bool {
-                return false;
-            }), m_code);
+        return std::visit(
+            overloaded(
+                [](const EAnyKey any_key) constexpr noexcept -> bool { return any(any_key & EAnyKey::mouse); },
+                [](EMouseAxis) constexpr noexcept -> bool { return true; },
+                [](EMouseButton) constexpr noexcept -> bool { return true; },
+                [](auto) constexpr noexcept -> bool { return false; }),
+            m_code);
     }
 
     hash_t hashValue(const InputKey &value) noexcept {
-        return std::visit(overloaded(
-            [](auto input_code) constexpr noexcept -> hash_t {
-                return hashValue(enumOrd(input_code));
-            }), value.m_code);
+        return std::visit(
+            overloaded([](auto input_code) constexpr noexcept -> hash_t { return hashValue(enumOrd(input_code)); }),
+            value.m_code);
     }
 
     opaque::Value opaqueValue(const InputKey &value) noexcept {
@@ -450,13 +433,9 @@ namespace pP {
 
 
     std::error_code InputKey::enumerateAll(const Collector<InputKey> push_back) noexcept {
-        return push_back.combine({
-            &enumerateGamepadAxes,
-            &enumerateGamepadButtons,
-            &enumerateKeyboardKeys,
-            &enumerateMouseAxes,
-            &enumerateMouseButtons
-        });
+        return push_back.combine(
+            {&enumerateGamepadAxes, &enumerateGamepadButtons, &enumerateKeyboardKeys, &enumerateMouseAxes,
+                &enumerateMouseButtons});
     }
 
     std::error_code InputKey::enumerateAny(const EAnyKey any_key, const Collector<InputKey> push_back) noexcept {
@@ -465,7 +444,8 @@ namespace pP {
         }
 
         if (any(any_key & EAnyKey::gamepad)) {
-            if (const std::error_code err = push_back.combine({&enumerateGamepadAxes, &enumerateGamepadButtons})) [[unlikely]] {
+            if (const std::error_code err = push_back.combine({&enumerateGamepadAxes, &enumerateGamepadButtons}))
+                [[unlikely]] {
                 return err;
             }
         }
@@ -477,7 +457,8 @@ namespace pP {
         }
 
         if (any(any_key & EAnyKey::mouse)) {
-            if (const std::error_code err = push_back.combine({&enumerateMouseAxes, &enumerateMouseButtons})) [[unlikely]] {
+            if (const std::error_code err = push_back.combine({&enumerateMouseAxes, &enumerateMouseButtons}))
+                [[unlikely]] {
                 return err;
             }
         }
@@ -487,177 +468,49 @@ namespace pP {
 
 
     std::error_code InputKey::enumerateGamepadAxes(const Collector<InputKey> push_back) noexcept {
-        return push_back.append({
-            gamepad_left_2d,
-            gamepad_right_2d,
-            gamepad_left_trigger_axis,
-            gamepad_right_trigger_axis
-        });
+        return push_back.append(
+            {gamepad_left_2d, gamepad_right_2d, gamepad_left_trigger_axis, gamepad_right_trigger_axis});
     }
 
     std::error_code InputKey::enumerateGamepadButtons(const Collector<InputKey> push_back) noexcept {
-        return push_back.append({
-            gamepad_left_thumbstick,
-            gamepad_right_thumbstick,
-            gamepad_face_button_bottom,
-            gamepad_face_button_right,
-            gamepad_face_button_left,
-            gamepad_face_button_top,
-            gamepad_left_shoulder,
-            gamepad_right_shoulder,
-            gamepad_dpad_up,
-            gamepad_dpad_down,
-            gamepad_dpad_right,
-            gamepad_dpad_left,
-            gamepad_start,
-            gamepad_back
-        });
+        return push_back.append(
+            {gamepad_left_thumbstick, gamepad_right_thumbstick, gamepad_face_button_bottom, gamepad_face_button_right,
+                gamepad_face_button_left, gamepad_face_button_top, gamepad_left_shoulder, gamepad_right_shoulder,
+                gamepad_dpad_up, gamepad_dpad_down, gamepad_dpad_right, gamepad_dpad_left, gamepad_start,
+                gamepad_back});
     }
 
     std::error_code InputKey::enumerateMouseAxes(const Collector<InputKey> push_back) noexcept {
-        return push_back.append({
-            mouse_2d,
-            mouse_wheel_axis_x,
-            mouse_wheel_axis_y
-        });
+        return push_back.append({mouse_2d, mouse_wheel_axis_x, mouse_wheel_axis_y});
     }
 
     std::error_code InputKey::enumerateMouseButtons(const Collector<InputKey> push_back) noexcept {
-        return push_back.append({
-            left_mouse_button,
-            right_mouse_button,
-            middle_mouse_button,
-            thumb_mouse_button,
-            thumb_mouse_button2
-        });
+        return push_back.append(
+            {left_mouse_button, right_mouse_button, middle_mouse_button, thumb_mouse_button, thumb_mouse_button2});
     }
 
     std::error_code InputKey::enumerateKeyboardKeys(const Collector<InputKey> push_back) noexcept {
-        return push_back.append({
-            back_space,
-            tab,
-            enter,
-            pause,
-            caps_lock,
-            escape,
-            space_bar,
-            page_up,
-            page_down,
-            end,
-            home,
-            left_arrow,
-            up_arrow,
-            right_arrow,
-            down_arrow,
-            insert,
-            delete_,
+        return push_back.append(
+            {back_space, tab, enter, pause, caps_lock, escape, space_bar, page_up, page_down, end, home, left_arrow,
+                up_arrow, right_arrow, down_arrow, insert, delete_,
 
-            zero,
-            one,
-            two,
-            three,
-            four,
-            five,
-            six,
-            seven,
-            eight,
-            nine,
+                zero, one, two, three, four, five, six, seven, eight, nine,
 
-            a,
-            b,
-            c,
-            d,
-            e,
-            f,
-            g,
-            h,
-            i,
-            j,
-            k,
-            l,
-            m,
-            n,
-            o,
-            p,
-            q,
-            r,
-            s,
-            t,
-            u,
-            v,
-            w,
-            x,
-            y,
-            z,
+                a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z,
 
-            numpad0,
-            numpad1,
-            numpad2,
-            numpad3,
-            numpad4,
-            numpad5,
-            numpad6,
-            numpad7,
-            numpad8,
-            numpad9,
-            numpad_multiply,
-            numpad_add,
-            numpad_subtract,
-            numpad_decimal,
-            numpad_divide,
-            numpad_enter,
-            numpad_equal,
+                numpad0, numpad1, numpad2, numpad3, numpad4, numpad5, numpad6, numpad7, numpad8, numpad9,
+                numpad_multiply, numpad_add, numpad_subtract, numpad_decimal, numpad_divide, numpad_enter, numpad_equal,
 
-            multiply,
-            add,
-            subtract,
-            decimal,
-            divide,
+                multiply, add, subtract, decimal, divide,
 
-            f1,
-            f2,
-            f3,
-            f4,
-            f5,
-            f6,
-            f7,
-            f8,
-            f9,
-            f10,
-            f11,
-            f12,
+                f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12,
 
-            num_lock,
-            print_screen,
-            scroll_lock,
+                num_lock, print_screen, scroll_lock,
 
-            left_shift,
-            right_shift,
-            left_control,
-            right_control,
-            left_alt,
-            right_alt,
-            left_super,
-            right_super,
+                left_shift, right_shift, left_control, right_control, left_alt, right_alt, left_super, right_super,
 
-            semicolon,
-            equals,
-            underscore,
-            period,
-            tilde,
-            left_bracket,
-            backslash,
-            right_bracket,
-            apostrophe,
-            ampersand,
-            caret,
-            colon,
-            dollar,
-            exclamation,
-            left_parenthesis,
-            right_parenthesis,
-            quote
-        });
+                semicolon, equals, underscore, period, tilde, left_bracket, backslash, right_bracket, apostrophe,
+                ampersand, caret, colon, dollar, exclamation, left_parenthesis, right_parenthesis, quote});
     }
 
     const InputKey InputKey::any_digital{"any_digital", EAnyKey::all, EInputValueType::digital};
@@ -668,8 +521,10 @@ namespace pP {
     const InputKey InputKey::any_axis_2d{"any_axis_2d", EAnyKey::all, EInputValueType::axis_2d};
     const InputKey InputKey::any_axis_3d{"any_axis_3d", EAnyKey::all, EInputValueType::axis_3d};
     const InputKey InputKey::mouse_2d{"mouse2d", EMouseAxis::pointer, EInputValueType::axis_2d};
-    const InputKey InputKey::mouse_wheel_axis_x{"mouse_wheel_axis_x", EMouseAxis::scroll_wheel_x, EInputValueType::axis_1d};
-    const InputKey InputKey::mouse_wheel_axis_y{"mouse_wheel_axis_y", EMouseAxis::scroll_wheel_y, EInputValueType::axis_1d};
+    const InputKey InputKey::mouse_wheel_axis_x{
+        "mouse_wheel_axis_x", EMouseAxis::scroll_wheel_x, EInputValueType::axis_1d};
+    const InputKey InputKey::mouse_wheel_axis_y{
+        "mouse_wheel_axis_y", EMouseAxis::scroll_wheel_y, EInputValueType::axis_1d};
     const InputKey InputKey::left_mouse_button{"left_mouse_button", EMouseButton::left, EInputValueType::digital};
     const InputKey InputKey::right_mouse_button{"right_mouse_button", EMouseButton::right, EInputValueType::digital};
     const InputKey InputKey::middle_mouse_button{"middle_mouse_button", EMouseButton::middle, EInputValueType::digital};
@@ -738,9 +593,11 @@ namespace pP {
     const InputKey InputKey::numpad7{"numpad7", EKeyboardKey::numpad7, EInputValueType::digital};
     const InputKey InputKey::numpad8{"numpad8", EKeyboardKey::numpad8, EInputValueType::digital};
     const InputKey InputKey::numpad9{"numpad9", EKeyboardKey::numpad9, EInputValueType::digital};
-    const InputKey InputKey::numpad_multiply{"numpad_multiply", EKeyboardKey::numpad_multiply, EInputValueType::digital};
+    const InputKey InputKey::numpad_multiply{
+        "numpad_multiply", EKeyboardKey::numpad_multiply, EInputValueType::digital};
     const InputKey InputKey::numpad_add{"numpad_add", EKeyboardKey::numpad_add, EInputValueType::digital};
-    const InputKey InputKey::numpad_subtract{"numpad_subtract", EKeyboardKey::numpad_subtract, EInputValueType::digital};
+    const InputKey InputKey::numpad_subtract{
+        "numpad_subtract", EKeyboardKey::numpad_subtract, EInputValueType::digital};
     const InputKey InputKey::numpad_decimal{"numpad_decimal", EKeyboardKey::numpad_decimal, EInputValueType::digital};
     const InputKey InputKey::numpad_divide{"numpad_divide", EKeyboardKey::numpad_divide, EInputValueType::digital};
     const InputKey InputKey::numpad_enter{"numpad_enter", EKeyboardKey::numpad_enter, EInputValueType::digital};
@@ -787,25 +644,40 @@ namespace pP {
     const InputKey InputKey::colon{"colon", EKeyboardKey::colon, EInputValueType::digital};
     const InputKey InputKey::dollar{"dollar", EKeyboardKey::dollar, EInputValueType::digital};
     const InputKey InputKey::exclamation{"exclamation", EKeyboardKey::exclamation, EInputValueType::digital};
-    const InputKey InputKey::left_parenthesis{"left_parenthesis", EKeyboardKey::left_parenthesis, EInputValueType::digital};
-    const InputKey InputKey::right_parenthesis{"right_parenthesis", EKeyboardKey::right_parenthesis, EInputValueType::digital};
+    const InputKey InputKey::left_parenthesis{
+        "left_parenthesis", EKeyboardKey::left_parenthesis, EInputValueType::digital};
+    const InputKey InputKey::right_parenthesis{
+        "right_parenthesis", EKeyboardKey::right_parenthesis, EInputValueType::digital};
     const InputKey InputKey::quote{"quote", EKeyboardKey::quote, EInputValueType::digital};
     const InputKey InputKey::gamepad_left_2d{"gamepad_left2d", EGamepadAxis::left_stick, EInputValueType::axis_2d};
     const InputKey InputKey::gamepad_right_2d{"gamepad_right2d", EGamepadAxis::right_stick, EInputValueType::axis_2d};
-    const InputKey InputKey::gamepad_left_trigger_axis{"gamepad_left_trigger_axis", EGamepadAxis::left_trigger, EInputValueType::axis_1d};
-    const InputKey InputKey::gamepad_right_trigger_axis{"gamepad_right_trigger_axis", EGamepadAxis::right_trigger, EInputValueType::axis_1d};
-    const InputKey InputKey::gamepad_left_thumbstick{"gamepad_left_thumbstick", EGamepadButton::left_thumb, EInputValueType::digital};
-    const InputKey InputKey::gamepad_right_thumbstick{"gamepad_right_thumbstick", EGamepadButton::right_thumb, EInputValueType::digital};
-    const InputKey InputKey::gamepad_face_button_bottom{"gamepad_face_button_bottom", EGamepadButton::button0, EInputValueType::digital};
-    const InputKey InputKey::gamepad_face_button_right{"gamepad_face_button_right", EGamepadButton::button1, EInputValueType::digital};
-    const InputKey InputKey::gamepad_face_button_left{"gamepad_face_button_left", EGamepadButton::button2, EInputValueType::digital};
-    const InputKey InputKey::gamepad_face_button_top{"gamepad_face_button_top", EGamepadButton::button3, EInputValueType::digital};
-    const InputKey InputKey::gamepad_left_shoulder{"gamepad_left_shoulder", EGamepadButton::left_shoulder, EInputValueType::digital};
-    const InputKey InputKey::gamepad_right_shoulder{"gamepad_right_shoulder", EGamepadButton::right_shoulder, EInputValueType::digital};
+    const InputKey InputKey::gamepad_left_trigger_axis{
+        "gamepad_left_trigger_axis", EGamepadAxis::left_trigger, EInputValueType::axis_1d};
+    const InputKey InputKey::gamepad_right_trigger_axis{
+        "gamepad_right_trigger_axis", EGamepadAxis::right_trigger, EInputValueType::axis_1d};
+    const InputKey InputKey::gamepad_left_thumbstick{
+        "gamepad_left_thumbstick", EGamepadButton::left_thumb, EInputValueType::digital};
+    const InputKey InputKey::gamepad_right_thumbstick{
+        "gamepad_right_thumbstick", EGamepadButton::right_thumb, EInputValueType::digital};
+    const InputKey InputKey::gamepad_face_button_bottom{
+        "gamepad_face_button_bottom", EGamepadButton::button0, EInputValueType::digital};
+    const InputKey InputKey::gamepad_face_button_right{
+        "gamepad_face_button_right", EGamepadButton::button1, EInputValueType::digital};
+    const InputKey InputKey::gamepad_face_button_left{
+        "gamepad_face_button_left", EGamepadButton::button2, EInputValueType::digital};
+    const InputKey InputKey::gamepad_face_button_top{
+        "gamepad_face_button_top", EGamepadButton::button3, EInputValueType::digital};
+    const InputKey InputKey::gamepad_left_shoulder{
+        "gamepad_left_shoulder", EGamepadButton::left_shoulder, EInputValueType::digital};
+    const InputKey InputKey::gamepad_right_shoulder{
+        "gamepad_right_shoulder", EGamepadButton::right_shoulder, EInputValueType::digital};
     const InputKey InputKey::gamepad_dpad_up{"gamepad_d_pad_up", EGamepadButton::dpad_up, EInputValueType::digital};
-    const InputKey InputKey::gamepad_dpad_down{"gamepad_d_pad_down", EGamepadButton::dpad_down, EInputValueType::digital};
-    const InputKey InputKey::gamepad_dpad_right{"gamepad_d_pad_right", EGamepadButton::dpad_right, EInputValueType::digital};
-    const InputKey InputKey::gamepad_dpad_left{"gamepad_d_pad_left", EGamepadButton::dpad_left, EInputValueType::digital};
+    const InputKey InputKey::gamepad_dpad_down{
+        "gamepad_d_pad_down", EGamepadButton::dpad_down, EInputValueType::digital};
+    const InputKey InputKey::gamepad_dpad_right{
+        "gamepad_d_pad_right", EGamepadButton::dpad_right, EInputValueType::digital};
+    const InputKey InputKey::gamepad_dpad_left{
+        "gamepad_d_pad_left", EGamepadButton::dpad_left, EInputValueType::digital};
     const InputKey InputKey::gamepad_start{"gamepad_start", EGamepadButton::start, EInputValueType::digital};
     const InputKey InputKey::gamepad_back{"gamepad_back", EGamepadButton::back, EInputValueType::digital};
 }

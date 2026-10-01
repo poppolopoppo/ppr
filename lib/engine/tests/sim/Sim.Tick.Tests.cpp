@@ -173,20 +173,32 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(integrate.has_value());
             PPR_TEST_ASSERT(prepare.has_value());
 
-            PPR_TEST_ASSERT(scheduler.addSystem(*emit, [&](Registry &registry) {
-                PPR_TEST_ASSERT(&registry == &entities);
-                ran.push_back(*emit);
-            }).has_value());
-            PPR_TEST_ASSERT(scheduler.addSystem(*integrate, [&](Registry &registry) {
-                PPR_TEST_ASSERT(&registry == &entities);
-                PPR_TEST_ASSERT(registry.isAlive(created));
-                ran.push_back(*integrate);
-            }).has_value());
-            PPR_TEST_ASSERT(scheduler.addSystem(*prepare, [&](Registry &registry) {
-                PPR_TEST_ASSERT(&registry == &entities);
-                created = registry.create();
-                ran.push_back(*prepare);
-            }).has_value());
+            PPR_TEST_ASSERT(scheduler
+                    .addSystem(
+                        *emit,
+                        [&](Registry &registry) {
+                            PPR_TEST_ASSERT(&registry == &entities);
+                            ran.push_back(*emit);
+                        })
+                    .has_value());
+            PPR_TEST_ASSERT(scheduler
+                    .addSystem(
+                        *integrate,
+                        [&](Registry &registry) {
+                            PPR_TEST_ASSERT(&registry == &entities);
+                            PPR_TEST_ASSERT(registry.isAlive(created));
+                            ran.push_back(*integrate);
+                        })
+                    .has_value());
+            PPR_TEST_ASSERT(scheduler
+                    .addSystem(
+                        *prepare,
+                        [&](Registry &registry) {
+                            PPR_TEST_ASSERT(&registry == &entities);
+                            created = registry.create();
+                            ran.push_back(*prepare);
+                        })
+                    .has_value());
 
             PPR_TEST_ASSERT(not scheduler.runSystems(entities));
             PPR_TEST_ASSERT(ran.size() == scheduler.order().size());

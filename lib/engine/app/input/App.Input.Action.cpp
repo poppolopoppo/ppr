@@ -11,29 +11,21 @@ namespace pP {
     // ------------------------------------------------------------------
 
     InputAction::InputAction(
-        const string_literal description,
-        const EInputValueType value_type,
-        const EInputActionFlags flags) noexcept
+        const string_literal description, const EInputValueType value_type, const EInputActionFlags flags) noexcept
         : m_description{description}, m_value_type{value_type}, m_flags{flags} {
         PPR_ASSERT(not m_description.empty());
     }
 
     InputModifierEvent InputAction::modulate(const float value) noexcept {
-        return [value](const TimeSpan dt, InputValue &output) noexcept {
-            output = output.modulate(dt, value);
-        };
+        return [value](const TimeSpan dt, InputValue &output) noexcept { output = output.modulate(dt, value); };
     }
 
     InputModifierEvent InputAction::modulate(const float2 &value) noexcept {
-        return [value](const TimeSpan dt, InputValue &output) noexcept {
-            output = output.modulate(dt, value);
-        };
+        return [value](const TimeSpan dt, InputValue &output) noexcept { output = output.modulate(dt, value); };
     }
 
     InputModifierEvent InputAction::modulate(const float3 &value) noexcept {
-        return [value](const TimeSpan dt, InputValue &output) noexcept {
-            output = output.modulate(dt, value);
-        };
+        return [value](const TimeSpan dt, InputValue &output) noexcept { output = output.modulate(dt, value); };
     }
 
     // ------------------------------------------------------------------
@@ -95,19 +87,16 @@ namespace pP {
     // input mapping -> collection of input key mappings
     // ------------------------------------------------------------------
 
-    InputMapping::InputMapping(const string_literal description) noexcept
-        : m_description{description} {
+    InputMapping::InputMapping(const string_literal description) noexcept : m_description{description} {
         PPR_ASSERT(not m_description.empty());
     }
 
     InputActionKeyMapping &InputMapping::mapInputKey(SharedInputAction action, InputKey key) {
         PPR_ASSERT(action.isValid());
 
-        const auto it = std::ranges::find_if(
-            m_keymap,
-            [&](const InputActionKeyMapping &key_mapping) noexcept -> bool {
-                return key_mapping.m_action == action and key_mapping.m_key == key;
-            });
+        const auto it = std::ranges::find_if(m_keymap, [&](const InputActionKeyMapping &key_mapping) noexcept -> bool {
+            return key_mapping.m_action == action and key_mapping.m_key == key;
+        });
 
         if (m_keymap.end() == it) {
             return m_keymap.emplaceBack(key, std::move(action));
@@ -115,18 +104,17 @@ namespace pP {
         return *it;
     }
 
-    InputActionKeyMapping &InputMapping::mapInputKey(SharedInputAction action, const InputKey key, InputModifierEvent modifier) {
+    InputActionKeyMapping &InputMapping::mapInputKey(
+        SharedInputAction action, const InputKey key, InputModifierEvent modifier) {
         InputActionKeyMapping &key_mapping = mapInputKey(std::move(action), key);
         key_mapping.m_modifier = std::move(modifier);
         return key_mapping;
     }
 
     bool InputMapping::unmapInputKey(const InputAction &action, const InputKey &key) {
-        const auto it = std::ranges::find_if(
-            m_keymap,
-            [&](const InputActionKeyMapping &key_mapping) noexcept -> bool {
-                return key_mapping.m_action == &action and key_mapping.m_key == key;
-            });
+        const auto it = std::ranges::find_if(m_keymap, [&](const InputActionKeyMapping &key_mapping) noexcept -> bool {
+            return key_mapping.m_action == &action and key_mapping.m_key == key;
+        });
 
         if (m_keymap.end() != it) [[likely]] {
             m_keymap.erase(it);

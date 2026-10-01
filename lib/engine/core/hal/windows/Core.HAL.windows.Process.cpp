@@ -20,7 +20,8 @@ namespace pP::hal::process {
         return std::filesystem::path(buffer, buffer + len);
     }
 
-    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
+    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(
+        false) {
         std::wstring cmdline = L"\"" + executable.wstring() + L"\"";
         for (const auto &arg: args) {
             cmdline += L" \"";
@@ -38,10 +39,8 @@ namespace pP::hal::process {
         constexpr DWORD creationFlags = CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE;
 
         if (!::CreateProcessW(
-            executable.c_str(),
-            cmdline.data(),
-            nullptr, nullptr, FALSE,
-            creationFlags, nullptr, nullptr, &si, &pi)) {
+                executable.c_str(), cmdline.data(), nullptr, nullptr, FALSE, creationFlags, nullptr, nullptr, &si,
+                &pi)) {
             throw std::runtime_error("Failed to create process");
         }
 

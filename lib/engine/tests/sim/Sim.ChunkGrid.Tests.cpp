@@ -81,7 +81,7 @@ namespace pP::tests::detail {
 
             PPR_TEST_ASSERT(not grid.setCell(pos, Cell{5u, 300.0f}));
 
-            const std::optional<std::span<const Cell> > cells = grid.residentCells(chunk);
+            const std::optional<std::span<const Cell>> cells = grid.residentCells(chunk);
             PPR_TEST_ASSERT(cells.has_value());
             PPR_TEST_ASSERT(cells->size() == kCellsPerChunk);
             PPR_TEST_ASSERT((*cells)[2u * kChunkEdge + 1u] == (Cell{5u, 300.0f}));

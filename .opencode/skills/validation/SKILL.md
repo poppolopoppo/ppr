@@ -10,18 +10,20 @@ description: >
 ## Contract
 
 Validation is execution-focused and orchestrator-owned. Apart from the required
-CLion reformat gate, it does not edit the working tree. It selects and runs the
-requested checks, records exact results, and treats the `code-reviewer` verdict
-as a release gate rather than duplicating review dimensions. Failures are routed
-to `@fixer` or `@oracle`, then only affected checks are repeated.
+`scripts/Format-Cpp.ps1 -Mode Fix` pass, it does not edit the working tree. It
+selects and runs the requested checks, records exact results, and treats the
+`code-reviewer` verdict as a release gate rather than duplicating review
+dimensions. Failures are routed to `@fixer` or `@oracle`, then only affected
+checks are repeated.
 
 ## Execution flow
 
 1. Determine scope and platform. Honor explicitly requested presets/targets;
    otherwise use the standard platform matrix from `build-system`.
-2. Enumerate changed C++ files and run `reformat_file` via the single
-   `execute_tool` router on every one of them before builds or other
-   validation checks.
+2. Run `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` once over the
+   change set, then `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (Check),
+   before builds or other validation checks. Formatting is never applied per file
+   by hand and never through the CLion `reformat_file` router.
 3. Configure, build, and test through the `build-system` authority, not from
    this skill: target/preset/test selection, command form, ordering, and
    runner rules all come from the `build-system` table. Execution is
@@ -41,8 +43,11 @@ to `@fixer` or `@oracle`, then only affected checks are repeated.
      implicitly builds the configured run target first (IJPL-217679 /
      IJPL-218400); it is restricted to allow-listed executables, never
      libraries.
-4. Perform the post-format semantic readability check for touched C++ before
-   inspection, and block validation on any material finding.
+4. Run the deterministic gates for touched C++ and block validation on any
+   failure: `scripts/Format-Cpp.ps1` (Check) and
+   `scripts/Check-SemanticStyle.ps1 -Files '<touched>'`. Design-level readability
+   — phase separation, guard grouping, helper extraction — is `code-reviewer`'s
+   verdict rather than a formatting check, and is not re-litigated here.
 5. Run the staged CLion inspection workflow for touched C++ files when the IDE
    is available (tool access follows the `AGENTS.md` guard; procedure is
    below). A final inspection timeout must be disclosed as
@@ -67,55 +72,54 @@ to `@fixer` or `@oracle`, then only affected checks are repeated.
 
 ## C++ formatting gate
 
-Applies whenever the change set includes a C++ file. The active project CLion
-C/C++ Code Style is canonical for mechanical formatting and is applied through
-`reformat_file` via the single `execute_tool` router. The repository-root
-`.clang-format` is a tracked reference/configuration only; it is not the agent
-formatting authority. Direct
-`clang-format`, `git-clang-format`, `clang-format --lines`, and native/manual
-whitespace alternatives are not the normal formatter path and must not replace
-this gate.
+Applies whenever the change set includes a C++ file. The repository-root
+`.clang-format` is the single canonical formatting authority; the CLion project
+style is IDE convenience only. All formatting goes through one script, which
+applies clang-format to changed lines only and enforces three invariants: the
+ASCII code token stream is unchanged, the result is a fixed point within a
+bounded pass budget, and in Check mode the working tree already holds the
+canonical output.
 
-- Enumerate every changed C++ file and call
-  `execute_tool(command="reformat_file --files
-  '["E:/Code/ppr/<project-relative path>"]'", projectPath="E:/Code/ppr")`
-  on each one. Every call MUST pass `projectPath="E:/Code/ppr"`, and the
-  `--files` arg MUST be a single-quoted JSON array string.
-- Require a successful result for every file. A failed, timed-out, or unknown
-  reformat result blocks validation: diagnose and retry the CLion operation,
-  and never substitute manual formatting.
-- After the final reformat, perform only read-only verification: inspect the
-  final content and diff, rejecting any whitespace-only hunks outside the
-  functional edit. Do not issue text edits after the final reformat.
+- Fix, once over the change set:
+  `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix`
+- Gate:
+  `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (or `-Base <merge-base>` in CI)
+- Exit 0 is required. `DRIFT` means lines are not canonical, `UNSAFE` means the
+  formatter would change the code token stream, and `UNSTABLE` means no fixed
+  point within the pass budget. Each class blocks validation and is routed to the
+  orchestrator; do not hand-fix whitespace and do not re-run the formatter hoping
+  for a different result.
+- Do not use the CLion `reformat_file` router. It does not consistently apply the
+  project style, reflows `and`/`or`/`not` chains away from the trailing-operator
+  rule, injects namespace end-comments, and inherits a confirmed upstream
+  non-idempotency defect class.
+- Do not hand-edit whitespace to satisfy a layout rule. The script owns layout.
 - If no C++ files changed, record this gate as not applicable.
 
-## C++ semantic readability gate
+## C++ semantic style gate
 
-Applies to touched C++ after the final CLion reformat and before CLion inspection.
-Mechanical reformatting only handles indentation, wrapping, spacing, and braces;
-it does not satisfy this gate.
+Applies to touched C++ after the formatting gate and before CLion inspection.
+This gate is deterministic only. Design-level readability is not, and lives with
+`code-reviewer`; validation does not duplicate that pass.
 
-- Re-read the touched control flow for functions that mix setup, validation,
-  nested iteration, material/resource resolution, submission, counters, and
-  logging, and for deeply nested control flow or repeated early exits that obscure
-  the successful path.
-- Record mixed responsibilities or unreadable nesting as a material finding and
-  block validation until it is corrected. Do not invent numeric line limits or
-  flag ordinary personal blank-line preferences.
-- Expect validation guards to remain grouped at the start of the relevant helper,
-  successful work to continue through a contiguous fall-through path, and blank
-  lines to separate logical phases without fragmenting related declarations,
-  guards, or structured logging fields.
-- Extract helpers only for a distinct domain operation or reuse, keep side effects
-  and submissions in the caller, and do not create helpers solely to meet a line
-  count. Validation does not edit; route findings to the orchestrator for a
-  bounded fix, then repeat the affected formatting and readability gates.
-- Run the semantic-style tripwire on touched C++ (`pwsh -NoProfile -File
-  scripts/Check-SemanticStyle.ps1`, optionally `-PathFilter '<subdir>'`) after the
-  final reformat. Classes A-STRANDED, B-OP, C-LEADING, C-DETACHED, and D-DENSE block
-  validation; B-CMP is advisory (template brackets such as `view<T>` are correct,
-  genuine `x<max` comparisons are not — eyeball each hit). Route findings to the
-  orchestrator for a bounded fix, then repeat the affected formatting and readability gates.
+- Run the tripwire on the touched files only, never repo-wide:
+  `pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files '<a.cpp,b.cpp>'`.
+  `pwsh -File` cannot pass a real array, so pass one comma/semicolon-joined
+  argument. An unresolvable path exits 2 rather than reporting a false clean.
+- Blocking classes are A-STRANDED, B-OP, and C-LEADING. B-CMP, C-DETACHED, and
+  D-DENSE are advisory: B-CMP cannot separate template brackets such as `view<T>`
+  from a genuine `x<max`, C-DETACHED brace placement is owned by the formatter,
+  and D-DENSE is a blank-line count heuristic that must not become a blocking
+  numeric line limit. Exit 1 on blocking findings, exit 0 on advisory-only.
+- Add `-Strict` only for a deliberate full audit; it also fails on advisory hits.
+- Route blocking findings to the orchestrator for a bounded fix, then repeat the
+  formatting and style gates.
+- For the design-level pass, expect validation guards grouped at the start of the
+  relevant helper, successful work through a contiguous fall-through path, and
+  blank lines separating logical phases without fragmenting related declarations,
+  guards, or structured logging fields. Extract helpers only for a distinct domain
+  operation or reuse, keep side effects and submissions in the caller, and never
+  invent numeric line limits. These are review expectations, not gate criteria.
 
 ## CLion inspection gate
 

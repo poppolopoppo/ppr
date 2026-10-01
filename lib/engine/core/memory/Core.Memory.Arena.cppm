@@ -24,8 +24,7 @@ export namespace pP::mem {
 
     public:
         constexpr Slab(void *const data, const std::size_t capacity) noexcept
-            : m_data(static_cast<std::byte *>(data)),
-              m_capacity(safe_narrowing{capacity}) {
+            : m_data(static_cast<std::byte *>(data)), m_capacity(safe_narrowing{capacity}) {
             PPR_ASSERT(m_data != nullptr || m_capacity == 0u);
         }
 
@@ -39,13 +38,13 @@ export namespace pP::mem {
 
         Slab(const Slab &) = delete;
 
-        Slab &operator =(const Slab &) = delete;
+        Slab &operator=(const Slab &) = delete;
 
         constexpr Slab(Slab &&other) noexcept {
             swap(*this, other);
         }
 
-        constexpr Slab &operator =(Slab &&other) noexcept {
+        constexpr Slab &operator=(Slab &&other) noexcept {
             m_data = nullptr;
             m_capacity = m_offset = 0u;
             swap(*this, other);
@@ -64,12 +63,13 @@ export namespace pP::mem {
 
         void reset() noexcept;
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(const void *const ptr, const std::size_t size) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool owns(
+            const void *const ptr, const std::size_t size) const noexcept {
             return overlap(m_data, m_capacity, ptr, size);
         }
 
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(std::size_t bytes, std::align_val_t alignment) noexcept(false);
+        [[nodiscard]] std::allocation_result<void *> allocateRaw(
+            std::size_t bytes, std::align_val_t alignment) noexcept(false);
 
         [[nodiscard]] bool resizeRaw(void *ptr, std::size_t old_size, std::size_t new_size) noexcept;
 
@@ -99,8 +99,8 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     template<details::TAllocator AllocatorT = HugePage>
-    class PPR_EMPTY_BASES Arena : public AllocatorTraits<Arena<AllocatorT> >, AllocatorT {
-        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT> >);
+    class PPR_EMPTY_BASES Arena : public AllocatorTraits<Arena<AllocatorT>>, AllocatorT {
+        static_assert(std::is_same_v<AllocatorT, std::remove_cvref_t<AllocatorT>>);
 
         struct SlabHeader {
             SlabHeader *m_next{nullptr};
@@ -128,15 +128,10 @@ export namespace pP::mem {
             m_capacity = checked_cast<u32>(al.count);
             m_offset = slab_overhead_size;
             static_assert(sizeof(SlabHeader) <= slab_overhead_size);
-            new(std::launder(rootSlab_())) SlabHeader{
-                .m_next = prev_slab,
-                .m_capacity = m_capacity,
-                .m_offset = m_offset
-            };
+            new (std::launder(rootSlab_()))
+                SlabHeader{.m_next = prev_slab, .m_capacity = m_capacity, .m_offset = m_offset};
 
-            annotateContiguousContainer(
-                static_cast<std::byte *>(m_slab),
-                m_capacity, slab_overhead_size, m_offset);
+            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, slab_overhead_size, m_offset);
         }
 
         void popSlab_() {
@@ -175,14 +170,11 @@ export namespace pP::mem {
                 if (overlap(m_slab, m_capacity, mark)) [[likely]] {
                     const u32 old_offset = m_offset;
                     m_offset = checked_cast<u32>(
-                        std::bit_cast<std::uintptr_t>(mark) -
-                        std::bit_cast<std::uintptr_t>(m_slab));
+                        std::bit_cast<std::uintptr_t>(mark) - std::bit_cast<std::uintptr_t>(m_slab));
                     PPR_ASSERT(m_offset >= sizeof(SlabHeader));
                     PPR_ASSERT(m_offset <= old_offset);
 
-                    annotateContiguousContainer(
-                        static_cast<std::byte *>(m_slab),
-                        m_capacity, old_offset, m_offset);
+                    annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, old_offset, m_offset);
                     return;
                 }
                 popSlab_();
@@ -197,12 +189,14 @@ export namespace pP::mem {
         u32 m_offset{0u};
 
     public:
-        Arena() requires details::TBlockAllocator<AllocatorT>
+        Arena()
+            requires details::TBlockAllocator<AllocatorT>
             : Arena(AllocatorT::block_size_v) {
         }
 
         explicit Arena(const std::size_t initial_capacity)
-            requires std::is_default_constructible_v<AllocatorT> {
+            requires std::is_default_constructible_v<AllocatorT>
+        {
             reset(initial_capacity);
         }
 
@@ -230,19 +224,17 @@ export namespace pP::mem {
 
         Arena(const Arena &) = delete;
 
-        Arena &operator =(const Arena &) = delete;
+        Arena &operator=(const Arena &) = delete;
 
         Arena(Arena &&rvalue) noexcept
-            : AllocatorT(std::move(rvalue)),
-              m_slab(rvalue.m_slab),
-              m_capacity(rvalue.m_capacity),
+            : AllocatorT(std::move(rvalue)), m_slab(rvalue.m_slab), m_capacity(rvalue.m_capacity),
               m_offset(rvalue.m_offset) {
             rvalue.m_slab = nullptr;
             rvalue.m_capacity = 0u;
             rvalue.m_offset = 0u;
         }
 
-        Arena &operator =(Arena &&rvalue) noexcept {
+        Arena &operator=(Arena &&rvalue) noexcept {
             if (&rvalue == this) {
                 return *this;
             }
@@ -250,7 +242,7 @@ export namespace pP::mem {
             reset();
             popSlab_();
 
-            AllocatorT::operator =(std::move(rvalue));
+            AllocatorT::operator=(std::move(rvalue));
 
             m_slab = rvalue.m_slab;
             m_capacity = rvalue.m_capacity;
@@ -272,18 +264,14 @@ export namespace pP::mem {
                 return;
             }
 
-            annotateContiguousContainer(
-                static_cast<std::byte *>(m_slab),
-                m_capacity, m_offset, slab_overhead_size);
+            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, m_offset, slab_overhead_size);
 
             m_offset = slab_overhead_size;
 
             while (rootSlab_()->m_next) {
                 popSlab_();
 
-                annotateContiguousContainer(
-                    static_cast<std::byte *>(m_slab),
-                    m_capacity, m_offset, slab_overhead_size);
+                annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, m_offset, slab_overhead_size);
 
                 m_offset = slab_overhead_size;
             }
@@ -313,8 +301,8 @@ export namespace pP::mem {
             return false;
         }
 
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
         RETRY_ALLOC:
             std::size_t space = m_capacity - m_offset;
             void *aligned_ptr = static_cast<std::byte *>(m_slab) + m_offset;
@@ -325,12 +313,12 @@ export namespace pP::mem {
             }
 
             const u32 old_offset = m_offset;
-            m_offset = checked_cast<u32>(static_cast<std::ptrdiff_t>(bytes) +
-                                         static_cast<std::byte *>(aligned_ptr) - static_cast<std::byte *>(m_slab));
+            m_offset = checked_cast<u32>(
+                static_cast<std::ptrdiff_t>(bytes) +
+                static_cast<std::byte *>(aligned_ptr) -
+                static_cast<std::byte *>(m_slab));
 
-            annotateContiguousContainer(
-                static_cast<std::byte *>(m_slab),
-                m_capacity, old_offset, m_offset);
+            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, old_offset, m_offset);
 
             return {aligned_ptr, bytes};
         }
@@ -349,22 +337,22 @@ export namespace pP::mem {
             }
 
             const u32 new_offset = checked_cast<u32>(
-                static_cast<std::byte *>(byte_ptr) - static_cast<std::byte *>(m_slab) +
+                static_cast<std::byte *>(byte_ptr) -
+                static_cast<std::byte *>(m_slab) +
                 static_cast<std::ptrdiff_t>(new_size));
             if (new_offset > m_capacity) [[unlikely]] {
                 return false; // OOM - can't relocate to a new slab
             }
 
-            annotateContiguousContainer(
-                static_cast<std::byte *>(m_slab),
-                m_capacity, m_offset, new_offset);
+            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, m_offset, new_offset);
 
             m_offset = new_offset;
             return true;
         }
 
         // Only valid if ptr was the most recent allocation
-        [[maybe_unused]] /*constexpr*/ bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        [[maybe_unused]] /*constexpr*/ bool deallocateRaw(
+            void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
             PPR_ASSERT(owns(ptr, bytes) && "Trying to deallocate a pointer outside of the arena");
 
             // Verify ptr is actually the top of the arena
@@ -373,9 +361,7 @@ export namespace pP::mem {
                 const u32 old_offset = m_offset;
                 m_offset = checked_cast<u32>(byte_ptr - static_cast<const std::byte *>(m_slab));
 
-                annotateContiguousContainer(
-                    static_cast<std::byte *>(m_slab),
-                    m_capacity, old_offset, m_offset);
+                annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, old_offset, m_offset);
                 return true;
             }
 
@@ -391,12 +377,9 @@ export namespace pP::mem {
         constexpr void restore(const void *const mark) noexcept {
             if (overlap(m_slab, m_capacity, mark)) [[likely]] {
                 const u32 prev_offset = m_offset;
-                m_offset = static_cast<u32>(static_cast<const std::byte *>(mark) -
-                                            static_cast<std::byte *>(m_slab));
+                m_offset = static_cast<u32>(static_cast<const std::byte *>(mark) - static_cast<std::byte *>(m_slab));
 
-                annotateContiguousContainer(
-                    static_cast<std::byte *>(m_slab),
-                    m_capacity, prev_offset, m_offset);
+                annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, prev_offset, m_offset);
                 return;
             }
 
@@ -410,10 +393,10 @@ export namespace pP::mem {
     };
 
     template<details::TAllocator AllocatorT>
-    Arena(AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT> >;
+    Arena(AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT>>;
 
     template<details::TAllocator AllocatorT>
-    Arena(std::size_t initial_capacity, AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT> >;
+    Arena(std::size_t initial_capacity, AllocatorT &&al) -> Arena<std::remove_cvref_t<AllocatorT>>;
 
     extern template class Arena<HugePage>;
     extern template class Arena<SmallPage>;
@@ -430,21 +413,21 @@ export namespace pP::mem {
         ScopedArena() = delete;
 
         explicit constexpr ScopedArena(ArenaT &arena) noexcept
-            : m_arena{std::addressof(arena)},
-              m_scope_offset{arena.watermark()} {
+            : m_arena{std::addressof(arena)}, m_scope_offset{arena.watermark()} {
         }
 
         constexpr ScopedArena(const ScopedArena &) = delete;
 
-        constexpr ScopedArena &operator =(const ScopedArena &) = delete;
+        constexpr ScopedArena &operator=(const ScopedArena &) = delete;
 
         constexpr ScopedArena(ScopedArena &&other) noexcept {
             std::swap(m_arena, other.m_arena);
             std::swap(m_scope_offset, other.m_scope_offset);
         }
 
-        constexpr ScopedArena &operator =(ScopedArena &&other) noexcept {
-            if (this == &other) [[unlikely]] return *this;
+        constexpr ScopedArena &operator=(ScopedArena &&other) noexcept {
+            if (this == &other) [[unlikely]]
+                return *this;
 
             if (m_arena) {
                 PPR_ASSERT(m_scope_offset);
@@ -465,43 +448,38 @@ export namespace pP::mem {
             }
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        bool owns(const void *const ptr, const std::size_t size) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE bool owns(const void *const ptr, const std::size_t size) const noexcept {
             return m_arena->owns(ptr, size);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             return m_arena->allocateRaw(bytes, alignment);
         }
 
         // Only valid if ptr was the most recent allocation
-        [[nodiscard]] PPR_FORCE_INLINE
-        bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
             return m_arena->resizeRaw(ptr, old_size, new_size);
         }
 
         // Only valid if ptr was the most recent allocation
-        [[maybe_unused]] PPR_FORCE_INLINE
-        bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        [[maybe_unused]] PPR_FORCE_INLINE bool deallocateRaw(
+            void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
             return m_arena->deallocateRaw(ptr, bytes, alignment);
         }
 
         // Checkpoint the current offset for cheap scope-level rewind
-        [[nodiscard]] PPR_FORCE_INLINE constexpr
-        const void *watermark() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr const void *watermark() const noexcept {
             return m_arena->watermark();
         }
 
         // Rewind to a previous checkpoint — no destructor calls, O(1)
-        PPR_FORCE_INLINE constexpr
-        void restore(const void *const mark) noexcept {
+        PPR_FORCE_INLINE constexpr void restore(const void *const mark) noexcept {
             m_arena->restore(mark);
         }
 
-        PPR_FORCE_INLINE constexpr
-        void reset() noexcept {
+        PPR_FORCE_INLINE constexpr void reset() noexcept {
             m_arena->restore(m_scope_offset);
         }
     };
@@ -510,12 +488,11 @@ export namespace pP::mem {
     ScopedArena(ArenaT &arena) -> ScopedArena<ArenaT>;
 
     template<details::TArenaAllocator ArenaT>
-    struct details::use_inplace<ScopedArena<ArenaT> > : std::true_type {
-    };
+    struct details::use_inplace<ScopedArena<ArenaT>> : std::true_type {};
 
 #if PPR_ENABLE_DEBUG
     namespace details {
-        class [[nodiscard]] ScopedArenaWithDebug : public ScopedArena<Arena<SmallPage> > {
+        class [[nodiscard]] ScopedArenaWithDebug : public ScopedArena<Arena<SmallPage>> {
             static i32 &getDepthTLS() noexcept {
                 thread_local i32 g_depth_tls{-1};
                 return g_depth_tls;
@@ -525,8 +502,7 @@ export namespace pP::mem {
 
         public:
             explicit ScopedArenaWithDebug(Arena<SmallPage> &arena) noexcept
-                : ScopedArena(arena)
-                  , m_depth(++getDepthTLS()) {
+                : ScopedArena(arena), m_depth(++getDepthTLS()) {
             }
 
             ~ScopedArenaWithDebug() noexcept;
@@ -540,8 +516,7 @@ export namespace pP::mem {
         };
 
         template<>
-        struct use_inplace<ScopedArenaWithDebug> : std::true_type {
-        };
+        struct use_inplace<ScopedArenaWithDebug> : std::true_type {};
     }
 #endif
 
@@ -558,50 +533,45 @@ export namespace pP::mem {
 #if PPR_ENABLE_DEBUG
         using scoped_arena_t = details::ScopedArenaWithDebug;
 #else
-        using scoped_arena_t = ScopedArena<Arena<SmallPage> >;
+        using scoped_arena_t = ScopedArena<Arena<SmallPage>>;
 #endif
 
         [[nodiscard]] static constexpr Allocator<scoped_arena_t> open() noexcept {
             return scoped_arena_t(getArenaTLS_());
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE static
-        bool owns(const void *const ptr, const std::size_t size) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE static bool owns(const void *const ptr, const std::size_t size) noexcept {
             return getArenaTLS_().owns(ptr, size);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE static
-        std::allocation_result<void *>
-        allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE static std::allocation_result<void *> allocateRaw(
+            const std::size_t bytes, const std::align_val_t alignment) noexcept {
             return getArenaTLS_().allocateRaw(bytes, alignment);
         }
 
         // Only valid if ptr was the most recent allocation
-        [[nodiscard]] PPR_FORCE_INLINE static
-        bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE static bool resizeRaw(
+            void *const ptr, const std::size_t old_size, const std::size_t new_size) noexcept {
             return getArenaTLS_().resizeRaw(ptr, old_size, new_size);
         }
 
         // Only valid if ptr was the most recent allocation
-        [[maybe_unused]] PPR_FORCE_INLINE static
-        bool deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
+        [[maybe_unused]] PPR_FORCE_INLINE static bool deallocateRaw(
+            void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) noexcept {
             return getArenaTLS_().deallocateRaw(ptr, bytes, alignment);
         }
 
         // Checkpoint the current offset for cheap scope-level rewind
-        [[nodiscard]] PPR_FORCE_INLINE static
-        const void *watermark() noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE static const void *watermark() noexcept {
             return getArenaTLS_().watermark();
         }
 
         // Rewind to a previous checkpoint — no destructor calls, O(1)
-        PPR_FORCE_INLINE static
-        void restore(const void *const mark) noexcept {
+        PPR_FORCE_INLINE static void restore(const void *const mark) noexcept {
             getArenaTLS_().restore(mark);
         }
 
-        PPR_FORCE_INLINE static
-        void reset() noexcept {
+        PPR_FORCE_INLINE static void reset() noexcept {
             getArenaTLS_().reset();
         }
     };

@@ -32,16 +32,14 @@ namespace pP::hal {
         }
 
         // Reserve the 2x window so both views land adjacent without racing other mappings.
-        void *const reservation =
-            ::mmap(nullptr, 2u * buffer_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        void *const reservation = ::mmap(nullptr, 2u * buffer_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (reservation == MAP_FAILED) {
             const int reserve_errno = errno;
             ::close(fd);
             throw std::system_error(reserve_errno, std::generic_category(), "pP::hal: mmap reservation failed");
         }
 
-        void *const view1 =
-            ::mmap(reservation, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+        void *const view1 = ::mmap(reservation, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
         if (view1 == MAP_FAILED) {
             const int view_errno = errno;
             ::munmap(reservation, 2u * buffer_size);
@@ -49,8 +47,9 @@ namespace pP::hal {
             throw std::system_error(view_errno, std::generic_category(), "pP::hal: mmap first view failed");
         }
 
-        void *const view2 = ::mmap(static_cast<std::byte *>(reservation) + buffer_size, buffer_size,
-            PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+        void *const view2 = ::mmap(
+            static_cast<std::byte *>(reservation) + buffer_size, buffer_size, PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_FIXED, fd, 0);
         if (view2 == MAP_FAILED) {
             const int view_errno = errno;
             ::munmap(reservation, 2u * buffer_size);

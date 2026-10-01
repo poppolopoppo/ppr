@@ -49,13 +49,18 @@ export namespace pP {
         std::optional<InputTriggerEvent> m_when_completed;
 
         InputAction(
-            string_literal description,
-            EInputValueType value_type,
+            string_literal description, EInputValueType value_type,
             EInputActionFlags flags = EInputActionFlags::consume_input) noexcept;
 
-        void setStarted(InputTriggerEvent callback) noexcept { m_when_started = std::move(callback); }
-        void setCompleted(InputTriggerEvent callback) noexcept { m_when_completed = std::move(callback); }
-        void setTriggered(InputTriggerEvent callback) noexcept { m_when_triggered = std::move(callback); }
+        void setStarted(InputTriggerEvent callback) noexcept {
+            m_when_started = std::move(callback);
+        }
+        void setCompleted(InputTriggerEvent callback) noexcept {
+            m_when_completed = std::move(callback);
+        }
+        void setTriggered(InputTriggerEvent callback) noexcept {
+            m_when_triggered = std::move(callback);
+        }
 
         [[nodiscard]] constexpr bool hasConsumeInput() const noexcept {
             return any(m_flags & EInputActionFlags::consume_input);
@@ -74,7 +79,8 @@ export namespace pP {
         }
 
         constexpr void setTriggerWhenPaused(const bool value) noexcept {
-            m_flags = value ? m_flags + EInputActionFlags::trigger_when_paused : m_flags - EInputActionFlags::trigger_when_paused;
+            m_flags = value ? m_flags + EInputActionFlags::trigger_when_paused
+                            : m_flags - EInputActionFlags::trigger_when_paused;
         }
 
         constexpr void setEnabled(const bool value) noexcept {
@@ -92,9 +98,8 @@ export namespace pP {
                      std::is_nothrow_invocable_r_v<float2, const GetValueT &> or
                      std::is_nothrow_invocable_r_v<float3, const GetValueT &>
         [[nodiscard]] static InputModifierEvent modulate(GetValueT &&get_value) noexcept {
-            return [get_value{std::forward<GetValueT>(get_value)}](const TimeSpan dt, InputValue &output) noexcept {
-                output = output.modulate(dt, get_value());
-            };
+            return [get_value{std::forward<GetValueT>(get_value)}](
+                       const TimeSpan dt, InputValue &output) noexcept { output = output.modulate(dt, get_value()); };
         }
     };
 
@@ -112,8 +117,7 @@ export namespace pP {
         u32 m_repeat_count{0u};
         EInputTriggerEvent m_trigger_state{default_value_v};
 
-        explicit InputActionEvent(SharedInputAction source) noexcept
-            : m_source(std::move(source)) {
+        explicit InputActionEvent(SharedInputAction source) noexcept : m_source(std::move(source)) {
         }
 
         InputActionEvent(SharedInputAction source, InputValue value) noexcept
@@ -156,7 +160,8 @@ export namespace pP {
             return lhs.m_source.get() == &rhs;
         }
 
-        [[nodiscard]] friend std::strong_ordering operator<=>(const InputActionEvent &lhs, const InputAction &rhs) noexcept {
+        [[nodiscard]] friend std::strong_ordering operator<=>(
+            const InputActionEvent &lhs, const InputAction &rhs) noexcept {
             return lhs.m_source.get() <=> &rhs;
         }
     };
@@ -179,30 +184,24 @@ export namespace pP {
             : m_action{std::move(action)}, m_key{std::move(key)} {
         }
 
-        constexpr InputActionKeyMapping(
-            InputKey key, SharedInputAction action,
-            InputModifierEvent modifier) noexcept
-            : m_action{std::move(action)}, m_key{std::move(key)},
-              m_modifier{std::move(modifier)} {
+        constexpr InputActionKeyMapping(InputKey key, SharedInputAction action, InputModifierEvent modifier) noexcept
+            : m_action{std::move(action)}, m_key{std::move(key)}, m_modifier{std::move(modifier)} {
         }
 
         constexpr InputActionKeyMapping(
-            InputKey key, SharedInputAction action,
+            InputKey key, SharedInputAction action, InputTriggerEvent when_triggered) noexcept
+            : m_action{std::move(action)}, m_key{std::move(key)}, m_when_triggered{std::move(when_triggered)} {
+        }
+
+        constexpr InputActionKeyMapping(
+            InputKey key, SharedInputAction action, InputModifierEvent modifier,
             InputTriggerEvent when_triggered) noexcept
-            : m_action{std::move(action)}, m_key{std::move(key)},
+            : m_action{std::move(action)}, m_key{std::move(key)}, m_modifier{std::move(modifier)},
               m_when_triggered{std::move(when_triggered)} {
         }
 
-        constexpr InputActionKeyMapping(
-            InputKey key, SharedInputAction action,
-            InputModifierEvent modifier,
-            InputTriggerEvent when_triggered) noexcept
-            : m_action{std::move(action)}, m_key{std::move(key)},
-              m_modifier{std::move(modifier)},
-              m_when_triggered{std::move(when_triggered)} {
-        }
-
-        [[nodiscard]] friend constexpr bool operator==(const InputActionKeyMapping &lhs, const InputActionKeyMapping &rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(
+            const InputActionKeyMapping &lhs, const InputActionKeyMapping &rhs) noexcept {
             return lhs.m_key == rhs.m_key and lhs.m_action == rhs.m_action;
         }
     };

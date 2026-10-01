@@ -24,8 +24,7 @@ namespace pP::sim {
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<ecs::errc>(ev)) {
                     case ecs::errc::ok: return "indicates success";
-                    case ecs::errc::too_many_components:
-                        return "component capacity exceeded (kMaxComponents)";
+                    case ecs::errc::too_many_components: return "component capacity exceeded (kMaxComponents)";
                     default: return "unknown sim.ecs result (" + std::to_string(ev) + ")";
                 }
             }
@@ -207,7 +206,8 @@ namespace pP::sim {
 
         for (const EcsColumnData &data: section.m_columns) {
             for (std::size_t row = 0u; row < data.m_owners.size(); ++row) {
-                appendRow(data.m_id, data.m_owners[row],
+                appendRow(
+                    data.m_id, data.m_owners[row],
                     reinterpret_cast<const std::byte *>(data.m_bytes.data() + row * data.m_stride));
             }
         }

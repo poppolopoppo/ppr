@@ -35,9 +35,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (traits_relocatable_specialized_types) {
-            PPR_TEST_ASSERT(details::is_relocatable_v<Bitmask<std::uint64_t> >);
-            PPR_TEST_ASSERT(details::is_relocatable_v<Stack<float, 15> >);
-            PPR_TEST_ASSERT(details::is_relocatable_v<RingBuffer<int, 8> >);
+            PPR_TEST_ASSERT(details::is_relocatable_v<Bitmask<std::uint64_t>>);
+            PPR_TEST_ASSERT(details::is_relocatable_v<Stack<float, 15>>);
+            PPR_TEST_ASSERT(details::is_relocatable_v<RingBuffer<int, 8>>);
         };
 
         PPR_UNIT_TEST (bitmask_basic_set_reset_test) {
@@ -83,7 +83,7 @@ namespace pP::tests::detail {
             Bitmask<std::uint32_t> m;
             m.set(0);
             auto swapped = m.byteSwap();
-            PPR_TEST_ASSERT(std::is_same_v<decltype(swapped), Bitmask<std::uint32_t> >);
+            PPR_TEST_ASSERT(std::is_same_v<decltype(swapped), Bitmask<std::uint32_t>>);
 
             auto inv = m.invert();
             PPR_TEST_ASSERT(inv.any());
@@ -176,7 +176,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (indexiterator_const_conversion_and_cross_compare) {
             std::array arr = {5, 6};
             IndexIterator<std::array<int, 2>, int> it(arr, 0);
-            IndexIterator<std::add_const_t<std::array<int, 2> >, std::add_const_t<int> > cit = it;
+            IndexIterator<std::add_const_t<std::array<int, 2>>, std::add_const_t<int>> cit = it;
             PPR_TEST_ASSERT(*cit == 5);
             PPR_TEST_ASSERT(it == cit);
         };

@@ -11,11 +11,10 @@ import engine.core;
 import std;
 
 namespace pP {
-    GlfwPlayer::GlfwPlayer() noexcept
-        : m_id_generator(randomNumberGenerator()) {
+    GlfwPlayer::GlfwPlayer() noexcept : m_id_generator(randomNumberGenerator()) {
     }
 
-    std::error_code GlfwPlayer::initialize(GlfwInput& glfw_input) {
+    std::error_code GlfwPlayer::initialize(GlfwInput &glfw_input) {
         m_glfw_input.reset(&glfw_input);
         return default_value_v;
     }
@@ -40,8 +39,7 @@ namespace pP {
         }
 
         const PlayerId user_id{m_id_generator()};
-        return m_graph.getOrCreateKeyboardPlayer(
-            *this, user_id, keyboard, m_glfw_input->m_mouse);
+        return m_graph.getOrCreateKeyboardPlayer(*this, user_id, keyboard, m_glfw_input->m_mouse);
     }
 
     Expected<SharedPlayer> GlfwPlayer::addGamepadPlayer(const u32 controller_index) {

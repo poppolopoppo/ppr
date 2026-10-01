@@ -22,12 +22,12 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code removePlayer(const PlayerId &id) = 0;
 
-        using PlayerCallback = BroadcastCallback<std::error_code (const Player &)>;
+        using PlayerCallback = BroadcastCallback<std::error_code(const Player &)>;
 
         [[nodiscard]] virtual PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event on_added) = 0;
 
         [[nodiscard]] virtual PlayerCallback::Handle whenPlayerRemoved(PlayerCallback::Event on_removed) = 0;
     };
 
-    extern template class BroadcastCallback<std::error_code (const Player &)>;
+    extern template class BroadcastCallback<std::error_code(const Player &)>;
 }

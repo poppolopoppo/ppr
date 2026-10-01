@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    PPR semantic-control-flow tripwire. Scans C++ sources for four defect
-    classes and exits 1 when hits exist (CI-gating semantics), 0 when clean.
+    PPR semantic-control-flow tripwire. Scans C++ sources for six labels in
+    three blocking and three advisory classes; exits 1 when blocking hits
+    exist (or any hit with -Strict), 0 otherwise.
 
 .DESCRIPTION
     Checks map to AGENTS.md "C++ and API rules / Semantic control flow":
@@ -13,29 +14,52 @@
       "Separate distinct logical phases (setup, validation, iteration,
         submission, logging) with blank lines; do not put a blank line
         between every statement."
-      "Mechanical reformat_file ... never inserts blank lines, never rebreaks
-        and/or/not chains, and never spaces alternative tokens (and(, or(, x<).
-        The semantic pass owns all three."
+      "The mechanical formatter (scripts/Format-Cpp.ps1 with .clang-format)
+        owns indentation, spacing and alignment. It does NOT decide logical
+        line breaks, and it performs no column-driven wrapping because
+        ColumnLimit is 0, so a chain the author broke is left broken. The
+        author owns whether a statement is logically wrapped; this script is
+        a tripwire that flags the mechanical defects listed below."
+
+    Blocking (fail the gate):
+      A-STRANDED, B-OP, C-LEADING.
+    Advisory (reported, gate stays green unless -Strict is set):
+      B-CMP, C-DETACHED, D-DENSE.
 
     Class map:
-      A-STRANDED  -> "never leave an operator stranded alone on its line";
-                     trailing `not` (operand must stay attached: `and not x`).
-      B-OP        -> hard gate: never `and(`/`or(`/`not(` without trailing
+      A-STRANDED  -> blocking: "never leave an operator stranded alone on
+                     its line"; trailing `not` (operand must stay attached:
+                     `and not x`).
+      B-OP        -> blocking: never `and(`/`or(`/`not(` without trailing
                      space after the alternative token.
       B-CMP       -> advisory: `x<` needs eyeballing — comparison `x<max`
                      is a hit, template `view<T>` is not; the script cannot
                      distinguish, so B-CMP is review-only.
-      C-LEADING   -> trailing-operator rule (operator must end the line,
-                     never start the continuation: a code line whose first
-                     token is `and`/`or`).
-      C-DETACHED  -> trailing-continuation subset where the block `{` opens
-                     lone on a following line instead of attached to the
-                     `)` line.
-      D-DENSE     -> "separate distinct logical phases with blank lines".
+      C-LEADING   -> blocking: trailing-operator rule (operator must end the
+                     line, never start the continuation: a code line whose
+                     first token is `and`/`or`).
+      C-DETACHED  -> advisory: trailing-continuation subset where the block
+                     `{` opens lone on a following line instead of attached
+                     to the `)` line. Brace placement is owned by
+                     clang-format, so this heuristic no longer gates.
+      D-DENSE     -> advisory: "separate distinct logical phases with blank
+                     lines" heuristic. Blank-line counts are a style
+                     preference, not a gate; review-only.
+
+.PARAMETER Files
+    Optional explicit list of file paths to scan. When provided, only these
+    files are scanned and the repo-wide directory walk (and -PathFilter)
+    is skipped. Accepts absolute or repo-relative paths.
+
+.PARAMETER Strict
+    When set, any hit (advisory or blocking) exits 1, preserving the old
+    strict behaviour for a deliberate full audit. Default: only blocking
+    hits exit 1.
 
 .PARAMETER PathFilter
     Optional case-insensitive substring; only files whose full path contains
-    it are scanned. E.g. -PathFilter 'game\colony'.
+    it are scanned. E.g. -PathFilter 'game\colony'. Ignored when -Files
+    is provided.
 
 .PARAMETER RepoRoot
     Defaults to the grandparent of this script (i.e. repo root when the script
@@ -50,6 +74,8 @@
 .EXAMPLE
     pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1
     pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -PathFilter 'game\colony'
+    pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files 'lib/engine/rhi/RHI.cpp','game/main.cpp'
+    pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Strict
 
 .NOTES
     Stock pwsh 5.1 compatible. No modules. Read-only (never modifies files).
@@ -58,7 +84,9 @@
 param(
     [string]$PathFilter = "",
     [string]$RepoRoot = "",
-    [int]$DenseMinCodeLines = 30
+    [int]$DenseMinCodeLines = 30,
+    [string[]]$Files = @(),
+    [switch]$Strict
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,15 +111,66 @@ $ExcludeDirRe = '(^|[\\/])(out|build|cmake-build[^\\/]*|Temp|Testing|_deps|vcpkg
 $ExcludeFileRe = '(\.generated|\.pb)\.(cpp|cppm|h)$'
 $SourceExts = @('.cpp', '.cppm', '.h')
 
-$files = Get-ChildItem -Path $RepoRoot -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object {
-        $SourceExts -contains $_.Extension -and
-        ($_.FullName -notmatch $ExcludeDirRe) -and
-        ($_.Name -notmatch $ExcludeFileRe)
+# Blocking classes fail the gate; all others are advisory (see class map).
+$BlockingClasses = @('A-STRANDED', 'B-OP', 'C-LEADING')
+
+if ($Files -and $Files.Count -gt 0) {
+    # `pwsh -File` cannot pass a genuine array argument: extra values bind to
+    # the next positional parameter instead. A caller therefore supplies one
+    # comma/semicolon-joined argument, so expand it before resolving.
+    $requested = @()
+    foreach ($entry in $Files) {
+        $requested += ($entry -split '[,;]')
     }
-if (-not [string]::IsNullOrEmpty($PathFilter)) {
-    $files = $files | Where-Object {
-        $_.FullName.IndexOf($PathFilter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    $requested = @($requested | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    # Explicit file list: scan only these, skip the repo-wide walk entirely.
+    # NOTE: collect into $scanFiles, never $files — variable names are
+    # case-insensitive, so $files IS the [string[]]$Files parameter itself
+    # and assigning FileInfo objects to it would coerce them down to strings.
+    $scanFiles = @()
+    $unresolved = @()
+    $skipped = @()
+    foreach ($p in $requested) {
+        $resolved = Resolve-Path -LiteralPath $p -ErrorAction SilentlyContinue
+        if ($null -eq $resolved) {
+            $joined = Join-Path $RepoRoot $p
+            $resolved = Resolve-Path -LiteralPath $joined -ErrorAction SilentlyContinue
+        }
+        if ($null -eq $resolved) { $unresolved += $p; continue }
+        $item = Get-Item -LiteralPath $resolved.Path -ErrorAction SilentlyContinue
+        if ($null -eq $item -or $item.PSIsContainer) { continue }
+        # Only C++ sources are in scope. A caller that passes a changed-files list
+        # routinely includes headers of interest plus Markdown, CMake, and JSON;
+        # scanning those as C++ would invent findings and a false blocking count.
+        if ($SourceExts -notcontains $item.Extension) { $skipped += $item.Name; continue }
+        $scanFiles += $item
+    }
+
+    # A gate must never report "Clean" because it scanned nothing. An
+    # unresolvable path is a caller error, so fail loudly instead.
+    if ($unresolved.Count -gt 0) {
+        Write-Output ('Unresolved path(s) passed to -Files: ' + ($unresolved -join ', '))
+        exit 2
+    }
+    if ($skipped.Count -gt 0) {
+        Write-Output ('Skipped non-C++ path(s): ' + ($skipped -join ', '))
+    }
+    if ($scanFiles.Count -eq 0) {
+        Write-Output 'No C++ sources resolved from -Files; nothing was scanned.'
+        exit 2
+    }
+} else {
+    $scanFiles = Get-ChildItem -Path $RepoRoot -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $SourceExts -contains $_.Extension -and
+            ($_.FullName -notmatch $ExcludeDirRe) -and
+            ($_.Name -notmatch $ExcludeFileRe)
+        }
+    if (-not [string]::IsNullOrEmpty($PathFilter)) {
+        $scanFiles = $scanFiles | Where-Object {
+            $_.FullName.IndexOf($PathFilter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        }
     }
 }
 
@@ -173,7 +252,7 @@ function Get-Excerpt([string]$Text, [int]$Max = 140) {
 $hits = @()   # each: Rel, Line, Class, Excerpt
 $scanned = 0
 
-foreach ($f in $files) {
+foreach ($f in $scanFiles) {
     $scanned++
     $rel = Get-RelPath $f.FullName
     $ext = $f.Extension
@@ -254,7 +333,7 @@ foreach ($f in $files) {
         }
     }
 
-    # --- Class D: dense functions (.cpp only) --------------------------------
+    # --- Class D: dense functions (.cpp only, advisory) -----------------------
     # Heuristic: brace-matched function bodies with >= DenseMinCodeLines code
     # lines and ZERO blank lines. Comment-only lines are separators: they
     # neither count as code nor satisfy the blank-line requirement.
@@ -338,8 +417,12 @@ foreach ($h in ($hits | Sort-Object Rel, Line, Class)) {
     Write-Output ('{0}:{1}:{2}: {3}' -f $h.Rel, $h.Line, $h.Class, $h.Excerpt)
 }
 
+# Severity split: only blocking classes fail the gate (unless -Strict).
+$blocking = @($hits | Where-Object { $BlockingClasses -contains $_.Class })
+$advisory = @($hits | Where-Object { $BlockingClasses -notcontains $_.Class })
+
 Write-Output ''
-Write-Output ("Files scanned: {0}   Hits: {1}" -f $scanned, $hits.Count)
+Write-Output ("Files scanned: {0}   Blocking: {1}   Advisory: {2}" -f $scanned, $blocking.Count, $advisory.Count)
 if ($hits.Count -gt 0) {
     Write-Output '-- by class --'
     $hits | Group-Object Class | Sort-Object Name |
@@ -351,7 +434,14 @@ if ($hits.Count -gt 0) {
         $d
     } | Group-Object | Sort-Object Count -Descending |
         ForEach-Object { Write-Output ("  {0}: {1}" -f $_.Name, $_.Count) }
+}
+if ($blocking.Count -gt 0) {
     exit 1
+} elseif ($Strict -and $hits.Count -gt 0) {
+    exit 1
+} elseif ($hits.Count -gt 0) {
+    Write-Output ("No blocking findings ({0} advisory; use -Strict to fail on advisory)." -f $advisory.Count)
+    exit 0
 } else {
     Write-Output 'Clean.'
     exit 0

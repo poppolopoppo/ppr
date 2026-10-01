@@ -179,10 +179,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (numeric_handle_capabilities) {
-            struct SparseKeyTag {
-            };
-            struct U32Tag {
-            };
+            struct SparseKeyTag {};
+            struct U32Tag {};
             using SparseHandle = pP::Numeric<pP::SparseKeyId, SparseKeyTag>;
             using U32Handle = pP::Numeric<pP::u32, U32Tag>;
 
@@ -213,8 +211,7 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (sparse_handle_capabilities) {
-            struct HandleTag {
-            };
+            struct HandleTag {};
             using Handle64 = pP::Numeric<pP::SparseHandle, HandleTag>;
 
             static_assert(std::is_standard_layout_v<pP::SparseHandle>);

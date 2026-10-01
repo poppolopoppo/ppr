@@ -27,18 +27,15 @@ export namespace pP {
         [[nodiscard]] std::error_code shutdown();
 
         [[nodiscard]] std::error_code render(
-            string_literal description,
-            const rhi::RenderPassDesc &render_pass,
+            string_literal description, const rhi::RenderPassDesc &render_pass,
             std::initializer_list<DrawSubmission> draws);
 
         [[nodiscard]] std::error_code renderToTexture(
-            rhi::ITexture &render_target,
-            std::initializer_list<DrawSubmission> draws,
+            rhi::ITexture &render_target, std::initializer_list<DrawSubmission> draws,
             const ColorAttachmentOps &options = {});
 
         [[nodiscard]] std::error_code renderAndPresent(
-            const Window &window,
-            std::initializer_list<SurfaceRenderPass> passes);
+            const Window &window, std::initializer_list<SurfaceRenderPass> passes);
 
         [[nodiscard]] std::error_code waitOnHost();
 
@@ -86,11 +83,8 @@ export namespace pP {
         // steady-state frame reuses the entry resizeWindowSurface_ recomputed
         // for the current surface shape.
         [[nodiscard]] std::error_code surfaceSignature_(
-            SurfaceRecord &record,
-            const SurfaceRenderPass &surface_pass,
-            const rhi::RenderPassDesc &render_pass,
-            RenderPipelineSignature &out_signature,
-            int2 &out_target_extent);
+            SurfaceRecord &record, const SurfaceRenderPass &surface_pass, const rhi::RenderPassDesc &render_pass,
+            RenderPipelineSignature &out_signature, int2 &out_target_extent);
 
         // Reseeds every cacheable per-pass signature entry from the inputs that
         // define it: the configured swapchain format, the backbuffer sample
@@ -102,11 +96,12 @@ export namespace pP {
 
         [[nodiscard]] std::error_code resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent);
 
-        [[nodiscard]] std::error_code createSurfaceDepth_(const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
-                                                          rhi::ComPtr<rhi::ITextureView> &out_view) const;
+        [[nodiscard]] std::error_code createSurfaceDepth_(
+            const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
+            rhi::ComPtr<rhi::ITextureView> &out_view) const;
 
-        [[nodiscard]] std::error_code renderDraws_(string_literal description, const rhi::RenderPassDesc &render_pass,
-                                                   std::span<const DrawSubmission> draws);
+        [[nodiscard]] std::error_code renderDraws_(
+            string_literal description, const rhi::RenderPassDesc &render_pass, std::span<const DrawSubmission> draws);
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 

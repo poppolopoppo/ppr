@@ -231,7 +231,11 @@ namespace demo {
             try {
                 std::random_device entropy{};
                 const u64 seed = std::mt19937_64{entropy()}();
-                PPR_LOG(Demo, info, "colony regeneration", {{"seed", seed}, });
+                PPR_LOG(
+                    Demo, info, "colony regeneration",
+                    {
+                        {"seed", seed},
+                    });
                 const std::error_code error = m_driver.regenerate(seed);
                 m_translator.reset(getGridPass());
                 return error;
@@ -240,8 +244,9 @@ namespace demo {
             }
         }
 
-        void bindAction_(const std::size_t index, const string_literal description, const InputKey &key,
-                         InputTriggerEvent callback) {
+        void bindAction_(
+            const std::size_t index, const string_literal description, const InputKey &key,
+            InputTriggerEvent callback) {
             m_actions[index] = std::make_unique<InputAction>(description, EInputValueType::digital);
             m_actions[index]->setStarted(std::move(callback));
             m_colony_mapping->mapInputKey(SharedInputAction(m_actions[index].get()), key);
@@ -299,12 +304,13 @@ namespace demo {
                 if (m_tool.m_accepted_click.has_value()) {
                     m_tool.m_visited.push_back(*m_tool.m_accepted_click);
                     m_tool.m_last_cell = m_tool.m_accepted_click;
-                    PPR_LOG(Demo, info, "tool accepted",
-                            {
-                                    {"slot", "click"},
-                                    {"x", m_tool.m_accepted_click->m_x},
-                                    {"y", m_tool.m_accepted_click->m_y},
-                            });
+                    PPR_LOG(
+                        Demo, info, "tool accepted",
+                        {
+                            {"slot", "click"},
+                            {"x", m_tool.m_accepted_click->m_x},
+                            {"y", m_tool.m_accepted_click->m_y},
+                        });
                 }
                 return;
             }
@@ -350,9 +356,8 @@ namespace demo {
             if (not cell.has_value() or m_tool.m_last_cell == cell) {
                 return;
             }
-            const bool seen = std::ranges::any_of(m_tool.m_visited, [&](const sim::GlobalCellPos known) noexcept {
-                return known == *cell;
-            });
+            const bool seen = std::ranges::any_of(
+                m_tool.m_visited, [&](const sim::GlobalCellPos known) noexcept { return known == *cell; });
             if (seen) {
                 m_tool.m_last_cell = cell;
                 return;
@@ -372,12 +377,13 @@ namespace demo {
                 m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
             }
             m_tool.m_drag_queue.push_back(*cell);
-            PPR_LOG(Demo, info, "tool accepted",
-                    {
-                            {"slot", "drag"},
-                            {"x", cell->m_x},
-                            {"y", cell->m_y},
-                    });
+            PPR_LOG(
+                Demo, info, "tool accepted",
+                {
+                    {"slot", "drag"},
+                    {"x", cell->m_x},
+                    {"y", cell->m_y},
+                });
         }
 
         /// Slice 5 preview update: anchor to cursor, inclusive, normalized to
@@ -447,8 +453,9 @@ namespace demo {
             }
             const bool is_wall = m_ui_state.m_tool == colony::EColonyTool::build_wall;
             if (m_build_preview.m_reason[0] != '\0' or not m_tool.m_footprint_anchor.has_value()) {
-                postNotice_(m_build_preview.m_reason[0] != '\0' ? m_build_preview.m_reason : "no placement to commit",
-                            std::errc::invalid_argument);
+                postNotice_(
+                    m_build_preview.m_reason[0] != '\0' ? m_build_preview.m_reason : "no placement to commit",
+                    std::errc::invalid_argument);
                 return;
             }
 
@@ -457,7 +464,8 @@ namespace demo {
             const u32 height = m_build_preview.m_max.m_y - min.m_y + 1u;
             Expected<sim::Entity> placed{std::unexpect, std::make_error_code(std::errc::invalid_argument)};
             if (is_wall) {
-                placed = m_driver.buildWall(colony::Footprint{
+                placed = m_driver.buildWall(
+                    colony::Footprint{
                         .m_min = min, .m_width = width, .m_height = height, .m_element = colony::kElementRock});
             } else {
                 placed = m_driver.demolish(min, width, height);
@@ -466,13 +474,14 @@ namespace demo {
                 const std::error_code error = placed.error();
                 const std::errc code = error == std::errc::operation_not_permitted ? std::errc::operation_not_permitted
                                                                                    : std::errc::invalid_argument;
-                PPR_LOG(Demo, warning, "build order rejected",
-                        {
-                                {"w", width},
-                                {"h", height},
-                                {"error", error.value()},
-                                {"category", error.category().name()},
-                        });
+                PPR_LOG(
+                    Demo, warning, "build order rejected",
+                    {
+                        {"w", width},
+                        {"h", height},
+                        {"error", error.value()},
+                        {"category", error.category().name()},
+                    });
                 postNotice_(is_wall ? "Rock wall order rejected" : "Demolish order rejected", code);
                 return;
             }
@@ -481,10 +490,12 @@ namespace demo {
             // waits on Step/Resume (paused) or progresses on its own.
             // Progress after this is driver-side; this never polls errands.
             try {
-                m_status_scratch =
-                        std::string(is_wall ? "Rock wall " : "Demolish ") + std::to_string(width) + "x" +
-                        std::to_string(height) +
-                        (m_driver.paused() ? " queued (paused - Step or Resume to progress)" : " queued - progressing");
+                m_status_scratch = std::string(is_wall ? "Rock wall " : "Demolish ") +
+                                   std::to_string(width) +
+                                   "x" +
+                                   std::to_string(height) +
+                                   (m_driver.paused() ? " queued (paused - Step or Resume to progress)"
+                                                      : " queued - progressing");
                 m_ui_state.m_notice.m_text = m_status_scratch;
                 m_ui_state.m_notice.m_error = std::error_code{};
                 m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
@@ -534,8 +545,8 @@ namespace demo {
                     return std::nullopt;
                 }
                 const int2 client_px{static_cast<int>(cursor_client.x), static_cast<int>(cursor_client.y)};
-                const float2 uv{static_cast<float>(client_px.x) / m_extent.x,
-                                static_cast<float>(client_px.y) / m_extent.y};
+                const float2 uv{
+                    static_cast<float>(client_px.x) / m_extent.x, static_cast<float>(client_px.y) / m_extent.y};
                 const bool inside_client = uv.x >= 0.0f and uv.x <= 1.0f and uv.y >= 0.0f and uv.y <= 1.0f;
                 if (not inside_client) {
                     return std::nullopt;
@@ -559,7 +570,8 @@ namespace demo {
                 if (not world.has_value()) {
                     return std::nullopt;
                 }
-                const bool inside_world = world->x >= 0.0f and world->y >= 0.0f and
+                const bool inside_world = world->x >= 0.0f and
+                                          world->y >= 0.0f and
                                           world->x < static_cast<float>(sim::kWorldEdge) and
                                           world->y < static_cast<float>(sim::kWorldEdge);
                 if (not inside_world) {
@@ -642,116 +654,117 @@ namespace demo {
             // shortcut rows the panel renders, and (through those rows) every
             // tooltip and Help line - so no second key map can drift.
             const std::array<Binding, kColonyKeyActions> bindings{{
-                    {.m_kind = colony::EColonyIntent::pause_toggle,
-                     .m_arg = 0u,
-                     .m_key = InputKey::space_bar,
-                     .m_description = "ColonyPause",
-                     .m_label = "Space",
-                     .m_tip = "Pause or resume the simulation"},
-                    {.m_kind = colony::EColonyIntent::step,
-                     .m_arg = 0u,
-                     .m_key = InputKey::n,
-                     .m_description = "ColonyStep",
-                     .m_label = "N",
-                     .m_tip = "Advance one tick (while paused)"},
-                    {.m_kind = colony::EColonyIntent::set_speed,
-                     .m_arg = 1u,
-                     .m_key = InputKey::one,
-                     .m_description = "ColonySpeed1",
-                     .m_label = "1",
-                     .m_tip = "Run at 1x speed"},
-                    {.m_kind = colony::EColonyIntent::set_speed,
-                     .m_arg = 2u,
-                     .m_key = InputKey::two,
-                     .m_description = "ColonySpeed2",
-                     .m_label = "2",
-                     .m_tip = "Run at 2x speed"},
-                    {.m_kind = colony::EColonyIntent::set_speed,
-                     .m_arg = 3u,
-                     .m_key = InputKey::three,
-                     .m_description = "ColonySpeed3",
-                     .m_label = "3",
-                     .m_tip = "Run at 3x speed"},
-                    {.m_kind = colony::EColonyIntent::regenerate,
-                     .m_arg = 0u,
-                     .m_key = InputKey::r,
-                     .m_description = "ColonyRegenerate",
-                     .m_label = "R",
-                     .m_tip = "Ask to replace this world (confirm first)"},
-                    {.m_kind = colony::EColonyIntent::toggle_dig,
-                     .m_arg = 0u,
-                     .m_key = InputKey::g,
-                     .m_description = "ColonyDigMode",
-                     .m_label = "G",
-                     .m_tip = "Arm or stow the dig tool"},
-                    {.m_kind = colony::EColonyIntent::toggle_edit_highlight,
-                     .m_arg = 0u,
-                     .m_key = InputKey::h,
-                     .m_description = "ColonyHighlight",
-                     .m_label = "H",
-                     .m_tip = "Toggle the edit highlight"},
-                    {// V is free repo-wide: no game, camera (WASD/QE,
-                     // arrows, page keys, mouse/wheel, gamepad, modifiers),
-                     // or engine mapping binds it (definition only).
-                     .m_kind = colony::EColonyIntent::toggle_grid_overlay,
-                     .m_arg = 0u,
-                     .m_key = InputKey::v,
-                     .m_description = "ColonyGridOverlay",
-                     .m_label = "V",
-                     .m_tip = "Toggle the chunk grid overlay"},
-                    {.m_kind = colony::EColonyIntent::cancel,
-                     .m_arg = 0u,
-                     .m_key = InputKey::escape,
-                     .m_description = "ColonyCancelGesture",
-                     .m_label = "Esc",
-                     .m_tip = "Stop following, or cancel the gesture, tool, pin, or Help"},
-                    {.m_kind = colony::EColonyIntent::select_tool,
-                     .m_arg = static_cast<u32>(colony::EColonyTool::inspect),
-                     .m_key = InputKey::i,
-                     .m_description = "ColonyInspect",
-                     .m_label = "I",
-                     .m_tip = "Select the inspect tool"},
-                    {.m_kind = colony::EColonyIntent::open_build_menu,
-                     .m_arg = 0u,
-                     .m_key = InputKey::b,
-                     .m_description = "ColonyBuildMenu",
-                     .m_label = "B",
-                     .m_tip = "Open the build menu (no placement yet)"},
-                    {.m_kind = colony::EColonyIntent::find_next,
-                     .m_arg = 0u,
-                     .m_key = InputKey::f,
-                     .m_description = "ColonyFindColonist",
-                     .m_label = "F",
-                     .m_tip = "Select the next colonist in stable-key order"},
-                    {.m_kind = colony::EColonyIntent::help,
-                     .m_arg = 0u,
-                     .m_key = InputKey::f1,
-                     .m_description = "ColonyHelp",
-                     .m_label = "F1",
-                     .m_tip = "Toggle this help window"},
-                    {.m_kind = colony::EColonyIntent::toggle_performance,
-                     .m_arg = 0u,
-                     .m_key = InputKey::f3,
-                     .m_description = "ColonyPerformance",
-                     .m_label = "F3",
-                     .m_tip = "Switch the panel between Colony and Performance"},
+                {.m_kind = colony::EColonyIntent::pause_toggle,
+                    .m_arg = 0u,
+                    .m_key = InputKey::space_bar,
+                    .m_description = "ColonyPause",
+                    .m_label = "Space",
+                    .m_tip = "Pause or resume the simulation"},
+                {.m_kind = colony::EColonyIntent::step,
+                    .m_arg = 0u,
+                    .m_key = InputKey::n,
+                    .m_description = "ColonyStep",
+                    .m_label = "N",
+                    .m_tip = "Advance one tick (while paused)"},
+                {.m_kind = colony::EColonyIntent::set_speed,
+                    .m_arg = 1u,
+                    .m_key = InputKey::one,
+                    .m_description = "ColonySpeed1",
+                    .m_label = "1",
+                    .m_tip = "Run at 1x speed"},
+                {.m_kind = colony::EColonyIntent::set_speed,
+                    .m_arg = 2u,
+                    .m_key = InputKey::two,
+                    .m_description = "ColonySpeed2",
+                    .m_label = "2",
+                    .m_tip = "Run at 2x speed"},
+                {.m_kind = colony::EColonyIntent::set_speed,
+                    .m_arg = 3u,
+                    .m_key = InputKey::three,
+                    .m_description = "ColonySpeed3",
+                    .m_label = "3",
+                    .m_tip = "Run at 3x speed"},
+                {.m_kind = colony::EColonyIntent::regenerate,
+                    .m_arg = 0u,
+                    .m_key = InputKey::r,
+                    .m_description = "ColonyRegenerate",
+                    .m_label = "R",
+                    .m_tip = "Ask to replace this world (confirm first)"},
+                {.m_kind = colony::EColonyIntent::toggle_dig,
+                    .m_arg = 0u,
+                    .m_key = InputKey::g,
+                    .m_description = "ColonyDigMode",
+                    .m_label = "G",
+                    .m_tip = "Arm or stow the dig tool"},
+                {.m_kind = colony::EColonyIntent::toggle_edit_highlight,
+                    .m_arg = 0u,
+                    .m_key = InputKey::h,
+                    .m_description = "ColonyHighlight",
+                    .m_label = "H",
+                    .m_tip = "Toggle the edit highlight"},
+                {// V is free repo-wide: no game, camera (WASD/QE,
+                 // arrows, page keys, mouse/wheel, gamepad, modifiers),
+                 // or engine mapping binds it (definition only).
+                    .m_kind = colony::EColonyIntent::toggle_grid_overlay,
+                    .m_arg = 0u,
+                    .m_key = InputKey::v,
+                    .m_description = "ColonyGridOverlay",
+                    .m_label = "V",
+                    .m_tip = "Toggle the chunk grid overlay"},
+                {.m_kind = colony::EColonyIntent::cancel,
+                    .m_arg = 0u,
+                    .m_key = InputKey::escape,
+                    .m_description = "ColonyCancelGesture",
+                    .m_label = "Esc",
+                    .m_tip = "Stop following, or cancel the gesture, tool, pin, or Help"},
+                {.m_kind = colony::EColonyIntent::select_tool,
+                    .m_arg = static_cast<u32>(colony::EColonyTool::inspect),
+                    .m_key = InputKey::i,
+                    .m_description = "ColonyInspect",
+                    .m_label = "I",
+                    .m_tip = "Select the inspect tool"},
+                {.m_kind = colony::EColonyIntent::open_build_menu,
+                    .m_arg = 0u,
+                    .m_key = InputKey::b,
+                    .m_description = "ColonyBuildMenu",
+                    .m_label = "B",
+                    .m_tip = "Open the build menu (no placement yet)"},
+                {.m_kind = colony::EColonyIntent::find_next,
+                    .m_arg = 0u,
+                    .m_key = InputKey::f,
+                    .m_description = "ColonyFindColonist",
+                    .m_label = "F",
+                    .m_tip = "Select the next colonist in stable-key order"},
+                {.m_kind = colony::EColonyIntent::help,
+                    .m_arg = 0u,
+                    .m_key = InputKey::f1,
+                    .m_description = "ColonyHelp",
+                    .m_label = "F1",
+                    .m_tip = "Toggle this help window"},
+                {.m_kind = colony::EColonyIntent::toggle_performance,
+                    .m_arg = 0u,
+                    .m_key = InputKey::f3,
+                    .m_description = "ColonyPerformance",
+                    .m_label = "F3",
+                    .m_tip = "Switch the panel between Colony and Performance"},
             }};
 
             for (std::size_t index = 0u; index < bindings.size(); ++index) {
                 const Binding &row = bindings[index];
                 m_shortcut_rows[index] = colony::ColonyShortcut{
-                        .m_kind = row.m_kind, .m_arg = row.m_arg, .m_key = row.m_label, .m_tip = row.m_tip};
+                    .m_kind = row.m_kind, .m_arg = row.m_arg, .m_key = row.m_label, .m_tip = row.m_tip};
                 // Keys and buttons share this one dispatch: the callback
                 // only translates a physical press into the typed intent.
-                bindAction_(index, row.m_description, row.m_key,
-                            [this, kind = row.m_kind, arg = row.m_arg](const InputActionEvent &, const InputKey &) {
-                                dispatchIntent_(colony::ColonyIntent{.m_kind = kind, .m_arg = arg});
-                            });
+                bindAction_(
+                    index, row.m_description, row.m_key,
+                    [this, kind = row.m_kind, arg = row.m_arg](const InputActionEvent &, const InputKey &) {
+                        dispatchIntent_(colony::ColonyIntent{.m_kind = kind, .m_arg = arg});
+                    });
             }
 
             // These keys do not overlap the camera mapping; UI still gets first refusal.
-            getMainPlayer()->getListener().addInputMapping(m_colony_mapping,
-                static_cast<int>(EInputMappingPriority::camera));
+            getMainPlayer()->getListener().addInputMapping(
+                m_colony_mapping, static_cast<int>(EInputMappingPriority::camera));
 
             // Arbitration: ImGui capture first (foreground listener consumes),
             // then tool > camera > selection. The tool mapping dispatches before
@@ -761,30 +774,29 @@ namespace demo {
             // mouse_2d freezes camera pan/rotate (mouse_2d rotate included) until
             // the completed event or a dig-mode cancel.
             m_tool_mapping = std::make_unique<InputMapping>("colony_tool_mapping");
-            m_actions[kToolPressAction] =
-                    std::make_unique<InputAction>("ColonyToolPress", EInputValueType::digital, EInputActionFlags::none);
+            m_actions[kToolPressAction] = std::make_unique<InputAction>(
+                "ColonyToolPress", EInputValueType::digital, EInputActionFlags::none);
             m_actions[kToolPressAction]->setStarted([this](const InputActionEvent &, const InputKey &) noexcept {
                 acquireToolGesture_();
                 // Same press, inspect tool: pin/unpin the picked cell
                 // (no-op for dig, which owns the gesture instead).
                 observeInspectPress_();
             });
-            m_actions[kToolPressAction]->setCompleted([this](const InputActionEvent &, const InputKey &) noexcept {
-                completeToolGesture_();
-            });
-            m_tool_mapping->mapInputKey(SharedInputAction(m_actions[kToolPressAction].get()),
-                InputKey::left_mouse_button);
+            m_actions[kToolPressAction]->setCompleted(
+                [this](const InputActionEvent &, const InputKey &) noexcept { completeToolGesture_(); });
+            m_tool_mapping->mapInputKey(
+                SharedInputAction(m_actions[kToolPressAction].get()), InputKey::left_mouse_button);
 
-            m_actions[kToolCursorAction] = std::make_unique<InputAction>("ColonyToolCursor", EInputValueType::axis_2d,
-                                                                         EInputActionFlags::none);
+            m_actions[kToolCursorAction] = std::make_unique<InputAction>(
+                "ColonyToolCursor", EInputValueType::axis_2d, EInputActionFlags::none);
             m_actions[kToolCursorAction]->setTriggered(
-                    [this](const InputActionEvent &event, const InputKey &) noexcept {
-                        trackToolCursor_(event.getAxis2DValue().m_absolute);
-                    });
+                [this](const InputActionEvent &event, const InputKey &) noexcept {
+                    trackToolCursor_(event.getAxis2DValue().m_absolute);
+                });
             m_tool_mapping->mapInputKey(SharedInputAction(m_actions[kToolCursorAction].get()), InputKey::mouse_2d);
 
-            getMainPlayer()->getListener().addInputMapping(m_tool_mapping,
-                                                           static_cast<int>(EInputMappingPriority::camera) - 1);
+            getMainPlayer()->getListener().addInputMapping(
+                m_tool_mapping, static_cast<int>(EInputMappingPriority::camera) - 1);
 
             // Focus loss cancels the transient gesture only (the accepted
             // queue survives). Ownership: the member owns the callable, the
@@ -854,8 +866,9 @@ namespace demo {
 
                 case colony::EColonyIntent::toggle_dig:
                     // Same gesture as G: arm dig, or stow back to Inspect.
-                    selectTool_(m_ui_state.m_tool == colony::EColonyTool::dig ? colony::EColonyTool::inspect
-                                                                              : colony::EColonyTool::dig);
+                    selectTool_(
+                        m_ui_state.m_tool == colony::EColonyTool::dig ? colony::EColonyTool::inspect
+                                                                      : colony::EColonyTool::dig);
                     break;
 
                 case colony::EColonyIntent::toggle_edit_highlight: m_show_highlight = not m_show_highlight; break;
@@ -907,8 +920,8 @@ namespace demo {
 
                 case colony::EColonyIntent::toggle_performance:
                     m_ui_state.m_tab = m_ui_state.m_tab == colony::EColonyPanelTab::performance
-                                               ? colony::EColonyPanelTab::colony
-                                               : colony::EColonyPanelTab::performance;
+                                           ? colony::EColonyPanelTab::colony
+                                           : colony::EColonyPanelTab::performance;
                     break;
 
                 case colony::EColonyIntent::help: m_ui_state.m_help_open = not m_ui_state.m_help_open; break;
@@ -1136,9 +1149,14 @@ namespace demo {
         /// Name a selected agent on the status line (stable key + live cell).
         void setAgentStatus_(const char *const verb, const colony::AgentSummary &row) noexcept {
             try {
-                m_status_scratch = std::string(verb) + " colonist #" + std::to_string(row.m_key) + " at (" +
-                                   std::to_string(static_cast<int>(row.m_x)) + ", " +
-                                   std::to_string(static_cast<int>(row.m_y)) + ")";
+                m_status_scratch = std::string(verb) +
+                                   " colonist #" +
+                                   std::to_string(row.m_key) +
+                                   " at (" +
+                                   std::to_string(static_cast<int>(row.m_x)) +
+                                   ", " +
+                                   std::to_string(static_cast<int>(row.m_y)) +
+                                   ")";
                 setStatus_(m_status_scratch.c_str());
             } catch (...) {
             }
@@ -1313,11 +1331,12 @@ namespace demo {
                 if (needs == nullptr) {
                     continue;
                 }
-                m_agent_needs_rows.push_back(colony::AgentNeedsRow{
+                m_agent_needs_rows.push_back(
+                    colony::AgentNeedsRow{
                         .m_key = agent.m_key,
                         .m_o2 = needs->m_o2,
                         .m_rest = needs->m_rest,
-                });
+                    });
             }
         }
 
@@ -1436,13 +1455,13 @@ namespace demo {
                     }
                     const i32 min_x = static_cast<i32>(x * sim::kChunkEdge);
                     const i32 min_y = static_cast<i32>(y * sim::kChunkEdge);
-                    submissions.push_back(GridTileSubmission{
-                        .m_chunk_id = sim::chunkIndexOf(pos),
-                        .m_tile_range = {
-                            min_x, min_y, min_x + static_cast<i32>(sim::kChunkEdge),
-                            min_y + static_cast<i32>(sim::kChunkEdge)
-                        },
-                    });
+                    submissions.push_back(
+                        GridTileSubmission{
+                            .m_chunk_id = sim::chunkIndexOf(pos),
+                            .m_tile_range =
+                                {min_x, min_y, min_x + static_cast<i32>(sim::kChunkEdge),
+                                    min_y + static_cast<i32>(sim::kChunkEdge)},
+                        });
                 }
             }
 
@@ -1477,78 +1496,79 @@ namespace demo {
             // bound - the driver FIFO sheds under overflow).
             const u64 tick_count = m_driver.tickCount();
             const double sim_ms = m_driver.simMs();
-            const double tick_hz =
-                    tick_count > 0u and sim_ms > 0.0 ? 1000.0 * static_cast<double>(tick_count) / sim_ms : 0.0;
-            const u64 window_samples =
-                    m_frame_samples < static_cast<u64>(kFrameWindow) ? m_frame_samples : static_cast<u64>(kFrameWindow);
+            const double tick_hz = tick_count > 0u and sim_ms > 0.0 ? 1000.0 * static_cast<double>(tick_count) / sim_ms
+                                                                    : 0.0;
+            const u64 window_samples = m_frame_samples < static_cast<u64>(kFrameWindow)
+                                           ? m_frame_samples
+                                           : static_cast<u64>(kFrameWindow);
             const u64 dig_applied = static_cast<u64>(m_driver.digTotal());
             const u64 dig_pending_est = m_dig_issued >= dig_applied ? m_dig_issued - dig_applied : 0u;
 
             // One read-only view assembled from live state; the panel never
             // touches simulation state and returns at most one intent.
             const colony::ColonyUiView view{
-                    .m_counts =
-                            colony::ColonyPanelCounts{
-                                    .m_visible_chunks = visible,
-                                    .m_visible_tiles = visible,
-                                    .m_paths = paths.m_paths,
-                                    .m_partials = paths.m_partials,
-                                    .m_blocked = paths.m_blocked,
-                                    .m_errands = m_driver.errandCount(),
-                                    .m_dug_total = m_driver.digTotal(),
-                                    .m_wake_radius = colony::kDigWakeCells,
-                                    .m_affected_chunks = safe_narrowing(edits.size()),
-                                    .m_dig_mode = m_tool.m_dig_armed,
-                                    .m_show_highlight = m_show_highlight,
-                            },
-                    .m_hover = m_hover,
-                    .m_perf =
-                            colony::ColonyPerfView{
-                                    .m_frame_ms = m_frame_ms_last,
-                                    .m_avg_frame_ms = m_frame_avg,
-                                    .m_max_frame_ms = m_frame_max,
-                                    .m_frames = m_frame_count,
-                                    .m_p50_ms = m_frame_p50,
-                                    .m_p95_ms = m_frame_p95,
-                                    .m_min_ms = m_frame_min,
-                                    .m_window_max_ms = m_frame_window_max,
-                                    .m_over_budget = m_frame_over,
-                                    .m_window_samples = window_samples,
-                                    .m_window_def = static_cast<u32>(kFrameWindow),
-                                    .m_tick_hz = tick_hz,
-                                    .m_tick_count = tick_count,
-                                    .m_sim_ms = sim_ms,
-                                    .m_paused = m_driver.paused(),
-                                    .m_speed = m_driver.speed(),
-                                    .m_submitted_chunks = m_translator.submittedChunks(),
-                                    .m_total_chunks = colony::ColonyTranslator::totalChunks(),
-                                    .m_staged_tiles = getGridPass().stagedTileCount(),
-                                    .m_cached_tiles = getGridPass().cachedTileCount(),
-                                    .m_last_edit_chunks = safe_narrowing(edits.size()),
-                                    .m_dirty_chunks = grid.dirtyChunkCount(),
-                                    .m_collider_pending = static_cast<u64>(m_driver.colliderPending()),
-                                    .m_live_errands = m_driver.errandCount(),
-                                    .m_dig_issued = m_dig_issued,
-                                    .m_dig_pending_est = dig_pending_est,
-                                    .m_gpu_validation = IRhiService::get()->isGpuAssistedValidationEnabled(),
-                            },
-                    .m_preview =
-                            colony::ColonyPreviewView{
-                                    .m_active = m_build_preview.m_active,
-                                    .m_clamped = m_build_preview.m_clamped,
-                                    .m_width = preview_w,
-                                    .m_height = preview_h,
-                                    .m_max_edge = colony::kMaxFootprintEdge,
-                                    .m_reason = m_build_preview.m_reason,
-                                    .m_clamped_x = m_build_preview.m_clamped_x,
-                                    .m_clamped_y = m_build_preview.m_clamped_y,
-                            },
-                    .m_selected_agent = m_selected_agent,
-                    .m_hovered_agent = m_hovered_agent,
-                    .m_following = following,
-                    .m_agent_needs = m_agent_needs_rows,
-                    .m_driver_stages = std::span<const colony::StageStat>{m_driver.stageTimings().m_stats},
-                    .m_presentation_stages = std::span<const colony::StageStat>{m_translator.stageTimings().m_stats},
+                .m_counts =
+                    colony::ColonyPanelCounts{
+                        .m_visible_chunks = visible,
+                        .m_visible_tiles = visible,
+                        .m_paths = paths.m_paths,
+                        .m_partials = paths.m_partials,
+                        .m_blocked = paths.m_blocked,
+                        .m_errands = m_driver.errandCount(),
+                        .m_dug_total = m_driver.digTotal(),
+                        .m_wake_radius = colony::kDigWakeCells,
+                        .m_affected_chunks = safe_narrowing(edits.size()),
+                        .m_dig_mode = m_tool.m_dig_armed,
+                        .m_show_highlight = m_show_highlight,
+                    },
+                .m_hover = m_hover,
+                .m_perf =
+                    colony::ColonyPerfView{
+                        .m_frame_ms = m_frame_ms_last,
+                        .m_avg_frame_ms = m_frame_avg,
+                        .m_max_frame_ms = m_frame_max,
+                        .m_frames = m_frame_count,
+                        .m_p50_ms = m_frame_p50,
+                        .m_p95_ms = m_frame_p95,
+                        .m_min_ms = m_frame_min,
+                        .m_window_max_ms = m_frame_window_max,
+                        .m_over_budget = m_frame_over,
+                        .m_window_samples = window_samples,
+                        .m_window_def = static_cast<u32>(kFrameWindow),
+                        .m_tick_hz = tick_hz,
+                        .m_tick_count = tick_count,
+                        .m_sim_ms = sim_ms,
+                        .m_paused = m_driver.paused(),
+                        .m_speed = m_driver.speed(),
+                        .m_submitted_chunks = m_translator.submittedChunks(),
+                        .m_total_chunks = colony::ColonyTranslator::totalChunks(),
+                        .m_staged_tiles = getGridPass().stagedTileCount(),
+                        .m_cached_tiles = getGridPass().cachedTileCount(),
+                        .m_last_edit_chunks = safe_narrowing(edits.size()),
+                        .m_dirty_chunks = grid.dirtyChunkCount(),
+                        .m_collider_pending = static_cast<u64>(m_driver.colliderPending()),
+                        .m_live_errands = m_driver.errandCount(),
+                        .m_dig_issued = m_dig_issued,
+                        .m_dig_pending_est = dig_pending_est,
+                        .m_gpu_validation = IRhiService::get()->isGpuAssistedValidationEnabled(),
+                    },
+                .m_preview =
+                    colony::ColonyPreviewView{
+                        .m_active = m_build_preview.m_active,
+                        .m_clamped = m_build_preview.m_clamped,
+                        .m_width = preview_w,
+                        .m_height = preview_h,
+                        .m_max_edge = colony::kMaxFootprintEdge,
+                        .m_reason = m_build_preview.m_reason,
+                        .m_clamped_x = m_build_preview.m_clamped_x,
+                        .m_clamped_y = m_build_preview.m_clamped_y,
+                    },
+                .m_selected_agent = m_selected_agent,
+                .m_hovered_agent = m_hovered_agent,
+                .m_following = following,
+                .m_agent_needs = m_agent_needs_rows,
+                .m_driver_stages = std::span<const colony::StageStat>{m_driver.stageTimings().m_stats},
+                .m_presentation_stages = std::span<const colony::StageStat>{m_translator.stageTimings().m_stats},
             };
 
             const colony::ColonyUiFrame frame = colony::drawColonyUi(m_driver, view, m_shortcut_rows, m_ui_state);
@@ -1638,9 +1658,10 @@ namespace demo {
                 const double mean = calls > 0u ? static_cast<double>(total) / static_cast<double>(calls) : 0.0;
                 // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
                 // C3546 on this toolchain; output is byte-identical CSV.
-                std::printf("%s,%llu,%llu,%.2f,%llu\n", colony::stageName(stage),
-                    static_cast<unsigned long long>(calls), static_cast<unsigned long long>(total),
-                    static_cast<double>(mean), static_cast<unsigned long long>(stat.m_max_us));
+                std::printf(
+                    "%s,%llu,%llu,%.2f,%llu\n", colony::stageName(stage), static_cast<unsigned long long>(calls),
+                    static_cast<unsigned long long>(total), static_cast<double>(mean),
+                    static_cast<unsigned long long>(stat.m_max_us));
             }
         }
 
@@ -1663,15 +1684,16 @@ namespace demo {
 
         void printProfileCsv_() const {
             const std::string workload = profileWorkloadSuffix_();
-            std::println(stderr, "[profile-csv label={}{}] driver timings (live dt is real-time; frame counts vary)",
+            std::println(
+                stderr, "[profile-csv label={}{}] driver timings (live dt is real-time; frame counts vary)",
                 m_profile_label, workload);
             printLiveTimingsCsv_(m_driver.stageTimings());
-            std::println(stderr,
-                "[profile-csv label={}{}] translator timings (live dt is real-time; frame counts vary)",
+            std::println(
+                stderr, "[profile-csv label={}{}] translator timings (live dt is real-time; frame counts vary)",
                 m_profile_label, workload);
             printLiveTimingsCsv_(m_translator.stageTimings());
-            std::println(stderr,
-                "[profile-csv label={}{}] frame intervals (live dt is real-time; frame counts vary)",
+            std::println(
+                stderr, "[profile-csv label={}{}] frame intervals (live dt is real-time; frame counts vary)",
                 m_profile_label, workload);
             printProfileFrameCsv_();
         }
@@ -1714,19 +1736,19 @@ namespace demo {
             std::println("frame_label,frames,p50_us,p95_us,p99_us,max_us,over_16667,over_33333,backlog_frames");
             // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
             // C3546 on this toolchain; output is byte-identical CSV.
-            std::printf("%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", m_profile_label.c_str(),
+            std::printf(
+                "%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", m_profile_label.c_str(),
                 static_cast<unsigned long long>(count), static_cast<unsigned long long>(p50),
                 static_cast<unsigned long long>(p95), static_cast<unsigned long long>(p99),
                 static_cast<unsigned long long>(max_us), static_cast<unsigned long long>(over_16667),
-                static_cast<unsigned long long>(over_33333),
-                static_cast<unsigned long long>(m_profile_backlog_frames));
+                static_cast<unsigned long long>(over_33333), static_cast<unsigned long long>(m_profile_backlog_frames));
         }
 
     protected:
         [[nodiscard]] std::error_code initialize() override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::initialize());
-            PPR_RETURN_ERROR_ON_FAIL(Demo,
-                m_driver.init(colony::ColonyDriverDesc{.m_seed = 1234567u, .m_agent_count = m_agent_count}));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, m_driver.init(colony::ColonyDriverDesc{.m_seed = 1234567u, .m_agent_count = m_agent_count}));
             m_driver_ready = true;
 
             auto camera_controller = std::make_unique<PanCameraController>();
@@ -1745,17 +1767,18 @@ namespace demo {
             // on-screen at every zoom; the extent feeds cursor-anchored zoom
             // and bounds. refreshControllerViewport_() in update() now
             // follows client-extent changes every frame (Slice 3 fix).
-            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setWorldBounds(
-                                                   float2{0.0f, 0.0f}, float2{static_cast<float>(sim::kWorldEdge),
-                                                                              static_cast<float>(sim::kWorldEdge)}));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, camera_controller->setWorldBounds(
+                          float2{0.0f, 0.0f},
+                          float2{static_cast<float>(sim::kWorldEdge), static_cast<float>(sim::kWorldEdge)}));
             camera_controller->setViewportSize(
-                    float2{static_cast<float>(client.m_extent.x), static_cast<float>(client.m_extent.y)});
+                float2{static_cast<float>(client.m_extent.x), static_cast<float>(client.m_extent.y)});
             camera_controller->translate(float3{2048.0f - half_width, 2048.0f - half_height, -0.5f}, true);
             // Stash a non-owning view for the scripted pan route (the editor
             // owns the controller after the move below).
             m_pan_controller.reset(camera_controller.get());
             PPR_RETURN_ERROR_ON_FAIL(
-                    Demo, replaceMainCameraController(std::move(camera_controller), ECameraProjection::orthographic));
+                Demo, replaceMainCameraController(std::move(camera_controller), ECameraProjection::orthographic));
 
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
@@ -1766,16 +1789,20 @@ namespace demo {
             // Clockwise unit quad in XY facing +Z (this pipeline culls the
             // other winding); shared by capsules and path polylines.
             const mesh::StaticMeshVertex quad[4] = {
-                {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-                {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-                {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-                {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f},
+                    {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f},
+                    {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f},
+                    {1.0f, 1.0f, 1.0f, 1.0f}},
+                {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f},
+                    {1.0f, 1.0f, 1.0f, 1.0f}},
             };
             const u32 quad_indices[6] = {0u, 3u, 2u, 0u, 2u, 1u};
 
             TrianglePass &pass = getTrianglePass();
-            const auto bag = pass.uploadMesh(std::span<const mesh::StaticMeshVertex>{quad, 4u},
-                std::span<const u32>{quad_indices, 6u});
+            const auto bag = pass.uploadMesh(
+                std::span<const mesh::StaticMeshVertex>{quad, 4u}, std::span<const u32>{quad_indices, 6u});
             if (not bag) {
                 return bag.error();
             }
@@ -1785,8 +1812,7 @@ namespace demo {
             agent_asset.m_base_color = float4{1.0f, 0.55f, 0.15f, 1.0f};
             agent_asset.m_metallic = 0.0f;
             agent_asset.m_roughness = 1.0f;
-            const auto agent_material = pass.packMaterial(agent_asset,
-                std::span<const TextureHandle>{no_textures, 4u});
+            const auto agent_material = pass.packMaterial(agent_asset, std::span<const TextureHandle>{no_textures, 4u});
             if (not agent_material) {
                 return agent_material.error();
             }
@@ -1795,8 +1821,7 @@ namespace demo {
             path_asset.m_base_color = float4{0.2f, 0.9f, 0.9f, 1.0f};
             path_asset.m_metallic = 0.0f;
             path_asset.m_roughness = 1.0f;
-            const auto path_material = pass.packMaterial(path_asset,
-                std::span<const TextureHandle>{no_textures, 4u});
+            const auto path_material = pass.packMaterial(path_asset, std::span<const TextureHandle>{no_textures, 4u});
             if (not path_material) {
                 return path_material.error();
             }
@@ -1808,20 +1833,20 @@ namespace demo {
             return {};
         }
 
-        [[nodiscard]] float4x4 debugModel_(const float x, const float y, const float angle, const float sx,
-                                           const float sy) noexcept {
+        [[nodiscard]] float4x4 debugModel_(
+            const float x, const float y, const float angle, const float sx, const float sy) noexcept {
             const float c = std::cos(angle);
             const float s = std::sin(angle);
             return float4x4{
-                    float4{sx * c, sx * s, 0.0f, 0.0f},
-                    float4{-sy * s, sy * c, 0.0f, 0.0f},
-                    float4{0.0f, 0.0f, 1.0f, 0.0f},
-                    float4{x, y, -0.25f, 1.0f},
+                float4{sx * c, sx * s, 0.0f, 0.0f},
+                float4{-sy * s, sy * c, 0.0f, 0.0f},
+                float4{0.0f, 0.0f, 1.0f, 0.0f},
+                float4{x, y, -0.25f, 1.0f},
             };
         }
 
-        [[nodiscard]] std::error_code submitChunkBorder_(TrianglePass &pass, const sim::ChunkPos chunk,
-                                                         const u32 expand, const MaterialHandle material) {
+        [[nodiscard]] std::error_code submitChunkBorder_(
+            TrianglePass &pass, const sim::ChunkPos chunk, const u32 expand, const MaterialHandle material) {
             const float origin_x = static_cast<float>(chunk.m_x * sim::kChunkEdge);
             const float origin_y = static_cast<float>(chunk.m_y * sim::kChunkEdge);
             const float expand_f = static_cast<float>(expand);
@@ -1847,8 +1872,9 @@ namespace demo {
         /// One band (a single quad) through the shared bag and an existing
         /// material. Serves the grid overlay and the edit/wake chunk
         /// outlines that remain in the pass (no new GPU handles).
-        [[nodiscard]] std::error_code submitBand_(TrianglePass &pass, const float cx, const float cy, const float sx,
-                                                  const float sy, const MaterialHandle material) {
+        [[nodiscard]] std::error_code submitBand_(
+            TrianglePass &pass, const float cx, const float cy, const float sx, const float sy,
+            const MaterialHandle material) {
             return pass.submitInstance(m_quad_bag, material, debugModel_(cx, cy, 0.0f, sx, sy));
         }
 
@@ -1863,8 +1889,8 @@ namespace demo {
         /// unit-separated points through the same forward formula the pick
         /// inverts, so screen-space line weights match the old
         /// pixel-derived band at every zoom with no second mapping.
-        [[nodiscard]] static std::optional<float> overlayPixelsPerWorld_(const ScreenMap &map,
-                                                                         const float2 at) noexcept {
+        [[nodiscard]] static std::optional<float> overlayPixelsPerWorld_(
+            const ScreenMap &map, const float2 at) noexcept {
             const std::optional<float2> origin = map.worldToClient(at);
             const std::optional<float2> unit_x = map.worldToClient(float2{at.x + 1.0f, at.y});
             if (not origin.has_value() or not unit_x.has_value()) {
@@ -1881,9 +1907,9 @@ namespace demo {
         /// axis-aligned, so projecting two opposite corners is the whole
         /// rect; false when any corner has no screen position (degenerate
         /// or behind-camera), and the caller skips that shape.
-        [[nodiscard]] static bool overlayProjectRect_(const ScreenMap &map, const float x0, const float y0,
-                                                      const float x1, const float y1, ImVec2 &min_out,
-                                                      ImVec2 &max_out) noexcept {
+        [[nodiscard]] static bool overlayProjectRect_(
+            const ScreenMap &map, const float x0, const float y0, const float x1, const float y1, ImVec2 &min_out,
+            ImVec2 &max_out) noexcept {
             const std::optional<float2> a = map.worldToClient(float2{x0, y0});
             const std::optional<float2> b = map.worldToClient(float2{x1, y1});
             if (not a.has_value() or not b.has_value()) {
@@ -1897,9 +1923,9 @@ namespace demo {
         /// One rectangular outline in screen space: an ImGui rect border
         /// whose thickness centres on the edge, matching the old bands that
         /// straddled the rect edges half in and half out.
-        static void overlayRectBorder_(ImDrawList *const draw, const ScreenMap &map, const float cx, const float cy,
-                                       const float hx, const float hy, const float band_world,
-                                       const ImU32 color) noexcept {
+        static void overlayRectBorder_(
+            ImDrawList *const draw, const ScreenMap &map, const float cx, const float cy, const float hx,
+            const float hy, const float band_world, const ImU32 color) noexcept {
             if (draw == nullptr) {
                 return;
             }
@@ -1918,10 +1944,11 @@ namespace demo {
         /// One hovered/pinned cell outline: the shared rect-border helper at
         /// the cell centre with half extents 0.5 and the standing 0.5-cell
         /// band, exactly as before.
-        static void overlayCellBorder_(ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell,
-                                       const ImU32 color) noexcept {
-            overlayRectBorder_(draw, map, static_cast<float>(cell.m_x) + 0.5f, static_cast<float>(cell.m_y) + 0.5f,
-                               0.5f, 0.5f, 0.5f, color);
+        static void overlayCellBorder_(
+            ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) noexcept {
+            overlayRectBorder_(
+                draw, map, static_cast<float>(cell.m_x) + 0.5f, static_cast<float>(cell.m_y) + 0.5f, 0.5f, 0.5f, 0.5f,
+                color);
         }
 
         /// Footprint preview in screen space: the inclusive min/max corners
@@ -1971,18 +1998,23 @@ namespace demo {
                 const std::optional<float2> left_b = map.worldToClient(float2{x0, cy + h * kSpan * 0.5f});
                 const std::optional<float2> right_a = map.worldToClient(float2{x1, cy - h * kSpan * 0.5f});
                 const std::optional<float2> right_b = map.worldToClient(float2{x1, cy + h * kSpan * 0.5f});
-                const bool complete = top_a.has_value() and top_b.has_value() and bottom_a.has_value() and
-                                      bottom_b.has_value() and left_a.has_value() and left_b.has_value() and
-                                      right_a.has_value() and right_b.has_value();
+                const bool complete = top_a.has_value() and
+                                      top_b.has_value() and
+                                      bottom_a.has_value() and
+                                      bottom_b.has_value() and
+                                      left_a.has_value() and
+                                      left_b.has_value() and
+                                      right_a.has_value() and
+                                      right_b.has_value();
                 if (not complete) {
                     return;
                 }
                 draw->AddLine(ImVec2{top_a->x, top_a->y}, ImVec2{top_b->x, top_b->y}, kFeedbackOrange, thickness);
-                draw->AddLine(ImVec2{bottom_a->x, bottom_a->y}, ImVec2{bottom_b->x, bottom_b->y}, kFeedbackOrange,
-                              thickness);
+                draw->AddLine(
+                    ImVec2{bottom_a->x, bottom_a->y}, ImVec2{bottom_b->x, bottom_b->y}, kFeedbackOrange, thickness);
                 draw->AddLine(ImVec2{left_a->x, left_a->y}, ImVec2{left_b->x, left_b->y}, kFeedbackOrange, thickness);
-                draw->AddLine(ImVec2{right_a->x, right_a->y}, ImVec2{right_b->x, right_b->y}, kFeedbackOrange,
-                              thickness);
+                draw->AddLine(
+                    ImVec2{right_a->x, right_a->y}, ImVec2{right_b->x, right_b->y}, kFeedbackOrange, thickness);
                 return;
             }
 
@@ -2013,8 +2045,9 @@ namespace demo {
                 const float dir = cut_max_x ? offset : -offset;
                 ImVec2 min{};
                 ImVec2 max{};
-                if (overlayProjectRect_(map, edge + dir - badge * 0.5f, cy - (h + band) * 0.5f,
-                                        edge + dir + badge * 0.5f, cy + (h + band) * 0.5f, min, max)) {
+                if (overlayProjectRect_(
+                        map, edge + dir - badge * 0.5f, cy - (h + band) * 0.5f, edge + dir + badge * 0.5f,
+                        cy + (h + band) * 0.5f, min, max)) {
                     draw->AddRectFilled(min, max, kFeedbackOrange);
                 }
             }
@@ -2024,8 +2057,9 @@ namespace demo {
                 const float dir = cut_max_y ? offset : -offset;
                 ImVec2 min{};
                 ImVec2 max{};
-                if (overlayProjectRect_(map, cx - (w + band) * 0.5f, edge + dir - badge * 0.5f, cx + (w + band) * 0.5f,
-                                        edge + dir + badge * 0.5f, min, max)) {
+                if (overlayProjectRect_(
+                        map, cx - (w + band) * 0.5f, edge + dir - badge * 0.5f, cx + (w + band) * 0.5f,
+                        edge + dir + badge * 0.5f, min, max)) {
                     draw->AddRectFilled(min, max, kFeedbackOrange);
                 }
             }
@@ -2106,8 +2140,8 @@ namespace demo {
                         const float outer_y = ring_y + outer_gap + band;
                         overlayRectBorder_(draw, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
                     } else if (agent.m_key == m_hovered_agent) {
-                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f,
-                                           kFeedbackOrange);
+                        overlayRectBorder_(
+                            draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f, kFeedbackOrange);
                     } else {
                         overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
                     }
@@ -2172,12 +2206,12 @@ namespace demo {
 
                     // Horizontal (y = at) and vertical (x = at) lines, each
                     // centred on the boundary and spanning the whole world.
-                    if (const std::error_code error =
-                                submitBand_(pass, world_half, at, world_half, stroke, m_path_material)) {
+                    if (const std::error_code error = submitBand_(
+                            pass, world_half, at, world_half, stroke, m_path_material)) {
                         return error;
                     }
-                    if (const std::error_code error =
-                                submitBand_(pass, at, world_half, stroke, world_half, m_path_material)) {
+                    if (const std::error_code error = submitBand_(
+                            pass, at, world_half, stroke, world_half, m_path_material)) {
                         return error;
                     }
                 }
@@ -2185,7 +2219,7 @@ namespace demo {
 
             for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
                 if (const std::error_code error = pass.submitInstance(
-                            m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
+                        m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
                     return error;
                 }
             }
@@ -2216,8 +2250,9 @@ namespace demo {
                     const float dy = qy - py;
                     const float length = std::sqrt(dx * dx + dy * dy);
                     if (length > 0.01f) {
-                        if (const std::error_code error = pass.submitInstance(m_quad_bag, m_path_material,
-                            debugModel_((px + qx) * 0.5f, (py + qy) * 0.5f, std::atan2(dy, dx), length, 0.3f))) {
+                        if (const std::error_code error = pass.submitInstance(
+                                m_quad_bag, m_path_material,
+                                debugModel_((px + qx) * 0.5f, (py + qy) * 0.5f, std::atan2(dy, dx), length, 0.3f))) {
                             return error;
                         }
                     }
@@ -2235,8 +2270,8 @@ namespace demo {
                     if (const std::error_code error = submitChunkBorder_(pass, chunk, 0u, m_path_material)) {
                         return error;
                     }
-                    if (const std::error_code error =
-                            submitChunkBorder_(pass, chunk, colony::kDigWakeCells, m_agent_material)) {
+                    if (const std::error_code error = submitChunkBorder_(
+                            pass, chunk, colony::kDigWakeCells, m_agent_material)) {
                         return error;
                     }
                 }
@@ -2274,15 +2309,17 @@ namespace demo {
                 build = not base_build;
             }
             if (build) {
-                const Expected<sim::Entity> wall = m_driver.buildWall(colony::Footprint{.m_min = origin,
-                    .m_width = kProfileWallWidth, .m_height = kProfileWallHeight,
-                    .m_element = colony::kElementRock});
+                const Expected<sim::Entity> wall = m_driver.buildWall(
+                    colony::Footprint{
+                        .m_min = origin,
+                        .m_width = kProfileWallWidth,
+                        .m_height = kProfileWallHeight,
+                        .m_element = colony::kElementRock});
                 if (not wall) {
                     return wall.error();
                 }
             } else {
-                const Expected<sim::Entity> teardown =
-                    m_driver.demolish(origin, kProfileWallWidth, kProfileWallHeight);
+                const Expected<sim::Entity> teardown = m_driver.demolish(origin, kProfileWallWidth, kProfileWallHeight);
                 if (not teardown) {
                     return teardown.error();
                 }
@@ -2358,8 +2395,11 @@ namespace demo {
                 bool armed;
                 void record() noexcept {
                     try {
-                        if (not armed or samples == nullptr or cap == nullptr or backlog == nullptr or
-                                driver == nullptr) {
+                        if (not armed or
+                            samples == nullptr or
+                            cap == nullptr or
+                            backlog == nullptr or
+                            driver == nullptr) {
                             return;
                         }
                         armed = false;
@@ -2379,8 +2419,8 @@ namespace demo {
                     record();
                 }
             };
-            ProfileFrameScope profile_scope{&m_profile_frame_us, &m_profile_csv_total, &m_profile_backlog_frames,
-                &m_driver,
+            ProfileFrameScope profile_scope{
+                &m_profile_frame_us, &m_profile_csv_total, &m_profile_backlog_frames, &m_driver,
                 profile_sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{},
                 profile_sample};
 
@@ -2414,13 +2454,14 @@ namespace demo {
                 const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
                 m_tool.m_accepted_click.reset();
                 if (const std::error_code error = m_driver.requestDig(cell, 1u, 1u)) {
-                    PPR_LOG(Demo, warning, "tool drain failed",
-                            {
-                                    {"x", cell.m_x},
-                                    {"y", cell.m_y},
-                                    {"error", error.value()},
-                                    {"category", error.category().name()},
-                            });
+                    PPR_LOG(
+                        Demo, warning, "tool drain failed",
+                        {
+                            {"x", cell.m_x},
+                            {"y", cell.m_y},
+                            {"error", error.value()},
+                            {"category", error.category().name()},
+                        });
                     m_input_error = error;
                     return error;
                 }
@@ -2432,13 +2473,14 @@ namespace demo {
                 const sim::GlobalCellPos cell = m_tool.m_drag_queue.front();
                 m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
                 if (const std::error_code error = m_driver.requestDig(cell, 1u, 1u)) {
-                    PPR_LOG(Demo, warning, "tool drain failed",
-                            {
-                                    {"x", cell.m_x},
-                                    {"y", cell.m_y},
-                                    {"error", error.value()},
-                                    {"category", error.category().name()},
-                            });
+                    PPR_LOG(
+                        Demo, warning, "tool drain failed",
+                        {
+                            {"x", cell.m_x},
+                            {"y", cell.m_y},
+                            {"error", error.value()},
+                            {"category", error.category().name()},
+                        });
                     m_input_error = error;
                     return error;
                 }
@@ -2463,10 +2505,11 @@ namespace demo {
             // Phase: tool progress. Silent when idle; a zero delta with
             // activity means the cells were already vacuum (silent no-op).
             if (tool_active) {
-                PPR_LOG(Demo, info, "tool progress",
-                        {
-                                {"dug_delta", m_driver.digTotal() - dug_before},
-                        });
+                PPR_LOG(
+                    Demo, info, "tool progress",
+                    {
+                        {"dug_delta", m_driver.digTotal() - dug_before},
+                    });
             }
 
             // Phase: present. Drain edit chunks into presentation every frame,
@@ -2547,205 +2590,203 @@ namespace demo {
 // behavior is unchanged when healthy; see Slice 6 notes for the allocator
 // abort this scaffolding diagnosed (TrianglePass ScratchPad overflow).
 namespace {
-extern "C" {
-__declspec(dllimport) void *__stdcall LoadLibraryA(const char *name);
-__declspec(dllimport) void *__stdcall GetProcAddress(void *module, const char *name);
-} // extern "C"
-using DiagSigHandlerFn = void(__cdecl *)(int);
-extern "C" __declspec(dllimport) DiagSigHandlerFn __cdecl signal(int sig, DiagSigHandlerFn handler);
-extern "C" __declspec(dllimport) void __cdecl _exit(int status);
+    extern "C" {
+    __declspec(dllimport) void *__stdcall LoadLibraryA(const char *name);
+    __declspec(dllimport) void *__stdcall GetProcAddress(void *module, const char *name);
+    } // extern "C"
+    using DiagSigHandlerFn = void(__cdecl *)(int);
+    extern "C" __declspec(dllimport) DiagSigHandlerFn __cdecl signal(int sig, DiagSigHandlerFn handler);
+    extern "C" __declspec(dllimport) void __cdecl _exit(int status);
 
-using DiagSymInitFn = int(__stdcall *)(void *, const char *, int);
-using DiagSymFromAddrFn = int(__stdcall *)(void *, unsigned long long, unsigned long long *, void *);
-using DiagCaptureFn = unsigned short(__stdcall *)(unsigned long, unsigned long, void **, unsigned long *);
-using DiagAddVehFn = long(__stdcall *)(unsigned long, void *);
+    using DiagSymInitFn = int(__stdcall *)(void *, const char *, int);
+    using DiagSymFromAddrFn = int(__stdcall *)(void *, unsigned long long, unsigned long long *, void *);
+    using DiagCaptureFn = unsigned short(__stdcall *)(unsigned long, unsigned long, void **, unsigned long *);
+    using DiagAddVehFn = long(__stdcall *)(unsigned long, void *);
 
-struct DiagSymInfo {
-    unsigned long SizeOfStruct;
-    unsigned long TypeIndex;
-    unsigned long long Reserved[2];
-    unsigned long Index;
-    unsigned long Size;
-    unsigned long long ModBase;
-    unsigned long Flags;
-    unsigned long long Value;
-    unsigned long long Address;
-    unsigned long Register;
-    unsigned long Scope;
-    unsigned long Tag;
-    int NameLen;
-    int MaxNameLen;
-    char Name[512];
-};
+    struct DiagSymInfo {
+        unsigned long SizeOfStruct;
+        unsigned long TypeIndex;
+        unsigned long long Reserved[2];
+        unsigned long Index;
+        unsigned long Size;
+        unsigned long long ModBase;
+        unsigned long Flags;
+        unsigned long long Value;
+        unsigned long long Address;
+        unsigned long Register;
+        unsigned long Scope;
+        unsigned long Tag;
+        int NameLen;
+        int MaxNameLen;
+        char Name[512];
+    };
 
-void diagDumpStack(const char *reason, const unsigned long code) noexcept {
-    static bool entered = false;
-    if (entered) {
-        return;
-    }
-    entered = true;
-    std::fprintf(stderr, "[trap] %s code=%lu\n", reason, code);
-    void *kernel = LoadLibraryA("kernel32.dll");
-    DiagCaptureFn capture = nullptr;
-    if (kernel != nullptr) {
-        capture = reinterpret_cast<DiagCaptureFn>(GetProcAddress(kernel, "CaptureStackBackTrace"));
-    }
-    void *frames[40] = {};
-    unsigned long hash = 0u;
-    unsigned short taken = 0u;
-    if (capture != nullptr) {
-        taken = capture(0u, 40u, frames, &hash);
-    }
-    void *dbghelp = LoadLibraryA("Dbghelp.dll");
-    DiagSymFromAddrFn symAddr = nullptr;
-    bool sym_ok = false;
-    if (dbghelp != nullptr) {
-        const auto symInit = reinterpret_cast<DiagSymInitFn>(GetProcAddress(dbghelp, "SymInitialize"));
-        symAddr = reinterpret_cast<DiagSymFromAddrFn>(GetProcAddress(dbghelp, "SymFromAddr"));
-        if (symInit != nullptr) {
-            sym_ok = symInit(reinterpret_cast<void *>(-1), nullptr, 1) != 0;
+    void diagDumpStack(const char *reason, const unsigned long code) noexcept {
+        static bool entered = false;
+        if (entered) {
+            return;
         }
-    }
-    for (unsigned short i = 0u; i < taken; ++i) {
-        const unsigned long long addr = reinterpret_cast<unsigned long long>(frames[i]);
-        if (symAddr != nullptr and sym_ok) {
-            DiagSymInfo info{};
-            info.SizeOfStruct = sizeof(DiagSymInfo);
-            info.MaxNameLen = 511;
-            unsigned long long disp = 0u;
-            if (symAddr(reinterpret_cast<void *>(-1), addr, &disp, &info) != 0) {
-                std::fprintf(stderr, "  #%u 0x%llx %s+0x%llx\n", i, addr, info.Name, disp);
-                continue;
+        entered = true;
+        std::fprintf(stderr, "[trap] %s code=%lu\n", reason, code);
+        void *kernel = LoadLibraryA("kernel32.dll");
+        DiagCaptureFn capture = nullptr;
+        if (kernel != nullptr) {
+            capture = reinterpret_cast<DiagCaptureFn>(GetProcAddress(kernel, "CaptureStackBackTrace"));
+        }
+        void *frames[40] = {};
+        unsigned long hash = 0u;
+        unsigned short taken = 0u;
+        if (capture != nullptr) {
+            taken = capture(0u, 40u, frames, &hash);
+        }
+        void *dbghelp = LoadLibraryA("Dbghelp.dll");
+        DiagSymFromAddrFn symAddr = nullptr;
+        bool sym_ok = false;
+        if (dbghelp != nullptr) {
+            const auto symInit = reinterpret_cast<DiagSymInitFn>(GetProcAddress(dbghelp, "SymInitialize"));
+            symAddr = reinterpret_cast<DiagSymFromAddrFn>(GetProcAddress(dbghelp, "SymFromAddr"));
+            if (symInit != nullptr) {
+                sym_ok = symInit(reinterpret_cast<void *>(-1), nullptr, 1) != 0;
             }
         }
-        std::fprintf(stderr, "  #%u 0x%llx\n", i, addr);
-    }
-    std::fprintf(stderr, "[trap] end\n");
-}
-
-void __cdecl diagSigAbrt(const int sig) noexcept {
-    diagDumpStack("SIGABRT", static_cast<unsigned long>(sig));
-    _exit(3);
-}
-
-long __stdcall diagVeh(void *pointers) noexcept {
-    // EXCEPTION_POINTERS: [0] = record (ExceptionCode at +0, param count at
-    // +24, params at +32). For DBG_PRINTEXCEPTION_C, params are [len, string].
-    const void *record = *reinterpret_cast<void **>(pointers);
-    const char *bytes = static_cast<const char *>(record);
-    const unsigned long code = *reinterpret_cast<const unsigned long *>(bytes);
-    unsigned long count = 0u;
-    unsigned long long info0 = 0u;
-    const char *info1 = nullptr;
-    {
-        unsigned long n = 0u;
-        __try {
-            n = *reinterpret_cast<const unsigned long *>(bytes + 24);
-        } __except (1) {
-            n = 0u;
-        }
-        count = n > 4u ? 4u : n;
-        if (count > 0u) {
-            __try {
-                info0 = *reinterpret_cast<const unsigned long long *>(bytes + 32);
-            } __except (1) {
-                info0 = 0u;
-            }
-        }
-        if (count > 1u) {
-            __try {
-                info1 = *reinterpret_cast<const char *const *>(bytes + 40);
-            } __except (1) {
-                info1 = nullptr;
-            }
-        }
-    }
-    // NOTE: benign prints must NOT touch diagDumpStack (its once-guard is
-    // reserved for the real trap); otherwise a later SIGABRT exits silently.
-    // Same for 0x406D1388 legacy thread-naming: debuggers swallow it by
-    // protocol, and our own HAL only raises it under IsDebuggerPresent, so a
-    // third-party raise in a debugger-less run must be swallowed, not trapped.
-    if (code == 0x406D1388u) {
-        std::fprintf(stderr, "[dbgthread] swallowed legacy thread-name raise\n");
-        return -1; // EXCEPTION_CONTINUE_EXECUTION, as a debugger would
-    }
-    if (code == 0xE06D7363u and count >= 3u) {
-        // MSVC C++ exception: params are [magic, object, ThrowInfo*].
-        // Decode the first catchable type name WITHOUT touching the guard.
-        const void *throw_info = nullptr;
-        __try {
-            throw_info = *reinterpret_cast<void *const *>(bytes + 48);
-        } __except (1) {
-            throw_info = nullptr;
-        }
-        const char *type_name = nullptr;
-        if (throw_info != nullptr) {
-            __try {
-                const char *ti = static_cast<const char *>(throw_info);
-                const void *arr = *reinterpret_cast<void *const *>(ti + 16);
-                int n = 0;
-                if (arr != nullptr) {
-                    n = *reinterpret_cast<const int *>(arr);
+        for (unsigned short i = 0u; i < taken; ++i) {
+            const unsigned long long addr = reinterpret_cast<unsigned long long>(frames[i]);
+            if (symAddr != nullptr and sym_ok) {
+                DiagSymInfo info{};
+                info.SizeOfStruct = sizeof(DiagSymInfo);
+                info.MaxNameLen = 511;
+                unsigned long long disp = 0u;
+                if (symAddr(reinterpret_cast<void *>(-1), addr, &disp, &info) != 0) {
+                    std::fprintf(stderr, "  #%u 0x%llx %s+0x%llx\n", i, addr, info.Name, disp);
+                    continue;
                 }
-                if (n > 0) {
-                    const void *first =
-                        *reinterpret_cast<void *const *>(static_cast<const char *>(arr) + 8);
-                    if (first != nullptr) {
-                        const void *desc =
-                            *reinterpret_cast<void *const *>(static_cast<const char *>(first) + 16);
-                        if (desc != nullptr) {
-                            type_name = static_cast<const char *>(desc) + 16;
+            }
+            std::fprintf(stderr, "  #%u 0x%llx\n", i, addr);
+        }
+        std::fprintf(stderr, "[trap] end\n");
+    }
+
+    void __cdecl diagSigAbrt(const int sig) noexcept {
+        diagDumpStack("SIGABRT", static_cast<unsigned long>(sig));
+        _exit(3);
+    }
+
+    long __stdcall diagVeh(void *pointers) noexcept {
+        // EXCEPTION_POINTERS: [0] = record (ExceptionCode at +0, param count at
+        // +24, params at +32). For DBG_PRINTEXCEPTION_C, params are [len, string].
+        const void *record = *reinterpret_cast<void **>(pointers);
+        const char *bytes = static_cast<const char *>(record);
+        const unsigned long code = *reinterpret_cast<const unsigned long *>(bytes);
+        unsigned long count = 0u;
+        unsigned long long info0 = 0u;
+        const char *info1 = nullptr;
+        {
+            unsigned long n = 0u;
+            __try {
+                n = *reinterpret_cast<const unsigned long *>(bytes + 24);
+            } __except (1) {
+                n = 0u;
+            }
+            count = n > 4u ? 4u : n;
+            if (count > 0u) {
+                __try {
+                    info0 = *reinterpret_cast<const unsigned long long *>(bytes + 32);
+                } __except (1) {
+                    info0 = 0u;
+                }
+            }
+            if (count > 1u) {
+                __try {
+                    info1 = *reinterpret_cast<const char *const *>(bytes + 40);
+                } __except (1) {
+                    info1 = nullptr;
+                }
+            }
+        }
+        // NOTE: benign prints must NOT touch diagDumpStack (its once-guard is
+        // reserved for the real trap); otherwise a later SIGABRT exits silently.
+        // Same for 0x406D1388 legacy thread-naming: debuggers swallow it by
+        // protocol, and our own HAL only raises it under IsDebuggerPresent, so a
+        // third-party raise in a debugger-less run must be swallowed, not trapped.
+        if (code == 0x406D1388u) {
+            std::fprintf(stderr, "[dbgthread] swallowed legacy thread-name raise\n");
+            return -1; // EXCEPTION_CONTINUE_EXECUTION, as a debugger would
+        }
+        if (code == 0xE06D7363u and count >= 3u) {
+            // MSVC C++ exception: params are [magic, object, ThrowInfo*].
+            // Decode the first catchable type name WITHOUT touching the guard.
+            const void *throw_info = nullptr;
+            __try {
+                throw_info = *reinterpret_cast<void *const *>(bytes + 48);
+            } __except (1) {
+                throw_info = nullptr;
+            }
+            const char *type_name = nullptr;
+            if (throw_info != nullptr) {
+                __try {
+                    const char *ti = static_cast<const char *>(throw_info);
+                    const void *arr = *reinterpret_cast<void *const *>(ti + 16);
+                    int n = 0;
+                    if (arr != nullptr) {
+                        n = *reinterpret_cast<const int *>(arr);
+                    }
+                    if (n > 0) {
+                        const void *first = *reinterpret_cast<void *const *>(static_cast<const char *>(arr) + 8);
+                        if (first != nullptr) {
+                            const void *desc = *reinterpret_cast<void *const *>(static_cast<const char *>(first) + 16);
+                            if (desc != nullptr) {
+                                type_name = static_cast<const char *>(desc) + 16;
+                            }
                         }
                     }
+                } __except (1) {
+                    type_name = nullptr;
                 }
-            } __except (1) {
-                type_name = nullptr;
             }
-        }
-        if (type_name != nullptr and type_name[0] != '\0') {
-            __try {
-                std::fprintf(stderr, "[cppthrow] %s\n", type_name);
-            } __except (1) {
-                std::fprintf(stderr, "[cppthrow] <unprintable>\n");
+            if (type_name != nullptr and type_name[0] != '\0') {
+                __try {
+                    std::fprintf(stderr, "[cppthrow] %s\n", type_name);
+                } __except (1) {
+                    std::fprintf(stderr, "[cppthrow] <unprintable>\n");
+                }
+            } else {
+                std::fprintf(stderr, "[cppthrow] <undecoded>\n");
             }
-        } else {
-            std::fprintf(stderr, "[cppthrow] <undecoded>\n");
+            return 0; // EXCEPTION_CONTINUE_SEARCH: normal unwind/terminate proceeds
         }
-        return 0; // EXCEPTION_CONTINUE_SEARCH: normal unwind/terminate proceeds
+        if (code == 0x40010006u) {
+            // OutputDebugString payload: log it, then continue execution exactly
+            // as a debugger would (this raise is non-fatal by design).
+            if (info1 != nullptr) {
+                __try {
+                    std::fprintf(stderr, "[dbgprint len=%llu] %s\n", info0, info1);
+                } __except (1) {
+                    std::fprintf(stderr, "[dbgprint] <unreadable>\n");
+                }
+            } else {
+                std::fprintf(stderr, "[dbgprint] <no payload> params=%lu\n", count);
+            }
+            return -1; // EXCEPTION_CONTINUE_EXECUTION
+        }
+        diagDumpStack("VEH", code);
+        return 0; // EXCEPTION_CONTINUE_SEARCH
     }
-    if (code == 0x40010006u) {
-        // OutputDebugString payload: log it, then continue execution exactly
-        // as a debugger would (this raise is non-fatal by design).
-        if (info1 != nullptr) {
-            __try {
-                std::fprintf(stderr, "[dbgprint len=%llu] %s\n", info0, info1);
-            } __except (1) {
-                std::fprintf(stderr, "[dbgprint] <unreadable>\n");
-            }
-        } else {
-            std::fprintf(stderr, "[dbgprint] <no payload> params=%lu\n", count);
-        }
-        return -1; // EXCEPTION_CONTINUE_EXECUTION
-    }
-    diagDumpStack("VEH", code);
-    return 0; // EXCEPTION_CONTINUE_SEARCH
-}
 
-struct DiagTrapInstaller {
-    DiagTrapInstaller() noexcept {
-        signal(22, &diagSigAbrt); // SIGABRT
-        void *kernel = LoadLibraryA("kernel32.dll");
-        if (kernel != nullptr) {
-            const auto addVeh =
-                reinterpret_cast<DiagAddVehFn>(GetProcAddress(kernel, "AddVectoredExceptionHandler"));
-            if (addVeh != nullptr) {
-                addVeh(1u, reinterpret_cast<void *>(&diagVeh));
+    struct DiagTrapInstaller {
+        DiagTrapInstaller() noexcept {
+            signal(22, &diagSigAbrt); // SIGABRT
+            void *kernel = LoadLibraryA("kernel32.dll");
+            if (kernel != nullptr) {
+                const auto addVeh = reinterpret_cast<DiagAddVehFn>(
+                    GetProcAddress(kernel, "AddVectoredExceptionHandler"));
+                if (addVeh != nullptr) {
+                    addVeh(1u, reinterpret_cast<void *>(&diagVeh));
+                }
             }
         }
-    }
-};
+    };
 
-DiagTrapInstaller g_diag_trap{};
+    DiagTrapInstaller g_diag_trap{};
 } // namespace
 #endif
 
@@ -2827,7 +2868,8 @@ int main(const int argc, char *argv[]) {
     try {
         const std::error_code run_error = app.run();
         if (run_error) {
-            std::fprintf(stderr, "[fatal] app.run: %s (category=%s value=%d)\n", run_error.message().c_str(),
+            std::fprintf(
+                stderr, "[fatal] app.run: %s (category=%s value=%d)\n", run_error.message().c_str(),
                 run_error.category().name(), run_error.value());
         }
         return run_error.value();

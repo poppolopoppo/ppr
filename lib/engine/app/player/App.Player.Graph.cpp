@@ -26,16 +26,14 @@ namespace pP {
     }
 
     std::optional<PlayerId> PlayerGraph::findPlayerForDevice(const InputDeviceID &device_id) const noexcept {
-        if (const auto it = m_device_to_player.find(device_id);
-            it != m_device_to_player.end()) {
+        if (const auto it = m_device_to_player.find(device_id); it != m_device_to_player.end()) {
             return it->second;
         }
         return std::nullopt;
     }
 
     Expected<SharedPlayer> PlayerGraph::getOrCreateKeyboardPlayer(
-        const IPlayerService &, const PlayerId user_id, KeyboardDevice &keyboard, MouseDevice &mouse)
-    {
+        const IPlayerService &, const PlayerId user_id, KeyboardDevice &keyboard, MouseDevice &mouse) {
         if (const auto it = m_players.find(user_id); it != m_players.end()) [[likely]] {
             PPR_ASSERT(it->second->getIdentity().m_device_id == keyboard.getInputDeviceID());
             return SharedPlayer{it->second.get()};
@@ -61,8 +59,7 @@ namespace pP {
     }
 
     Expected<SharedPlayer> PlayerGraph::addGamepadPlayer(
-        const IPlayerService &, const PlayerId user_id, GamepadDevice &gamepad)
-    {
+        const IPlayerService &, const PlayerId user_id, GamepadDevice &gamepad) {
         if (const auto it = m_players.find(user_id); it != m_players.end()) [[likely]] {
             PPR_ASSERT(it->second->getIdentity().m_device_id == gamepad.getInputDeviceID());
             return SharedPlayer{it->second.get()};
@@ -89,7 +86,7 @@ namespace pP {
         if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {
             PPR_RETURN_ERROR_ON_FAIL(PlayerGraph, m_when_player_removed(*it->second));
 
-            for (auto dit = m_device_to_player.begin(); dit != m_device_to_player.end(); ) {
+            for (auto dit = m_device_to_player.begin(); dit != m_device_to_player.end();) {
                 if (dit->second == id) {
                     dit = m_device_to_player.erase(dit);
                 } else {
@@ -104,14 +101,12 @@ namespace pP {
     }
 
     auto PlayerGraph::whenPlayerAdded(IPlayerService::PlayerCallback::Event on_added)
-        -> IPlayerService::PlayerCallback::Handle
-    {
+        -> IPlayerService::PlayerCallback::Handle {
         return m_when_player_added.add(std::move(on_added));
     }
 
     auto PlayerGraph::whenPlayerRemoved(IPlayerService::PlayerCallback::Event on_removed)
-        -> IPlayerService::PlayerCallback::Handle
-    {
+        -> IPlayerService::PlayerCallback::Handle {
         return m_when_player_removed.add(std::move(on_removed));
     }
 

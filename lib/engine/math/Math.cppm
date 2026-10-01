@@ -15,7 +15,8 @@ namespace pP::math::details {
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr mango::math::Vector<T, DimV> roundHalfAwayFromZero(const mango::math::Vector<T, DimV> &value) noexcept {
+    [[nodiscard]] constexpr mango::math::Vector<T, DimV> roundHalfAwayFromZero(
+        const mango::math::Vector<T, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<T, DimV> {
             mango::math::Vector<T, DimV> result{};
             ((result[idx] = std::round(value[idx])), ...);
@@ -24,7 +25,8 @@ namespace pP::math::details {
     }
 
     template<typename ToT, typename FromT, u32 DimV>
-    [[nodiscard]] constexpr mango::math::Vector<ToT, DimV> vectorCast(const mango::math::Vector<FromT, DimV> &value) noexcept {
+    [[nodiscard]] constexpr mango::math::Vector<ToT, DimV> vectorCast(
+        const mango::math::Vector<FromT, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<ToT, DimV> {
             mango::math::Vector<ToT, DimV> result{};
             ((result[idx] = static_cast<ToT>(value[idx])), ...);
@@ -33,23 +35,27 @@ namespace pP::math::details {
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<i32, 4u> vectorCast<i32, float, 4u>(const mango::math::Vector<float, 4u> &value) noexcept {
-        return mango::math::truncate<mango::math::Vector<i32, 4u> >(value);
+    [[nodiscard]] constexpr mango::math::Vector<i32, 4u> vectorCast<i32, float, 4u>(
+        const mango::math::Vector<float, 4u> &value) noexcept {
+        return mango::math::truncate<mango::math::Vector<i32, 4u>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, i32, 4u>(const mango::math::Vector<i32, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<float, 4u> >(value);
+    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, i32, 4u>(
+        const mango::math::Vector<i32, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4u>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, u32, 4u>(const mango::math::Vector<u32, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<float, 4u> >(value);
+    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, u32, 4u>(
+        const mango::math::Vector<u32, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4u>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<u32, 4u> vectorCast<u32, float, 4u>(const mango::math::Vector<float, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<u32, 4u> >(value);
+    [[nodiscard]] constexpr mango::math::Vector<u32, 4u> vectorCast<u32, float, 4u>(
+        const mango::math::Vector<float, 4u> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<u32, 4u>>(value);
     }
 
     template<typename ToT, typename FromT>
@@ -199,10 +205,7 @@ export namespace pP {
             concept TArithmetic = std::is_arithmetic_v<T>;
 
             template<auto ValueGeneratorV, typename T>
-            concept TValueGenerator = requires
-            {
-                ValueGeneratorV.template operator()<T>();
-            };
+            concept TValueGenerator = requires { ValueGeneratorV.template operator()<T>(); };
 
             // Accept any callable object as a Non-Type Template Parameter
             template<auto ValueGeneratorV>
@@ -218,20 +221,21 @@ export namespace pP {
 
                 template<typename T>
                     requires TValueGenerator<ValueGeneratorV, T>
-                [[nodiscard]] constexpr bool operator ==(const T value) const noexcept {
+                [[nodiscard]] constexpr bool operator==(const T value) const noexcept {
                     return ValueGeneratorV.template operator()<T>() == value;
                 }
 
                 template<typename T>
                     requires TValueGenerator<ValueGeneratorV, T>
-                [[nodiscard]] constexpr auto operator <=>(const T value) const noexcept {
+                [[nodiscard]] constexpr auto operator<=>(const T value) const noexcept {
                     return ValueGeneratorV.template operator()<T>() <=> value;
                 }
             };
 
             template<class T>
             struct InvalidConstantType {
-                static_assert(!sizeof(T *),
+                static_assert(
+                    !sizeof(T *),
                     "A program that instantiates a primary template of a mathematical constant variable template is ill-formed. (N4950 [math.constants]/3)");
             };
 
@@ -253,8 +257,7 @@ export namespace pP {
 
             struct IdentityValue {
                 template<typename IdentityT>
-                    requires requires
-                    {
+                    requires requires {
                         { IdentityT::identity() } -> std::convertible_to<IdentityT>;
                     }
                 // ReSharper disable once CppNonExplicitConversionOperator
@@ -300,19 +303,15 @@ export namespace pP {
         using mango::math::none_of;
     }
 
-#define PPR_POLYMORPHIC_BASIC_NUMBER(_CONCEPT, _NAME, ...) \
-    template<typename ValueT = void> \
-    constexpr auto _NAME = math::details::Number<ValueT, \
-        []<_CONCEPT T>() constexpr noexcept { \
-            return __VA_ARGS__; \
-        }>::value
+#define PPR_POLYMORPHIC_BASIC_NUMBER(_CONCEPT, _NAME, ...)                                                             \
+    template<typename ValueT = void>                                                                                   \
+    constexpr auto _NAME =                                                                                             \
+        math::details::Number<ValueT, []<_CONCEPT T>() constexpr noexcept { return __VA_ARGS__; }>::value
 
-#define PPR_POLYMORPHIC_ARITHMETIC(_NAME, ...) \
+#define PPR_POLYMORPHIC_ARITHMETIC(_NAME, ...)                                                                         \
     PPR_POLYMORPHIC_BASIC_NUMBER(math::details::TArithmetic, _NAME, __VA_ARGS__)
-#define PPR_POLYMORPHIC_FLOAT(_NAME, ...) \
-    PPR_POLYMORPHIC_BASIC_NUMBER(std::floating_point, _NAME, __VA_ARGS__)
-#define PPR_POLYMORPHIC_STD_NUMBER(_NAME) \
-    PPR_POLYMORPHIC_FLOAT(_NAME, std::numbers::_NAME<T>)
+#define PPR_POLYMORPHIC_FLOAT(_NAME, ...) PPR_POLYMORPHIC_BASIC_NUMBER(std::floating_point, _NAME, __VA_ARGS__)
+#define PPR_POLYMORPHIC_STD_NUMBER(_NAME) PPR_POLYMORPHIC_FLOAT(_NAME, std::numbers::_NAME<T>)
 
     PPR_POLYMORPHIC_STD_NUMBER(e_v);
     PPR_POLYMORPHIC_STD_NUMBER(log2e_v);
@@ -336,8 +335,7 @@ export namespace pP {
     // normalize() output, 3.58e-7 measured over a 20k-direction sweep), 0 for
     // ints (== today's static_cast<int>(1e-8), so int asserts keep `> 0`).
     // Single expression: the macro wraps this in `return ...;`.
-    PPR_POLYMORPHIC_ARITHMETIC(epsilon_v,
-        std::floating_point<T> ? 10 * std::numeric_limits<T>::epsilon() : T{0});
+    PPR_POLYMORPHIC_ARITHMETIC(epsilon_v, std::floating_point<T> ? 10 * std::numeric_limits<T>::epsilon() : T{0});
     PPR_POLYMORPHIC_ARITHMETIC(infinity_v, std::numeric_limits<T>::infinity());
 
 #undef PPR_POLYMORPHIC_STD_NUMBER
@@ -408,7 +406,7 @@ export namespace pP {
     using mango::math::operator~;
 
     template<typename T>
-        requires requires(T x) { mango::math::dot(x, x); }
+        requires requires (T x) { mango::math::dot(x, x); }
     [[nodiscard]] constexpr auto dot2(const T &x) noexcept {
         return mango::math::dot(x, x);
     }
@@ -422,8 +420,7 @@ export namespace pP {
     template<std::integral ToT, std::integral FromT, u32 DimV>
     [[nodiscard]] constexpr Vector<ToT, DimV> checked_cast(const Vector<FromT, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> Vector<ToT, DimV> {
-            return Vector<ToT, DimV>(
-                checked_cast<ToT>(value[idx])...);
+            return Vector<ToT, DimV>(checked_cast<ToT>(value[idx])...);
         });
     }
 
@@ -536,17 +533,15 @@ export namespace pP {
     // check if any component isInf
     template<std::floating_point T, std::size_t DimV>
     [[nodiscard]] constexpr bool isInf(const Vector<T, DimV> &value) noexcept {
-        return pP::static_iota<std::size_t, DimV>([&](auto... idx) constexpr noexcept -> bool {
-            return (isInf(value[idx]) or ...);
-        });
+        return pP::static_iota<std::size_t, DimV>(
+            [&](auto... idx) constexpr noexcept -> bool { return (isInf(value[idx]) or ...); });
     }
 
     // check if any column isInf
     template<std::floating_point T, std::size_t WidthV, std::size_t HeightV>
     [[nodiscard]] constexpr bool isInf(const Matrix<T, WidthV, HeightV> &value) noexcept {
-        return pP::static_iota<u32, WidthV>([&](auto... idx) constexpr noexcept -> bool {
-            return (isInf(value.template column<idx>()) or ...);
-        });
+        return pP::static_iota<u32, WidthV>(
+            [&](auto... idx) constexpr noexcept -> bool { return (isInf(value.template column<idx>()) or ...); });
     }
 
     // check if nan
@@ -563,17 +558,15 @@ export namespace pP {
     // check if any component isnan
     template<std::floating_point T, std::size_t DimV>
     [[nodiscard]] constexpr bool isNan(const Vector<T, DimV> &value) noexcept {
-        return pP::static_iota<std::size_t, DimV>([&](auto... idx) constexpr noexcept -> bool {
-            return (isNan(value[idx]) or ...);
-        });
+        return pP::static_iota<std::size_t, DimV>(
+            [&](auto... idx) constexpr noexcept -> bool { return (isNan(value[idx]) or ...); });
     }
 
     // check if any column isnan
     template<std::floating_point T, std::size_t WidthV, std::size_t HeightV>
     [[nodiscard]] constexpr bool isNan(const Matrix<T, WidthV, HeightV> &value) noexcept {
-        return pP::static_iota<u32, WidthV>([&](auto... idx) constexpr noexcept -> bool {
-            return (isNan(value.template column<idx>()) or ...);
-        });
+        return pP::static_iota<u32, WidthV>(
+            [&](auto... idx) constexpr noexcept -> bool { return (isNan(value.template column<idx>()) or ...); });
     }
 
     // Single source of truth is epsilon_v above (10x eps for floats, 0 for ints).
@@ -587,7 +580,8 @@ export namespace pP {
     }
 
     template<std::floating_point T, u32 DimV>
-    [[nodiscard]] constexpr Vector<T, DimV> safeNormalize(const Vector<T, DimV> &value, const Vector<T, DimV> &fallback, const T epsilon = epsilon_v<T>) noexcept {
+    [[nodiscard]] constexpr Vector<T, DimV> safeNormalize(
+        const Vector<T, DimV> &value, const Vector<T, DimV> &fallback, const T epsilon = epsilon_v<T>) noexcept {
         const T norm_sq = dot(value, value);
         return norm_sq > epsilon ? value / std::sqrt(norm_sq) : fallback;
     }
@@ -706,7 +700,8 @@ export namespace pP {
 
 
             // m_rotate stays unit, so conjugate() is its inverse (3 negations, no divides).
-            // Non-uniform scale + rotation: inverse/composition is approximate (S,R do not commute); exact for uniform scale.
+            // Non-uniform scale + rotation: inverse/composition is approximate (S,R do not commute); exact for uniform
+            // scale.
             [[nodiscard]] Transform invert() const noexcept {
                 PPR_ASSERT(hasUniformScale() && "Transform::invert() only approximates for non-uniform scale");
 
@@ -846,8 +841,7 @@ export namespace pP {
     }
 
     template<typename T>
-        requires requires(param_lvref_t<const T> value)
-        {
+        requires requires (param_lvref_t<const T> value) {
             { isInf(value) } -> std::same_as<bool>;
             { isNan(value) } -> std::same_as<bool>;
         }
@@ -856,8 +850,7 @@ export namespace pP {
     }
 
     template<typename T>
-        requires requires(param_lvref_t<const T> value)
-        {
+        requires requires (param_lvref_t<const T> value) {
             { isInf(value) } -> std::same_as<bool>;
             { isNan(value) } -> std::same_as<bool>;
         }
@@ -868,9 +861,8 @@ export namespace pP {
     [[nodiscard]] float3 fallbackPerpendicular(const float3 &n) noexcept {
         // smallest-component axis ⇒ cross is never near-parallel
         const float3 a = abs(n);
-        const float3 axis = a.x <= a.y
-            ? (a.x <= a.z ? math::axis_x : math::axis_z)
-            : (a.y <= a.z ? math::axis_y : math::axis_z);
+        const float3 axis = a.x <= a.y ? (a.x <= a.z ? math::axis_x : math::axis_z)
+                                       : (a.y <= a.z ? math::axis_y : math::axis_z);
         return safeNormalize(cross(n, axis), math::axis_x);
     }
 

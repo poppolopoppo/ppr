@@ -22,17 +22,17 @@ namespace pP::tests::detail {
             }
         }
 
-        PPR_UNIT_TEST(child_process_without_error, UnitTest::fork) {
+        PPR_UNIT_TEST (child_process_without_error, UnitTest::fork) {
             // simple test to make sure the process is not failing when not expected to
         };
 
-        PPR_UNIT_TEST(poison_destroyed_then_read_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (poison_destroyed_then_read_triggers_asan, UnitTest::expect_crash) {
             std::byte buffer[64u]{};
             mem::poisonDestroyed(buffer, sizeof(buffer));
             details::access_after_poison(buffer);
         };
 
-        PPR_UNIT_TEST(poison_reserved_then_write_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (poison_reserved_then_write_triggers_asan, UnitTest::expect_crash) {
             std::byte buffer[64u]{};
             mem::poisonReserved(buffer, sizeof(buffer));
             details::write_after_poison(buffer);
@@ -44,41 +44,41 @@ namespace pP::tests::detail {
             mem::poisonReserved(nullptr, 0u);
         };
 
-        PPR_UNIT_TEST(gpa_poison_on_free_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (gpa_poison_on_free_triggers_asan, UnitTest::expect_crash) {
             const auto [ptr, count] = mem::GPA::allocateRaw(32u, max_align_v);
             mem::GPA::deallocateRaw(ptr, count, max_align_v);
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(os_poison_on_free_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (os_poison_on_free_triggers_asan, UnitTest::expect_crash) {
             if (const auto [ptr, count] = mem::OS::allocateRaw(4096u, std::align_val_t{4096u}); ptr) [[likely]] {
                 mem::OS::deallocateRaw(ptr, count, std::align_val_t{4096u});
                 details::access_after_poison(ptr);
             }
         };
 
-        PPR_UNIT_TEST(pooling_poison_on_free_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (pooling_poison_on_free_triggers_asan, UnitTest::expect_crash) {
             mem::Pooling<64u, mem::GPA, 256u> pool{};
             void *block = pool.allocateRaw(64u, max_align_v).ptr;
             pool.deallocateRaw(block, 64u, max_align_v);
             details::access_after_poison(block);
         };
 
-        PPR_UNIT_TEST(arena_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (arena_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
             mem::Arena<mem::GPA> arena{4096u};
             auto *const alloc = arena.allocateRaw(64u, max_align_v).ptr;
             arena.deallocateRaw(alloc, 64u, max_align_v);
             details::access_after_poison(alloc);
         };
 
-        PPR_UNIT_TEST(in_situ_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (in_situ_poison_on_dealloc_triggers_asan, UnitTest::expect_crash) {
             mem::InSitu<128u> buffer{};
             const auto [ptr, count] = buffer.allocateRaw(64u, max_align_v);
             buffer.deallocateRaw(ptr, count, max_align_v);
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stable_vector_asan_on_erase, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (stable_vector_asan_on_erase, UnitTest::expect_crash) {
             StableVector<int> sv;
             sv.pushBack(42);
             int *ptr = &sv[0];
@@ -86,7 +86,7 @@ namespace pP::tests::detail {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stable_vector_asan_multi_slice, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (stable_vector_asan_multi_slice, UnitTest::expect_crash) {
             StableVector<int> sv;
             for (std::size_t i = 0; i < 100; ++i) {
                 sv.pushBack(static_cast<int>(i));
@@ -96,7 +96,7 @@ namespace pP::tests::detail {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(stable_vector_asan_on_clear, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (stable_vector_asan_on_clear, UnitTest::expect_crash) {
             StableVector<int> sv;
             sv.pushBack(42);
             int *ptr = &sv[0];
@@ -104,7 +104,7 @@ namespace pP::tests::detail {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(hash_map_asan_on_clear, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (hash_map_asan_on_clear, UnitTest::expect_crash) {
             HashMap<int, int> hm;
             hm.insert({1, 10});
             auto it = hm.find(1);
@@ -114,7 +114,7 @@ namespace pP::tests::detail {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(sparse_vector_asan_on_erase, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (sparse_vector_asan_on_erase, UnitTest::expect_crash) {
             SparseVector<int> sv;
             const auto key = sv.add(42);
             int *ptr = &sv[key];
@@ -122,7 +122,7 @@ namespace pP::tests::detail {
             details::access_after_poison(ptr);
         };
 
-        PPR_UNIT_TEST(arena_asan_on_restore, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (arena_asan_on_restore, UnitTest::expect_crash) {
             mem::Arena<mem::GPA> arena{4096u};
             const void *mark = arena.watermark();
             auto *const alloc = static_cast<std::byte *>(arena.allocateRaw(64u, max_align_v).ptr);
@@ -131,7 +131,7 @@ namespace pP::tests::detail {
             details::access_after_poison(alloc);
         };
 
-        PPR_UNIT_TEST(arena_cross_slab_restore_triggers_asan, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (arena_cross_slab_restore_triggers_asan, UnitTest::expect_crash) {
             // Exhaust first slab to trigger pushSlab_, then restore past it
             mem::Arena<mem::GPA> arena{128u};
             const void *mark = arena.watermark();
@@ -142,7 +142,7 @@ namespace pP::tests::detail {
             details::access_after_poison(cross_slab);
         };
 
-        PPR_UNIT_TEST(pooling_pool_level_poison, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (pooling_pool_level_poison, UnitTest::expect_crash) {
             mem::Pooling<64u, mem::GPA, 128u> pool;
             std::byte *blocks[128];
             for (std::size_t i = 0u; i < 128u; ++i) {

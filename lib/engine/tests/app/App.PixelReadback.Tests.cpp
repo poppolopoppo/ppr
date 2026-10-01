@@ -24,8 +24,12 @@ namespace pP::tests::detail {
                 : Application(kRenderingDomain, name, argv) {
             }
 
-            [[nodiscard]] std::error_code boot() { return Application::initialize(); }
-            [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
+            [[nodiscard]] std::error_code boot() {
+                return Application::initialize();
+            }
+            [[nodiscard]] std::error_code teardown() {
+                return Application::shutdown();
+            }
         };
 
         struct ThrowingRunApp final : TestApp {
@@ -47,7 +51,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(domain.m_needs_rendering);
         PPR_TEST_ASSERT(domain.m_needs_user_interface);
         PPR_TEST_ASSERT(not test_app.boot());
-        PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not test_app.teardown());
+        };
         const auto rhi = test_app.getServices().get<IRhiService>();
         PPR_TEST_ASSERT(rhi.isValid());
         PPR_TEST_ASSERT(&rhi->getDevice() == &rhi->getDevice());
@@ -61,7 +67,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(not test_app.teardown());
     };
 
-    PPR_UNIT_TEST(app_run_shutdowns_after_nonstandard_hook_exception, UnitTest::expect_fail) {
+    PPR_UNIT_TEST (app_run_shutdowns_after_nonstandard_hook_exception, UnitTest::expect_fail) {
         using namespace detail;
         ThrowingRunApp test_app{"ThrowingRun", std::span<const char *const>{}};
         PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::state_not_recoverable));
@@ -82,7 +88,8 @@ namespace pP::tests {
         return app_headless_lifecycle_is_idempotent;
     }
 
-    const UnitTest app_run_shutdowns_after_nonstandard_hook_exception = detail::app_run_shutdowns_after_nonstandard_hook_exception;
+    const UnitTest app_run_shutdowns_after_nonstandard_hook_exception =
+        detail::app_run_shutdowns_after_nonstandard_hook_exception;
 
     const UnitTest &app_run_shutdowns_after_nonstandard_hook_exceptionTests() noexcept {
         return app_run_shutdowns_after_nonstandard_hook_exception;

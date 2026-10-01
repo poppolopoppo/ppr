@@ -28,8 +28,7 @@ namespace pP::tests::detail {
             Log::Policy m_previous;
 
         public:
-            ExpectedFailureLogGuard() noexcept
-                : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
+            ExpectedFailureLogGuard() noexcept : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
             }
 
             ~ExpectedFailureLogGuard() noexcept {
@@ -44,12 +43,10 @@ namespace pP::tests::detail {
         // KHR_texture_transform bake: the unanimous scene transform
         // lands in m_texcoord at convert, and the stored per-slot transforms
         // reset to identity so no later stage can double-apply them.
-        PPR_UNIT_TEST(uv_transform_bakes_into_texcoords) {
-            const Expected<mesh::SceneAsset> raw =
-                    mesh::importAndConvert(meshDir(), "textured_box.gltf");
+        PPR_UNIT_TEST (uv_transform_bakes_into_texcoords) {
+            const Expected<mesh::SceneAsset> raw = mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(raw.has_value());
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "uv_transform_box.gltf");
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "uv_transform_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
             const mesh::MaterialAsset &material = scene->m_materials.front();
@@ -89,17 +86,15 @@ namespace pP::tests::detail {
         // pack. The single-channel verts keep the authored set-0 data verbatim
         // (Mango imports TEXCOORD_0 only), so set-1 fetch stays deferred and
         // the pack agreement rule still guards mixed sets.
-        PPR_UNIT_TEST(second_texcoord_set_flows_to_pack) {
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "second_set_box.gltf");
+        PPR_UNIT_TEST (second_texcoord_set_flows_to_pack) {
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "second_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
             const mesh::MaterialAsset &material = scene->m_materials.front();
             PPR_TEST_ASSERT(material.m_base_color_map.enabled());
             PPR_TEST_ASSERT(material.m_base_color_map.m_texcoord == pP::mesh::UvSetId{1u});
 
-            const Expected<mesh::SceneAsset> box =
-                    mesh::importAndConvert(meshDir(), "textured_box.gltf");
+            const Expected<mesh::SceneAsset> box = mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(box.has_value());
             const mesh::StaticMeshAsset &box_mesh = box->m_meshes.front();
             const mesh::StaticMeshAsset &second_mesh = scene->m_meshes.front();
@@ -110,17 +105,15 @@ namespace pP::tests::detail {
             }
 
             // Pack carries the selector to the GPU struct (CPU-only, no device).
-            const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                material, {none_v, none_v, none_v, none_v});
+            const Expected<GpuMaterial> gpu = buildGpuMaterial(material, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
             PPR_TEST_ASSERT(*gpu->m_texcoord == 1u);
         };
 
         // Mixed sets with identity transforms convert cleanly: only authored
         // non-identity divergence is deferred, never silent agreement.
-        PPR_UNIT_TEST(mixed_identity_sets_convert_cleanly) {
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "mixed_set_box.gltf");
+        PPR_UNIT_TEST (mixed_identity_sets_convert_cleanly) {
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "mixed_set_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
             const mesh::MaterialAsset &material = scene->m_materials.front();
@@ -132,19 +125,17 @@ namespace pP::tests::detail {
 
         // Divergent authored transforms cannot share the single UV channel:
         // deferred with function_not_supported, never silently mis-sampled.
-        PPR_UNIT_TEST(divergent_uv_transforms_rejected) {
+        PPR_UNIT_TEST (divergent_uv_transforms_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "divergent_transform_box.gltf");
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "divergent_transform_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::function_not_supported);
         };
 
         // A transform on a non-zero set has no channel to bake into: deferred.
-        PPR_UNIT_TEST(transformed_nonzero_set_rejected) {
+        PPR_UNIT_TEST (transformed_nonzero_set_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "transformed_set_box.gltf");
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "transformed_set_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::function_not_supported);
         };
@@ -155,9 +146,8 @@ namespace pP::tests::detail {
         // resets to identity. Expectations derive from the unscaled twin's
         // converted values with a hand-rolled diagonal inverse-transpose, so
         // the convert path itself is what the test proves.
-        PPR_UNIT_TEST(scaled_node_bakes_with_inverse_transpose) {
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf");
+        PPR_UNIT_TEST (scaled_node_bakes_with_inverse_transpose) {
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_nodes.size() == 2u);
             PPR_TEST_ASSERT(scene->m_meshes.size() == 2u);
@@ -229,15 +219,16 @@ namespace pP::tests::detail {
 
                     // Shading parity with the hand-transformed twin, and proof the
                     // correction is lighting-observable (naive mul differs).
-                    const float shade_baked = baked_vert.m_normal[0] * light.x + baked_vert.m_normal[1] * light.y +
+                    const float shade_baked = baked_vert.m_normal[0] * light.x +
+                                              baked_vert.m_normal[1] * light.y +
                                               baked_vert.m_normal[2] * light.z;
                     const float shade_hand = want_nx * light.x + want_ny * light.y + want_nz * light.z;
                     PPR_TEST_ASSERT(std::abs(shade_baked - shade_hand) < 1e-5f);
-                    const float naive_len_sq =
-                            twin_nx * twin_nx * 4.0f + twin_ny * twin_ny * 0.25f + twin_nz * twin_nz;
+                    const float naive_len_sq = twin_nx * twin_nx * 4.0f + twin_ny * twin_ny * 0.25f + twin_nz * twin_nz;
                     const float naive_inv_len = 1.0f / std::sqrt(naive_len_sq);
                     const float shade_naive = twin_nx * 2.0f * naive_inv_len * light.x +
-                                              twin_ny * 0.5f * naive_inv_len * light.y + twin_nz * naive_inv_len * light.z;
+                                              twin_ny * 0.5f * naive_inv_len * light.y +
+                                              twin_nz * naive_inv_len * light.z;
                     PPR_TEST_ASSERT(std::abs(shade_baked - shade_naive) > 1e-3f);
                 }
 
@@ -290,9 +281,8 @@ namespace pP::tests::detail {
 
         // Mirrored (negative-determinant) worlds flip tangent-w so the
         // bitangent handedness survives the reflection.
-        PPR_UNIT_TEST(mirrored_node_flips_tangent_w) {
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "mirror_twin_tri.gltf");
+        PPR_UNIT_TEST (mirrored_node_flips_tangent_w) {
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "mirror_twin_tri.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_meshes.size() == 2u);
             PPR_TEST_ASSERT(scene->m_instances.size() == 2u);
@@ -343,21 +333,20 @@ namespace pP::tests::detail {
 
         // Singular worlds (collapsed basis) have no inverse-transpose: the
         // scene fails closed instead of baking NaN normals.
-        PPR_UNIT_TEST(degenerate_node_world_rejected) {
+        PPR_UNIT_TEST (degenerate_node_world_rejected) {
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<mesh::SceneAsset> scene =
-                    mesh::importAndConvert(meshDir(), "degenerate_node_box.gltf");
+            const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(meshDir(), "degenerate_node_box.gltf");
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::invalid_argument);
         };
 
         // The per-instance bake honors the production mesh cap.
-        PPR_UNIT_TEST(scaled_bake_respects_mesh_cap) {
+        PPR_UNIT_TEST (scaled_bake_respects_mesh_cap) {
             ExpectedFailureLogGuard expected_failure_log;
             mesh::MeshLimits tight = mesh::kDefaultMeshLimits;
             tight.m_max_meshes = 1u;
-            const Expected<mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "scaled_twin_tri.gltf", tight);
+            const Expected<mesh::SceneAsset> scene = pP::mesh::importAndConvert(
+                meshDir(), "scaled_twin_tri.gltf", tight);
             PPR_TEST_ASSERT(not scene.has_value());
             PPR_TEST_ASSERT(scene.error() == std::errc::invalid_argument);
         };

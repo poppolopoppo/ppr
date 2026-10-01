@@ -46,16 +46,15 @@ namespace pP::colony {
             return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
         }
 
-        [[nodiscard]] std::error_code readCenterPixel(rhi::IDevice &device, rhi::ITexture &target,
-                                                      std::array<u8, 4u> &pixel) {
+        [[nodiscard]] std::error_code readCenterPixel(
+            rhi::IDevice &device, rhi::ITexture &target, std::array<u8, 4u> &pixel) {
             shader::ComPtr<ISlangBlob> blob{};
             rhi::SubresourceLayout layout{};
-            if (const std::error_code err = make_error_code(device.readTexture(&target, 0u, 0u,
-                blob.writeRef(), &layout))) [[unlikely]] {
+            if (const std::error_code err = make_error_code(
+                    device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) [[unlikely]] {
                 return err;
             }
-            const std::size_t offset = static_cast<std::size_t>(kCenter) *
-                                       static_cast<std::size_t>(layout.rowPitch) +
+            const std::size_t offset = static_cast<std::size_t>(kCenter) * static_cast<std::size_t>(layout.rowPitch) +
                                        static_cast<std::size_t>(kCenter) * pixel.size();
             if (blob.get() == nullptr or
                 blob->getBufferPointer() == nullptr or
@@ -152,7 +151,7 @@ namespace pP::colony {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
             if (not result->m_partial) {
-                if (result->m_count == 0u or not(result->m_pts[result->m_count - 1u] == to)) {
+                if (result->m_count == 0u or not (result->m_pts[result->m_count - 1u] == to)) {
                     return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
                 }
                 sim::GlobalCellPos previous = from;
@@ -208,7 +207,7 @@ namespace pP::colony {
             if (done == nullptr or
                 done->m_partial or
                 done->m_count == 0u or
-                not(done->m_pts[done->m_count - 1u] == near)) {
+                not (done->m_pts[done->m_count - 1u] == near)) {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
             sim::GlobalCellPos previous = from;
@@ -243,13 +242,13 @@ namespace pP::colony {
             }
             const PathReq *req2 = restored.get<PathReq>(entity);
             const PathComp *comp2 = restored.get<PathComp>(entity);
-            if (req2 == nullptr or comp2 == nullptr or not(*req2 == want_req) or not(*comp2 == want_comp)) {
+            if (req2 == nullptr or comp2 == nullptr or not (*req2 == want_req) or not (*comp2 == want_comp)) {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
             Pathfinder again{};
             stepPathfinding(grid, restored, again, kExpansionsPerTick * 4u);
             const PathComp *comp3 = restored.get<PathComp>(entity);
-            if (comp3 == nullptr or not(*comp3 == want_comp)) {
+            if (comp3 == nullptr or not (*comp3 == want_comp)) {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
 
@@ -275,9 +274,7 @@ namespace pP::colony {
             // First 8x8 all-vacuum block in the central region (row-major, so
             // the rect is a pure function of the seed).
             sim::GlobalCellPos origin{sim::kWorldEdge, sim::kWorldEdge};
-            for (u32 y = sim::kWorldEdge / 4u;
-                 y < sim::kWorldEdge * 3u / 4u and origin.m_x >= sim::kWorldEdge;
-                 ++y) {
+            for (u32 y = sim::kWorldEdge / 4u; y < sim::kWorldEdge * 3u / 4u and origin.m_x >= sim::kWorldEdge; ++y) {
                 for (u32 x = sim::kWorldEdge / 4u; x < sim::kWorldEdge * 3u / 4u; ++x) {
                     bool open = true;
                     for (u32 dy = 0u; dy < 8u and open; ++dy) {
@@ -373,7 +370,7 @@ namespace pP::colony {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
             if (not detoured->m_partial) {
-                if (detoured->m_count == 0u or not(detoured->m_pts[detoured->m_count - 1u] == side_b)) {
+                if (detoured->m_count == 0u or not (detoured->m_pts[detoured->m_count - 1u] == side_b)) {
                     return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
                 }
                 sim::GlobalCellPos previous = side_a;
@@ -538,7 +535,7 @@ namespace pP::colony {
                 return out;
             };
             const auto awakeOf = [](ColonyDriver &driver) {
-                Array<std::pair<sim::Entity, bool> > out{};
+                Array<std::pair<sim::Entity, bool>> out{};
                 sim::Snapshot snap = driver.snapshotWithBodies();
                 for (const sim::BodyRecord &record: snap.m_bodies.m_records) {
                     out.push_back({record.m_entity, record.m_awake});
@@ -550,16 +547,8 @@ namespace pP::colony {
                 const u32 min_y = chunk.m_y * sim::kChunkEdge;
                 const u32 max_x = min_x + sim::kChunkEdge - 1u;
                 const u32 max_y = min_y + sim::kChunkEdge - 1u;
-                const u64 dx = x < min_x
-                                   ? static_cast<u64>(min_x - x)
-                                   : x > max_x
-                                         ? static_cast<u64>(x - max_x)
-                                         : 0u;
-                const u64 dy = y < min_y
-                                   ? static_cast<u64>(min_y - y)
-                                   : y > max_y
-                                         ? static_cast<u64>(y - max_y)
-                                         : 0u;
+                const u64 dx = x < min_x ? static_cast<u64>(min_x - x) : x > max_x ? static_cast<u64>(x - max_x) : 0u;
+                const u64 dy = y < min_y ? static_cast<u64>(min_y - y) : y > max_y ? static_cast<u64>(y - max_y) : 0u;
                 return dx * dx + dy * dy;
             };
             const auto gridsEqual = [](const sim::ChunkGrid &a, const sim::ChunkGrid &b) {
@@ -601,8 +590,8 @@ namespace pP::colony {
                 for (u32 row = 0u; row < height; ++row) {
                     for (u32 col = 0u; col < width; ++col) {
                         const float temp = base + static_cast<float>(row * width + col);
-                        if (const std::error_code error = probe.setCell({x0 + col, y0 + row},
-                            sim::Cell{kElementRock, temp})) {
+                        if (const std::error_code error = probe.setCell(
+                                {x0 + col, y0 + row}, sim::Cell{kElementRock, temp})) {
                             return error;
                         }
                     }
@@ -621,22 +610,22 @@ namespace pP::colony {
                 return fail("D1", "seed dirt");
             }
             const u32 clean_dirt = probe.dirtyChunkCount();
-            const Expected<DigResult> zero_dig = digCells(probe,
-                DigRect{.m_min = {64u, 64u}, .m_width = 0u, .m_height = 8u});
+            const Expected<DigResult> zero_dig = digCells(
+                probe, DigRect{.m_min = {64u, 64u}, .m_width = 0u, .m_height = 8u});
             const bool zero_rejected = not zero_dig;
             const bool zero_clean = probe.dirtyChunkCount() == clean_dirt;
             if (not zero_rejected or not zero_clean) {
                 return fail("D1", "zero edge");
             }
-            const Expected<DigResult> wide_dig = digCells(probe,
-                DigRect{.m_min = {64u, 64u}, .m_width = kMaxDigEdge + 1u, .m_height = 8u});
+            const Expected<DigResult> wide_dig = digCells(
+                probe, DigRect{.m_min = {64u, 64u}, .m_width = kMaxDigEdge + 1u, .m_height = 8u});
             const bool wide_rejected = not wide_dig;
             const bool wide_clean = probe.dirtyChunkCount() == clean_dirt;
             if (not wide_rejected or not wide_clean) {
                 return fail("D1", "oversized edge");
             }
-            const Expected<DigResult> oob_dig = digCells(probe,
-                DigRect{.m_min = {sim::kWorldEdge - 4u, sim::kWorldEdge - 4u}, .m_width = 8u, .m_height = 8u});
+            const Expected<DigResult> oob_dig = digCells(
+                probe, DigRect{.m_min = {sim::kWorldEdge - 4u, sim::kWorldEdge - 4u}, .m_width = 8u, .m_height = 8u});
             const bool oob_rejected = not oob_dig;
             const bool oob_clean = probe.dirtyChunkCount() == clean_dirt;
             if (not oob_rejected or not oob_clean) {
@@ -646,8 +635,7 @@ namespace pP::colony {
             if (not witness) {
                 return std::unexpected{witness.error()};
             }
-            const bool witness_intact = witness->m_element == kElementRock and
-                                        witness->m_temperature == 300.0f;
+            const bool witness_intact = witness->m_element == kElementRock and witness->m_temperature == 300.0f;
             if (not witness_intact) {
                 return fail("D1", "rejected dirtied grid");
             }
@@ -656,8 +644,8 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             probe.clearAllDirty();
-            const Expected<DigResult> single_dig = digCells(probe,
-                DigRect{.m_min = {200u, 200u}, .m_width = 1u, .m_height = 1u});
+            const Expected<DigResult> single_dig = digCells(
+                probe, DigRect{.m_min = {200u, 200u}, .m_width = 1u, .m_height = 1u});
             if (not single_dig) {
                 return std::unexpected{single_dig.error()};
             }
@@ -671,8 +659,7 @@ namespace pP::colony {
             if (not single_cell) {
                 return std::unexpected{single_cell.error()};
             }
-            const bool single_kept = single_cell->m_element == kElementVacuum and
-                                     single_cell->m_temperature == 310.0f;
+            const bool single_kept = single_cell->m_element == kElementVacuum and single_cell->m_temperature == 310.0f;
             if (not single_kept) {
                 return fail("D1", "single temp");
             }
@@ -681,8 +668,8 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             probe.clearAllDirty();
-            const Expected<DigResult> full_dig = digCells(probe,
-                DigRect{.m_min = {256u, 256u}, .m_width = 32u, .m_height = 32u});
+            const Expected<DigResult> full_dig = digCells(
+                probe, DigRect{.m_min = {256u, 256u}, .m_width = 32u, .m_height = 32u});
             if (not full_dig) {
                 return std::unexpected{full_dig.error()};
             }
@@ -696,7 +683,8 @@ namespace pP::colony {
             for (u32 row = 0u; row < 32u and full_kept; ++row) {
                 for (u32 col = 0u; col < 32u; ++col) {
                     const auto cell = probe.getCell({256u + col, 256u + row});
-                    if (not cell or cell->m_element != kElementVacuum or
+                    if (not cell or
+                        cell->m_element != kElementVacuum or
                         cell->m_temperature != rockTemp(200.0f, row * 32u + col)) {
                         full_kept = false;
                         break;
@@ -715,21 +703,20 @@ namespace pP::colony {
                     const bool vacuum_seed = (row + col) % 2u == 0u;
                     if (vacuum_seed) {
                         const float temp = rockTemp(280.0f, row * 4u + col);
-                        if (const std::error_code error = probe.setCell({500u + col, 500u + row},
-                            sim::Cell{kElementVacuum, temp})) {
+                        if (const std::error_code error = probe.setCell(
+                                {500u + col, 500u + row}, sim::Cell{kElementVacuum, temp})) {
                             return std::unexpected{error};
                         }
                     }
                 }
             }
             probe.clearAllDirty();
-            const Expected<DigResult> mixed_dig = digCells(probe,
-                DigRect{.m_min = {500u, 500u}, .m_width = 4u, .m_height = 4u});
+            const Expected<DigResult> mixed_dig = digCells(
+                probe, DigRect{.m_min = {500u, 500u}, .m_width = 4u, .m_height = 4u});
             if (not mixed_dig) {
                 return std::unexpected{mixed_dig.error()};
             }
-            const bool mixed_count = mixed_dig->m_dug == 8u and
-                                     mixed_dig->m_touched.size() == 1u;
+            const bool mixed_count = mixed_dig->m_dug == 8u and mixed_dig->m_touched.size() == 1u;
             if (not mixed_count) {
                 return fail("D1", "mixed count");
             }
@@ -737,7 +724,8 @@ namespace pP::colony {
             for (u32 row = 0u; row < 4u and mixed_kept; ++row) {
                 for (u32 col = 0u; col < 4u; ++col) {
                     const auto cell = probe.getCell({500u + col, 500u + row});
-                    if (not cell or cell->m_element != kElementVacuum or
+                    if (not cell or
+                        cell->m_element != kElementVacuum or
                         cell->m_temperature != rockTemp(280.0f, row * 4u + col)) {
                         mixed_kept = false;
                         break;
@@ -749,8 +737,8 @@ namespace pP::colony {
             }
 
             const u32 mixed_dirt = probe.dirtyChunkCount();
-            const Expected<DigResult> repeat_dig = digCells(probe,
-                DigRect{.m_min = {500u, 500u}, .m_width = 4u, .m_height = 4u});
+            const Expected<DigResult> repeat_dig = digCells(
+                probe, DigRect{.m_min = {500u, 500u}, .m_width = 4u, .m_height = 4u});
             if (not repeat_dig) {
                 return std::unexpected{repeat_dig.error()};
             }
@@ -765,8 +753,8 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             probe.clearAllDirty();
-            const Expected<DigResult> cross_probe = digCells(probe,
-                DigRect{.m_min = {124u, 64u}, .m_width = 8u, .m_height = 8u});
+            const Expected<DigResult> cross_probe = digCells(
+                probe, DigRect{.m_min = {124u, 64u}, .m_width = 8u, .m_height = 8u});
             if (not cross_probe) {
                 return std::unexpected{cross_probe.error()};
             }
@@ -795,8 +783,7 @@ namespace pP::colony {
             if (not wide_error) {
                 return fail("D1", "oversized accepted");
             }
-            const std::error_code oob_error = driver.requestDig(
-                {sim::kWorldEdge - 4u, sim::kWorldEdge - 4u}, 8u, 8u);
+            const std::error_code oob_error = driver.requestDig({sim::kWorldEdge - 4u, sim::kWorldEdge - 4u}, 8u, 8u);
             if (not oob_error) {
                 return fail("D1", "oob accepted");
             }
@@ -804,7 +791,7 @@ namespace pP::colony {
                 return fail("D1", "invalid changed state");
             }
             const auto spot2 = driver.grid().getCell({2048u, 2048u});
-            if (not spot2 or not(*spot2 == *spot)) {
+            if (not spot2 or not (*spot2 == *spot)) {
                 return fail("D1", "invalid dirtied grid");
             }
 
@@ -812,12 +799,9 @@ namespace pP::colony {
             // (row-major, so the rect is a pure function of the seed; same
             // loop shape as the all-vacuum scan in checkBuildings).
             sim::GlobalCellPos origin{sim::kWorldEdge, sim::kWorldEdge};
-            for (u32 y = sim::kWorldEdge / 4u;
-                 y < sim::kWorldEdge * 3u / 4u and origin.m_x >= sim::kWorldEdge;
-                 ++y) {
+            for (u32 y = sim::kWorldEdge / 4u; y < sim::kWorldEdge * 3u / 4u and origin.m_x >= sim::kWorldEdge; ++y) {
                 for (u32 x = sim::kWorldEdge / 4u; x < sim::kWorldEdge * 3u / 4u; ++x) {
-                    if (sim::chunkOf(sim::GlobalCellPos{x, y}) !=
-                        sim::chunkOf(sim::GlobalCellPos{x + 7u, y + 7u})) {
+                    if (sim::chunkOf(sim::GlobalCellPos{x, y}) != sim::chunkOf(sim::GlobalCellPos{x + 7u, y + 7u})) {
                         continue;
                     }
                     bool solid = true;
@@ -867,14 +851,12 @@ namespace pP::colony {
                     if (not cell) {
                         return std::unexpected{cell.error()};
                     }
-                    if (cell->m_element != kElementVacuum or
-                        cell->m_temperature != temps[dy * 8u + dx]) {
+                    if (cell->m_element != kElementVacuum or cell->m_temperature != temps[dy * 8u + dx]) {
                         return fail("D1", "cell or temperature mismatch");
                     }
                 }
             }
-            if (driver.lastEditChunks().size() != 1u or
-                not(driver.lastEditChunks()[0u] == sim::chunkOf(origin))) {
+            if (driver.lastEditChunks().size() != 1u or not (driver.lastEditChunks()[0u] == sim::chunkOf(origin))) {
                 return fail("D1", "touched dedupe");
             }
 
@@ -896,12 +878,8 @@ namespace pP::colony {
             // boundary, then an 8x8 dig across it. Touched chunks are exactly
             // the pair, deduped, in row-major encounter order.
             std::println(stderr, "SMOKE-DIG-STAGE D1X");
-            const auto wall1 = driver.buildWall(Footprint{
-                .m_min = {2032u, 2000u},
-                .m_width = 32u,
-                .m_height = 16u,
-                .m_element = kElementRock
-            });
+            const auto wall1 = driver.buildWall(
+                Footprint{.m_min = {2032u, 2000u}, .m_width = 32u, .m_height = 16u, .m_element = kElementRock});
             if (not wall1) {
                 return std::unexpected{wall1.error()};
             }
@@ -935,7 +913,7 @@ namespace pP::colony {
             const sim::ChunkPos want_a{15u, 15u};
             const sim::ChunkPos want_b{16u, 15u};
             const std::span<const sim::ChunkPos> touched = driver.lastEditChunks();
-            if (touched.size() != 2u or not(touched[0u] == want_a) or not(touched[1u] == want_b)) {
+            if (touched.size() != 2u or not (touched[0u] == want_a) or not (touched[1u] == want_b)) {
                 return fail("D1X", "cross-chunk touched");
             }
 
@@ -976,12 +954,12 @@ namespace pP::colony {
                 return fail("D2", "footprint not cleared");
             }
             const u64 dug_cleared = driver.digTotal();
-            const auto wall2 = driver.buildWall(Footprint{
-                .m_min = {build_rect.m_x, build_rect.m_y},
-                .m_width = 16u,
-                .m_height = 8u,
-                .m_element = kElementRock
-            });
+            const auto wall2 = driver.buildWall(
+                Footprint{
+                    .m_min = {build_rect.m_x, build_rect.m_y},
+                    .m_width = 16u,
+                    .m_height = 8u,
+                    .m_element = kElementRock});
             if (not wall2) {
                 return std::unexpected{wall2.error()};
             }
@@ -1015,8 +993,7 @@ namespace pP::colony {
             }
             u32 awake_or_moving = 0u;
             for (const sim::BodyRecord &record: bodies_before.m_bodies.m_records) {
-                const bool moving = record.m_state.m_velocity_x != 0.0f or
-                                    record.m_state.m_velocity_y != 0.0f;
+                const bool moving = record.m_state.m_velocity_x != 0.0f or record.m_state.m_velocity_y != 0.0f;
                 if (record.m_awake or moving) {
                     ++awake_or_moving;
                 }
@@ -1055,13 +1032,11 @@ namespace pP::colony {
             const Array<Plan> plans_after = plansOf(registry);
             const Array<PathReq> reqs_after = reqsOf(registry);
             const Array<PathComp> comps_after = compsOf(registry);
-            const bool errand_frozen = frozen != nullptr and
-                                       frozen->m_progress == progress_before;
+            const bool errand_frozen = frozen != nullptr and frozen->m_progress == progress_before;
             if (not errand_frozen) {
                 return fail("D2", "build progress moved");
             }
-            const bool clock_frozen = driver.tickCount() == ticks_before and
-                                      driver.simMs() == ms_before;
+            const bool clock_frozen = driver.tickCount() == ticks_before and driver.simMs() == ms_before;
             if (not clock_frozen) {
                 return fail("D2", "clock moved");
             }
@@ -1072,9 +1047,9 @@ namespace pP::colony {
             if (not members_frozen) {
                 return fail("D2", "entity membership moved");
             }
-            const bool bodies_frozen = bodies_after.m_bodies.m_replay_ticks ==
-                                       bodies_before.m_bodies.m_replay_ticks and
-                                       std::ranges::equal(bodies_after.m_bodies.m_records, bodies_before.m_bodies.m_records);
+            const bool bodies_frozen = bodies_after.m_bodies.m_replay_ticks == bodies_before.m_bodies.m_replay_ticks and
+                                       std::ranges::equal(
+                                           bodies_after.m_bodies.m_records, bodies_before.m_bodies.m_records);
             if (not bodies_frozen) {
                 return fail("D2", "body states moved");
             }
@@ -1180,14 +1155,12 @@ namespace pP::colony {
             // a one-cell moat to the rect edge and a two-cell gap across the
             // corner, so each island is its own collider loop.
             const sim::GlobalCellPos island_min[4u] = {
-                {corner_x - 3u, corner_y - 3u}, {corner_x + 1u, corner_y - 3u},
-                {corner_x - 3u, corner_y + 1u}, {corner_x + 1u, corner_y + 1u}
-            };
+                {corner_x - 3u, corner_y - 3u}, {corner_x + 1u, corner_y - 3u}, {corner_x - 3u, corner_y + 1u},
+                {corner_x + 1u, corner_y + 1u}};
             Array<sim::Entity> island_errands{};
             for (u32 island = 0u; island < 4u; ++island) {
-                const auto made = driver.buildWall(Footprint{
-                    .m_min = island_min[island], .m_width = 2u, .m_height = 2u, .m_element = kElementRock
-                });
+                const auto made = driver.buildWall(
+                    Footprint{.m_min = island_min[island], .m_width = 2u, .m_height = 2u, .m_element = kElementRock});
                 if (not made) {
                     return std::unexpected{made.error()};
                 }
@@ -1217,8 +1190,8 @@ namespace pP::colony {
             for (u32 island = 0u; island < 4u; ++island) {
                 for (u32 dy = 0u; dy < 2u; ++dy) {
                     for (u32 dx = 0u; dx < 2u; ++dx) {
-                        const auto cell =
-                                driver.grid().getCell({island_min[island].m_x + dx, island_min[island].m_y + dy});
+                        const auto cell = driver.grid().getCell(
+                            {island_min[island].m_x + dx, island_min[island].m_y + dy});
                         if (not cell) {
                             return std::unexpected{cell.error()};
                         }
@@ -1302,15 +1275,18 @@ namespace pP::colony {
                 return fail("D3", "island dig count");
             }
             const std::span<const sim::ChunkPos> dug_chunks = driver.lastEditChunks();
-            if (dug_chunks.size() != 4u or not(dug_chunks[0u] == want_tl) or not(dug_chunks[1u] == want_tr) or
-                not(dug_chunks[2u] == want_bl) or not(dug_chunks[3u] == want_br)) {
+            if (dug_chunks.size() != 4u or
+                not (dug_chunks[0u] == want_tl) or
+                not (dug_chunks[1u] == want_tr) or
+                not (dug_chunks[2u] == want_bl) or
+                not (dug_chunks[3u] == want_br)) {
                 return fail("D3", "touched order");
             }
             for (u32 island = 0u; island < 4u; ++island) {
                 for (u32 dy = 0u; dy < 2u; ++dy) {
                     for (u32 dx = 0u; dx < 2u; ++dx) {
-                        const auto cell =
-                                driver.grid().getCell({island_min[island].m_x + dx, island_min[island].m_y + dy});
+                        const auto cell = driver.grid().getCell(
+                            {island_min[island].m_x + dx, island_min[island].m_y + dy});
                         if (not cell or cell->m_element != kElementVacuum) {
                             return fail("D3", "island not vacuum");
                         }
@@ -1352,7 +1328,8 @@ namespace pP::colony {
                     return fail("D3", "geometry moved paused");
                 }
             }
-            std::println(stderr, "SMOKE-DIG-STAGE D3 paused-frames=2 uploads={} touched=4 clock-frozen poses={}",
+            std::println(
+                stderr, "SMOKE-DIG-STAGE D3 paused-frames=2 uploads={} touched=4 clock-frozen poses={}",
                 uploads1 - uploads0, poses_before.size());
 
             // Resume exactly one tick: the retained collider dirt reaches the
@@ -1400,8 +1377,9 @@ namespace pP::colony {
                     }
                 }
             }
-            std::println(stderr, "SMOKE-DIG-STAGE D3 first-remaining={} drain-ticks={} corner={},{} dig={},{}",
-                remaining_first, drain_ticks, corner_x, corner_y, dig_x, dig_y);
+            std::println(
+                stderr, "SMOKE-DIG-STAGE D3 first-remaining={} drain-ticks={} corner={},{} dig={},{}", remaining_first,
+                drain_ticks, corner_x, corner_y, dig_x, dig_y);
             driver.setPaused(true);
             // D4: sleeping inside/outside witnesses via fixture BodyDefinitions
             // + restoreBodies. Scene-wide sleep is disabled in the driver, so
@@ -1471,9 +1449,8 @@ namespace pP::colony {
             if (const std::error_code error = driver.presentEdits(translator)) {
                 return std::unexpected{error};
             }
-            const auto site_wall = driver.buildWall(Footprint{
-                .m_min = site, .m_width = 4u, .m_height = 4u, .m_element = kElementRock
-            });
+            const auto site_wall = driver.buildWall(
+                Footprint{.m_min = site, .m_width = 4u, .m_height = 4u, .m_element = kElementRock});
             if (not site_wall) {
                 return std::unexpected{site_wall.error()};
             }
@@ -1512,11 +1489,13 @@ namespace pP::colony {
             inside_pose = *inside_now;
             outside_pose = *outside_now;
             const sim::ChunkPos site_chunk = sim::chunkOf(site);
-            if (not(site_chunk == sim::chunkOf({static_cast<u32>(inside_pose.m_x), static_cast<u32>(inside_pose.m_y)}))) {
+            if (not (
+                    site_chunk ==
+                    sim::chunkOf({static_cast<u32>(inside_pose.m_x), static_cast<u32>(inside_pose.m_y)}))) {
                 return fail("D4", "site chunk");
             }
-            const u64 outside_best =
-                    chunkDist2(static_cast<u32>(outside_pose.m_x), static_cast<u32>(outside_pose.m_y), site_chunk);
+            const u64 outside_best = chunkDist2(
+                static_cast<u32>(outside_pose.m_x), static_cast<u32>(outside_pose.m_y), site_chunk);
             if (outside_best <= kWakeRadius2) {
                 return fail("D4", "radius degenerate");
             }
@@ -1535,7 +1514,7 @@ namespace pP::colony {
                 if (const std::error_code error = driver.restoreBodies()) {
                     return std::unexpected{error};
                 }
-                const Array<std::pair<sim::Entity, bool> > calm = awakeOf(driver);
+                const Array<std::pair<sim::Entity, bool>> calm = awakeOf(driver);
                 const bool *inside_calm = nullptr;
                 const bool *outside_calm = nullptr;
                 for (const auto &row: calm) {
@@ -1573,7 +1552,7 @@ namespace pP::colony {
             if (driver.digTotal() != wake_dug_before + 16u) {
                 return fail("D4", "wake dig count");
             }
-            if (driver.lastEditChunks().size() != 1u or not(driver.lastEditChunks()[0u] == site_chunk)) {
+            if (driver.lastEditChunks().size() != 1u or not (driver.lastEditChunks()[0u] == site_chunk)) {
                 return fail("D4", "wake touched");
             }
             const bool *inside_awake = nullptr;
@@ -1589,7 +1568,7 @@ namespace pP::colony {
             if (inside_awake == nullptr or outside_awake == nullptr) {
                 return fail("D4", "wake record");
             }
-            if (not*inside_awake or *outside_awake) {
+            if (not *inside_awake or *outside_awake) {
                 return fail("D4", "wake flags");
             }
             if (driver.tickCount() != wake_ticks_before or driver.simMs() != wake_ms_before) {
@@ -1616,9 +1595,7 @@ namespace pP::colony {
                 return fail("D4", "sleep witness blocker");
             }
             sim::GlobalCellPos vacuum{sim::kWorldEdge, sim::kWorldEdge};
-            for (u32 y = sim::kWorldEdge / 4u;
-                 y < sim::kWorldEdge * 3u / 4u and vacuum.m_x >= sim::kWorldEdge;
-                 ++y) {
+            for (u32 y = sim::kWorldEdge / 4u; y < sim::kWorldEdge * 3u / 4u and vacuum.m_x >= sim::kWorldEdge; ++y) {
                 for (u32 x = sim::kWorldEdge / 4u; x < sim::kWorldEdge * 3u / 4u; ++x) {
                     bool open = true;
                     for (u32 dy = 0u; dy < 8u and open; ++dy) {
@@ -1658,7 +1635,7 @@ namespace pP::colony {
                 return fail("D4", "noop touched");
             }
             for (u32 slot = 0u; slot < noop_touched_before.size(); ++slot) {
-                if (not(driver.lastEditChunks()[slot] == noop_touched_before[slot])) {
+                if (not (driver.lastEditChunks()[slot] == noop_touched_before[slot])) {
                     return fail("D4", "noop touched");
                 }
             }
@@ -1717,7 +1694,7 @@ namespace pP::colony {
             if (not loaded) {
                 return std::unexpected{loaded.error()};
             }
-            if (loaded->m_version != 3u or not(*loaded == snap)) {
+            if (loaded->m_version != 3u or not (*loaded == snap)) {
                 return fail("D6", "round trip");
             }
 
@@ -1866,7 +1843,7 @@ namespace pP::colony {
                 for (u32 dx = 0u; dx < 4u; ++dx) {
                     const auto left = still_rock.grid().getCell({pending_rect.m_x + dx, pending_rect.m_y + dy});
                     const auto right = cleared.grid().getCell({pending_rect.m_x + dx, pending_rect.m_y + dy});
-                    if (not left or not right or not(*left == *right)) {
+                    if (not left or not right or not (*left == *right)) {
                         return fail("D6", "matched next-tick match");
                     }
                     if (left->m_element != kElementVacuum) {
@@ -1886,7 +1863,7 @@ namespace pP::colony {
                 return std::unexpected{bytes_post.error()};
             }
             const auto loaded_post = sim::load(std::span<const u8>{bytes_post->data(), bytes_post->size()});
-            if (not loaded_post or not(*loaded_post == snap_post)) {
+            if (not loaded_post or not (*loaded_post == snap_post)) {
                 return fail("D6", "post-tick round trip");
             }
             sim::ChunkGrid fresh_post{};
@@ -1897,7 +1874,7 @@ namespace pP::colony {
                 for (u32 dx = 0u; dx < 4u; ++dx) {
                     const auto live = still_rock.grid().getCell({pending_rect.m_x + dx, pending_rect.m_y + dy});
                     const auto replay = fresh_post.getCell({pending_rect.m_x + dx, pending_rect.m_y + dy});
-                    if (not live or not replay or not(*live == *replay)) {
+                    if (not live or not replay or not (*live == *replay)) {
                         return fail("D6", "post-tick match");
                     }
                     if (live->m_element != kElementVacuum) {
@@ -1935,9 +1912,7 @@ namespace pP::colony {
             twin_b.setPaused(true);
             const auto run_schedule = [](ColonyDriver &twin) -> std::error_code {
                 sim::GlobalCellPos site{sim::kWorldEdge, sim::kWorldEdge};
-                for (u32 y = sim::kWorldEdge / 4u;
-                     y < sim::kWorldEdge * 3u / 4u and site.m_x >= sim::kWorldEdge;
-                     ++y) {
+                for (u32 y = sim::kWorldEdge / 4u; y < sim::kWorldEdge * 3u / 4u and site.m_x >= sim::kWorldEdge; ++y) {
                     for (u32 x = sim::kWorldEdge / 4u; x < sim::kWorldEdge * 3u / 4u; ++x) {
                         if (sim::chunkOf(sim::GlobalCellPos{x, y}) !=
                             sim::chunkOf(sim::GlobalCellPos{x + 7u, y + 7u})) {
@@ -2003,13 +1978,12 @@ namespace pP::colony {
                 for (const sim::BodyRecord &record: snap.m_bodies.m_records) {
                     out.push_back(record);
                 }
-                std::ranges::sort(out, {}, [](const sim::BodyRecord &record) -> sim::Entity {
-                    return record.m_entity;
-                });
+                std::ranges::sort(
+                    out, {}, [](const sim::BodyRecord &record) -> sim::Entity { return record.m_entity; });
                 return out;
             };
             const auto agentsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, Agent> > out{};
+                Array<std::pair<sim::Entity, Agent>> out{};
                 for (const auto &[entity, agent]: registry.view<Agent>()) {
                     out.push_back({entity, agent});
                 }
@@ -2017,7 +1991,7 @@ namespace pP::colony {
                 return out;
             };
             const auto needsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, Needs> > out{};
+                Array<std::pair<sim::Entity, Needs>> out{};
                 for (const auto &[entity, agent]: registry.view<Agent>()) {
                     (void) agent;
                     const Needs *needs = registry.get<Needs>(entity);
@@ -2029,7 +2003,7 @@ namespace pP::colony {
                 return out;
             };
             const auto plansKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, Plan> > out{};
+                Array<std::pair<sim::Entity, Plan>> out{};
                 for (const auto &[entity, agent]: registry.view<Agent>()) {
                     (void) agent;
                     const Plan *plan = registry.get<Plan>(entity);
@@ -2041,7 +2015,7 @@ namespace pP::colony {
                 return out;
             };
             const auto reqsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, PathReq> > out{};
+                Array<std::pair<sim::Entity, PathReq>> out{};
                 for (const auto &[entity, req]: registry.view<PathReq>()) {
                     out.push_back({entity, req});
                 }
@@ -2049,7 +2023,7 @@ namespace pP::colony {
                 return out;
             };
             const auto compsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, PathComp> > out{};
+                Array<std::pair<sim::Entity, PathComp>> out{};
                 for (const auto &[entity, comp]: registry.view<PathComp>()) {
                     out.push_back({entity, comp});
                 }
@@ -2057,7 +2031,7 @@ namespace pP::colony {
                 return out;
             };
             const auto errandsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, BuildErrand> > out{};
+                Array<std::pair<sim::Entity, BuildErrand>> out{};
                 for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
                     out.push_back({entity, errand});
                 }
@@ -2065,7 +2039,7 @@ namespace pP::colony {
                 return out;
             };
             const auto printsKeyed = [&](sim::Registry &registry) {
-                Array<std::pair<sim::Entity, Footprint> > out{};
+                Array<std::pair<sim::Entity, Footprint>> out{};
                 for (const auto &[entity, print]: registry.view<Footprint>()) {
                     out.push_back({entity, print});
                 }
@@ -2088,7 +2062,7 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < bodies_left.size(); ++row) {
-                    if (not(bodies_left[row].m_entity == bodies_right[row].m_entity)) {
+                    if (not (bodies_left[row].m_entity == bodies_right[row].m_entity)) {
                         return fail("D7", stage);
                     }
                     if (bodies_left[row].m_awake != bodies_right[row].m_awake) {
@@ -2104,8 +2078,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < agents_left.size(); ++row) {
-                    if (not(agents_left[row].first == agents_right[row].first) or
-                        not(agents_left[row].second == agents_right[row].second)) {
+                    if (not (agents_left[row].first == agents_right[row].first) or
+                        not (agents_left[row].second == agents_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2115,8 +2089,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < needs_left.size(); ++row) {
-                    if (not(needs_left[row].first == needs_right[row].first) or
-                        not(needs_left[row].second == needs_right[row].second)) {
+                    if (not (needs_left[row].first == needs_right[row].first) or
+                        not (needs_left[row].second == needs_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2126,8 +2100,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < plans_left.size(); ++row) {
-                    if (not(plans_left[row].first == plans_right[row].first) or
-                        not(plans_left[row].second == plans_right[row].second)) {
+                    if (not (plans_left[row].first == plans_right[row].first) or
+                        not (plans_left[row].second == plans_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2137,8 +2111,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < reqs_left.size(); ++row) {
-                    if (not(reqs_left[row].first == reqs_right[row].first) or
-                        not(reqs_left[row].second == reqs_right[row].second)) {
+                    if (not (reqs_left[row].first == reqs_right[row].first) or
+                        not (reqs_left[row].second == reqs_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2148,8 +2122,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < comps_left.size(); ++row) {
-                    if (not(comps_left[row].first == comps_right[row].first) or
-                        not(comps_left[row].second == comps_right[row].second)) {
+                    if (not (comps_left[row].first == comps_right[row].first) or
+                        not (comps_left[row].second == comps_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2159,8 +2133,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < errands_left.size(); ++row) {
-                    if (not(errands_left[row].first == errands_right[row].first) or
-                        not(errands_left[row].second == errands_right[row].second)) {
+                    if (not (errands_left[row].first == errands_right[row].first) or
+                        not (errands_left[row].second == errands_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2170,8 +2144,8 @@ namespace pP::colony {
                     return fail("D7", stage);
                 }
                 for (u32 row = 0u; row < prints_left.size(); ++row) {
-                    if (not(prints_left[row].first == prints_right[row].first) or
-                        not(prints_left[row].second == prints_right[row].second)) {
+                    if (not (prints_left[row].first == prints_right[row].first) or
+                        not (prints_left[row].second == prints_right[row].second)) {
                         return fail("D7", stage);
                     }
                 }
@@ -2200,7 +2174,7 @@ namespace pP::colony {
                 return fail("D7", "twin touched");
             }
             for (u32 i = 0u; i < twin_a.lastEditChunks().size(); ++i) {
-                if (not(twin_a.lastEditChunks()[i] == twin_b.lastEditChunks()[i])) {
+                if (not (twin_a.lastEditChunks()[i] == twin_b.lastEditChunks()[i])) {
                     return fail("D7", "twin touched");
                 }
             }
@@ -2286,7 +2260,8 @@ namespace pP::colony {
                     return std::unexpected{replay_pair.error()};
                 }
             }
-            std::println(stderr, "SMOKE-DIG-STAGE D7 restored pair equal immediate+10 ticks agents={}",
+            std::println(
+                stderr, "SMOKE-DIG-STAGE D7 restored pair equal immediate+10 ticks agents={}",
                 membersKeyed(third).size());
 
             // Scoped teardown: every initialized driver shuts down even when an
@@ -2325,19 +2300,29 @@ namespace pP::colony {
         class ColonySmokeApp final : public Application {
         public:
             explicit ColonySmokeApp(const std::span<const char *const> argv)
-                : Application(ApplicationDomain{
-                    .m_is_headless = true,
-                    .m_is_interactive = false,
-                    .m_needs_presence = false,
-                    .m_needs_rendering = true,
-                    .m_needs_user_interface = false,
-                }, "colony-smoke", argv) {
+                : Application(
+                      ApplicationDomain{
+                          .m_is_headless = true,
+                          .m_is_interactive = false,
+                          .m_needs_presence = false,
+                          .m_needs_rendering = true,
+                          .m_needs_user_interface = false,
+                      },
+                      "colony-smoke", argv) {
             }
 
-            [[nodiscard]] u32 visibleTiles() const noexcept { return m_visible_tiles; }
-            [[nodiscard]] const std::array<u8, 4u> &pixel() const noexcept { return m_pixel; }
-            [[nodiscard]] bool verified() const noexcept { return m_verified; }
-            [[nodiscard]] std::error_code shutdownError() const noexcept { return m_shutdown_error; }
+            [[nodiscard]] u32 visibleTiles() const noexcept {
+                return m_visible_tiles;
+            }
+            [[nodiscard]] const std::array<u8, 4u> &pixel() const noexcept {
+                return m_pixel;
+            }
+            [[nodiscard]] bool verified() const noexcept {
+                return m_verified;
+            }
+            [[nodiscard]] std::error_code shutdownError() const noexcept {
+                return m_shutdown_error;
+            }
 
         protected:
             [[nodiscard]] std::error_code initialize() override {
@@ -2354,8 +2339,8 @@ namespace pP::colony {
                 }
 
                 m_pass_started = true;
-                if (const std::error_code error = m_pass.initialize(*rhi_service, *shader_service,
-                    getContentDir().path())) [[unlikely]] {
+                if (const std::error_code error = m_pass.initialize(
+                        *rhi_service, *shader_service, getContentDir().path())) [[unlikely]] {
                     return error;
                 }
 
@@ -2382,8 +2367,8 @@ namespace pP::colony {
                     -0.5f,
                 };
                 Camera camera{ECameraProjection::orthographic};
-                camera.updateModel(TimeSpan{}, model,
-                    Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
                 m_camera_view = camera.getSnapshot();
                 return {};
             }
@@ -2418,25 +2403,20 @@ namespace pP::colony {
                 const i32 bottom = static_cast<i32>(chunk.m_y * sim::kChunkEdge);
                 const GridTileSubmission sample{
                     .m_chunk_id = sim::chunkIndexOf(chunk),
-                    .m_tile_range = {
-                        left, bottom, left + static_cast<i32>(sim::kChunkEdge),
-                        bottom + static_cast<i32>(sim::kChunkEdge)
-                    },
+                    .m_tile_range =
+                        {left, bottom, left + static_cast<i32>(sim::kChunkEdge),
+                            bottom + static_cast<i32>(sim::kChunkEdge)},
                 };
-                const auto plan = GridPass::planTiles(m_camera_view,
-                    std::span<const GridTileSubmission>{&sample, 1u});
+                const auto plan = GridPass::planTiles(m_camera_view, std::span<const GridTileSubmission>{&sample, 1u});
                 if (not plan) [[unlikely]] {
                     return plan.error();
                 }
                 m_visible_tiles = static_cast<u32>(plan->m_tiles.size());
-                if (m_visible_tiles == 0u or m_pass.stagedTileCount() == 0u)
-                [[unlikely]] {
+                if (m_visible_tiles == 0u or m_pass.stagedTileCount() == 0u) [[unlikely]] {
                     return std::make_error_code(std::errc::operation_not_supported);
                 }
 
-                const auto wait_for_gpu_idle = [&renderer]() -> std::error_code {
-                    return renderer.waitOnHost();
-                };
+                const auto wait_for_gpu_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
                 if (const std::error_code error = m_pass.prepareCellUploads(device, wait_for_gpu_idle)) [[unlikely]] {
                     return error;
                 }
@@ -2451,12 +2431,12 @@ namespace pP::colony {
                 desc.usage = rhi::TextureUsage::RenderTarget;
                 desc.defaultState = rhi::ResourceState::RenderTarget;
                 desc.label = "colony smoke";
-                if (const std::error_code error = make_error_code(device.createTexture(desc, nullptr,
-                    m_target.writeRef()))) [[unlikely]] {
+                if (const std::error_code error = make_error_code(
+                        device.createTexture(desc, nullptr, m_target.writeRef()))) [[unlikely]] {
                     return error;
                 }
-                if (const std::error_code error = renderer.renderToTexture(*m_target,
-                    {DrawSubmission{m_pass}}, ColorAttachmentOps{})) [[unlikely]] {
+                if (const std::error_code error = renderer.renderToTexture(
+                        *m_target, {DrawSubmission{m_pass}}, ColorAttachmentOps{})) [[unlikely]] {
                     return error;
                 }
                 if (const std::error_code error = renderer.waitOnHost()) [[unlikely]] {
@@ -2470,8 +2450,7 @@ namespace pP::colony {
                 // This rejects the clear (0.1,0.1,0.2), transparent vacuum,
                 // and flat-tile fallback without treating a successful submit
                 // as a successful rasterization.
-                if (m_pixel[0u] < 160u or m_pixel[1u] > 85u or m_pixel[2u] > 85u or m_pixel[3u] < 240u)
-                [[unlikely]] {
+                if (m_pixel[0u] < 160u or m_pixel[1u] > 85u or m_pixel[2u] > 85u or m_pixel[3u] < 240u) [[unlikely]] {
                     return std::make_error_code(std::errc::state_not_recoverable);
                 }
                 m_verified = true;
@@ -2535,8 +2514,7 @@ namespace pP::colony {
         constexpr u32 kLoad100PanPeriod = 150u;
         static_assert(kLoad100PanWaypoints * kLoad100PanPeriod == kLoad100Frames);
         constexpr float kLoad100PanOffsets[kLoad100PanWaypoints][2u] = {
-            {0.0f, 0.0f}, {96.0f, 0.0f}, {0.0f, 96.0f}, {-64.0f, -64.0f}
-        };
+            {0.0f, 0.0f}, {96.0f, 0.0f}, {0.0f, 96.0f}, {-64.0f, -64.0f}};
 
         /// Timing CSV printer: same columns and printf shape as TimeTrials
         /// (TimeTrials.cpp printTimingsCsv). stdout CSV, stderr banners.
@@ -2551,7 +2529,8 @@ namespace pP::colony {
                 // NOTE: std::println with >2 fixed-width args trips consteval
                 // _Format_checker C3546 on this toolchain (VS18 Insiders);
                 // printf is runtime-parsed and prints byte-identical CSV.
-                std::printf("%s,%llu,%llu,%.2f,%llu\n", stageName(stage), static_cast<unsigned long long>(calls),
+                std::printf(
+                    "%s,%llu,%llu,%.2f,%llu\n", stageName(stage), static_cast<unsigned long long>(calls),
                     static_cast<unsigned long long>(total), static_cast<double>(mean),
                     static_cast<unsigned long long>(stat.m_max_us));
             }
@@ -2567,16 +2546,20 @@ namespace pP::colony {
         class ColonyLoad100App final : public Application {
         public:
             explicit ColonyLoad100App()
-                : Application(ApplicationDomain{
-                    .m_is_headless = true,
-                    .m_is_interactive = false,
-                    .m_needs_presence = false,
-                    .m_needs_rendering = true,
-                    .m_needs_user_interface = false,
-                }, "colony-load100", std::span<const char *const>{}) {
+                : Application(
+                      ApplicationDomain{
+                          .m_is_headless = true,
+                          .m_is_interactive = false,
+                          .m_needs_presence = false,
+                          .m_needs_rendering = true,
+                          .m_needs_user_interface = false,
+                      },
+                      "colony-load100", std::span<const char *const>{}) {
             }
 
-            [[nodiscard]] u64 frames() const noexcept { return m_frames; }
+            [[nodiscard]] u64 frames() const noexcept {
+                return m_frames;
+            }
             [[nodiscard]] const StageTimings &driverStageTimings() const noexcept {
                 return m_driver_snapshot;
             }
@@ -2589,7 +2572,9 @@ namespace pP::colony {
             [[nodiscard]] u64 panUploadMark(const u32 mark) const noexcept {
                 return mark <= kLoad100PanWaypoints ? m_upload_marks[mark] : 0u;
             }
-            [[nodiscard]] std::error_code shutdownError() const noexcept { return m_shutdown_error; }
+            [[nodiscard]] std::error_code shutdownError() const noexcept {
+                return m_shutdown_error;
+            }
 
         protected:
             [[nodiscard]] std::error_code initialize() override {
@@ -2606,14 +2591,14 @@ namespace pP::colony {
                 }
 
                 m_pass_started = true;
-                if (const std::error_code error = m_pass.initialize(*rhi_service, *shader_service,
-                    getContentDir().path())) [[unlikely]] {
+                if (const std::error_code error = m_pass.initialize(
+                        *rhi_service, *shader_service, getContentDir().path())) [[unlikely]] {
                     return error;
                 }
 
                 m_driver_started = true;
                 if (const std::error_code error = m_driver.init(
-                    ColonyDriverDesc{.m_seed = kSeed, .m_agent_count = kLoad100Agents})) [[unlikely]] {
+                        ColonyDriverDesc{.m_seed = kSeed, .m_agent_count = kLoad100Agents})) [[unlikely]] {
                     return error;
                 }
 
@@ -2642,11 +2627,13 @@ namespace pP::colony {
                             }
                             const i32 left = static_cast<i32>(cx * sim::kChunkEdge);
                             const i32 bottom = static_cast<i32>(cy * sim::kChunkEdge);
-                            m_pan_submissions.push_back(GridTileSubmission{
-                                .m_chunk_id = sim::chunkIndexOf(sim::ChunkPos{cx, cy}),
-                                .m_tile_range = {left, bottom, left + static_cast<i32>(sim::kChunkEdge),
-                                    bottom + static_cast<i32>(sim::kChunkEdge)},
-                            });
+                            m_pan_submissions.push_back(
+                                GridTileSubmission{
+                                    .m_chunk_id = sim::chunkIndexOf(sim::ChunkPos{cx, cy}),
+                                    .m_tile_range =
+                                        {left, bottom, left + static_cast<i32>(sim::kChunkEdge),
+                                            bottom + static_cast<i32>(sim::kChunkEdge)},
+                                });
                         }
                     }
                 }
@@ -2662,8 +2649,8 @@ namespace pP::colony {
                     -0.5f,
                 };
                 Camera camera{ECameraProjection::orthographic};
-                camera.updateModel(TimeSpan{}, model,
-                    Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
                 m_camera_view = camera.getSnapshot();
                 return {};
             }
@@ -2683,19 +2670,19 @@ namespace pP::colony {
                     -0.5f,
                 };
                 Camera camera{ECameraProjection::orthographic};
-                camera.updateModel(TimeSpan{}, model,
-                    Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{0, 0, static_cast<int>(kExtent), static_cast<int>(kExtent)}});
                 m_camera_view = camera.getSnapshot();
                 const auto started = std::chrono::steady_clock::now();
-                const auto plan = GridPass::planTiles(m_camera_view,
-                    std::span<const GridTileSubmission>{
-                        m_pan_submissions.data(), m_pan_submissions.size()});
+                const auto plan = GridPass::planTiles(
+                    m_camera_view,
+                    std::span<const GridTileSubmission>{m_pan_submissions.data(), m_pan_submissions.size()});
                 const auto finished = std::chrono::steady_clock::now();
                 if (not plan) [[unlikely]] {
                     return plan.error();
                 }
-                m_plan_us[waypoint] =
-                    static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(finished - started).count());
+                m_plan_us[waypoint] = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(finished - started).count());
                 m_upload_marks[waypoint] = m_pass.uploadCount();
                 m_waypoint = waypoint;
                 return {};
@@ -2714,8 +2701,7 @@ namespace pP::colony {
                 if (const std::error_code error = m_translator.submit(m_driver.grid(), m_pass)) [[unlikely]] {
                     return error;
                 }
-                const u32 waypoint =
-                    static_cast<u32>((m_frames / kLoad100PanPeriod) % kLoad100PanWaypoints);
+                const u32 waypoint = static_cast<u32>((m_frames / kLoad100PanPeriod) % kLoad100PanWaypoints);
                 if (waypoint != m_waypoint) {
                     if (const std::error_code error = applyPanWaypoint(waypoint)) [[unlikely]] {
                         return error;
@@ -2728,7 +2714,8 @@ namespace pP::colony {
                 if (m_frames % kLoad100DiagPeriod == 0u) {
                     // NOTE: fprintf — println trips consteval _Format_checker
                     // C3546 on this toolchain; same reason as TimeTrials.
-                    std::fprintf(stderr, "[load100] tick=%llu iter=%llu chunks=%u\n",
+                    std::fprintf(
+                        stderr, "[load100] tick=%llu iter=%llu chunks=%u\n",
                         static_cast<unsigned long long>(m_driver.tickCount()),
                         static_cast<unsigned long long>(m_frames),
                         static_cast<unsigned>(m_translator.submittedChunks()));
@@ -2788,9 +2775,9 @@ namespace pP::colony {
     }
 
     /// Deterministic Slice 4 self-checks: seed-identical spawns, plan
-        /// coverage, movement, double-run equality, and bodies snapshot
-        /// replay continuation.
-    [[nodiscard]] Expected<std::array<u32, 3u> > checkAgents(const char *&stage) {
+    /// coverage, movement, double-run equality, and bodies snapshot
+    /// replay continuation.
+    [[nodiscard]] Expected<std::array<u32, 3u>> checkAgents(const char *&stage) {
         constexpr u32 kTicks = 100u;
         constexpr u32 kWallEdge = 32u;
         const auto drive = [&](ColonyDriver &driver, sim::GlobalCellPos site, float &peak, u32 &peak_tick,
@@ -2799,13 +2786,13 @@ namespace pP::colony {
             ColonyTranslator translator{};
             peak = 0.0f;
             stage = "wall";
-            const auto wall = driver.buildWall(Footprint{
-                .m_min = site,
-                .m_width = kWallEdge,
-                .m_height = kWallEdge,
-                .m_element = kElementRock,
-                .m_solid = true
-            });
+            const auto wall = driver.buildWall(
+                Footprint{
+                    .m_min = site,
+                    .m_width = kWallEdge,
+                    .m_height = kWallEdge,
+                    .m_element = kElementRock,
+                    .m_solid = true});
             if (not wall) {
                 return wall.error();
             }
@@ -2831,13 +2818,13 @@ namespace pP::colony {
                 }
             }
             for (const sim::GlobalCellPos &extra_min: extra_mins) {
-                const auto extra = driver.buildWall(Footprint{
-                    .m_min = extra_min,
-                    .m_width = kWallEdge,
-                    .m_height = kWallEdge,
-                    .m_element = kElementRock,
-                    .m_solid = true
-                });
+                const auto extra = driver.buildWall(
+                    Footprint{
+                        .m_min = extra_min,
+                        .m_width = kWallEdge,
+                        .m_height = kWallEdge,
+                        .m_element = kElementRock,
+                        .m_solid = true});
                 if (not extra) {
                     return extra.error();
                 }
@@ -2889,7 +2876,9 @@ namespace pP::colony {
                 if (tick == 0u) {
                     const BuildErrand *raised = registry.get<BuildErrand>(*wall);
                     const auto rock_after = rockInWall(site);
-                    if (raised == nullptr or raised->m_total != 1024u or not rock_after or
+                    if (raised == nullptr or
+                        raised->m_total != 1024u or
+                        not rock_after or
                         *rock_after != *rock_before + 64u) {
                         stage = "budget";
                         return std::make_error_code(std::errc::state_not_recoverable);
@@ -3053,8 +3042,9 @@ namespace pP::colony {
             }
         }
         if (planned != kAgentCount or peak <= 4.0f) {
-            std::println("SMOKE-AGENTS stage=planned planned={} peak={} peak_tick={} final_disp={} result=FAIL",
-                planned, peak, peak_tick, final_disp);
+            std::println(
+                "SMOKE-AGENTS stage=planned planned={} peak={} peak_tick={} final_disp={} result=FAIL", planned, peak,
+                peak_tick, final_disp);
             return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
         }
         if (first.colliderPending() != 0u) {
@@ -3069,11 +3059,10 @@ namespace pP::colony {
                 if (pose == nullptr or pose->m_x < 0.0f or pose->m_y < 0.0f) {
                     continue;
                 }
-                if (first.chainCount(sim::ChunkPos{
-                        static_cast<u32>(pose->m_x) / sim::kChunkEdge,
-                        static_cast<u32>(pose->m_y) / sim::kChunkEdge
-                    })
-                    > 0u) {
+                if (first.chainCount(
+                        sim::ChunkPos{
+                            static_cast<u32>(pose->m_x) / sim::kChunkEdge,
+                            static_cast<u32>(pose->m_y) / sim::kChunkEdge}) > 0u) {
                     chained = true;
                 }
             }
@@ -3142,7 +3131,7 @@ namespace pP::colony {
                 }
             }
         }
-        if (not(site2 == site)) {
+        if (not (site2 == site)) {
             return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
         }
         float peak2 = 0.0f;
@@ -3279,8 +3268,8 @@ namespace pP::colony {
         std::println(stderr, "SMOKE-STAGE pathfinding");
         const auto paths = checkPathfinding();
         if (not paths) {
-            std::println("SMOKE seed={} tiles=0 pixel=0,0,0,0 paths=ERR result=FAIL error={}", kSeed,
-                paths.error().message());
+            std::println(
+                "SMOKE seed={} tiles=0 pixel=0,0,0,0 paths=ERR result=FAIL error={}", kSeed, paths.error().message());
             return paths.error();
         }
 
@@ -3291,7 +3280,8 @@ namespace pP::colony {
             std::println("SMOKE-AGENTS stage={} result=FAIL error={}", agents_stage, agents.error().message());
             return agents.error();
         }
-        std::println("SMOKE-AGENTS agents=3 moved={} planned={} replay={} result=PASS", (*agents)[0u], (*agents)[1u],
+        std::println(
+            "SMOKE-AGENTS agents=3 moved={} planned={} replay={} result=PASS", (*agents)[0u], (*agents)[1u],
             (*agents)[2u]);
 
         std::println(stderr, "SMOKE-STAGE buildings");
@@ -3334,9 +3324,9 @@ namespace pP::colony {
         }
 
         const auto &pixel = app.pixel();
-        std::println("SMOKE seed={} tiles={} pixel={},{},{},{} paths={}/{}/{} result={} error={}", kSeed,
-            app.visibleTiles(), pixel[0u], pixel[1u], pixel[2u], pixel[3u],
-            paths->m_paths, paths->m_partials, paths->m_blocked,
+        std::println(
+            "SMOKE seed={} tiles={} pixel={},{},{},{} paths={}/{}/{} result={} error={}", kSeed, app.visibleTiles(),
+            pixel[0u], pixel[1u], pixel[2u], pixel[3u], paths->m_paths, paths->m_partials, paths->m_blocked,
             result ? "FAIL" : "PASS", result ? result.message() : "-");
         return result;
     }
@@ -3345,8 +3335,8 @@ namespace pP::colony {
         // Stderr breadcrumbs are unbuffered: on abort the last tick line
         // survives. Timing CSVs print on all paths so partial windows are
         // still evidence; shutdown preserves the first error throughout.
-        std::println(stderr, "[load100] start seed={} agents={} frames={} dt=1/60", kSeed, kLoad100Agents,
-            kLoad100Frames);
+        std::println(
+            stderr, "[load100] start seed={} agents={} frames={} dt=1/60", kSeed, kLoad100Agents, kLoad100Frames);
         ColonyLoad100App app{};
         std::error_code first_error{};
         try {
@@ -3381,9 +3371,9 @@ namespace pP::colony {
             const u64 mark_hi = app.panUploadMark(waypoint + 1u);
             const u64 delta = mark_hi >= mark_lo ? mark_hi - mark_lo : 0u;
             // NOTE: fprintf — println trips consteval _Format_checker C3546.
-            std::printf("%u,%llu,%llu\n", static_cast<unsigned>(waypoint),
-                static_cast<unsigned long long>(app.panPlanUs(waypoint)),
-                static_cast<unsigned long long>(delta));
+            std::printf(
+                "%u,%llu,%llu\n", static_cast<unsigned>(waypoint),
+                static_cast<unsigned long long>(app.panPlanUs(waypoint)), static_cast<unsigned long long>(delta));
             if (waypoint > 0u and delta != 0u) {
                 pan_clean = false;
             }
@@ -3394,7 +3384,8 @@ namespace pP::colony {
         } else {
             std::println(stderr, "[load100] pan invariance result={}", pan_clean ? "PASS" : "FAIL");
         }
-        std::println(stderr, "[load100] frames={} result={} error={}", app.frames(), first_error ? "FAIL" : "PASS",
+        std::println(
+            stderr, "[load100] frames={} result={} error={}", app.frames(), first_error ? "FAIL" : "PASS",
             first_error ? first_error.message() : "-");
         if (first_error) {
             return std::unexpected{first_error};

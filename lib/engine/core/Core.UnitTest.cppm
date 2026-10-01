@@ -13,9 +13,7 @@ namespace pP {
     // Unit test helper
     // ------------------------------------------------------------------
 
-    export [[noreturn]] void onTestAssertionFailure(
-        const char *message,
-        const std::source_location &site);
+    export [[noreturn]] void onTestAssertionFailure(const char *message, const std::source_location &site);
 
     export class UnitTest {
     protected:
@@ -44,8 +42,7 @@ namespace pP {
         struct Id {
             const RunImpl *m_run{nullptr};
 
-            explicit constexpr Id(const RunImpl &run) noexcept
-                : m_run(&run) {
+            explicit constexpr Id(const RunImpl &run) noexcept : m_run(&run) {
             }
 
             [[nodiscard]] std::string_view name() const noexcept {
@@ -82,17 +79,19 @@ namespace pP {
             virtual void success() = 0;
 
             template<typename... ArgsT>
-            void logFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
+            void logFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept {
                 char buffer[2048];
-                const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
+                const auto [out, size] = std::format_to_n(
+                    buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
                 *out = char{0};
                 log(buffer);
             }
 
             template<typename... ArgsT>
-            void failFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept(false) {
+            void failFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept(false) {
                 char buffer[2048];
-                const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
+                const auto [out, size] = std::format_to_n(
+                    buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
                 *out = char{0};
                 failWith(buffer);
             }
@@ -102,17 +101,11 @@ namespace pP {
 
         using test_func_ec_t = std::error_code (*)(IRun &run);
 
-        consteval UnitTest(
-            const char *const name,
-            const test_func_t test,
-            const EFlags flags = none) noexcept
+        consteval UnitTest(const char *const name, const test_func_t test, const EFlags flags = none) noexcept
             : m_name(name), m_run(test), m_flags(flags) {
         }
 
-        consteval UnitTest(
-            const char *const name,
-            const test_func_ec_t test,
-            const EFlags flags = none) noexcept
+        consteval UnitTest(const char *const name, const test_func_ec_t test, const EFlags flags = none) noexcept
             : m_name(name), m_run_ec(test), m_flags(flags) {
         }
 
@@ -157,19 +150,17 @@ namespace pP {
             EFlags m_flags{none};
 
             template<std::size_t nLen>
-            explicit consteval Named(
-                const char (&name)[nLen],
-                const std::initializer_list<EFlags> flags = {}) noexcept
+            explicit consteval Named(const char (&name)[nLen], const std::initializer_list<EFlags> flags = {}) noexcept
                 : m_name(name), m_flags(aggregateFlags(flags)) {
             }
 
             template<std::convertible_to<test_func_t> CallbackT>
-            consteval UnitTest operator /(CallbackT &&callback) const noexcept {
+            consteval UnitTest operator/(CallbackT &&callback) const noexcept {
                 return UnitTest(m_name, callback, m_flags);
             }
 
             template<std::convertible_to<test_func_ec_t> CallbackT>
-            consteval UnitTest operator /(CallbackT &&callback) const noexcept {
+            consteval UnitTest operator/(CallbackT &&callback) const noexcept {
                 return UnitTest(m_name, callback, m_flags);
             }
         };

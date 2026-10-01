@@ -24,9 +24,8 @@ export namespace pP {
         class StableVectorIterator {
         public:
             using stable_vector = std::conditional_t<
-                std::is_const_v<T>,
-                std::add_const_t<StableVector<std::remove_const_t<T>, AllocatorT> >,
-                StableVector<T, AllocatorT> >;
+                std::is_const_v<T>, std::add_const_t<StableVector<std::remove_const_t<T>, AllocatorT>>,
+                StableVector<T, AllocatorT>>;
 
             using iterator_category = std::random_access_iterator_tag;
             using iterator_concept = std::random_access_iterator_tag; // C++20+
@@ -68,7 +67,8 @@ export namespace pP {
                     const u32 slice_index = stable_vector::sliceIndex_(m_index);
                     m_slice_ptr = m_vector->m_slices[slice_index].getData();
                     m_slice_first = stable_vector::sliceOffset_(slice_index);
-                    m_slice_last = std::min(m_vector->m_size, m_slice_first + stable_vector::sliceCapacity_(slice_index));
+                    m_slice_last = std::min(
+                        m_vector->m_size, m_slice_first + stable_vector::sliceCapacity_(slice_index));
                 }
             }
 
@@ -85,36 +85,34 @@ export namespace pP {
 
             constexpr StableVectorIterator(const StableVectorIterator &) noexcept = default;
 
-            constexpr StableVectorIterator &operator =(const StableVectorIterator &) noexcept = default;
+            constexpr StableVectorIterator &operator=(const StableVectorIterator &) noexcept = default;
 
             constexpr StableVectorIterator(StableVectorIterator &&) noexcept = default;
 
-            constexpr StableVectorIterator &operator =(StableVectorIterator &&) noexcept = default;
+            constexpr StableVectorIterator &operator=(StableVectorIterator &&) noexcept = default;
 
             constexpr StableVectorIterator(stable_vector &container, const std::size_t index) noexcept
-                : m_vector(std::addressof(container)),
-                  m_index(checked_cast<u32>(index)) {
+                : m_vector(std::addressof(container)), m_index(checked_cast<u32>(index)) {
                 initFromIndexFallback_();
             }
 
             constexpr StableVectorIterator(stable_vector &container, const MaxValue end) noexcept
-                : m_vector(std::addressof(container)),
-                  m_index(end) {
+                : m_vector(std::addressof(container)), m_index(end) {
                 initFromIndexFallback_();
             }
 
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr StableVectorIterator(const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
+            constexpr StableVectorIterator(
+                const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
                 requires std::is_const_v<T>
-                : m_vector(other.m_vector),
-                  m_slice_ptr(other.m_slice_ptr),
-                  m_slice_first(other.m_slice_first),
-                  m_slice_last(other.m_slice_last),
-                  m_index(other.m_index) {
+                : m_vector(other.m_vector), m_slice_ptr(other.m_slice_ptr), m_slice_first(other.m_slice_first),
+                  m_slice_last(other.m_slice_last), m_index(other.m_index) {
             }
 
-            constexpr StableVectorIterator &operator =(const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
-                requires std::is_const_v<T> {
+            constexpr StableVectorIterator &operator=(
+                const StableVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
+                requires std::is_const_v<T>
+            {
                 m_vector = other.m_vector;
                 m_slice_ptr = other.m_slice_ptr;
                 m_slice_first = other.m_slice_first;
@@ -196,20 +194,20 @@ export namespace pP {
                 return *this;
             }
 
-            [[nodiscard]] friend constexpr StableVectorIterator
-            operator+(StableVectorIterator it, difference_type n) noexcept {
+            [[nodiscard]] friend constexpr StableVectorIterator operator+(
+                StableVectorIterator it, difference_type n) noexcept {
                 it += n;
                 return it;
             }
 
-            [[nodiscard]] friend constexpr StableVectorIterator
-            operator+(difference_type n, StableVectorIterator it) noexcept {
+            [[nodiscard]] friend constexpr StableVectorIterator operator+(
+                difference_type n, StableVectorIterator it) noexcept {
                 it += n;
                 return it;
             }
 
-            [[nodiscard]] friend constexpr StableVectorIterator
-            operator-(StableVectorIterator it, difference_type n) noexcept {
+            [[nodiscard]] friend constexpr StableVectorIterator operator-(
+                StableVectorIterator it, difference_type n) noexcept {
                 it -= n;
                 return it;
             }
@@ -221,14 +219,14 @@ export namespace pP {
             // ------------------------------------------------------------
             // comparisons
             // ------------------------------------------------------------
-            [[nodiscard]] friend constexpr bool
-            operator==(const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
+            [[nodiscard]] friend constexpr bool operator==(
+                const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
                 PPR_ASSERT(a.m_vector == b.m_vector);
                 return a.getIndex() == b.getIndex();
             }
 
-            [[nodiscard]] friend constexpr std::strong_ordering
-            operator<=>(const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
+            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+                const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
                 PPR_ASSERT(a.m_vector == b.m_vector);
                 return a.getIndex() <=> b.getIndex();
             }
@@ -236,18 +234,17 @@ export namespace pP {
             // ------------------------------------------------------------
             // distance
             // ------------------------------------------------------------
-            [[nodiscard]] friend constexpr difference_type
-            operator-(const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
+            [[nodiscard]] friend constexpr difference_type operator-(
+                const StableVectorIterator &a, const StableVectorIterator &b) noexcept {
                 PPR_ASSERT(a.m_vector == b.m_vector);
-                return static_cast<difference_type>(a.getIndex())
-                       - static_cast<difference_type>(b.getIndex());
+                return static_cast<difference_type>(a.getIndex()) - static_cast<difference_type>(b.getIndex());
             }
         };
     }
 
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
-    using StableVectorInplace = StableVector<T,
-        mem::InSituFallback<details::stable_vector_min_capacity_v * sizeof(T), AllocatorT, alignof_v<T> > >;
+    using StableVectorInplace = StableVector<
+        T, mem::InSituFallback<details::stable_vector_min_capacity_v * sizeof(T), AllocatorT, alignof_v<T>>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
     class StableVector : mem::Allocator<AllocatorT> {
@@ -366,7 +363,8 @@ export namespace pP {
                     case composite_slice_end_:
                         PPR_ASSERT(composite_slice_ptr + composite_slice_size == slice.getData());
 
-                        allocator_type::template deallocate<T>(composite_slice_ptr, composite_slice_size + slice_capacity);
+                        allocator_type::template deallocate<T>(
+                            composite_slice_ptr, composite_slice_size + slice_capacity);
                         composite_slice_ptr = nullptr;
                         composite_slice_size = 0u;
                         break;
@@ -389,42 +387,42 @@ export namespace pP {
         using const_iterator = details::StableVectorIterator<const T, AllocatorT>;
 
         constexpr StableVector() noexcept
-            requires std::is_default_constructible_v<allocator_type> = default;
+            requires std::is_default_constructible_v<allocator_type>
+        = default;
 
         explicit constexpr StableVector(const std::size_t initial_capacity) noexcept
-            requires std::is_default_constructible_v<allocator_type> {
+            requires std::is_default_constructible_v<allocator_type>
+        {
             reserveAssumeEmpty(initial_capacity);
         }
 
         constexpr StableVector(std::initializer_list<T> init_values) noexcept
-            requires std::is_default_constructible_v<allocator_type> and
-                     std::is_copy_constructible_v<T> {
+            requires std::is_default_constructible_v<allocator_type> and std::is_copy_constructible_v<T>
+        {
             assignAssumeEmpty(init_values);
         }
 
         constexpr StableVector(const std::size_t size, const T &init_value) noexcept
-            requires std::is_default_constructible_v<allocator_type> and
-                     std::is_copy_constructible_v<T> {
+            requires std::is_default_constructible_v<allocator_type> and std::is_copy_constructible_v<T>
+        {
             resize(size, init_value);
         }
 
-        explicit constexpr StableVector(AllocatorT &&al)
-            noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+        explicit constexpr StableVector(AllocatorT &&al) noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
             requires std::is_move_constructible_v<AllocatorT>
             : allocator_type(std::move(al)) {
         }
 
-        explicit constexpr StableVector(const AllocatorT &al)
-            noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+        explicit constexpr StableVector(const AllocatorT &al) noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
             requires std::is_copy_constructible_v<AllocatorT>
             : allocator_type(al) {
         }
 
         template<typename AllocatorLikeT>
-            requires std::is_constructible_v<AllocatorT, AllocatorLikeT&&>
-        explicit constexpr StableVector(AllocatorLikeT &&al_init)
-            noexcept(std::is_nothrow_constructible_v<AllocatorT, AllocatorLikeT&&>)
-        :   allocator_type(std::in_place, std::forward<AllocatorLikeT>(al_init)) {
+            requires std::is_constructible_v<AllocatorT, AllocatorLikeT &&>
+        explicit constexpr StableVector(AllocatorLikeT &&al_init) noexcept(
+            std::is_nothrow_constructible_v<AllocatorT, AllocatorLikeT &&>)
+            : allocator_type(std::in_place, std::forward<AllocatorLikeT>(al_init)) {
         }
 
         constexpr StableVector(const std::size_t initial_capacity, AllocatorT &&al) noexcept
@@ -432,8 +430,7 @@ export namespace pP {
             reserveAssumeEmpty(initial_capacity);
         }
 
-        constexpr StableVector(const std::size_t initial_capacity, const AllocatorT &al) noexcept
-            : allocator_type(al) {
+        constexpr StableVector(const std::size_t initial_capacity, const AllocatorT &al) noexcept : allocator_type(al) {
             reserveAssumeEmpty(initial_capacity);
         }
 
@@ -465,8 +462,9 @@ export namespace pP {
             assignAssumeEmpty(other);
         }
 
-        constexpr StableVector &operator =(const StableVector &other) noexcept
-            requires std::is_copy_assignable_v<allocator_type> {
+        constexpr StableVector &operator=(const StableVector &other) noexcept
+            requires std::is_copy_assignable_v<allocator_type>
+        {
             if (this == &other) [[unlikely]] {
                 return *this;
             }
@@ -483,8 +481,9 @@ export namespace pP {
             spliceAssumeEmpty(rvalue);
         }
 
-        constexpr StableVector &operator =(StableVector &&rvalue) noexcept
-            requires std::is_move_assignable_v<allocator_type> {
+        constexpr StableVector &operator=(StableVector &&rvalue) noexcept
+            requires std::is_move_assignable_v<allocator_type>
+        {
             if (this == &rvalue) [[unlikely]] {
                 return *this;
             }
@@ -502,12 +501,22 @@ export namespace pP {
             reset();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr std::size_t capacity() const noexcept { return m_capacity; }
-        [[nodiscard]] PPR_FORCE_INLINE constexpr std::size_t size() const noexcept { return m_size; }
-        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isEmpty() const noexcept { return m_size == 0u; }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::size_t capacity() const noexcept {
+            return m_capacity;
+        }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::size_t size() const noexcept {
+            return m_size;
+        }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isEmpty() const noexcept {
+            return m_size == 0u;
+        }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &front(this auto &&self) noexcept { return self.at(0u); }
-        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &back(this auto &&self) noexcept { return self.at(self.m_size - 1u); }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &front(this auto &&self) noexcept {
+            return self.at(0u);
+        }
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &back(this auto &&self) noexcept {
+            return self.at(self.m_size - 1u);
+        }
 
         [[nodiscard]] constexpr T &at(const std::size_t index) noexcept {
             PPR_ASSERT(index < m_size);
@@ -524,39 +533,48 @@ export namespace pP {
             return const_cast<StableVector *>(this)->at(index);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &
-        operator [](this auto &&self, const std::size_t index) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &operator[](this auto &&self, const std::size_t index) noexcept {
             return self.at(index);
         }
 
-        [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, 0u); }
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, max_v); }
+        [[nodiscard]] constexpr iterator begin() noexcept {
+            return iterator(*this, 0u);
+        }
+        [[nodiscard]] constexpr iterator end() noexcept {
+            return iterator(*this, max_v);
+        }
 
-        [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0u); }
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, max_v); }
+        [[nodiscard]] constexpr const_iterator begin() const noexcept {
+            return const_iterator(*this, 0u);
+        }
+        [[nodiscard]] constexpr const_iterator end() const noexcept {
+            return const_iterator(*this, max_v);
+        }
 
-        [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
-        [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }
+        [[nodiscard]] constexpr const_iterator cbegin() const noexcept {
+            return begin();
+        }
+        [[nodiscard]] constexpr const_iterator cend() const noexcept {
+            return end();
+        }
 
         template<std::ranges::range RangeT>
-        constexpr void assign(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        constexpr void assign(RangeT &&values) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             clear();
             assignAssumeEmpty(std::forward<RangeT>(values));
         }
 
         template<std::ranges::range RangeT>
-        constexpr void assignAssumeEmpty(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        constexpr void assignAssumeEmpty(RangeT &&values) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             const std::size_t n = std::ranges::size(values);
             reserveAssumeEmpty(n);
             m_size = checked_cast<u32>(n);
             std::uninitialized_copy(
-                std::ranges::begin(values),
-                std::ranges::end(values),
-                mem::UnpoisonUninitializedIterator(begin()));
+                std::ranges::begin(values), std::ranges::end(values), mem::UnpoisonUninitializedIterator(begin()));
         }
 
         constexpr void clear() noexcept(std::is_nothrow_destructible_v<T>) {
@@ -647,7 +665,8 @@ export namespace pP {
                         } else {
                             PPR_ASSERT(composite_slice_ptr + composite_slice_size == slice.getData());
 
-                            allocator_type::template deallocate<T>(composite_slice_ptr, composite_slice_size + slice_capacity);
+                            allocator_type::template deallocate<T>(
+                                composite_slice_ptr, composite_slice_size + slice_capacity);
                             composite_slice_ptr = nullptr;
                             composite_slice_size = 0u;
                         }
@@ -665,7 +684,8 @@ export namespace pP {
                 wanted_num_slices = composite_restriction_on_num_slices;
             }
 
-            slice_t *const slice_arr = allocator_type::relocate(m_slices.getData(), actual_num_slices, wanted_num_slices).ptr;
+            slice_t *const slice_arr =
+                allocator_type::relocate(m_slices.getData(), actual_num_slices, wanted_num_slices).ptr;
             PPR_ASSERT(slice_arr != nullptr);
             m_slices.reset(slice_arr, slices_is_array_);
             m_capacity = n;
@@ -702,7 +722,8 @@ export namespace pP {
 
                 expandSingleSliceToArray_(actual_num_slices, wanted_num_slices);
             } else {
-                slice_t *const slice_arr = allocator_type::relocate(m_slices.getData(), actual_num_slices, wanted_num_slices).ptr;
+                slice_t *const slice_arr =
+                    allocator_type::relocate(m_slices.getData(), actual_num_slices, wanted_num_slices).ptr;
                 m_slices.reset(slice_arr, slices_is_array_);
             }
             PPR_ASSERT(m_slices.isValid() && m_slices.getTag() == slices_is_array_);
@@ -778,7 +799,8 @@ export namespace pP {
         }
 
         constexpr void resize(const std::size_t new_size, const T &init_value = default_value_v) noexcept
-            requires std::is_copy_constructible_v<T> {
+            requires std::is_copy_constructible_v<T>
+        {
             if (new_size < m_size) {
                 std::ranges::destroy(begin() + static_cast<std::ptrdiff_t>(new_size), end());
                 m_size = checked_cast<u32>(new_size);
@@ -790,8 +812,7 @@ export namespace pP {
                 m_size = checked_cast<u32>(new_size);
 
                 std::uninitialized_fill(
-                    mem::UnpoisonUninitializedIterator(begin() + old_size),
-                    mem::UnpoisonUninitializedIterator(end()),
+                    mem::UnpoisonUninitializedIterator(begin() + old_size), mem::UnpoisonUninitializedIterator(end()),
                     init_value);
             }
         }
@@ -816,17 +837,12 @@ export namespace pP {
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
             if (m_slices.getTag() == slices_is_single_slice_) {
-                mem::annotateContiguousContainer(
-                    m_slices.template getReinterpret<T>(),
-                    m_capacity,
-                    old_size,
-                    m_size);
+                mem::annotateContiguousContainer(m_slices.template getReinterpret<T>(), m_capacity, old_size, m_size);
             } else {
                 const u32 slice_idx = sliceIndex_(old_size);
                 const u32 rel_idx = old_size - sliceOffset_(slice_idx);
                 mem::annotateContiguousContainer(
-                    m_slices[slice_idx].getData(),
-                    sliceCapacity_(slice_idx), rel_idx, rel_idx + 1u);
+                    m_slices[slice_idx].getData(), sliceCapacity_(slice_idx), rel_idx, rel_idx + 1u);
             }
 #endif
 
@@ -838,43 +854,45 @@ export namespace pP {
             return pushBackUninitializedAssumeCapacity();
         }
 
-        constexpr void pushBack(T &&rvalue)
-            noexcept(std::is_nothrow_move_constructible_v<T>)
-            requires std::is_move_constructible_v<T> {
+        constexpr void pushBack(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
+            requires std::is_move_constructible_v<T>
+        {
             reserveAdditional(1u);
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, std::move(rvalue));
         }
 
-        constexpr void pushBackAssumeCapacity(T &&rvalue)
-            noexcept(std::is_nothrow_move_constructible_v<T>)
-            requires std::is_move_constructible_v<T> {
+        constexpr void pushBackAssumeCapacity(T &&rvalue) noexcept(std::is_nothrow_move_constructible_v<T>)
+            requires std::is_move_constructible_v<T>
+        {
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, std::move(rvalue));
         }
 
-        [[maybe_unused]] constexpr T &pushBackDefault()
-            noexcept(std::is_nothrow_default_constructible_v<T>)
-            requires std::is_default_constructible_v<T> {
+        [[maybe_unused]] constexpr T &pushBackDefault() noexcept(std::is_nothrow_default_constructible_v<T>)
+            requires std::is_default_constructible_v<T>
+        {
             reserveAdditional(1u);
             return pushBackDefaultAssumeCapacity();
         }
 
-        [[maybe_unused]] constexpr T &pushBackDefaultAssumeCapacity()
-            noexcept(std::is_nothrow_default_constructible_v<T>)
-            requires std::is_default_constructible_v<T> {
+        [[maybe_unused]] constexpr T &pushBackDefaultAssumeCapacity() noexcept(
+            std::is_nothrow_default_constructible_v<T>)
+            requires std::is_default_constructible_v<T>
+        {
             return *std::construct_at(pushBackUninitializedAssumeCapacity());
         }
 
-        constexpr void pushBackAssumeCapacity(const T &value)
-            noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_copy_constructible_v<T> {
+        constexpr void pushBackAssumeCapacity(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_copy_constructible_v<T>
+        {
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, value);
         }
 
         constexpr void pushBack(const T &value) noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_copy_constructible_v<T> {
+            requires std::is_copy_constructible_v<T>
+        {
             reserveAdditional(1u);
             T *const ptr = pushBackUninitializedAssumeCapacity();
             std::construct_at(ptr, value);
@@ -882,32 +900,34 @@ export namespace pP {
 
 
         template<typename... ArgsT>
-        [[maybe_unused]] constexpr T &emplaceBack(ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
-            requires std::is_constructible_v<T, ArgsT &&...> {
+        [[maybe_unused]] constexpr T &emplaceBack(ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires std::is_constructible_v<T, ArgsT &&...>
+        {
             reserveAdditional(1u);
             return emplaceBackAssumeCapacity(std::forward<ArgsT>(args)...);
         }
 
         template<typename... ArgsT>
-        [[maybe_unused]] constexpr T &emplaceBackAssumeCapacity(ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
-            requires std::is_constructible_v<T, ArgsT &&...> {
+        [[maybe_unused]] constexpr T &emplaceBackAssumeCapacity(ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires std::is_constructible_v<T, ArgsT &&...>
+        {
             T *const ptr = pushBackUninitializedAssumeCapacity();
             return *std::construct_at(ptr, std::forward<ArgsT>(args)...);
         }
 
         template<typename ValueT>
-        [[nodiscard]] constexpr auto
-        find(this auto &&self, ValueT &&value_to_find) noexcept
-            requires std::equality_comparable_with<T, ValueT> {
+        [[nodiscard]] constexpr auto find(this auto &&self, ValueT &&value_to_find) noexcept
+            requires std::equality_comparable_with<T, ValueT>
+        {
             return std::find(self.begin(), self.end(), std::forward<ValueT>(value_to_find));
         }
 
         template<std::ranges::range RangeT>
-        [[maybe_unused]] constexpr std::size_t
-        append(RangeT &&range) noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        [[maybe_unused]] constexpr std::size_t append(RangeT &&range) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             const std::size_t n = std::ranges::size(range);
             reserveAdditional(n);
             return appendAssumeCapacity(std::ranges::begin(range), std::ranges::end(range));
@@ -915,9 +935,8 @@ export namespace pP {
 
         template<std::forward_iterator IteratorT>
             requires details::is_iterator_of_v<IteratorT, T>
-        [[maybe_unused]] constexpr std::size_t
-        append(IteratorT first, IteratorT last)
-            noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        [[maybe_unused]] constexpr std::size_t append(IteratorT first, IteratorT last) noexcept(
+            std::is_nothrow_copy_constructible_v<T>) {
             if constexpr (std::random_access_iterator<IteratorT>) {
                 const std::size_t n = static_cast<std::size_t>(std::distance(first, last));
                 reserveAdditional(n);
@@ -934,10 +953,10 @@ export namespace pP {
             }
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
-        [[maybe_unused]] constexpr std::size_t
-        appendAssumeCapacity(IteratorT first, IteratorT last)
-            noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of_v<IteratorT, T>
+        [[maybe_unused]] constexpr std::size_t appendAssumeCapacity(IteratorT first, IteratorT last) noexcept(
+            std::is_nothrow_copy_constructible_v<T>) {
             std::size_t num_append = 0u;
             for (; first != last; ++first, ++num_append) {
                 pushBackAssumeCapacity(*first);
@@ -969,29 +988,32 @@ export namespace pP {
 
         template<std::ranges::range RangeT>
         constexpr void insert(const const_iterator &where, RangeT &&range) noexcept
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             insert(where, std::ranges::begin(range), std::ranges::end(range));
         }
 
         template<std::ranges::range RangeT>
         constexpr void insert(const std::size_t index, RangeT &&range) noexcept
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             insert(index, std::ranges::begin(range), std::ranges::end(range));
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of_v<IteratorT, T>
         constexpr void insert(const const_iterator &where, IteratorT first, IteratorT last) noexcept {
             PPR_ASSERT(where.m_vector == this);
             insert(where.m_index, first, last);
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of_v<IteratorT, T>
         constexpr void insert(const std::size_t index, IteratorT first, IteratorT last) noexcept {
             PPR_ASSERT(index <= m_size);
             if (const std::size_t n = append(first, last); n > 0u) [[likely]] {
-                std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index),
-                                    end() - static_cast<std::ptrdiff_t>(n),
-                                    end());
+                std::ranges::rotate(
+                    begin() + static_cast<std::ptrdiff_t>(index), end() - static_cast<std::ptrdiff_t>(n), end());
             }
         }
 
@@ -1004,18 +1026,13 @@ export namespace pP {
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
             if (m_slices.getTag() == slices_is_single_slice_) {
-                mem::annotateContiguousContainer(
-                    m_slices.template getReinterpret<T>(),
-                    m_capacity,
-                    old_size,
-                    m_size);
+                mem::annotateContiguousContainer(m_slices.template getReinterpret<T>(), m_capacity, old_size, m_size);
             } else {
                 const u32 element_idx = old_size - 1u;
                 const u32 slice_idx = sliceIndex_(element_idx);
                 const u32 rel_idx = element_idx - sliceOffset_(slice_idx);
                 mem::annotateContiguousContainer(
-                    m_slices[slice_idx].getData(),
-                    sliceCapacity_(slice_idx), rel_idx + 1u, rel_idx);
+                    m_slices[slice_idx].getData(), sliceCapacity_(slice_idx), rel_idx + 1u, rel_idx);
             }
 #endif
         }
@@ -1030,9 +1047,9 @@ export namespace pP {
             PPR_ASSERT(index < m_size);
 
             if (index + 1u < m_size) [[likely]] {
-                std::ranges::rotate(begin() + static_cast<std::ptrdiff_t>(index),
-                                    begin() + static_cast<std::ptrdiff_t>(index) + 1,
-                                    end());
+                std::ranges::rotate(
+                    begin() + static_cast<std::ptrdiff_t>(index), begin() + static_cast<std::ptrdiff_t>(index) + 1,
+                    end());
             }
 
             popBack();
@@ -1055,9 +1072,10 @@ export namespace pP {
         }
 
         template<typename ValueT>
-        constexpr void eraseAllSwapBack(ValueT &&value_to_erase)
-            noexcept(std::is_nothrow_destructible_v<T> && std::is_nothrow_move_constructible_v<T>)
-            requires std::equality_comparable_with<T, ValueT> {
+        constexpr void eraseAllSwapBack(ValueT &&value_to_erase) noexcept(
+            std::is_nothrow_destructible_v<T> && std::is_nothrow_move_constructible_v<T>)
+            requires std::equality_comparable_with<T, ValueT>
+        {
             for (iterator it = begin(); it != end();) {
                 if (*it == value_to_erase) {
                     it = eraseSwapBack(it);
@@ -1068,7 +1086,7 @@ export namespace pP {
         }
 
         template<typename OtherAllocatorT>
-        friend bool operator ==(const StableVector &lhs, const StableVector<T, OtherAllocatorT> &rhs) noexcept {
+        friend bool operator==(const StableVector &lhs, const StableVector<T, OtherAllocatorT> &rhs) noexcept {
             return std::ranges::equal(lhs, rhs);
         }
 
@@ -1082,35 +1100,40 @@ export namespace pP {
     };
 
     template<typename T>
-    StableVector(std::initializer_list<T>) -> StableVector<std::remove_cvref_t<T> >;
+    StableVector(std::initializer_list<T>) -> StableVector<std::remove_cvref_t<T>>;
 
     template<typename T>
-    StableVector(std::size_t n, T &&rvalue) -> StableVector<std::remove_cvref_t<T> >;
+    StableVector(std::size_t n, T &&rvalue) -> StableVector<std::remove_cvref_t<T>>;
 
     template<typename T>
-    StableVector(std::size_t n, const T &value) -> StableVector<std::remove_cvref_t<T> >;
+    StableVector(std::size_t n, const T &value) -> StableVector<std::remove_cvref_t<T>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::initializer_list<T>, AllocatorT &&al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::initializer_list<T>, AllocatorT &&al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::initializer_list<T>, const AllocatorT &al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::initializer_list<T>, const AllocatorT &al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::size_t n, T &&rvalue, AllocatorT &&al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::size_t n, T &&rvalue, AllocatorT &&al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::size_t n, T &&rvalue, const AllocatorT &al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::size_t n, T &&rvalue, const AllocatorT &al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::size_t n, const T &value, AllocatorT &&al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::size_t n, const T &value, AllocatorT &&al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    StableVector(std::size_t n, const T &value, const AllocatorT &al) -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    StableVector(std::size_t n, const T &value, const AllocatorT &al)
+        -> StableVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    struct details::relocatable<StableVector<T, AllocatorT> > : relocatable<mem::Allocator<AllocatorT> > {
-    };
+    struct details::relocatable<StableVector<T, AllocatorT>> : relocatable<mem::Allocator<AllocatorT>> {};
 
     extern template class StableVector<int>;
 }

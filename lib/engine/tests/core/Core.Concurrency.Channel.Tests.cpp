@@ -189,9 +189,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (flush_roundtrip) {
             std::atomic<int> test_phase = 0u;
-            PPR_DEFER{
+            PPR_DEFER {
                 PPR_TEST_ASSERT(test_phase == 3u);
-
             };
 
             RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
@@ -379,19 +378,16 @@ namespace pP::tests::detail {
 
             std::atomic<int> seed_send = 0;
 
-            std::barrier close_barrier{
-                num_producers, [&]() noexcept {
-                    const auto close = chan.close();
-                    PPR_TEST_ASSERT(!close);
-                }
-            };
+            std::barrier close_barrier{num_producers, [&]() noexcept {
+                                           const auto close = chan.close();
+                                           PPR_TEST_ASSERT(!close);
+                                       }};
 
             for (int t = 0; t < num_producers; ++t) {
                 producers.emplace_back([=, &chan, &seed_send, &close_barrier]() mutable {
                     int local_send = 0;
-                    PPR_DEFER{
+                    PPR_DEFER {
                         seed_send += local_send;
-
                     };
                     for (int i = 0; i < messages_per_thread; ++i) {
                         auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
@@ -451,12 +447,12 @@ namespace pP::tests::detail {
             for (int t = 0; t < num_producers; ++t) {
                 producers.emplace_back([=, &channels, &seed_send, &channels_fan_out]() mutable {
                     int local_send = 0;
-                    PPR_DEFER{
+                    PPR_DEFER {
                         seed_send += local_send;
-
                     };
                     for (int i = 0; i < messages_per_thread; ++i) {
-                        RawChannel &chan = channels[checked_cast<std::size_t>(channels_fan_out.fetch_add(1) % num_consumers)];
+                        RawChannel &chan =
+                            channels[checked_cast<std::size_t>(channels_fan_out.fetch_add(1) % num_consumers)];
                         auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
                         PPR_TEST_ASSERT(hdr.has_value());
                         auto *const p_value = static_cast<int *>(hdr->data());
@@ -617,11 +613,13 @@ namespace pP::tests::detail {
             auto event = signal.poll();
             PPR_TEST_ASSERT(event.has_value());
 
-            std::visit([](RawChannel *p_chan) {
-                const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
-                PPR_TEST_ASSERT(not recv.has_value());
-                PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
-            }, event.value());
+            std::visit(
+                [](RawChannel *p_chan) {
+                    const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                    PPR_TEST_ASSERT(not recv.has_value());
+                    PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
+                },
+                event.value());
 
             signal.reset(*event);
         };
@@ -637,16 +635,18 @@ namespace pP::tests::detail {
             bool chan_b_closed = false;
 
             for (auto event: select(chan_a, chan_b)) {
-                std::visit([&](RawChannel *p_chan) {
-                    const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
-                    PPR_TEST_ASSERT(not recv.has_value());
-                    PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
-                    if (p_chan == &chan_a) {
-                        chan_a_closed = true;
-                    } else if (p_chan == &chan_b) {
-                        chan_b_closed = true;
-                    }
-                }, event);
+                std::visit(
+                    [&](RawChannel *p_chan) {
+                        const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                        PPR_TEST_ASSERT(not recv.has_value());
+                        PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
+                        if (p_chan == &chan_a) {
+                            chan_a_closed = true;
+                        } else if (p_chan == &chan_b) {
+                            chan_b_closed = true;
+                        }
+                    },
+                    event);
 
                 if (chan_a_closed && chan_b_closed) {
                     break;
@@ -745,13 +745,15 @@ namespace pP::tests::detail {
             // Range-for iterates through all three ready channels
             std::size_t seen = 0;
             for (auto event: select(chan_a, chan_b, chan_c)) {
-                std::visit([&](RawChannel *p_chan) {
-                    const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
-                    PPR_TEST_ASSERT(recv.has_value());
-                    PPR_TEST_ASSERT(*static_cast<const int *>(recv->data()) == 42);
-                    p_chan->consumerRelease(*recv);
-                    ++seen;
-                }, event);
+                std::visit(
+                    [&](RawChannel *p_chan) {
+                        const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
+                        PPR_TEST_ASSERT(recv.has_value());
+                        PPR_TEST_ASSERT(*static_cast<const int *>(recv->data()) == 42);
+                        p_chan->consumerRelease(*recv);
+                        ++seen;
+                    },
+                    event);
 
                 if (seen == 3u) {
                     break;
@@ -772,12 +774,14 @@ namespace pP::tests::detail {
 
             std::size_t closed_count = 0;
             for (auto event: select(chan_a, chan_b, chan_c)) {
-                std::visit([&](RawChannel *p_chan) {
-                    const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
-                    PPR_TEST_ASSERT(not recv.has_value());
-                    PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
-                    ++closed_count;
-                }, event);
+                std::visit(
+                    [&](RawChannel *p_chan) {
+                        const auto recv = p_chan->consumerAcquire(RawChannel::block_until_available);
+                        PPR_TEST_ASSERT(not recv.has_value());
+                        PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
+                        ++closed_count;
+                    },
+                    event);
 
                 if (closed_count == 3u) {
                     break;
@@ -813,18 +817,20 @@ namespace pP::tests::detail {
             bool closed_detected = false;
 
             for (auto event: select(chan_a, chan_b, chan_c)) {
-                std::visit([&](RawChannel *p_chan) {
-                    const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
-                    if (recv.has_value()) {
-                        const int val = *static_cast<const int *>(recv->data());
-                        PPR_TEST_ASSERT(val == 100 || val == 300);
-                        p_chan->consumerRelease(*recv);
-                        ++data_received;
-                    } else {
-                        PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
-                        closed_detected = true;
-                    }
-                }, event);
+                std::visit(
+                    [&](RawChannel *p_chan) {
+                        const auto recv = p_chan->consumerAcquire(RawChannel::peek_without_blocking);
+                        if (recv.has_value()) {
+                            const int val = *static_cast<const int *>(recv->data());
+                            PPR_TEST_ASSERT(val == 100 || val == 300);
+                            p_chan->consumerRelease(*recv);
+                            ++data_received;
+                        } else {
+                            PPR_TEST_ASSERT(recv.error() == RawChannel::error_closed);
+                            closed_detected = true;
+                        }
+                    },
+                    event);
 
                 if (data_received == 2u && closed_detected) {
                     break;
@@ -1215,11 +1221,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(!chan.close());
         };
 
-        PPR_UNIT_TEST (auto_close_in_destructor){
+        PPR_UNIT_TEST (auto_close_in_destructor) {
             {
                 const RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
                 PPR_TEST_ASSERT(chan.isOpened());
-
             }
         };
 

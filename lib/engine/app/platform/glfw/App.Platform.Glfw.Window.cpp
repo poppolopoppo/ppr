@@ -38,17 +38,16 @@ namespace pP {
     }
 
     template<typename T>
-    [[nodiscard]] static auto glfwAllocation_(const Array<std::unique_ptr<T> > &allocations, const T &shared) noexcept {
-        return std::ranges::find_if(allocations, [&](const std::unique_ptr<T> &owned) noexcept -> bool {
-            return owned.get() == &shared;
-        });
+    [[nodiscard]] static auto glfwAllocation_(const Array<std::unique_ptr<T>> &allocations, const T &shared) noexcept {
+        return std::ranges::find_if(
+            allocations, [&](const std::unique_ptr<T> &owned) noexcept -> bool { return owned.get() == &shared; });
     }
 
     template<typename T>
-    [[nodiscard]] static auto glfwAllocation_(const Array<std::unique_ptr<T> > &allocations, const Numeric<void *, T> handle) noexcept {
-        return std::ranges::find_if(allocations, [&](const std::unique_ptr<T> &owned) noexcept -> bool {
-            return owned->m_handle == handle;
-        });
+    [[nodiscard]] static auto glfwAllocation_(
+        const Array<std::unique_ptr<T>> &allocations, const Numeric<void *, T> handle) noexcept {
+        return std::ranges::find_if(
+            allocations, [&](const std::unique_ptr<T> &owned) noexcept -> bool { return owned->m_handle == handle; });
     }
 
     [[nodiscard]] static std::unique_ptr<Monitor> glfwCreateMonitor_(GLFWmonitor *const p_glfw_monitor) {
@@ -64,12 +63,8 @@ namespace pP {
         PPR_ASSERT(p_video_mode != nullptr);
 
         auto monitor = std::make_unique<Monitor>(
-            MonitorHandle{p_glfw_monitor},
-            std::move(monitor_name),
-            glfwVideoMode_(*p_video_mode),
-            monitor_physical_size,
-            monitor_virtual_position,
-            ::glfwGetPrimaryMonitor() == p_glfw_monitor);
+            MonitorHandle{p_glfw_monitor}, std::move(monitor_name), glfwVideoMode_(*p_video_mode),
+            monitor_physical_size, monitor_virtual_position, ::glfwGetPrimaryMonitor() == p_glfw_monitor);
 
         return monitor;
     }
@@ -159,7 +154,7 @@ namespace pP {
             return make_error_code(std::errc::no_such_device);
         }
 
-        Array<std::unique_ptr<Monitor> > staged_monitors{};
+        Array<std::unique_ptr<Monitor>> staged_monitors{};
         staged_monitors.reserve(safe_narrowing(monitors_count));
 
         safe_ptr<const Monitor> staged_primary{};
@@ -218,9 +213,11 @@ namespace pP {
         return m_primary_monitor;
     }
 
-    std::error_code GlfwWindow::enumerateMonitorVideoModes(const Monitor &monitor, const Collector<VideoMode> each_video_mode) const noexcept {
+    std::error_code GlfwWindow::enumerateMonitorVideoModes(
+        const Monitor &monitor, const Collector<VideoMode> each_video_mode) const noexcept {
         int video_modes_count{0};
-        const ::GLFWvidmode *const p_video_modes_arr = ::glfwGetVideoModes(glfwHandle_(monitor.m_handle), &video_modes_count);
+        const ::GLFWvidmode *const p_video_modes_arr = ::glfwGetVideoModes(
+            glfwHandle_(monitor.m_handle), &video_modes_count);
         PPR_ASSERT(p_video_modes_arr != nullptr || video_modes_count == 0);
         if (p_video_modes_arr == nullptr) {
             return make_error_code(std::errc::no_such_device);
@@ -249,7 +246,8 @@ namespace pP {
         return m_when_monitor_connected.add(std::move(on_connected));
     }
 
-    auto GlfwWindow::whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept -> MonitorCallback::Handle {
+    auto GlfwWindow::whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept
+        -> MonitorCallback::Handle {
         return m_when_monitor_disconnected.add(std::move(on_disconnected));
     }
 
@@ -417,8 +415,9 @@ namespace pP {
         }
     }
 
-    static void glfwKeyCallback_(::GLFWwindow *const p_glfw_window, const int glfw_key, [[maybe_unused]] const int scancode, const int action,
-                                 [[maybe_unused]] const int mods) {
+    static void glfwKeyCallback_(
+        ::GLFWwindow *const p_glfw_window, const int glfw_key, [[maybe_unused]] const int scancode, const int action,
+        [[maybe_unused]] const int mods) {
         const std::optional<EKeyboardKey> key = glfwToKeyboardKey_(glfw_key);
         if (not key.has_value()) {
             return;
@@ -426,18 +425,10 @@ namespace pP {
 
         const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         switch (action) {
-            case GLFW_PRESS:
-                window.m_when_keyboard_pressed(window, *key, true);
-                break;
-            case GLFW_RELEASE:
-                window.m_when_keyboard_pressed(window, *key, false);
-                break;
-            case GLFW_REPEAT:
-                window.m_when_keyboard_repeated(window, *key);
-                break;
-            default:
-                PPR_ASSERT(false && "unhandled GLFW keyboard action");
-                break;
+            case GLFW_PRESS: window.m_when_keyboard_pressed(window, *key, true); break;
+            case GLFW_RELEASE: window.m_when_keyboard_pressed(window, *key, false); break;
+            case GLFW_REPEAT: window.m_when_keyboard_repeated(window, *key); break;
+            default: PPR_ASSERT(false && "unhandled GLFW keyboard action"); break;
         }
     }
 
@@ -455,7 +446,8 @@ namespace pP {
         window.m_when_hovered(window, entered);
     }
 
-    static void glfwMouseButtonCallback_(::GLFWwindow *p_glfw_window, const int glfw_button, const int action, [[maybe_unused]] const int mods) {
+    static void glfwMouseButtonCallback_(
+        ::GLFWwindow *p_glfw_window, const int glfw_button, const int action, [[maybe_unused]] const int mods) {
         if (glfw_button < 0 || glfw_button > 4) {
             return;
         }
@@ -464,15 +456,9 @@ namespace pP {
 
         const Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         switch (action) {
-            case GLFW_PRESS:
-                window.m_when_mouse_clicked(window, button, true);
-                break;
-            case GLFW_RELEASE:
-                window.m_when_mouse_clicked(window, button, false);
-                break;
-            default:
-                PPR_ASSERT(false && "unhandled GLFW mouse action");
-                break;
+            case GLFW_PRESS: window.m_when_mouse_clicked(window, button, true); break;
+            case GLFW_RELEASE: window.m_when_mouse_clicked(window, button, false); break;
+            default: PPR_ASSERT(false && "unhandled GLFW mouse action"); break;
         }
     }
 
@@ -502,7 +488,7 @@ namespace pP {
 #ifdef _WIN32
             return ::glfwGetWin32Window(p_glfw_window);
 #elif defined(__APPLE__)
-            return (void*)::glfwGetCocoaWindow(p_glfw_window);
+            return (void *) ::glfwGetCocoaWindow(p_glfw_window);
 #else
             return nullptr;
 #endif
@@ -510,9 +496,7 @@ namespace pP {
         return nullptr;
     }
 
-    std::error_code GlfwWindow::createWindow(
-        WindowModel &&definition,
-        safe_ptr<Window> *window_write_ref) {
+    std::error_code GlfwWindow::createWindow(WindowModel &&definition, safe_ptr<Window> *window_write_ref) {
         PPR_ASSERT(window_write_ref);
 
         ::glfwWindowHint(GLFW_FOCUSED, definition.m_focused ? GLFW_TRUE : GLFW_FALSE);
@@ -522,13 +506,12 @@ namespace pP {
 
         auto p_glfw_window = std::unique_ptr<GLFWwindow, decltype(&::glfwDestroyWindow)>{
             ::glfwCreateWindow(
-                definition.m_window_size.x,
-                definition.m_window_size.y,
-                definition.m_title.data(),
-                definition.m_fullscreen_monitor.isValid() ? glfwHandle_(definition.m_fullscreen_monitor->m_handle) : nullptr,
-                definition.m_share_resources_with.isValid() ? glfwHandle_(definition.m_share_resources_with->m_handle) : nullptr),
-            &::glfwDestroyWindow
-        };
+                definition.m_window_size.x, definition.m_window_size.y, definition.m_title.data(),
+                definition.m_fullscreen_monitor.isValid() ? glfwHandle_(definition.m_fullscreen_monitor->m_handle)
+                                                          : nullptr,
+                definition.m_share_resources_with.isValid() ? glfwHandle_(definition.m_share_resources_with->m_handle)
+                                                            : nullptr),
+            &::glfwDestroyWindow};
 
         if (not p_glfw_window) {
             return std::make_error_code(std::errc::invalid_argument);
@@ -571,9 +554,7 @@ namespace pP {
         const NativeWindowHandle native_handle{glfwGetNativeWindowHandle(p_glfw_window.get())};
 
         auto window = std::make_unique<Window>(
-            WindowHandle{p_glfw_window.release()},
-            native_handle,
-            std::move(definition));
+            WindowHandle{p_glfw_window.release()}, native_handle, std::move(definition));
         window->m_content_scale = content_scale;
         window->m_framebuffer_size = framebuffer_size;
         window->m_window_position = window_position;
@@ -593,10 +574,7 @@ namespace pP {
 
     std::error_code GlfwWindow::destroyWindow(SharedWindow &&window) {
         const auto it = std::ranges::find_if(
-            m_windows,
-            [&](const std::unique_ptr<Window> &owned) noexcept -> bool {
-                return owned.get() == &*window;
-            });
+            m_windows, [&](const std::unique_ptr<Window> &owned) noexcept -> bool { return owned.get() == &*window; });
 
         if (PPR_ENSURE(m_windows.end() != it)) {
             const bool was_main = (m_main_window == window);
@@ -630,7 +608,6 @@ namespace pP {
         m_main_window = std::move(window);
 
         if (m_main_window.isValid()) {
-
         }
 
         return old_main_window;
@@ -649,18 +626,10 @@ namespace pP {
     }
 
     void GlfwWindow::setWindowMonitor(
-        const Window &window,
-        const Monitor &monitor,
-        const int2 &window_position,
-        const int2 &window_size) {
+        const Window &window, const Monitor &monitor, const int2 &window_position, const int2 &window_size) {
         ::glfwSetWindowMonitor(
-            glfwHandle_(window.m_handle),
-            glfwHandle_(monitor.m_handle),
-            window_position.x,
-            window_position.y,
-            window_size.x,
-            window_size.y,
-            GLFW_DONT_CARE);
+            glfwHandle_(window.m_handle), glfwHandle_(monitor.m_handle), window_position.x, window_position.y,
+            window_size.x, window_size.y, GLFW_DONT_CARE);
     }
 
     [[nodiscard]] bool GlfwWindow::getWindowShouldClose(const Window &window) const noexcept {
@@ -675,18 +644,10 @@ namespace pP {
         ::GLFWwindow *const p_glfw_window = glfwHandle_(window.m_handle);
 
         switch (mode) {
-            case ECursorMode::normal:
-                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                break;
-            case ECursorMode::captured:
-                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_CAPTURED);
-                break;
-            case ECursorMode::disabled:
-                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                break;
-            case ECursorMode::hidden:
-                ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
-                break;
+            case ECursorMode::normal: ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); break;
+            case ECursorMode::captured: ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_CAPTURED); break;
+            case ECursorMode::disabled: ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); break;
+            case ECursorMode::hidden: ::glfwSetInputMode(p_glfw_window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN); break;
         }
     }
 
@@ -762,11 +723,13 @@ namespace pP {
         return m_when_window_closed.add(std::move(on_closed));
     }
 
-    auto GlfwWindow::whenWindowFocused(WindowFocusedCallback::Event on_focused) noexcept -> WindowFocusedCallback::Handle {
+    auto GlfwWindow::whenWindowFocused(WindowFocusedCallback::Event on_focused) noexcept
+        -> WindowFocusedCallback::Handle {
         return m_when_window_focused.add(std::move(on_focused));
     }
 
-    auto GlfwWindow::whenWindowIconified(WindowIconifiedCallback::Event on_iconified) noexcept -> WindowIconifiedCallback::Handle {
+    auto GlfwWindow::whenWindowIconified(WindowIconifiedCallback::Event on_iconified) noexcept
+        -> WindowIconifiedCallback::Handle {
         return m_when_window_iconified.add(std::move(on_iconified));
     }
 
@@ -774,7 +737,8 @@ namespace pP {
         return m_when_window_moved.add(std::move(on_moved));
     }
 
-    auto GlfwWindow::whenWindowResized(WindowResizedCallback::Event on_resized) noexcept -> WindowResizedCallback::Handle {
+    auto GlfwWindow::whenWindowResized(WindowResizedCallback::Event on_resized) noexcept
+        -> WindowResizedCallback::Handle {
         return m_when_window_resized.add(std::move(on_resized));
     }
 

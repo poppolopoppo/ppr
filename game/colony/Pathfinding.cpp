@@ -32,7 +32,7 @@ namespace pP::colony {
 
         [[nodiscard]] bool elementAt(const sim::ChunkGrid &grid, const u32 x, const u32 y, u16 &element) noexcept {
             const sim::ChunkPos chunk{x / sim::kChunkEdge, y / sim::kChunkEdge};
-            const std::optional<std::span<const sim::Cell> > cells = grid.residentCells(chunk);
+            const std::optional<std::span<const sim::Cell>> cells = grid.residentCells(chunk);
             if (not cells) {
                 element = kElementVacuum;
                 return true;
@@ -64,7 +64,8 @@ namespace pP::colony {
             registry.emplace<PathComp>(entity, comp);
         }
 
-        void finishSearch(sim::Registry &registry, Pathfinder &finder, const u32 end_node, const bool partial) noexcept {
+        void finishSearch(
+            sim::Registry &registry, Pathfinder &finder, const u32 end_node, const bool partial) noexcept {
             const sim::Entity entity = finder.m_entity;
             Array<u32> chain{};
             u32 node = end_node;
@@ -119,11 +120,11 @@ namespace pP::colony {
         if (finder.m_has_search) {
             const PathReq *active_req = registry.get<PathReq>(finder.m_entity);
             const bool matches = active_req != nullptr and
-                registry.isAlive(finder.m_entity) and
-                active_req->m_from == finder.m_from and
-                active_req->m_to == finder.m_to and
-                active_req->m_caps == finder.m_caps and
-                registry.get<PathComp>(finder.m_entity) == nullptr;
+                                 registry.isAlive(finder.m_entity) and
+                                 active_req->m_from == finder.m_from and
+                                 active_req->m_to == finder.m_to and
+                                 active_req->m_caps == finder.m_caps and
+                                 registry.get<PathComp>(finder.m_entity) == nullptr;
             if (not matches) {
                 finder = Pathfinder{};
             }
@@ -148,9 +149,9 @@ namespace pP::colony {
                 return;
             }
             const bool usable = sim::isInsideWorld(req->m_from) and
-                sim::isInsideWorld(req->m_to) and
-                (req->m_caps & kPathCapsWalk) != 0u and
-                (req->m_caps & ~kPathCapsWalk) == 0u;
+                                sim::isInsideWorld(req->m_to) and
+                                (req->m_caps & kPathCapsWalk) != 0u and
+                                (req->m_caps & ~kPathCapsWalk) == 0u;
             const bool endpoints_open = usable and isWalkable(grid, req->m_from) and isWalkable(grid, req->m_to);
             if (not endpoints_open) {
                 emitResult(registry, pending, PathComp{.m_partial = true});
@@ -203,8 +204,7 @@ namespace pP::colony {
                 const u32 x = static_cast<u32>(next_x);
                 const u32 y = static_cast<u32>(next_y);
                 u16 element = kElementVacuum;
-                if (not elementAt(grid, x, y, element) or element != kElementVacuum)
-                {
+                if (not elementAt(grid, x, y, element) or element != kElementVacuum) {
                     continue;
                 }
                 const u32 next = packCell(x, y);

@@ -52,17 +52,19 @@ namespace pP {
           m_speed_action{std::make_unique<InputAction>("CameraSpeed", EInputValueType::axis_1d)},
           m_fov_action{std::make_unique<InputAction>("CameraFov", EInputValueType::axis_1d)},
           m_look_action{std::make_unique<InputAction>("CameraLook", EInputValueType::digital)} {
-        m_translate_action->setTriggered([self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &key) noexcept {
-            const InputAxis3D &value = event.getAxis3DValue();
-            if (key.isMouse()) {
-                self->m_translate_impulse += value.m_relative;
-            } else {
-                self->setTranslateRate_(key, value.m_absolute);
-            }
-        });
-        m_translate_action->setCompleted([self{safe_ptr(this)}](const InputActionEvent &, const InputKey &key) noexcept {
-            self->setTranslateRate_(key, float3{zero_v});
-        });
+        m_translate_action->setTriggered(
+            [self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &key) noexcept {
+                const InputAxis3D &value = event.getAxis3DValue();
+                if (key.isMouse()) {
+                    self->m_translate_impulse += value.m_relative;
+                } else {
+                    self->setTranslateRate_(key, value.m_absolute);
+                }
+            });
+        m_translate_action->setCompleted(
+            [self{safe_ptr(this)}](const InputActionEvent &, const InputKey &key) noexcept {
+                self->setTranslateRate_(key, float3{zero_v});
+            });
 
         m_rotate_action->setTriggered([this](const InputActionEvent &event, const InputKey &key) noexcept {
             if (const auto &[absolute, relative] = event.getAxis2DValue(); key != InputKey::mouse_2d) {
@@ -71,16 +73,14 @@ namespace pP {
                 m_rotate_impulse += relative;
             }
         });
-        m_rotate_action->setCompleted([this](const InputActionEvent &, const InputKey &key) noexcept {
-            setRotateRate_(key, float2{zero_v});
-        });
+        m_rotate_action->setCompleted(
+            [this](const InputActionEvent &, const InputKey &key) noexcept { setRotateRate_(key, float2{zero_v}); });
 
         m_speed_action->setTriggered([this](const InputActionEvent &event, const InputKey &key) noexcept {
             setSpeedRate_(key, event.getAxis1DValue().m_absolute);
         });
-        m_speed_action->setCompleted([this](const InputActionEvent &, const InputKey &key) noexcept {
-            setSpeedRate_(key, 0.0f);
-        });
+        m_speed_action->setCompleted(
+            [this](const InputActionEvent &, const InputKey &key) noexcept { setSpeedRate_(key, 0.0f); });
 
         m_fov_action->setTriggered([this](const InputActionEvent &event, const InputKey &key) noexcept {
             const InputAxis1D value = event.getAxis1DValue();
@@ -90,16 +90,13 @@ namespace pP {
                 setFovRate_(key, value.m_absolute);
             }
         });
-        m_fov_action->setCompleted([this](const InputActionEvent &, const InputKey &key) noexcept {
-            setFovRate_(key, 0.0f);
-        });
+        m_fov_action->setCompleted(
+            [this](const InputActionEvent &, const InputKey &key) noexcept { setFovRate_(key, 0.0f); });
 
-        m_look_action->setStarted([this](const InputActionEvent &, const InputKey &) noexcept {
-            m_has_mouse_look = true;
-        });
-        m_look_action->setCompleted([this](const InputActionEvent &, const InputKey &) noexcept {
-            m_has_mouse_look = false;
-        });
+        m_look_action->setStarted(
+            [this](const InputActionEvent &, const InputKey &) noexcept { m_has_mouse_look = true; });
+        m_look_action->setCompleted(
+            [this](const InputActionEvent &, const InputKey &) noexcept { m_has_mouse_look = false; });
     }
 
     void details::BasicCameraController::resetInputState() noexcept {
@@ -118,7 +115,8 @@ namespace pP {
         m_has_mouse_look = false;
     }
 
-    void details::BasicCameraController::rotateCamera_(const float heading, const float pitch, const float roll) noexcept {
+    void details::BasicCameraController::rotateCamera_(
+        const float heading, const float pitch, const float roll) noexcept {
         // Heading is a world-Y pre-multiply; pitch/roll are body-local post-multiplies.
         // Exact regrouping into Ry(sum H) * q * Rx(sum P) * Rz(sum R) holds because roll
         // is unused today, keeping every pitch factor adjacent to the raw basis.
@@ -130,7 +128,8 @@ namespace pP {
         if (isIdentityRotation_(m_delta_heading) and isIdentityRotation_(m_delta_pitch_roll)) {
             return m_rotation_analog.raw();
         }
-        const Quaternion combined = normalizedOrIdentity_(m_delta_heading * m_rotation_analog.raw() * m_delta_pitch_roll);
+        const Quaternion combined = normalizedOrIdentity_(
+            m_delta_heading * m_rotation_analog.raw() * m_delta_pitch_roll);
         if (max_pitch.has_value()) {
             return clampPitch_(combined, *max_pitch);
         }
@@ -189,7 +188,8 @@ namespace pP {
         for (const float rate: m_speed_rates.values()) {
             speed_rate += rate;
         }
-        m_speed_analog.addClamp(speed_rate * elapsed_seconds + m_speed_impulse, m_speed_multiplier_min_max.x, m_speed_multiplier_min_max.y);
+        m_speed_analog.addClamp(
+            speed_rate * elapsed_seconds + m_speed_impulse, m_speed_multiplier_min_max.x, m_speed_multiplier_min_max.y);
 
         float fov_rate{zero_v};
         for (const float rate: m_fov_rates.values()) {
@@ -221,8 +221,7 @@ namespace pP {
         }
         m_rotation_analog.update(dt);
 
-        if (not m_has_teleported and dot2(m_delta_position) > 0.0f)
-        {
+        if (not m_has_teleported and dot2(m_delta_position) > 0.0f) {
             const float3 local_delta = m_delta_position * float3(m_speed_analog.filtered());
             const float3 world_delta = quaternionTransform(m_rotation_analog.raw(), local_delta);
             m_position_analog.add(world_delta);
@@ -242,14 +241,18 @@ namespace pP {
 
         const auto speed_modifier = [this](const float delta) -> InputModifierEvent {
             return [self{safe_ptr(this)}, delta](const TimeSpan, InputValue &output) noexcept {
-                output = output.modulate(delta * std::max(self->m_speed_multiplier_min_max.y - self->m_speed_multiplier_min_max.x, 0.0f));
+                output = output.modulate(
+                    delta * std::max(self->m_speed_multiplier_min_max.y - self->m_speed_multiplier_min_max.x, 0.0f));
             };
         };
 
         out_mapping.mapInputKey(SharedInputAction(m_speed_action.get()), InputKey::left_shift, speed_modifier(0.015f));
-        out_mapping.mapInputKey(SharedInputAction(m_speed_action.get()), InputKey::left_control, speed_modifier(-0.015f));
-        out_mapping.mapInputKey(SharedInputAction(m_speed_action.get()), InputKey::gamepad_left_shoulder, speed_modifier(-0.01f));
-        out_mapping.mapInputKey(SharedInputAction(m_speed_action.get()), InputKey::gamepad_right_shoulder, speed_modifier(0.01f));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_speed_action.get()), InputKey::left_control, speed_modifier(-0.015f));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_speed_action.get()), InputKey::gamepad_left_shoulder, speed_modifier(-0.01f));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_speed_action.get()), InputKey::gamepad_right_shoulder, speed_modifier(0.01f));
 
         // fov:
 
@@ -267,7 +270,8 @@ namespace pP {
     // FreeCameraController — free-flight camera controller
     // ------------------------------------------------------------------
 
-    void FreeCameraController::lookAt(const float3 &eye, const float3 &target, const float3 &up, const bool has_teleported) noexcept {
+    void FreeCameraController::lookAt(
+        const float3 &eye, const float3 &target, const float3 &up, const bool has_teleported) noexcept {
         const float3 forward = safeNormalize<float, 3u>(target - eye, math::forward);
         const float3 right = normalize(cross(up, forward));
         const float3 corrected_up = cross(forward, right);
@@ -283,7 +287,8 @@ namespace pP {
         }
     }
 
-    void FreeCameraController::lookAt(const float3 &eye, const float heading, const float pitch, const bool has_teleported) noexcept {
+    void FreeCameraController::lookAt(
+        const float3 &eye, const float heading, const float pitch, const bool has_teleported) noexcept {
         if (has_teleported) {
             m_has_teleported = true;
             m_position_analog.reset(eye);
@@ -305,41 +310,62 @@ namespace pP {
             };
         };
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::w, translate_modifier(math::forward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::s, translate_modifier(math::backward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::a, translate_modifier(math::left));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::d, translate_modifier(math::right));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::w, translate_modifier(math::forward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::s, translate_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::a, translate_modifier(math::left));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::d, translate_modifier(math::right));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::up_arrow, translate_modifier(math::forward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::down_arrow, translate_modifier(math::backward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::left_arrow, translate_modifier(math::left));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::right_arrow, translate_modifier(math::right));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::up_arrow, translate_modifier(math::forward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::down_arrow, translate_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::left_arrow, translate_modifier(math::left));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::right_arrow, translate_modifier(math::right));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::page_up, translate_modifier(math::up));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::page_down, translate_modifier(math::down));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::page_up, translate_modifier(math::up));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::page_down, translate_modifier(math::down));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, translate_modifier(math::up));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, translate_modifier(math::down));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, translate_modifier(math::up));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, translate_modifier(math::down));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_left_2d,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_left_2d,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 output = output.modulate(float3(self->m_gamepad_sensitivity.x) * self->getTranslateSpeed());
             });
 
         // rotation:
 
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::q, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
-        });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::e, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
-        });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::mouse_2d, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(self->m_mouse_sensitivity * self->getRotateSpeed());
-        });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::gamepad_right_2d,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::q,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-                output = output.modulate(float2{1.0f, -1.0f} * float2(self->m_gamepad_sensitivity.y) * self->getRotateSpeed());
+                output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
+            });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::e,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
+            });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::mouse_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(self->m_mouse_sensitivity * self->getRotateSpeed());
+            });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::gamepad_right_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(
+                    float2{1.0f, -1.0f} * float2(self->m_gamepad_sensitivity.y) * self->getRotateSpeed());
             });
 
         // fov:
@@ -350,7 +376,8 @@ namespace pP {
             };
         };
 
-        out_mapping.mapInputKey(SharedInputAction(m_fov_action.get()), InputKey::mouse_wheel_axis_y, fov_modifier(0.01f));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_fov_action.get()), InputKey::mouse_wheel_axis_y, fov_modifier(0.01f));
     }
 
     // ------------------------------------------------------------------
@@ -383,20 +410,20 @@ namespace pP {
         // apparent motion so grabbed ground stays under the cursor):
         // local delta = (-dx * scale, +dy * scale, 0).
         m_translate_action->setTriggered(
-                [self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &key) noexcept {
-                    if (key != InputKey::mouse_2d) {
-                        self->setTranslateRate_(key, event.getAxis3DValue().m_absolute);
-                        return;
-                    }
-                    const InputAxis2D cursor = event.getAxis2DValue();
-                    self->m_cursor_client = cursor.m_absolute;
-                    self->m_has_cursor = true;
-                    const bool finite_delta = std::isfinite(cursor.m_relative.x) and std::isfinite(cursor.m_relative.y);
-                    if (self->m_has_grab_pan and finite_delta) {
-                        const float scale = self->m_ortho_scale;
-                        self->m_grab_impulse += float3{-cursor.m_relative.x * scale, cursor.m_relative.y * scale, 0.0f};
-                    }
-                });
+            [self{safe_ptr(this)}](const InputActionEvent &event, const InputKey &key) noexcept {
+                if (key != InputKey::mouse_2d) {
+                    self->setTranslateRate_(key, event.getAxis3DValue().m_absolute);
+                    return;
+                }
+                const InputAxis2D cursor = event.getAxis2DValue();
+                self->m_cursor_client = cursor.m_absolute;
+                self->m_has_cursor = true;
+                const bool finite_delta = std::isfinite(cursor.m_relative.x) and std::isfinite(cursor.m_relative.y);
+                if (self->m_has_grab_pan and finite_delta) {
+                    const float scale = self->m_ortho_scale;
+                    self->m_grab_impulse += float3{-cursor.m_relative.x * scale, cursor.m_relative.y * scale, 0.0f};
+                }
+            });
     }
 
     std::error_code PanCameraController::setOrthoScale(const float scale) noexcept {
@@ -414,7 +441,9 @@ namespace pP {
     }
 
     std::error_code PanCameraController::setWorldBounds(const float2 &min_bound, const float2 &max_bound) noexcept {
-        const bool finite = std::isfinite(min_bound.x) and std::isfinite(min_bound.y) and std::isfinite(max_bound.x) and
+        const bool finite = std::isfinite(min_bound.x) and
+                            std::isfinite(min_bound.y) and
+                            std::isfinite(max_bound.x) and
                             std::isfinite(max_bound.y);
         const bool ordered = min_bound.x <= max_bound.x and min_bound.y <= max_bound.y;
         if (not finite or not ordered) [[unlikely]] {
@@ -480,7 +509,8 @@ namespace pP {
         const float3 right = quaternionTransform(basis, math::axis_x);
         const float3 up = quaternionTransform(basis, math::axis_y);
         const float3 forward = quaternionTransform(basis, math::axis_z);
-        const bool finite_frame = std::isfinite(right.x + right.y + right.z) and std::isfinite(up.x + up.y + up.z) and
+        const bool finite_frame = std::isfinite(right.x + right.y + right.z) and
+                                  std::isfinite(up.x + up.y + up.z) and
                                   std::isfinite(forward.x + forward.y + forward.z);
         if (not finite_frame or std::abs(forward.z) < 1e-6f) {
             return;
@@ -585,8 +615,8 @@ namespace pP {
         return finite and positive;
     }
 
-    void PanCameraController::setParallelPlane(const float3 &plane_normal, const float3 &plane_up,
-                                               const bool has_teleported) noexcept {
+    void PanCameraController::setParallelPlane(
+        const float3 &plane_normal, const float3 &plane_up, const bool has_teleported) noexcept {
         PPR_ASSERT(isNormalized<float, 3u>(plane_normal));
         PPR_ASSERT(isNormalized<float, 3u>(plane_up));
 
@@ -638,40 +668,50 @@ namespace pP {
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::a, move_modifier(math::left));
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::d, move_modifier(math::right));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::up_arrow,
-                                move_modifier(math::up));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::down_arrow, move_modifier(math::down));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::left_arrow, move_modifier(math::left));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::right_arrow, move_modifier(math::right));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::up_arrow, move_modifier(math::up));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::down_arrow, move_modifier(math::down));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::left_arrow, move_modifier(math::left));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::right_arrow, move_modifier(math::right));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, move_modifier(math::up));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, move_modifier(math::down));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_left, move_modifier(math::left));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_right, move_modifier(math::right));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, move_modifier(math::up));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, move_modifier(math::down));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_left, move_modifier(math::left));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_right, move_modifier(math::right));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::q, move_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::q, move_modifier(math::backward));
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::e, move_modifier(math::forward));
 
         // Cursor motion alone never pans: the raw axis_2d reaches the grab
         // handler (cursor record + MMB-gated impulse) unmodified.
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::mouse_2d);
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_left_2d,
-                                [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-                                    // left stick moves left/right & up/down under the same law
-                                    output = InputValue(std::get<InputAxis2D>(output), InputAxis1D{})
-                                                     . // transforms {x,y} vector to {x,y,0}
-                                             modulate(float3(self->m_gamepad_sensitivity.x) *
-                                                      self->getPanTranslateSpeed());
-                                });
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_right_2d,
-                                [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-                                    // right stick moves only forward/backward
-                                    output =
-                                            InputValue(InputAxis1D{}, std::get<InputAxis2D>(output))
-                                                    . // transforms {x,y} vector to {0,x,y}
-                                            modulate(float3(self->m_gamepad_sensitivity.y) * self->getTranslateSpeed() *
-                                                     float3(0, 0, 1)); // transforms {0,x,y} to {0,0,y}
-                                });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_left_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                // left stick moves left/right & up/down under the same law
+                output = InputValue(std::get<InputAxis2D>(output), InputAxis1D{})
+                             . // transforms {x,y} vector to {x,y,0}
+                         modulate(float3(self->m_gamepad_sensitivity.x) * self->getPanTranslateSpeed());
+            });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_right_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                // right stick moves only forward/backward
+                output = InputValue(InputAxis1D{}, std::get<InputAxis2D>(output))
+                             . // transforms {x,y} vector to {0,x,y}
+                         modulate(
+                             float3(self->m_gamepad_sensitivity.y) *
+                             self->getTranslateSpeed() *
+                             float3(0, 0, 1)); // transforms {0,x,y} to {0,0,y}
+            });
     }
 
     // ------------------------------------------------------------------
@@ -683,9 +723,8 @@ namespace pP {
         }
 
         [[nodiscard]] float3 safeOrbitRight_(const float3 &forward) noexcept {
-            const float3 reference_up = std::abs(dot(forward, math::up)) < 1.0f - epsilon_v<float>
-                                            ? math::up
-                                            : math::right;
+            const float3 reference_up = std::abs(dot(forward, math::up)) < 1.0f - epsilon_v<float> ? math::up
+                                                                                                   : math::right;
             return safeNormalize<float, 3u>(cross(reference_up, forward), math::right);
         }
 
@@ -787,62 +826,86 @@ namespace pP {
         };
 
         out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::w, move_modifier(math::forward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::s, move_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::s, move_modifier(math::backward));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::up_arrow, move_modifier(math::forward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::down_arrow, move_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::up_arrow, move_modifier(math::forward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::down_arrow, move_modifier(math::backward));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, move_modifier(math::forward));
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, move_modifier(math::backward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_up, move_modifier(math::forward));
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_dpad_down, move_modifier(math::backward));
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::mouse_wheel_axis_y,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::mouse_wheel_axis_y,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 // mouse wheel moves forward/backward
-                output = InputValue(InputAxis1D{}, std::get<InputAxis1D>(output)). // transforms {x} vector to {0,x}
-                        modulate(self->getTranslateSpeed()); // transforms {0,x} vector to {0,0,x}
+                output = InputValue(InputAxis1D{}, std::get<InputAxis1D>(output))
+                             . // transforms {x} vector to {0,x}
+                         modulate(self->getTranslateSpeed()); // transforms {0,x} vector to {0,0,x}
             });
 
         // rotation:
 
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::a, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
-        });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::d, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
-        });
-
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::left_arrow,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::a,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
             });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::right_arrow,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::d,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
             });
 
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::gamepad_dpad_left,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::left_arrow,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
             });
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::gamepad_dpad_right,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::right_arrow,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
             });
 
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::gamepad_left_2d,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::gamepad_dpad_left,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-                output = output.modulate(float2{1.0f, -1.0f} * float2(self->m_gamepad_sensitivity.x) * self->getRotateSpeed());
+                output = output.modulate(-float2{1.0f, 0.0f} * self->getRotateSpeed());
+            });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::gamepad_dpad_right,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(float2{1.0f, 0.0f} * self->getRotateSpeed());
             });
 
-        out_mapping.mapInputKey(SharedInputAction(m_rotate_action.get()), InputKey::mouse_2d, [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
-            output = output.modulate(self->m_mouse_sensitivity * self->getRotateSpeed());
-        });
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::gamepad_left_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(
+                    float2{1.0f, -1.0f} * float2(self->m_gamepad_sensitivity.x) * self->getRotateSpeed());
+            });
 
-        out_mapping.mapInputKey(SharedInputAction(m_translate_action.get()), InputKey::gamepad_right_2d,
+        out_mapping.mapInputKey(
+            SharedInputAction(m_rotate_action.get()), InputKey::mouse_2d,
+            [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
+                output = output.modulate(self->m_mouse_sensitivity * self->getRotateSpeed());
+            });
+
+        out_mapping.mapInputKey(
+            SharedInputAction(m_translate_action.get()), InputKey::gamepad_right_2d,
             [self{safe_ptr(this)}](const TimeSpan, InputValue &output) noexcept {
                 // right stick moves only forward/backward
-                output = InputValue(InputAxis1D{}, std::get<InputAxis2D>(output)). // transforms {x,y} vector to {0,x,y}
-                        modulate(float3(self->m_gamepad_sensitivity.y) * self->getTranslateSpeed() * float3(0, 0, 1)); // transforms {0,x,y} to {0,0,y}
+                output = InputValue(InputAxis1D{}, std::get<InputAxis2D>(output))
+                             . // transforms {x,y} vector to {0,x,y}
+                         modulate(
+                             float3(self->m_gamepad_sensitivity.y) *
+                             self->getTranslateSpeed() *
+                             float3(0, 0, 1)); // transforms {0,x,y} to {0,0,y}
             });
     }
 }

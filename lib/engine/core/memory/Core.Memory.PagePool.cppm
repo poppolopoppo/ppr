@@ -28,8 +28,12 @@ namespace pP::mem {
             u32 m_leaves_num_words{0};
             u32 m_leaves_first_word{0};
 
-            [[nodiscard]] constexpr u32 getNumTotalWords() const noexcept { return m_leaves_first_word + m_leaves_num_words; }
-            [[nodiscard]] constexpr std::size_t getAllocationSize() const noexcept { return getNumTotalWords() * sizeof(word_t); }
+            [[nodiscard]] constexpr u32 getNumTotalWords() const noexcept {
+                return m_leaves_first_word + m_leaves_num_words;
+            }
+            [[nodiscard]] constexpr std::size_t getAllocationSize() const noexcept {
+                return getNumTotalWords() * sizeof(word_t);
+            }
 
             explicit constexpr BuildInfos(u32 desired_size) noexcept;
         };
@@ -128,10 +132,12 @@ namespace pP::mem {
             return std::span(m_bits + infos.m_leaves_first_word, infos.m_leaves_num_words);
         }
 
-        [[nodiscard]] constexpr std::span<const word_t> nodesAtDepth(const BuildInfos &infos, std::size_t depth) const noexcept;
+        [[nodiscard]] constexpr std::span<const word_t> nodesAtDepth(
+            const BuildInfos &infos, std::size_t depth) const noexcept;
 
         // must call setupMemoryRequirements() before
-        constexpr void initialize(const BuildInfos &infos, std::allocation_result<void *> storage, bool enabled_by_default) noexcept;
+        constexpr void initialize(
+            const BuildInfos &infos, std::allocation_result<void *> storage, bool enabled_by_default) noexcept;
 
         [[nodiscard]] constexpr bool isAllocated(const BuildInfos &infos, u32 bit) const noexcept;
 
@@ -146,7 +152,8 @@ namespace pP::mem {
             u32 m_bit_count{0u};
         };
 
-        [[nodiscard]] constexpr AllocRange allocateContiguous(const BuildInfos &infos, u32 requested_count, bool &out_was_empty) noexcept;
+        [[nodiscard]] constexpr AllocRange allocateContiguous(
+            const BuildInfos &infos, u32 requested_count, bool &out_was_empty) noexcept;
 
         [[maybe_unused]] PPR_FORCE_INLINE constexpr bool deallocate(const BuildInfos &infos, u32 bit) noexcept {
             PPR_ASSERT(bit < infos.m_desired_size);
@@ -229,10 +236,14 @@ namespace pP::mem {
         BitmapTree m_committed_pages{};
 
         [[maybe_unused]]
-        const std::byte m_padding_for_alignment[
-            hal::cacheline_size_v - (
-                sizeof(m_barrier) + sizeof(m_reserved_space) + sizeof(m_highest_committed_space) + sizeof(m_page_size) +
-                sizeof(m_tree_infos) + sizeof(m_committed_pages)) % hal::cacheline_size_v]{};
+        const std::byte m_padding_for_alignment
+            [hal::cacheline_size_v - (sizeof(m_barrier) +
+                                         sizeof(m_reserved_space) +
+                                         sizeof(m_highest_committed_space) +
+                                         sizeof(m_page_size) +
+                                         sizeof(m_tree_infos) +
+                                         sizeof(m_committed_pages)) %
+                                         hal::cacheline_size_v]{};
 
         // hot storage, bundles are voluntarily isolated inside their respective cache lines
         alignas(hal::cacheline_size_v) PartialBundle m_partial_bundle{};
@@ -258,11 +269,11 @@ namespace pP::mem {
         }
 
         PPR_FORCE_INLINE static constexpr auto runListAssumeSorted_(std::span<const u32> indices) noexcept {
-            return indices
-               | std::views::chunk_by([](const u32 a, const u32 b) constexpr noexcept { return b == a + 1; })
-               | std::views::transform([](auto run) constexpr noexcept {
-                   return std::pair{run.front(), static_cast<u32>(std::ranges::distance(run))};
-               });
+            return indices |
+                   std::views::chunk_by([](const u32 a, const u32 b) constexpr noexcept { return b == a + 1; }) |
+                   std::views::transform([](auto run) constexpr noexcept {
+                       return std::pair{run.front(), static_cast<u32>(std::ranges::distance(run))};
+                   });
         }
 
         void decommitFullBundle_();
@@ -286,12 +297,11 @@ namespace pP::mem {
 
         [[nodiscard]] bool owns(const void *ptr, std::size_t size) const noexcept;
 
-        [[nodiscard]] std::allocation_result<void *>
-        allocateRaw(std::size_t bytes = hal::page_size,
-                    std::align_val_t alignment = std::align_val_t{hal::page_size});
+        [[nodiscard]] std::allocation_result<void *> allocateRaw(
+            std::size_t bytes = hal::page_size, std::align_val_t alignment = std::align_val_t{hal::page_size});
 
-        void deallocateRaw(const void *ptr, std::size_t bytes,
-                           std::align_val_t alignment = std::align_val_t{hal::page_size});
+        void deallocateRaw(
+            const void *ptr, std::size_t bytes, std::align_val_t alignment = std::align_val_t{hal::page_size});
 
         void shrinkToFit();
     };

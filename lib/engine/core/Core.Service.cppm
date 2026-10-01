@@ -26,7 +26,7 @@ export namespace pP {
 
     class ServicesStore : public safe_object {
         mutable std::shared_mutex m_shared_mutex{};
-        FlatMap<std::type_index, safe_ptr<IService> > m_services{};
+        FlatMap<std::type_index, safe_ptr<IService>> m_services{};
         safe_ptr<ServicesStore> m_parent{};
 
         [[nodiscard]] bool insert_(std::type_index service_key, safe_ptr<IService> &&service);
@@ -37,16 +37,15 @@ export namespace pP {
     public:
         ServicesStore() noexcept = default;
 
-        explicit ServicesStore(safe_ptr<ServicesStore> parent) noexcept
-            : m_parent{std::move(parent)} {
+        explicit ServicesStore(safe_ptr<ServicesStore> parent) noexcept : m_parent{std::move(parent)} {
         }
 
         void reset() noexcept;
 
         [[nodiscard]] ServiceInjector inject() const noexcept;
 
-        using iterator = FlatMap<std::type_index, safe_ptr<IService> >::iterator;
-        using const_iterator = FlatMap<std::type_index, safe_ptr<IService> >::iterator;
+        using iterator = FlatMap<std::type_index, safe_ptr<IService>>::iterator;
+        using const_iterator = FlatMap<std::type_index, safe_ptr<IService>>::iterator;
 
         template<typename T>
             requires std::is_base_of_v<IService, T>

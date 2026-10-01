@@ -25,7 +25,7 @@ namespace pP {
     }
 
     double time::seconds(const TimeSpan duration) noexcept {
-        return std::chrono::duration_cast<std::chrono::duration<double> >(duration).count();
+        return std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
     }
 
     // ------------------------------------------------------------------
@@ -43,8 +43,7 @@ namespace pP {
         return g_instance;
     }
 
-    TimerManager::TimerManager(const ITimerClock &clock) noexcept
-        : m_clock(std::addressof(clock)) {
+    TimerManager::TimerManager(const ITimerClock &clock) noexcept : m_clock(std::addressof(clock)) {
         reset();
     }
 

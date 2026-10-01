@@ -18,7 +18,8 @@ namespace pP {
 
     bool ServicesStore::release_(std::type_index service_key, const IService &service) {
         const std::unique_lock write_lock{m_shared_mutex};
-        if (const auto it = m_services.find(service_key); it != m_services.end() && it->second == std::addressof(service)) [[likely]] {
+        if (const auto it = m_services.find(service_key);
+            it != m_services.end() && it->second == std::addressof(service)) [[likely]] {
             m_services.erase(it);
             return true;
         }

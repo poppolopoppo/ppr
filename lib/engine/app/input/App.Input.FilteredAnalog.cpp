@@ -26,8 +26,7 @@ namespace pP {
     }
 
     template<typename T>
-    FilteredAnalog<T>::FilteredAnalog(T init, float sensitivity) noexcept
-        : m_raw{init}, m_sensitivity{sensitivity} {
+    FilteredAnalog<T>::FilteredAnalog(T init, float sensitivity) noexcept : m_raw{init}, m_sensitivity{sensitivity} {
     }
 
     template<typename T>
@@ -36,16 +35,24 @@ namespace pP {
     }
 
     template<typename T>
-    T FilteredAnalog<T>::delta() const noexcept { return m_delta; }
+    T FilteredAnalog<T>::delta() const noexcept {
+        return m_delta;
+    }
 
     template<typename T>
-    T FilteredAnalog<T>::raw() const noexcept { return m_raw; }
+    T FilteredAnalog<T>::raw() const noexcept {
+        return m_raw;
+    }
 
     template<typename T>
-    float FilteredAnalog<T>::sensitivity() const noexcept { return m_sensitivity; }
+    float FilteredAnalog<T>::sensitivity() const noexcept {
+        return m_sensitivity;
+    }
 
     template<typename T>
-    void FilteredAnalog<T>::setSensitivity(float s) noexcept { m_sensitivity = s; }
+    void FilteredAnalog<T>::setSensitivity(float s) noexcept {
+        m_sensitivity = s;
+    }
 
     template<typename T>
     void FilteredAnalog<T>::add(const T &offset) noexcept {
@@ -101,14 +108,13 @@ namespace pP {
     }
 
     template<>
-    void FilteredAnalog<Quaternion>::addClamp(const Quaternion &offset, const Quaternion &, const Quaternion &) noexcept {
+    void FilteredAnalog<Quaternion>::addClamp(
+        const Quaternion &offset, const Quaternion &, const Quaternion &) noexcept {
         // Quaternion composition is multiplication, not addition, and component-wise clamp
         // does not preserve unit length — apply the offset as a rotation and re-normalize,
         // falling back to identity if the combined quaternion collapses to zero length.
         const Quaternion combined = m_raw * offset;
-        m_raw = dot(combined, combined) > epsilon_v<float>
-                    ? normalize(combined)
-                    : Quaternion{0.0f, 0.0f, 0.0f, 1.0f};
+        m_raw = dot(combined, combined) > epsilon_v<float> ? normalize(combined) : Quaternion{0.0f, 0.0f, 0.0f, 1.0f};
     }
 
     template class FilteredAnalog<float>;

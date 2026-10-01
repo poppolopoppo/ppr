@@ -29,14 +29,11 @@ namespace pP {
             m_raw.m_relative = value_type{zero_v};
         }
 
-        const float blend_rate = saturate(static_cast<float>(
-            std::pow(elapsed_seconds,
-                static_cast<double>(1.0f / std::max<float>(m_sensitivity, epsilon_v<float>)))));
+        const float blend_rate = saturate(
+            static_cast<float>(std::pow(
+                elapsed_seconds, static_cast<double>(1.0f / std::max<float>(m_sensitivity, epsilon_v<float>)))));
 
-        const value_type next_filtered = lerp(
-            m_filtered.m_absolute,
-            m_raw.m_absolute,
-            blend_rate);
+        const value_type next_filtered = lerp(m_filtered.m_absolute, m_raw.m_absolute, blend_rate);
 
         m_filtered.m_relative = next_filtered - m_filtered.m_absolute;
         m_filtered.m_absolute = next_filtered;
@@ -44,30 +41,23 @@ namespace pP {
 
     template<typename T>
     bool InputAxisState<T>::postInputMessages(
-        const TimeSpan dt,
-        const InputContext &context,
-        const InputDeviceID device_id,
-        const InputKey input_key,
-        const bool enable_filtered_inputs,
-        const bool emit_terminal_inactive) noexcept {
-        if (const auto &analog_value = get(enable_filtered_inputs);
-            dot2(analog_value.m_relative) > dot2(m_dead_zone)) {
+        const TimeSpan dt, const InputContext &context, const InputDeviceID device_id, const InputKey input_key,
+        const bool enable_filtered_inputs, const bool emit_terminal_inactive) noexcept {
+        if (const auto &analog_value = get(enable_filtered_inputs); dot2(analog_value.m_relative) > dot2(m_dead_zone)) {
             InputValue input_value(analog_value);
             PPR_ASSERT(input_value.getType() == input_key.m_value);
 
-            std::ignore = context.postKeyEvent(dt, InputMessage{
-                input_key, std::move(input_value),
-                device_id, EInputMessageEvent::axis
-            });
+            std::ignore = context.postKeyEvent(
+                dt, InputMessage{input_key, std::move(input_value), device_id, EInputMessageEvent::axis});
             m_has_active_output = dot2(analog_value.m_absolute) > dot2(m_dead_zone);
             return true;
         }
 
         if (emit_terminal_inactive && m_has_active_output && dot2(m_next_raw_absolute) <= dot2(m_dead_zone)) {
-            std::ignore = context.postKeyEvent(dt, InputMessage{
-                input_key, InputValue(details::input_value<value_type>{}),
-                device_id, EInputMessageEvent::axis
-            });
+            std::ignore = context.postKeyEvent(
+                dt,
+                InputMessage{
+                    input_key, InputValue(details::input_value<value_type>{}), device_id, EInputMessageEvent::axis});
             m_has_active_output = false;
             return true;
         }
@@ -97,8 +87,9 @@ namespace pP {
 
     template<typename ButtonT>
         requires std::is_enum_v<ButtonT> || std::is_integral_v<ButtonT>
-    bool InputDigitalState<ButtonT>::postInputMessages(const TimeSpan dt, const InputContext &context, const InputDeviceID device_id, ButtonT button,
-                                                       const bool pressed) {
+    bool InputDigitalState<ButtonT>::postInputMessages(
+        const TimeSpan dt, const InputContext &context, const InputDeviceID device_id, ButtonT button,
+        const bool pressed) {
         const std::optional input_key = InputKey::from(button);
         if (not input_key.has_value()) {
             return false;
@@ -107,18 +98,16 @@ namespace pP {
         if (pressed) {
             const auto [it, inserted] = m_pressed.insert(button);
 
-            std::ignore = context.postKeyEvent(dt, InputMessage{
-                input_key.value(), InputDigital(true),
-                device_id, inserted ? EInputMessageEvent::pressed : EInputMessageEvent::repeat
-            });
+            std::ignore = context.postKeyEvent(
+                dt, InputMessage{
+                        input_key.value(), InputDigital(true), device_id,
+                        inserted ? EInputMessageEvent::pressed : EInputMessageEvent::repeat});
             return true;
         }
 
         if (m_pressed.erase(button) > 0u) {
-            std::ignore = context.postKeyEvent(dt, InputMessage{
-                input_key.value(), InputDigital(false),
-                device_id, EInputMessageEvent::released
-            });
+            std::ignore = context.postKeyEvent(
+                dt, InputMessage{input_key.value(), InputDigital(false), device_id, EInputMessageEvent::released});
             return true;
         }
 
@@ -133,8 +122,7 @@ namespace pP {
     // keyboard device
     // ------------------------------------------------------------------
 
-    KeyboardDevice::KeyboardDevice(const InputDeviceID device_id) noexcept
-        : m_device_id{device_id} {
+    KeyboardDevice::KeyboardDevice(const InputDeviceID device_id) noexcept : m_device_id{device_id} {
     }
 
     void KeyboardDevice::postKeyboardCharacterInput(const InputContext &context, const hal::native::char_t codepoint) {
@@ -142,12 +130,15 @@ namespace pP {
         std::ignore = context.postCharacterInput(codepoint);
     }
 
-    void KeyboardDevice::postKeyboardKeyPressed(const TimeSpan dt, const InputContext &context, const EKeyboardKey key, const bool pressed) {
+    void KeyboardDevice::postKeyboardKeyPressed(
+        const TimeSpan dt, const InputContext &context, const EKeyboardKey key, const bool pressed) {
         if (not m_keys.postInputMessages(dt, context, m_device_id, key, pressed)) [[unlikely]] {
-            PPR_LOG(InputDevice, verbose, "unbound keyboard key received", {
-                {"device_id", m_device_id},
-                {"keyboard_key", enumOrd(key)},
-            });
+            PPR_LOG(
+                InputDevice, verbose, "unbound keyboard key received",
+                {
+                    {"device_id", m_device_id},
+                    {"keyboard_key", enumOrd(key)},
+                });
         }
     }
 
@@ -170,8 +161,7 @@ namespace pP {
     // mouse device
     // ------------------------------------------------------------------
 
-    MouseDevice::MouseDevice(const InputDeviceID device_id) noexcept
-        : m_device_id{device_id} {
+    MouseDevice::MouseDevice(const InputDeviceID device_id) noexcept : m_device_id{device_id} {
     }
 
     std::error_code MouseDevice::enumerateSupportedInputKeys(const Collector<InputKey> supports_key) const {
@@ -181,19 +171,24 @@ namespace pP {
         return InputKey::enumerateMouseButtons(supports_key);
     }
 
-    void MouseDevice::postMouseButtonPressed(TimeSpan dt, const InputContext &context, EMouseButton button, bool pressed) {
+    void MouseDevice::postMouseButtonPressed(
+        TimeSpan dt, const InputContext &context, EMouseButton button, bool pressed) {
         if (not m_buttons.postInputMessages(dt, context, m_device_id, button, pressed)) [[unlikely]] {
-            PPR_LOG(InputDevice, verbose, "unbound mouse button received", {
-                {"device_id", m_device_id},
-                {"mouse_button", enumOrd(button)},
-            });
+            PPR_LOG(
+                InputDevice, verbose, "unbound mouse button received",
+                {
+                    {"device_id", m_device_id},
+                    {"mouse_button", enumOrd(button)},
+                });
         }
     }
 
-    void MouseDevice::postMouseCursorPosition(const TimeSpan dt, const InputContext &context, const float2 &absolute_pos) {
+    void MouseDevice::postMouseCursorPosition(
+        const TimeSpan dt, const InputContext &context, const float2 &absolute_pos) {
         m_cursor_pos.set(absolute_pos);
         m_cursor_pos.update(time::seconds(dt));
-        std::ignore = m_cursor_pos.postInputMessages(dt, context, m_device_id, InputKey::mouse_2d, m_has_axis_filtering, true);
+        std::ignore = m_cursor_pos.postInputMessages(
+            dt, context, m_device_id, InputKey::mouse_2d, m_has_axis_filtering, true);
     }
 
     void MouseDevice::postMouseScrollWheel(const TimeSpan dt, const InputContext &context, const float2 &delta) {
@@ -201,11 +196,13 @@ namespace pP {
 
         m_wheel_x.add(delta.x);
         m_wheel_x.update(elapsed_seconds);
-        std::ignore = m_wheel_x.postInputMessages(dt, context, m_device_id, InputKey::mouse_wheel_axis_x, m_has_axis_filtering, true);
+        std::ignore = m_wheel_x.postInputMessages(
+            dt, context, m_device_id, InputKey::mouse_wheel_axis_x, m_has_axis_filtering, true);
 
         m_wheel_y.add(delta.y);
         m_wheel_y.update(elapsed_seconds);
-        std::ignore = m_wheel_y.postInputMessages(dt, context, m_device_id, InputKey::mouse_wheel_axis_y, m_has_axis_filtering, true);
+        std::ignore = m_wheel_y.postInputMessages(
+            dt, context, m_device_id, InputKey::mouse_wheel_axis_y, m_has_axis_filtering, true);
     }
 
     std::error_code MouseDevice::pollInputMessages(const TimeSpan dt) {
@@ -224,58 +221,64 @@ namespace pP {
     // gamepad device
     // ------------------------------------------------------------------
 
-    GamepadDevice::GamepadDevice(const InputDeviceID device_id) noexcept
-        : m_device_id(device_id) {
+    GamepadDevice::GamepadDevice(const InputDeviceID device_id) noexcept : m_device_id(device_id) {
     }
 
-    void GamepadDevice::postGamepadAxis1DMoved(const TimeSpan dt, const InputContext &context, const EGamepadAxis axis, const float value) {
+    void GamepadDevice::postGamepadAxis1DMoved(
+        const TimeSpan dt, const InputContext &context, const EGamepadAxis axis, const float value) {
         const double elapsed_seconds = time::seconds(dt);
 
         switch (axis) {
             case EGamepadAxis::left_trigger:
                 m_left_trigger.set(value);
                 m_left_trigger.update(elapsed_seconds);
-                std::ignore = m_left_trigger.postInputMessages(dt, context, m_device_id, InputKey::gamepad_left_trigger_axis, m_has_trigger_filtering, true);
+                std::ignore = m_left_trigger.postInputMessages(
+                    dt, context, m_device_id, InputKey::gamepad_left_trigger_axis, m_has_trigger_filtering, true);
                 break;
 
             case EGamepadAxis::right_trigger:
                 m_right_trigger.set(value);
                 m_right_trigger.update(elapsed_seconds);
-                std::ignore = m_right_trigger.postInputMessages(dt, context, m_device_id, InputKey::gamepad_right_trigger_axis, m_has_trigger_filtering, true);
+                std::ignore = m_right_trigger.postInputMessages(
+                    dt, context, m_device_id, InputKey::gamepad_right_trigger_axis, m_has_trigger_filtering, true);
                 break;
 
-            default:
-                break;
+            default: break;
         }
     }
 
-    void GamepadDevice::postGamepadAxis2DMoved(const TimeSpan dt, const InputContext &context, const EGamepadAxis axis, const float2 &value) {
+    void GamepadDevice::postGamepadAxis2DMoved(
+        const TimeSpan dt, const InputContext &context, const EGamepadAxis axis, const float2 &value) {
         const double elapsed_seconds = time::seconds(dt);
 
         switch (axis) {
             case EGamepadAxis::left_stick:
                 m_left_stick.set(value);
                 m_left_stick.update(elapsed_seconds);
-                std::ignore = m_left_stick.postInputMessages(dt, context, m_device_id, InputKey::gamepad_left_2d, m_has_axis_filtering, true);
+                std::ignore = m_left_stick.postInputMessages(
+                    dt, context, m_device_id, InputKey::gamepad_left_2d, m_has_axis_filtering, true);
                 break;
 
             case EGamepadAxis::right_stick:
                 m_right_stick.set(value);
                 m_right_stick.update(elapsed_seconds);
-                std::ignore = m_right_stick.postInputMessages(dt, context, m_device_id, InputKey::gamepad_right_2d, m_has_axis_filtering, true);
+                std::ignore = m_right_stick.postInputMessages(
+                    dt, context, m_device_id, InputKey::gamepad_right_2d, m_has_axis_filtering, true);
                 break;
 
-            default:
-                break;
+            default: break;
         }
     }
 
-    void GamepadDevice::postGamepadButtonPressed(TimeSpan dt, const InputContext &context, EGamepadButton button, bool pressed) {
+    void GamepadDevice::postGamepadButtonPressed(
+        TimeSpan dt, const InputContext &context, EGamepadButton button, bool pressed) {
         if (not m_buttons.postInputMessages(dt, context, m_device_id, button, pressed)) [[unlikely]] {
-            PPR_LOG(InputDevice, verbose, "unbound gamepad button received", {
-                {"device_id", m_device_id},
-                {"gamepad_button", enumOrd(button)},
-            });
+            PPR_LOG(
+                InputDevice, verbose, "unbound gamepad button received",
+                {
+                    {"device_id", m_device_id},
+                    {"gamepad_button", enumOrd(button)},
+                });
         }
     }
 

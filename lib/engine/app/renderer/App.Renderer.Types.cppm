@@ -34,16 +34,11 @@ export namespace pP {
     // signature.
     [[nodiscard]] constexpr Expected<SampleCount> makeSampleCount(const u32 sample_count) noexcept {
         switch (sample_count) {
-            case 1u:
-                return SampleCount::x1;
-            case 2u:
-                return SampleCount::x2;
-            case 4u:
-                return SampleCount::x4;
-            case 8u:
-                return SampleCount::x8;
-            default:
-                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            case 1u: return SampleCount::x1;
+            case 2u: return SampleCount::x2;
+            case 4u: return SampleCount::x4;
+            case 8u: return SampleCount::x8;
+            default: return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
     }
 
@@ -78,12 +73,9 @@ export namespace pP {
         }
 
         [[nodiscard]] friend hash_t hashValue(
-            const RenderPipelineSignature &value,
-            const hash_t seed = {hash::default_seed_v}) noexcept {
-            return hash::combine(seed,
-                hash::sizedRange(value.colorFormats()),
-                value.m_depth_stencil_format,
-                value.m_sample_count);
+            const RenderPipelineSignature &value, const hash_t seed = {hash::default_seed_v}) noexcept {
+            return hash::combine(
+                seed, hash::sizedRange(value.colorFormats()), value.m_depth_stencil_format, value.m_sample_count);
         }
     };
 
@@ -106,8 +98,7 @@ export namespace pP {
 
     namespace details {
         template<typename T>
-        concept TDrawable = requires(T &drawable, const DrawContext &draw_context)
-        {
+        concept TDrawable = requires (T &drawable, const DrawContext &draw_context) {
             { drawable.render(draw_context) } -> std::same_as<std::error_code>;
         };
     }
@@ -118,16 +109,17 @@ export namespace pP {
         std::optional<rhi::Viewport> m_viewport{};
         std::optional<rhi::ScissorRect> m_scissor{};
 
-        DrawSubmission(const string_literal description, DrawCallback encode_draws) noexcept // NOLINT(*-pro-type-member-init)
-            : m_description(description),
-              m_encode_draws(std::move(encode_draws)) {
+        DrawSubmission(
+            const string_literal description, DrawCallback encode_draws) noexcept // NOLINT(*-pro-type-member-init)
+            : m_description(description), m_encode_draws(std::move(encode_draws)) {
         }
 
         template<details::TDrawable T>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         DrawSubmission(T &drawable) noexcept // NOLINT(*-pro-type-member-init)
-            : DrawSubmission(string_literal{std::in_place, typeid(T).name()},
-                DrawCallback{std23::nontype<&T::render>, &drawable}) {
+            : DrawSubmission(
+                  string_literal{std::in_place, typeid(T).name()},
+                  DrawCallback{std23::nontype<&T::render>, &drawable}) {
         }
     };
 

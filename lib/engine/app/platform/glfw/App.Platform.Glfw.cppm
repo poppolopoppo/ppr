@@ -21,7 +21,7 @@ export namespace pP {
         GlfwPlatform() noexcept;
 
         GlfwPlatform(const GlfwPlatform &) = delete;
-        GlfwPlatform &operator =(const GlfwPlatform &) = delete;
+        GlfwPlatform &operator=(const GlfwPlatform &) = delete;
 
         [[nodiscard]] std::error_code initialize(Application &app) override;
 

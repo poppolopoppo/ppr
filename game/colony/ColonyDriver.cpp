@@ -32,22 +32,19 @@ namespace pP::colony {
         [[nodiscard]] Expected<sim::Entity> recordErrand(sim::Registry &registry, const Footprint &print) {
             const sim::Entity entity = registry.create();
             registry.emplace<Footprint>(entity, print);
-            registry.emplace<BuildErrand>(entity,
-                BuildErrand{.m_print = print, .m_total = print.m_width * print.m_height});
+            registry.emplace<BuildErrand>(
+                entity, BuildErrand{.m_print = print, .m_total = print.m_width * print.m_height});
             return entity;
         }
 
         [[nodiscard]] physics::BodyDefinition mirrorDefinition(
             const sim::BodyState &pose, const sim::BodyDefinition &def, const float vx, const float vy) noexcept {
             physics::BodyDefinition out{};
-            out.m_motion = def.m_motion == sim::EMotionKind::dynamic
-                               ? physics::EMotion::dynamic
-                               : def.m_motion == sim::EMotionKind::kinematic
-                                     ? physics::EMotion::kinematic
-                                     : physics::EMotion::static_body;
-            out.m_geometry = def.m_geometry == sim::EBodyGeometry::circle
-                                 ? physics::EGeometry::circle
-                                 : physics::EGeometry::box;
+            out.m_motion = def.m_motion == sim::EMotionKind::dynamic     ? physics::EMotion::dynamic
+                           : def.m_motion == sim::EMotionKind::kinematic ? physics::EMotion::kinematic
+                                                                         : physics::EMotion::static_body;
+            out.m_geometry = def.m_geometry == sim::EBodyGeometry::circle ? physics::EGeometry::circle
+                                                                          : physics::EGeometry::box;
             out.m_x = pose.m_x;
             out.m_y = pose.m_y;
             out.m_angle = pose.m_angle;
@@ -68,7 +65,8 @@ namespace pP::colony {
             return out;
         }
 
-        [[nodiscard]] bool chunkListedU32(const std::span<const sim::ChunkPos> listed, const sim::ChunkPos pos) noexcept {
+        [[nodiscard]] bool chunkListedU32(
+            const std::span<const sim::ChunkPos> listed, const sim::ChunkPos pos) noexcept {
             for (const sim::ChunkPos entry: listed) {
                 if (entry == pos) {
                     return true;
@@ -86,9 +84,7 @@ namespace pP::colony {
                 }
 
                 const sim::ChunkPos home{
-                    static_cast<u32>(pose->m_x) / sim::kChunkEdge,
-                    static_cast<u32>(pose->m_y) / sim::kChunkEdge
-                };
+                    static_cast<u32>(pose->m_x) / sim::kChunkEdge, static_cast<u32>(pose->m_y) / sim::kChunkEdge};
                 if (not sim::isInsideChunkGrid(home)) {
                     continue;
                 }
@@ -413,8 +409,7 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::setSpeed(const u32 speed) noexcept {
-        if (speed < 1u or speed > 3u)
-        [[unlikely]] {
+        if (speed < 1u or speed > 3u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
         m_speed = speed;
@@ -496,7 +491,7 @@ namespace pP::colony {
         return static_cast<double>(m_tick_count) * milliseconds.count();
     }
 
-    const StageTimings& ColonyDriver::stageTimings() const noexcept {
+    const StageTimings &ColonyDriver::stageTimings() const noexcept {
         return m_timings;
     }
 
@@ -549,8 +544,7 @@ namespace pP::colony {
         }
         // Demolition writes vacuum explicitly (never rely on the default).
         const Footprint print{
-            .m_min = min, .m_width = width, .m_height = height, .m_element = kElementVacuum, .m_solid = false
-        };
+            .m_min = min, .m_width = width, .m_height = height, .m_element = kElementVacuum, .m_solid = false};
         if (const std::error_code error = validateFootprint(print)) {
             return std::unexpected{error};
         }
@@ -741,8 +735,7 @@ namespace pP::colony {
             .m_gravity_y = -9.8f,
             .m_fixed_dt = 1.0f / 60.0f,
             .m_substeps = 4u,
-            .m_enable_sleep = false
-        };
+            .m_enable_sleep = false};
         if (const std::error_code error = m_scene.initialize(desc)) {
             return error;
         }
@@ -761,7 +754,7 @@ namespace pP::colony {
         m_colliders = physics::ChunkColliders{};
         m_collider_covered = Array<sim::ChunkPos>{};
         m_cached_views = Array<physics::ColliderChunkView>{};
-        m_cached_pool = Array<Array<u16> >{};
+        m_cached_pool = Array<Array<u16>>{};
         m_cached_listed = Array<sim::ChunkPos>{};
         m_cached_needed = Array<sim::ChunkPos>{};
         invalidateColliderCache();
@@ -794,8 +787,7 @@ namespace pP::colony {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             keys.push_back(identity->m_key);
-            definitions.push_back(
-                mirrorDefinition(*pose, *definition, pose->m_velocity_x, pose->m_velocity_y));
+            definitions.push_back(mirrorDefinition(*pose, *definition, pose->m_velocity_x, pose->m_velocity_y));
             owners.push_back(entity);
         }
 
@@ -803,21 +795,21 @@ namespace pP::colony {
             Array<physics::BodyHandle> handles{};
             handles.resize(keys.size());
             if (const std::error_code error = m_scene.createBodies(
-                std::span<const u64>{keys.data(), keys.size()},
-                std::span<const physics::BodyDefinition>{definitions.data(), definitions.size()},
-                std::span<physics::BodyHandle>{handles.data(), handles.size()})) {
+                    std::span<const u64>{keys.data(), keys.size()},
+                    std::span<const physics::BodyDefinition>{definitions.data(), definitions.size()},
+                    std::span<physics::BodyHandle>{handles.data(), handles.size()})) {
                 return error;
             }
             for (std::size_t index = 0u; index < owners.size(); ++index) {
                 const Agent *identity = m_registry.get<Agent>(owners[index]);
                 const sim::BodyState *restored = m_registry.get<sim::BodyState>(owners[index]);
-                m_bodies.push_back(AgentBody{
-                    .m_entity = owners[index],
-                    .m_key = identity != nullptr ? identity->m_key : 0u,
-                    .m_handle = handles[index],
-                    .m_velocity_x = restored != nullptr ? restored->m_velocity_x : 0.0f,
-                    .m_velocity_y = restored != nullptr ? restored->m_velocity_y : 0.0f
-                });
+                m_bodies.push_back(
+                    AgentBody{
+                        .m_entity = owners[index],
+                        .m_key = identity != nullptr ? identity->m_key : 0u,
+                        .m_handle = handles[index],
+                        .m_velocity_x = restored != nullptr ? restored->m_velocity_x : 0.0f,
+                        .m_velocity_y = restored != nullptr ? restored->m_velocity_y : 0.0f});
             }
         }
         // Materialize the spawn neighbourhood synchronously so agents never
@@ -895,14 +887,15 @@ namespace pP::colony {
                 }
             }
             const u64 key = identity->m_key;
-            const physics::BodyDefinition body = mirrorDefinition(*pose, *definition, intent.m_velocity_x, intent.m_velocity_y);
+            const physics::BodyDefinition body = mirrorDefinition(
+                *pose, *definition, intent.m_velocity_x, intent.m_velocity_y);
             const u64 keys[1] = {key};
             const physics::BodyDefinition bodies[1] = {body};
             physics::BodyHandle made[1] = {};
 
-            if (const std::error_code error = m_scene.createBodies(std::span<const u64>{keys, 1u},
-                std::span<const physics::BodyDefinition>{bodies, 1u},
-                std::span<physics::BodyHandle>{made, 1u})) {
+            if (const std::error_code error = m_scene.createBodies(
+                    std::span<const u64>{keys, 1u}, std::span<const physics::BodyDefinition>{bodies, 1u},
+                    std::span<physics::BodyHandle>{made, 1u})) {
                 if (not m_step_error) {
                     m_step_error = error;
                 }
@@ -914,13 +907,13 @@ namespace pP::colony {
                 m_bodies[entry].m_velocity_x = intent.m_velocity_x;
                 m_bodies[entry].m_velocity_y = intent.m_velocity_y;
             } else {
-                m_bodies.push_back(AgentBody{
-                    .m_entity = entity,
-                    .m_key = key,
-                    .m_handle = made[0u],
-                    .m_velocity_x = intent.m_velocity_x,
-                    .m_velocity_y = intent.m_velocity_y
-                });
+                m_bodies.push_back(
+                    AgentBody{
+                        .m_entity = entity,
+                        .m_key = key,
+                        .m_handle = made[0u],
+                        .m_velocity_x = intent.m_velocity_x,
+                        .m_velocity_y = intent.m_velocity_y});
             }
         }
     }
@@ -982,9 +975,9 @@ namespace pP::colony {
         }
     }
 
-    bool ColonyDriver::buildColliderViewsDelta(std::span<const sim::ChunkPos> sorted_needed,
-        std::span<const sim::ChunkPos> dirty, Array<sim::ChunkPos> &listed_out,
-        Array<Array<u16> > &pool_out, Array<physics::ColliderChunkView> &views_out) {
+    bool ColonyDriver::buildColliderViewsDelta(
+        std::span<const sim::ChunkPos> sorted_needed, std::span<const sim::ChunkPos> dirty,
+        Array<sim::ChunkPos> &listed_out, Array<Array<u16>> &pool_out, Array<physics::ColliderChunkView> &views_out) {
         // Fallback: no reusable history. Init/shutdown/reinit clear the pool
         // (shutdownPhysics) and invalidate, so the canonical full preparation
         // below runs for every restore/reinit. A dirt invalidation never clears
@@ -992,8 +985,7 @@ namespace pP::colony {
         if (m_cached_pool.empty()) {
             return false;
         }
-        if (m_cached_pool.size() != m_cached_listed.size() or
-            m_cached_views.size() != m_cached_listed.size()) {
+        if (m_cached_pool.size() != m_cached_listed.size() or m_cached_views.size() != m_cached_listed.size()) {
             return false;
         }
         for (const Array<u16> &buffer: m_cached_pool) {
@@ -1062,8 +1054,7 @@ namespace pP::colony {
                         static_cast<u32>(ny) >= sim::kChunksPerEdge) {
                         continue;
                     }
-                    grown.set(sim::chunkIndexOf(
-                        sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)}));
+                    grown.set(sim::chunkIndexOf(sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)}));
                 }
             }
         };
@@ -1099,11 +1090,11 @@ namespace pP::colony {
         // Fresh copies first (verbatim mirror of the full-path cell copy): the
         // cache is untouched until assembly, so an allocation failure here
         // propagates exactly as it would on the full path.
-        Array<Array<u16> > fresh{};
+        Array<Array<u16>> fresh{};
         fresh.reserve(fresh_keys.size());
         for (const u32 key: fresh_keys) {
             const sim::ChunkPos pos{key % sim::kChunksPerEdge, key / sim::kChunksPerEdge};
-            const std::optional<std::span<const sim::Cell> > cells = m_colony.grid().residentCells(pos);
+            const std::optional<std::span<const sim::Cell>> cells = m_colony.grid().residentCells(pos);
             Array<u16> elements{};
             elements.resize(sim::kCellsPerChunk);
             if (cells) {
@@ -1148,11 +1139,11 @@ namespace pP::colony {
             }
             listed_out.push_back(pos);
             const Array<u16> &stored = pool_out[pool_out.size() - 1u];
-            views_out.push_back(physics::ColliderChunkView{
-                .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
-                .m_elements = std::span<const u16>{stored.data(), stored.size()},
-                .m_needed = need.test(key)
-            });
+            views_out.push_back(
+                physics::ColliderChunkView{
+                    .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
+                    .m_elements = std::span<const u16>{stored.data(), stored.size()},
+                    .m_needed = need.test(key)});
         }
         return true;
     }
@@ -1174,17 +1165,15 @@ namespace pP::colony {
         for (const sim::ChunkPos pos: needed) {
             sorted_needed.push_back(pos);
         }
-        std::ranges::sort(sorted_needed, {}, [](const sim::ChunkPos pos) {
-            return pos.m_y * sim::kChunksPerEdge + pos.m_x;
-        });
-        m_timings.m_stats[(std::size_t)Stage::NeededCells].m_calls +=
-            static_cast<std::uint64_t>(sorted_needed.size());
+        std::ranges::sort(
+            sorted_needed, {}, [](const sim::ChunkPos pos) { return pos.m_y * sim::kChunksPerEdge + pos.m_x; });
+        m_timings.m_stats[(std::size_t) Stage::NeededCells].m_calls += static_cast<std::uint64_t>(sorted_needed.size());
         const bool hit = m_cache_valid and
-            m_cover_gen == m_cached_gen and
-            dirty.empty() and
-            std::ranges::equal(m_cached_needed, sorted_needed);
+                         m_cover_gen == m_cached_gen and
+                         dirty.empty() and
+                         std::ranges::equal(m_cached_needed, sorted_needed);
         if (hit) {
-            m_timings.m_stats[(std::size_t)Stage::CacheHit].m_calls += 1u;
+            m_timings.m_stats[(std::size_t) Stage::CacheHit].m_calls += 1u;
             // Cache HIT: skip the coverage merge, sort, and per-chunk cell
             // copies entirely. The cached views already span every chunk the
             // drain can touch: empty dirt enqueues nothing, and the pending
@@ -1203,12 +1192,12 @@ namespace pP::colony {
             {
                 const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
                 const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
-                rebuilt = m_colliders.rebuildDirtyChunks(m_scene,
-                    std::span<const physics::ColliderChunkView>{m_cached_views.data(), m_cached_views.size()},
-                    std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()},
-                    sim::kChunkEdge, max, processed);
+                rebuilt = m_colliders.rebuildDirtyChunks(
+                    m_scene, std::span<const physics::ColliderChunkView>{m_cached_views.data(), m_cached_views.size()},
+                    std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge,
+                    max, processed);
             }
-            m_timings.m_stats[(std::size_t)Stage::ChunksDrained].m_calls += processed;
+            m_timings.m_stats[(std::size_t) Stage::ChunksDrained].m_calls += processed;
             if (m_colliders.pendingCount() == 0u and not m_collider_covered.empty()) {
                 // H3a Slice 6: REMOVED gen bump — clearing removes views, and cached
                 // views stay a SUPERSET of what drain needs (pending==0 needs nothing).
@@ -1220,9 +1209,9 @@ namespace pP::colony {
             return rebuilt;
         }
 
-        m_timings.m_stats[(std::size_t)Stage::CacheMiss].m_calls += 1u;
+        m_timings.m_stats[(std::size_t) Stage::CacheMiss].m_calls += 1u;
         Array<sim::ChunkPos> listed{};
-        Array<Array<u16> > pool{};
+        Array<Array<u16>> pool{};
         Array<physics::ColliderChunkView> views{};
         // H4a Slice 6: a delta prepare still counts one Miss; the recopy set
         // is (added ∪ dirty ∪ coverage-growth) while kept buffers move over
@@ -1264,11 +1253,10 @@ namespace pP::colony {
                     }
                 }
             }
-            std::ranges::sort(listed, {}, [](const sim::ChunkPos pos) {
-                return pos.m_y * sim::kChunksPerEdge + pos.m_x;
-            });
+            std::ranges::sort(
+                listed, {}, [](const sim::ChunkPos pos) { return pos.m_y * sim::kChunksPerEdge + pos.m_x; });
             for (const sim::ChunkPos pos: listed) {
-                const std::optional<std::span<const sim::Cell> > cells = m_colony.grid().residentCells(pos);
+                const std::optional<std::span<const sim::Cell>> cells = m_colony.grid().residentCells(pos);
                 Array<u16> elements{};
                 elements.resize(sim::kCellsPerChunk);
                 if (cells) {
@@ -1281,29 +1269,28 @@ namespace pP::colony {
                 const bool wanted = chunkListedU32(sorted_needed, pos);
                 pool.push_back(std::move(elements));
                 const Array<u16> &stored = pool[pool.size() - 1u];
-                views.push_back(physics::ColliderChunkView{
-                    .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
-                    .m_elements = std::span<const u16>{stored.data(), stored.size()},
-                    .m_needed = wanted
-                });
+                views.push_back(
+                    physics::ColliderChunkView{
+                        .m_pos = physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)},
+                        .m_elements = std::span<const u16>{stored.data(), stored.size()},
+                        .m_needed = wanted});
             }
         }
         Array<physics::ColliderChunkPos> dirty_i32{};
         for (const sim::ChunkPos pos: dirty) {
-            dirty_i32.push_back(
-                physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
+            dirty_i32.push_back(physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
         }
         u32 processed = 0u;
         std::error_code rebuilt{};
         {
             const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
             const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
-            rebuilt = m_colliders.rebuildDirtyChunks(m_scene,
-                std::span<const physics::ColliderChunkView>{views.data(), views.size()},
-                std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()},
-                sim::kChunkEdge, max, processed);
+            rebuilt = m_colliders.rebuildDirtyChunks(
+                m_scene, std::span<const physics::ColliderChunkView>{views.data(), views.size()},
+                std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge, max,
+                processed);
         }
-        m_timings.m_stats[(std::size_t)Stage::ChunksDrained].m_calls += processed;
+        m_timings.m_stats[(std::size_t) Stage::ChunksDrained].m_calls += processed;
         // Store the prepared views for steady-state reuse; the stored
         // generation is the pre-drain value, so covered growth below forces
         // the next tick to re-prepare, while a gen-preserving clear keeps the
@@ -1313,8 +1300,8 @@ namespace pP::colony {
         m_cached_pool = std::move(pool);
         m_cached_views = std::move(views);
         for (std::size_t index = 0u; index < m_cached_views.size(); ++index) {
-            m_cached_views[index].m_elements =
-                std::span<const u16>{m_cached_pool[index].data(), m_cached_pool[index].size()};
+            m_cached_views[index].m_elements = std::span<const u16>{
+                m_cached_pool[index].data(), m_cached_pool[index].size()};
         }
         m_cached_gen = m_cover_gen;
         m_cache_valid = true;
@@ -1405,8 +1392,7 @@ namespace pP::colony {
     }
 
     std::size_t ColonyDriver::chainCount(const sim::ChunkPos pos) const noexcept {
-        return m_colliders.chainCount(
-            physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
+        return m_colliders.chainCount(physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
     }
 
     std::size_t ColonyDriver::colliderPending() const noexcept {

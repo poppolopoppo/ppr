@@ -29,8 +29,10 @@ export namespace pP {
         };
 
         [[nodiscard]] static std::basic_string_view<char> toString(std::type_identity_t<char>, ELevel level) noexcept;
-        [[nodiscard]] static std::basic_string_view<char8_t> toString(std::type_identity_t<char8_t>, ELevel level) noexcept;
-        [[nodiscard]] static std::basic_string_view<wchar_t> toString(std::type_identity_t<wchar_t>, ELevel level) noexcept;
+        [[nodiscard]] static std::basic_string_view<char8_t> toString(
+            std::type_identity_t<char8_t>, ELevel level) noexcept;
+        [[nodiscard]] static std::basic_string_view<wchar_t> toString(
+            std::type_identity_t<wchar_t>, ELevel level) noexcept;
 
         struct Category {
             enum EFlags : u8 {
@@ -47,10 +49,9 @@ export namespace pP {
             EFlags m_flags;
             ELevel m_verbosity;
 
-            constexpr explicit Category(const string_literal name, const ELevel verbosity = ELevel::debug, const EFlags flags = none) noexcept
-                : m_name(name),
-                  m_flags(flags),
-                  m_verbosity(verbosity) {
+            constexpr explicit Category(
+                const string_literal name, const ELevel verbosity = ELevel::debug, const EFlags flags = none) noexcept
+                : m_name(name), m_flags(flags), m_verbosity(verbosity) {
             }
         };
 
@@ -60,12 +61,9 @@ export namespace pP {
             ELevel m_verbosity;
 
             constexpr Emitter(
-                const Category &category,
-                const ELevel verbosity,
-                const std::source_location &location = std::source_location::current() ) noexcept
-                : m_category(category),
-                  m_location(location),
-                  m_verbosity(verbosity) {
+                const Category &category, const ELevel verbosity,
+                const std::source_location &location = std::source_location::current()) noexcept
+                : m_category(category), m_location(location), m_verbosity(verbosity) {
             }
 
             [[nodiscard]] bool shouldBreakDebugger() const noexcept;

@@ -109,7 +109,9 @@ export namespace pP::mesh {
         UvSetId m_texcoord{none_v};
         UvTransformAsset m_transform;
 
-        [[nodiscard]] constexpr bool enabled() const noexcept { return m_image != none_v; }
+        [[nodiscard]] constexpr bool enabled() const noexcept {
+            return m_image != none_v;
+        }
     };
 
     enum class EAlphaMode : u8 {
@@ -212,5 +214,4 @@ export namespace pP::mesh {
 }
 
 export template<>
-struct std::is_error_code_enum<pP::mesh::errc> : true_type {
-};
+struct std::is_error_code_enum<pP::mesh::errc> : true_type {};

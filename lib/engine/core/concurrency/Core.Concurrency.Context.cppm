@@ -14,11 +14,10 @@ export namespace pP {
     public:
         virtual ~IContext() = default;
 
-        [[nodiscard]] virtual std::error_code
-        error() const noexcept = 0;
+        [[nodiscard]] virtual std::error_code error() const noexcept = 0;
 
-        [[nodiscard]] virtual std::optional<const opaque::Block::Value *>
-        value(string_literal user_key) const noexcept = 0;
+        [[nodiscard]] virtual std::optional<const opaque::Block::Value *> value(
+            string_literal user_key) const noexcept = 0;
     };
 
     using SharedContext = std::shared_ptr<IContext>;
@@ -73,7 +72,8 @@ export namespace pP {
         // associate opaque data with the context
         // --------------------------------------------------------------
 
-        [[nodiscard]] SharedContext withValue(SharedContext parent, string_literal user_key, const opaque::Value &value);
+        [[nodiscard]] SharedContext withValue(
+            SharedContext parent, string_literal user_key, const opaque::Value &value);
 
         [[nodiscard]] SharedContext withValues(SharedContext parent, const opaque::Dict &values);
 
@@ -81,11 +81,13 @@ export namespace pP {
         // cancels on timeout or parent cancel
         // --------------------------------------------------------------
 
-        [[nodiscard]] SharedContext withDeadlineCause(SharedContext parent, TimePoint deadline, std::error_code cause, TimerManager &timer);
+        [[nodiscard]] SharedContext withDeadlineCause(
+            SharedContext parent, TimePoint deadline, std::error_code cause, TimerManager &timer);
 
         [[nodiscard]] SharedContext withDeadline(SharedContext parent, TimePoint deadline, TimerManager &timer);
 
-        [[nodiscard]] SharedContext withTimeoutCause(SharedContext parent, TimeSpan delay, std::error_code cause, TimerManager &timer);
+        [[nodiscard]] SharedContext withTimeoutCause(
+            SharedContext parent, TimeSpan delay, std::error_code cause, TimerManager &timer);
 
         [[nodiscard]] SharedContext withTimeout(SharedContext parent, TimeSpan delay, TimerManager &timer);
     }

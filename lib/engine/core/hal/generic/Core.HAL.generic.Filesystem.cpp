@@ -23,9 +23,7 @@ namespace pP::hal {
 
             if (const char *drive = std::getenv("HOMEDRIVE")) {
                 if (const char *path = std::getenv("HOMEPATH")) {
-                    return std::filesystem::directory_entry(
-                        std::filesystem::path(drive) / path
-                    );
+                    return std::filesystem::directory_entry(std::filesystem::path(drive) / path);
                 }
             }
 

@@ -13,7 +13,7 @@ import std;
 
 namespace pP::tests::detail {
     namespace RendererBoundary {
-        PPR_UNIT_TEST(color_attachment_ops_have_sane_defaults) {
+        PPR_UNIT_TEST (color_attachment_ops_have_sane_defaults) {
             const ColorAttachmentOps options{};
             PPR_TEST_ASSERT(options.m_load_op == rhi::LoadOp::Clear);
             PPR_TEST_ASSERT(options.m_store_op == rhi::StoreOp::Store);
@@ -23,10 +23,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(options.m_clear_color.w == 1.0f);
         };
 
-        PPR_UNIT_TEST(draw_submission_carries_camera_free_raster_state) {
+        PPR_UNIT_TEST (draw_submission_carries_camera_free_raster_state) {
             const auto encode = [](const DrawContext &) -> std::error_code { return {}; };
             DrawSubmission submission{"camera-free", DrawCallback{encode}};
-            submission.m_viewport = rhi::Viewport{.originX = 4.0f, .originY = 8.0f, .extentX = 400.0f, .extentY = 300.0f};
+            submission.m_viewport = rhi::Viewport{
+                .originX = 4.0f, .originY = 8.0f, .extentX = 400.0f, .extentY = 300.0f};
             submission.m_scissor = rhi::ScissorRect{.minX = 4u, .minY = 8u, .maxX = 404u, .maxY = 308u};
             PPR_TEST_ASSERT(submission.m_viewport.has_value());
             PPR_TEST_ASSERT(submission.m_scissor.has_value());
@@ -34,7 +35,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(submission.m_scissor->maxY == 308u);
         };
 
-        PPR_UNIT_TEST(triangle_frame_constants_match_hlsl_layout) {
+        PPR_UNIT_TEST (triangle_frame_constants_match_hlsl_layout) {
             PPR_TEST_ASSERT(sizeof(TrianglePass::FrameConstants) == 288u);
             const TrianglePass::FrameConstants frame{};
             PPR_TEST_ASSERT(frame.m_view(0, 0) == 1.0f && frame.m_view(3, 3) == 1.0f);
@@ -42,15 +43,20 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(frame.m_camera_position.w == 0.0f);
         };
 
-        PPR_UNIT_TEST(perspective_uses_d3d_depth_zero_to_one) {
+        PPR_UNIT_TEST (perspective_uses_d3d_depth_zero_to_one) {
             const auto first = rhi::getPerspectiveMatrix(0.75f, 16.0f / 9.0f, 0.1f, 1000.0f);
             const auto second = rhi::getPerspectiveMatrix(0.75f, 16.0f / 9.0f, 0.1f, 1000.0f);
-            PPR_TEST_ASSERT(std::ranges::all_of(std::span<const float, 16>(first.data(), 16), [](const float value) noexcept { return std::isfinite(value); }));
-            PPR_TEST_ASSERT(std::ranges::equal(std::span<const float, 16>(first.data(), 16), std::span<const float, 16>(second.data(), 16)));
+            PPR_TEST_ASSERT(
+                std::ranges::all_of(std::span<const float, 16>(first.data(), 16), [](const float value) noexcept {
+                    return std::isfinite(value);
+                }));
+            PPR_TEST_ASSERT(
+                std::ranges::equal(
+                    std::span<const float, 16>(first.data(), 16), std::span<const float, 16>(second.data(), 16)));
             PPR_TEST_ASSERT(std::abs(first(2, 3) - 1.0f) < 1e-4f);
         };
 
-        PPR_UNIT_TEST(ortho_uses_d3d_convention_without_y_flip) {
+        PPR_UNIT_TEST (ortho_uses_d3d_convention_without_y_flip) {
             const auto matrix = rhi::getOrthoMatrix(800.0f, 600.0f);
             PPR_TEST_ASSERT(std::abs(matrix(0, 0) - 2.0f / 800.0f) < 1e-7f);
             PPR_TEST_ASSERT(matrix(1, 1) > 0.0f);
@@ -63,7 +69,7 @@ namespace pP::tests::detail {
             return lhs[0] == rhs.x and lhs[1] == rhs.y and lhs[2] == rhs.z and lhs[3] == rhs.w;
         }
 
-        PPR_UNIT_TEST(handles_default_invalid) {
+        PPR_UNIT_TEST (handles_default_invalid) {
             PPR_TEST_ASSERT(not TextureHandle{}->isValid());
             PPR_TEST_ASSERT(not MaterialHandle{}->isValid());
             PPR_TEST_ASSERT(not TriangleBagHandle{}->isValid());
@@ -74,9 +80,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sizeof(GpuMaterialFlags) == 4u);
         };
 
-        PPR_UNIT_TEST(build_material_maps_factors) {
-            const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                mesh::MaterialAsset{}, {none_v, none_v, none_v, none_v});
+        PPR_UNIT_TEST (build_material_maps_factors) {
+            const Expected<GpuMaterial> gpu = buildGpuMaterial(mesh::MaterialAsset{}, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
             PPR_TEST_ASSERT(float4Equal_(gpu->m_base_color, float4{1.0f, 1.0f, 1.0f, 1.0f}));
             PPR_TEST_ASSERT(float4Equal_(gpu->m_emissive_metallic, float4{0.0f, 0.0f, 0.0f, 1.0f}));
@@ -88,7 +93,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(gpu->m_flags.m_bits == 0u);
         };
 
-        PPR_UNIT_TEST(build_material_texcoord_agreement) {
+        PPR_UNIT_TEST (build_material_texcoord_agreement) {
             mesh::MaterialAsset textured{};
             textured.m_base_color_map.m_image = mesh::ImageAssetId{0u};
             textured.m_base_color_map.m_texcoord = mesh::UvSetId{1u};
@@ -96,26 +101,23 @@ namespace pP::tests::detail {
             textured.m_normal_map.m_texcoord = mesh::UvSetId{1u};
             const TextureBindlessIndex albedo{7u};
             const TextureBindlessIndex normal{9u};
-            const Expected<GpuMaterial> agreed = buildGpuMaterial(
-                textured, {albedo, none_v, normal, none_v});
+            const Expected<GpuMaterial> agreed = buildGpuMaterial(textured, {albedo, none_v, normal, none_v});
             PPR_TEST_ASSERT(agreed.has_value());
             PPR_TEST_ASSERT(agreed->m_textures.m_albedo == albedo);
             PPR_TEST_ASSERT(*agreed->m_texcoord == 1u);
 
             textured.m_normal_map.m_texcoord = mesh::UvSetId{0u};
-            const Expected<GpuMaterial> split = buildGpuMaterial(
-                textured, {albedo, none_v, normal, none_v});
+            const Expected<GpuMaterial> split = buildGpuMaterial(textured, {albedo, none_v, normal, none_v});
             PPR_TEST_ASSERT(not split.has_value());
             PPR_TEST_ASSERT(split.error() == std::make_error_code(std::errc::invalid_argument));
         };
 
-        PPR_UNIT_TEST(build_material_alpha_flags) {
+        PPR_UNIT_TEST (build_material_alpha_flags) {
             mesh::MaterialAsset mask{};
             mask.m_alpha_mode = mesh::EAlphaMode::mask;
             mask.m_alpha_cutoff = 0.25f;
             mask.m_is_two_sided = true;
-            const Expected<GpuMaterial> gpu = buildGpuMaterial(
-                mask, {none_v, none_v, none_v, none_v});
+            const Expected<GpuMaterial> gpu = buildGpuMaterial(mask, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(gpu.has_value());
             PPR_TEST_ASSERT((gpu->m_flags.m_bits & kGpuMaterialAlphaModeMask) == enumOrd(mesh::EAlphaMode::mask));
             PPR_TEST_ASSERT((gpu->m_flags.m_bits & kGpuMaterialDoubleSidedBit) != 0u);
@@ -123,18 +125,19 @@ namespace pP::tests::detail {
 
             mesh::MaterialAsset blend{};
             blend.m_alpha_mode = mesh::EAlphaMode::blend;
-            const Expected<GpuMaterial> rejected = buildGpuMaterial(
-                blend, {none_v, none_v, none_v, none_v});
+            const Expected<GpuMaterial> rejected = buildGpuMaterial(blend, {none_v, none_v, none_v, none_v});
             PPR_TEST_ASSERT(not rejected.has_value());
             PPR_TEST_ASSERT(rejected.error() == std::make_error_code(std::errc::function_not_supported));
         };
 
-        PPR_UNIT_TEST(pipeline_variant_key) {
+        PPR_UNIT_TEST (pipeline_variant_key) {
             PPR_TEST_ASSERT(not checkPipelineVariant({.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::opaque}));
             PPR_TEST_ASSERT(not checkPipelineVariant({.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::mask}));
-            PPR_TEST_ASSERT(checkPipelineVariant({.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::blend}) ==
+            PPR_TEST_ASSERT(
+                checkPipelineVariant({.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::blend}) ==
                 std::make_error_code(std::errc::function_not_supported));
-            PPR_TEST_ASSERT(checkPipelineVariant({.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::blend}) ==
+            PPR_TEST_ASSERT(
+                checkPipelineVariant({.m_is_two_sided = true, .m_alpha = mesh::EAlphaMode::blend}) ==
                 std::make_error_code(std::errc::function_not_supported));
             const TrianglePipelineVariant opaque{};
             const TrianglePipelineVariant masked{.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::mask};
@@ -156,7 +159,7 @@ namespace pP::tests::detail {
         // + 20 scalars + 12 pad, 16-aligned. A field-width or order change on
         // either side silently reinterprets every draw, so the contract is
         // pinned here rather than left to a draw that would look plausible.
-        PPR_UNIT_TEST(instance_payload_layout_matches_the_shader) {
+        PPR_UNIT_TEST (instance_payload_layout_matches_the_shader) {
             PPR_TEST_ASSERT(sizeof(TrianglePass::InstancePayload) == 96u);
             PPR_TEST_ASSERT(alignof(TrianglePass::InstancePayload) == 16u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::InstancePayload, m_model) == 0u);
@@ -175,20 +178,42 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::FrameConstants, m_camera_position) == 256u);
         };
 
-        PPR_UNIT_TEST(draw_plan_contract) {
+        PPR_UNIT_TEST (draw_plan_contract) {
             constexpr TrianglePipelineVariant opaque{};
             constexpr TrianglePipelineVariant masked{.m_is_two_sided = false, .m_alpha = mesh::EAlphaMode::mask};
 
             const TrianglePass::ResolvedInstance instances[] = {
-                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 12u}, .m_variant = opaque, .m_count = 12u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = masked, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_variant = opaque, .m_count = 0u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 12u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                    .m_variant = opaque,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                    .m_variant = opaque,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 12u},
+                    .m_variant = opaque,
+                    .m_count = 12u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                    .m_variant = masked,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_variant = opaque,
+                    .m_count = 0u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 12u, .m_index_count = 36u},
+                    .m_variant = opaque,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketBVertices,
+                    .m_index_buffer = kBucketBIndices},
             };
-            const Expected<TrianglePass::DrawPlan> plan =
-                TrianglePass::planDraws(instances);
+            const Expected<TrianglePass::DrawPlan> plan = TrianglePass::planDraws(instances);
             PPR_TEST_ASSERT(plan.has_value());
             PPR_TEST_ASSERT(plan->m_payload_count == 5u);
             PPR_TEST_ASSERT(plan->m_groups.size() == 4u);
@@ -212,12 +237,23 @@ namespace pP::tests::detail {
             // Interleaved compatible inputs are compacted into a contiguous
             // payload interval while retaining their original source order.
             const TrianglePass::ResolvedInstance interleaved_instances[] = {
-                {.m_payload = {.m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_index_count = 36u}, .m_variant = masked, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                {.m_payload = {.m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 36u},
+                    .m_variant = opaque,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 36u},
+                    .m_variant = masked,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 36u},
+                    .m_variant = opaque,
+                    .m_count = 36u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
             };
-            const Expected<TrianglePass::DrawPlan> interleaved = TrianglePass::planDraws(
-                interleaved_instances);
+            const Expected<TrianglePass::DrawPlan> interleaved = TrianglePass::planDraws(interleaved_instances);
             PPR_TEST_ASSERT(interleaved.has_value());
             PPR_TEST_ASSERT(interleaved->m_groups.size() == 2u);
             PPR_TEST_ASSERT(interleaved->m_groups[0].m_first_payload == 0u);
@@ -233,14 +269,33 @@ namespace pP::tests::detail {
             // The group must carry B's buffers and B's source indices.
             {
                 const TrianglePass::ResolvedInstance ab_instances[] = {
-                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
-                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
-                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketBVertices, .m_index_buffer = kBucketBIndices},
-                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u}, .m_variant = opaque, .m_count = 36u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                        .m_variant = opaque,
+                        .m_count = 36u,
+                        .m_vertex_buffer = kBucketAVertices,
+                        .m_index_buffer = kBucketAIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u},
+                        .m_variant = opaque,
+                        .m_count = 36u,
+                        .m_vertex_buffer = kBucketBVertices,
+                        .m_index_buffer = kBucketBIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                        .m_variant = opaque,
+                        .m_count = 36u,
+                        .m_vertex_buffer = kBucketAVertices,
+                        .m_index_buffer = kBucketAIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 6u, .m_index_count = 36u},
+                        .m_variant = opaque,
+                        .m_count = 36u,
+                        .m_vertex_buffer = kBucketBVertices,
+                        .m_index_buffer = kBucketBIndices},
+                    {.m_payload = {.m_vb_offset = 0u, .m_ib_start = 0u, .m_index_count = 36u},
+                        .m_variant = opaque,
+                        .m_count = 36u,
+                        .m_vertex_buffer = kBucketAVertices,
+                        .m_index_buffer = kBucketAIndices},
                 };
-                const Expected<TrianglePass::DrawPlan> ab =
-                    TrianglePass::planDraws(ab_instances);
+                const Expected<TrianglePass::DrawPlan> ab = TrianglePass::planDraws(ab_instances);
                 PPR_TEST_ASSERT(ab.has_value());
                 PPR_TEST_ASSERT(ab->m_payload_count == 5u);
                 PPR_TEST_ASSERT(ab->m_groups.size() == 2u);
@@ -271,10 +326,14 @@ namespace pP::tests::detail {
             // single instance plans one group. The old four-span length
             // mismatch has no counterpart in the single-span signature.
             const TrianglePass::ResolvedInstance one[] = {
-                {.m_payload = {.m_index_count = 3u}, .m_variant = opaque, .m_count = 3u, .m_vertex_buffer = kBucketAVertices, .m_index_buffer = kBucketAIndices},
+                {.m_payload = {.m_index_count = 3u},
+                    .m_variant = opaque,
+                    .m_count = 3u,
+                    .m_vertex_buffer = kBucketAVertices,
+                    .m_index_buffer = kBucketAIndices},
             };
-            const Expected<TrianglePass::DrawPlan> empty_plan =
-                TrianglePass::planDraws(std::span<const TrianglePass::ResolvedInstance>{});
+            const Expected<TrianglePass::DrawPlan> empty_plan = TrianglePass::planDraws(
+                std::span<const TrianglePass::ResolvedInstance>{});
             PPR_TEST_ASSERT(empty_plan.has_value());
             PPR_TEST_ASSERT(empty_plan->m_groups.empty());
             PPR_TEST_ASSERT(empty_plan->m_payload_count == 0u);

@@ -23,9 +23,9 @@ namespace pP::colony {
 
         [[nodiscard]] std::error_code validateDigRect(const DigRect &rect) noexcept {
             const bool bad_edge = rect.m_width == 0u or
-            rect.m_height == 0u or
-            rect.m_width > kMaxDigEdge or
-            rect.m_height > kMaxDigEdge;
+                                  rect.m_height == 0u or
+                                  rect.m_width > kMaxDigEdge or
+                                  rect.m_height > kMaxDigEdge;
             if (bad_edge) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -35,8 +35,7 @@ namespace pP::colony {
             }
             const u64 far_x = static_cast<u64>(rect.m_min.m_x) + rect.m_width;
             const u64 far_y = static_cast<u64>(rect.m_min.m_y) + rect.m_height;
-            if (far_x > sim::kWorldEdge or
-                far_y > sim::kWorldEdge) {
+            if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             return {};
@@ -75,8 +74,8 @@ namespace pP::colony {
 
         DigResult result{};
         for (const DigTarget target: targets) {
-            const std::error_code set_error = grid.setCell({target.m_x, target.m_y},
-                sim::Cell{kElementVacuum, target.m_temperature});
+            const std::error_code set_error = grid.setCell(
+                {target.m_x, target.m_y}, sim::Cell{kElementVacuum, target.m_temperature});
             PPR_ASSERT(not set_error);
             const sim::ChunkPos chunk = sim::chunkOf({target.m_x, target.m_y});
             if (not chunkListed(result.m_touched, chunk)) {

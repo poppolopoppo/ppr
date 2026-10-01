@@ -27,8 +27,7 @@ namespace pP::tests::detail {
             Log::Policy m_previous;
 
         public:
-            ExpectedFailureLogGuard() noexcept
-                : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
+            ExpectedFailureLogGuard() noexcept : m_previous(Log::setWriterPolicy(discardExpectedFailureLog_)) {
             }
 
             ~ExpectedFailureLogGuard() noexcept {
@@ -48,11 +47,9 @@ namespace pP::tests::detail {
                     return false;
                 }
                 for (u64 k = 0u; k < static_cast<u64>(prim.m_count); ++k) {
-                    const i64 resolved =
-                            static_cast<i64>(mesh_asset.m_indices[prim.m_start + static_cast<u32>(k)])
-                            + static_cast<i64>(prim.m_base);
-                    if (resolved < 0 or resolved >= vert_count)
-                    {
+                    const i64 resolved = static_cast<i64>(mesh_asset.m_indices[prim.m_start + static_cast<u32>(k)]) +
+                                         static_cast<i64>(prim.m_base);
+                    if (resolved < 0 or resolved >= vert_count) {
                         return false;
                     }
                 }
@@ -61,8 +58,7 @@ namespace pP::tests::detail {
         }
 
         PPR_UNIT_TEST (glb_embed_path_imports) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "textured_quad.glb");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(meshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_meshes.size() == 1u);
             PPR_TEST_ASSERT(not scene->m_instances.empty());
@@ -71,8 +67,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not mesh.m_vertices.empty());
             PPR_TEST_ASSERT(mesh.m_indices.size() % 3u == 0u);
             PPR_TEST_ASSERT(not mesh.m_primitives.empty());
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
             for (const pP::mesh::MeshPrimitiveRange &prim: mesh.m_primitives) {
                 PPR_TEST_ASSERT(*prim.m_material < scene->m_materials.size());
             }
@@ -87,8 +82,7 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (gltf_external_uri_path_imports) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_meshes.size() == 1u);
 
@@ -101,16 +95,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(prim.m_count == 36u);
             PPR_TEST_ASSERT(prim.m_material == pP::mesh::MaterialAssetId{0u});
             PPR_TEST_ASSERT(allResolvedInRange_(mesh));
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::normal) == pP::mesh::EMeshAttribute::normal);
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::texcoord) == pP::mesh::EMeshAttribute::texcoord);
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::tangent) == pP::mesh::EMeshAttribute::none);
-            PPR_TEST_ASSERT(
-                (mesh.m_flags & pP::mesh::EMeshAttribute::color) == pP::mesh::EMeshAttribute::none);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::position) == pP::mesh::EMeshAttribute::position);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::normal) == pP::mesh::EMeshAttribute::normal);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::texcoord) == pP::mesh::EMeshAttribute::texcoord);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::tangent) == pP::mesh::EMeshAttribute::none);
+            PPR_TEST_ASSERT((mesh.m_flags & pP::mesh::EMeshAttribute::color) == pP::mesh::EMeshAttribute::none);
 
             // External-URI path: geometry + texture stay file refs.
             PPR_TEST_ASSERT(scene->m_images.size() == 1u);
@@ -125,13 +114,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scene->m_instances.size() == 1u);
             PPR_TEST_ASSERT(scene->m_instances.front().m_mesh == pP::mesh::MeshAssetId{0u});
             PPR_TEST_ASSERT(scene->m_instances.front().m_node == pP::mesh::NodeId{0u});
-            PPR_TEST_ASSERT(
-                scene->m_instances.front().m_material_override == none_v);
+            PPR_TEST_ASSERT(scene->m_instances.front().m_material_override == none_v);
         };
 
         PPR_UNIT_TEST (verbatim_lh_box_values) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
 
@@ -141,8 +128,9 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(vert.m_position[1] == 0.5f or vert.m_position[1] == -0.5f);
                 PPR_TEST_ASSERT(vert.m_position[2] == 0.5f or vert.m_position[2] == -0.5f);
                 // Axis-aligned unit normals, V-down UVs in {0, 1}.
-                const float normal_len = vert.m_normal[0] * vert.m_normal[0]
-                                         + vert.m_normal[1] * vert.m_normal[1] + vert.m_normal[2] * vert.m_normal[2];
+                const float normal_len = vert.m_normal[0] * vert.m_normal[0] +
+                                         vert.m_normal[1] * vert.m_normal[1] +
+                                         vert.m_normal[2] * vert.m_normal[2];
                 PPR_TEST_ASSERT(normal_len == 1.0f);
                 PPR_TEST_ASSERT(vert.m_texcoord[0] == 0.0f or vert.m_texcoord[0] == 1.0f);
                 PPR_TEST_ASSERT(vert.m_texcoord[1] == 0.0f or vert.m_texcoord[1] == 1.0f);
@@ -167,8 +155,7 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (verbatim_lh_quad_values) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "textured_quad.glb");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(meshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
             const pP::mesh::StaticMeshAsset &mesh = scene->m_meshes.front();
 
@@ -187,8 +174,7 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (material_mr_split) {
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(meshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_materials.size() == 1u);
             const pP::mesh::MaterialAsset &material = scene->m_materials.front();
@@ -237,17 +223,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty_dir.has_value());
             PPR_TEST_ASSERT(empty_dir.error() == std::errc::invalid_argument);
 
-            const Expected<pP::mesh::SceneAsset> empty_file =
-                    pP::mesh::importAndConvert(meshDir(), "");
+            const Expected<pP::mesh::SceneAsset> empty_file = pP::mesh::importAndConvert(meshDir(), "");
             PPR_TEST_ASSERT(not empty_file.has_value());
             PPR_TEST_ASSERT(empty_file.error() == std::errc::invalid_argument);
 
             ExpectedFailureLogGuard expected_failure_log;
-            const Expected<pP::mesh::SceneAsset> missing =
-                    pP::mesh::importAndConvert(meshDir(), "does_not_exist.glb");
+            const Expected<pP::mesh::SceneAsset> missing = pP::mesh::importAndConvert(meshDir(), "does_not_exist.glb");
             PPR_TEST_ASSERT(not missing.has_value());
-            PPR_TEST_ASSERT(
-                missing.error() == pP::mesh::make_error_code(pP::mesh::errc::import_failed));
+            PPR_TEST_ASSERT(missing.error() == pP::mesh::make_error_code(pP::mesh::errc::import_failed));
         };
 
         [[nodiscard]] std::filesystem::path malformedDir() {
@@ -284,8 +267,8 @@ namespace pP::tests::detail {
             // 12-byte header only: magic + version + total, zero chunks.
             const std::string bytes{'g', 'l', 'T', 'F', 0x02, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00};
             PPR_TEST_ASSERT(writeScratchGlb("malformed_truncated.glb", bytes));
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(malformedDir(), "malformed_truncated.glb");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(
+                malformedDir(), "malformed_truncated.glb");
             PPR_TEST_ASSERT(not scene.has_value());
             std::error_code err{};
             std::filesystem::remove_all(std::filesystem::current_path() / "malformed_glb_tmp", err);
@@ -301,8 +284,8 @@ namespace pP::tests::detail {
             bytes[14] = static_cast<char>(0x00);
             bytes[15] = static_cast<char>(0x00);
             PPR_TEST_ASSERT(writeScratchGlb("malformed_chunklen.glb", bytes));
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(malformedDir(), "malformed_chunklen.glb");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(
+                malformedDir(), "malformed_chunklen.glb");
             PPR_TEST_ASSERT(not scene.has_value());
             std::error_code err{};
             std::filesystem::remove_all(std::filesystem::current_path() / "malformed_glb_tmp", err);
@@ -330,8 +313,8 @@ namespace pP::tests::detail {
             bytes[8] = static_cast<char>(0x7Au);
             bytes[9] = static_cast<char>(0x06u);
             PPR_TEST_ASSERT(writeScratchGlb("malformed_vieworder.glb", bytes));
-            const Expected<pP::mesh::SceneAsset> scene =
-                    pP::mesh::importAndConvert(malformedDir(), "malformed_vieworder.glb");
+            const Expected<pP::mesh::SceneAsset> scene = pP::mesh::importAndConvert(
+                malformedDir(), "malformed_vieworder.glb");
             PPR_TEST_ASSERT(not scene.has_value());
             std::error_code err{};
             std::filesystem::remove_all(std::filesystem::current_path() / "malformed_glb_tmp", err);
@@ -339,14 +322,11 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (errc_taxonomy) {
             PPR_TEST_ASSERT(std::string{pP::mesh::error_category().name()} == "mesh");
+            PPR_TEST_ASSERT(pP::mesh::make_error_code(pP::mesh::errc::invalid_argument) == std::errc::invalid_argument);
             PPR_TEST_ASSERT(
-                pP::mesh::make_error_code(pP::mesh::errc::invalid_argument) == std::errc::invalid_argument);
+                pP::mesh::make_error_code(pP::mesh::errc::function_not_supported) == std::errc::function_not_supported);
             PPR_TEST_ASSERT(
-                pP::mesh::make_error_code(pP::mesh::errc::function_not_supported)
-                == std::errc::function_not_supported);
-            PPR_TEST_ASSERT(
-                pP::mesh::make_error_code(pP::mesh::errc::import_failed).category()
-                == pP::mesh::error_category());
+                pP::mesh::make_error_code(pP::mesh::errc::import_failed).category() == pP::mesh::error_category());
         };
 
         PPR_UNIT_TEST (vertex_layout_64b) {
@@ -406,8 +386,8 @@ namespace pP::tests::detail {
                     normal[1] + (tangent[1] + bitangent[1]) * 0.25f,
                     normal[2] + (tangent[2] + bitangent[2]) * 0.25f,
                 };
-                const float length =
-                        std::sqrt(perturbed[0] * perturbed[0] + perturbed[1] * perturbed[1] + perturbed[2] * perturbed[2]);
+                const float length = std::sqrt(
+                    perturbed[0] * perturbed[0] + perturbed[1] * perturbed[1] + perturbed[2] * perturbed[2]);
                 perturbed[0] /= length;
                 perturbed[1] /= length;
                 perturbed[2] /= length;
@@ -417,8 +397,8 @@ namespace pP::tests::detail {
 
             // Converted fixtures keep unit tangents with |w| == 1 (w=-w applied).
             for (const char *const file: {"textured_quad.glb", "textured_box.gltf"}) {
-                const Expected<mesh::SceneAsset> scene =
-                        mesh::importAndConvert(std::filesystem::current_path() / "meshes" / "", file);
+                const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(
+                    std::filesystem::current_path() / "meshes" / "", file);
                 PPR_TEST_ASSERT(scene.has_value());
                 for (const mesh::StaticMeshAsset &mesh_asset: scene->m_meshes) {
                     for (const mesh::StaticMeshVertex &vert: mesh_asset.m_vertices) {

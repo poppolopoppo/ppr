@@ -129,11 +129,11 @@ export namespace pP {
 
         [[nodiscard]] virtual slang::IGlobalSession *getGlobalSession() const noexcept = 0;
 
-        [[nodiscard]] virtual std::error_code
-        loadModuleFromFile(const std::filesystem::path &path, const char *module_name, shader::IModule **out_module) = 0;
+        [[nodiscard]] virtual std::error_code loadModuleFromFile(
+            const std::filesystem::path &path, const char *module_name, shader::IModule **out_module) = 0;
 
-        [[nodiscard]] virtual std::error_code
-        loadModuleFromSource(const char *module_name, const char *path, string_literal source, shader::IModule **out_module) = 0;
+        [[nodiscard]] virtual std::error_code loadModuleFromSource(
+            const char *module_name, const char *path, string_literal source, shader::IModule **out_module) = 0;
     };
 }
 

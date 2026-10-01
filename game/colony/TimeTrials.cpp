@@ -47,7 +47,8 @@ namespace pP::colony {
                 // NOTE: std::println with >2 fixed-width args trips consteval
                 // _Format_checker C3546 on this toolchain (VS18 Insiders);
                 // printf is runtime-parsed and prints byte-identical CSV.
-                std::printf("%s,%llu,%llu,%.2f,%llu\n", stageName(stage), static_cast<unsigned long long>(calls),
+                std::printf(
+                    "%s,%llu,%llu,%.2f,%llu\n", stageName(stage), static_cast<unsigned long long>(calls),
                     static_cast<unsigned long long>(total), static_cast<double>(mean),
                     static_cast<unsigned long long>(stat.m_max_us));
             }
@@ -55,8 +56,8 @@ namespace pP::colony {
 
         [[nodiscard]] Expected<void> runSteady() {
             ColonyDriver driver{};
-            if (const std::error_code error =
-                    driver.init(ColonyDriverDesc{.m_seed = kTrialSeed, .m_agent_count = kTrialAgents})) {
+            if (const std::error_code error = driver.init(
+                    ColonyDriverDesc{.m_seed = kTrialSeed, .m_agent_count = kTrialAgents})) {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
@@ -81,7 +82,8 @@ namespace pP::colony {
 
             // Phase: report. Timing output never feeds sim state.
             // NOTE: fprintf — println trips consteval _Format_checker C3546 here.
-            std::fprintf(stderr, "[timetrials] S1 steady seed=%llu agents=%u ticks=%u\n",
+            std::fprintf(
+                stderr, "[timetrials] S1 steady seed=%llu agents=%u ticks=%u\n",
                 static_cast<unsigned long long>(kTrialSeed), static_cast<unsigned>(kTrialAgents),
                 static_cast<unsigned>(kTrialTicks));
             if (not first_error) {
@@ -102,8 +104,8 @@ namespace pP::colony {
 
         [[nodiscard]] Expected<void> runWallBuilding() {
             ColonyDriver driver{};
-            if (const std::error_code error =
-                    driver.init(ColonyDriverDesc{.m_seed = kTrialSeed, .m_agent_count = kTrialAgents})) {
+            if (const std::error_code error = driver.init(
+                    ColonyDriverDesc{.m_seed = kTrialSeed, .m_agent_count = kTrialAgents})) {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
@@ -147,17 +149,18 @@ namespace pP::colony {
                             writes = kWallCells;
                         }
                         if (build) {
-                            const Expected<sim::Entity> wall = driver.buildWall(Footprint{.m_min = origin,
-                                .m_width = kWallWidth,
-                                .m_height = kWallHeight,
-                                .m_element = kElementRock});
+                            const Expected<sim::Entity> wall = driver.buildWall(
+                                Footprint{
+                                    .m_min = origin,
+                                    .m_width = kWallWidth,
+                                    .m_height = kWallHeight,
+                                    .m_element = kElementRock});
                             if (not wall) {
                                 first_error = wall.error();
                                 break;
                             }
                         } else {
-                            const Expected<sim::Entity> teardown =
-                                driver.demolish(origin, kWallWidth, kWallHeight);
+                            const Expected<sim::Entity> teardown = driver.demolish(origin, kWallWidth, kWallHeight);
                             if (not teardown) {
                                 first_error = teardown.error();
                                 break;
@@ -172,7 +175,8 @@ namespace pP::colony {
                 if (not first_error) {
                     if (tick + 1u == 300u) {
                         const u32 dirty = driver.grid().dirtyChunkCount();
-                        std::fprintf(stderr, "[timetrials] S2 [segment 0-300] issued_cells=%llu dirty_chunks=%u\n",
+                        std::fprintf(
+                            stderr, "[timetrials] S2 [segment 0-300] issued_cells=%llu dirty_chunks=%u\n",
                             static_cast<unsigned long long>(window_issued), static_cast<unsigned>(dirty));
                         printTimingsCsv(driver.stageTimings());
                         driver.resetStageTimings();
@@ -180,8 +184,8 @@ namespace pP::colony {
                         window_issued = 0u;
                     } else if (tick + 1u == 500u) {
                         const u32 dirty = driver.grid().dirtyChunkCount();
-                        std::fprintf(stderr,
-                            "[timetrials] S2 [segment 300-500] issued_cells=%llu dirty_chunks=%u\n",
+                        std::fprintf(
+                            stderr, "[timetrials] S2 [segment 300-500] issued_cells=%llu dirty_chunks=%u\n",
                             static_cast<unsigned long long>(window_issued), static_cast<unsigned>(dirty));
                         printTimingsCsv(driver.stageTimings());
                         driver.resetStageTimings();
@@ -193,13 +197,15 @@ namespace pP::colony {
 
             // Phase: report. Timing output never feeds sim state.
             // NOTE: fprintf — println trips consteval _Format_checker C3546 here.
-            std::fprintf(stderr,
+            std::fprintf(
+                stderr,
                 "[timetrials] S2 wall-building seed=%llu agents=%u ticks=%u period=%u (presentEdits skipped: no translator headless)\n",
                 static_cast<unsigned long long>(kTrialSeed), static_cast<unsigned>(kTrialAgents),
                 static_cast<unsigned>(kTrialTicks), static_cast<unsigned>(kWallPeriod));
             if (not first_error) {
                 const u32 dirty = driver.grid().dirtyChunkCount();
-                std::fprintf(stderr, "[timetrials] S2 [segment 500-600] issued_cells=%llu dirty_chunks=%u\n",
+                std::fprintf(
+                    stderr, "[timetrials] S2 [segment 500-600] issued_cells=%llu dirty_chunks=%u\n",
                     static_cast<unsigned long long>(window_issued), static_cast<unsigned>(dirty));
                 printTimingsCsv(driver.stageTimings());
             }

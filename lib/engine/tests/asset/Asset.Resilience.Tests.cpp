@@ -92,8 +92,11 @@ namespace pP::tests::detail {
             }
             using mango::image::Format;
             const mango::image::Surface surface{
-                8, 8, Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8),
-                static_cast<std::size_t>(8u) * 4u, rgba.data(),
+                8,
+                8,
+                Format(32, Format::UNORM, Format::RGBA, 8, 8, 8, 8),
+                static_cast<std::size_t>(8u) * 4u,
+                rgba.data(),
             };
             if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
@@ -105,8 +108,7 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] mem::SharedBuffer seedGlbBytes() {
-            if (Expected<mem::SharedBuffer> mapped =
-                        mem::SharedBuffer::mapFile(meshDir() / "textured_quad.glb");
+            if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(meshDir() / "textured_quad.glb");
                 mapped.has_value()) {
                 return *mapped;
             }
@@ -114,8 +116,7 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] mem::SharedBuffer seedGltfBytes() {
-            if (Expected<mem::SharedBuffer> mapped =
-                        mem::SharedBuffer::mapFile(meshDir() / "textured_box.gltf");
+            if (Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(meshDir() / "textured_box.gltf");
                 mapped.has_value()) {
                 return *mapped;
             }
@@ -131,11 +132,12 @@ namespace pP::tests::detail {
         };
 
         [[nodiscard]] ImageOutcome tryDecodeRgba8(
-            const std::span<const std::byte> bytes, const std::string_view ext, const image::ImageDecodeDesc desc) noexcept {
+            const std::span<const std::byte> bytes, const std::string_view ext,
+            const image::ImageDecodeDesc desc) noexcept {
             ImageOutcome out{};
             try {
-                const Expected<image::ImageAsset> decoded =
-                        image::decodeToRgba8(mem::SharedBufferView{bytes.data(), bytes.size()}, ext, desc, image::EImageUsage::color);
+                const Expected<image::ImageAsset> decoded = image::decodeToRgba8(
+                    mem::SharedBufferView{bytes.data(), bytes.size()}, ext, desc, image::EImageUsage::color);
                 if (decoded.has_value()) {
                     out.m_ok = true;
                     out.m_width = decoded->m_width;
@@ -278,14 +280,14 @@ namespace pP::tests::detail {
 
             image::ImageDecodeDesc tiny_input{};
             tiny_input.m_limits.m_max_input_bytes = 16u;
-            const ImageOutcome input =
-                    tryDecodeRgba8({seed_view.data(), seed_view.size()}, ".png", tiny_input);
+            const ImageOutcome input = tryDecodeRgba8({seed_view.data(), seed_view.size()}, ".png", tiny_input);
             PPR_TEST_ASSERT(not input.m_threw);
             PPR_TEST_ASSERT(not input.m_ok);
             PPR_TEST_ASSERT(input.m_err == std::errc::invalid_argument);
 
             // Defaults still accept the seed: limits must not break valid inputs.
-            const ImageOutcome open = tryDecodeRgba8({seed_view.data(), seed_view.size()}, ".png", image::ImageDecodeDesc{});
+            const ImageOutcome open = tryDecodeRgba8(
+                {seed_view.data(), seed_view.size()}, ".png", image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not open.m_threw);
             PPR_TEST_ASSERT(open.m_ok);
             PPR_TEST_ASSERT(open.m_width == 8u and open.m_height == 8u);
@@ -384,26 +386,26 @@ namespace pP::tests::detail {
             mesh::MeshLimits no_meshes = mesh::kDefaultMeshLimits;
             no_meshes.m_max_meshes = 0u;
             PPR_TEST_ASSERT(
-                mesh::importAndConvert(meshDir(), "textured_quad.glb", no_meshes).error()
-                == std::errc::invalid_argument);
+                mesh::importAndConvert(meshDir(), "textured_quad.glb", no_meshes).error() ==
+                std::errc::invalid_argument);
 
             mesh::MeshLimits tiny_glb = mesh::kDefaultMeshLimits;
             tiny_glb.m_max_glb_bytes = 16u;
             PPR_TEST_ASSERT(
-                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_glb).error()
-                == std::errc::invalid_argument);
+                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_glb).error() ==
+                std::errc::invalid_argument);
 
             mesh::MeshLimits tiny_verts = mesh::kDefaultMeshLimits;
             tiny_verts.m_max_vertices_per_mesh = 1u;
             PPR_TEST_ASSERT(
-                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_verts).error()
-                == std::errc::invalid_argument);
+                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_verts).error() ==
+                std::errc::invalid_argument);
 
             mesh::MeshLimits tiny_chunks = mesh::kDefaultMeshLimits;
             tiny_chunks.m_max_glb_chunks = 0u;
             PPR_TEST_ASSERT(
-                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_chunks).error()
-                == std::errc::invalid_argument);
+                mesh::importAndConvert(meshDir(), "textured_quad.glb", tiny_chunks).error() ==
+                std::errc::invalid_argument);
 
             // Defaults still accept the fixture: limits must not break valid inputs.
             PPR_TEST_ASSERT(mesh::importAndConvert(meshDir(), "textured_quad.glb").has_value());
@@ -441,8 +443,7 @@ namespace pP::tests::detail {
             }
             const mango::image::Surface surface{
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
-                16u, rgba.data()
-            };
+                16u, rgba.data()};
             if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }

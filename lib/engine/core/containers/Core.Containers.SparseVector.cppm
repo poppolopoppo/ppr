@@ -78,13 +78,14 @@ export namespace pP {
             return m_seed != 0u;
         }
 
-        [[nodiscard]] constexpr bool operator ==(const SparseKeyId &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator==(const SparseKeyId &other) const noexcept = default;
 
-        [[nodiscard]] constexpr std::strong_ordering operator <=>(const SparseKeyId other) const noexcept {
+        [[nodiscard]] constexpr std::strong_ordering operator<=>(const SparseKeyId other) const noexcept {
             if (isValid() && other.isValid()) [[likely]] {
                 return m_index <=> other.m_index;
             }
-            return isValid() ? std::strong_ordering::less : (other.isValid() ? std::strong_ordering::greater : std::strong_ordering::equal);
+            return isValid() ? std::strong_ordering::less
+                             : (other.isValid() ? std::strong_ordering::greater : std::strong_ordering::equal);
         }
 
         [[nodiscard]] PPR_FORCE_INLINE friend constexpr hash_t hashValue(const SparseKeyId key) noexcept {
@@ -117,13 +118,14 @@ export namespace pP {
             return m_generation != 0u;
         }
 
-        [[nodiscard]] constexpr bool operator ==(const SparseHandle &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator==(const SparseHandle &other) const noexcept = default;
 
-        [[nodiscard]] constexpr std::strong_ordering operator <=>(const SparseHandle other) const noexcept {
+        [[nodiscard]] constexpr std::strong_ordering operator<=>(const SparseHandle other) const noexcept {
             if (isValid() && other.isValid()) [[likely]] {
                 return m_index <=> other.m_index;
             }
-            return isValid() ? std::strong_ordering::less : (other.isValid() ? std::strong_ordering::greater : std::strong_ordering::equal);
+            return isValid() ? std::strong_ordering::less
+                             : (other.isValid() ? std::strong_ordering::greater : std::strong_ordering::equal);
         }
 
         [[nodiscard]] PPR_FORCE_INLINE friend constexpr hash_t hashValue(const SparseHandle handle) noexcept {
@@ -142,9 +144,8 @@ export namespace pP {
         class SparseVectorIterator {
         public:
             using sparse_vector = std::conditional_t<
-                std::is_const_v<T>,
-                std::add_const_t<SparseVector<std::remove_const_t<T>, AllocatorT> >,
-                SparseVector<T, AllocatorT> >;
+                std::is_const_v<T>, std::add_const_t<SparseVector<std::remove_const_t<T>, AllocatorT>>,
+                SparseVector<T, AllocatorT>>;
             friend sparse_vector;
 
             using iterator_category = std::bidirectional_iterator_tag;
@@ -160,13 +161,10 @@ export namespace pP {
             friend class SparseVectorIterator;
 
             using stable_vector = std::conditional_t<
-                std::is_const_v<T>,
-                std::add_const_t<typename sparse_vector::stable_vector>,
+                std::is_const_v<T>, std::add_const_t<typename sparse_vector::stable_vector>,
                 typename sparse_vector::stable_vector>;
             using stable_vector_iterator = std::conditional_t<
-                std::is_const_v<T>,
-                typename stable_vector::const_iterator,
-                typename stable_vector::iterator>;
+                std::is_const_v<T>, typename stable_vector::const_iterator, typename stable_vector::iterator>;
 
             stable_vector_iterator m_stable_it{};
 
@@ -179,11 +177,11 @@ export namespace pP {
 
             constexpr SparseVectorIterator(const SparseVectorIterator &) noexcept = default;
 
-            constexpr SparseVectorIterator &operator =(const SparseVectorIterator &) noexcept = default;
+            constexpr SparseVectorIterator &operator=(const SparseVectorIterator &) noexcept = default;
 
             constexpr SparseVectorIterator(SparseVectorIterator &&) noexcept = default;
 
-            constexpr SparseVectorIterator &operator =(SparseVectorIterator &&) noexcept = default;
+            constexpr SparseVectorIterator &operator=(SparseVectorIterator &&) noexcept = default;
 
             constexpr SparseVectorIterator(sparse_vector &container, const std::size_t index) noexcept
                 : m_stable_it(static_cast<stable_vector &>(container), index) {
@@ -193,13 +191,16 @@ export namespace pP {
                 : m_stable_it(static_cast<stable_vector &>(container), end) {
             }
 
-            constexpr SparseVectorIterator(const SparseVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
+            constexpr SparseVectorIterator(
+                const SparseVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
                 requires std::is_const_v<T>
                 : m_stable_it(other.m_stable_it) {
             }
 
-            constexpr SparseVectorIterator &operator =(const SparseVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
-                requires std::is_const_v<T> {
+            constexpr SparseVectorIterator &operator=(
+                const SparseVectorIterator<std::remove_const_t<T>, AllocatorT> &other) noexcept
+                requires std::is_const_v<T>
+            {
                 m_stable_it = other.m_stable_it;
                 return (*this);
             }
@@ -281,13 +282,13 @@ export namespace pP {
             // ------------------------------------------------------------
             // comparisons
             // ------------------------------------------------------------
-            [[nodiscard]] friend constexpr bool
-            operator==(const SparseVectorIterator &a, const SparseVectorIterator &b) noexcept {
+            [[nodiscard]] friend constexpr bool operator==(
+                const SparseVectorIterator &a, const SparseVectorIterator &b) noexcept {
                 return (a.m_stable_it == b.m_stable_it);
             }
 
-            [[nodiscard]] friend constexpr std::strong_ordering
-            operator<=>(const SparseVectorIterator &a, const SparseVectorIterator &b) noexcept {
+            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+                const SparseVectorIterator &a, const SparseVectorIterator &b) noexcept {
                 return (a.m_stable_it <=> b.m_stable_it);
             }
         };
@@ -298,9 +299,10 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename T, mem::details::TAllocator AllocatorT = mem::GPA>
-    using SparseVectorInplace = SparseVector<T,
-        mem::InSituFallback<details::stable_vector_min_capacity_v * sizeof(details::SparseVectorItem<T>),
-            AllocatorT, alignof_v<details::SparseVectorItem<T> > > >;
+    using SparseVectorInplace = SparseVector<
+        T, mem::InSituFallback<
+               details::stable_vector_min_capacity_v * sizeof(details::SparseVectorItem<T>), AllocatorT,
+               alignof_v<details::SparseVectorItem<T>>>>;
 
     // ------------------------------------------------------------------
     // general purpose sparse vector with stable pointers and generation keys to validate lifetime
@@ -431,7 +433,8 @@ export namespace pP {
 
                 // https://plflib.org/matt_bentley_-_the_low_complexity_jump-counting_pattern.pdf
                 const u32 skip_left = (new_alloc_index > 0u ? (new_alloc - 1u)->m_payload.m_skip : 0u);
-                const u32 skip_right = (new_alloc_index + 1u < stable_vector::m_size ? (new_alloc + 1u)->m_payload.m_skip : 0u);
+                const u32 skip_right =
+                    (new_alloc_index + 1u < stable_vector::m_size ? (new_alloc + 1u)->m_payload.m_skip : 0u);
 
                 if (skip_left && skip_right) {
                     // middle-blocks can't be unskipped in O(1), pop until we have a front/back/single block
@@ -458,7 +461,8 @@ export namespace pP {
             AllocationResult_ new_alloc;
             if (stable_vector::m_size < stable_vector::m_capacity || m_free_tail == none_v) [[likely]] {
                 sparse_vector_item *const free_ptr = stable_vector::pushBackUninitialized();
-                PPR_ASSERT(stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
+                PPR_ASSERT(
+                    stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
                 new_alloc = AllocationResult_{.m_item_ptr = free_ptr, .m_index = stable_vector::m_size - 1u};
             } else {
                 new_alloc = allocateItemFromFreeList_();
@@ -486,7 +490,7 @@ export namespace pP {
             mem::poisonDestroyed(item.getValuePtr());
             mem::unpoisonUninitialized(item.getValuePtr());
 
-            new(std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
+            new (std::launder(&item.m_free_list)) sparse_vector_item::FreeList{
                 .m_next_free = none_v,
             };
 
@@ -495,8 +499,11 @@ export namespace pP {
             item.m_generation = 0u;
 
             // https://plflib.org/matt_bentley_-_the_low_complexity_jump-counting_pattern.pdf
-            const u32 skip_left = (old_alloc_index > 0u ? stable_vector::at(old_alloc_index - 1u).m_payload.m_skip : 0u);
-            const u32 skip_right = (old_alloc_index + 1u < stable_vector::m_size ? stable_vector::at(old_alloc_index + 1u).m_payload.m_skip : 0u);
+            const u32 skip_left =
+                (old_alloc_index > 0u ? stable_vector::at(old_alloc_index - 1u).m_payload.m_skip : 0u);
+            const u32 skip_right =
+                (old_alloc_index + 1u < stable_vector::m_size ? stable_vector::at(old_alloc_index + 1u).m_payload.m_skip
+                                                              : 0u);
 
             bool is_middle_block = false;
             if (skip_left && skip_right) {
@@ -539,35 +546,36 @@ export namespace pP {
         using const_iterator = details::SparseVectorIterator<const T, AllocatorT>;
 
         constexpr SparseVector() noexcept
-            requires std::is_default_constructible_v<allocator_type> : stable_vector() {
+            requires std::is_default_constructible_v<allocator_type>
+            : stable_vector() {
         }
 
         explicit constexpr SparseVector(const std::size_t initial_capacity) noexcept
-            requires std::is_default_constructible_v<allocator_type> {
+            requires std::is_default_constructible_v<allocator_type>
+        {
             reserveAssumeEmpty(initial_capacity);
         }
 
         constexpr SparseVector(std::initializer_list<T> init_values) noexcept
-            requires std::is_default_constructible_v<allocator_type> {
+            requires std::is_default_constructible_v<allocator_type>
+        {
             assignAssumeEmpty(init_values);
         }
 
-        explicit constexpr SparseVector(AllocatorT &&al)
-            noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+        explicit constexpr SparseVector(AllocatorT &&al) noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
             requires std::is_move_constructible_v<AllocatorT>
             : stable_vector(std::move(al)) {
         }
 
-        explicit constexpr SparseVector(const AllocatorT &al)
-            noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+        explicit constexpr SparseVector(const AllocatorT &al) noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
             requires std::is_copy_constructible_v<AllocatorT>
             : stable_vector(al) {
         }
 
         template<typename AllocatorLikeT>
             requires std::is_constructible_v<stable_vector, AllocatorLikeT &&>
-        explicit constexpr SparseVector(AllocatorLikeT &&al_init)
-            noexcept(std::is_nothrow_constructible_v<stable_vector, AllocatorLikeT &&>)
+        explicit constexpr SparseVector(AllocatorLikeT &&al_init) noexcept(
+            std::is_nothrow_constructible_v<stable_vector, AllocatorLikeT &&>)
             : stable_vector(std::forward<AllocatorLikeT>(al_init)) {
         }
 
@@ -576,8 +584,7 @@ export namespace pP {
             reserveAssumeEmpty(initial_capacity);
         }
 
-        constexpr SparseVector(const std::size_t initial_capacity, const AllocatorT &al) noexcept
-            : stable_vector(al) {
+        constexpr SparseVector(const std::size_t initial_capacity, const AllocatorT &al) noexcept : stable_vector(al) {
             reserveAssumeEmpty(initial_capacity);
         }
 
@@ -591,12 +598,11 @@ export namespace pP {
             assignAssumeEmpty(init_values);
         }
 
-        constexpr SparseVector(const SparseVector &other) noexcept
-            : stable_vector(other.getAllocator_()) {
+        constexpr SparseVector(const SparseVector &other) noexcept : stable_vector(other.getAllocator_()) {
             assignAssumeEmpty(other);
         }
 
-        constexpr SparseVector &operator =(const SparseVector &other) noexcept {
+        constexpr SparseVector &operator=(const SparseVector &other) noexcept {
             if (this == &other) [[unlikely]] {
                 return *this;
             }
@@ -606,12 +612,11 @@ export namespace pP {
             return (*this);
         }
 
-        constexpr SparseVector(SparseVector &&rvalue) noexcept
-            : stable_vector(std::move(rvalue.getAllocator_())) {
+        constexpr SparseVector(SparseVector &&rvalue) noexcept : stable_vector(std::move(rvalue.getAllocator_())) {
             spliceAssumeEmpty(rvalue);
         }
 
-        constexpr SparseVector &operator =(SparseVector &&rvalue) noexcept {
+        constexpr SparseVector &operator=(SparseVector &&rvalue) noexcept {
             if (this == &rvalue) [[unlikely]] {
                 return *this;
             }
@@ -644,7 +649,9 @@ export namespace pP {
             return end();
         }
 
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, max_v); }
+        [[nodiscard]] constexpr iterator end() noexcept {
+            return iterator(*this, max_v);
+        }
 
         [[nodiscard]] constexpr const_iterator begin() const noexcept {
             if (const auto first = stable_vector::begin(); first != stable_vector::end()) {
@@ -653,10 +660,16 @@ export namespace pP {
             return end();
         }
 
-        [[nodiscard]] constexpr const_iterator end() const noexcept { return const_iterator(*this, max_v); }
+        [[nodiscard]] constexpr const_iterator end() const noexcept {
+            return const_iterator(*this, max_v);
+        }
 
-        [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return begin(); }
-        [[nodiscard]] constexpr const_iterator cend() const noexcept { return end(); }
+        [[nodiscard]] constexpr const_iterator cbegin() const noexcept {
+            return begin();
+        }
+        [[nodiscard]] constexpr const_iterator cend() const noexcept {
+            return end();
+        }
 
         [[nodiscard]] constexpr auto each(this auto &&self) noexcept {
             return std::ranges::subrange(self.begin(), self.end());
@@ -680,8 +693,7 @@ export namespace pP {
         [[nodiscard]] static constexpr SparseHandle handle(const const_iterator &it) noexcept {
             // getHandle already maps end iterators to invalid; free slots carry
             // generation 0 (zeroed at deallocate), so they fail closed here too.
-            if (const SparseHandle probed = it.getHandle();
-                PPR_ENSURE(probed.isValid())) [[likely]] {
+            if (const SparseHandle probed = it.getHandle(); PPR_ENSURE(probed.isValid())) [[likely]] {
                 return probed;
             }
             return default_value_v;
@@ -696,8 +708,7 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr auto *tryGet(this auto &&self, const SparseKeyId key) noexcept {
-            if (auto &item = self.at(key.m_index);
-                item.m_payload.m_seed == key.m_seed) [[likely]] {
+            if (auto &item = self.at(key.m_index); item.m_payload.m_seed == key.m_seed) [[likely]] {
                 PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
                 return item.getValuePtr();
             } else {
@@ -712,8 +723,7 @@ export namespace pP {
             return *item.getValuePtr();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &
-        operator [](this auto &&self, const SparseKeyId key) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &operator[](this auto &&self, const SparseKeyId key) noexcept {
             return self.get(key);
         }
 
@@ -733,8 +743,7 @@ export namespace pP {
             if (handle.m_index >= self.stable_vector::size()) [[unlikely]] {
                 return static_cast<item_ptr_t>(nullptr);
             }
-            if (auto &item = self.at(handle.m_index);
-                item.m_generation == handle.m_generation) [[likely]] {
+            if (auto &item = self.at(handle.m_index); item.m_generation == handle.m_generation) [[likely]] {
                 PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
                 return item.getValuePtr();
             } else {
@@ -749,8 +758,8 @@ export namespace pP {
             return *item.getValuePtr();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &
-        operator [](this auto &&self, const SparseHandle handle) noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto &operator[](
+            this auto &&self, const SparseHandle handle) noexcept {
             return self.get(handle);
         }
 
@@ -759,24 +768,24 @@ export namespace pP {
         }
 
         template<typename ValueT>
-        [[nodiscard]] constexpr auto
-        find(this auto &&self, ValueT &&value_to_find) noexcept
-            requires std::equality_comparable_with<T, ValueT> {
+        [[nodiscard]] constexpr auto find(this auto &&self, ValueT &&value_to_find) noexcept
+            requires std::equality_comparable_with<T, ValueT>
+        {
             return std::find(self.begin(), self.end(), std::forward<ValueT>(value_to_find));
         }
 
         template<std::ranges::range RangeT>
-        constexpr void assign(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        constexpr void assign(RangeT &&values) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             clear();
             assignAssumeEmpty(std::forward<RangeT>(values));
         }
 
         template<std::ranges::range RangeT>
-        constexpr void assignAssumeEmpty(RangeT &&values)
-            noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        constexpr void assignAssumeEmpty(RangeT &&values) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             const std::size_t n = std::ranges::size(values);
             reserveAssumeEmpty(n);
             for (auto &value: values) {
@@ -784,15 +793,15 @@ export namespace pP {
             }
         }
 
-        [[nodiscard]] constexpr std::pair<SparseKeyId, T *>
-        addUninitialized() noexcept(std::is_nothrow_move_constructible_v<T>) {
+        [[nodiscard]] constexpr std::pair<SparseKeyId, T *> addUninitialized() noexcept(
+            std::is_nothrow_move_constructible_v<T>) {
             const AllocationResult_ alloc = allocateItem_();
             return std::make_pair(alloc.getKeyId(), alloc.launderValuePtr());
         }
 
-        constexpr std::pair<SparseKeyId, T *>
-        addDefault() noexcept(std::is_nothrow_move_constructible_v<T>)
-            requires std::is_default_constructible_v<T> {
+        constexpr std::pair<SparseKeyId, T *> addDefault() noexcept(std::is_nothrow_move_constructible_v<T>)
+            requires std::is_default_constructible_v<T>
+        {
             const AllocationResult_ alloc = allocateItem_();
             T *const value_ptr = alloc.launderValuePtr();
             std::construct_at(value_ptr);
@@ -811,15 +820,15 @@ export namespace pP {
             return alloc.getKeyId();
         }
 
-        [[nodiscard]] constexpr std::pair<SparseHandle, T *>
-        addHandleUninitialized() noexcept(std::is_nothrow_move_constructible_v<T>) {
+        [[nodiscard]] constexpr std::pair<SparseHandle, T *> addHandleUninitialized() noexcept(
+            std::is_nothrow_move_constructible_v<T>) {
             const AllocationResult_ alloc = allocateItem_();
             return std::make_pair(alloc.getHandle(), alloc.launderValuePtr());
         }
 
-        constexpr std::pair<SparseHandle, T *>
-        addHandleDefault() noexcept(std::is_nothrow_move_constructible_v<T>)
-            requires std::is_default_constructible_v<T> {
+        constexpr std::pair<SparseHandle, T *> addHandleDefault() noexcept(std::is_nothrow_move_constructible_v<T>)
+            requires std::is_default_constructible_v<T>
+        {
             const AllocationResult_ alloc = allocateItem_();
             T *const value_ptr = alloc.launderValuePtr();
             std::construct_at(value_ptr);
@@ -839,35 +848,37 @@ export namespace pP {
         }
 
         template<typename... ArgsT>
-        constexpr iterator emplace(ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
-            requires std::is_constructible_v<T, ArgsT &&...> {
+        constexpr iterator emplace(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires std::is_constructible_v<T, ArgsT &&...>
+        {
             const AllocationResult_ alloc = allocateItem_();
             std::construct_at(alloc.launderValuePtr(), std::forward<ArgsT>(args)...);
             return iterator(*this, alloc.m_index);
         }
 
         template<typename... ArgsT>
-        constexpr std::pair<SparseHandle, iterator> emplaceHandle(ArgsT &&... args)
-            noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>)
-            requires std::is_constructible_v<T, ArgsT &&...> {
+        constexpr std::pair<SparseHandle, iterator> emplaceHandle(ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>)
+            requires std::is_constructible_v<T, ArgsT &&...>
+        {
             const AllocationResult_ alloc = allocateItem_();
             std::construct_at(alloc.launderValuePtr(), std::forward<ArgsT>(args)...);
             return std::make_pair(alloc.getHandle(), iterator(*this, alloc.m_index));
         }
 
         template<std::ranges::range RangeT>
-        [[maybe_unused]] constexpr std::size_t
-        append(RangeT &&range) noexcept(std::is_nothrow_copy_constructible_v<T>)
-            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T> {
+        [[maybe_unused]] constexpr std::size_t append(RangeT &&range) noexcept(std::is_nothrow_copy_constructible_v<T>)
+            requires std::is_convertible_v<std::ranges::range_value_t<RangeT>, T>
+        {
             const std::size_t n = std::ranges::size(range);
             reserveAdditional(n);
             return appendAssumeCapacity(std::ranges::begin(range), std::ranges::end(range));
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
-        [[maybe_unused]] constexpr std::size_t
-        append(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of_v<IteratorT, T>
+        [[maybe_unused]] constexpr std::size_t append(IteratorT first, IteratorT last) noexcept(
+            std::is_nothrow_copy_constructible_v<T>) {
             if constexpr (std::random_access_iterator<IteratorT>) {
                 const std::size_t required = std::distance(first, last);
                 reserveAdditional(required);
@@ -875,9 +886,10 @@ export namespace pP {
             return appendAssumeCapacity(first, last);
         }
 
-        template<std::forward_iterator IteratorT> requires details::is_iterator_of_v<IteratorT, T>
-        [[maybe_unused]] constexpr std::size_t
-        appendAssumeCapacity(IteratorT first, IteratorT last) noexcept(std::is_nothrow_copy_constructible_v<T>) {
+        template<std::forward_iterator IteratorT>
+            requires details::is_iterator_of_v<IteratorT, T>
+        [[maybe_unused]] constexpr std::size_t appendAssumeCapacity(IteratorT first, IteratorT last) noexcept(
+            std::is_nothrow_copy_constructible_v<T>) {
             std::size_t n = 0u;
             for (; first != last; ++first, ++n) {
                 add(*first);
@@ -886,8 +898,8 @@ export namespace pP {
         }
 
         constexpr bool erase(const SparseKeyId key) noexcept(std::is_nothrow_destructible_v<T>) {
-            if (sparse_vector_item &item = stable_vector::at(key.m_index);
-                item.m_payload.m_seed == key.m_seed) [[likely]] {
+            if (sparse_vector_item &item = stable_vector::at(key.m_index); item.m_payload.m_seed == key.m_seed)
+                [[likely]] {
                 PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
 
                 std::destroy_at(item.getValuePtr());
@@ -904,8 +916,8 @@ export namespace pP {
             if (handle.m_index >= stable_vector::size()) [[unlikely]] {
                 return false;
             }
-            if (sparse_vector_item &item = stable_vector::at(handle.m_index);
-                item.m_generation == handle.m_generation) [[likely]] {
+            if (sparse_vector_item &item = stable_vector::at(handle.m_index); item.m_generation == handle.m_generation)
+                [[likely]] {
                 PPR_ASSERT(item.m_payload.m_skip == 0u && item.m_payload.m_seed);
 
                 std::destroy_at(item.getValuePtr());
@@ -936,20 +948,23 @@ export namespace pP {
             PPR_ASSERT(m_free_tail == none_v);
 
             stable_vector::reserveAssumeEmpty(n);
-            PPR_ASSERT(stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
+            PPR_ASSERT(
+                stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
         }
 
         constexpr void reserveAdditional(const std::size_t n) noexcept {
             if (const u32 num_free_items = stable_vector::m_capacity - m_size_alive; n > num_free_items) [[unlikely]] {
                 stable_vector::reserve(m_size_alive + n);
-                PPR_ASSERT(stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
+                PPR_ASSERT(
+                    stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
             }
         }
 
         constexpr void reserve(const std::size_t n) noexcept {
             const u32 free_list_size = stable_vector::m_size - m_size_alive;
             stable_vector::reserve(n - free_list_size);
-            PPR_ASSERT(stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
+            PPR_ASSERT(
+                stable_vector::m_capacity <= (1u << 24u) && "SparseVector do not support more than 16m elements");
         }
 
         constexpr void clear() noexcept(std::is_nothrow_destructible_v<T>) {
@@ -1012,15 +1027,16 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename T>
-    SparseVector(std::initializer_list<T>) -> SparseVector<std::remove_cvref_t<T> >;
+    SparseVector(std::initializer_list<T>) -> SparseVector<std::remove_cvref_t<T>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    SparseVector(std::initializer_list<T>, AllocatorT &&al) -> SparseVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    SparseVector(std::initializer_list<T>, AllocatorT &&al)
+        -> SparseVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    SparseVector(std::initializer_list<T>, const AllocatorT &al) -> SparseVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT> >;
+    SparseVector(std::initializer_list<T>, const AllocatorT &al)
+        -> SparseVector<std::remove_cvref_t<T>, std::remove_cvref_t<AllocatorT>>;
 
     template<typename T, mem::details::TAllocator AllocatorT>
-    struct details::relocatable<SparseVector<T, AllocatorT> > : relocatable<StableVector<T, AllocatorT> > {
-    };
+    struct details::relocatable<SparseVector<T, AllocatorT>> : relocatable<StableVector<T, AllocatorT>> {};
 }

@@ -109,12 +109,8 @@ namespace pP::tests::detail {
                 check(opaque::Formatter([](opaque::format_context &ctx) noexcept -> decltype(auto) {
                     return ctx.out();
                 }));
-                check([](opaque::format_context &ctx) noexcept -> decltype(auto) {
-                    return ctx.out();
-                });
-                constexpr auto formatter = [](opaque::format_context &ctx) noexcept {
-                    return ctx.out();
-                };
+                check([](opaque::format_context &ctx) noexcept -> decltype(auto) { return ctx.out(); });
+                constexpr auto formatter = [](opaque::format_context &ctx) noexcept { return ctx.out(); };
                 check(opaque::Formatter(formatter));
             };
 
@@ -140,54 +136,41 @@ namespace pP::tests::detail {
             };
 
             PPR_UNIT_TEST (format_array) {
-                constexpr auto fmt = [](opaque::Array &&v) -> std::string {
-                    return std::format("{}", v);
-                };
-                const std::string res = fmt({
-                    1, true, "ansi", L"wide", 3.14151618, [](opaque::format_context &fmt) noexcept {
-                        std::format_to(fmt.out(), "the answer is {}", 42);
-                    }
-                });
+                constexpr auto fmt = [](opaque::Array &&v) -> std::string { return std::format("{}", v); };
+                const std::string res = fmt(
+                    {1, true, "ansi", L"wide", 3.14151618, [](opaque::format_context &fmt) noexcept {
+                         std::format_to(fmt.out(), "the answer is {}", 42);
+                     }});
                 // MSVC STL transcodes cross-width strings in "{:?}"; libc++ emits
                 // them empty. The expectation below encodes the MSVC behavior.
 #if defined(_MSC_VER)
-                constexpr std::string_view expected = R"EXPECT([1, true, "ansi", "wide", 3.14151618, "the answer is 42"])EXPECT";
+                constexpr std::string_view expected =
+                    R"EXPECT([1, true, "ansi", "wide", 3.14151618, "the answer is 42"])EXPECT";
 #else
-                constexpr std::string_view expected = R"EXPECT([1, true, "ansi", "", 3.14151618, "the answer is 42"])EXPECT";
+                constexpr std::string_view expected =
+                    R"EXPECT([1, true, "ansi", "", 3.14151618, "the answer is 42"])EXPECT";
 #endif
                 PPR_TEST_ASSERT(expected == res);
             };
 
             PPR_UNIT_TEST (format_object) {
-                const auto fmt = [](const opaque::Dict &v) -> std::string {
-                    return std::format("{}", v);
-                };
-                const std::string res = fmt({
-                    {"FirstName", "John"},
-                    {"LastName", L"Doe"},
-                    {"Age", 41u},
-                    {"Height", 1.83},
-                    {
-                        "Hobbies", opaque::Array{
-                            "coding", "gaming", "joking"
-                        }
-                    }
-                });
+                const auto fmt = [](const opaque::Dict &v) -> std::string { return std::format("{}", v); };
+                const std::string res = fmt(
+                    {{"FirstName", "John"}, {"LastName", L"Doe"}, {"Age", 41u}, {"Height", 1.83},
+                        {"Hobbies", opaque::Array{"coding", "gaming", "joking"}}});
                 // See format_array above: cross-width "{:?}" output is STL-specific.
 #if defined(_MSC_VER)
                 constexpr std::string_view expected =
-                        R"EXPECT({"FirstName": "John", "LastName": "Doe", "Age": 41, "Height": 1.83, "Hobbies": ["coding", "gaming", "joking"]})EXPECT";
+                    R"EXPECT({"FirstName": "John", "LastName": "Doe", "Age": 41, "Height": 1.83, "Hobbies": ["coding", "gaming", "joking"]})EXPECT";
 #else
                 constexpr std::string_view expected =
-                        R"EXPECT({"FirstName": "John", "LastName": "", "Age": 41, "Height": 1.83, "Hobbies": ["coding", "gaming", "joking"]})EXPECT";
+                    R"EXPECT({"FirstName": "John", "LastName": "", "Age": 41, "Height": 1.83, "Hobbies": ["coding", "gaming", "joking"]})EXPECT";
 #endif
                 PPR_TEST_ASSERT(expected == res);
             };
 
             PPR_UNIT_TEST (format_delegate) {
-                constexpr auto fmt = [](opaque::Value &&v) -> std::string {
-                    return std::format("{}", v);
-                };
+                constexpr auto fmt = [](opaque::Value &&v) -> std::string { return std::format("{}", v); };
                 const auto res = fmt(opaque::Delegate{[] noexcept { return opaque::Value{42}; }});
                 constexpr std::string_view expected = "42";
                 PPR_TEST_ASSERT(expected == res);
@@ -198,9 +181,7 @@ namespace pP::tests::detail {
             };
 
             PPR_UNIT_TEST (format_formatter) {
-                constexpr auto fmt = [](opaque::Value &&v) -> std::string {
-                    return std::format("{}", v);
-                };
+                constexpr auto fmt = [](opaque::Value &&v) -> std::string { return std::format("{}", v); };
                 const std::string res = fmt([](opaque::format_context &ctx) noexcept {
                     return std::format_to(ctx.out(), "This is {:02} formatted {}", 1, "text");
                 });
@@ -209,7 +190,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (value){
+        PPR_UNIT_TEST (value) {
             _.recurse({
                 Value::decl_scalars,
                 Value::decl_arrays,
@@ -223,7 +204,6 @@ namespace pP::tests::detail {
                 Value::format_delegate,
                 Value::format_formatter,
             });
-
         };
 
         namespace Block {
@@ -352,13 +332,7 @@ namespace pP::tests::detail {
                 auto arena = mem::Allocator<mem::ScratchPad>{};
                 const auto mark = arena.watermark();
 
-                const opaque::Block block{
-                    {
-                        {"name", "ppr"},
-                        {"count", u64{42}}
-                    },
-                    arena
-                };
+                const opaque::Block block{{{"name", "ppr"}, {"count", u64{42}}}, arena};
 
                 PPR_TEST_ASSERT(block->size() == 2u);
                 {
@@ -385,9 +359,8 @@ namespace pP::tests::detail {
                 auto &target = *arena.create<opaque::Block::Value>();
                 opaque::Block::Builder builder{target, arena};
 
-                builder.dup([](opaque::format_context &ctx) noexcept {
-                    return std::format_to(ctx.out(), "fmt {}", 42);
-                });
+                builder.dup(
+                    [](opaque::format_context &ctx) noexcept { return std::format_to(ctx.out(), "fmt {}", 42); });
                 {
                     const auto &rv = target.get<opaque::Block::String>();
                     PPR_TEST_ASSERT(std::string_view(rv.data(), rv.size()) == "fmt 42");
@@ -433,13 +406,7 @@ namespace pP::tests::detail {
                 auto arena = mem::Allocator<mem::ScratchPad>{};
                 const auto mark = arena.watermark();
 
-                opaque::Block block{
-                    opaque::Dict{
-                        {"name", "ppr"},
-                        {"count", u64{42}}
-                    },
-                    arena
-                };
+                opaque::Block block{opaque::Dict{{"name", "ppr"}, {"count", u64{42}}}, arena};
 
                 const auto &dict = *block.m_data;
 
@@ -469,19 +436,13 @@ namespace pP::tests::detail {
                 const auto mark = arena.watermark();
 
                 opaque::Block block{
-                    {
-                        {"active", true},
-                        {"name", "test"},
-                        {"count", u64{7}},
-                        {"tags", opaque::Array{"a", "b", "c"}},
-                        {"meta", opaque::Dict{{"x", 1.5}}}
-                    },
-                    arena
-                };
+                    {{"active", true}, {"name", "test"}, {"count", u64{7}}, {"tags", opaque::Array{"a", "b", "c"}},
+                        {"meta", opaque::Dict{{"x", 1.5}}}},
+                    arena};
 
                 const std::string result = std::format("{}", block);
                 constexpr std::string_view expected =
-                        R"({"active": true, "name": "test", "count": 7, "tags": ["a", "b", "c"], "meta": {"x": 1.5}})";
+                    R"({"active": true, "name": "test", "count": 7, "tags": ["a", "b", "c"], "meta": {"x": 1.5}})";
                 PPR_TEST_ASSERT(result == expected);
 
                 arena.restore(mark);
@@ -492,15 +453,7 @@ namespace pP::tests::detail {
                 const auto mark = arena.watermark();
 
                 const opaque::Block block{
-                    {
-                        {"bool", true},
-                        {"int", i64{-99}},
-                        {"uint", u64{42}},
-                        {"float", 3.14},
-                        {"str", "hello"}
-                    },
-                    arena
-                };
+                    {{"bool", true}, {"int", i64{-99}}, {"uint", u64{42}}, {"float", 3.14}, {"str", "hello"}}, arena};
 
                 const auto &dict = *block.m_data;
                 PPR_TEST_ASSERT(dict.size() == 5u);
@@ -535,20 +488,16 @@ namespace pP::tests::detail {
 
                 const opaque::Block block{
                     opaque::Dict{
-                        {
-                            "int", 99
-                        },
-                        {
-                            "fmt", [](opaque::format_context &ctx) noexcept {
+                        {"int", 99},
+                        {"fmt",
+                            [](opaque::format_context &ctx) noexcept {
                                 return std::format_to(ctx.out(), "formatted");
-                            }
-                        },
+                            }},
                         {
-                            "arr", opaque::Array{1, true, "string", 3.1415f},
-                        }
-                    },
-                    arena
-                };
+                            "arr",
+                            opaque::Array{1, true, "string", 3.1415f},
+                        }},
+                    arena};
 
                 const auto &dict = *block.m_data;
                 PPR_TEST_ASSERT(dict.size() == 3u);
@@ -565,7 +514,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (block){
+        PPR_UNIT_TEST (block) {
             _.recurse({
                 Block::value,
                 Block::builder_scalars,
@@ -580,7 +529,6 @@ namespace pP::tests::detail {
                 Block::constructor,
                 Block::constructor_with_generator_fmt,
             });
-
         };
     }
 } // namespace pP::tests::detail

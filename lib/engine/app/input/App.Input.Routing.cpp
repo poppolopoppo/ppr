@@ -12,34 +12,29 @@ import std;
 namespace pP {
 
     InputBackgroundLatch::InputBackgroundLatch(
-        const int foreground_priority,
-        safe_ptr<InputListener> background_listener,
-        const int background_priority,
+        const int foreground_priority, safe_ptr<InputListener> background_listener, const int background_priority,
         const int detector_priority) noexcept
-    : m_background_listener(std::move(background_listener)),
-m_foreground_priority(foreground_priority),
-m_background_priority(background_priority),
-m_detector_priority(detector_priority){
+        : m_background_listener(std::move(background_listener)), m_foreground_priority(foreground_priority),
+          m_background_priority(background_priority), m_detector_priority(detector_priority) {
         // Non-owning view: the state owner must detach before destroying it,
         // mirroring the detector-listener ownership contract.
-        m_detector_listener.setRawKeyCallback(
-            [tap_state = this](TimeSpan, const InputMessage &message) noexcept {
-                PPR_ASSERT(tap_state != nullptr);
+        m_detector_listener.setRawKeyCallback([tap_state = this](TimeSpan, const InputMessage &message) noexcept {
+            PPR_ASSERT(tap_state != nullptr);
 
-                if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
-                    button != nullptr && isBackgroundDragButton(*button)) [[likely]] {
+            if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
+                button != nullptr && isBackgroundDragButton(*button)) [[likely]] {
 
-                    // Latch on pressed only: repeats must not inflate the hold,
-                    // so a single release always clears it.
-                    if (message.m_event == EInputMessageEvent::pressed) [[likely]] {
-                        tap_state->notifyPress(*button);
-                    } else if (message.m_event == EInputMessageEvent::released) [[likely]] {
-                        tap_state->notifyRelease(*button);
-                    }
+                // Latch on pressed only: repeats must not inflate the hold,
+                // so a single release always clears it.
+                if (message.m_event == EInputMessageEvent::pressed) [[likely]] {
+                    tap_state->notifyPress(*button);
+                } else if (message.m_event == EInputMessageEvent::released) [[likely]] {
+                    tap_state->notifyRelease(*button);
                 }
+            }
 
-                return EInputMessageResponse::unhandled;
-            });
+            return EInputMessageResponse::unhandled;
+        });
     }
 
 
@@ -61,7 +56,8 @@ m_detector_priority(detector_priority){
     }
 
 
-    std::error_code InputBackgroundLatch::initialize(InputContext &context, safe_ptr<const InputListener> foreground_listener) {
+    std::error_code InputBackgroundLatch::initialize(
+        InputContext &context, safe_ptr<const InputListener> foreground_listener) {
         if (not foreground_listener.isValid()) {
             return make_error_code(std::errc::invalid_argument);
         }

@@ -17,14 +17,18 @@ namespace pP {
     namespace platform {
         class GlfwErrorCategory : public std::error_category {
         public:
-            [[nodiscard]] const char *name() const noexcept override { return "glfw"; }
+            [[nodiscard]] const char *name() const noexcept override {
+                return "glfw";
+            }
 
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<errc>(ev)) {
                     case errc::ok: return "indicates success";
-                    case errc::fail: return "generic failure code - meaning a serious error occurred and the call couldn't complete";
+                    case errc::fail:
+                        return "generic failure code - meaning a serious error occurred and the call couldn't complete";
                     case errc::initialization_failed: return "indicates that the plaform failed to initialize";
-                    case errc::invalid_argument: return "indicates that an argument passed in as parameter to a method is invalid";
+                    case errc::invalid_argument:
+                        return "indicates that an argument passed in as parameter to a method is invalid";
 
                     default: return std::format("unknown glfw result ({})", ev);
                 }
@@ -45,7 +49,8 @@ namespace pP {
         }
 
         [[nodiscard]] std::error_code make_error_code(const int result) noexcept {
-            return result == GL_TRUE ? std::error_code{} : std::error_code{static_cast<int>(errc::fail), g_glfw_error_category};
+            return result == GL_TRUE ? std::error_code{}
+                                     : std::error_code{static_cast<int>(errc::fail), g_glfw_error_category};
         }
 
         [[nodiscard]] std::error_code make_error_code(const errc error_code) noexcept {
@@ -75,7 +80,9 @@ namespace pP {
         return safe_ptr(m_player_service.get());
     }
 
-    std::string_view GlfwPlatform::getPlatformName() const noexcept { return "GLFW"; }
+    std::string_view GlfwPlatform::getPlatformName() const noexcept {
+        return "GLFW";
+    }
 
     platform::Version GlfwPlatform::getPlatformVersion() const noexcept {
         int major = 0, minor = 0, revision = 0;
@@ -84,9 +91,7 @@ namespace pP {
     }
 
     std::error_code GlfwPlatform::initialize(Application &app) {
-        PPR_LOG(GlfwPlatform, info, "initialize GLFW platform", {
-            {"version", ::glfwGetVersionString()}
-        });
+        PPR_LOG(GlfwPlatform, info, "initialize GLFW platform", {{"version", ::glfwGetVersionString()}});
 
         PPR_ASSERT(not m_application.isValid());
         m_application.reset(&app);
@@ -105,7 +110,7 @@ namespace pP {
         // custom allocator, so these hooks stay installed on every exit path.
         ::glfwInitAllocator(&glfw_allocator);
 
-        if (not::glfwInit()) [[unlikely]] {
+        if (not ::glfwInit()) [[unlikely]] {
             PPR_LOG(GlfwPlatform, error, "failed to init GLFW");
             ::glfwSetErrorCallback(nullptr);
             return platform::errc::initialization_failed;
@@ -146,9 +151,7 @@ namespace pP {
     }
 
     std::error_code GlfwPlatform::shutdown(Application &app) {
-        PPR_LOG(GlfwPlatform, info, "shutdown GLFW platform", {
-            {"version", ::glfwGetVersionString()}
-        });
+        PPR_LOG(GlfwPlatform, info, "shutdown GLFW platform", {{"version", ::glfwGetVersionString()}});
 
         // Idempotent: Application::shutdown() calls here on every teardown,
         // and initialize() already shuts down on failure, so a second call

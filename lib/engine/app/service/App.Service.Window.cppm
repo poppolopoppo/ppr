@@ -31,26 +31,29 @@ export namespace pP {
         [[nodiscard]] virtual std::error_code waitEvents() = 0;
 
         // monitors:
-        [[nodiscard]] virtual std::error_code enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept = 0;
+        [[nodiscard]] virtual std::error_code enumerateMonitors(
+            Collector<SharedMonitor> each_monitor) const noexcept = 0;
 
         [[nodiscard]] virtual SharedMonitor getPrimaryMonitor() const noexcept = 0;
 
-        [[nodiscard]] virtual std::error_code enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept = 0;
+        [[nodiscard]] virtual std::error_code enumerateMonitorVideoModes(
+            const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept = 0;
 
         virtual void setMonitorGamma(const Monitor &monitor, float gamma) noexcept = 0;
 
         // monitor callbacks:
 
-        using MonitorCallback = BroadcastCallback<std::error_code (const Monitor &monitor)>;
+        using MonitorCallback = BroadcastCallback<std::error_code(const Monitor &monitor)>;
 
-        [[nodiscard]] virtual MonitorCallback::Handle whenMonitorConnected(MonitorCallback::Event on_connected) noexcept = 0;
+        [[nodiscard]] virtual MonitorCallback::Handle whenMonitorConnected(
+            MonitorCallback::Event on_connected) noexcept = 0;
 
-        [[nodiscard]] virtual MonitorCallback::Handle whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept = 0;
+        [[nodiscard]] virtual MonitorCallback::Handle whenMonitorDisconnected(
+            MonitorCallback::Event on_disconnected) noexcept = 0;
 
         // windows:
         [[nodiscard]] virtual std::error_code createWindow(
-            WindowModel &&definition,
-            safe_ptr<Window> *window_write_ref) = 0;
+            WindowModel &&definition, safe_ptr<Window> *window_write_ref) = 0;
 
         [[nodiscard]] virtual std::error_code destroyWindow(SharedWindow &&window) = 0;
 
@@ -63,10 +66,7 @@ export namespace pP {
         [[nodiscard]] virtual SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept = 0;
 
         virtual void setWindowMonitor(
-            const Window &window,
-            const Monitor &monitor,
-            const int2 &window_position,
-            const int2 &window_size) = 0;
+            const Window &window, const Monitor &monitor, const int2 &window_position, const int2 &window_size) = 0;
 
         [[nodiscard]] virtual bool getWindowShouldClose(const Window &window) const noexcept = 0;
 
@@ -115,38 +115,44 @@ export namespace pP {
 
         // window callbacks:
 
-        using WindowCallback = BroadcastCallback<std::error_code (const Window &window)>;
+        using WindowCallback = BroadcastCallback<std::error_code(const Window &window)>;
 
         [[nodiscard]] virtual WindowCallback::Handle whenWindowCreated(WindowCallback::Event on_connected) noexcept = 0;
 
-        [[nodiscard]] virtual WindowCallback::Handle whenWindowDestroyed(WindowCallback::Event on_destroyed) noexcept = 0;
+        [[nodiscard]] virtual WindowCallback::Handle whenWindowDestroyed(
+            WindowCallback::Event on_destroyed) noexcept = 0;
 
         [[nodiscard]] virtual WindowCallback::Handle whenWindowClosed(WindowCallback::Event on_closed) noexcept = 0;
 
-        using WindowFocusedCallback = BroadcastCallback<std::error_code (const Window &window, bool focused)>;
+        using WindowFocusedCallback = BroadcastCallback<std::error_code(const Window &window, bool focused)>;
 
-        [[nodiscard]] virtual WindowFocusedCallback::Handle whenWindowFocused(WindowFocusedCallback::Event on_focused) noexcept = 0;
+        [[nodiscard]] virtual WindowFocusedCallback::Handle whenWindowFocused(
+            WindowFocusedCallback::Event on_focused) noexcept = 0;
 
-        using WindowIconifiedCallback = BroadcastCallback<std::error_code (const Window &window, bool iconified)>;
+        using WindowIconifiedCallback = BroadcastCallback<std::error_code(const Window &window, bool iconified)>;
 
-        [[nodiscard]] virtual WindowIconifiedCallback::Handle whenWindowIconified(WindowIconifiedCallback::Event on_iconified) noexcept = 0;
+        [[nodiscard]] virtual WindowIconifiedCallback::Handle whenWindowIconified(
+            WindowIconifiedCallback::Event on_iconified) noexcept = 0;
 
-        using WindowMovedCallback = BroadcastCallback<std::error_code (const Window &window, const int2 &old_position)>;
+        using WindowMovedCallback = BroadcastCallback<std::error_code(const Window &window, const int2 &old_position)>;
 
-        [[nodiscard]] virtual WindowMovedCallback::Handle whenWindowMoved(WindowMovedCallback::Event on_moved) noexcept = 0;
+        [[nodiscard]] virtual WindowMovedCallback::Handle whenWindowMoved(
+            WindowMovedCallback::Event on_moved) noexcept = 0;
 
-        using WindowResizedCallback = BroadcastCallback<std::error_code (const Window &window, const int2 &old_size)>;
+        using WindowResizedCallback = BroadcastCallback<std::error_code(const Window &window, const int2 &old_size)>;
 
-        [[nodiscard]] virtual WindowResizedCallback::Handle whenWindowResized(WindowResizedCallback::Event on_resized) noexcept = 0;
+        [[nodiscard]] virtual WindowResizedCallback::Handle whenWindowResized(
+            WindowResizedCallback::Event on_resized) noexcept = 0;
 
-        using WindowScaledCallback = BroadcastCallback<std::error_code (const Window &window, const float2 &old_scale)>;
+        using WindowScaledCallback = BroadcastCallback<std::error_code(const Window &window, const float2 &old_scale)>;
 
-        [[nodiscard]] virtual WindowScaledCallback::Handle whenWindowScaled(WindowScaledCallback::Event on_scaled) noexcept = 0;
+        [[nodiscard]] virtual WindowScaledCallback::Handle whenWindowScaled(
+            WindowScaledCallback::Event on_scaled) noexcept = 0;
     };
 
-    extern template class BroadcastCallback<std::error_code (const Monitor &)>;
-    extern template class BroadcastCallback<std::error_code (const Window &)>;
-    extern template class BroadcastCallback<std::error_code (const Window &, bool)>;
-    extern template class BroadcastCallback<std::error_code (const Window &, const int2 &)>;
-    extern template class BroadcastCallback<std::error_code (const Window &, const float2 &)>;
+    extern template class BroadcastCallback<std::error_code(const Monitor &)>;
+    extern template class BroadcastCallback<std::error_code(const Window &)>;
+    extern template class BroadcastCallback<std::error_code(const Window &, bool)>;
+    extern template class BroadcastCallback<std::error_code(const Window &, const int2 &)>;
+    extern template class BroadcastCallback<std::error_code(const Window &, const float2 &)>;
 }

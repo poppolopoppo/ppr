@@ -26,8 +26,10 @@ export namespace pP {
         [[nodiscard]] constexpr bool operator==(const PlayerIdentity &other) const noexcept = default;
 
         [[nodiscard]] constexpr std::strong_ordering operator<=>(const PlayerIdentity &other) const noexcept {
-            if (const auto cmp = m_kind <=> other.m_kind; cmp != 0) [[unlikely]] return cmp;
-            if (const auto cmp = m_local_index <=> other.m_local_index; cmp != 0) [[unlikely]] return cmp;
+            if (const auto cmp = m_kind <=> other.m_kind; cmp != 0) [[unlikely]]
+                return cmp;
+            if (const auto cmp = m_local_index <=> other.m_local_index; cmp != 0) [[unlikely]]
+                return cmp;
             return m_user_id <=> other.m_user_id;
         }
     };

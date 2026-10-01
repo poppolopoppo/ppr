@@ -16,9 +16,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     DirectoryWatcher::DirectoryWatcher(const std::filesystem::path &dir, const bool recursive)
-        : m_recursive(recursive)
-        , m_root(dir)
-    {
+        : m_recursive(recursive), m_root(dir) {
         m_handle = hal::io::openWatch(dir, recursive);
     }
 
@@ -33,7 +31,6 @@ namespace pP {
     // ------------------------------------------------------------------
 
 
-
     // ------------------------------------------------------------------
     // IEvent
     // ------------------------------------------------------------------
@@ -42,8 +39,7 @@ namespace pP {
         return m_changed.subscribeEvent(signal);
     }
 
-    void DirectoryWatcher::unsubscribeEvent(const TagPtr<ISignal> signal,
-                                             const TagPtr<ISignal> restore) noexcept {
+    void DirectoryWatcher::unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept {
         m_changed.unsubscribeEvent(signal, restore);
     }
 
@@ -68,15 +64,11 @@ namespace pP {
         m_cache_valid = false;
 
         if (bytes > 0u) {
-            m_event_count = hal::io::parseWatchEvents(
-                {m_raw, bytes},
-                m_events,
-                m_names
-            );
+            m_event_count = hal::io::parseWatchEvents({m_raw, bytes}, m_events, m_names);
         }
 
         const bool has_events = m_event_count > 0u;
-        const bool has_error  = static_cast<bool>(m_ec) || m_overflow;
+        const bool has_error = static_cast<bool>(m_ec) || m_overflow;
 
         if (has_events || has_error) {
             m_changed.emitEvent();

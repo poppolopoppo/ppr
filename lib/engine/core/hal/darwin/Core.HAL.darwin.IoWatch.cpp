@@ -28,9 +28,8 @@ namespace pP::hal::io {
         return 0u;
     }
 
-    std::size_t parseWatchEvents(const std::span<const std::byte>,
-                                  const std::span<WatchEvent>,
-                                  const std::span<char>) noexcept {
+    std::size_t parseWatchEvents(
+        const std::span<const std::byte>, const std::span<WatchEvent>, const std::span<char>) noexcept {
         return 0u;
     }
 }

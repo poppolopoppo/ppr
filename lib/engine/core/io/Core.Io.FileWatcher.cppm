@@ -15,30 +15,30 @@ export namespace pP {
 
     struct FileChange {
         WatchEvent::Action m_action;
-        std::string_view   m_filename;
+        std::string_view m_filename;
     };
 
     class DirectoryWatcher final : public IEvent {
-        static constexpr std::size_t kMaxEvents    = 256u;
-        static constexpr std::size_t kNameBufSize  = 16384u;
-        static constexpr std::size_t kRawBufSize   = 65536u;
+        static constexpr std::size_t kMaxEvents = 256u;
+        static constexpr std::size_t kNameBufSize = 16384u;
+        static constexpr std::size_t kRawBufSize = 65536u;
 
         // --- hot path data (touched every poll / changes call) ---
-        hal::io::WatchHandle          m_handle{nullptr};
-        std::size_t                   m_event_count{0u};
-        std::error_code               m_ec{};
-        bool                          m_overflow{false};
-        bool                          m_error_flag{false};
-        bool                          m_recursive{false};
-        mutable bool                  m_cache_valid{false};
+        hal::io::WatchHandle m_handle{nullptr};
+        std::size_t m_event_count{0u};
+        std::error_code m_ec{};
+        bool m_overflow{false};
+        bool m_error_flag{false};
+        bool m_recursive{false};
+        mutable bool m_cache_valid{false};
         mutable Array<FileChange> m_cache{};
-        PulseEvent                    m_changed{};
-        std::filesystem::path         m_root;
+        PulseEvent m_changed{};
+        std::filesystem::path m_root;
 
         // --- cold storage ---
         alignas(std::max_align_t) std::byte m_raw[kRawBufSize]{};
-        hal::io::WatchEvent                 m_events[kMaxEvents]{};
-        char                                m_names[kNameBufSize]{};
+        hal::io::WatchEvent m_events[kMaxEvents]{};
+        char m_names[kNameBufSize]{};
 
         void consume_(const std::size_t bytes) noexcept;
 
@@ -56,10 +56,9 @@ export namespace pP {
 
         // --- IEvent ---
         TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;
-        void            unsubscribeEvent(const TagPtr<ISignal> signal,
-                                          const TagPtr<ISignal> restore) noexcept override;
+        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override;
         [[nodiscard]] bool pollEvent() noexcept override;
-        void               resetEvent() noexcept override;
+        void resetEvent() noexcept override;
 
         // --- Polling (not thread-safe) ---
         void poll(std::error_code &ec) noexcept;
@@ -67,10 +66,18 @@ export namespace pP {
 
         [[nodiscard]] std::span<const FileChange> changes() const noexcept;
 
-        [[nodiscard]] bool                     isOpen() const noexcept { return m_handle != nullptr; }
-        [[nodiscard]] const std::filesystem::path &root() const noexcept { return m_root; }
-        [[nodiscard]] bool                     hadOverflow() const noexcept { return m_overflow; }
-        [[nodiscard]] bool                     hadError() const noexcept { return m_error_flag; }
+        [[nodiscard]] bool isOpen() const noexcept {
+            return m_handle != nullptr;
+        }
+        [[nodiscard]] const std::filesystem::path &root() const noexcept {
+            return m_root;
+        }
+        [[nodiscard]] bool hadOverflow() const noexcept {
+            return m_overflow;
+        }
+        [[nodiscard]] bool hadError() const noexcept {
+            return m_error_flag;
+        }
     };
 
 } // namespace pP

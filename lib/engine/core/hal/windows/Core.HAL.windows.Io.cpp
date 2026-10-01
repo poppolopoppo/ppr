@@ -30,15 +30,12 @@ namespace pP::hal::io {
     static_assert(sizeof(OverlappedExt) == sizeof(::OVERLAPPED) + sizeof(void *));
     static_assert(sizeof(OverlappedExt) <= overlapped_storage_size_v);
 
-    static_assert(sizeof(::HANDLE) <= sizeof(::ULONG_PTR),
-        "IOCP completion key must be wide enough to hold a HANDLE");
+    static_assert(sizeof(::HANDLE) <= sizeof(::ULONG_PTR), "IOCP completion key must be wide enough to hold a HANDLE");
 
     IoHandle init() noexcept(false) {
-        const ::HANDLE port = ::CreateIoCompletionPort(
-            INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        const ::HANDLE port = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
         if (port == nullptr) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *data = new IoHandleData();
@@ -79,24 +76,17 @@ namespace pP::hal::io {
         }
 
         const ::HANDLE file = ::CreateFileW(
-            path.c_str(),
-            access,
-            share,
-            nullptr,
-            disposition,
-            FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
+            path.c_str(), access, share, nullptr, disposition, FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
             nullptr);
 
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
-        if (::CreateIoCompletionPort(file, io_data->m_port,
-                                     std::bit_cast<::ULONG_PTR>(file), 0) == nullptr) [[unlikely]] {
+        if (::CreateIoCompletionPort(file, io_data->m_port, std::bit_cast<::ULONG_PTR>(file), 0) == nullptr)
+            [[unlikely]] {
             ::CloseHandle(file);
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         ::SetFileCompletionNotificationModes(file, FILE_SKIP_SET_EVENT_ON_HANDLE);
@@ -107,7 +97,7 @@ namespace pP::hal::io {
     }
 
     void closeFile(const IoHandle io, const FileHandle file) noexcept {
-        (void)io;
+        (void) io;
         auto *data = static_cast<FileHandleData *>(file);
         if (data != nullptr) {
             if (data->m_file != INVALID_HANDLE_VALUE) {
@@ -125,7 +115,7 @@ namespace pP::hal::io {
         }
 
         std::size_t submitted = 0u;
-        for (auto &entry : entries) {
+        for (auto &entry: entries) {
             const auto *file_data = static_cast<const FileHandleData *>(entry.m_file);
             if (file_data == nullptr || file_data->m_file == INVALID_HANDLE_VALUE) {
                 continue;
@@ -133,7 +123,7 @@ namespace pP::hal::io {
 
             PPR_ASSERT(entry.m_overlapped != nullptr);
             PPR_ASSERT((std::bit_cast<std::uintptr_t>(entry.m_overlapped) % alignof(OverlappedExt)) == 0u);
-            auto *overlapped = ::new(entry.m_overlapped) OverlappedExt{};
+            auto *overlapped = ::new (entry.m_overlapped) OverlappedExt{};
             overlapped->Offset = static_cast<::DWORD>(entry.m_file_offset & 0xFFFFFFFFu);
             overlapped->OffsetHigh = static_cast<::DWORD>(entry.m_file_offset >> 32u);
             overlapped->m_user_data = entry.m_user_data;
@@ -143,28 +133,17 @@ namespace pP::hal::io {
             ::BOOL result = FALSE;
             if (entry.m_opcode == Opcode::read) {
                 result = ::ReadFile(
-                    file_data->m_file,
-                    entry.m_buffer,
-                    static_cast<::DWORD>(entry.m_buffer_size),
-                    nullptr,
-                    overlapped);
+                    file_data->m_file, entry.m_buffer, static_cast<::DWORD>(entry.m_buffer_size), nullptr, overlapped);
             } else {
                 result = ::WriteFile(
-                    file_data->m_file,
-                    entry.m_buffer,
-                    static_cast<::DWORD>(entry.m_buffer_size),
-                    nullptr,
-                    overlapped);
+                    file_data->m_file, entry.m_buffer, static_cast<::DWORD>(entry.m_buffer_size), nullptr, overlapped);
             }
 
             if (not result) {
                 const ::DWORD err = ::GetLastError();
                 if (err != ERROR_IO_PENDING) [[unlikely]] {
                     ::PostQueuedCompletionStatus(
-                        io_data->m_port,
-                        0,
-                        std::bit_cast<::ULONG_PTR>(file_data->m_file),
-                        overlapped);
+                        io_data->m_port, 0, std::bit_cast<::ULONG_PTR>(file_data->m_file), overlapped);
                 }
             }
             ++submitted;
@@ -173,8 +152,8 @@ namespace pP::hal::io {
         return submitted;
     }
 
-    static std::size_t drainCompletions_(const IoHandle io, const std::span<CompletionEntry> entries,
-                                         const ::DWORD timeout_ms) noexcept {
+    static std::size_t drainCompletions_(
+        const IoHandle io, const std::span<CompletionEntry> entries, const ::DWORD timeout_ms) noexcept {
         auto *io_data = static_cast<IoHandleData *>(io);
         if (io_data == nullptr) [[unlikely]] {
             return 0u;
@@ -185,17 +164,11 @@ namespace pP::hal::io {
         }
 
         ::OVERLAPPED_ENTRY ov_entries[64];
-        const ::ULONG max_count = static_cast<::ULONG>(
-            std::min(entries.size(), static_cast<std::size_t>(64u)));
+        const ::ULONG max_count = static_cast<::ULONG>(std::min(entries.size(), static_cast<std::size_t>(64u)));
         ::ULONG count = 0u;
 
         const ::BOOL result = ::GetQueuedCompletionStatusEx(
-            io_data->m_port,
-            ov_entries,
-            max_count,
-            &count,
-            timeout_ms,
-            FALSE);
+            io_data->m_port, ov_entries, max_count, &count, timeout_ms, FALSE);
 
         if (not result) [[unlikely]] {
             return 0u;

@@ -38,11 +38,13 @@ export namespace pP::colony {
         /// Owned separately from the driver's in-tick table: submit runs on
         /// the presentation boundary with its own lifetime, so the driver
         /// never merges this table — both are reported side by side.
-        [[nodiscard]] const StageTimings& stageTimings() const noexcept;
+        [[nodiscard]] const StageTimings &stageTimings() const noexcept;
 
         /// Clears the accumulated submit timings.
         void resetStageTimings() noexcept;
 
-        [[nodiscard]] static constexpr u32 totalChunks() noexcept { return sim::kChunkCount; }
+        [[nodiscard]] static constexpr u32 totalChunks() noexcept {
+            return sim::kChunkCount;
+        }
     };
 }

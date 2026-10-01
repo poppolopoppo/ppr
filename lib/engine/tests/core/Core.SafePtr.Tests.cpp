@@ -10,9 +10,9 @@ import std;
 namespace pP::tests::detail {
     namespace SafePtr {
 #if PPR_ENABLE_DEBUG
-        static_assert(not pP::details::is_relocatable_v<safe_ptr<safe_object> >);
+        static_assert(not pP::details::is_relocatable_v<safe_ptr<safe_object>>);
 #else
-        static_assert(pP::details::is_relocatable_v<safe_ptr<safe_object> >);
+        static_assert(pP::details::is_relocatable_v<safe_ptr<safe_object>>);
         static_assert(sizeof(safe_ptr<safe_object>) == sizeof(safe_object *));
 #endif
 
@@ -25,10 +25,10 @@ namespace pP::tests::detail {
             virtual ~TestBase() = default;
 
             TestBase(const TestBase &) = default;
-            TestBase(TestBase &&)      = default;
+            TestBase(TestBase &&) = default;
 
             TestBase &operator=(const TestBase &) = default;
-            TestBase &operator=(TestBase &&)      = default;
+            TestBase &operator=(TestBase &&) = default;
         };
 
         struct TestDerived : public TestBase {
@@ -174,7 +174,7 @@ namespace pP::tests::detail {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
             PPR_PRAGMA_WARNING_PUSH()
-            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself-assign-overloaded)
+            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself - assign - overloaded)
             p = p;
             PPR_PRAGMA_WARNING_POP()
             PPR_TEST_ASSERT(p.get() == &obj);
@@ -185,7 +185,7 @@ namespace pP::tests::detail {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
             PPR_PRAGMA_WARNING_PUSH()
-            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself-move)
+            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself - move)
             p = std::move(p);
             PPR_PRAGMA_WARNING_POP()
             PPR_TEST_ASSERT(p.get() == &obj);
@@ -274,12 +274,12 @@ namespace pP::tests::detail {
         // with "expected to fail", signalling the probe should be revisited.
         PPR_UNIT_TEST (null_deref_star_triggers_assert, UnitTest::expect_crash) {
             const safe_ptr<TestBase> p{};
-            (void)(*p).value;
+            (void) (*p).value;
         };
 
         PPR_UNIT_TEST (null_deref_arrow_triggers_assert, UnitTest::expect_crash) {
             const safe_ptr<TestBase> p{};
-            (void)p->value;
+            (void) p->value;
         };
 
         PPR_UNIT_TEST (copy_ctor_while_observed_triggers_assert, UnitTest::expect_fail) {

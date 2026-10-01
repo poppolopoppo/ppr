@@ -28,8 +28,12 @@ export namespace pP {
 
     template<details::TChar CharT>
     [[nodiscard]] constexpr bool isSpace(const CharT ch) noexcept {
-        return ch == CharT(' ') || ch == CharT('\n') || ch == CharT('\r') ||
-               ch == CharT('\t') || ch == CharT('\v') || ch == CharT('\f');
+        return ch == CharT(' ') ||
+               ch == CharT('\n') ||
+               ch == CharT('\r') ||
+               ch == CharT('\t') ||
+               ch == CharT('\v') ||
+               ch == CharT('\f');
     }
 
     template<details::TChar CharT>
@@ -56,14 +60,13 @@ export namespace pP {
         const CharT *m_str{nullptr};
 
     public:
-        constexpr basic_string_literal(std::in_place_t, const CharT *const literal) noexcept
-            : m_str(literal) {
+        constexpr basic_string_literal(std::in_place_t, const CharT *const literal) noexcept : m_str(literal) {
         }
 
-        template<std::size_t nLen> requires (nLen > 0u)
+        template<std::size_t nLen>
+            requires (nLen > 0u)
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr basic_string_literal(const CharT (&str)[nLen]) noexcept
-            : m_str{str} {
+        constexpr basic_string_literal(const CharT (&str)[nLen]) noexcept : m_str{str} {
         }
 
         [[nodiscard]] constexpr bool empty() const noexcept {
@@ -98,13 +101,13 @@ export namespace pP {
             return {m_str};
         }
 
-        [[nodiscard]] friend constexpr bool
-        operator==(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(
+            const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
             return std::strcmp(lhs.m_str, rhs.m_str) == 0;
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            const basic_string_literal &lhs, const basic_string_literal &rhs) noexcept {
             if (const int cmp = std::strcmp(lhs.m_str, rhs.m_str); cmp != 0) {
                 return cmp < 0 ? std::strong_ordering::less : std::strong_ordering::greater;
             }
@@ -116,7 +119,7 @@ export namespace pP {
     using wstring_literal = basic_string_literal<wchar_t>;
     using u8string_literal = basic_string_literal<char8_t>;
 
-    [[nodiscard]] constexpr string_literal operator ""_l(const char *literal) noexcept {
+    [[nodiscard]] constexpr string_literal operator""_l(const char *literal) noexcept {
         return string_literal(std::in_place, literal);
     }
 
@@ -125,8 +128,7 @@ export namespace pP {
     }
 
     template<details::TChar CharT>
-    struct details::relocatable<basic_string_literal<CharT> > : std::true_type {
-    };
+    struct details::relocatable<basic_string_literal<CharT>> : std::true_type {};
 
     // ------------------------------------------------------------------
     // static strings are immutable and constexpr
@@ -134,12 +136,12 @@ export namespace pP {
 
     template<details::TChar CharT, std::size_t nLen>
     struct [[nodiscard]] basic_static_string {
-        std::array<CharT, nLen + 1u/* \0 */> m_chars{};
+        std::array<CharT, nLen + 1u /* \0 */> m_chars{};
 
         constexpr basic_static_string() noexcept = default;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr basic_static_string(const CharT (&str)[nLen + 1u/* \0 */]) noexcept {
+        constexpr basic_static_string(const CharT (&str)[nLen + 1u /* \0 */]) noexcept {
             std::copy(std::begin(str), std::end(str), m_chars.begin());
             PPR_ASSERT(m_chars.back() == CharT{});
         }
@@ -180,9 +182,9 @@ export namespace pP {
             return view();
         }
 
-        template<std::size_t nOffset, std::size_t nNewLen> requires (nOffset + nNewLen <= nLen)
-        [[nodiscard]] constexpr basic_static_string<CharT, nNewLen>
-        subrange() const noexcept {
+        template<std::size_t nOffset, std::size_t nNewLen>
+            requires (nOffset + nNewLen <= nLen)
+        [[nodiscard]] constexpr basic_static_string<CharT, nNewLen> subrange() const noexcept {
             basic_static_string<CharT, nNewLen> output;
             const auto first = m_chars.begin() + nOffset;
             std::copy(first, first + nNewLen, output.m_chars.begin());
@@ -191,56 +193,51 @@ export namespace pP {
         }
 
         template<std::size_t nOtherLen>
-        [[nodiscard]] friend constexpr auto
-        operator +(const basic_static_string &lhs, const basic_static_string<CharT, nOtherLen> &rhs) noexcept {
+        [[nodiscard]] friend constexpr auto operator+(
+            const basic_static_string &lhs, const basic_static_string<CharT, nOtherLen> &rhs) noexcept {
             basic_static_string<CharT, nLen + nOtherLen> result;
             auto output = std::copy(lhs.begin(), lhs.end(), result.begin());
             std::copy(rhs.begin(), rhs.end(), output);
             return result;
         }
 
-        [[nodiscard]] friend constexpr bool
-        operator ==(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(
+            const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
             return std::ranges::equal(lhs, rhs);
         }
 
         template<std::size_t nOtherLen>
-        [[nodiscard]] friend constexpr bool
-        operator ==(const basic_static_string &, const basic_static_string<CharT, nOtherLen> &) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(
+            const basic_static_string &, const basic_static_string<CharT, nOtherLen> &) noexcept {
             return false;
         }
 
         template<std::size_t StringLenV>
-        [[nodiscard]] friend constexpr bool
-        operator ==(const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(
+            const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
             return std::ranges::equal(lhs, std::basic_string_view<CharT>(rhs));
         }
 
         template<std::size_t StringLenV>
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator <=>(const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            const basic_static_string &lhs, const CharT (&rhs)[StringLenV]) noexcept {
             const std::basic_string_view<CharT> rhs_view(rhs);
             return std::lexicographical_compare_three_way(
-                lhs.begin(), lhs.end(),
-                rhs_view.begin(), rhs_view.end(),
-                std::compare_three_way{});
+                lhs.begin(), lhs.end(), rhs_view.begin(), rhs_view.end(), std::compare_three_way{});
         }
 
         template<std::ranges::forward_range StringT>
             requires std::is_same_v<std::ranges::range_value_t<StringT>, CharT>
-        [[nodiscard]] friend constexpr bool
-        operator ==(const basic_static_string &lhs, const StringT &rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(const basic_static_string &lhs, const StringT &rhs) noexcept {
             return std::ranges::equal(lhs, rhs);
         }
 
         template<std::ranges::forward_range StringT>
             requires std::is_same_v<std::ranges::range_value_t<StringT>, CharT>
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator <=>(const basic_static_string &lhs, const StringT &rhs) noexcept {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            const basic_static_string &lhs, const StringT &rhs) noexcept {
             return std::lexicographical_compare_three_way(
-                lhs.begin(), lhs.end(),
-                std::begin(rhs), std::end(rhs),
-                std::compare_three_way{});
+                lhs.begin(), lhs.end(), std::begin(rhs), std::end(rhs), std::compare_three_way{});
         }
     };
 
@@ -256,12 +253,12 @@ export namespace pP {
         using static_string = basic_static_string<char_t, nLen>;
     }
 
-    template<details::TChar CharT, std::size_t nLenPlus1> requires (nLenPlus1 > 0u)
+    template<details::TChar CharT, std::size_t nLenPlus1>
+        requires (nLenPlus1 > 0u)
     basic_static_string(const CharT (&str)[nLenPlus1]) -> basic_static_string<CharT, nLenPlus1 - 1u>;
 
     template<details::TChar CharT, std::size_t nLen>
-    struct details::relocatable<basic_static_string<CharT, nLen> > : std::true_type {
-    };
+    struct details::relocatable<basic_static_string<CharT, nLen>> : std::true_type {};
 
     // ------------------------------------------------------------------
     // character escaping
@@ -275,7 +272,8 @@ export namespace pP {
 
         // Construct from a string literal — used by all named escape arms.
         // The array is copied into m_buf at construction time; no pointer escapes.
-        template<std::size_t N> requires (N - 1u <= nCapacity)
+        template<std::size_t N>
+            requires (N - 1u <= nCapacity)
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr basic_string_glyph(const CharT (&lit)[N]) noexcept : m_len{N - 1u} {
             std::copy_n(lit, N - 1u, m_buf.begin());
@@ -290,9 +288,15 @@ export namespace pP {
         }
 
         // Contiguous range interface — satisfies views::join's requirements.
-        [[nodiscard]] constexpr const CharT *begin() const noexcept { return m_buf.data(); }
-        [[nodiscard]] constexpr const CharT *end() const noexcept { return m_buf.data() + m_len; }
-        [[nodiscard]] constexpr std::size_t size() const noexcept { return m_len; }
+        [[nodiscard]] constexpr const CharT *begin() const noexcept {
+            return m_buf.data();
+        }
+        [[nodiscard]] constexpr const CharT *end() const noexcept {
+            return m_buf.data() + m_len;
+        }
+        [[nodiscard]] constexpr std::size_t size() const noexcept {
+            return m_len;
+        }
 
         [[nodiscard]] constexpr std::basic_string_view<CharT> view() const noexcept {
             return {m_buf.data(), m_len};
@@ -340,8 +344,7 @@ export namespace pP {
 
         constexpr CaseFoldChar() noexcept = default;
 
-        explicit constexpr CaseFoldChar(const CharT ch) noexcept
-            : m_char(ch) {
+        explicit constexpr CaseFoldChar(const CharT ch) noexcept : m_char(ch) {
         }
 
         [[nodiscard]] constexpr CharT operator*() const noexcept {
@@ -353,30 +356,25 @@ export namespace pP {
             return toLower(m_char);
         }
 
-        [[nodiscard]] friend constexpr bool
-        operator==(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept {
             return *lhs == *rhs;
         }
 
-        [[nodiscard]] friend constexpr auto
-        operator<=>(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept
+        [[nodiscard]] friend constexpr auto operator<=>(const CaseFoldChar lhs, const CaseFoldChar rhs) noexcept
             -> std::compare_three_way_result_t<CharT, CharT> {
             return *lhs <=> *rhs;
         }
 
-        [[nodiscard]] friend constexpr bool
-        operator==(const CaseFoldChar lhs, const CharT rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(const CaseFoldChar lhs, const CharT rhs) noexcept {
             return *lhs == toLower(rhs);
         }
 
-        [[nodiscard]] friend constexpr auto
-        operator<=>(const CaseFoldChar lhs, const CharT rhs) noexcept
+        [[nodiscard]] friend constexpr auto operator<=>(const CaseFoldChar lhs, const CharT rhs) noexcept
             -> std::compare_three_way_result_t<CharT, CharT> {
             return *lhs <=> toLower(rhs);
         }
 
-        [[nodiscard]] friend constexpr hash_t
-        hashValue(const CaseFoldChar ch) noexcept {
+        [[nodiscard]] friend constexpr hash_t hashValue(const CaseFoldChar ch) noexcept {
             return hashValue(*ch);
         }
     };
@@ -395,22 +393,20 @@ export namespace pP {
 
     // report CaseFoldChar<> as relocatable
     template<details::TChar CharT>
-    struct details::relocatable<CaseFoldChar<CharT> > : std::true_type {
-    };
+    struct details::relocatable<CaseFoldChar<CharT>> : std::true_type {};
 
     // report CaseFoldChar<> as a valid string character type
     template<details::TChar CharT>
-    struct details::string_character<CaseFoldChar<CharT> > : std::true_type {
-    };
+    struct details::string_character<CaseFoldChar<CharT>> : std::true_type {};
 
     static_assert(std::equality_comparable_with<char, char>);
     static_assert(std::three_way_comparable_with<char, char>);
 
     static_assert(std::equality_comparable_with<CaseFoldChar<char>, char>);
-    static_assert(std::equality_comparable_with<char, CaseFoldChar<char> >);
+    static_assert(std::equality_comparable_with<char, CaseFoldChar<char>>);
 
     static_assert(std::three_way_comparable_with<CaseFoldChar<char>, char>);
-    static_assert(std::three_way_comparable_with<char, CaseFoldChar<char> >);
+    static_assert(std::three_way_comparable_with<char, CaseFoldChar<char>>);
 
     // ------------------------------------------------------------------
     // string range for in-memory transforms
@@ -418,15 +414,12 @@ export namespace pP {
 
     namespace details {
         template<typename CharactersT>
-        concept TCharRange = std::ranges::viewable_range<CharactersT> &&
-                             TChar<std::ranges::range_value_t<CharactersT> >;
+        concept TCharRange = std::ranges::viewable_range<CharactersT> && TChar<std::ranges::range_value_t<CharactersT>>;
     }
 
     template<details::TCharRange CharactersT>
-    class [[nodiscard]] basic_string_range
-            : public std::ranges::view_interface<basic_string_range<CharactersT> > {
-        static_assert(
-            std::is_same_v<std::remove_cvref_t<CharactersT>, CharactersT>);
+    class [[nodiscard]] basic_string_range : public std::ranges::view_interface<basic_string_range<CharactersT>> {
+        static_assert(std::is_same_v<std::remove_cvref_t<CharactersT>, CharactersT>);
 
         CharactersT m_view;
 
@@ -436,13 +429,11 @@ export namespace pP {
         using iterator = std::ranges::iterator_t<CharactersT>;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr basic_string_range(CharactersT &&view) noexcept
-            : m_view(std::forward<CharactersT>(view)) {
+        constexpr basic_string_range(CharactersT &&view) noexcept : m_view(std::forward<CharactersT>(view)) {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr basic_string_range(const CharactersT &view) noexcept
-            : m_view(view) {
+        constexpr basic_string_range(const CharactersT &view) noexcept : m_view(view) {
         }
 
         [[nodiscard]] constexpr auto begin() noexcept {
@@ -450,7 +441,8 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr auto begin() const noexcept
-            requires std::ranges::range<const CharactersT> {
+            requires std::ranges::range<const CharactersT>
+        {
             return std::ranges::begin(m_view);
         }
 
@@ -459,17 +451,20 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr auto end() const noexcept
-            requires std::ranges::range<const CharactersT> {
+            requires std::ranges::range<const CharactersT>
+        {
             return std::ranges::end(m_view);
         }
 
         [[nodiscard]] constexpr std::size_t size() noexcept
-            requires std::ranges::sized_range<CharactersT> {
+            requires std::ranges::sized_range<CharactersT>
+        {
             return std::ranges::size(m_view);
         }
 
         [[nodiscard]] constexpr std::size_t size() const noexcept
-            requires std::ranges::sized_range<const CharactersT> {
+            requires std::ranges::sized_range<const CharactersT>
+        {
             return std::ranges::size(m_view);
         }
 
@@ -478,15 +473,14 @@ export namespace pP {
         }
 
         template<typename CharTraitsT, typename AllocatorT>
-        [[nodiscard]] explicit
-        operator std::basic_string<value_type, CharTraitsT, AllocatorT>() {
+        [[nodiscard]] explicit operator std::basic_string<value_type, CharTraitsT, AllocatorT>() {
             return std::basic_string<value_type, CharTraitsT, AllocatorT>(std::from_range, *this);
         }
 
         template<typename CharTraitsT, typename AllocatorT>
-        [[nodiscard]] explicit
-        operator std::basic_string<value_type, CharTraitsT, AllocatorT>() const
-            requires std::ranges::range<const CharactersT> {
+        [[nodiscard]] explicit operator std::basic_string<value_type, CharTraitsT, AllocatorT>() const
+            requires std::ranges::range<const CharactersT>
+        {
             return std::basic_string<value_type, CharTraitsT, AllocatorT>(std::from_range, *this);
         }
 
@@ -495,25 +489,21 @@ export namespace pP {
         }
 
         template<std::ranges::range RhsT>
-            requires std::equality_comparable_with<value_type, std::ranges::range_value_t<RhsT> >
-        [[nodiscard]] friend constexpr bool operator==(
-            basic_string_range lhs, RhsT &&rhs) noexcept {
+            requires std::equality_comparable_with<value_type, std::ranges::range_value_t<RhsT>>
+        [[nodiscard]] friend constexpr bool operator==(basic_string_range lhs, RhsT &&rhs) noexcept {
             return std::ranges::equal(lhs, std::forward<RhsT>(rhs));
         }
 
         template<std::ranges::range RhsT>
-            requires std::three_way_comparable_with<value_type, std::ranges::range_value_t<RhsT> >
-        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
-            basic_string_range lhs, RhsT &&rhs) noexcept {
+            requires std::three_way_comparable_with<value_type, std::ranges::range_value_t<RhsT>>
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(basic_string_range lhs, RhsT &&rhs) noexcept {
             return std::lexicographical_compare_three_way(
-                lhs.begin(), lhs.end(),
-                std::ranges::begin(rhs), std::ranges::end(rhs));
+                lhs.begin(), lhs.end(), std::ranges::begin(rhs), std::ranges::end(rhs));
         }
 
         template<details::TChar CharT, std::size_t N>
             requires std::equality_comparable_with<value_type, CharT>
-        [[nodiscard]] friend constexpr bool operator==(
-            basic_string_range lhs, const CharT (&rhs)[N]) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(basic_string_range lhs, const CharT (&rhs)[N]) noexcept {
             auto rhs_view = std::basic_string_view<CharT>(rhs);
             return std::ranges::equal(lhs, rhs_view);
         }
@@ -523,27 +513,21 @@ export namespace pP {
         [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
             basic_string_range lhs, const CharT (&rhs)[N]) noexcept {
             auto rhs_view = std::basic_string_view<CharT>(rhs);
-            return std::lexicographical_compare_three_way(
-                lhs.begin(), lhs.end(),
-                rhs_view.begin(), rhs_view.end());
+            return std::lexicographical_compare_three_way(lhs.begin(), lhs.end(), rhs_view.begin(), rhs_view.end());
         }
     };
 
     template<details::TCharRange CharactersT>
-    basic_string_range(CharactersT &&)
-        -> basic_string_range<std::remove_cvref_t<CharactersT> >;
+    basic_string_range(CharactersT &&) -> basic_string_range<std::remove_cvref_t<CharactersT>>;
 
     template<details::TChar CharT, std::size_t N>
-    basic_string_range(const CharT (&)[N])
-        -> basic_string_range<std::basic_string_view<CharT> >;
+    basic_string_range(const CharT (&)[N]) -> basic_string_range<std::basic_string_view<CharT>>;
 
     template<details::TCharRange CharactersT>
-    basic_string_range(basic_string_range<CharactersT> &&)
-        -> basic_string_range<CharactersT>;
+    basic_string_range(basic_string_range<CharactersT> &&) -> basic_string_range<CharactersT>;
 
     template<details::TCharRange CharactersT>
-    basic_string_range(const basic_string_range<CharactersT> &)
-        -> basic_string_range<CharactersT>;
+    basic_string_range(const basic_string_range<CharactersT> &) -> basic_string_range<CharactersT>;
 
     template<details::TCharRange V>
         requires std::is_same_v<std::ranges::range_value_t<V>, char>
@@ -562,25 +546,22 @@ export namespace pP {
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto caseFold(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
-        return basic_string_range(std::views::transform(
-            basic_string_range(std::forward<CharactersT>(characters)),
-            &caseFold<char_type>));
+        return basic_string_range(
+            std::views::transform(basic_string_range(std::forward<CharactersT>(characters)), &caseFold<char_type>));
     }
 
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto toLower(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
-        return basic_string_range(std::views::transform(
-            basic_string_range(std::forward<CharactersT>(characters)),
-            &toLower<char_type>));
+        return basic_string_range(
+            std::views::transform(basic_string_range(std::forward<CharactersT>(characters)), &toLower<char_type>));
     }
 
     template<details::TCharRange CharactersT>
     [[nodiscard]] constexpr auto toUpper(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
-        return basic_string_range(std::views::transform(
-            basic_string_range(std::forward<CharactersT>(characters)),
-            &toUpper<char_type>));
+        return basic_string_range(
+            std::views::transform(basic_string_range(std::forward<CharactersT>(characters)), &toUpper<char_type>));
     }
 
     template<details::TCharRange CharactersT>
@@ -593,7 +574,8 @@ export namespace pP {
             }));
     }
 
-    template<details::TCharRange CharactersT> requires std::ranges::contiguous_range<CharactersT>
+    template<details::TCharRange CharactersT>
+        requires std::ranges::contiguous_range<CharactersT>
     [[nodiscard]] auto stringEscape(CharactersT &&characters) noexcept {
         // Takes const char& so the string_view{&c, 1} points into the original
         // buffer. Safe because contiguous_range guarantees stable element
@@ -601,13 +583,13 @@ export namespace pP {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::transform(&charEscape<char_type>) | std::views::join);
+            std::views::transform(&charEscape<char_type>) |
+            std::views::join);
     }
 
     template<details::TCharRange CharactersT, typename PredicateT>
-        requires std::predicate<PredicateT, std::ranges::range_value_t<CharactersT> >
-    [[nodiscard]] constexpr auto filterChars(CharactersT &&characters,
-                                             PredicateT &&pred) noexcept {
+        requires std::predicate<PredicateT, std::ranges::range_value_t<CharactersT>>
+    [[nodiscard]] constexpr auto filterChars(CharactersT &&characters, PredicateT &&pred) noexcept {
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
             std::views::filter(std::forward<PredicateT>(pred)));
@@ -617,17 +599,13 @@ export namespace pP {
     [[nodiscard]] constexpr auto trimLeft(CharactersT &&characters) noexcept {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
-            basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::drop_while(&isSpace<char_type>));
+            basic_string_range(std::forward<CharactersT>(characters)) | std::views::drop_while(&isSpace<char_type>));
     }
 
     // views::take is the simplest possible range operation
     template<details::TCharRange CharactersT>
-    [[nodiscard]] constexpr auto truncate(CharactersT &&characters,
-                                          std::size_t maxLen) noexcept {
-        return basic_string_range(
-            basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::take(maxLen));
+    [[nodiscard]] constexpr auto truncate(CharactersT &&characters, std::size_t maxLen) noexcept {
+        return basic_string_range(basic_string_range(std::forward<CharactersT>(characters)) | std::views::take(maxLen));
     }
 
     template<details::TCharRange CharactersT>
@@ -664,7 +642,8 @@ export namespace pP {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::reverse | std::views::drop_while(&isSpace<char_type>) |
+            std::views::reverse |
+            std::views::drop_while(&isSpace<char_type>) |
             std::views::reverse);
     }
 
@@ -683,7 +662,8 @@ export namespace pP {
         using char_type = std::ranges::range_value_t<CharactersT>;
         return basic_string_range(
             basic_string_range(std::forward<CharactersT>(characters)) |
-            std::views::transform(&xmlEscapeChar<char_type>) | std::views::join);
+            std::views::transform(&xmlEscapeChar<char_type>) |
+            std::views::join);
     }
 
     template<details::TCharRange CharactersT>
@@ -712,7 +692,8 @@ export namespace pP {
 export namespace std {
     template<pP::details::TChar StrCharT, pP::details::TChar OutCharT>
         requires (!std::is_same_v<StrCharT, OutCharT>)
-    struct formatter<std::basic_string_view<StrCharT>, OutCharT> : formatter<std::basic_string_view<OutCharT>, OutCharT> {
+    struct formatter<std::basic_string_view<StrCharT>, OutCharT>
+        : formatter<std::basic_string_view<OutCharT>, OutCharT> {
         using super_t = formatter<std::basic_string_view<OutCharT>, OutCharT>;
 
         template<class OutIteratorT>
@@ -739,8 +720,7 @@ export namespace std {
             };
 
             auto tmp = pP::hal::toString<char>(
-                pP::hal::native::string_view(p.native()),
-                pP::mem::STL<char, pP::mem::ScratchPad>{});
+                pP::hal::native::string_view(p.native()), pP::mem::STL<char, pP::mem::ScratchPad>{});
             return formatter<std::string_view, char>::format(tmp, ctx);
         }
     };
@@ -773,14 +753,12 @@ export namespace std {
     };
 
     template<pP::details::TChar CharT>
-    struct formatter<pP::CaseFoldChar<CharT>, CharT>
-            : formatter<CharT, CharT> {
+    struct formatter<pP::CaseFoldChar<CharT>, CharT> : formatter<CharT, CharT> {
         constexpr void set_debug_format() const noexcept {
         }
 
         template<typename FormatContext>
-        constexpr auto format(const pP::CaseFoldChar<CharT> &c,
-                              FormatContext &ctx) const {
+        constexpr auto format(const pP::CaseFoldChar<CharT> &c, FormatContext &ctx) const {
             return formatter<CharT, CharT>::format(static_cast<CharT>(c), ctx);
         }
     };
@@ -794,8 +772,7 @@ export namespace std {
         }
 
         template<typename FormatContext>
-        auto format(const pP::basic_string_range<CharactersT> &range,
-                    FormatContext &ctx) const {
+        auto format(const pP::basic_string_range<CharactersT> &range, FormatContext &ctx) const {
             if constexpr (std::is_same_v<CharT, char_type>) {
                 return std::copy(range.begin(), range.end(), ctx.out());
             } else {

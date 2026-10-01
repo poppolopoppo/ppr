@@ -15,8 +15,7 @@ namespace pP::tests::detail {
 
     [[nodiscard]] bool matEq(const float4x4 &a, const float4x4 &b) noexcept {
         return std::ranges::equal(
-            std::span<const float, 16>(a.data(), 16),
-            std::span<const float, 16>(b.data(), 16),
+            std::span<const float, 16>(a.data(), 16), std::span<const float, 16>(b.data(), 16),
             [](float x, float y) noexcept { return std::abs(x - y) <= kEps; });
     }
 
@@ -34,7 +33,8 @@ namespace pP::tests::detail {
         const float3 expected_forward = quaternionTransform(model.m_basis, math::axis_z);
         const float3 expected_up = quaternionTransform(model.m_basis, math::axis_y);
         const float4x4 expected_view = float4x4::lookat(model.m_origin + expected_forward, model.m_origin, expected_up);
-        const float4x4 expected_proj = rhi::getPerspectiveMatrix(model.m_fov, 800.0f / 600.0f, model.m_z_near, model.m_z_far);
+        const float4x4 expected_proj = rhi::getPerspectiveMatrix(
+            model.m_fov, 800.0f / 600.0f, model.m_z_near, model.m_z_far);
         PPR_TEST_ASSERT(matEq(snap.m_view, expected_view));
         PPR_TEST_ASSERT(matEq(snap.m_projection, expected_proj));
         PPR_TEST_ASSERT(matEq(snap.m_view_projection, expected_view * expected_proj));
@@ -89,13 +89,11 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (look_at_canonical) {
-        const float4x4 view = float4x4::lookat(float3{0.0f, 0.0f, 1.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 view = float4x4::lookat(
+            float3{0.0f, 0.0f, 1.0f}, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4x4 expected{
-            float4{1.0f, 0.0f, 0.0f, 0.0f},
-            float4{0.0f, 1.0f, 0.0f, 0.0f},
-            float4{0.0f, 0.0f, 1.0f, 0.0f},
-            float4{0.0f, 0.0f, 0.0f, 1.0f}
-        };
+            float4{1.0f, 0.0f, 0.0f, 0.0f}, float4{0.0f, 1.0f, 0.0f, 0.0f}, float4{0.0f, 0.0f, 1.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 1.0f}};
         PPR_TEST_ASSERT(matEq(view, expected));
     };
 
@@ -125,7 +123,8 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (look_at_orthonormal_bis) {
-        const float4x4 view = float4x4::lookat(float3{4.0f, 5.0f, 6.0f}, float3{1.0f, 2.0f, 3.0f}, float3{0.0f, 1.0f, 0.0f});
+        const float4x4 view = float4x4::lookat(
+            float3{4.0f, 5.0f, 6.0f}, float3{1.0f, 2.0f, 3.0f}, float3{0.0f, 1.0f, 0.0f});
         const float4 x = view[0];
         const float4 y = view[1];
         const float4 z = view[2];
@@ -343,7 +342,8 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{250}, press);
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -360,7 +360,8 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
 
         CameraModel model{};
@@ -378,14 +379,17 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage forward{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
-        const InputMessage right{InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage forward{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage right{
+            InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, forward);
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, right);
 
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::seconds{1}, model);
-        const InputMessage release_right{InputKey::d, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
+        const InputMessage release_right{
+            InputKey::d, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, release_right);
         ctrl.updateCameraModel(std::chrono::seconds{1}, model);
         PPR_TEST_ASSERT(std::abs(model.m_origin.x - 3.0f) < kEps);
@@ -400,8 +404,11 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage forward{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage forward{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, forward);
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
 
@@ -412,9 +419,9 @@ namespace pP::tests::detail {
         ctrl.resetInputState();
 
         const InputMessage mouse{
-            InputKey::mouse_2d, InputValue{InputAxis2D{.m_absolute = float2{1.0f, 0.0f}, .m_relative = float2{1.0f, 0.0f}}}, InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
+            InputKey::mouse_2d,
+            InputValue{InputAxis2D{.m_absolute = float2{1.0f, 0.0f}, .m_relative = float2{1.0f, 0.0f}}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         // Reset cleared held-key rates and the look gate, so pointer motion
         // must neither drift the origin nor rotate the basis.
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
@@ -436,10 +443,10 @@ namespace pP::tests::detail {
         const InputMessage mouse{
             InputKey::mouse_2d,
             InputValue{InputAxis2D{.m_absolute = float2{100.0f, 0.0f}, .m_relative = float2{100.0f, 0.0f}}},
-            InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            InputDeviceID{0u}, EInputMessageEvent::axis};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         CameraModel model{};
         // Disengaged: no look held, motion ignored.
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
@@ -464,11 +471,13 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage look{
+                InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                EInputMessageEvent::pressed};
             const InputMessage mouse{
-                InputKey::mouse_2d, InputValue{InputAxis2D{.m_absolute = float2{1.0f, 0.0f}, .m_relative = float2{1.0f, 0.0f}}}, InputDeviceID{0u},
-                EInputMessageEvent::axis
-            };
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{1.0f, 0.0f}, .m_relative = float2{1.0f, 0.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
             CameraModel model{};
@@ -479,7 +488,9 @@ namespace pP::tests::detail {
             return first_rotation;
         };
 
-        PPR_TEST_ASSERT(dot(mouse_rotation(std::chrono::milliseconds{1}), mouse_rotation(std::chrono::milliseconds{100})) > 1.0f - kEps);
+        PPR_TEST_ASSERT(
+            dot(mouse_rotation(std::chrono::milliseconds{1}), mouse_rotation(std::chrono::milliseconds{100})) >
+            1.0f - kEps);
 
         const auto wheel_zoom = [](const TimeSpan dt) {
             PanCameraController ctrl;
@@ -489,8 +500,8 @@ namespace pP::tests::detail {
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
             const InputMessage wheel{
-                InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}}, InputDeviceID{0u}, EInputMessageEvent::axis
-            };
+                InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel);
             CameraModel model{};
             ctrl.updateCameraModel(dt, model);
@@ -503,7 +514,8 @@ namespace pP::tests::detail {
             return first_scale;
         };
 
-        PPR_TEST_ASSERT(std::abs(wheel_zoom(std::chrono::milliseconds{1}) - wheel_zoom(std::chrono::milliseconds{100})) < kEps);
+        PPR_TEST_ASSERT(
+            std::abs(wheel_zoom(std::chrono::milliseconds{1}) - wheel_zoom(std::chrono::milliseconds{100})) < kEps);
     };
 
     PPR_UNIT_TEST (free_camera_gamepad_rate) {
@@ -524,11 +536,13 @@ namespace pP::tests::detail {
         ctrl.updateCameraModel(dt, model);
         PPR_TEST_ASSERT(std::abs(model.m_origin.z - 3.6f) < kEps);
 
-        device.postGamepadAxis2DMoved(dt, context, EGamepadAxis::left_stick, float2{0.0f, device.m_left_stick.m_dead_zone / 2.0f});
+        device.postGamepadAxis2DMoved(
+            dt, context, EGamepadAxis::left_stick, float2{0.0f, device.m_left_stick.m_dead_zone / 2.0f});
         ctrl.updateCameraModel(dt, model);
         PPR_TEST_ASSERT(std::abs(model.m_origin.z - 3.6f) < kEps);
 
-        device.postGamepadAxis2DMoved(dt, context, EGamepadAxis::left_stick, float2{0.0f, device.m_left_stick.m_dead_zone / 2.0f});
+        device.postGamepadAxis2DMoved(
+            dt, context, EGamepadAxis::left_stick, float2{0.0f, device.m_left_stick.m_dead_zone / 2.0f});
         ctrl.updateCameraModel(dt, model);
         PPR_TEST_ASSERT(std::abs(model.m_origin.z - 3.6f) < kEps);
     };
@@ -542,7 +556,8 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
 
         // Reset before any update: retained rate is dropped, no movement.
@@ -570,9 +585,8 @@ namespace pP::tests::detail {
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
         const InputMessage wheel{
-            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}}, InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel);
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
@@ -620,7 +634,8 @@ namespace pP::tests::detail {
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
         const float3 eye{1.0f, 2.0f, 3.0f};
         ctrl.lookAt(eye, 0.5f, 0.25f, true);
-        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{16}, press);
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
@@ -646,9 +661,7 @@ namespace pP::tests::detail {
             return InputMessage{
                 InputKey::mouse_2d,
                 InputValue{InputAxis2D{.m_absolute = float2{x, 0.0f}, .m_relative = float2{x, 0.0f}}},
-                InputDeviceID{0u},
-                EInputMessageEvent::axis
-            };
+                InputDeviceID{0u}, EInputMessageEvent::axis};
         };
 
         // Without the look button held, pointer motion does not rotate.
@@ -657,7 +670,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(distance(quaternionTransform(model.m_basis, math::axis_z), base_forward) < 1e-6f);
 
         // Holding RMB gates pointer rotation.
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{250}, look);
         (void) listener.postKeyEvent(std::chrono::milliseconds{250}, mouse(100.0f));
         ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -674,7 +689,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage press{
+                key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{250}, press);
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -709,7 +725,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage press{
+                key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{250}, press);
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -727,14 +744,14 @@ namespace pP::tests::detail {
         pitch_ctrl.provideInputActionKeyMappings(pitch_mapping);
         InputListener pitch_listener;
         pitch_listener.addInputMapping(SharedInputMapping{&pitch_mapping}, 0);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) pitch_listener.postKeyEvent(std::chrono::milliseconds{250}, look);
         const InputMessage mouse{
             InputKey::mouse_2d,
             InputValue{InputAxis2D{.m_absolute = float2{0.0f, 100.0f}, .m_relative = float2{0.0f, 100.0f}}},
-            InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) pitch_listener.postKeyEvent(std::chrono::milliseconds{250}, mouse);
         CameraModel pitch_model{};
         pitch_ctrl.updateCameraModel(std::chrono::milliseconds{250}, pitch_model);
@@ -755,23 +772,25 @@ namespace pP::tests::detail {
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
 
         // Frame 1: E-key yaw for 250ms -> heading 1.8 * 0.25 = 0.45 rad.
-        const InputMessage yaw{InputKey::e, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage yaw{
+            InputKey::e, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, yaw);
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
 
         // Frame 2: release yaw, then RMB-gated pointer-Y pitch of 100px ->
         // pitch 100 * 0.0025 * 1.2 = 0.3 rad.
-        const InputMessage yaw_release{InputKey::e, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
+        const InputMessage yaw_release{
+            InputKey::e, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, yaw_release);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
         const InputMessage mouse{
             InputKey::mouse_2d,
             InputValue{InputAxis2D{.m_absolute = float2{0.0f, 100.0f}, .m_relative = float2{0.0f, 100.0f}}},
-            InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
 
@@ -795,7 +814,9 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
         CameraModel model{};
         constexpr float kPx = 100.0f;
@@ -804,9 +825,7 @@ namespace pP::tests::detail {
             const InputMessage mouse{
                 InputKey::mouse_2d,
                 InputValue{InputAxis2D{.m_absolute = float2{kPx, kPy}, .m_relative = float2{kPx, kPy}}},
-                InputDeviceID{0u},
-                EInputMessageEvent::axis
-            };
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         }
@@ -828,7 +847,9 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
         CameraModel model{};
         constexpr int kFrames = 4;
@@ -838,9 +859,7 @@ namespace pP::tests::detail {
             const InputMessage mouse{
                 InputKey::mouse_2d,
                 InputValue{InputAxis2D{.m_absolute = float2{kPx, kPy}, .m_relative = float2{kPx, kPy}}},
-                InputDeviceID{0u},
-                EInputMessageEvent::axis
-            };
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         }
@@ -871,9 +890,7 @@ namespace pP::tests::detail {
             const InputMessage mouse{
                 InputKey::mouse_2d,
                 InputValue{InputAxis2D{.m_absolute = float2{0.0f, pixels_y}, .m_relative = float2{0.0f, pixels_y}}},
-                InputDeviceID{0u},
-                EInputMessageEvent::axis
-            };
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
         };
 
@@ -885,7 +902,9 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, look);
         CameraModel model{};
         for (int i = 0; i < 6; ++i) {
@@ -959,7 +978,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage press{
+                key, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{250}, press);
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -1008,9 +1028,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(controller.setOrthoScale(scale) == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(controller.getOrthoScale() == 0.25f);
         }
-        PPR_TEST_ASSERT(controller.setOrthoScale(std::numeric_limits<float>::infinity()) == std::make_error_code(std::errc::invalid_argument));
-        PPR_TEST_ASSERT(controller.setOrthoScale(-std::numeric_limits<float>::infinity()) == std::make_error_code(std::errc::invalid_argument));
-        PPR_TEST_ASSERT(controller.setOrthoScale(std::numeric_limits<float>::quiet_NaN()) == std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(
+            controller.setOrthoScale(std::numeric_limits<float>::infinity()) ==
+            std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(
+            controller.setOrthoScale(-std::numeric_limits<float>::infinity()) ==
+            std::make_error_code(std::errc::invalid_argument));
+        PPR_TEST_ASSERT(
+            controller.setOrthoScale(std::numeric_limits<float>::quiet_NaN()) ==
+            std::make_error_code(std::errc::invalid_argument));
         PPR_TEST_ASSERT(controller.getOrthoScale() == 0.25f);
 
         CameraModel model{};
@@ -1018,7 +1044,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(model.m_ortho_scale == 0.25f);
     };
 
-    PPR_UNIT_TEST(pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth) {
+    PPR_UNIT_TEST (pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth) {
         PanCameraController controller;
         PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
         InputMapping mapping{"PanCameraOrthoWheel"};
@@ -1031,10 +1057,8 @@ namespace pP::tests::detail {
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
         const InputMessage wheel_up{
-            InputKey::mouse_wheel_axis_y,
-            InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
-            InputDeviceID{0u}, EInputMessageEvent::axis
-        };
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_up);
         CameraModel model{};
         controller.updateCameraModel(std::chrono::milliseconds{16}, model);
@@ -1048,10 +1072,8 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(std::abs(model.m_origin.z) < kEps);
 
         const InputMessage wheel_down{
-            InputKey::mouse_wheel_axis_y,
-            InputValue{InputAxis1D{.m_absolute = -1.0f, .m_relative = -1.0f}},
-            InputDeviceID{0u}, EInputMessageEvent::axis
-        };
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = -1.0f, .m_relative = -1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_down);
         controller.resetInputState();
         controller.updateCameraModel(std::chrono::milliseconds{16}, model);
@@ -1074,9 +1096,9 @@ namespace pP::tests::detail {
         CameraModel anchored_model{};
         anchored.updateCameraModel(std::chrono::milliseconds{16}, anchored_model);
         const InputMessage cursor_at{
-                InputKey::mouse_2d,
-                InputValue{InputAxis2D{.m_absolute = float2{600.0f, 100.0f}, .m_relative = float2{0.0f, 0.0f}}},
-                InputDeviceID{0u}, EInputMessageEvent::axis};
+            InputKey::mouse_2d,
+            InputValue{InputAxis2D{.m_absolute = float2{600.0f, 100.0f}, .m_relative = float2{0.0f, 0.0f}}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) anchored_listener.postKeyEvent(std::chrono::milliseconds{1}, cursor_at);
         anchored.updateCameraModel(std::chrono::milliseconds{16}, anchored_model);
         PPR_TEST_ASSERT(distance(anchored_model.m_origin, float3{100.0f, 100.0f, -0.5f}) < kEps);
@@ -1092,7 +1114,7 @@ namespace pP::tests::detail {
 
     // MMB-held grab-pan moves the eye against the cursor delta at current
     // scale: +40/+30px at 0.5 lands (-20,+15) world through the plane basis.
-    PPR_UNIT_TEST(pan_camera_grab_pan_direction_sign) {
+    PPR_UNIT_TEST (pan_camera_grab_pan_direction_sign) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
         InputMapping mapping{"PanCameraGrabSign"};
@@ -1104,13 +1126,14 @@ namespace pP::tests::detail {
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(not ctrl.setOrthoScale(0.5f));
-        const InputMessage grab_press{InputKey::middle_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                      EInputMessageEvent::pressed};
+        const InputMessage grab_press{
+            InputKey::middle_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_press);
         const InputMessage drag{
-                InputKey::mouse_2d,
-                InputValue{InputAxis2D{.m_absolute = float2{440.0f, 330.0f}, .m_relative = float2{40.0f, 30.0f}}},
-                InputDeviceID{0u}, EInputMessageEvent::axis};
+            InputKey::mouse_2d,
+            InputValue{InputAxis2D{.m_absolute = float2{440.0f, 330.0f}, .m_relative = float2{40.0f, 30.0f}}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(std::abs(model.m_origin.x - 80.0f) < 1e-2f);
@@ -1118,8 +1141,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(std::abs(model.m_origin.z + 0.5f) < kEps);
 
         // Released: the identical motion adds nothing more.
-        const InputMessage grab_release{InputKey::middle_mouse_button, InputValue{InputDigital{false}},
-                                        InputDeviceID{0u}, EInputMessageEvent::released};
+        const InputMessage grab_release{
+            InputKey::middle_mouse_button, InputValue{InputDigital{false}}, InputDeviceID{0u},
+            EInputMessageEvent::released};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_release);
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
@@ -1129,7 +1153,7 @@ namespace pP::tests::detail {
 
     // Equal screen displacement scales with zoom: 100px drag moves 100
     // world units at 1x, 25 at 0.25x.
-    PPR_UNIT_TEST(pan_camera_grab_matches_scale) {
+    PPR_UNIT_TEST (pan_camera_grab_matches_scale) {
         const auto dragAt = [](const float scale) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
@@ -1141,13 +1165,14 @@ namespace pP::tests::detail {
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
             (void) ctrl.setOrthoScale(scale);
-            const InputMessage grab_press{InputKey::middle_mouse_button, InputValue{InputDigital{true}},
-                                          InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage grab_press{
+                InputKey::middle_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+                EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, grab_press);
             const InputMessage drag{
-                    InputKey::mouse_2d,
-                    InputValue{InputAxis2D{.m_absolute = float2{100.0f, 0.0f}, .m_relative = float2{100.0f, 0.0f}}},
-                    InputDeviceID{0u}, EInputMessageEvent::axis};
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{100.0f, 0.0f}, .m_relative = float2{100.0f, 0.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drag);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
             return model.m_origin.x;
@@ -1157,7 +1182,7 @@ namespace pP::tests::detail {
     };
 
     // Cursor motion without MMB never pans (it only records for anchoring).
-    PPR_UNIT_TEST(pan_camera_cursor_motion_alone_never_pans) {
+    PPR_UNIT_TEST (pan_camera_cursor_motion_alone_never_pans) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
         InputMapping mapping{"PanCameraCursorAlone"};
@@ -1169,10 +1194,11 @@ namespace pP::tests::detail {
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         for (int i = 0; i < 4; ++i) {
-            const InputMessage drift{InputKey::mouse_2d,
-                                     InputValue{InputAxis2D{.m_absolute = float2{100.0f * i, 50.0f * i},
-                                                            .m_relative = float2{100.0f, 50.0f}}},
-                                     InputDeviceID{0u}, EInputMessageEvent::axis};
+            const InputMessage drift{
+                InputKey::mouse_2d,
+                InputValue{
+                    InputAxis2D{.m_absolute = float2{100.0f * i, 50.0f * i}, .m_relative = float2{100.0f, 50.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, drift);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
             PPR_TEST_ASSERT(distance(model.m_origin, eye) < kEps);
@@ -1180,7 +1206,7 @@ namespace pP::tests::detail {
     };
 
     // Plane rate law: 600 world-units/s per scale unit at 1x multiplier.
-    PPR_UNIT_TEST(pan_camera_keyboard_speed_law) {
+    PPR_UNIT_TEST (pan_camera_keyboard_speed_law) {
         const auto holdW = [](const float scale) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
@@ -1189,8 +1215,8 @@ namespace pP::tests::detail {
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
             (void) ctrl.setOrthoScale(scale);
-            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                     EInputMessageEvent::pressed};
+            const InputMessage press{
+                InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{250}, model);
@@ -1205,7 +1231,7 @@ namespace pP::tests::detail {
 
     // Equal wall time converges regardless of partitioning; zero/negative
     // dt rests and huge dt clamps to 250ms exactly.
-    PPR_UNIT_TEST(pan_camera_dt_partition_invariant_and_clamped) {
+    PPR_UNIT_TEST (pan_camera_dt_partition_invariant_and_clamped) {
         const auto holdW = [](const int steps, const TimeSpan step) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
@@ -1213,8 +1239,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                     EInputMessageEvent::pressed};
+            const InputMessage press{
+                InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
             CameraModel model{};
             for (int i = 0; i < steps; ++i) {
@@ -1234,8 +1260,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                     EInputMessageEvent::pressed};
+            const InputMessage press{
+                InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
             CameraModel model{};
             ctrl.updateCameraModel(step, model);
@@ -1243,15 +1269,15 @@ namespace pP::tests::detail {
         };
         PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::milliseconds{0}}) == 0.0f);
         PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::milliseconds{-5}}) == 0.0f);
-        PPR_TEST_ASSERT(holdOnce(TimeSpan{std::chrono::seconds{10}}) ==
-                        holdOnce(TimeSpan{std::chrono::milliseconds{250}}));
+        PPR_TEST_ASSERT(
+            holdOnce(TimeSpan{std::chrono::seconds{10}}) == holdOnce(TimeSpan{std::chrono::milliseconds{250}}));
     };
 
     // Bounds clamp the eye rect; a larger viewport centers the world;
     // unset bounds preserve unbounded motion.
-    PPR_UNIT_TEST(pan_camera_world_bounds_clamp_and_centering) {
+    PPR_UNIT_TEST (pan_camera_world_bounds_clamp_and_centering) {
         const auto holdD = [](const bool bounded, const float2 viewport, const float2 bounds_min,
-                              const float2 bounds_max) {
+                               const float2 bounds_max) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
             if (bounded) {
@@ -1262,8 +1288,8 @@ namespace pP::tests::detail {
             ctrl.provideInputActionKeyMappings(mapping);
             InputListener listener;
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-            const InputMessage press{InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                     EInputMessageEvent::pressed};
+            const InputMessage press{
+                InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
             CameraModel model{};
             for (int i = 0; i < 8; ++i) {
@@ -1285,7 +1311,7 @@ namespace pP::tests::detail {
 
     // Clamp wins over anchoring: eye at the wall stays walled while the
     // scale still applies; the unbounded twin shows the anchor pull.
-    PPR_UNIT_TEST(pan_camera_zoom_clamp_wins_over_anchor) {
+    PPR_UNIT_TEST (pan_camera_zoom_clamp_wins_over_anchor) {
         const auto zoomOut = [](const bool bounded) {
             PanCameraController ctrl;
             ctrl.setPositionInertia(100000.0f);
@@ -1303,15 +1329,15 @@ namespace pP::tests::detail {
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
 
             const InputMessage corner{
-                    InputKey::mouse_2d,
-                    InputValue{InputAxis2D{.m_absolute = float2{199.0f, 1.0f}, .m_relative = float2{0.0f, 0.0f}}},
-                    InputDeviceID{0u}, EInputMessageEvent::axis};
+                InputKey::mouse_2d,
+                InputValue{InputAxis2D{.m_absolute = float2{199.0f, 1.0f}, .m_relative = float2{0.0f, 0.0f}}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, corner);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
 
-            const InputMessage wheel_out{InputKey::mouse_wheel_axis_y,
-                                         InputValue{InputAxis1D{.m_absolute = -10.0f, .m_relative = -10.0f}},
-                                         InputDeviceID{0u}, EInputMessageEvent::axis};
+            const InputMessage wheel_out{
+                InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = -10.0f, .m_relative = -10.0f}},
+                InputDeviceID{0u}, EInputMessageEvent::axis};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_out);
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
             return model;
@@ -1330,7 +1356,7 @@ namespace pP::tests::detail {
 
     // Scale saturates at [0.001, 1000] staying finite; without viewport
     // info the anchor step is a no-op (scale still applies, pose exact).
-    PPR_UNIT_TEST(pan_camera_scale_clamp_and_invalid_viewport_noop) {
+    PPR_UNIT_TEST (pan_camera_scale_clamp_and_invalid_viewport_noop) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
         InputMapping mapping{"PanCameraScaleClamp"};
@@ -1343,23 +1369,23 @@ namespace pP::tests::detail {
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
 
         const InputMessage cursor_at{
-                InputKey::mouse_2d,
-                InputValue{InputAxis2D{.m_absolute = float2{700.0f, 500.0f}, .m_relative = float2{0.0f, 0.0f}}},
-                InputDeviceID{0u}, EInputMessageEvent::axis};
+            InputKey::mouse_2d,
+            InputValue{InputAxis2D{.m_absolute = float2{700.0f, 500.0f}, .m_relative = float2{0.0f, 0.0f}}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, cursor_at);
 
-        const InputMessage wheel_in{InputKey::mouse_wheel_axis_y,
-                                    InputValue{InputAxis1D{.m_absolute = 100.0f, .m_relative = 100.0f}},
-                                    InputDeviceID{0u}, EInputMessageEvent::axis};
+        const InputMessage wheel_in{
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 100.0f, .m_relative = 100.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_in);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(model.m_ortho_scale == 0.001f);
         PPR_TEST_ASSERT(distance(model.m_origin, eye) < kEps);
         PPR_TEST_ASSERT(std::isfinite(model.m_origin.x) and std::isfinite(model.m_origin.y));
 
-        const InputMessage wheel_out{InputKey::mouse_wheel_axis_y,
-                                     InputValue{InputAxis1D{.m_absolute = -100.0f, .m_relative = -100.0f}},
-                                     InputDeviceID{0u}, EInputMessageEvent::axis};
+        const InputMessage wheel_out{
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = -100.0f, .m_relative = -100.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel_out);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         // Two-notch saturation: 0.001 * e^10 ~= 22.03 after the first, so a
@@ -1371,7 +1397,7 @@ namespace pP::tests::detail {
     };
 
     // Game-owned focus: teleport cut keeping depth.
-    PPR_UNIT_TEST(pan_camera_focus_teleport) {
+    PPR_UNIT_TEST (pan_camera_focus_teleport) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
         ctrl.translate(float3{0.0f, 0.0f, -0.5f}, true);
@@ -1385,7 +1411,7 @@ namespace pP::tests::detail {
 
     // Follow eases toward the target in bounded steps; any manual
     // pan/zoom input cancels it.
-    PPR_UNIT_TEST(pan_camera_follow_eases_and_cancels) {
+    PPR_UNIT_TEST (pan_camera_follow_eases_and_cancels) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
         InputMapping mapping{"PanCameraFollow"};
@@ -1407,8 +1433,8 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(model.m_origin.x < 100.0f);
 
         // Manual input cancels: W press hands motion back to the keyboard.
-        const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u},
-                                 EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(not ctrl.getFollowTarget().has_value());
@@ -1417,13 +1443,13 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(model.m_origin.y > handed_off);
 
         // Zoom input cancels too (keyboard released first to isolate it).
-        const InputMessage release{InputKey::w, InputValue{InputDigital{false}}, InputDeviceID{0u},
-                                   EInputMessageEvent::released};
+        const InputMessage release{
+            InputKey::w, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, release);
         ctrl.setFollowTarget(float3{100.0f, 0.0f, 0.0f});
-        const InputMessage wheel{InputKey::mouse_wheel_axis_y,
-                                 InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}}, InputDeviceID{0u},
-                                 EInputMessageEvent::axis};
+        const InputMessage wheel{
+            InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{.m_absolute = 1.0f, .m_relative = 1.0f}},
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, wheel);
         ctrl.updateCameraModel(std::chrono::milliseconds{16}, model);
         PPR_TEST_ASSERT(not ctrl.getFollowTarget().has_value());
@@ -1461,7 +1487,8 @@ namespace pP::tests::detail {
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
             CameraModel model{};
             ctrl.updateCameraModel(std::chrono::milliseconds{16}, model); // prime filters
-            const InputMessage press{InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+            const InputMessage press{
+                InputKey::w, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
             (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
             for (int i = 0; i < steps; ++i) {
                 ctrl.updateCameraModel(step, model);
@@ -1496,7 +1523,8 @@ namespace pP::tests::detail {
         ctrl.provideInputActionKeyMappings(mapping);
         InputListener listener;
         listener.addInputMapping(SharedInputMapping{&mapping}, 0);
-        const InputMessage press{InputKey::e, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage press{
+            InputKey::e, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
         (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
         CameraModel model{};
         ctrl.updateCameraModel(std::chrono::seconds{1}, model);
@@ -1511,13 +1539,13 @@ namespace pP::tests::detail {
         mouse_ctrl.provideInputActionKeyMappings(mouse_mapping);
         InputListener mouse_listener;
         mouse_listener.addInputMapping(SharedInputMapping{&mouse_mapping}, 0);
-        const InputMessage look{InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        const InputMessage look{
+            InputKey::right_mouse_button, InputValue{InputDigital{true}}, InputDeviceID{0u},
+            EInputMessageEvent::pressed};
         const InputMessage mouse{
             InputKey::mouse_2d,
             InputValue{InputAxis2D{.m_absolute = float2{100.0f, 0.0f}, .m_relative = float2{100.0f, 0.0f}}},
-            InputDeviceID{0u},
-            EInputMessageEvent::axis
-        };
+            InputDeviceID{0u}, EInputMessageEvent::axis};
         (void) mouse_listener.postKeyEvent(std::chrono::milliseconds{1}, look);
         (void) mouse_listener.postKeyEvent(std::chrono::milliseconds{1}, mouse);
         CameraModel mouse_model{};
@@ -1529,28 +1557,19 @@ namespace pP::tests::detail {
 
     PPR_UNIT_TEST (math_inverse_identity) {
         const float4x4 identity{
-            float4{1.0f, 0.0f, 0.0f, 0.0f},
-            float4{0.0f, 1.0f, 0.0f, 0.0f},
-            float4{0.0f, 0.0f, 1.0f, 0.0f},
-            float4{0.0f, 0.0f, 0.0f, 1.0f}
-        };
+            float4{1.0f, 0.0f, 0.0f, 0.0f}, float4{0.0f, 1.0f, 0.0f, 0.0f}, float4{0.0f, 0.0f, 1.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 1.0f}};
         PPR_TEST_ASSERT(matEq(inverse(identity), identity));
         const float4x4 scale{
-            float4{2.0f, 0.0f, 3.0f, 0.0f},
-            float4{0.0f, 3.0f, 0.0f, 0.0f},
-            float4{0.0f, 0.0f, 4.0f, 0.0f},
-            float4{0.0f, 0.0f, 0.0f, 1.0f}
-        };
+            float4{2.0f, 0.0f, 3.0f, 0.0f}, float4{0.0f, 3.0f, 0.0f, 0.0f}, float4{0.0f, 0.0f, 4.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 1.0f}};
         PPR_TEST_ASSERT(matEq(inverse(scale) * scale, identity));
     };
 
     PPR_UNIT_TEST (math_inverse_involution) {
         const float4x4 m{
-            float4{1.0f, 2.0f, 3.0f, 0.0f},
-            float4{0.0f, 1.0f, 4.0f, 0.0f},
-            float4{5.0f, 0.0f, 1.0f, 0.0f},
-            float4{0.0f, 0.0f, 0.0f, 1.0f}
-        };
+            float4{1.0f, 2.0f, 3.0f, 0.0f}, float4{0.0f, 1.0f, 4.0f, 0.0f}, float4{5.0f, 0.0f, 1.0f, 0.0f},
+            float4{0.0f, 0.0f, 0.0f, 1.0f}};
         PPR_TEST_ASSERT(matEq(inverse(inverse(m)), m));
     };
 } // namespace pP::tests::detail
@@ -1558,62 +1577,62 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest camera = UnitTest::Named("camera") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-                detail::camera_model,
-                detail::ortho_default_scale_preserves_pixel_extent,
-                detail::ortho_scale_updates_projection_inverse_and_frustum,
-                detail::viewport_size,
-                detail::velocity,
-                detail::cut_velocity,
-                detail::frustum_from_update_model,
-                detail::empty_jitter,
-                detail::zero_to_one_frustum_near_plane,
-                detail::look_at_canonical,
-                detail::look_at_eye_to_origin,
-                detail::look_at_target_distance,
-                detail::look_at_orthonormal_bis,
-                detail::math_inverse_identity,
-                detail::math_inverse_involution,
-                detail::mode_accessors,
-                detail::state_accessors,
-                detail::basis_accessors,
-                detail::inverse_accessors,
-                detail::free_camera_translate_moves_origin,
-                detail::free_camera_held_key_rate,
-                detail::free_camera_partial_key_release,
-                detail::free_camera_input_reset,
-                detail::free_camera_look_press_gates_pointer_yaw,
-                detail::camera_mouse_wheel_impulses,
-                detail::free_camera_gamepad_rate,
-                detail::free_camera_reset_clears_held_key,
-                detail::free_camera_fov_wheel_transient,
-                detail::free_camera_look_at_target,
-                detail::free_camera_look_at_heading_pitch,
-                detail::free_camera_teleport_skips_delta,
-                detail::free_camera_mouse_look_gate,
-                detail::free_camera_qe_oppose,
-                detail::free_camera_heading_pitch_wiring,
-                detail::free_camera_look_stays_level_after_yaw,
-                detail::free_camera_look_mixed_input_stays_level,
-                detail::free_camera_look_incremental_matches_absolute,
-                detail::free_camera_pitch_clamped,
-                detail::free_camera_accessors,
-                detail::free_camera_retuned_rates,
-                detail::pan_camera_key_directions,
-                detail::pan_camera_parallel_plane,
-                detail::pan_camera_ortho_scale_validates_explicit_bounds,
-                detail::pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth,
-                detail::pan_camera_grab_pan_direction_sign,
-                detail::pan_camera_grab_matches_scale,
-                detail::pan_camera_cursor_motion_alone_never_pans,
-                detail::pan_camera_keyboard_speed_law,
-                detail::pan_camera_dt_partition_invariant_and_clamped,
-                detail::pan_camera_world_bounds_clamp_and_centering,
-                detail::pan_camera_zoom_clamp_wins_over_anchor,
-                detail::pan_camera_scale_clamp_and_invalid_viewport_noop,
-                detail::pan_camera_focus_teleport,
-                detail::pan_camera_follow_eases_and_cancels,
-                detail::orbit_camera_look_at_and_radius,
-                detail::free_camera_primed_held_key_partition_invariant,
+            detail::camera_model,
+            detail::ortho_default_scale_preserves_pixel_extent,
+            detail::ortho_scale_updates_projection_inverse_and_frustum,
+            detail::viewport_size,
+            detail::velocity,
+            detail::cut_velocity,
+            detail::frustum_from_update_model,
+            detail::empty_jitter,
+            detail::zero_to_one_frustum_near_plane,
+            detail::look_at_canonical,
+            detail::look_at_eye_to_origin,
+            detail::look_at_target_distance,
+            detail::look_at_orthonormal_bis,
+            detail::math_inverse_identity,
+            detail::math_inverse_involution,
+            detail::mode_accessors,
+            detail::state_accessors,
+            detail::basis_accessors,
+            detail::inverse_accessors,
+            detail::free_camera_translate_moves_origin,
+            detail::free_camera_held_key_rate,
+            detail::free_camera_partial_key_release,
+            detail::free_camera_input_reset,
+            detail::free_camera_look_press_gates_pointer_yaw,
+            detail::camera_mouse_wheel_impulses,
+            detail::free_camera_gamepad_rate,
+            detail::free_camera_reset_clears_held_key,
+            detail::free_camera_fov_wheel_transient,
+            detail::free_camera_look_at_target,
+            detail::free_camera_look_at_heading_pitch,
+            detail::free_camera_teleport_skips_delta,
+            detail::free_camera_mouse_look_gate,
+            detail::free_camera_qe_oppose,
+            detail::free_camera_heading_pitch_wiring,
+            detail::free_camera_look_stays_level_after_yaw,
+            detail::free_camera_look_mixed_input_stays_level,
+            detail::free_camera_look_incremental_matches_absolute,
+            detail::free_camera_pitch_clamped,
+            detail::free_camera_accessors,
+            detail::free_camera_retuned_rates,
+            detail::pan_camera_key_directions,
+            detail::pan_camera_parallel_plane,
+            detail::pan_camera_ortho_scale_validates_explicit_bounds,
+            detail::pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth,
+            detail::pan_camera_grab_pan_direction_sign,
+            detail::pan_camera_grab_matches_scale,
+            detail::pan_camera_cursor_motion_alone_never_pans,
+            detail::pan_camera_keyboard_speed_law,
+            detail::pan_camera_dt_partition_invariant_and_clamped,
+            detail::pan_camera_world_bounds_clamp_and_centering,
+            detail::pan_camera_zoom_clamp_wins_over_anchor,
+            detail::pan_camera_scale_clamp_and_invalid_viewport_noop,
+            detail::pan_camera_focus_teleport,
+            detail::pan_camera_follow_eases_and_cancels,
+            detail::orbit_camera_look_at_and_radius,
+            detail::free_camera_primed_held_key_partition_invariant,
         });
     };
 

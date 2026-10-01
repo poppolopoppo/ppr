@@ -19,7 +19,9 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (set_get_name_roundtrip) {
             const auto tid = hal::currentThreadId();
             const std::string previous = hal::getThreadName(tid);
-            PPR_DEFER{hal::setThreadName(previous); };
+            PPR_DEFER {
+                hal::setThreadName(previous);
+            };
 
             constexpr std::string_view expected = "PPR_HAL_Test"; // 12 chars, fits Linux comm limit
             hal::setThreadName(expected);
@@ -48,7 +50,9 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (buffer_truncation) {
             const auto tid = hal::currentThreadId();
             const std::string previous = hal::getThreadName(tid);
-            PPR_DEFER{hal::setThreadName(previous); };
+            PPR_DEFER {
+                hal::setThreadName(previous);
+            };
 
             hal::setThreadName("PPR_HAL_Test");
             if (hal::platformName() == "generic") {
@@ -65,20 +69,16 @@ namespace pP::tests::detail {
             std::atomic<bool> named{false};
             std::atomic<bool> release{false};
 
-            std::thread worker{
-                [&] {
-                    tid.store(hal::currentThreadId());
-                    hal::setThreadName("PPR_Worker");
-                    named.store(true);
-                    while (not release.load())
-                    {
-                        std::this_thread::yield();
-                    }
+            std::thread worker{[&] {
+                tid.store(hal::currentThreadId());
+                hal::setThreadName("PPR_Worker");
+                named.store(true);
+                while (not release.load()) {
+                    std::this_thread::yield();
                 }
-            };
+            }};
 
-            while (not named.load())
-            {
+            while (not named.load()) {
                 std::this_thread::yield();
             }
 

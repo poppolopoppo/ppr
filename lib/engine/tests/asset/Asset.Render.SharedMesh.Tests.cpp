@@ -73,11 +73,12 @@ namespace pP::tests::detail {
             picture.m_width = 2u;
             picture.m_height = 2u;
             picture.m_storage = frozen;
-            picture.m_subresources.push_back(image::ImageSubresource{
-                .m_view = frozen.subspan(0u, 16u),
-                .m_row_pitch = 8u,
-                .m_slice_pitch = 16u,
-            });
+            picture.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = frozen.subspan(0u, 16u),
+                    .m_row_pitch = 8u,
+                    .m_slice_pitch = 16u,
+                });
             return picture;
         }
 
@@ -110,14 +111,17 @@ namespace pP::tests::detail {
             for (const u32 index: {0u, 1u, 2u, 0u, 2u, 3u}) {
                 mesh_asset.m_indices.push_back(index);
             }
-            mesh_asset.m_primitives.push_back(mesh::MeshPrimitiveRange{
-                .m_start = 0u, .m_count = 3u, .m_base = 0, .m_material = mesh::MaterialAssetId{0u}
-            });
-            mesh_asset.m_primitives.push_back(mesh::MeshPrimitiveRange{
-                .m_start = 3u, .m_count = 3u, .m_base = 0, .m_material = mesh::MaterialAssetId{1u}
-            });
-            mesh_asset.m_flags = mesh::EMeshAttribute::position | mesh::EMeshAttribute::normal |
-                                 mesh::EMeshAttribute::texcoord | mesh::EMeshAttribute::tangent | mesh::EMeshAttribute::color;
+            mesh_asset.m_primitives.push_back(
+                mesh::MeshPrimitiveRange{
+                    .m_start = 0u, .m_count = 3u, .m_base = 0, .m_material = mesh::MaterialAssetId{0u}});
+            mesh_asset.m_primitives.push_back(
+                mesh::MeshPrimitiveRange{
+                    .m_start = 3u, .m_count = 3u, .m_base = 0, .m_material = mesh::MaterialAssetId{1u}});
+            mesh_asset.m_flags = mesh::EMeshAttribute::position |
+                                 mesh::EMeshAttribute::normal |
+                                 mesh::EMeshAttribute::texcoord |
+                                 mesh::EMeshAttribute::tangent |
+                                 mesh::EMeshAttribute::color;
 
             mesh::MaterialAsset first_material{};
             first_material.m_base_color = float4{1.0f, 0.0f, 0.0f, 1.0f};
@@ -135,25 +139,29 @@ namespace pP::tests::detail {
             out.m_scene.m_materials.push_back(first_material);
             out.m_scene.m_materials.push_back(second_material);
             out.m_scene.m_images.push_back(mesh::ImageRef{});
-            out.m_scene.m_nodes.push_back(mesh::SceneNodeAsset{
-                .m_local = place_a,
-                .m_world = place_a,
-                .m_parent = none_v,
-            });
-            out.m_scene.m_nodes.push_back(mesh::SceneNodeAsset{
-                .m_local = place_b,
-                .m_world = place_b,
-                .m_parent = none_v,
-            });
-            out.m_scene.m_instances.push_back(mesh::SceneInstance{
-                .m_mesh = mesh::MeshAssetId{0u},
-                .m_node = mesh::NodeId{0u},
-            });
-            out.m_scene.m_instances.push_back(mesh::SceneInstance{
-                .m_mesh = mesh::MeshAssetId{0u},
-                .m_node = mesh::NodeId{1u},
-                .m_material_override = mesh::MaterialAssetId{1u},
-            });
+            out.m_scene.m_nodes.push_back(
+                mesh::SceneNodeAsset{
+                    .m_local = place_a,
+                    .m_world = place_a,
+                    .m_parent = none_v,
+                });
+            out.m_scene.m_nodes.push_back(
+                mesh::SceneNodeAsset{
+                    .m_local = place_b,
+                    .m_world = place_b,
+                    .m_parent = none_v,
+                });
+            out.m_scene.m_instances.push_back(
+                mesh::SceneInstance{
+                    .m_mesh = mesh::MeshAssetId{0u},
+                    .m_node = mesh::NodeId{0u},
+                });
+            out.m_scene.m_instances.push_back(
+                mesh::SceneInstance{
+                    .m_mesh = mesh::MeshAssetId{0u},
+                    .m_node = mesh::NodeId{1u},
+                    .m_material_override = mesh::MaterialAssetId{1u},
+                });
             out.m_images.push_back(*image);
             return out;
         }
@@ -171,7 +179,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<SharedScene> built = twoInstanceSharedMesh_();
             PPR_TEST_ASSERT(built.has_value());
@@ -188,16 +198,16 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(uploaded->m_materials.size() == 2u);
 
             for (std::size_t slot = 0u; slot < 2u; ++slot) {
-                const Expected<TrianglePass::JoinedInstancePrim> joined =
-                        TrianglePass::joinInstancePrim(scene, *uploaded, scene.m_instances[0], slot);
+                const Expected<TrianglePass::JoinedInstancePrim> joined = TrianglePass::joinInstancePrim(
+                    scene, *uploaded, scene.m_instances[0], slot);
                 PPR_TEST_ASSERT(joined.has_value());
                 PPR_TEST_ASSERT(joined->m_bag == uploaded->m_primitives[slot].m_bag);
                 PPR_TEST_ASSERT(joined->m_material == uploaded->m_materials[slot]);
             }
 
             for (std::size_t slot = 0u; slot < 2u; ++slot) {
-                const Expected<TrianglePass::JoinedInstancePrim> joined =
-                        TrianglePass::joinInstancePrim(scene, *uploaded, scene.m_instances[1], slot);
+                const Expected<TrianglePass::JoinedInstancePrim> joined = TrianglePass::joinInstancePrim(
+                    scene, *uploaded, scene.m_instances[1], slot);
                 PPR_TEST_ASSERT(joined.has_value());
                 PPR_TEST_ASSERT(joined->m_bag == uploaded->m_primitives[slot].m_bag);
                 PPR_TEST_ASSERT(joined->m_material == uploaded->m_materials[1]);
@@ -208,8 +218,8 @@ namespace pP::tests::detail {
                 const float4x4 world = scene.m_nodes[instance.m_node].m_world.toMatrix();
                 const mesh::StaticMeshAsset &mesh_asset = scene.m_meshes[instance.m_mesh];
                 for (std::size_t slot = 0u; slot < mesh_asset.m_primitives.size(); ++slot) {
-                    const Expected<TrianglePass::JoinedInstancePrim> joined =
-                            TrianglePass::joinInstancePrim(scene, *uploaded, instance, slot);
+                    const Expected<TrianglePass::JoinedInstancePrim> joined = TrianglePass::joinInstancePrim(
+                        scene, *uploaded, instance, slot);
                     PPR_TEST_ASSERT(joined.has_value());
                     PPR_TEST_ASSERT(not pass.submitInstance(joined->m_bag, joined->m_material, world));
                 }
@@ -230,7 +240,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<SharedScene> built = twoInstanceSharedMesh_();
             PPR_TEST_ASSERT(built.has_value());
@@ -243,20 +255,20 @@ namespace pP::tests::detail {
 
             mesh::SceneInstance bad_mesh = scene.m_instances[0];
             bad_mesh.m_mesh = mesh::MeshAssetId{7u};
-            const Expected<TrianglePass::JoinedInstancePrim> bad_mesh_join =
-                    TrianglePass::joinInstancePrim(scene, *uploaded, bad_mesh, 0u);
+            const Expected<TrianglePass::JoinedInstancePrim> bad_mesh_join = TrianglePass::joinInstancePrim(
+                scene, *uploaded, bad_mesh, 0u);
             PPR_TEST_ASSERT(not bad_mesh_join.has_value());
             PPR_TEST_ASSERT(bad_mesh_join.error() == kInvalid);
 
-            const Expected<TrianglePass::JoinedInstancePrim> bad_slot_join =
-                    TrianglePass::joinInstancePrim(scene, *uploaded, scene.m_instances[0], 2u);
+            const Expected<TrianglePass::JoinedInstancePrim> bad_slot_join = TrianglePass::joinInstancePrim(
+                scene, *uploaded, scene.m_instances[0], 2u);
             PPR_TEST_ASSERT(not bad_slot_join.has_value());
             PPR_TEST_ASSERT(bad_slot_join.error() == kInvalid);
 
             mesh::SceneInstance bad_override = scene.m_instances[0];
             bad_override.m_material_override = mesh::MaterialAssetId{9u};
-            const Expected<TrianglePass::JoinedInstancePrim> bad_override_join =
-                    TrianglePass::joinInstancePrim(scene, *uploaded, bad_override, 0u);
+            const Expected<TrianglePass::JoinedInstancePrim> bad_override_join = TrianglePass::joinInstancePrim(
+                scene, *uploaded, bad_override, 0u);
             PPR_TEST_ASSERT(not bad_override_join.has_value());
             PPR_TEST_ASSERT(bad_override_join.error() == kInvalid);
 

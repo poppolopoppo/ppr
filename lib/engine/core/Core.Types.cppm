@@ -25,15 +25,13 @@ export namespace pP {
     inline constexpr bool always_false_v = false; // for conditional static asserts
 
     template<typename T>
-    using unwrap_ref_decay_t = std::decay_t<std::unwrap_reference_t<T> >; // this is weird.
+    using unwrap_ref_decay_t = std::decay_t<std::unwrap_reference_t<T>>; // this is weird.
 
 
     /// See also: https://www.agner.org/optimize/calling_conventions.pdf
     template<class T>
-    using param_by_value_or_lvalue_reference = std::conditional_t<
-        std::is_trivially_copyable_v<T>,
-        std::type_identity<T>,
-        std::add_lvalue_reference<T> >;
+    using param_by_value_or_lvalue_reference =
+        std::conditional_t<std::is_trivially_copyable_v<T>, std::type_identity<T>, std::add_lvalue_reference<T>>;
 
     template<class T>
     using param_lvref_t = param_by_value_or_lvalue_reference<T>::type;
@@ -52,15 +50,31 @@ export namespace pP {
     using i32 = std::int32_t;
     using i64 = std::int64_t;
 
-    [[nodiscard]] consteval u8 operator ""_u8(const unsigned long long value) { return static_cast<u8>(value); }
-    [[nodiscard]] consteval u16 operator ""_u16(const unsigned long long value) { return static_cast<u16>(value); }
-    [[nodiscard]] consteval u32 operator ""_u32(const unsigned long long value) { return static_cast<u32>(value); }
-    [[nodiscard]] consteval u64 operator ""_u64(const unsigned long long value) { return static_cast<u64>(value); }
+    [[nodiscard]] consteval u8 operator""_u8(const unsigned long long value) {
+        return static_cast<u8>(value);
+    }
+    [[nodiscard]] consteval u16 operator""_u16(const unsigned long long value) {
+        return static_cast<u16>(value);
+    }
+    [[nodiscard]] consteval u32 operator""_u32(const unsigned long long value) {
+        return static_cast<u32>(value);
+    }
+    [[nodiscard]] consteval u64 operator""_u64(const unsigned long long value) {
+        return static_cast<u64>(value);
+    }
 
-    [[nodiscard]] consteval i8 operator ""_i8(const unsigned long long value) { return static_cast<i8>(value); }
-    [[nodiscard]] consteval i16 operator ""_i16(const unsigned long long value) { return static_cast<i16>(value); }
-    [[nodiscard]] consteval i32 operator ""_i32(const unsigned long long value) { return static_cast<i32>(value); }
-    [[nodiscard]] consteval i64 operator ""_i64(const unsigned long long value) { return static_cast<i64>(value); }
+    [[nodiscard]] consteval i8 operator""_i8(const unsigned long long value) {
+        return static_cast<i8>(value);
+    }
+    [[nodiscard]] consteval i16 operator""_i16(const unsigned long long value) {
+        return static_cast<i16>(value);
+    }
+    [[nodiscard]] consteval i32 operator""_i32(const unsigned long long value) {
+        return static_cast<i32>(value);
+    }
+    [[nodiscard]] consteval i64 operator""_i64(const unsigned long long value) {
+        return static_cast<i64>(value);
+    }
 
     // ------------------------------------------------------------------
     // string character types
@@ -68,10 +82,8 @@ export namespace pP {
 
     namespace details {
         template<typename T>
-        struct string_character : std::bool_constant<
-                    std::is_same_v<char, T> ||
-                    std::is_same_v<wchar_t, T> ||
-                    std::is_same_v<char8_t, T>> {
+        struct string_character
+            : std::bool_constant<std::is_same_v<char, T> || std::is_same_v<wchar_t, T> || std::is_same_v<char8_t, T>> {
         };
 
         template<typename T>
@@ -91,16 +103,14 @@ export namespace pP {
         template<typename T>
             requires std::is_default_constructible_v<T>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator T() const
-            noexcept(std::is_nothrow_default_constructible_v<T>) {
+        [[nodiscard]] constexpr operator T() const noexcept(std::is_nothrow_default_constructible_v<T>) {
             return T{};
         }
 
         template<typename T>
             requires std::is_default_constructible_v<T>
-        [[nodiscard]] friend constexpr bool operator==(DefaultValue, T rhs)
-            noexcept(std::is_nothrow_default_constructible_v<T> &&
-                     noexcept(T{} == rhs)) {
+        [[nodiscard]] friend constexpr bool operator==(DefaultValue, T rhs) noexcept(
+            std::is_nothrow_default_constructible_v<T> && noexcept(T{} == rhs)) {
             return T{} == rhs;
         }
     };
@@ -110,8 +120,7 @@ export namespace pP {
         template<typename IntT>
             requires std::is_constructible_v<IntT, int>
         // ReSharper disable once CppNonExplicitConversionOperator
-        [[nodiscard]] constexpr operator IntT() const
-            noexcept(std::is_nothrow_constructible_v<IntT, int>) {
+        [[nodiscard]] constexpr operator IntT() const noexcept(std::is_nothrow_constructible_v<IntT, int>) {
             return IntT{0};
         }
 
@@ -129,9 +138,8 @@ export namespace pP {
 
         template<typename IntT>
             requires std::is_constructible_v<IntT, int>
-        [[nodiscard]] friend constexpr bool operator==(ZeroValue, IntT rhs)
-            noexcept(std::is_nothrow_constructible_v<IntT, int> &&
-                     noexcept(IntT{0} == rhs)) {
+        [[nodiscard]] friend constexpr bool operator==(ZeroValue, IntT rhs) noexcept(
+            std::is_nothrow_constructible_v<IntT, int> && noexcept(IntT{0} == rhs)) {
             return IntT{} == rhs;
         }
 
@@ -154,12 +162,14 @@ export namespace pP {
             return std::numeric_limits<FloatT>::max();
         }
 
-        template<typename T> requires std::convertible_to<const MaxValue &, T>
+        template<typename T>
+            requires std::convertible_to<const MaxValue &, T>
         [[nodiscard]] friend constexpr bool operator==(MaxValue lhs, T rhs) noexcept {
             return T{lhs} == rhs;
         }
 
-        template<typename T> requires std::convertible_to<const MaxValue &, T>
+        template<typename T>
+            requires std::convertible_to<const MaxValue &, T>
         [[nodiscard]] friend constexpr std::strong_ordering operator<=>(MaxValue lhs, T rhs) noexcept {
             return T{lhs} <=> rhs;
         }
@@ -178,12 +188,14 @@ export namespace pP {
             return std::numeric_limits<FloatT>::lowest();
         }
 
-        template<typename T> requires std::convertible_to<const MinValue &, T>
+        template<typename T>
+            requires std::convertible_to<const MinValue &, T>
         [[nodiscard]] friend constexpr bool operator==(MinValue lhs, T rhs) noexcept {
             return T{lhs} == rhs;
         }
 
-        template<typename T> requires std::convertible_to<const MinValue &, T>
+        template<typename T>
+            requires std::convertible_to<const MinValue &, T>
         [[nodiscard]] friend constexpr std::strong_ordering operator<=>(MinValue lhs, T rhs) noexcept {
             return T{lhs} <=> rhs;
         }
@@ -235,8 +247,9 @@ export namespace pP {
             : m_value{value} {
         }
 
-        explicit constexpr Numeric(const char (&magick)[sizeof(T) + 1/*'\0'*/]) noexcept
-            requires std::is_integral_v<T> and std::is_trivially_copyable_v<T> {
+        explicit constexpr Numeric(const char (&magick)[sizeof(T) + 1 /*'\0'*/]) noexcept
+            requires std::is_integral_v<T> and std::is_trivially_copyable_v<T>
+        {
             std::memcpy(&m_value, &magick[0], sizeof(T));
             if constexpr (std::endian::native == std::endian::little) {
                 m_value = std::byteswap(m_value); // make it readable in the debugger
@@ -244,30 +257,28 @@ export namespace pP {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Numeric(const DefaultValue) noexcept
-            : m_value{default_value_v} {
+        constexpr Numeric(const DefaultValue) noexcept : m_value{default_value_v} {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Numeric(const ZeroValue) noexcept
-            : m_value{zero_v} {
+        constexpr Numeric(const ZeroValue) noexcept : m_value{zero_v} {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Numeric(const MinValue) noexcept
-            : m_value{min_v} {
+        constexpr Numeric(const MinValue) noexcept : m_value{min_v} {
         }
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Numeric(const MaxValue) noexcept
-            : m_value{max_v} {
+        constexpr Numeric(const MaxValue) noexcept : m_value{max_v} {
         }
 
         [[nodiscard]] constexpr T operator*() const noexcept {
             return m_value;
         }
 
-        [[nodiscard]] constexpr const T *operator->() const noexcept requires std::is_object_v<T> {
+        [[nodiscard]] constexpr const T *operator->() const noexcept
+            requires std::is_object_v<T>
+        {
             return &m_value;
         }
 
@@ -276,12 +287,16 @@ export namespace pP {
             return m_value;
         }
 
-        constexpr Numeric &operator++() noexcept requires std::is_integral_v<T> {
+        constexpr Numeric &operator++() noexcept
+            requires std::is_integral_v<T>
+        {
             ++m_value;
             return *this;
         }
 
-        [[nodiscard]] constexpr Numeric operator++(int) noexcept requires std::is_integral_v<T> {
+        [[nodiscard]] constexpr Numeric operator++(int) noexcept
+            requires std::is_integral_v<T>
+        {
             const auto old_value = *this;
             ++m_value;
             return old_value;
@@ -346,14 +361,12 @@ export namespace pP {
         };
 
         template<typename ReturnT, typename... ArgsT>
-        struct FunctionTraits<ReturnT(ArgsT...) const>
-                : FunctionTraits<ReturnT(ArgsT...)> {
+        struct FunctionTraits<ReturnT(ArgsT...) const> : FunctionTraits<ReturnT(ArgsT...)> {
             static constexpr bool is_const_v = true;
         };
 
         template<typename ReturnT, typename... ArgsT>
-        struct FunctionTraits<ReturnT(ArgsT...) const noexcept>
-                : FunctionTraits<ReturnT(ArgsT...) noexcept> {
+        struct FunctionTraits<ReturnT(ArgsT...) const noexcept> : FunctionTraits<ReturnT(ArgsT...) noexcept> {
             static constexpr bool is_const_v = true;
         };
 
@@ -365,9 +378,6 @@ export namespace pP {
 
         template<typename FunctionT, typename ReturnT>
         concept TFunctionReturning =
-                std::conjunction_v<
-                    std::is_function<FunctionT>,
-                    std::is_same<function_result_t<FunctionT>, ReturnT>
-                >;
+            std::conjunction_v<std::is_function<FunctionT>, std::is_same<function_result_t<FunctionT>, ReturnT>>;
     }
 }

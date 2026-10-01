@@ -9,7 +9,9 @@ import std;
 
 namespace pP {
     struct GraphTestService : IPlayerService {
-        SharedPlayer getPlayer(const PlayerId &) const noexcept override { return {}; }
+        SharedPlayer getPlayer(const PlayerId &) const noexcept override {
+            return {};
+        }
 
         void enumeratePlayers(Collector<SharedPlayer>) const noexcept override {
         }
@@ -22,7 +24,9 @@ namespace pP {
             return std::unexpected{make_error_code(std::errc::not_supported)};
         }
 
-        std::error_code removePlayer(const PlayerId &) override { return default_value_v; }
+        std::error_code removePlayer(const PlayerId &) override {
+            return default_value_v;
+        }
 
         PlayerCallback::Handle whenPlayerAdded(PlayerCallback::Event) override {
             return {};

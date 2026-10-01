@@ -23,8 +23,10 @@ export namespace pP {
         const safe_ptr<InputListener> m_background_listener{};
 
         const int m_foreground_priority{};
-        const int m_background_priority{}; // background priority; call site static_cast<int>(EInputListenerPriority::player)
-        const int m_detector_priority{}; // detector priority, must be < m_priority; call site static_cast<int>(EInputListenerPriority::detector)
+        const int
+            m_background_priority{}; // background priority; call site static_cast<int>(EInputListenerPriority::player)
+        const int m_detector_priority{}; // detector priority, must be < m_priority; call site
+                                         // static_cast<int>(EInputListenerPriority::detector)
 
     private:
         u32 m_left_held_count{0u};
@@ -35,21 +37,19 @@ export namespace pP {
 
     public:
         InputBackgroundLatch(
-            int foreground_priority,
-            safe_ptr<InputListener> background_listener,
-            int background_priority,
+            int foreground_priority, safe_ptr<InputListener> background_listener, int background_priority,
             int detector_priority) noexcept;
 
         ~InputBackgroundLatch() noexcept;
 
         [[nodiscard]] std::error_code validate() const noexcept;
 
-        [[nodiscard]] std::error_code initialize(InputContext &context, safe_ptr<const InputListener> foreground_listener);
+        [[nodiscard]] std::error_code initialize(
+            InputContext &context, safe_ptr<const InputListener> foreground_listener);
         [[nodiscard]] std::error_code shutdown(InputContext &context);
 
         [[nodiscard]] static constexpr bool isBackgroundDragButton(const EMouseButton button) noexcept {
-            return button == EMouseButton::left or
-                   button == EMouseButton::middle;
+            return button == EMouseButton::left or button == EMouseButton::middle;
         }
 
         [[nodiscard]] bool isEngaged() const noexcept;

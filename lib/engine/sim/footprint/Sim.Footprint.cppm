@@ -6,8 +6,15 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
-    enum class EMotionKind : u32 { static_body, kinematic, dynamic };
-    enum class EBodyGeometry : u32 { box, circle };
+    enum class EMotionKind : u32 {
+        static_body,
+        kinematic,
+        dynamic
+    };
+    enum class EBodyGeometry : u32 {
+        box,
+        circle
+    };
 
     struct BodyState {
         float m_x{};

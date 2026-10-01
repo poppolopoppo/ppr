@@ -127,25 +127,21 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (static_iota_sum) {
-            constexpr auto sum = []<std::size_t... Is>(std::integral_constant<std::size_t, Is>...) {
-                return (0u + ... + Is);
-            };
+            constexpr auto sum = []<std::size_t... Is>(
+                                     std::integral_constant<std::size_t, Is>...) { return (0u + ... + Is); };
             constexpr auto r = static_iota<5u>(sum);
             PPR_TEST_ASSERT(r == 0u + 1u + 2u + 3u + 4u);
         };
 
         PPR_UNIT_TEST (static_iota_typed) {
-            constexpr auto sum = []<int... Is>(std::integral_constant<int, Is>...) {
-                return (0 + ... + Is);
-            };
+            constexpr auto sum = []<int... Is>(std::integral_constant<int, Is>...) { return (0 + ... + Is); };
             constexpr auto r = static_iota<int, 5>(sum);
             PPR_TEST_ASSERT(r == 0 + 1 + 2 + 3 + 4);
         };
 
         PPR_UNIT_TEST (static_iota_empty) {
-            constexpr auto sum = []<std::size_t... Is>(std::integral_constant<std::size_t, Is>...) {
-                return (0u + ... + Is);
-            };
+            constexpr auto sum = []<std::size_t... Is>(
+                                     std::integral_constant<std::size_t, Is>...) { return (0u + ... + Is); };
             constexpr auto r = static_iota<0u>(sum);
             PPR_TEST_ASSERT(r == 0u);
         };
@@ -165,9 +161,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (static_iota_compile_types) {
-            constexpr auto check = []<std::size_t... Is>(std::integral_constant<std::size_t, Is>...) {
-                return sizeof...(Is);
-            };
+            constexpr auto check = []<std::size_t... Is>(
+                                       std::integral_constant<std::size_t, Is>...) { return sizeof...(Is); };
             constexpr auto r = static_iota<3u>(check);
             PPR_TEST_ASSERT(r == 3u);
         };
@@ -197,13 +192,13 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(hasFailed(ec));
         };
 
-        PPR_UNIT_TEST(percentile_empty_nullopt) {
+        PPR_UNIT_TEST (percentile_empty_nullopt) {
             std::array<float, 4> scratch{1.0f, 2.0f, 3.0f, 4.0f};
             const std::optional<float> result = percentile_nearest_rank({}, std::span<float>{scratch}, 0.5f);
             PPR_TEST_ASSERT(not result.has_value());
         };
 
-        PPR_UNIT_TEST(percentile_singleton) {
+        PPR_UNIT_TEST (percentile_singleton) {
             const std::array<float, 1> samples{7.0f};
             std::array<float, 1> scratch{};
             for (const float q: {0.0f, 0.5f, 0.95f, 1.0f}) {
@@ -213,7 +208,7 @@ namespace pP::tests::detail {
             }
         };
 
-        PPR_UNIT_TEST(percentile_odd_unsorted) {
+        PPR_UNIT_TEST (percentile_odd_unsorted) {
             const std::array<float, 5> samples{5.0f, 1.0f, 4.0f, 2.0f, 3.0f};
             std::array<float, 5> scratch{};
             const std::optional<float> median = percentile_nearest_rank(samples, std::span<float>{scratch}, 0.5f);
@@ -224,7 +219,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(scratch[4] == 5.0f);
         };
 
-        PPR_UNIT_TEST(percentile_even_ranks) {
+        PPR_UNIT_TEST (percentile_even_ranks) {
             const std::array<float, 4> samples{4.0f, 1.0f, 3.0f, 2.0f};
             std::array<float, 4> scratch{};
             // Sorted [1, 2, 3, 4]: ceil(25*4/100)-1 = 0, ceil(50*4/100)-1 = 1,
@@ -236,7 +231,7 @@ namespace pP::tests::detail {
             }
         };
 
-        PPR_UNIT_TEST(percentile_duplicates) {
+        PPR_UNIT_TEST (percentile_duplicates) {
             const std::array<float, 4> samples{3.0f, 1.0f, 3.0f, 1.0f};
             std::array<float, 4> scratch{};
             // Sorted [1, 1, 3, 3]: p50 lands on index 1, p95 on index 3.
@@ -248,7 +243,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(*high == 3.0f);
         };
 
-        PPR_UNIT_TEST(percentile_boundaries_clamp) {
+        PPR_UNIT_TEST (percentile_boundaries_clamp) {
             const std::array<float, 3> samples{9.0f, 7.0f, 8.0f};
             std::array<float, 3> scratch{};
             // q = 0 names the minimum, q = 1 the maximum; out-of-range
@@ -260,7 +255,7 @@ namespace pP::tests::detail {
             }
         };
 
-        PPR_UNIT_TEST(percentile_oversized_scratch) {
+        PPR_UNIT_TEST (percentile_oversized_scratch) {
             const std::array<float, 3> samples{9.0f, 7.0f, 8.0f};
             std::array<float, 8> scratch{};
             scratch[7] = -1.0f;
@@ -277,30 +272,30 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest utility = UnitTest::Named("utility") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-                detail::Utility::divide_round_up_basic,
-                detail::Utility::align_backward_basic,
-                detail::Utility::align_forward_basic,
-                detail::Utility::align_forward_align_val,
-                detail::Utility::align_pointer_forward,
-                detail::Utility::align_pointer_backward,
-                detail::Utility::alignment_traits,
-                detail::Utility::bit_count,
-                detail::Utility::static_iota_sum,
-                detail::Utility::static_iota_typed,
-                detail::Utility::static_iota_empty,
-                detail::Utility::static_iota_fill_array,
-                detail::Utility::static_iota_compile_types,
-                detail::Utility::shuffle_context_seed,
-                detail::Utility::errc_not_found_is_error,
-                detail::Utility::failed_ec_zero_returns_false,
-                detail::Utility::failed_ec_nonzero_returns_true,
-                detail::Utility::percentile_empty_nullopt,
-                detail::Utility::percentile_singleton,
-                detail::Utility::percentile_odd_unsorted,
-                detail::Utility::percentile_even_ranks,
-                detail::Utility::percentile_duplicates,
-                detail::Utility::percentile_boundaries_clamp,
-                detail::Utility::percentile_oversized_scratch,
+            detail::Utility::divide_round_up_basic,
+            detail::Utility::align_backward_basic,
+            detail::Utility::align_forward_basic,
+            detail::Utility::align_forward_align_val,
+            detail::Utility::align_pointer_forward,
+            detail::Utility::align_pointer_backward,
+            detail::Utility::alignment_traits,
+            detail::Utility::bit_count,
+            detail::Utility::static_iota_sum,
+            detail::Utility::static_iota_typed,
+            detail::Utility::static_iota_empty,
+            detail::Utility::static_iota_fill_array,
+            detail::Utility::static_iota_compile_types,
+            detail::Utility::shuffle_context_seed,
+            detail::Utility::errc_not_found_is_error,
+            detail::Utility::failed_ec_zero_returns_false,
+            detail::Utility::failed_ec_nonzero_returns_true,
+            detail::Utility::percentile_empty_nullopt,
+            detail::Utility::percentile_singleton,
+            detail::Utility::percentile_odd_unsorted,
+            detail::Utility::percentile_even_ranks,
+            detail::Utility::percentile_duplicates,
+            detail::Utility::percentile_boundaries_clamp,
+            detail::Utility::percentile_oversized_scratch,
         });
     };
 

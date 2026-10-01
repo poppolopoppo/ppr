@@ -51,7 +51,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not scene.step());
             }
             PPR_TEST_ASSERT(scene.isAwake(handles[0]).has_value());
-            PPR_TEST_ASSERT(not * scene.isAwake(handles[0]));
+            PPR_TEST_ASSERT(not *scene.isAwake(handles[0]));
             PPR_TEST_ASSERT(not scene.setAwake(handles[0], true));
             PPR_TEST_ASSERT(*scene.isAwake(handles[0]));
             PPR_TEST_ASSERT(not scene.enableSleep(handles[0], false));
@@ -143,9 +143,7 @@ namespace pP::tests::detail {
                 right[x] = 1u;
             }
             const std::array chunks{
-                physics::ColliderChunkView{{0, 0}, left, true},
-                physics::ColliderChunkView{{1, 0}, right, true}
-            };
+                physics::ColliderChunkView{{0, 0}, left, true}, physics::ColliderChunkView{{1, 0}, right, true}};
             const std::array dirty{physics::ColliderChunkPos{0, 0}};
             u32 processed{};
             PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 2u, processed));
@@ -239,8 +237,8 @@ namespace pP::tests::detail {
                 std::size_t sensor_count{};
                 std::size_t wake_count{};
                 std::size_t contact_count{};
-                PPR_TEST_ASSERT(not coupling.publishUpdates(scene, handles, states, sensors, sensor_count,
-                    wakes, wake_count, {}, contact_count));
+                PPR_TEST_ASSERT(not coupling.publishUpdates(
+                    scene, handles, states, sensors, sensor_count, wakes, wake_count, {}, contact_count));
                 for (std::size_t index = 0u; index < sensor_count; ++index) {
                     const physics::SensorEvent &event = sensors[index];
                     PPR_TEST_ASSERT(event.m_visitor_entity == 99u);
@@ -319,12 +317,10 @@ namespace pP::tests::detail {
                 const auto state = original.state(old_handles[index]);
                 PPR_TEST_ASSERT(state.has_value());
                 *source.get<sim::BodyState>(entities[index]) = {
-                    state->m_x, state->m_y, state->m_angle,
-                    state->m_velocity_x, state->m_velocity_y,
-                    state->m_angular_velocity
-                };
+                    state->m_x, state->m_y, state->m_angle, state->m_velocity_x, state->m_velocity_y,
+                    state->m_angular_velocity};
             }
-            PPR_TEST_ASSERT(not * original.isAwake(old_handles[2]));
+            PPR_TEST_ASSERT(not *original.isAwake(old_handles[2]));
             sim::ChunkGrid grid;
             sim::Snapshot checkpoint = sim::capture(grid, source, 77u);
             checkpoint.m_bodies.m_replay_ticks = 180u;
@@ -337,22 +333,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(loaded.has_value());
             PPR_TEST_ASSERT(*loaded == checkpoint);
             PPR_TEST_ASSERT(not sim::restore(restored, *loaded));
-            const auto footprints_match =
-                    [](const sim::BodyDefinition &left, const sim::BodyDefinition &right) noexcept -> bool {
+            const auto footprints_match = [](const sim::BodyDefinition &left,
+                                              const sim::BodyDefinition &right) noexcept -> bool {
                 return left.m_motion == right.m_motion and
-                    left.m_geometry == right.m_geometry and
-                    left.m_half_width == right.m_half_width and
-                    left.m_half_height == right.m_half_height and
-                    left.m_density == right.m_density and
-                    left.m_friction == right.m_friction and
-                    left.m_restitution == right.m_restitution and
-                    left.m_category_bits == right.m_category_bits and
-                    left.m_mask_bits == right.m_mask_bits and
-                    left.m_group_index == right.m_group_index and
-                    left.m_enable_sleep == right.m_enable_sleep and
-                    left.m_is_awake == right.m_is_awake and
-                    left.m_is_bullet == right.m_is_bullet and
-                    left.m_fixed_rotation == right.m_fixed_rotation;
+                       left.m_geometry == right.m_geometry and
+                       left.m_half_width == right.m_half_width and
+                       left.m_half_height == right.m_half_height and
+                       left.m_density == right.m_density and
+                       left.m_friction == right.m_friction and
+                       left.m_restitution == right.m_restitution and
+                       left.m_category_bits == right.m_category_bits and
+                       left.m_mask_bits == right.m_mask_bits and
+                       left.m_group_index == right.m_group_index and
+                       left.m_enable_sleep == right.m_enable_sleep and
+                       left.m_is_awake == right.m_is_awake and
+                       left.m_is_bullet == right.m_is_bullet and
+                       left.m_fixed_rotation == right.m_fixed_rotation;
             };
             for (std::size_t index = 0u; index < entities.size(); ++index) {
                 const sim::BodyDefinition *expected = source.get<sim::BodyDefinition>(entities[index]);
@@ -394,7 +390,8 @@ namespace pP::tests::detail {
                 replay.m_velocity_x = spawn.m_velocity_x;
                 replay.m_velocity_y = spawn.m_velocity_y;
                 replay.m_angular_velocity = spawn.m_angular_velocity;
-                PPR_TEST_ASSERT(replay.m_motion == spawn.m_motion and
+                PPR_TEST_ASSERT(
+                    replay.m_motion == spawn.m_motion and
                     replay.m_geometry == spawn.m_geometry and
                     replay.m_half_width == spawn.m_half_width and
                     replay.m_half_height == spawn.m_half_height and
@@ -449,8 +446,7 @@ namespace pP::tests::detail {
             }
             const std::array views{
                 physics::ColliderChunkView{left, left_cells, true},
-                physics::ColliderChunkView{right, right_cells, true}
-            };
+                physics::ColliderChunkView{right, right_cells, true}};
             const std::array both{left, right};
 
             const auto noteContacts = [&](physics::Scene &target, bool &began, bool &ended) {
@@ -498,7 +494,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(processed == 2u);
             PPR_TEST_ASSERT(not kept_colliders.rebuildDirtyChunks(kept, views, both, 8u, 8u, processed));
             const bool chains_stable = kept_colliders.chainCount(left) == left_chains and
-                kept_colliders.chainCount(right) == right_chains;
+                                       kept_colliders.chainCount(right) == right_chains;
             PPR_TEST_ASSERT(processed == 2u and chains_stable);
 
             bool kept_after_began{false};
@@ -516,7 +512,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not fresh.initialize({}));
             PPR_TEST_ASSERT(not fresh_colliders.rebuildDirtyChunks(fresh, views, both, 8u, 8u, processed));
             const bool fresh_matches = fresh_colliders.chainCount(left) == left_chains and
-                fresh_colliders.chainCount(right) == right_chains;
+                                       fresh_colliders.chainCount(right) == right_chains;
             PPR_TEST_ASSERT(processed == 2u and fresh_matches);
             std::array<physics::BodyHandle, 1> fresh_handle{};
             PPR_TEST_ASSERT(not fresh.createBodies(entities, definitions, fresh_handle));
@@ -553,17 +549,16 @@ namespace pP::tests::detail {
 
 namespace pP::tests {
     const UnitTest physics = UnitTest::Named("physics") / [](UnitTest::IRun &_) -> void {
-        _.recurse({
-            detail::PhysicsSuite::fixed_replay_produces_identical_body_states,
-            detail::PhysicsSuite::quiescent_dynamic_body_sleeps_and_explicitly_wakes,
-            detail::PhysicsSuite::destroy_and_reset_invalidate_handles_without_aliasing,
-            detail::PhysicsSuite::dig_and_build_replace_chunk_boundaries,
-            detail::PhysicsSuite::cross_chunk_seam_slide_uses_ghost_vertices,
-            detail::PhysicsSuite::lazy_activation_and_bounded_dirty_slices,
-            detail::PhysicsSuite::ladder_door_vent_sensor_begin_end_are_published,
-            detail::PhysicsSuite::v3_active_contact_continues_by_deterministic_replay,
-            detail::PhysicsSuite::kept_chains_match_fresh_rebuild
-        });
+        _.recurse(
+            {detail::PhysicsSuite::fixed_replay_produces_identical_body_states,
+                detail::PhysicsSuite::quiescent_dynamic_body_sleeps_and_explicitly_wakes,
+                detail::PhysicsSuite::destroy_and_reset_invalidate_handles_without_aliasing,
+                detail::PhysicsSuite::dig_and_build_replace_chunk_boundaries,
+                detail::PhysicsSuite::cross_chunk_seam_slide_uses_ghost_vertices,
+                detail::PhysicsSuite::lazy_activation_and_bounded_dirty_slices,
+                detail::PhysicsSuite::ladder_door_vent_sensor_begin_end_are_published,
+                detail::PhysicsSuite::v3_active_contact_continues_by_deterministic_replay,
+                detail::PhysicsSuite::kept_chains_match_fresh_rebuild});
     };
 
     const UnitTest &physicsTests() noexcept {

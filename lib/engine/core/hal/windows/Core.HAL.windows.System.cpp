@@ -33,11 +33,10 @@ namespace pP::hal {
 
     Uuid Uuid::create() noexcept { // NOLINT(*-pro-type-member-init)
         Uuid result;
-        PPR_VERIFY(0 == BCryptGenRandom(
-            nullptr,
-            reinterpret_cast<PUCHAR>(result.m_data.data()),
-            safe_narrowing(result.m_data.size() * sizeof(result.m_data[0])),
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG));
+        PPR_VERIFY(
+            0 == BCryptGenRandom(
+                     nullptr, reinterpret_cast<PUCHAR>(result.m_data.data()),
+                     safe_narrowing(result.m_data.size() * sizeof(result.m_data[0])), BCRYPT_USE_SYSTEM_PREFERRED_RNG));
         return result;
     }
 }

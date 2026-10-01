@@ -135,18 +135,17 @@ export namespace pP {
     // defer block
     // ------------------------------------------------------------------
 
-    template<typename CallbackT> requires std::is_invocable_v<CallbackT>
+    template<typename CallbackT>
+        requires std::is_invocable_v<CallbackT>
     class [[nodiscard]] Deferred {
     public:
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        constexpr Deferred(CallbackT &&callback)
-            noexcept(std::is_nothrow_move_constructible_v<CallbackT>)
+        constexpr Deferred(CallbackT &&callback) noexcept(std::is_nothrow_move_constructible_v<CallbackT>)
             : m_callback(std::forward<CallbackT>(callback)) {
         }
 
-        constexpr ~Deferred()
-            noexcept(std::is_nothrow_invocable_v<CallbackT> &&
-                     std::is_nothrow_destructible_v<CallbackT>) {
+        constexpr ~Deferred() noexcept(
+            std::is_nothrow_invocable_v<CallbackT> && std::is_nothrow_destructible_v<CallbackT>) {
             // invoke the deferred callback when this object is destroyed
             m_callback();
         }
@@ -163,13 +162,14 @@ export namespace pP {
         CallbackT m_callback;
     };
 
-    template<typename CallbackT> requires std::is_invocable_v<CallbackT>
-    Deferred(CallbackT &&) -> Deferred<std::remove_cvref_t<CallbackT> >;
+    template<typename CallbackT>
+        requires std::is_invocable_v<CallbackT>
+    Deferred(CallbackT &&) -> Deferred<std::remove_cvref_t<CallbackT>>;
 
     template<typename CallbackT>
-    [[nodiscard]] constexpr auto defer(CallbackT &&callback)
-        noexcept(Deferred(std::forward<CallbackT>(callback)))
-        requires std::is_invocable_v<CallbackT> {
+    [[nodiscard]] constexpr auto defer(CallbackT &&callback) noexcept(Deferred(std::forward<CallbackT>(callback)))
+        requires std::is_invocable_v<CallbackT>
+    {
         return Deferred(std::forward<CallbackT>(callback));
     }
 
@@ -193,8 +193,7 @@ export namespace pP {
 
             constexpr Uuid() noexcept = default;
 
-            constexpr Uuid(const u32 a, const u32 b, const u32 c, const u32 d) noexcept
-                : m_data{a, b, c, d} {
+            constexpr Uuid(const u32 a, const u32 b, const u32 c, const u32 d) noexcept : m_data{a, b, c, d} {
             }
 
             [[nodiscard]] constexpr bool operator==(const Uuid &other) const noexcept {
@@ -239,9 +238,7 @@ export namespace pP {
         extern const std::align_val_t page_granularity;
 
         [[nodiscard]] std::allocation_result<void *> pageAlloc(
-            std::size_t size,
-            bool commit = true,
-            PageProtection allowed = {},
+            std::size_t size, bool commit = true, PageProtection allowed = {},
             std::align_val_t alignment = page_granularity) noexcept(false);
 
         void pageCommit(void *ptr, std::size_t size, PageProtection allowed = {}) noexcept(false);
@@ -284,16 +281,18 @@ export namespace pP {
 
         // identity: same char type passes the view through (no allocation).
         template<details::TChar CharT, typename AllocatorT = std::basic_string<CharT>::allocator_type>
-        [[nodiscard]] std::basic_string_view<CharT> toString(const std::basic_string_view<CharT> src, [[maybe_unused]] AllocatorT &&alloc = {}) noexcept {
+        [[nodiscard]] std::basic_string_view<CharT> toString(
+            const std::basic_string_view<CharT> src, [[maybe_unused]] AllocatorT &&alloc = {}) noexcept {
             return src;
         }
 
         // converting: transcodes into a newly allocated string.
-        template<details::TChar DstCharT, details::TChar SrcCharT, typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
-            requires (not
-        std::is_same_v<DstCharT, SrcCharT>
-        )
-        [[nodiscard]] std::basic_string<DstCharT> toString(const std::basic_string_view<SrcCharT> src, AllocatorT &&alloc = {}) noexcept(false) {
+        template<
+            details::TChar DstCharT, details::TChar SrcCharT,
+            typename AllocatorT = std::basic_string<DstCharT>::allocator_type>
+            requires (not std::is_same_v<DstCharT, SrcCharT>)
+        [[nodiscard]] std::basic_string<DstCharT> toString(
+            const std::basic_string_view<SrcCharT> src, AllocatorT &&alloc = {}) noexcept(false) {
             const std::size_t cap = transcode(src, static_cast<DstCharT *>(nullptr), 0u);
             std::basic_string dst(cap, DstCharT{}, std::forward<AllocatorT>(alloc));
             [[maybe_unused]] const std::size_t len = transcode(src, dst.data(), dst.size());
@@ -308,23 +307,28 @@ export namespace pP {
             inline constexpr bool is_wchar_v = std::is_same_v<char_t, wchar_t>;
 
             template<typename... ArgsT>
-            using format_string = std::conditional_t<is_wchar_v, std::wformat_string<ArgsT...>, std::format_string<ArgsT...> >;
+            using format_string =
+                std::conditional_t<is_wchar_v, std::wformat_string<ArgsT...>, std::format_string<ArgsT...>>;
             using format_context = std::conditional_t<is_wchar_v, std::wformat_context, std::format_context>;
             using format_args = std::basic_format_args<format_context>;
 
-            [[nodiscard]] inline std::size_t ansi(const string_view &native_str, char *out_buffer, const std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t ansi(
+                const string_view &native_str, char *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(native_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t utf8(const string_view &native_str, char8_t *out_buffer, const std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t utf8(
+                const string_view &native_str, char8_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(native_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t from(const std::string_view &ansi_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t from(
+                const std::string_view &ansi_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(ansi_str, out_buffer, buffer_size);
             }
 
-            [[nodiscard]] inline std::size_t from(const std::u8string_view &utf8_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
+            [[nodiscard]] inline std::size_t from(
+                const std::u8string_view &utf8_str, char_t *out_buffer, const std::size_t buffer_size) noexcept {
                 return transcode(utf8_str, out_buffer, buffer_size);
             }
 
@@ -406,7 +410,8 @@ export namespace pP {
                 return lhs.m_value == rhs.m_value;
             }
 
-            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(const ThreadId lhs, const ThreadId rhs) noexcept {
+            [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+                const ThreadId lhs, const ThreadId rhs) noexcept {
                 return lhs.m_value <=> rhs.m_value;
             }
 
@@ -442,7 +447,8 @@ export namespace pP {
         namespace process {
             [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false);
 
-            [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false);
+            [[nodiscard]] int spawnAndWait(
+                const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false);
 
             [[noreturn]] void terminateProcess(int exit_code) noexcept;
         }
@@ -456,7 +462,8 @@ export namespace pP {
                 void *m_data{nullptr};
             };
 
-            [[nodiscard]] DeadlineHandle setDeadline(std::chrono::milliseconds ms, std23::move_only_function<void()> callback) noexcept(false);
+            [[nodiscard]] DeadlineHandle setDeadline(
+                std::chrono::milliseconds ms, std23::move_only_function<void()> callback) noexcept(false);
 
             void cancelDeadline(DeadlineHandle &handle) noexcept;
         }
@@ -491,8 +498,7 @@ export namespace pP {
 
                 constexpr OpenFlags() noexcept = default;
 
-                explicit constexpr OpenFlags(const u32 bits) noexcept
-                    : m_bits(bits) {
+                explicit constexpr OpenFlags(const u32 bits) noexcept : m_bits(bits) {
                 }
 
                 [[nodiscard]] friend constexpr OpenFlags operator|(const OpenFlags a, const OpenFlags b) noexcept {
@@ -531,7 +537,8 @@ export namespace pP {
             void deinit(IoHandle handle) noexcept;
 
             // file operations
-            [[nodiscard]] FileHandle openFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(false);
+            [[nodiscard]] FileHandle openFile(IoHandle io, const std::filesystem::path &path, OpenFlags flags) noexcept(
+                false);
 
             void closeFile(IoHandle io, FileHandle file) noexcept;
 
@@ -578,14 +585,17 @@ export namespace pP {
             // pollWatch: non-blocking read of raw platform events into buffer.
             // Returns bytes written to buffer, or 0 if nothing pending / on error.
             // ec receives std::errc::result_out_of_range if the platform's internal buffer overflowed.
-            [[nodiscard]] std::size_t pollWatch(WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
+            [[nodiscard]] std::size_t pollWatch(
+                WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
 
             // waitWatch: blocking variant of pollWatch.
-            [[nodiscard]] std::size_t waitWatch(WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
+            [[nodiscard]] std::size_t waitWatch(
+                WatchHandle watch, std::span<std::byte> buffer, std::error_code &ec) noexcept;
 
             // Parse raw platform-specific event data into normalized WatchEvent records.
             // out_names receives concatenated null-terminated filenames relative to watched directory.
-            [[nodiscard]] std::size_t parseWatchEvents(std::span<const std::byte> raw, std::span<WatchEvent> out_events, std::span<char> out_names) noexcept;
+            [[nodiscard]] std::size_t parseWatchEvents(
+                std::span<const std::byte> raw, std::span<WatchEvent> out_events, std::span<char> out_names) noexcept;
         }
 
         // ------------------------------------------------------------------
@@ -594,16 +604,18 @@ export namespace pP {
 
 #ifdef _DEBUG
         template<typename... ArgsT>
-        void outputDebugFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
-            char buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
+        void outputDebugFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept {
+            char
+                buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
             const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
             *out = char{0};
             outputDebug(buffer);
         }
 
         template<typename... ArgsT>
-        void outputDebugFmt(const native::format_string<ArgsT...> &fmt, ArgsT &&... args) noexcept {
-            native::char_t buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
+        void outputDebugFmt(const native::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept {
+            native::char_t
+                buffer[2048]; // #TODO: use something that can fallback to a dynamic allocation when buffer is too small
             const auto [out, size] = std::format_to_n(buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
             *out = native::char_t{0};
             outputDebug(buffer);

@@ -134,8 +134,7 @@ namespace pP::tests::detail {
                 repeat.push_back(std::get<0>(row).m_index);
             }
             PPR_TEST_ASSERT(repeat == order);
-            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(),
-                                [](const auto &) { return true; }) == 3);
+            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 3);
 
             // Only entities holding every requested component appear.
             Array<u32> holders{};
@@ -165,8 +164,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::ranges::count_if(mixed, [](const auto &) { return true; }) == 0);
 
             // The registered type alone still visits its holder.
-            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(),
-                                [](const auto &) { return true; }) == 1);
+            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 1);
         };
 
         PPR_UNIT_TEST (emplace_get_remove_round_trip) {
@@ -318,13 +316,11 @@ namespace pP::tests::detail {
                     kept->m_x == static_cast<i32>(survivor * 10u) and
                     kept->m_y == static_cast<i32>(survivor * 10u + 1u));
             }
-            PPR_TEST_ASSERT(
-                std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 4);
+            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 4);
 
             PPR_TEST_ASSERT(registry.remove<Position>(late));
             PPR_TEST_ASSERT(registry.get<Position>(late) == nullptr);
-            PPR_TEST_ASSERT(
-                std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 3);
+            PPR_TEST_ASSERT(std::ranges::count_if(registry.view<Position>(), [](const auto &) { return true; }) == 3);
 
             for (const u32 survivor: {1u, 3u, 4u}) {
                 const Position *const kept = registry.get<Position>(entities[survivor]);

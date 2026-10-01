@@ -12,7 +12,7 @@ export namespace pP::image {
     // image errors and formats
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY (Image);
+    PPR_DECLARE_LOG_CATEGORY(Image);
 
     // CPU-only vocabulary. No mango/rhi types cross — native format + plain layout; RHI mapping happens
     // at upload inside engine.app caches.
@@ -61,9 +61,14 @@ export namespace pP::image {
         astc8x8_srgb
     };
 
-    enum class EImageUsage : u8 { color, data };
+    enum class EImageUsage : u8 {
+        color,
+        data
+    };
 
-    enum class EImageDimension : u8 { image2d };
+    enum class EImageDimension : u8 {
+        image2d
+    };
 
     // Configurable production limits: every decode rejects over-limit inputs fail-closed
     // with invalid_argument (no new errc — the taxonomy already covers deterministic
@@ -150,8 +155,7 @@ export namespace pP::image {
     }
 
     [[nodiscard]] constexpr bool isBlocked(const ENativeImageFormat format) noexcept {
-        return format != ENativeImageFormat::rgba8_linear
-        and format != ENativeImageFormat::rgba8_srgb;
+        return format != ENativeImageFormat::rgba8_linear and format != ENativeImageFormat::rgba8_srgb;
     }
 
     [[nodiscard]] constexpr EBlockTag blockTagOf(const ENativeImageFormat format) noexcept {
@@ -228,5 +232,4 @@ export namespace pP::image {
 }
 
 export template<>
-struct std::is_error_code_enum<pP::image::errc> : std::true_type {
-};
+struct std::is_error_code_enum<pP::image::errc> : std::true_type {};

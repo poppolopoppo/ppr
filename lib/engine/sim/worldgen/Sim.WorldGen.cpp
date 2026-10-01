@@ -187,15 +187,14 @@ namespace pP::sim {
             return distance;
         }
 
-        [[nodiscard]] constexpr float squaredDistance(const u32 ax, const u32 ay, const u32 bx,
-                                                      const u32 by) noexcept {
+        [[nodiscard]] constexpr float squaredDistance(const u32 ax, const u32 ay, const u32 bx, const u32 by) noexcept {
             const float dx = static_cast<float>(ax) - static_cast<float>(bx);
             const float dy = static_cast<float>(ay) - static_cast<float>(by);
             return dx * dx + dy * dy;
         }
 
-        [[nodiscard]] Cell baseCell(const u32 x, const u32 y, const u64 seed, const Layout &layout,
-                                    const Tuned &tuned) noexcept {
+        [[nodiscard]] Cell baseCell(
+            const u32 x, const u32 y, const u64 seed, const Layout &layout, const Tuned &tuned) noexcept {
             const u32 edge = edgeDistance(x, y);
             const float white = hash01(x, y, seed);
 
@@ -349,7 +348,7 @@ namespace pP::sim {
 
                     const bool non_negative = px >= 0.0f and py >= 0.0f;
                     const bool within_edge = px < static_cast<float>(kWorldEdge) and
-                    py < static_cast<float>(kWorldEdge);
+                                             py < static_cast<float>(kWorldEdge);
                     if (not non_negative or not within_edge) {
                         break;
                     }

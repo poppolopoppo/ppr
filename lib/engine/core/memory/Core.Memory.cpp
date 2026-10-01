@@ -13,8 +13,11 @@ namespace pP {
     // general purpose allocator use stl default allocator
     // ------------------------------------------------------------------
 
-    std::allocation_result<void *> mem::GPA::allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
-        void *const ptr = (alignment > max_align_v ? operator new(bytes, alignment, std::nothrow) : operator new(bytes, std::nothrow));
+    std::allocation_result<void *> mem::GPA::allocateRaw(
+        const std::size_t bytes, const std::align_val_t alignment) noexcept {
+        void *const ptr =
+            (alignment > max_align_v ? operator new(bytes, alignment, std::nothrow)
+                                     : operator new(bytes, std::nothrow));
         PPR_ASSERT(!ptr || alignForward(ptr, alignment) == ptr);
         return {ptr, ptr ? bytes : 0u};
     }
@@ -37,7 +40,8 @@ namespace pP {
         return {ptr, reserved};
     }
 
-    void mem::OS::deallocateRaw(void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) {
+    void mem::OS::deallocateRaw(
+        void *const ptr, const std::size_t bytes, [[maybe_unused]] const std::align_val_t alignment) {
         hal::pageFree(ptr, bytes);
     }
 
@@ -46,10 +50,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     auto mem::HugePage::getGlobalPool() noexcept -> PagePool & {
-        alignas(hal::cacheline_size_v) static PagePool g_instance{
-            block_size_v,
-            num_reserved_blocks_v
-        };
+        alignas(hal::cacheline_size_v) static PagePool g_instance{block_size_v, num_reserved_blocks_v};
         return g_instance;
     }
 
@@ -77,16 +78,17 @@ namespace pP {
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
     PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none);
 }
-    namespace std {
-        static void formatStackEntryTo(const std::stacktrace_entry &entry, pP::opaque::format_context &ctx) noexcept { // NOLINT(*-dcl58-cpp)
-            ctx.write(std::to_string(entry));
-        }
-
-        pP::opaque::Value opaqueValue(const std::stacktrace_entry &entry) noexcept { // NOLINT(*-dcl58-cpp)
-            return pP::opaque::Formatter{std23::nontype<&formatStackEntryTo>, entry};
-        }
+namespace std {
+    static void formatStackEntryTo(
+        const std::stacktrace_entry &entry, pP::opaque::format_context &ctx) noexcept { // NOLINT(*-dcl58-cpp)
+        ctx.write(std::to_string(entry));
     }
-    namespace pP {
+
+    pP::opaque::Value opaqueValue(const std::stacktrace_entry &entry) noexcept { // NOLINT(*-dcl58-cpp)
+        return pP::opaque::Formatter{std23::nontype<&formatStackEntryTo>, entry};
+    }
+}
+namespace pP {
 
 #endif
 
@@ -94,17 +96,19 @@ namespace pP {
     safe_object::~safe_object() noexcept(false) {
 
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
-    {
+        {
             const std::unique_lock scope_lock{m_referencer_barrier};
 
             for (const auto [index, referencer]: std::ranges::enumerate_view(m_references)) {
                 const std::stacktrace &callstack = referencer.m_callstack;
 
-                PPR_LOG(SafeObject, warning, "safe_object destroyed with live reference", {
-                    {"typename", typeid(*static_cast<const safe_object *>(referencer.m_derived)).name()},
-                    {"address", std::bit_cast<std::uintptr_t>(referencer.m_derived)},
-                    {"index", index},
-                    {"stacktrace", opaqueValue(callstack)},
+                PPR_LOG(
+                    SafeObject, warning, "safe_object destroyed with live reference",
+                    {
+                        {"typename", typeid(*static_cast<const safe_object *>(referencer.m_derived)).name()},
+                        {"address", std::bit_cast<std::uintptr_t>(referencer.m_derived)},
+                        {"index", index},
+                        {"stacktrace", opaqueValue(callstack)},
                     });
             }
 
@@ -114,37 +118,44 @@ namespace pP {
         }
 #endif
 
-    PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
-        "safe_object destroyed while safe_ptr references still exist!");
+        PPR_ASSERT(
+            m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+            "safe_object destroyed while safe_ptr references still exist!");
     }
 
     // Relocation/copying changes object identity: the new instance starts
     // unobserved, and the source must not be observed at the time of the op.
     safe_object::safe_object(safe_object &&other) {
-        PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+        PPR_ASSERT(
+            other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
             "Source of move construction is still observed by a safe_ptr!");
     }
 
     safe_object &safe_object::operator=(safe_object &&other) {
         if (this != &other) {
-            PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+            PPR_ASSERT(
+                m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Target of move assignment is still observed by a safe_ptr!");
-            PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+            PPR_ASSERT(
+                other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Source of move assignment is still observed by a safe_ptr!");
         }
         return *this;
     }
 
     safe_object::safe_object(const safe_object &other) {
-        PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+        PPR_ASSERT(
+            other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
             "Source of copy construction is still observed by a safe_ptr!");
     }
 
     safe_object &safe_object::operator=(const safe_object &other) {
         if (this != &other) {
-            PPR_ASSERT(m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+            PPR_ASSERT(
+                m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Target of copy assignment is still observed by a safe_ptr!");
-            PPR_ASSERT(other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
+            PPR_ASSERT(
+                other.m_safe_ref_count.load(std::memory_order_relaxed) == 0 &&
                 "Source of copy assignment is still observed by a safe_ptr!");
         }
         return *this;
@@ -154,13 +165,11 @@ namespace pP {
     SparseKeyId safe_object::incSafeRef([[maybe_unused]] const void *derived) const noexcept {
         m_safe_ref_count.fetch_add(1, std::memory_order_acquire);
         const std::unique_lock scope_lock{m_referencer_barrier};
-        return m_references.add({
-            .m_derived = derived,
-            .m_callstack = std::stacktrace::current(2u)
-        });
+        return m_references.add({.m_derived = derived, .m_callstack = std::stacktrace::current(2u)});
     }
 
-    void safe_object::decSafeRef([[maybe_unused]] const void *derived, const SparseKeyId referencer_key) const noexcept {
+    void safe_object::decSafeRef(
+        [[maybe_unused]] const void *derived, const SparseKeyId referencer_key) const noexcept {
         [[maybe_unused]] const int prev = m_safe_ref_count.fetch_sub(1, std::memory_order_release);
         PPR_ASSERT(prev > 0 && "safe object ref count underflow!");
         const std::unique_lock scope_lock{m_referencer_barrier};

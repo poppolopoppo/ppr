@@ -91,7 +91,7 @@ namespace pP::tests::detail {
             const Snapshot snapshot = capture(grid, 1u);
             PPR_TEST_ASSERT(snapshot.m_deltas.empty());
 
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
@@ -103,7 +103,7 @@ namespace pP::tests::detail {
             constexpr u64 kSeed = 0x0123456789ABCDEFull;
             const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{3u, 4u}, Cell{11u, 271.5f}, kSeed);
 
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
@@ -122,13 +122,12 @@ namespace pP::tests::detail {
             snapshot.m_streams.push_back(RngStream{1u, 0xDEADBEEFCAFEBABEull});
             snapshot.m_streams.push_back(RngStream{2u, 42u});
 
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             // Header (version + seed + delta count) + two delta headers with
             // dense cell runs + stream count + two streams.
-            PPR_TEST_ASSERT(saved.value().size()
-                            == 16u + 2u * (8u + kCellsPerChunk * 6u) + 4u + 2u * 12u + 32u);
+            PPR_TEST_ASSERT(saved.value().size() == 16u + 2u * (8u + kCellsPerChunk * 6u) + 4u + 2u * 12u + 32u);
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
             PPR_TEST_ASSERT(loaded.has_value());
@@ -138,8 +137,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (byte_layout_is_stable) {
-            const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}, 0x0123456789ABCDEFull);
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Snapshot snapshot = singleCellSnapshot(
+                GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}, 0x0123456789ABCDEFull);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             const std::span<const u8> bytes{saved.value()};
@@ -169,7 +169,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (load_rejects_version_mismatch) {
             const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}, 1u);
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             Array<u8> patched = saved.value();
@@ -184,7 +184,7 @@ namespace pP::tests::detail {
             Snapshot stale{};
             stale.m_version = kSnapshotVersion + 1u;
 
-            const Expected<Array<u8> > saved = save(stale);
+            const Expected<Array<u8>> saved = save(stale);
             PPR_TEST_ASSERT(not saved.has_value());
             PPR_TEST_ASSERT(saved.error() == make_error_code(errc::version_mismatch));
 
@@ -195,7 +195,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (load_rejects_truncated_input) {
             const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}, 1u);
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             const std::span<const u8> bytes{saved.value()};
@@ -218,7 +218,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (load_rejects_malformed_payload) {
             const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}, 1u);
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
             const std::span<const u8> bytes{saved.value()};
 
@@ -297,7 +297,7 @@ namespace pP::tests::detail {
 
             // Fail closed over last-wins: the repeated index never reaches the
             // grid, so no ordering of the duplicates could ever be observed.
-            const Expected<Array<u8> > saved = save(duplicated);
+            const Expected<Array<u8>> saved = save(duplicated);
             PPR_TEST_ASSERT(not saved.has_value());
             PPR_TEST_ASSERT(saved.error() == make_error_code(errc::invalid_payload));
 
@@ -381,7 +381,7 @@ namespace pP::tests::detail {
             snapshot.m_streams.push_back(RngStream{1u, 0xDEADBEEFCAFEBABEull});
             snapshot.m_streams.push_back(RngStream{2u, 1u});
 
-            const Expected<Array<u8> > saved = save(snapshot);
+            const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
@@ -418,7 +418,7 @@ namespace pP::tests::detail {
             source.destroy(dead_last);
 
             const Snapshot snapshot = capture(grid, source, 71u);
-            const Expected<Array<u8> > encoded = save(snapshot);
+            const Expected<Array<u8>> encoded = save(snapshot);
             PPR_TEST_ASSERT(encoded.has_value());
             const Expected<Snapshot> loaded = load(std::span<const u8>{*encoded});
             PPR_TEST_ASSERT(loaded.has_value());
@@ -434,7 +434,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(target.get<Position>(first)->m_x == 10);
             PPR_TEST_ASSERT(target.get<Velocity>(last)->m_speed == 7u);
 
-            PPR_TEST_ASSERT(snapshot.m_ecs.m_free_order == (Array<u32>{dead_last.m_index, dead.m_index, dead_first.m_index}));
+            PPR_TEST_ASSERT(
+                snapshot.m_ecs.m_free_order == (Array<u32>{dead_last.m_index, dead.m_index, dead_first.m_index}));
             for (u32 allocation = 0u; allocation < 2u; ++allocation) {
                 const Entity source_created = source.create();
                 const Entity target_created = target.create();
@@ -445,11 +446,15 @@ namespace pP::tests::detail {
             const Expected<u32> spawn = scheduler.declare("spawn");
             PPR_TEST_ASSERT(spawn.has_value());
             Array<Entity> spawned{};
-            PPR_TEST_ASSERT(scheduler.addSystem(*spawn, [&](Registry &registry) {
-                const Entity entity = registry.create();
-                registry.emplace(entity, Position{42, 17});
-                spawned.push_back(entity);
-            }).has_value());
+            PPR_TEST_ASSERT(scheduler
+                    .addSystem(
+                        *spawn,
+                        [&](Registry &registry) {
+                            const Entity entity = registry.create();
+                            registry.emplace(entity, Position{42, 17});
+                            spawned.push_back(entity);
+                        })
+                    .has_value());
             PPR_TEST_ASSERT(not scheduler.runSystems(source));
             PPR_TEST_ASSERT(not scheduler.runSystems(target));
             PPR_TEST_ASSERT(spawned.size() == 2u);
@@ -518,7 +523,7 @@ namespace pP::tests::detail {
             const Entity entity = registry.create();
             registry.emplace(entity, Position{5, 6});
             const Snapshot snapshot = capture(grid, registry, 1u);
-            const Expected<Array<u8> > encoded = save(snapshot);
+            const Expected<Array<u8>> encoded = save(snapshot);
             PPR_TEST_ASSERT(encoded.has_value());
 
             // A v1 file has no ECS tail; the version gate must reject it first.

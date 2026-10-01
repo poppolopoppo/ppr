@@ -138,10 +138,10 @@ export namespace pP {
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
         // nothing, so it is unit-testable without a device.
         [[nodiscard]] static Expected<GridTilePlan> planTiles(
-            const CameraSnapshot &snapshot,
-            std::span<const GridTileSubmission> submissions);
+            const CameraSnapshot &snapshot, std::span<const GridTileSubmission> submissions);
 
-        [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code initialize(
+            IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
 
@@ -161,8 +161,7 @@ export namespace pP {
         // encode binds the same pipeline/payloads and issues one drawIndirect
         // over the compacted args. No compute-cull lane, no pipeline changes,
         // no GI inputs of any kind.
-        [[nodiscard]] static Expected<Array<rhi::IndirectDrawArguments> > compactIndirect(
-            const GridTilePlan &plan);
+        [[nodiscard]] static Expected<Array<rhi::IndirectDrawArguments>> compactIndirect(const GridTilePlan &plan);
 
         [[nodiscard]] std::error_code renderIndirect(const DrawContext &draw_context);
 
@@ -203,18 +202,26 @@ export namespace pP {
         // exactly once before writing an atlas read by earlier GPU work; a
         // clean/offscreen/flat-only frame never waits. Failure leaves chunks
         // dirty and both render lanes fail closed until a successful prepare.
-        [[nodiscard]] std::error_code prepareCellUploads(rhi::IDevice &device,
-                                                         std23::function_ref<std::error_code()> wait_for_gpu_idle);
+        [[nodiscard]] std::error_code prepareCellUploads(
+            rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle);
 
         // Cache probe: the cached payload for a live entry. Quiescent tiles
         // are served here without touching the GPU. Stale or never-uploaded
         // chunk → invalid_argument.
         [[nodiscard]] Expected<GridTilePayload> resolveCached(u32 chunk_id) noexcept;
 
-        [[nodiscard]] u64 uploadCount() const noexcept { return m_upload_count; }
-        [[nodiscard]] u64 cacheHitCount() const noexcept { return m_cache_hit_count; }
-        [[nodiscard]] u32 stagedTileCount() const noexcept { return safe_narrowing(m_submitted_tiles.size()); }
-        [[nodiscard]] u32 cachedTileCount() const noexcept { return safe_narrowing(m_tile_cache.size()); }
+        [[nodiscard]] u64 uploadCount() const noexcept {
+            return m_upload_count;
+        }
+        [[nodiscard]] u64 cacheHitCount() const noexcept {
+            return m_cache_hit_count;
+        }
+        [[nodiscard]] u32 stagedTileCount() const noexcept {
+            return safe_narrowing(m_submitted_tiles.size());
+        }
+        [[nodiscard]] u32 cachedTileCount() const noexcept {
+            return safe_narrowing(m_tile_cache.size());
+        }
 
     private:
         // ------------------------------------------------------------------
@@ -227,7 +234,8 @@ export namespace pP {
         // resolve, upload, and encode
         // ------------------------------------------------------------------
 
-        std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        std::error_code createShaderProgram_(
+            IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
@@ -238,8 +246,7 @@ export namespace pP {
         };
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
-            rhi::IDevice &device,
-            const RenderPipelineSignature &signature);
+            rhi::IDevice &device, const RenderPipelineSignature &signature);
 
         [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
 
@@ -304,7 +311,7 @@ export namespace pP {
         rhi::ComPtr<rhi::IBuffer> m_cell_dummy{};
 
         struct GridCachedCells {
-            std::unique_ptr<std::array<u32, kCellWordsPerChunk> > m_words{};
+            std::unique_ptr<std::array<u32, kCellWordsPerChunk>> m_words{};
             bool m_pending = true;
         };
 

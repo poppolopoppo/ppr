@@ -19,25 +19,15 @@ namespace pP::tests::detail {
         InputKey m_key;
 
         explicit ListenerHarness(
-            const InputKey key = InputKey::w,
-            const EInputValueType value_type = EInputValueType::digital)
-            : action{"TestAction", value_type, EInputActionFlags::none},
-              mapping{"TestMapping"},
-              listener{},
+            const InputKey key = InputKey::w, const EInputValueType value_type = EInputValueType::digital)
+            : action{"TestAction", value_type, EInputActionFlags::none}, mapping{"TestMapping"}, listener{},
               m_key{key} {
             mapping.mapInputKey(SharedInputAction{&action}, m_key);
             listener.addInputMapping(SharedInputMapping{&mapping}, 0);
         }
 
-        EInputMessageResponse post(
-            const EInputMessageEvent event,
-            InputValue value = InputValue{InputDigital{true}}) {
-            const InputMessage msg{
-                m_key,
-                std::move(value),
-                InputDeviceID{0u},
-                event
-            };
+        EInputMessageResponse post(const EInputMessageEvent event, InputValue value = InputValue{InputDigital{true}}) {
+            const InputMessage msg{m_key, std::move(value), InputDeviceID{0u}, event};
             return listener.postKeyEvent(TimeSpan{}, msg);
         }
     };
@@ -58,9 +48,8 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (pressed_fires_triggered_handler) {
         ListenerHarness h;
         int triggered_count = 0;
-        h.action.setTriggered([&triggered_count](const InputActionEvent &, const InputKey &) noexcept {
-            ++triggered_count;
-        });
+        h.action.setTriggered(
+            [&triggered_count](const InputActionEvent &, const InputKey &) noexcept { ++triggered_count; });
         h.post(EInputMessageEvent::pressed);
         PPR_TEST_ASSERT(triggered_count == 1);
     };
@@ -68,9 +57,8 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (repeat_fires_triggered_handler) {
         ListenerHarness h;
         int triggered_count = 0;
-        h.action.setTriggered([&triggered_count](const InputActionEvent &, const InputKey &) noexcept {
-            ++triggered_count;
-        });
+        h.action.setTriggered(
+            [&triggered_count](const InputActionEvent &, const InputKey &) noexcept { ++triggered_count; });
         h.post(EInputMessageEvent::repeat);
         PPR_TEST_ASSERT(triggered_count == 1);
     };
@@ -78,9 +66,8 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (axis_fires_triggered_handler) {
         ListenerHarness h{InputKey::mouse_2d, EInputValueType::axis_2d};
         int triggered_count = 0;
-        h.action.setTriggered([&triggered_count](const InputActionEvent &, const InputKey &) noexcept {
-            ++triggered_count;
-        });
+        h.action.setTriggered(
+            [&triggered_count](const InputActionEvent &, const InputKey &) noexcept { ++triggered_count; });
         h.post(EInputMessageEvent::axis, InputValue{InputAxis2D{float2{1.0f, 0.0f}, float2{1.0f, 0.0f}}});
         PPR_TEST_ASSERT(triggered_count == 1);
     };
@@ -88,9 +75,8 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (released_fires_completed_handler) {
         ListenerHarness h;
         int completed_count = 0;
-        h.action.setCompleted([&completed_count](const InputActionEvent &, const InputKey &) noexcept {
-            ++completed_count;
-        });
+        h.action.setCompleted(
+            [&completed_count](const InputActionEvent &, const InputKey &) noexcept { ++completed_count; });
         h.post(EInputMessageEvent::released);
         PPR_TEST_ASSERT(completed_count == 1);
     };
@@ -98,9 +84,8 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (pressed_does_not_fire_completed_handler) {
         ListenerHarness h;
         int completed_count = 0;
-        h.action.setCompleted([&completed_count](const InputActionEvent &, const InputKey &) noexcept {
-            ++completed_count;
-        });
+        h.action.setCompleted(
+            [&completed_count](const InputActionEvent &, const InputKey &) noexcept { ++completed_count; });
         h.post(EInputMessageEvent::pressed);
         PPR_TEST_ASSERT(completed_count == 0);
     };
@@ -108,13 +93,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (modulate_fires_once_per_event_not_per_trigger) {
         ListenerHarness h;
         int modulate_count = 0;
-        h.action.m_modifier = [&modulate_count](TimeSpan, InputValue &) noexcept {
-            ++modulate_count;
-        };
-        h.action.setStarted([](const InputActionEvent &, const InputKey &) noexcept {
-        });
-        h.action.setTriggered([](const InputActionEvent &, const InputKey &) noexcept {
-        });
+        h.action.m_modifier = [&modulate_count](TimeSpan, InputValue &) noexcept { ++modulate_count; };
+        h.action.setStarted([](const InputActionEvent &, const InputKey &) noexcept {});
+        h.action.setTriggered([](const InputActionEvent &, const InputKey &) noexcept {});
         h.post(EInputMessageEvent::pressed);
         PPR_TEST_ASSERT(modulate_count == 1);
     };
@@ -133,13 +114,13 @@ namespace pP::tests::detail {
         Array<int> fire_order{};
         int lower_repeat_count = -1;
 
-        explicit ConsumeHarness(const EInputActionFlags upper_flags = EInputActionFlags::consume_input,
-                                const EInputActionFlags lower_flags = EInputActionFlags::none,
-                                const int upper_priority = 0, const int lower_priority = 1,
-                                const bool lower_first = false) :
-            upper{"Upper", EInputValueType::digital, upper_flags},
-            lower{"Lower", EInputValueType::digital, lower_flags}, upper_mapping{"UpperMapping"},
-            lower_mapping{"LowerMapping"}, listener{}, m_key{InputKey::w} {
+        explicit ConsumeHarness(
+            const EInputActionFlags upper_flags = EInputActionFlags::consume_input,
+            const EInputActionFlags lower_flags = EInputActionFlags::none, const int upper_priority = 0,
+            const int lower_priority = 1, const bool lower_first = false)
+            : upper{"Upper", EInputValueType::digital, upper_flags},
+              lower{"Lower", EInputValueType::digital, lower_flags}, upper_mapping{"UpperMapping"},
+              lower_mapping{"LowerMapping"}, listener{}, m_key{InputKey::w} {
             upper_mapping.mapInputKey(SharedInputAction{&upper}, m_key);
             lower_mapping.mapInputKey(SharedInputAction{&lower}, m_key);
             if (lower_first) {
@@ -171,7 +152,7 @@ namespace pP::tests::detail {
         }
     };
 
-    PPR_UNIT_TEST(consume_flag_off_without_rebuild_runs_shadowed_action) {
+    PPR_UNIT_TEST (consume_flag_off_without_rebuild_runs_shadowed_action) {
         ConsumeHarness h;
         PPR_TEST_ASSERT(h.post(EInputMessageEvent::pressed) == EInputMessageResponse::consumed);
         PPR_TEST_ASSERT(h.upper_count == 1);
@@ -184,7 +165,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(h.lower_count == 1);
     };
 
-    PPR_UNIT_TEST(consume_flag_on_without_rebuild_suppresses_lower_priority) {
+    PPR_UNIT_TEST (consume_flag_on_without_rebuild_suppresses_lower_priority) {
         ConsumeHarness h{EInputActionFlags::none, EInputActionFlags::none};
         PPR_TEST_ASSERT(h.post(EInputMessageEvent::pressed) == EInputMessageResponse::handled);
         PPR_TEST_ASSERT(h.upper_count == 1);
@@ -197,7 +178,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(h.lower_count == 1);
     };
 
-    PPR_UNIT_TEST(same_key_dispatch_follows_mapping_priority) {
+    PPR_UNIT_TEST (same_key_dispatch_follows_mapping_priority) {
         ConsumeHarness h{EInputActionFlags::none, EInputActionFlags::consume_input, 0, 1, true};
         const auto response = h.post(EInputMessageEvent::pressed);
         PPR_TEST_ASSERT(h.upper_count == 1);
@@ -208,7 +189,7 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(response == EInputMessageResponse::consumed);
     };
 
-    PPR_UNIT_TEST(remove_and_readd_consuming_mapping_preserves_live_state) {
+    PPR_UNIT_TEST (remove_and_readd_consuming_mapping_preserves_live_state) {
         ConsumeHarness h;
         PPR_TEST_ASSERT(h.post(EInputMessageEvent::pressed) == EInputMessageResponse::consumed);
         PPR_TEST_ASSERT(h.lower_count == 0);
@@ -241,17 +222,17 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest input_listener = UnitTest::Named("input_listener") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-                detail::pressed_fires_started_handler,
-                detail::pressed_fires_triggered_handler,
-                detail::repeat_fires_triggered_handler,
-                detail::axis_fires_triggered_handler,
-                detail::released_fires_completed_handler,
-                detail::pressed_does_not_fire_completed_handler,
-                detail::modulate_fires_once_per_event_not_per_trigger,
-                detail::consume_flag_off_without_rebuild_runs_shadowed_action,
-                detail::consume_flag_on_without_rebuild_suppresses_lower_priority,
-                detail::same_key_dispatch_follows_mapping_priority,
-                detail::remove_and_readd_consuming_mapping_preserves_live_state,
+            detail::pressed_fires_started_handler,
+            detail::pressed_fires_triggered_handler,
+            detail::repeat_fires_triggered_handler,
+            detail::axis_fires_triggered_handler,
+            detail::released_fires_completed_handler,
+            detail::pressed_does_not_fire_completed_handler,
+            detail::modulate_fires_once_per_event_not_per_trigger,
+            detail::consume_flag_off_without_rebuild_runs_shadowed_action,
+            detail::consume_flag_on_without_rebuild_suppresses_lower_priority,
+            detail::same_key_dispatch_follows_mapping_priority,
+            detail::remove_and_readd_consuming_mapping_preserves_live_state,
         });
     };
 

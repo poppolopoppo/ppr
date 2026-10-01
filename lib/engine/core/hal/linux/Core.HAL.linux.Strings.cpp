@@ -20,8 +20,9 @@ namespace pP::hal {
 
     [[nodiscard]] std::size_t transcode(const std::string_view ansi, wchar_t *p_dst, std::size_t capacity) noexcept {
         std::size_t count = 0;
-        for (char c : ansi) {
-            if (count >= capacity) break;
+        for (char c: ansi) {
+            if (count >= capacity)
+                break;
             p_dst[count++] = static_cast<wchar_t>(static_cast<unsigned char>(c));
         }
         return count;
@@ -29,7 +30,7 @@ namespace pP::hal {
 
     [[nodiscard]] std::size_t transcode(const std::u8string_view utf8, wchar_t *p_dst, std::size_t capacity) noexcept {
         std::size_t count = 0;
-        for (auto it = utf8.begin(); it != utf8.end() && count < capacity; ) {
+        for (auto it = utf8.begin(); it != utf8.end() && count < capacity;) {
             char32_t cp = static_cast<unsigned char>(*it++);
             if (cp < 0x80) {
                 p_dst[count++] = static_cast<wchar_t>(cp);
@@ -52,16 +53,19 @@ namespace pP::hal {
 
     [[nodiscard]] std::size_t transcode(const std::wstring_view wide, char8_t *p_dst, std::size_t capacity) noexcept {
         std::size_t count = 0;
-        for (wchar_t wc : wide) {
-            if (count >= capacity) break;
+        for (wchar_t wc: wide) {
+            if (count >= capacity)
+                break;
             if (wc < 0x80) {
                 p_dst[count++] = static_cast<char8_t>(wc);
             } else if (wc < 0x800) {
-                if (count + 1 >= capacity) break;
+                if (count + 1 >= capacity)
+                    break;
                 p_dst[count++] = static_cast<char8_t>(0xC0 | (wc >> 6));
                 p_dst[count++] = static_cast<char8_t>(0x80 | (wc & 0x3F));
             } else {
-                if (count + 2 >= capacity) break;
+                if (count + 2 >= capacity)
+                    break;
                 p_dst[count++] = static_cast<char8_t>(0xE0 | (wc >> 12));
                 p_dst[count++] = static_cast<char8_t>(0x80 | ((wc >> 6) & 0x3F));
                 p_dst[count++] = static_cast<char8_t>(0x80 | (wc & 0x3F));
@@ -72,8 +76,9 @@ namespace pP::hal {
 
     [[nodiscard]] std::size_t transcode(const std::wstring_view wide, char *p_dst, std::size_t capacity) noexcept {
         std::size_t count = 0;
-        for (wchar_t wc : wide) {
-            if (count >= capacity) break;
+        for (wchar_t wc: wide) {
+            if (count >= capacity)
+                break;
             if (wc >= 0 && wc <= 127)
                 p_dst[count++] = static_cast<char>(wc);
             else

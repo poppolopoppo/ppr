@@ -75,7 +75,7 @@ export namespace pP {
         WindowDelegate<const float2 &> m_when_mouse_moved{};
         WindowDelegate<const float2 &> m_when_mouse_scrolled{};
 
-        WindowDelegate<std::span<const char *> > m_when_drag_and_dropped{};
+        WindowDelegate<std::span<const char *>> m_when_drag_and_dropped{};
 
         Window(WindowHandle handle, NativeWindowHandle native, WindowModel &&model) noexcept;
 

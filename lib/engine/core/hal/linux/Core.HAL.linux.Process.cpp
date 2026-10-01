@@ -23,13 +23,14 @@ namespace pP::hal::process {
         return path;
     }
 
-    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(false) {
+    [[nodiscard]] int spawnAndWait(const std::filesystem::path &executable, std::span<const std::string> args) noexcept(
+        false) {
         const pid_t pid = ::fork();
         if (pid == 0) {
             std::vector<const char *> argv;
             argv.reserve(args.size() + 2);
             argv.push_back(executable.c_str());
-            for (const auto &arg : args) {
+            for (const auto &arg: args) {
                 argv.push_back(arg.c_str());
             }
             argv.push_back(nullptr);

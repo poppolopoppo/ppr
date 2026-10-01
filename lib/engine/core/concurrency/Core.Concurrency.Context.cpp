@@ -16,13 +16,11 @@ namespace pP::context {
     public:
         BackgroundContext() noexcept = default;
 
-        [[nodiscard]] std::error_code
-        error() const noexcept override {
+        [[nodiscard]] std::error_code error() const noexcept override {
             return default_value_v;
         }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *>
-        value(const string_literal) const noexcept override {
+        [[nodiscard]] std::optional<const opaque::Block::Value *> value(const string_literal) const noexcept override {
             return std::nullopt;
         }
 
@@ -68,8 +66,7 @@ namespace pP::context {
 
     public:
         explicit CancelContext(SharedContext parent) noexcept
-            : m_parent(std::move(parent)),
-              m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))),
+            : m_parent(std::move(parent)), m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))),
               m_error_code(std::error_code{}) {
             PPR_ASSERT(m_parent.get());
         }
@@ -90,8 +87,7 @@ namespace pP::context {
             // stored bits, so retry while it still reports "no error".
             std::error_code expect_no_error{};
             while (not expect_no_error) {
-                if (m_error_code.compare_exchange_strong(
-                        expect_no_error, err, std::memory_order_acq_rel)) {
+                if (m_error_code.compare_exchange_strong(expect_no_error, err, std::memory_order_acq_rel)) {
                     m_done.emitEvent();
                     return;
                 }
@@ -99,16 +95,15 @@ namespace pP::context {
         }
 
     public: // IContext interface:
-        [[nodiscard]] std::error_code
-        error() const noexcept override {
+        [[nodiscard]] std::error_code error() const noexcept override {
             if (const std::error_code err = m_error_code.load(std::memory_order_acquire)) {
                 return err;
             }
             return m_parent->error();
         }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *>
-        value(const string_literal user_key) const noexcept override {
+        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+            const string_literal user_key) const noexcept override {
             return m_parent->value(user_key);
         }
 
@@ -140,8 +135,7 @@ namespace pP::context {
         NeverEvent m_done{}; // Never fires
 
     public:
-        explicit WithoutCancelContext(SharedContext parent) noexcept
-            : m_parent(std::move(parent)) {
+        explicit WithoutCancelContext(SharedContext parent) noexcept : m_parent(std::move(parent)) {
             PPR_ASSERT(m_parent.get());
             // Notice: We specifically DO NOT subscribe to m_parent->done()
         }
@@ -152,7 +146,8 @@ namespace pP::context {
             return default_value_v; // Never has an error
         }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *> value(const string_literal user_key) const noexcept override {
+        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+            const string_literal user_key) const noexcept override {
             return m_parent->value(user_key); // Values still flow down
         }
 
@@ -185,8 +180,7 @@ namespace pP::context {
 
     public:
         AfterContext(SharedContext parent, AfterFunc &&execute_after) noexcept
-            : m_parent(std::move(parent)),
-              m_execute_after(std::move(execute_after)) {
+            : m_parent(std::move(parent)), m_execute_after(std::move(execute_after)) {
             PPR_ASSERT(m_parent.get());
         }
 
@@ -196,13 +190,12 @@ namespace pP::context {
 
         // IContext interface:
 
-        [[nodiscard]] std::error_code
-        error() const noexcept override {
+        [[nodiscard]] std::error_code error() const noexcept override {
             return m_parent->error();
         }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *>
-        value(const string_literal user_key) const noexcept override {
+        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+            const string_literal user_key) const noexcept override {
             return m_parent->value(user_key);
         }
 
@@ -235,20 +228,18 @@ namespace pP::context {
 
     public:
         ValueContext(SharedContext parent, const opaque::Dict &values)
-            : m_parent(std::move(parent)),
-              m_opaque(opaque::makeUnique<mem::GPA>(values)) {
+            : m_parent(std::move(parent)), m_opaque(opaque::makeUnique<mem::GPA>(values)) {
             PPR_ASSERT(m_parent.get());
         }
 
         // IContext interface:
 
-        [[nodiscard]] std::error_code
-        error() const noexcept override {
+        [[nodiscard]] std::error_code error() const noexcept override {
             return m_parent->error();
         }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *>
-        value(const string_literal user_key) const noexcept override {
+        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+            const string_literal user_key) const noexcept override {
             if (const opaque::Block::Value *const p_value = m_opaque->tryGet(user_key)) {
                 return p_value;
             }
@@ -284,23 +275,19 @@ namespace pP::context {
 
     public:
         DeadlineContext(SharedContext parent, const TimePoint deadline, const std::error_code cause) noexcept
-            : CancelContext(std::move(parent)),
-              m_deadline(deadline),
-              m_cause(cause) {
+            : CancelContext(std::move(parent)), m_deadline(deadline), m_cause(cause) {
         }
 
-        [[nodiscard]] static SharedContext schedule(SharedContext parent, const TimePoint deadline, const std::error_code cause,
-                                                    TimerManager &timer) {
-            auto ctx = std::make_shared<DeadlineContext>(
-                std::move(parent), deadline, cause);
+        [[nodiscard]] static SharedContext schedule(
+            SharedContext parent, const TimePoint deadline, const std::error_code cause, TimerManager &timer) {
+            auto ctx = std::make_shared<DeadlineContext>(std::move(parent), deadline, cause);
 
-            timer.schedule(
-                deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept -> std::error_code {
-                    if (const std::shared_ptr<DeadlineContext> self = weak_self.lock()) [[likely]] {
-                        self->cancelDeadline(now);
-                    }
-                    return default_value_v;
-                });
+            timer.schedule(deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept -> std::error_code {
+                if (const std::shared_ptr<DeadlineContext> self = weak_self.lock()) [[likely]] {
+                    self->cancelDeadline(now);
+                }
+                return default_value_v;
+            });
 
             return std::move(ctx);
         }
@@ -341,18 +328,15 @@ namespace pP::context {
     }
 
     SharedContext withValue(SharedContext parent, const string_literal user_key, const opaque::Value &value) {
-        return std::make_shared<ValueContext>(
-            parent, opaque::Dict{
-                {user_key, value}
-            });
+        return std::make_shared<ValueContext>(parent, opaque::Dict{{user_key, value}});
     }
 
     SharedContext withValues(SharedContext parent, const opaque::Dict &values) {
         return std::make_shared<ValueContext>(parent, values);
     }
 
-    SharedContext withDeadlineCause(SharedContext parent, const TimePoint deadline, const std::error_code cause,
-                                    TimerManager &timer) {
+    SharedContext withDeadlineCause(
+        SharedContext parent, const TimePoint deadline, const std::error_code cause, TimerManager &timer) {
         return DeadlineContext::schedule(std::move(parent), deadline, cause, timer);
     }
 
@@ -360,13 +344,14 @@ namespace pP::context {
         return withDeadlineCause(std::move(parent), deadline, std::make_error_code(std::errc::timed_out), timer);
     }
 
-    SharedContext withTimeoutCause(SharedContext parent, const TimeSpan delay, const std::error_code cause,
-                                   TimerManager &timer) {
+    SharedContext withTimeoutCause(
+        SharedContext parent, const TimeSpan delay, const std::error_code cause, TimerManager &timer) {
         return withDeadlineCause(std::move(parent), timer.now() + delay, cause, timer);
     }
 
     SharedContext withTimeout(SharedContext parent, const TimeSpan delay, TimerManager &timer) {
-        return withDeadlineCause(std::move(parent), timer.now() + delay, std::make_error_code(std::errc::timed_out), timer);
+        return withDeadlineCause(
+            std::move(parent), timer.now() + delay, std::make_error_code(std::errc::timed_out), timer);
     }
 
     bool CancelFunc::isValid() const noexcept {

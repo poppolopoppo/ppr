@@ -61,8 +61,7 @@ namespace pP::io {
     // IoPort
     // ------------------------------------------------------------------
 
-    IoPort::IoPort()
-        : m_handle(hal::io::init()) {
+    IoPort::IoPort() : m_handle(hal::io::init()) {
     }
 
     IoPort::~IoPort() noexcept {
@@ -81,7 +80,8 @@ namespace pP::io {
         return *this;
     }
 
-    std::expected<IoFile, std::error_code> IoPort::open(const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept {
+    std::expected<IoFile, std::error_code> IoPort::open(
+        const std::filesystem::path &path, const hal::io::OpenFlags flags) noexcept {
         try {
             return IoFile(m_handle, hal::io::openFile(m_handle, path, flags));
         } catch (const std::system_error &e) {
@@ -93,8 +93,7 @@ namespace pP::io {
         }
     }
 
-    void IoPort::read(IoRequest &req, const IoFile &file,
-                      std::span<std::byte> buffer, const u64 file_offset) noexcept {
+    void IoPort::read(IoRequest &req, const IoFile &file, std::span<std::byte> buffer, const u64 file_offset) noexcept {
         PPR_ASSERT(req.m_state.load() == 0u && "IoRequest already in-flight");
 
         req.m_active_file = file.m_file;
@@ -115,8 +114,8 @@ namespace pP::io {
         PPR_ASSERT(submitted == 1u);
     }
 
-    void IoPort::write(IoRequest &req, const IoFile &file,
-                       std::span<std::byte> buffer, const u64 file_offset) noexcept {
+    void IoPort::write(
+        IoRequest &req, const IoFile &file, std::span<std::byte> buffer, const u64 file_offset) noexcept {
         PPR_ASSERT(req.m_state.load() == 0u && "IoRequest already in-flight");
 
         req.m_active_file = file.m_file;

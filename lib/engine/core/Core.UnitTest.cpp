@@ -14,11 +14,10 @@ import std;
 namespace std {
     template<pP::details::TChar CharT>
     struct formatter<pP::UnitTest::Id, CharT>
-            : formatter<std::basic_string<CharT>, CharT> // ← inherit parse + all specs
+        : formatter<std::basic_string<CharT>, CharT> // ← inherit parse + all specs
     {
         template<typename FormatContextT>
-        auto format(const pP::UnitTest::Id &value, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::UnitTest::Id &value, FormatContextT &ctx) const -> decltype(ctx.out()) {
             std::basic_string<CharT> buf;
             auto output(std::back_inserter(buf));
             value.format<CharT>(output);
@@ -34,8 +33,8 @@ namespace pP {
 
     [[noreturn]] void onTestAssertionFailure(const char *message, const std::source_location &site) {
         const std::string text = std::format(
-            "{}({}): TEST assert failed: \"{}\"\n\tin function: {}\n",
-            site.file_name(), site.line(), message, site.function_name());
+            "{}({}): TEST assert failed: \"{}\"\n\tin function: {}\n", site.file_name(), site.line(), message,
+            site.function_name());
         throw std::logic_error{text};
     }
 
@@ -137,15 +136,11 @@ namespace pP {
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test) noexcept
-        : m_context(context),
-          m_test(test) {
+        : m_context(context), m_test(test) {
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept
-        : m_context(context),
-          m_test(test),
-          m_parent(&parent),
-          m_depth(parent.m_depth + 1u) {
+        : m_context(context), m_test(test), m_parent(&parent), m_depth(parent.m_depth + 1u) {
     }
 
     const UnitTest::RunImpl &UnitTest::RunImpl::getFirstRunImpl() const noexcept {
@@ -245,15 +240,18 @@ namespace pP {
 
         if (not m_test.isExpectedToFail()) {
 #if defined(__cpp_lib_stacktrace)
-            std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
+            std::println(
+                std::cerr,
+                "{}({}): Assertion failed with \"{}\"\n"
                 "\tin function: {}\n"
                 "\tin test: {}\n\n"
                 "Callstack:\n{}",
                 condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
-                condition.m_site.function_name(), getTestId(),
-                backtrace);
+                condition.m_site.function_name(), getTestId(), backtrace);
 #else
-            std::println(std::cerr, "{}({}): Assertion failed with \"{}\"\n"
+            std::println(
+                std::cerr,
+                "{}({}): Assertion failed with \"{}\"\n"
                 "\tin function: {}\n"
                 "\tin test: {}",
                 condition.m_site.file_name(), condition.m_site.line(), condition.m_message,
@@ -313,19 +311,17 @@ namespace pP {
         const char *bullet = is_group ? "\u21B3" : "\u2022";
         const char *icon = m_status == pass ? "\u2705" : "\u274C";
 
-        std::println(std::cout, " {} {:>3}/{:<3}  {} {:<70} ({})",
-            icon,
-            m_num_passed,
-            m_num_passed + m_num_failed,
-            bullet,
-            test_id,
-            test_duration);
+        std::println(
+            std::cout, " {} {:>3}/{:<3}  {} {:<70} ({})", icon, m_num_passed, m_num_passed + m_num_failed, bullet,
+            test_id, test_duration);
 
         if (m_status == fail) {
             std::println(std::cout, "    \u2514\u2500 {}", m_failure);
         }
         if (is_group) {
-            std::println(std::cout, "-----------------------------------------------------------------------------------------------");
+            std::println(
+                std::cout,
+                "-----------------------------------------------------------------------------------------------");
         }
 
         std::cout.flush();

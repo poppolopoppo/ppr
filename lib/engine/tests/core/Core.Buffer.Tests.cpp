@@ -26,12 +26,16 @@ namespace pP::tests::detail {
         static_assert(not std::constructible_from<mem::WeakSharedBuffer, mem::UniqueBuffer &&>);
         static_assert(not std::constructible_from<mem::WeakSharedBuffer, mem::SharedBufferView>);
 
-        static_assert(std::same_as<decltype(std::declval<mem::UniqueBuffer &>().getMutableData()), Expected<mem::MutableBufferView> >);
-        static_assert(std::same_as<decltype(std::declval<const mem::UniqueBuffer &>().getBufferData()), mem::MutableBufferView>);
+        static_assert(std::same_as<
+            decltype(std::declval<mem::UniqueBuffer &>().getMutableData()), Expected<mem::MutableBufferView>>);
+        static_assert(
+            std::same_as<decltype(std::declval<const mem::UniqueBuffer &>().getBufferData()), mem::MutableBufferView>);
         static_assert(std::same_as<decltype(std::declval<mem::UniqueBuffer &&>().makeOwned()), mem::UniqueBuffer>);
-        static_assert(std::same_as<decltype(std::declval<mem::UniqueBuffer &>().moveToShared(nullptr)), std::error_code>);
+        static_assert(
+            std::same_as<decltype(std::declval<mem::UniqueBuffer &>().moveToShared(nullptr)), std::error_code>);
         static_assert(std::same_as<decltype(std::declval<mem::UniqueBuffer &>().materialize()), std::error_code>);
-        static_assert(std::same_as<decltype(std::declval<const mem::SharedBuffer &>().getBufferData()), mem::SharedBufferView>);
+        static_assert(
+            std::same_as<decltype(std::declval<const mem::SharedBuffer &>().getBufferData()), mem::SharedBufferView>);
         static_assert(std::same_as<decltype(std::declval<const mem::SharedBuffer &>().makeOwned()), mem::SharedBuffer>);
         static_assert(std::same_as<decltype(std::declval<mem::SharedBuffer &&>().makeOwned()), mem::SharedBuffer>);
         static_assert(std::same_as<decltype(std::declval<mem::SharedBuffer &>().moveToUnique()), mem::UniqueBuffer>);
@@ -39,8 +43,10 @@ namespace pP::tests::detail {
         static_assert(std::same_as<decltype(std::declval<const mem::WeakSharedBuffer &>().pin()), mem::SharedBuffer>);
         static_assert(std::same_as<decltype(mem::UniqueBuffer::clone(mem::SharedBufferView{})), mem::UniqueBuffer>);
         static_assert(std::same_as<decltype(mem::SharedBuffer::clone(mem::SharedBufferView{})), mem::SharedBuffer>);
-        static_assert(std::same_as<decltype(mem::UniqueBuffer::mapFile(std::filesystem::path{})), Expected<mem::UniqueBuffer> >);
-        static_assert(std::same_as<decltype(mem::SharedBuffer::mapFile(std::filesystem::path{})), Expected<mem::SharedBuffer> >);
+        static_assert(
+            std::same_as<decltype(mem::UniqueBuffer::mapFile(std::filesystem::path{})), Expected<mem::UniqueBuffer>>);
+        static_assert(
+            std::same_as<decltype(mem::SharedBuffer::mapFile(std::filesystem::path{})), Expected<mem::SharedBuffer>>);
 
         // ------------------------------------------------------------------
         // Helpers (GLFW-free, deterministic, engine allocators only)
@@ -63,8 +69,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(raw != nullptr);
             std::ranges::copy(source, raw);
             auto owner = std::make_unique<mem::details::BufferOwner>(
-                static_cast<const void *>(raw),
-                source.size(),
+                static_cast<const void *>(raw), source.size(),
                 [](void *, const std::allocation_result<void *> alloc) { std::free(alloc.ptr); });
             return mem::UniqueBuffer{std::move(owner)};
         }
@@ -110,12 +115,9 @@ namespace pP::tests::detail {
 
             [[nodiscard]] std::allocation_result<void *> allocateRaw(const std::size_t, const std::align_val_t) {
                 switch (result) {
-                    case EMaterializationResult::throwing:
-                        throw std::bad_alloc{};
-                    case EMaterializationResult::null:
-                        return {};
-                    case EMaterializationResult::short_allocation:
-                        return {std::malloc(1u), 1u};
+                    case EMaterializationResult::throwing: throw std::bad_alloc{};
+                    case EMaterializationResult::null: return {};
+                    case EMaterializationResult::short_allocation: return {std::malloc(1u), 1u};
                 }
                 std::unreachable();
             }
@@ -152,7 +154,7 @@ namespace pP::tests::detail {
         // UniqueBuffer
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST(unique_default_is_empty) {
+        PPR_UNIT_TEST (unique_default_is_empty) {
             mem::UniqueBuffer empty{};
             PPR_TEST_ASSERT(not empty.isValid());
             PPR_TEST_ASSERT(not static_cast<bool>(empty));
@@ -171,7 +173,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty.isValid());
         };
 
-        PPR_UNIT_TEST(unique_best_fit_allocate_zero_is_invalid) {
+        PPR_UNIT_TEST (unique_best_fit_allocate_zero_is_invalid) {
             const mem::UniqueBuffer empty = mem::UniqueBuffer::allocate(0u);
             PPR_TEST_ASSERT(not empty.isValid());
             PPR_TEST_ASSERT(not static_cast<bool>(empty));
@@ -180,7 +182,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not cloned.isValid());
         };
 
-        PPR_UNIT_TEST(unique_allocation_ctor_stateless_roundtrip) {
+        PPR_UNIT_TEST (unique_allocation_ctor_stateless_roundtrip) {
             mem::Allocation<std::byte, mem::GPA> allocation{4u};
             mem::UniqueBuffer buffer{std::move(allocation)};
             PPR_TEST_ASSERT(buffer.isValid());
@@ -195,7 +197,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::ranges::equal(view, std::span<const std::byte>{kTestBytes}));
         };
 
-        PPR_UNIT_TEST(unique_allocation_ctor_stateful) {
+        PPR_UNIT_TEST (unique_allocation_ctor_stateful) {
             StatefulAllocator allocator{};
             {
                 mem::Allocation<std::byte, StatefulAllocator> allocation{4u, allocator};
@@ -212,7 +214,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(allocator.live_bytes == 0u);
         };
 
-        PPR_UNIT_TEST(unique_immutable_owner_rejects_mutable_access) {
+        PPR_UNIT_TEST (unique_immutable_owner_rejects_mutable_access) {
             mem::UniqueBuffer buffer = makeImmutableUnique(kTestBytes);
             PPR_TEST_ASSERT(buffer.isValid());
             PPR_TEST_ASSERT(buffer.isImmutable());
@@ -229,7 +231,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not shared.isUniqueOwnedMutable());
         };
 
-        PPR_UNIT_TEST(unique_clone_empty_is_invalid) {
+        PPR_UNIT_TEST (unique_clone_empty_is_invalid) {
             mem::GPA allocator{};
             const mem::UniqueBuffer cloned = mem::UniqueBuffer::clone(allocator, mem::SharedBufferView{});
             PPR_TEST_ASSERT(not cloned.isValid());
@@ -238,7 +240,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not shared_clone.isValid());
         };
 
-        PPR_UNIT_TEST(unique_lazy_allocate_stays_unmaterialized) {
+        PPR_UNIT_TEST (unique_lazy_allocate_stays_unmaterialized) {
             // allocate(allocator, size) builds a lazy (unmaterialized) owner.
             // Data views stay untouched here: materialization is deferred.
             mem::GPA allocator{};
@@ -252,8 +254,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not ec);
         };
 
-        PPR_UNIT_TEST(unique_lazy_materialization_failures_are_invalid) {
-            for (const EMaterializationResult result: {EMaterializationResult::throwing, EMaterializationResult::null, EMaterializationResult::short_allocation}) {
+        PPR_UNIT_TEST (unique_lazy_materialization_failures_are_invalid) {
+            for (const EMaterializationResult result:
+                {EMaterializationResult::throwing, EMaterializationResult::null,
+                    EMaterializationResult::short_allocation}) {
                 MaterializationFailureAllocator allocator{.result = result};
                 mem::UniqueBuffer buffer = mem::UniqueBuffer::allocate(allocator, 4u);
 
@@ -263,11 +267,12 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not buffer.isMaterialized());
                 PPR_TEST_ASSERT(buffer.getBufferData().empty());
                 PPR_TEST_ASSERT(not buffer.isMaterialized());
-                PPR_TEST_ASSERT(allocator.deallocate_calls == (result == EMaterializationResult::short_allocation ? 2u : 0u));
+                PPR_TEST_ASSERT(
+                    allocator.deallocate_calls == (result == EMaterializationResult::short_allocation ? 2u : 0u));
             }
         };
 
-        PPR_UNIT_TEST(unique_lazy_move_to_shared_materializes_readable_data) {
+        PPR_UNIT_TEST (unique_lazy_move_to_shared_materializes_readable_data) {
             StatefulAllocator allocator{};
             mem::UniqueBuffer unique = mem::UniqueBuffer::allocate(allocator, 4u);
             PPR_TEST_ASSERT(not unique.isMaterialized());
@@ -282,7 +287,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(allocator.allocate_calls == 1u);
         };
 
-        PPR_UNIT_TEST(unique_lazy_move_to_shared_propagates_materialization_failure) {
+        PPR_UNIT_TEST (unique_lazy_move_to_shared_propagates_materialization_failure) {
             MaterializationFailureAllocator allocator{.result = EMaterializationResult::null};
             mem::UniqueBuffer unique = mem::UniqueBuffer::allocate(allocator, 4u);
             mem::SharedBuffer shared{};
@@ -294,7 +299,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not shared.isValid());
         };
 
-        PPR_UNIT_TEST(unique_scratch_is_lazy_and_empty_clone_is_invalid) {
+        PPR_UNIT_TEST (unique_scratch_is_lazy_and_empty_clone_is_invalid) {
             mem::UniqueBuffer scratched = mem::UniqueBuffer::scratch(16u);
             PPR_TEST_ASSERT(scratched.isValid());
             PPR_TEST_ASSERT(scratched.isOwned());
@@ -304,7 +309,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not cloned.isValid());
         };
 
-        PPR_UNIT_TEST(unique_make_owned_passthrough_moves_owned) {
+        PPR_UNIT_TEST (unique_make_owned_passthrough_moves_owned) {
             mem::UniqueBuffer buffer = makeUnique(4u);
             writeBytes(buffer, kTestBytes);
             const auto *const data = buffer.getBufferData().data();
@@ -320,7 +325,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not still_empty.isValid());
         };
 
-        PPR_UNIT_TEST(unique_move_to_shared_transfers_ownership) {
+        PPR_UNIT_TEST (unique_move_to_shared_transfers_ownership) {
             mem::UniqueBuffer buffer = makeUnique(4u);
             writeBytes(buffer, kTestBytes);
             const auto *const data = buffer.getBufferData().data();
@@ -338,7 +343,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty_shared.isValid());
         };
 
-        PPR_UNIT_TEST(unique_move_assign_and_swap) {
+        PPR_UNIT_TEST (unique_move_assign_and_swap) {
             mem::UniqueBuffer source = makeUnique(2u);
             const auto *const source_data = source.getBufferData().data();
             mem::UniqueBuffer destination{};
@@ -360,7 +365,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not destination.isValid());
         };
 
-        PPR_UNIT_TEST(unique_map_file_error_paths) {
+        PPR_UNIT_TEST (unique_map_file_error_paths) {
             const auto missing = std::filesystem::temp_directory_path() / "ppr_buffer_test_missing.bin";
             removeTempMapFile(missing);
 
@@ -378,7 +383,7 @@ namespace pP::tests::detail {
         // SharedBuffer
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST(shared_default_is_empty) {
+        PPR_UNIT_TEST (shared_default_is_empty) {
             const mem::SharedBuffer empty{};
             PPR_TEST_ASSERT(not empty.isValid());
             PPR_TEST_ASSERT(not static_cast<bool>(empty));
@@ -393,7 +398,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not resettable.isValid());
         };
 
-        PPR_UNIT_TEST(shared_move_to_shared_and_copy_share_data) {
+        PPR_UNIT_TEST (shared_move_to_shared_and_copy_share_data) {
             mem::UniqueBuffer unique = makeUnique(4u);
             writeBytes(unique, kTestBytes);
             const auto *const data = unique.getBufferData().data();
@@ -416,7 +421,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(assigned == shared);
         };
 
-        PPR_UNIT_TEST(shared_is_unique_owned_mutable_matrix) {
+        PPR_UNIT_TEST (shared_is_unique_owned_mutable_matrix) {
             const mem::SharedBuffer empty{};
             PPR_TEST_ASSERT(not empty.isUniqueOwnedMutable());
 
@@ -433,7 +438,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not immutable.isUniqueOwnedMutable());
         };
 
-        PPR_UNIT_TEST(shared_make_owned_passthrough_on_owned) {
+        PPR_UNIT_TEST (shared_make_owned_passthrough_on_owned) {
             mem::UniqueBuffer unique = makeUnique(4u);
             writeBytes(unique, kTestBytes);
             mem::SharedBuffer shared = toShared(unique);
@@ -453,7 +458,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty_owned.isValid());
         };
 
-        PPR_UNIT_TEST(shared_move_to_unique_takes_single_owned_mutable) {
+        PPR_UNIT_TEST (shared_move_to_unique_takes_single_owned_mutable) {
             mem::UniqueBuffer unique = makeUnique(4u);
             writeBytes(unique, kTestBytes);
             const auto *const data = unique.getBufferData().data();
@@ -472,7 +477,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty_taken.isValid());
         };
 
-        PPR_UNIT_TEST(shared_subspan_empty_and_out_of_range) {
+        PPR_UNIT_TEST (shared_subspan_empty_and_out_of_range) {
             mem::UniqueBuffer unique = makeUnique(4u);
             const mem::SharedBuffer base = toShared(unique);
 
@@ -485,7 +490,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not empty.subspan(0u).isValid());
         };
 
-        PPR_UNIT_TEST(shared_subspan_flags_and_parent_lifetime) {
+        PPR_UNIT_TEST (shared_subspan_flags_and_parent_lifetime) {
             mem::UniqueBuffer unique = makeUnique(4u);
             writeBytes(unique, kTestBytes);
             mem::SharedBuffer base = toShared(unique);
@@ -512,7 +517,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not orphan.isOwned());
         };
 
-        PPR_UNIT_TEST(shared_equality_ordering_hash_and_swap) {
+        PPR_UNIT_TEST (shared_equality_ordering_hash_and_swap) {
             mem::UniqueBuffer first_unique = makeUnique(2u);
             mem::UniqueBuffer second_unique = makeUnique(2u);
             mem::SharedBuffer first = toShared(first_unique);
@@ -533,7 +538,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(second.isValid());
         };
 
-        PPR_UNIT_TEST(shared_map_file_error_paths) {
+        PPR_UNIT_TEST (shared_map_file_error_paths) {
             const auto missing = std::filesystem::temp_directory_path() / "ppr_buffer_test_missing.bin";
             removeTempMapFile(missing);
 
@@ -557,7 +562,7 @@ namespace pP::tests::detail {
         // signalling the probe should become a normal passing test.
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST(unique_map_file_roundtrip_reads_bytes) {
+        PPR_UNIT_TEST (unique_map_file_roundtrip_reads_bytes) {
             const auto path = writeTempMapFile(kTestBytes);
             const auto expected = mem::UniqueBuffer::mapFile(path);
             PPR_TEST_ASSERT(expected.has_value());
@@ -573,7 +578,7 @@ namespace pP::tests::detail {
             removeTempMapFile(path);
         };
 
-        PPR_UNIT_TEST(shared_map_file_roundtrip_reads_bytes) {
+        PPR_UNIT_TEST (shared_map_file_roundtrip_reads_bytes) {
             const auto path = writeTempMapFile(kTestBytes);
 
             const auto expected = mem::SharedBuffer::mapFile(path);
@@ -590,21 +595,21 @@ namespace pP::tests::detail {
             removeTempMapFile(path);
         };
 
-        PPR_UNIT_TEST(unique_bestfit_clone_nonempty) {
-            const mem::UniqueBuffer cloned =
-                    mem::UniqueBuffer::clone(mem::SharedBufferView{std::span<const std::byte>{kTestBytes}});
+        PPR_UNIT_TEST (unique_bestfit_clone_nonempty) {
+            const mem::UniqueBuffer cloned = mem::UniqueBuffer::clone(
+                mem::SharedBufferView{std::span<const std::byte>{kTestBytes}});
             PPR_TEST_ASSERT(cloned.isValid());
             PPR_TEST_ASSERT(std::ranges::equal(cloned.getBufferData(), std::span<const std::byte>{kTestBytes}));
         };
 
-        PPR_UNIT_TEST(unique_scratch_view_nonempty) {
-            const mem::UniqueBuffer cloned =
-                    mem::UniqueBuffer::scratch(mem::SharedBufferView{std::span<const std::byte>{kTestBytes}});
+        PPR_UNIT_TEST (unique_scratch_view_nonempty) {
+            const mem::UniqueBuffer cloned = mem::UniqueBuffer::scratch(
+                mem::SharedBufferView{std::span<const std::byte>{kTestBytes}});
             PPR_TEST_ASSERT(cloned.isValid());
             PPR_TEST_ASSERT(std::ranges::equal(cloned.getBufferData(), std::span<const std::byte>{kTestBytes}));
         };
 
-        PPR_UNIT_TEST(unique_make_owned_immutable_clone) {
+        PPR_UNIT_TEST (unique_make_owned_immutable_clone) {
             mem::UniqueBuffer immutable = makeImmutableUnique(kTestBytes);
             PPR_TEST_ASSERT(immutable.isImmutable());
             PPR_TEST_ASSERT(not immutable.isOwned());
@@ -613,7 +618,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::ranges::equal(owned.getBufferData(), std::span<const std::byte>{kTestBytes}));
         };
 
-        PPR_UNIT_TEST(shared_make_owned_unowned_clone) {
+        PPR_UNIT_TEST (shared_make_owned_unowned_clone) {
             mem::UniqueBuffer immutable_unique = makeImmutableUnique(kTestBytes);
             mem::SharedBuffer unowned = toShared(immutable_unique);
             PPR_TEST_ASSERT(unowned.isValid());
@@ -624,7 +629,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::ranges::equal(owned.getBufferData(), std::span<const std::byte>{kTestBytes}));
         };
 
-        PPR_UNIT_TEST(shared_subspan_out_of_range_throws, UnitTest::expect_fail) {
+        PPR_UNIT_TEST (shared_subspan_out_of_range_throws, UnitTest::expect_fail) {
             mem::UniqueBuffer unique = makeUnique(4u);
             const mem::SharedBuffer base = toShared(unique);
             (void) base.subspan(99u);
@@ -634,13 +639,13 @@ namespace pP::tests::detail {
         // WeakSharedBuffer
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST(weak_default_pin_is_invalid) {
+        PPR_UNIT_TEST (weak_default_pin_is_invalid) {
             const mem::WeakSharedBuffer empty{};
             const mem::SharedBuffer pinned = empty.pin();
             PPR_TEST_ASSERT(not pinned.isValid());
         };
 
-        PPR_UNIT_TEST(weak_pin_shares_parent_data) {
+        PPR_UNIT_TEST (weak_pin_shares_parent_data) {
             mem::UniqueBuffer unique = makeUnique(4u);
             writeBytes(unique, kTestBytes);
             mem::SharedBuffer shared = toShared(unique);
@@ -652,7 +657,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pinned.getBufferData().data() == shared.getBufferData().data());
         };
 
-        PPR_UNIT_TEST(weak_assign_and_reset) {
+        PPR_UNIT_TEST (weak_assign_and_reset) {
             mem::UniqueBuffer unique = makeUnique(2u);
             mem::SharedBuffer shared = toShared(unique);
 
@@ -665,7 +670,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(shared.isValid());
         };
 
-        PPR_UNIT_TEST(weak_parent_drop_invalidates_pin) {
+        PPR_UNIT_TEST (weak_parent_drop_invalidates_pin) {
             const mem::WeakSharedBuffer weak = [] {
                 mem::UniqueBuffer unique = makeUnique(2u);
                 mem::SharedBuffer shared = toShared(unique);
@@ -674,7 +679,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not weak.pin().isValid());
         };
 
-        PPR_UNIT_TEST(weak_move_and_swap) {
+        PPR_UNIT_TEST (weak_move_and_swap) {
             mem::UniqueBuffer unique = makeUnique(2u);
             mem::SharedBuffer shared = toShared(unique);
 
@@ -689,7 +694,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(other.pin() == shared);
         };
 
-        PPR_UNIT_TEST(weak_subspan_keeps_slice_alive) {
+        PPR_UNIT_TEST (weak_subspan_keeps_slice_alive) {
             mem::WeakSharedBuffer weak{};
             {
                 mem::UniqueBuffer unique = makeUnique(4u);

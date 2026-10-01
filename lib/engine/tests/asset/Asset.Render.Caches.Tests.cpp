@@ -80,11 +80,12 @@ namespace pP::tests::detail {
             picture.m_width = 2u;
             picture.m_height = 2u;
             picture.m_storage = frozen;
-            picture.m_subresources.push_back(image::ImageSubresource{
-                .m_view = frozen.subspan(0u, 16u),
-                .m_row_pitch = 8u,
-                .m_slice_pitch = 16u,
-            });
+            picture.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = frozen.subspan(0u, 16u),
+                    .m_row_pitch = 8u,
+                    .m_slice_pitch = 16u,
+                });
             return picture;
         }
 
@@ -108,11 +109,14 @@ namespace pP::tests::detail {
             for (const u32 index: {0u, 1u, 2u, 0u, 2u, 3u}) {
                 mesh_asset.m_indices.push_back(index);
             }
-            mesh_asset.m_primitives.push_back(mesh::MeshPrimitiveRange{
-                .m_start = 0u, .m_count = 6u, .m_base = 0, .m_material = mesh::MaterialAssetId{0u}
-            });
-            mesh_asset.m_flags = mesh::EMeshAttribute::position | mesh::EMeshAttribute::normal |
-                                 mesh::EMeshAttribute::texcoord | mesh::EMeshAttribute::tangent | mesh::EMeshAttribute::color;
+            mesh_asset.m_primitives.push_back(
+                mesh::MeshPrimitiveRange{
+                    .m_start = 0u, .m_count = 6u, .m_base = 0, .m_material = mesh::MaterialAssetId{0u}});
+            mesh_asset.m_flags = mesh::EMeshAttribute::position |
+                                 mesh::EMeshAttribute::normal |
+                                 mesh::EMeshAttribute::texcoord |
+                                 mesh::EMeshAttribute::tangent |
+                                 mesh::EMeshAttribute::color;
 
             mesh::MaterialAsset material{};
             material.m_base_color_map.m_image = mesh::ImageAssetId{0u};
@@ -135,11 +139,12 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const mesh::StaticMeshVertex quad[] = {
-                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)
-            };
+                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)};
             const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
             const Expected<TriangleBagHandle> bag0 = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag0.has_value());
@@ -157,8 +162,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag1)->m_range.m_vb_offset == 4u);
 
             PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(TriangleBagHandle{}).has_value());
-            PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(TriangleBagHandle{}).error() ==
-                            std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.bagCache().resolveForDraw(TriangleBagHandle{}).error() ==
+                std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(not pass.bagCache().release(*bag0));
             PPR_TEST_ASSERT(pass.bagCache().release(*bag0) == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(not pass.bagCache().resolveForDraw(*bag0).has_value());
@@ -187,8 +193,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(*pass.textureCache().residentIndex(*tex2) >= 1u);
             const TextureHandle invalid_tex{};
             const TextureHandle resolved_slots[] = {*tex2, invalid_tex, invalid_tex, invalid_tex};
-            const Expected<MaterialHandle> mat0 =
-                pass.packMaterial(mesh::MaterialAsset{}, resolved_slots);
+            const Expected<MaterialHandle> mat0 = pass.packMaterial(mesh::MaterialAsset{}, resolved_slots);
             PPR_TEST_ASSERT(mat0.has_value());
             const Expected<u32> slot0 = pass.materialCache().materialIndex(*mat0);
             PPR_TEST_ASSERT(slot0.has_value());
@@ -196,17 +201,21 @@ namespace pP::tests::detail {
 
             mesh::MaterialAsset blend{};
             blend.m_alpha_mode = mesh::EAlphaMode::blend;
-            PPR_TEST_ASSERT(pass.packMaterial(blend, resolved_slots).error() ==
-                            std::make_error_code(std::errc::function_not_supported));
+            PPR_TEST_ASSERT(
+                pass.packMaterial(blend, resolved_slots).error() ==
+                std::make_error_code(std::errc::function_not_supported));
             const TextureHandle short_slots[] = {*tex2, invalid_tex, invalid_tex};
-            PPR_TEST_ASSERT(pass.packMaterial(mesh::MaterialAsset{}, short_slots).error() ==
-                            std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.packMaterial(mesh::MaterialAsset{}, short_slots).error() ==
+                std::make_error_code(std::errc::invalid_argument));
 
             PPR_TEST_ASSERT(not pass.submitInstance(*bag1, *mat0, float4x4::identity()));
-            PPR_TEST_ASSERT(pass.submitInstance(TriangleBagHandle{}, *mat0, float4x4::identity()) ==
-                            std::make_error_code(std::errc::invalid_argument));
-            PPR_TEST_ASSERT(pass.submitInstance(*bag1, MaterialHandle{}, float4x4::identity()) ==
-                            std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.submitInstance(TriangleBagHandle{}, *mat0, float4x4::identity()) ==
+                std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.submitInstance(*bag1, MaterialHandle{}, float4x4::identity()) ==
+                std::make_error_code(std::errc::invalid_argument));
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.textureCache().release(*tex2));
             PPR_TEST_ASSERT(not pass.materialCache().release(*mat0));
@@ -228,7 +237,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             PPR_TEST_ASSERT(pass.bagCache().vertexUsed() == 0u);
             PPR_TEST_ASSERT(pass.bagCache().vertexCapacity() == 0u);
@@ -243,8 +254,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.materialCache().entryCount() == 0u);
 
             const mesh::StaticMeshVertex quad[] = {
-                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)
-            };
+                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)};
             const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
             const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag.has_value());
@@ -271,7 +281,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const std::error_code kNoSpace = std::make_error_code(std::errc::no_buffer_space);
             const u32 small_idx[] = {0u, 1u, 2u};
@@ -287,8 +299,8 @@ namespace pP::tests::detail {
             // Small verts with index bytes past the 1 MiB bucket fail closed.
             const mesh::StaticMeshVertex one = quadVert(0.0f, 0.0f);
             const std::vector<u32> many_idx(kTriangleBagIndexCapacity / sizeof(u32) + 16u, 0u);
-            const Expected<TriangleBagHandle> idx_overflow =
-                pass.uploadMesh(std::span<const mesh::StaticMeshVertex>{&one, 1u}, many_idx);
+            const Expected<TriangleBagHandle> idx_overflow = pass.uploadMesh(
+                std::span<const mesh::StaticMeshVertex>{&one, 1u}, many_idx);
             PPR_TEST_ASSERT(not idx_overflow.has_value());
             PPR_TEST_ASSERT(idx_overflow.error() == kNoSpace);
             PPR_TEST_ASSERT(pass.bagCache().rangeCount() == 0u);
@@ -330,12 +342,13 @@ namespace pP::tests::detail {
             fallback_desc.defaultState = rhi::ResourceState::ShaderResource;
             fallback_desc.label = "overflow test fallback";
             rhi::ComPtr<rhi::ITexture> fallback_tex{};
-            PPR_TEST_ASSERT(not make_error_code(device.createTexture(fallback_desc, &fallback_init, fallback_tex.writeRef())));
+            PPR_TEST_ASSERT(
+                not make_error_code(device.createTexture(fallback_desc, &fallback_init, fallback_tex.writeRef())));
             rhi::ComPtr<rhi::ITextureView> fallback_view{};
             PPR_TEST_ASSERT(not make_error_code(fallback_tex->getDefaultView(fallback_view.writeRef())));
             rhi::DescriptorHandle fallback_dh{};
-            PPR_TEST_ASSERT(
-                not make_error_code(fallback_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &fallback_dh)));
+            PPR_TEST_ASSERT(not make_error_code(
+                fallback_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &fallback_dh)));
 
             BindlessTextureCache small{};
             PPR_TEST_ASSERT(not small.initialize(device, 3u, fallback_dh));
@@ -372,11 +385,12 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const mesh::StaticMeshVertex quad[] = {
-                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)
-            };
+                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)};
             const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
             const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, quad_idx);
             PPR_TEST_ASSERT(bag.has_value());
@@ -436,7 +450,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<SyntheticScene> scene_a = singleQuadScene_(200u, 30u, 30u);
             PPR_TEST_ASSERT(scene_a.has_value());
@@ -482,7 +498,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<SyntheticScene> scene_a = singleQuadScene_(90u, 90u, 200u);
             PPR_TEST_ASSERT(scene_a.has_value());
@@ -522,7 +540,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const std::error_code kInvalid = std::make_error_code(std::errc::invalid_argument);
             PPR_TEST_ASSERT(pass.releaseScene(TrianglePass::UploadedScene{}) == kInvalid);
@@ -559,7 +579,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             struct Stride63 {
                 std::array<u8, 63> m_data{};
@@ -613,7 +635,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<image::ImageAsset> red = solidImage_(200u, 30u, 30u);
             const Expected<image::ImageAsset> green = solidImage_(30u, 200u, 30u);
@@ -626,8 +650,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(tex_green.has_value());
             PPR_TEST_ASSERT(*tex_red != *tex_green);
             PPR_TEST_ASSERT(pass.textureCache().entryCount() == 2u);
-            PPR_TEST_ASSERT(*pass.textureCache().residentIndex(*tex_red) !=
-                            *pass.textureCache().residentIndex(*tex_green));
+            PPR_TEST_ASSERT(
+                *pass.textureCache().residentIndex(*tex_red) != *pass.textureCache().residentIndex(*tex_green));
 
             const Expected<TextureHandle> tex_red_again = pass.uploadTexture(*red);
             PPR_TEST_ASSERT(tex_red_again.has_value());
@@ -667,11 +691,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not fresh_bag.notifyDeviceLost());
             PPR_TEST_ASSERT(fresh_bag.residency() == CacheResidency::uninitialized);
             const mesh::StaticMeshVertex quad[] = {
-                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)
-            };
+                quadVert(-0.5f, -0.5f), quadVert(0.5f, -0.5f), quadVert(0.5f, 0.5f), quadVert(-0.5f, 0.5f)};
             const u32 quad_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
-            PPR_TEST_ASSERT(fresh_bag.upload(std::span<const mesh::StaticMeshVertex>{quad},
-                                std::span<const u32>{quad_idx}).error() == kNotConnected);
+            PPR_TEST_ASSERT(
+                fresh_bag.upload(std::span<const mesh::StaticMeshVertex>{quad}, std::span<const u32>{quad_idx})
+                    .error() == kNotConnected);
             PPR_TEST_ASSERT(not fresh_bag.shutdown());
 
             const auto rhi = SharedGpu::rhiService();
@@ -738,11 +762,14 @@ namespace pP::tests::detail {
             // Parked: pass-level uploads fail not_connected, cache-level GPU
             // ops fail no_such_device, GPU views drop to null.
             PPR_TEST_ASSERT(pass.uploadMesh(quad, quad_idx).error() == kNotConnected);
-            PPR_TEST_ASSERT(pass.bagCache().upload(
-                                std::span<const mesh::StaticMeshVertex>{quad}, std::span<const u32>{quad_idx}).error() == kNoDevice);
+            PPR_TEST_ASSERT(
+                pass.bagCache()
+                    .upload(std::span<const mesh::StaticMeshVertex>{quad}, std::span<const u32>{quad_idx})
+                    .error() == kNoDevice);
             PPR_TEST_ASSERT(pass.textureCache().upload(*picture).error() == kNoDevice);
-            PPR_TEST_ASSERT(pass.materialCache().pack(mesh::MaterialAsset{},
-                                {none_v, none_v, none_v, none_v}).error() == kNoDevice);
+            PPR_TEST_ASSERT(
+                pass.materialCache().pack(mesh::MaterialAsset{}, {none_v, none_v, none_v, none_v}).error() ==
+                kNoDevice);
             PPR_TEST_ASSERT(pass.bagCache().resolveForDraw(*bag0).error() == kNoDevice);
             PPR_TEST_ASSERT(pass.textureCache().residentIndex(*tex0).error() == kInvalid);
             PPR_TEST_ASSERT(not pass.textureCache().residentIndex(*tex0).has_value());
@@ -805,10 +832,11 @@ namespace pP::tests::detail {
 
             static void push_(const Log::Entry &entry) noexcept {
                 try {
-                    s_entries.push_back(Captured{
-                        entry.m_site.m_verbosity,
-                        std::string(entry.m_message),
-                    });
+                    s_entries.push_back(
+                        Captured{
+                            entry.m_site.m_verbosity,
+                            std::string(entry.m_message),
+                        });
                 } catch (...) {
                 }
             }
@@ -851,8 +879,8 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] Expected<image::ImageAsset> decodeBoxPng_() {
-            Expected<mem::SharedBuffer> mapped =
-                mem::SharedBuffer::mapFile(std::filesystem::current_path() / "meshes" / "textured_box.png");
+            Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(
+                std::filesystem::current_path() / "meshes" / "textured_box.png");
             if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
@@ -869,7 +897,9 @@ namespace pP::tests::detail {
             CaptureGuard capture{};
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{std::ignore = pass.shutdown(); };
+            PPR_DEFER {
+                std::ignore = pass.shutdown();
+            };
 
             const Expected<image::ImageAsset> decoded = decodeBoxPng_();
             PPR_TEST_ASSERT(decoded.has_value());
@@ -885,26 +915,26 @@ namespace pP::tests::detail {
             // release, not an eviction: nothing is evicted under the
             // single-load contract.
             const mesh::StaticMeshVertex bag_quad[] = {
-                {
-                    .m_position = {-0.5f, -0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
-                    .m_texcoord = {0.0f, 0.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
-                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
-                },
-                {
-                    .m_position = {0.5f, -0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
-                    .m_texcoord = {1.0f, 0.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
-                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
-                },
-                {
-                    .m_position = {0.5f, 0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
-                    .m_texcoord = {1.0f, 1.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
-                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
-                },
-                {
-                    .m_position = {-0.5f, 0.5f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f},
-                    .m_texcoord = {0.0f, 1.0f}, .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
-                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}
-                },
+                {.m_position = {-0.5f, -0.5f, 0.0f},
+                    .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {0.0f, 0.0f},
+                    .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}},
+                {.m_position = {0.5f, -0.5f, 0.0f},
+                    .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {1.0f, 0.0f},
+                    .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}},
+                {.m_position = {0.5f, 0.5f, 0.0f},
+                    .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {1.0f, 1.0f},
+                    .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}},
+                {.m_position = {-0.5f, 0.5f, 0.0f},
+                    .m_normal = {0.0f, 0.0f, 1.0f},
+                    .m_texcoord = {0.0f, 1.0f},
+                    .m_tangent = {1.0f, 0.0f, 0.0f, 1.0f},
+                    .m_color = {1.0f, 1.0f, 1.0f, 1.0f}},
             };
             const u32 bag_idx[] = {0u, 1u, 2u, 0u, 2u, 3u};
             const Expected<TriangleBagHandle> bag = pass.uploadMesh(bag_quad, bag_idx);

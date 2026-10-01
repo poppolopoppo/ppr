@@ -38,7 +38,7 @@ namespace pP::sim {
         }
 
         const ChunkPos chunk = chunkOf(pos);
-        const std::optional<Array<Cell> > &payload = m_payloads[chunkIndexOf(chunk)];
+        const std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(chunk)];
         if (not payload.has_value()) {
             return Cell{};
         }
@@ -47,10 +47,10 @@ namespace pP::sim {
         return (*payload)[local.m_y * kChunkEdge + local.m_x];
     }
 
-    std::optional<std::span<const Cell> > ChunkGrid::residentCells(const ChunkPos pos) const noexcept {
+    std::optional<std::span<const Cell>> ChunkGrid::residentCells(const ChunkPos pos) const noexcept {
         PPR_ASSERT(isInsideChunkGrid(pos));
 
-        const std::optional<Array<Cell> > &payload = m_payloads[chunkIndexOf(pos)];
+        const std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(pos)];
         if (not payload.has_value()) {
             return std::nullopt;
         }
@@ -104,17 +104,13 @@ namespace pP::sim {
     }
 
     u32 ChunkGrid::residentChunkCount() const noexcept {
-        return safe_narrowing(std::ranges::count_if(
-            m_payloads,
-            [](const std::optional<Array<Cell> > &payload) { return payload.has_value(); }
-        ));
+        return safe_narrowing(std::ranges::count_if(m_payloads, [](const std::optional<Array<Cell>> &payload) {
+            return payload.has_value();
+        }));
     }
 
     u32 ChunkGrid::dirtyChunkCount() const noexcept {
-        return safe_narrowing(std::ranges::count_if(
-            m_states,
-            [](const ChunkState &state) { return state.m_dirty; }
-        ));
+        return safe_narrowing(std::ranges::count_if(m_states, [](const ChunkState &state) { return state.m_dirty; }));
     }
 
     Array<ChunkPos> ChunkGrid::gatherDirty(const bool activeOnly) const {
@@ -126,8 +122,7 @@ namespace pP::sim {
                 continue;
             }
 
-            if (activeOnly and state.m_activity != EChunkActivity::active)
-            {
+            if (activeOnly and state.m_activity != EChunkActivity::active) {
                 continue;
             }
 
@@ -138,7 +133,7 @@ namespace pP::sim {
     }
 
     void ChunkGrid::materialize(const ChunkPos pos) {
-        std::optional<Array<Cell> > &payload = m_payloads[chunkIndexOf(pos)];
+        std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(pos)];
         if (payload.has_value()) {
             return;
         }

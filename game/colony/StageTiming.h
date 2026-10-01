@@ -57,10 +57,10 @@ namespace pP::colony {
     };
 
     struct StageTimings {
-        std::array<StageStat, (std::size_t)Stage::Count> m_stats{};
+        std::array<StageStat, (std::size_t) Stage::Count> m_stats{};
     };
 
-    [[nodiscard]] inline const char* stageName(Stage s) noexcept {
+    [[nodiscard]] inline const char *stageName(Stage s) noexcept {
         switch (s) {
             case Stage::Tool: return "Colony.Tool";
             case Stage::Build: return "Colony.Build";
@@ -86,14 +86,15 @@ namespace pP::colony {
 
     class StageTimer {
     public:
-        explicit StageTimer(StageTimings& t, Stage s) noexcept
-            : m_t(&t), m_s(s), m_t0(std::chrono::steady_clock::now()) {}
+        explicit StageTimer(StageTimings &t, Stage s) noexcept
+            : m_t(&t), m_s(s), m_t0(std::chrono::steady_clock::now()) {
+        }
 
         ~StageTimer() noexcept {
             const auto elapsed = std::chrono::steady_clock::now() - m_t0;
-            StageStat& stat = m_t->m_stats[(std::size_t)m_s];
-            const auto single =
-                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count());
+            StageStat &stat = m_t->m_stats[(std::size_t) m_s];
+            const auto single = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count());
             stat.m_microseconds += single;
             stat.m_calls += 1u;
             if (single > stat.m_max_us) {
@@ -101,13 +102,13 @@ namespace pP::colony {
             }
         }
 
-        StageTimer(const StageTimer&) = delete;
-        StageTimer& operator=(const StageTimer&) = delete;
-        StageTimer(StageTimer&&) = delete;
-        StageTimer& operator=(StageTimer&&) = delete;
+        StageTimer(const StageTimer &) = delete;
+        StageTimer &operator=(const StageTimer &) = delete;
+        StageTimer(StageTimer &&) = delete;
+        StageTimer &operator=(StageTimer &&) = delete;
 
     private:
-        StageTimings* m_t;
+        StageTimings *m_t;
         Stage m_s;
         std::chrono::steady_clock::time_point m_t0;
     };

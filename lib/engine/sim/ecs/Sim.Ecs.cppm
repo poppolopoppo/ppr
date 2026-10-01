@@ -25,8 +25,7 @@ export namespace pP::sim {
 
         constexpr Entity() noexcept = default;
 
-        constexpr Entity(const u32 index, const u32 generation) noexcept
-            : m_index(index), m_generation(generation) {
+        constexpr Entity(const u32 index, const u32 generation) noexcept : m_index(index), m_generation(generation) {
         }
 
         /// Generation 0 is never issued, so only the default handle is invalid.
@@ -34,10 +33,10 @@ export namespace pP::sim {
             return m_generation != 0u;
         }
 
-        [[nodiscard]] constexpr bool operator ==(const Entity &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator==(const Entity &other) const noexcept = default;
 
         /// Orders by slot first, then generation — consistent with `operator==`.
-        [[nodiscard]] constexpr std::strong_ordering operator <=>(const Entity &other) const noexcept {
+        [[nodiscard]] constexpr std::strong_ordering operator<=>(const Entity &other) const noexcept {
             if (const std::strong_ordering by_index = m_index <=> other.m_index;
                 by_index != std::strong_ordering::equal) {
                 return by_index;
@@ -92,7 +91,7 @@ export namespace pP::sim {
             return m_bits == 0u;
         }
 
-        [[nodiscard]] constexpr bool operator ==(const ComponentMask &other) const noexcept = default;
+        [[nodiscard]] constexpr bool operator==(const ComponentMask &other) const noexcept = default;
     };
 
     // ------------------------------------------------------------------
@@ -238,10 +237,12 @@ export namespace pP::sim {
         /// are refused at compile time (see `emplace`).
         template<typename T>
         [[nodiscard]] Expected<ComponentId> registerComponent() {
-            static_assert(std::is_trivially_copyable_v<T>,
+            static_assert(
+                std::is_trivially_copyable_v<T>,
                 "ECS components must be trivially copyable: columns raw-copy component bytes "
                 "and provide no fallback for non-trivially-copyable types");
-            static_assert(alignof(T) <= alignof(std::max_align_t),
+            static_assert(
+                alignof(T) <= alignof(std::max_align_t),
                 "ECS columns are std::byte-backed with fundamental alignment only: "
                 "over-aligned components are refused");
 
@@ -260,10 +261,12 @@ export namespace pP::sim {
         /// no fallback path.
         template<typename T>
         void emplace(Entity entity, T value) {
-            static_assert(std::is_trivially_copyable_v<T>,
+            static_assert(
+                std::is_trivially_copyable_v<T>,
                 "ECS components must be trivially copyable: columns raw-copy component bytes "
                 "and provide no fallback for non-trivially-copyable types");
-            static_assert(alignof(T) <= alignof(std::max_align_t),
+            static_assert(
+                alignof(T) <= alignof(std::max_align_t),
                 "ECS columns are std::byte-backed with fundamental alignment only: "
                 "over-aligned components are refused");
 
@@ -299,8 +302,8 @@ export namespace pP::sim {
             const u32 row = column.m_rows[entity.m_index];
             PPR_ASSERT(row != none_v and "a masked entity always has a row per held component");
 
-            return std::launder(reinterpret_cast<const T *>(
-                column.m_values.data() + static_cast<std::size_t>(row) * column.m_stride));
+            return std::launder(
+                reinterpret_cast<const T *>(column.m_values.data() + static_cast<std::size_t>(row) * column.m_stride));
         }
 
         /// Removes `entity`'s `T` component through a single-column
@@ -374,10 +377,10 @@ export namespace pP::sim {
     template<typename RegistryT, typename... Cs>
     class View {
         static_assert(sizeof...(Cs) > 0u, "a view needs at least one component type");
-        static_assert((std::is_trivially_copyable_v<Cs> and ...),
+        static_assert(
+            (std::is_trivially_copyable_v<Cs> and ...),
             "ECS components must be trivially copyable: views raw-read column bytes "
-            "and provide no fallback for non-trivially-copyable types"
-        );
+            "and provide no fallback for non-trivially-copyable types");
 
     public:
         /// The entity plus one reference per requested component, in
@@ -427,13 +430,12 @@ export namespace pP::sim {
                 return previous;
             }
 
-            [[nodiscard]] friend bool operator ==(const Iterator &lhs, const Iterator &rhs) noexcept {
+            [[nodiscard]] friend bool operator==(const Iterator &lhs, const Iterator &rhs) noexcept {
                 return lhs.m_view == rhs.m_view and lhs.m_index == rhs.m_index;
             }
 
         private:
-            Iterator(const View &view, const u32 index) noexcept
-                : m_view(std::addressof(view)), m_index(index) {
+            Iterator(const View &view, const u32 index) noexcept : m_view(std::addressof(view)), m_index(index) {
                 skipToMatch_();
             }
         };
@@ -495,8 +497,9 @@ export namespace pP::sim {
             PPR_ASSERT(row != none_v and "a masked entity always has a row per held component");
 
             using ComponentRef = std::conditional_t<std::is_const_v<RegistryT>, const ComponentT, ComponentT>;
-            return *std::launder(reinterpret_cast<ComponentRef *>(
-                column.m_values.data() + static_cast<std::size_t>(row) * column.m_stride));
+            return *std::launder(
+                reinterpret_cast<ComponentRef *>(
+                    column.m_values.data() + static_cast<std::size_t>(row) * column.m_stride));
         }
     };
 }

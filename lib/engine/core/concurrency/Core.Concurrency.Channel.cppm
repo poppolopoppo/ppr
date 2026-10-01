@@ -149,12 +149,12 @@ export namespace pP {
         };
 
     private:
-        [[nodiscard]] std::expected<Record, errc>
-        producerReserveAssumeNotClosed_(const std::size_t size_bytes, const EBackPressure policy) noexcept;
+        [[nodiscard]] std::expected<Record, errc> producerReserveAssumeNotClosed_(
+            const std::size_t size_bytes, const EBackPressure policy) noexcept;
 
     public:
-        [[nodiscard]] std::expected<Record, errc>
-        producerReserve(const std::size_t size_bytes, const EBackPressure policy = wait_if_full) noexcept;
+        [[nodiscard]] std::expected<Record, errc> producerReserve(
+            const std::size_t size_bytes, const EBackPressure policy = wait_if_full) noexcept;
 
         void producerSubmit(RecordHeader &written) noexcept;
 
@@ -165,8 +165,8 @@ export namespace pP {
             peek_without_blocking,
         };
 
-        [[nodiscard]] std::expected<Record, errc>
-        consumerAcquire(const EPolling policy = block_until_available) noexcept;
+        [[nodiscard]] std::expected<Record, errc> consumerAcquire(
+            const EPolling policy = block_until_available) noexcept;
 
         void consumerRelease(const RecordHeader &read) noexcept;
 
@@ -193,7 +193,6 @@ export namespace pP {
     [[nodiscard]] std::error_code make_error_code(RawChannel::errc error) noexcept;
 
     using SharedRawChannelPtr = std::shared_ptr<RawChannel>;
-
 
 
     // ------------------------------------------------------------------
@@ -224,8 +223,7 @@ export namespace pP {
         using enum RawChannel::errc;
         using enum RawChannel::EPolling;
 
-        explicit Channel(SharedRawChannelPtr &&chan) noexcept
-            : m_chan{std::move(chan)} {
+        explicit Channel(SharedRawChannelPtr &&chan) noexcept : m_chan{std::move(chan)} {
             PPR_ASSERT(m_chan != nullptr);
         }
 
@@ -239,14 +237,12 @@ export namespace pP {
             PPR_ASSERT(not err or err == make_error_code(error_closed));
 
 #if PPR_ENABLE_ASSERTIONS
-            if constexpr (not std::is_trivially_destructible_v<T>
-                          && std::is_nothrow_move_constructible_v<T>) {
+            if constexpr (not std::is_trivially_destructible_v<T> && std::is_nothrow_move_constructible_v<T>) {
                 std::size_t unread = 0;
                 while (peek().has_value()) {
                     ++unread;
                 }
-                PPR_ASSERT(unread == 0
-                    && "Channel destroyed with unread non-trivially-destructible messages");
+                PPR_ASSERT(unread == 0 && "Channel destroyed with unread non-trivially-destructible messages");
             }
 #endif
         }
@@ -270,13 +266,14 @@ export namespace pP {
         [[nodiscard]] ChannelWriter<T> writer() noexcept;
 
         template<typename LikeT>
-        [[nodiscard]] std::error_code
-        send(LikeT &&value, const EBackPressure policy = drop_if_full) noexcept
-            requires std::conjunction_v<std::is_nothrow_constructible<T, LikeT &&>, std::is_nothrow_move_constructible<T> > {
+        [[nodiscard]] std::error_code send(LikeT &&value, const EBackPressure policy = drop_if_full) noexcept
+            requires std::conjunction_v<
+                std::is_nothrow_constructible<T, LikeT &&>, std::is_nothrow_move_constructible<T>>
+        {
             auto hdr = m_chan->producerReserve(sizeof(T), policy);
 
             if (hdr.has_value()) [[likely]] {
-                new(hdr->data()) T(std::forward<LikeT>(value));
+                new (hdr->data()) T(std::forward<LikeT>(value));
                 m_chan->producerSubmit(*hdr);
                 return {};
             }
@@ -285,12 +282,12 @@ export namespace pP {
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::error_code
-        emplace(const EBackPressure policy, ArgsT &&... args) noexcept
-            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+        [[nodiscard]] std::error_code emplace(const EBackPressure policy, ArgsT &&...args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...>
+        {
             auto hdr = m_chan->producerReserve(sizeof(T), policy);
             if (hdr.has_value()) [[likely]] {
-                new(hdr->data()) T(std::forward<ArgsT>(args)...);
+                new (hdr->data()) T(std::forward<ArgsT>(args)...);
                 m_chan->producerSubmit(*hdr);
                 return {};
             }
@@ -298,9 +295,9 @@ export namespace pP {
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::error_code
-        emplace(ArgsT &&... args) noexcept
-            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+        [[nodiscard]] std::error_code emplace(ArgsT &&...args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...>
+        {
             return emplace(wait_if_full, std::forward<ArgsT>(args)...);
         }
 
@@ -310,8 +307,7 @@ export namespace pP {
             std::optional<std::error_code> m_error{std::nullopt};
 
         public:
-            BasicSendResult(ChannelT &chan, const std::error_code &result) noexcept
-                : m_chan{chan} {
+            BasicSendResult(ChannelT &chan, const std::error_code &result) noexcept : m_chan{chan} {
                 if (result) {
                     m_error = result;
                 }
@@ -377,7 +373,8 @@ export namespace pP {
             }
 
             OutputIterator &operator=(const T &value) noexcept
-                requires std::is_nothrow_copy_constructible_v<T> {
+                requires std::is_nothrow_copy_constructible_v<T>
+            {
                 if (const std::error_code status = m_writer.send(value, m_policy); status) [[unlikely]] {
                     m_error = status;
                 }
@@ -385,7 +382,8 @@ export namespace pP {
             }
 
             OutputIterator &operator=(T &&value) noexcept
-                requires std::is_nothrow_move_constructible_v<T> {
+                requires std::is_nothrow_move_constructible_v<T>
+            {
                 if (const std::error_code status = m_writer.send(value, m_policy); status) [[unlikely]] {
                     m_error = status;
                 }
@@ -405,9 +403,9 @@ export namespace pP {
             return OutputIterator{*this, policy};
         }
 
-        [[nodiscard]] std::expected<T, EError>
-        receive(const EPolling policy = block_until_available) noexcept
-            requires std::is_nothrow_move_constructible_v<T> {
+        [[nodiscard]] std::expected<T, EError> receive(const EPolling policy = block_until_available) noexcept
+            requires std::is_nothrow_move_constructible_v<T>
+        {
             auto hdr = m_chan->consumerAcquire(policy);
 
             if (hdr.has_value()) [[likely]] {
@@ -424,7 +422,8 @@ export namespace pP {
         }
 
         [[nodiscard]] std::optional<T> peek() noexcept
-            requires std::is_nothrow_move_constructible_v<T> {
+            requires std::is_nothrow_move_constructible_v<T>
+        {
             auto it = receive(peek_without_blocking);
             if (it.has_value()) [[likely]] {
                 return std::move(*it);
@@ -533,24 +532,22 @@ export namespace pP {
         using enum RawChannel::EPolling;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        ChannelReader(const Channel<T> &channel) noexcept
-            : m_channel{channel} {
+        ChannelReader(const Channel<T> &channel) noexcept : m_channel{channel} {
         }
 
-        [[nodiscard]] std::expected<T, EError>
-        receive(const EPolling policy = block_until_available) noexcept
-            requires std::is_nothrow_move_constructible_v<T> {
+        [[nodiscard]] std::expected<T, EError> receive(const EPolling policy = block_until_available) noexcept
+            requires std::is_nothrow_move_constructible_v<T>
+        {
             return m_channel.receive(policy);
         }
 
-        [[nodiscard]] std::optional<T>
-        peek() noexcept
-            requires std::is_nothrow_move_constructible_v<T> {
+        [[nodiscard]] std::optional<T> peek() noexcept
+            requires std::is_nothrow_move_constructible_v<T>
+        {
             return m_channel.peek(peek_without_blocking);
         }
 
-        [[nodiscard]] friend std::error_code
-        operator>>(ChannelReader &reader, T &dst) noexcept {
+        [[nodiscard]] friend std::error_code operator>>(ChannelReader &reader, T &dst) noexcept {
             return reader.m_channel >> dst;
         }
 
@@ -578,8 +575,7 @@ export namespace pP {
         using enum RawChannel::errc;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        ChannelWriter(const Channel<T> &channel) noexcept
-            : m_channel{channel} {
+        ChannelWriter(const Channel<T> &channel) noexcept : m_channel{channel} {
         }
 
         [[nodiscard]] std::error_code flush() noexcept {
@@ -591,16 +587,16 @@ export namespace pP {
         }
 
         template<typename LikeT>
-        [[nodiscard]] std::error_code
-        send(LikeT &&value) noexcept
-            requires std::is_nothrow_constructible_v<T, LikeT &&> {
+        [[nodiscard]] std::error_code send(LikeT &&value) noexcept
+            requires std::is_nothrow_constructible_v<T, LikeT &&>
+        {
             return m_channel.send(std::forward<LikeT>(value));
         }
 
         template<typename... ArgsT>
-        [[nodiscard]] std::error_code
-        emplace(ArgsT &&... args) noexcept
-            requires std::is_nothrow_constructible_v<T, ArgsT &&...> {
+        [[nodiscard]] std::error_code emplace(ArgsT &&...args) noexcept
+            requires std::is_nothrow_constructible_v<T, ArgsT &&...>
+        {
             return m_channel.emplace(std::forward<ArgsT>(args)...);
         }
 

@@ -16,10 +16,7 @@ namespace pP {
             buffer, sizeof(buffer) - 1,
             "{}({}): {} assert failed: \"{}\"\n"
             "\tin function: {}\n",
-            condition.m_site.file_name(),
-            condition.m_site.line(),
-            typeName(condition.m_type),
-            condition.m_message,
+            condition.m_site.file_name(), condition.m_site.line(), typeName(condition.m_type), condition.m_message,
             condition.m_site.function_name());
         *out = zero_v;
 
@@ -53,12 +50,7 @@ namespace pP {
     }
 
     void Assertion::onFailure(const EType type, const char *message, const std::source_location &site) {
-        Handler::get().onAssertFailure(
-            Assertion{
-                .m_site = site,
-                .m_message = message,
-                .m_type = type
-            });
+        Handler::get().onAssertFailure(Assertion{.m_site = site, .m_message = message, .m_type = type});
     }
 }
 #endif

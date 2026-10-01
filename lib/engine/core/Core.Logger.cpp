@@ -16,21 +16,14 @@ namespace pP {
         template<details::TChar CharT>
         [[nodiscard]] constexpr std::basic_string_view<CharT> toString_(const Log::ELevel level) noexcept {
             switch (level) {
-                    using enum Log::ELevel;
-                case debug:
-                    return PPR_LITERAL_FOR(CharT, "👾");
-                case verbose:
-                    return PPR_LITERAL_FOR(CharT, "🗣️");
-                case info:
-                    return PPR_LITERAL_FOR(CharT, "🔹");
-                case emphasis:
-                    return PPR_LITERAL_FOR(CharT, "🟢");
-                case warning:
-                    return PPR_LITERAL_FOR(CharT, "⚠️");
-                case error:
-                    return PPR_LITERAL_FOR(CharT, "❌");
-                case fatal:
-                    return PPR_LITERAL_FOR(CharT, "💀");
+                using enum Log::ELevel;
+                case debug: return PPR_LITERAL_FOR(CharT, "👾");
+                case verbose: return PPR_LITERAL_FOR(CharT, "🗣️");
+                case info: return PPR_LITERAL_FOR(CharT, "🔹");
+                case emphasis: return PPR_LITERAL_FOR(CharT, "🟢");
+                case warning: return PPR_LITERAL_FOR(CharT, "⚠️");
+                case error: return PPR_LITERAL_FOR(CharT, "❌");
+                case fatal: return PPR_LITERAL_FOR(CharT, "💀");
             }
             std::unreachable();
         }
@@ -40,11 +33,13 @@ namespace pP {
         return toString_<char>(level);
     }
 
-    [[nodiscard]] std::basic_string_view<char8_t> Log::toString(std::type_identity_t<char8_t>, const ELevel level) noexcept {
+    [[nodiscard]] std::basic_string_view<char8_t> Log::toString(
+        std::type_identity_t<char8_t>, const ELevel level) noexcept {
         return toString_<char8_t>(level);
     }
 
-    [[nodiscard]] std::basic_string_view<wchar_t> Log::toString(std::type_identity_t<wchar_t>, const ELevel level) noexcept {
+    [[nodiscard]] std::basic_string_view<wchar_t> Log::toString(
+        std::type_identity_t<wchar_t>, const ELevel level) noexcept {
         return toString_<wchar_t>(level);
     }
 
@@ -88,10 +83,8 @@ namespace pP {
     };
 
     Log::Handler::Handler() noexcept
-        : m_messages(buffer_size_v),
-          m_writer_policy{std23::nontype<&Handler::defaultWriter_>, this},
-          m_background_worker(&Handler::backgroundWorkerLoop_, std::ref(*this)),
-          m_started_at(time::now()) {
+        : m_messages(buffer_size_v), m_writer_policy{std23::nontype<&Handler::defaultWriter_>, this},
+          m_background_worker(&Handler::backgroundWorkerLoop_, std::ref(*this)), m_started_at(time::now()) {
     }
 
     Log::Handler::~Handler() noexcept {
@@ -122,7 +115,7 @@ namespace pP {
         }
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
-        new(slot) Entry{
+        new (slot) Entry{
             .m_message{},
             .m_params{},
             .m_site{g_flush_emitter},
@@ -151,7 +144,7 @@ namespace pP {
         }
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
-        auto *const entry = new(slot) Entry{
+        auto *const entry = new (slot) Entry{
             .m_message{message.view()},
             .m_params{},
             .m_site{emitter},
@@ -165,11 +158,13 @@ namespace pP {
         m_messages.producerSubmit(*hdr);
     }
 
-    void Log::Handler::logRaw(const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
+    void Log::Handler::logRaw(
+        const Emitter &emitter, const std::string_view copy_message, const opaque::Dict params) noexcept {
         const TimePoint timestamp = time::now();
 
         const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
-        const std::size_t message_size_bytes = alignForward((copy_message.size() + 1u/* '\0' */) * sizeof(copy_message[0]), max_align_v);
+        const std::size_t message_size_bytes = alignForward(
+            (copy_message.size() + 1u /* '\0' */) * sizeof(copy_message[0]), max_align_v);
         const std::size_t entry_size_bytes = sizeof(Entry) + message_size_bytes + block_size_bytes;
 
         const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
@@ -183,7 +178,7 @@ namespace pP {
         std::copy(copy_message.begin(), copy_message.end(), embedded_message);
         embedded_message[copy_message.size()] = '\0'; // make sure all messages are null terminated
 
-        auto *const entry = new(slot) Entry{
+        auto *const entry = new (slot) Entry{
             .m_message{embedded_message, copy_message.size()},
             .m_params{},
             .m_site{emitter},
@@ -199,7 +194,9 @@ namespace pP {
 
     void Log::Handler::defaultWriter_(const Entry &entry) const noexcept {
         using namespace std::chrono;
-        const auto elapsed_seconds = static_cast<double>(duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count()) / 1e9;
+        const auto elapsed_seconds = static_cast<double>(
+                                         duration_cast<nanoseconds>(entry.m_timestamp - m_started_at).count()) /
+                                     1e9;
 
 #if 0
         hal::outputDebugFmt("{} [{:08.3f}][{}][{}] -- {} {}\n",
@@ -208,17 +205,15 @@ namespace pP {
             entry.m_message, entry.m_params);
 #else
         if (not entry.m_message.empty()) {
-            std::println(std::cout, "{:08.3f} {} {} [{:16}] -- {} {}",
-                elapsed_seconds, entry.m_thread_id,
-                toString_<char>(entry.m_site.m_verbosity),
-                entry.m_site.m_category.m_name.view(),
-                entry.m_message, entry.m_params);
+            std::println(
+                std::cout, "{:08.3f} {} {} [{:16}] -- {} {}", elapsed_seconds, entry.m_thread_id,
+                toString_<char>(entry.m_site.m_verbosity), entry.m_site.m_category.m_name.view(), entry.m_message,
+                entry.m_params);
 
             if (entry.m_site.m_verbosity >= ELevel::error) {
-                std::println(std::cout, "    \u2514\u2500 {}({}): {}",
-                    entry.m_site.m_location.file_name(),
-                    entry.m_site.m_location.line(),
-                    entry.m_site.m_location.function_name());
+                std::println(
+                    std::cout, "    \u2514\u2500 {}({}): {}", entry.m_site.m_location.file_name(),
+                    entry.m_site.m_location.line(), entry.m_site.m_location.function_name());
             }
         }
 
@@ -257,12 +252,10 @@ namespace pP {
     static std::atomic g_log_minimum_verbose_level{Log::ELevel::debug};
 
     bool Log::Emitter::shouldBreakDebugger() const noexcept {
-        if (m_verbosity >= ELevel::warning &&
-            m_category.m_flags & Category::break_on_warning) [[unlikely]] {
+        if (m_verbosity >= ELevel::warning && m_category.m_flags & Category::break_on_warning) [[unlikely]] {
             return true;
         }
-        if (m_verbosity >= ELevel::error &&
-            m_category.m_flags & Category::break_on_error) [[unlikely]] {
+        if (m_verbosity >= ELevel::error && m_category.m_flags & Category::break_on_error) [[unlikely]] {
             return true;
         }
         return false;

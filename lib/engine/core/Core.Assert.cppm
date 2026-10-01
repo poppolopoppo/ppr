@@ -51,11 +51,11 @@ export namespace pP {
 
             Handler(const Handler &) = delete;
 
-            Handler &operator =(const Handler &) = delete;
+            Handler &operator=(const Handler &) = delete;
 
             Handler(Handler &&) = delete;
 
-            Handler &operator =(Handler &&) = delete;
+            Handler &operator=(Handler &&) = delete;
 
             [[nodiscard]] static Handler &get() noexcept;
 
@@ -112,7 +112,7 @@ export namespace pP {
         requires std::is_base_of_v<FromT, ToT>
     [[nodiscard]] ToT &checked_cast(FromT &value) noexcept {
 #if PPR_ENABLE_ASSERTIONS
-        PPR_ASSERT(dynamic_cast<ToT*>(std::addressof(value)) != nullptr);
+        PPR_ASSERT(dynamic_cast<ToT *>(std::addressof(value)) != nullptr);
 #endif
         return static_cast<ToT &>(value);
     }
@@ -121,8 +121,7 @@ export namespace pP {
     struct safe_narrowing {
         IntT m_value{};
 
-        PPR_FORCE_INLINE explicit constexpr safe_narrowing(const IntT value) noexcept
-            : m_value(value) {
+        PPR_FORCE_INLINE explicit constexpr safe_narrowing(const IntT value) noexcept : m_value(value) {
         }
 
         // ReSharper disable once CppNonExplicitConversionOperator

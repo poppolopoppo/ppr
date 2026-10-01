@@ -12,13 +12,12 @@ namespace pP::tests::detail {
     public:
         PlayerServiceTestApp()
             : Application(
-                ApplicationDomain{
-                    .m_needs_presence = true,
-                    .m_needs_rendering = false,
-                    .m_needs_user_interface = false,
-                },
-                "PlayerServiceTest",
-                std::span<const char *const>{}) {
+                  ApplicationDomain{
+                      .m_needs_presence = true,
+                      .m_needs_rendering = false,
+                      .m_needs_user_interface = false,
+                  },
+                  "PlayerServiceTest", std::span<const char *const>{}) {
         }
 
         [[nodiscard]] std::error_code boot() {
@@ -33,7 +32,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (player_service_keyboard_and_gamepad) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
-        PPR_DEFER{PPR_TEST_ASSERT(test_app.teardown() == default_value_v); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
+        };
         const safe_ptr<IPlayerService> input = test_app.getServices().get<IPlayerService>();
         PPR_TEST_ASSERT(input.get() != nullptr);
 
@@ -58,7 +59,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (gamepad_player_creation) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
-        PPR_DEFER{PPR_TEST_ASSERT(test_app.teardown() == default_value_v); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
+        };
         const safe_ptr<IPlayerService> input = test_app.getServices().get<IPlayerService>();
         PPR_TEST_ASSERT(input.get() != nullptr);
 
@@ -85,7 +88,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (remove_nonexistent_player_returns_false) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
-        PPR_DEFER{PPR_TEST_ASSERT(test_app.teardown() == default_value_v); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
+        };
         const safe_ptr<IPlayerService> input = test_app.getServices().get<IPlayerService>();
         const PlayerId fake_id{max_v};
         PPR_TEST_ASSERT(input->removePlayer(fake_id) != default_value_v);
@@ -94,7 +99,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (get_or_create_keyboard_is_idempotent) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
-        PPR_DEFER{PPR_TEST_ASSERT(test_app.teardown() == default_value_v); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
+        };
         const safe_ptr<IPlayerService> input = test_app.getServices().get<IPlayerService>();
 
         auto first_result = input->getOrCreateKeyboardPlayer();
@@ -117,7 +124,9 @@ namespace pP::tests::detail {
     PPR_UNIT_TEST (player_service_callbacks) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
-        PPR_DEFER{PPR_TEST_ASSERT(test_app.teardown() == default_value_v); };
+        PPR_DEFER {
+            PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
+        };
         const safe_ptr<IPlayerService> input = test_app.getServices().get<IPlayerService>();
 
         u32 added_count = 0u;

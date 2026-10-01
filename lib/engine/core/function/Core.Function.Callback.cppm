@@ -20,7 +20,7 @@ export namespace pP {
         class DelegateImpl;
 
         template<TFunction FunctionT, typename... ArgsT>
-        class DelegateImpl<FunctionT, std::tuple<ArgsT...> > {
+        class DelegateImpl<FunctionT, std::tuple<ArgsT...>> {
         public:
             using FunctionTraits = FunctionTraits<FunctionT>;
             using Return = typename FunctionTraits::return_type;
@@ -30,8 +30,7 @@ export namespace pP {
 
             DelegateImpl() noexcept = default;
 
-            explicit DelegateImpl(Subscriber subscriber) noexcept
-                : m_subscriber(std::move(subscriber)) {
+            explicit DelegateImpl(Subscriber subscriber) noexcept : m_subscriber(std::move(subscriber)) {
             }
 
             void reset() noexcept {
@@ -43,8 +42,7 @@ export namespace pP {
             }
 
             template<auto F, typename T>
-                requires requires(T *obj)
-                {
+                requires requires (T *obj) {
                     { Subscriber(std23::nontype<F>, obj) };
                 }
             std::optional<Subscriber> subscribe(T *obj) noexcept {
@@ -52,8 +50,7 @@ export namespace pP {
             }
 
             template<auto F, typename T>
-                requires requires(T &&obj)
-                {
+                requires requires (T &&obj) {
                     { Subscriber(std23::nontype<F>, std::forward<T>(obj)) };
                 }
             std::optional<Subscriber> subscribe(T &&obj) noexcept {
@@ -74,10 +71,9 @@ export namespace pP {
     }
 
     template<details::TFunction FunctionT>
-    class Delegate final : public details::DelegateImpl<FunctionT,
-                typename details::FunctionTraits<FunctionT>::params_type> {
-        using super_t = details::DelegateImpl<FunctionT,
-            typename details::FunctionTraits<FunctionT>::params_type>;
+    class Delegate final
+        : public details::DelegateImpl<FunctionT, typename details::FunctionTraits<FunctionT>::params_type> {
+        using super_t = details::DelegateImpl<FunctionT, typename details::FunctionTraits<FunctionT>::params_type>;
 
     public:
         using super_t::super_t;
@@ -89,17 +85,11 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     namespace details {
-        template<
-            TFunctionReturning<std::error_code> FunctionT,
-            mem::details::TAllocator AllocatorT,
-            typename ParamsT>
+        template<TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT, typename ParamsT>
         class BroadcastCallbackImpl;
 
-        template<
-            TFunctionReturning<std::error_code> FunctionT,
-            mem::details::TAllocator AllocatorT,
-            typename... ArgsT>
-        class BroadcastCallbackImpl<FunctionT, AllocatorT, std::tuple<ArgsT...> > {
+        template<TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT, typename... ArgsT>
+        class BroadcastCallbackImpl<FunctionT, AllocatorT, std::tuple<ArgsT...>> {
         public:
             using FunctionTraits = FunctionTraits<FunctionT>;
             using Event = std23::function_ref<FunctionT>;
@@ -107,7 +97,7 @@ export namespace pP {
             class [[nodiscard]] Handle final {
                 const BroadcastCallbackImpl *m_callback{nullptr};
                 SparseKeyId m_event_key{};
-                std::shared_ptr<std::atomic<bool> > m_alive{};
+                std::shared_ptr<std::atomic<bool>> m_alive{};
 
             public:
                 constexpr Handle() = default;
@@ -169,8 +159,7 @@ export namespace pP {
                 requires std::is_default_constructible_v<AllocatorT>
             = default;
 
-            explicit BroadcastCallbackImpl(const AllocatorT &alloc) noexcept
-                : m_subscribers(alloc) {
+            explicit BroadcastCallbackImpl(const AllocatorT &alloc) noexcept : m_subscribers(alloc) {
             }
 
             explicit BroadcastCallbackImpl(AllocatorT &&alloc) noexcept
@@ -187,12 +176,12 @@ export namespace pP {
                 return m_subscribers.isEmpty();
             }
 
-            [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
+            [[nodiscard]] Handle add(Event event) const /* see mutable bellow */ {
                 const SparseKeyId event_key = m_subscribers.add(std::forward<Event>(event));
                 return Handle(*this, event_key);
             }
 
-            [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
+            [[nodiscard]] bool remove(const SparseKeyId event_key) const /* see mutable bellow */ {
                 return m_subscribers.erase(event_key);
             }
 
@@ -223,19 +212,16 @@ export namespace pP {
             // hold a shared_ptr to it. This prevents Handle::~Handle() from
             // dereferencing a dangling Callback* when the owning object is destroyed
             // before the Handle.
-            std::shared_ptr<std::atomic<bool> > m_alive = std::make_shared<std::atomic<bool> >(true);
+            std::shared_ptr<std::atomic<bool>> m_alive = std::make_shared<std::atomic<bool>>(true);
         };
     }
 
-    template<
-        details::TFunctionReturning<std::error_code> FunctionT,
-        mem::details::TAllocator AllocatorT = mem::GPA>
-    class BroadcastCallback final : public details::BroadcastCallbackImpl<
-                FunctionT, AllocatorT,
-                typename details::FunctionTraits<FunctionT>::params_type> {
+    template<details::TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT = mem::GPA>
+    class BroadcastCallback final
+        : public details::BroadcastCallbackImpl<
+              FunctionT, AllocatorT, typename details::FunctionTraits<FunctionT>::params_type> {
         using super_t = details::BroadcastCallbackImpl<
-            FunctionT, AllocatorT,
-            typename details::FunctionTraits<FunctionT>::params_type>;
+            FunctionT, AllocatorT, typename details::FunctionTraits<FunctionT>::params_type>;
 
     public:
         using super_t::super_t;
@@ -248,43 +234,30 @@ export namespace pP {
 
     namespace details {
         template<typename T>
-        struct ForwardAsLValue : std::type_identity<T> {
-        };
+        struct ForwardAsLValue : std::type_identity<T> {};
 
         template<TSafeObject T>
-        struct ForwardAsLValue<T &> : std::type_identity<safe_ptr<T> > {
-        };
+        struct ForwardAsLValue<T &> : std::type_identity<safe_ptr<T>> {};
 
         template<TSafeObject T>
-        struct ForwardAsLValue<T *> : std::type_identity<safe_ptr<T> > {
-        };
+        struct ForwardAsLValue<T *> : std::type_identity<safe_ptr<T>> {};
 
         template<TSafeObject T>
-        struct ForwardAsLValue<const T &> : std::type_identity<safe_ptr<const T> > {
-        };
+        struct ForwardAsLValue<const T &> : std::type_identity<safe_ptr<const T>> {};
 
         template<TSafeObject T>
-        struct ForwardAsLValue<const T *> : std::type_identity<safe_ptr<const T> > {
-        };
+        struct ForwardAsLValue<const T *> : std::type_identity<safe_ptr<const T>> {};
 
         template<typename... ArgsT>
-        struct ForwardAsLValue<std::tuple<ArgsT...> > {
-            using type = std::tuple<
-                typename ForwardAsLValue<ArgsT>::type...
-            >;
+        struct ForwardAsLValue<std::tuple<ArgsT...>> {
+            using type = std::tuple<typename ForwardAsLValue<ArgsT>::type...>;
         };
 
-        template<
-            TFunctionReturning<std::error_code> FunctionT,
-            mem::details::TAllocator AllocatorT,
-            typename ParamsT>
+        template<TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT, typename ParamsT>
         class CallbackSinkImpl;
 
-        template<
-            TFunctionReturning<std::error_code> FunctionT,
-            mem::details::TAllocator AllocatorT,
-            typename... ArgsT>
-        class CallbackSinkImpl<FunctionT, AllocatorT, std::tuple<ArgsT...> > final {
+        template<TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT, typename... ArgsT>
+        class CallbackSinkImpl<FunctionT, AllocatorT, std::tuple<ArgsT...>> final {
             using function_traits = FunctionTraits<FunctionT>;
             using broadcast_callback = BroadcastCallback<FunctionT, AllocatorT>;
             using params_type = std::tuple<ArgsT...>;
@@ -300,19 +273,17 @@ export namespace pP {
                 requires std::is_default_constructible_v<AllocatorT>
             = default;
 
-            explicit CallbackSinkImpl(const AllocatorT &alloc) noexcept
-                : m_callback(alloc) {
+            explicit CallbackSinkImpl(const AllocatorT &alloc) noexcept : m_callback(alloc) {
             }
 
-            explicit CallbackSinkImpl(AllocatorT &&alloc) noexcept
-                : m_callback(std::forward<AllocatorT>(alloc)) {
+            explicit CallbackSinkImpl(AllocatorT &&alloc) noexcept : m_callback(std::forward<AllocatorT>(alloc)) {
             }
 
-            [[nodiscard]] Handle add(Event event) const/* see mutable bellow */ {
+            [[nodiscard]] Handle add(Event event) const /* see mutable bellow */ {
                 return m_callback.add(std::move(event));
             }
 
-            [[nodiscard]] bool remove(const SparseKeyId event_key) const/* see mutable bellow */ {
+            [[nodiscard]] bool remove(const SparseKeyId event_key) const /* see mutable bellow */ {
                 return m_callback.remove(event_key);
             }
 
@@ -335,15 +306,11 @@ export namespace pP {
         };
     }
 
-    template<
-        details::TFunctionReturning<std::error_code> FunctionT,
-        mem::details::TAllocator AllocatorT = mem::GPA>
+    template<details::TFunctionReturning<std::error_code> FunctionT, mem::details::TAllocator AllocatorT = mem::GPA>
     class CallbackSink final : public details::CallbackSinkImpl<
-                FunctionT, AllocatorT,
-                typename details::FunctionTraits<FunctionT>::params_type> {
-        using super_t = details::CallbackSinkImpl<
-            FunctionT, AllocatorT,
-            typename details::FunctionTraits<FunctionT>::params_type>;
+                                   FunctionT, AllocatorT, typename details::FunctionTraits<FunctionT>::params_type> {
+        using super_t =
+            details::CallbackSinkImpl<FunctionT, AllocatorT, typename details::FunctionTraits<FunctionT>::params_type>;
 
     public:
         using super_t::super_t;

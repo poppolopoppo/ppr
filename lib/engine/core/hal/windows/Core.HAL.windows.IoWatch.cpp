@@ -31,31 +31,19 @@ namespace pP::hal::io {
                                FILE_NOTIFY_CHANGE_LAST_WRITE;
 
         const ::BOOL result = ::ReadDirectoryChangesW(
-            data->m_dir,
-            data->m_buffer,
-            static_cast<::DWORD>(sizeof(data->m_buffer)),
-            data->m_recursive ? TRUE : FALSE,
-            filter,
-            nullptr,
-            &data->m_overlapped,
-            nullptr);
+            data->m_dir, data->m_buffer, static_cast<::DWORD>(sizeof(data->m_buffer)), data->m_recursive ? TRUE : FALSE,
+            filter, nullptr, &data->m_overlapped, nullptr);
 
         data->m_pending = result != FALSE || ::GetLastError() == ERROR_IO_PENDING;
     }
 
     WatchHandle openWatch(const std::filesystem::path &dir, const bool recursive) noexcept(false) {
         const ::HANDLE hDir = ::CreateFileW(
-            dir.c_str(),
-            FILE_LIST_DIRECTORY,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-            nullptr);
+            dir.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
 
         if (hDir == INVALID_HANDLE_VALUE) [[unlikely]] {
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         auto *data = new WatchHandleData();
@@ -66,8 +54,7 @@ namespace pP::hal::io {
         if (data->m_event == nullptr) [[unlikely]] {
             ::CloseHandle(hDir);
             delete data;
-            throw std::system_error(
-                std::error_code(::GetLastError(), std::system_category()));
+            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
         }
 
         startWatch_(data);
@@ -76,7 +63,8 @@ namespace pP::hal::io {
 
     void closeWatch(const WatchHandle watch) noexcept {
         auto *data = static_cast<WatchHandleData *>(watch);
-        if (data == nullptr) return;
+        if (data == nullptr)
+            return;
 
         if (data->m_pending) {
             ::CancelIoEx(data->m_dir, &data->m_overlapped);
@@ -92,8 +80,9 @@ namespace pP::hal::io {
         delete data;
     }
 
-    static std::size_t drainWatch_(WatchHandleData *data, const ::DWORD timeout_ms,
-                                    const std::span<std::byte> buffer, std::error_code &ec) noexcept {
+    static std::size_t drainWatch_(
+        WatchHandleData *data, const ::DWORD timeout_ms, const std::span<std::byte> buffer,
+        std::error_code &ec) noexcept {
         if (not data->m_pending) {
             return 0u;
         }
@@ -142,9 +131,9 @@ namespace pP::hal::io {
         return drainWatch_(static_cast<WatchHandleData *>(watch), INFINITE, buffer, ec);
     }
 
-    std::size_t parseWatchEvents(const std::span<const std::byte> raw,
-                                  const std::span<WatchEvent> out_events,
-                                  const std::span<char> out_names) noexcept {
+    std::size_t parseWatchEvents(
+        const std::span<const std::byte> raw, const std::span<WatchEvent> out_events,
+        const std::span<char> out_names) noexcept {
         std::size_t event_idx = 0u;
         std::size_t name_offset = 0u;
         // Win32 API writes FILE_NOTIFY_INFORMATION into a DWORD-aligned byte buffer;
@@ -152,15 +141,21 @@ namespace pP::hal::io {
         const auto *p = reinterpret_cast<const ::FILE_NOTIFY_INFORMATION *>(raw.data());
 
         while (event_idx < out_events.size()) {
-            if (reinterpret_cast<const std::byte *>(p) + offsetof(::FILE_NOTIFY_INFORMATION, FileName) > raw.data() + raw.size()) break;
-            if (reinterpret_cast<const std::byte *>(p) + offsetof(::FILE_NOTIFY_INFORMATION, FileName) + p->FileNameLength > raw.data() + raw.size()) break;
+            if (reinterpret_cast<const std::byte *>(p) + offsetof(::FILE_NOTIFY_INFORMATION, FileName) >
+                raw.data() + raw.size())
+                break;
+            if (reinterpret_cast<const std::byte *>(p) +
+                    offsetof(::FILE_NOTIFY_INFORMATION, FileName) +
+                    p->FileNameLength >
+                raw.data() + raw.size())
+                break;
 
             bool known_action = true;
             WatchEvent::Action action{};
             switch (p->Action) {
-                case FILE_ACTION_ADDED:            action = WatchEvent::Action::added;    break;
-                case FILE_ACTION_REMOVED:          action = WatchEvent::Action::removed;  break;
-                case FILE_ACTION_MODIFIED:         action = WatchEvent::Action::modified; break;
+                case FILE_ACTION_ADDED: action = WatchEvent::Action::added; break;
+                case FILE_ACTION_REMOVED: action = WatchEvent::Action::removed; break;
+                case FILE_ACTION_MODIFIED: action = WatchEvent::Action::modified; break;
                 case FILE_ACTION_RENAMED_OLD_NAME: action = WatchEvent::Action::renamed_old; break;
                 case FILE_ACTION_RENAMED_NEW_NAME: action = WatchEvent::Action::renamed_new; break;
                 default: known_action = false; break;
@@ -170,11 +165,8 @@ namespace pP::hal::io {
                 out_events[event_idx].m_action = action;
 
                 const int name_len_utf8 = ::WideCharToMultiByte(
-                    CP_UTF8, 0,
-                    p->FileName, p->FileNameLength / sizeof(WCHAR),
-                    out_names.data() + name_offset,
-                    checked_cast<int>(out_names.size() - name_offset),
-                    nullptr, nullptr);
+                    CP_UTF8, 0, p->FileName, p->FileNameLength / sizeof(WCHAR), out_names.data() + name_offset,
+                    checked_cast<int>(out_names.size() - name_offset), nullptr, nullptr);
 
                 if (name_len_utf8 > 0) {
                     out_events[event_idx].m_name_offset = checked_cast<u32>(name_offset);
@@ -187,7 +179,8 @@ namespace pP::hal::io {
                 }
             }
 
-            if (p->NextEntryOffset == 0u) break;
+            if (p->NextEntryOffset == 0u)
+                break;
             p = reinterpret_cast<const ::FILE_NOTIFY_INFORMATION *>(
                 reinterpret_cast<const std::byte *>(p) + p->NextEntryOffset);
         }

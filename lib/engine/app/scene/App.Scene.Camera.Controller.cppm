@@ -69,21 +69,43 @@ export namespace pP {
             float m_heading_speed{1.8f};
             float m_pitch_speed{1.2f};
 
-            [[nodiscard]] bool hasTeleported() const noexcept { return m_has_teleported; }
+            [[nodiscard]] bool hasTeleported() const noexcept {
+                return m_has_teleported;
+            }
 
-            [[nodiscard]] float3 getPosition() const noexcept { return m_position_analog.filtered(); }
-            [[nodiscard]] Quaternion getRotation() const noexcept { return m_rotation_analog.filtered(); }
-            [[nodiscard]] float getFov() const noexcept { return m_fov_analog.filtered(); }
-            [[nodiscard]] float getSpeedMultiplier() const noexcept { return m_speed_analog.filtered(); }
+            [[nodiscard]] float3 getPosition() const noexcept {
+                return m_position_analog.filtered();
+            }
+            [[nodiscard]] Quaternion getRotation() const noexcept {
+                return m_rotation_analog.filtered();
+            }
+            [[nodiscard]] float getFov() const noexcept {
+                return m_fov_analog.filtered();
+            }
+            [[nodiscard]] float getSpeedMultiplier() const noexcept {
+                return m_speed_analog.filtered();
+            }
 
-            [[nodiscard]] float3 getTranslateSpeed() const noexcept { return float3(m_strafe_speed, m_upward_speed, m_forward_speed); }
-            [[nodiscard]] float2 getRotateSpeed() const noexcept { return float2(m_heading_speed, m_pitch_speed); }
+            [[nodiscard]] float3 getTranslateSpeed() const noexcept {
+                return float3(m_strafe_speed, m_upward_speed, m_forward_speed);
+            }
+            [[nodiscard]] float2 getRotateSpeed() const noexcept {
+                return float2(m_heading_speed, m_pitch_speed);
+            }
 
-            [[nodiscard]] float getPositionInertia() const noexcept { return m_position_analog.sensitivity(); }
-            void setPositionInertia(const float value) noexcept { m_position_analog.setSensitivity(value); }
+            [[nodiscard]] float getPositionInertia() const noexcept {
+                return m_position_analog.sensitivity();
+            }
+            void setPositionInertia(const float value) noexcept {
+                m_position_analog.setSensitivity(value);
+            }
 
-            [[nodiscard]] float getRotationInertia() const noexcept { return m_rotation_analog.sensitivity(); }
-            void setRotationInertia(const float value) noexcept { m_rotation_analog.setSensitivity(value); }
+            [[nodiscard]] float getRotationInertia() const noexcept {
+                return m_rotation_analog.sensitivity();
+            }
+            void setRotationInertia(const float value) noexcept {
+                m_rotation_analog.setSensitivity(value);
+            }
 
             void resetInputState() noexcept override;
 
@@ -106,7 +128,9 @@ export namespace pP {
 
             void setFovRate_(const InputKey &key, float rate) noexcept;
 
-            void translateCamera_(const float3 &delta) noexcept { m_delta_position += delta; }
+            void translateCamera_(const float3 &delta) noexcept {
+                m_delta_position += delta;
+            }
 
             void rotateCamera_(float heading, float pitch, float roll = zero_v) noexcept;
 
@@ -150,7 +174,9 @@ export namespace pP {
         // zoomed in. The wheel adjusts this scale, never camera depth.
         [[nodiscard]] std::error_code setOrthoScale(float scale) noexcept;
 
-        [[nodiscard]] float getOrthoScale() const noexcept { return m_ortho_scale; }
+        [[nodiscard]] float getOrthoScale() const noexcept {
+            return m_ortho_scale;
+        }
 
         // Plane translate rate law: 600 world-units/s per ortho-scale unit
         // at 1x speed multiplier (x/y); depth keeps the shared forward speed.
@@ -233,9 +259,10 @@ export namespace pP {
 
         [[nodiscard]] bool hasValidViewport_() const noexcept;
 
-        std::unique_ptr<InputAction> m_zoom_action{std::make_unique<InputAction>("CameraOrthoZoom", EInputValueType::axis_1d)};
+        std::unique_ptr<InputAction> m_zoom_action{
+            std::make_unique<InputAction>("CameraOrthoZoom", EInputValueType::axis_1d)};
         std::unique_ptr<InputAction> m_grab_action{
-                std::make_unique<InputAction>("CameraPanGrab", EInputValueType::digital)};
+            std::make_unique<InputAction>("CameraPanGrab", EInputValueType::digital)};
         float m_ortho_scale{1.0f};
         float m_zoom_impulse{0.0f};
         bool m_has_grab_pan{false};
@@ -251,7 +278,9 @@ export namespace pP {
     public:
         OrbitCameraController() = default;
 
-        [[nodiscard]] float3 getOrbitTarget() const noexcept { return m_target_analog.filtered(); }
+        [[nodiscard]] float3 getOrbitTarget() const noexcept {
+            return m_target_analog.filtered();
+        }
 
         void setOrbitTarget(const float3 &target, bool has_teleported = false) noexcept;
 

@@ -26,22 +26,20 @@ namespace pP {
     bool InputListener::hasInputMapping(const InputMapping &mapping) const noexcept {
         // NOTE: heterogeneous lookup by mapped value; flat_set orders by
         // priority key only, so locate the entry with pointer identity.
-        return std::ranges::any_of(m_mappings, [&](const auto &entry) noexcept {
-            return entry.m_value.get() == &mapping;
-        });
+        return std::ranges::any_of(
+            m_mappings, [&](const auto &entry) noexcept { return entry.m_value.get() == &mapping; });
     }
 
-    void InputListener::addInputMapping(SharedInputMapping mapping, const int priority) { // NOLINT(*-unnecessary-value-param)
-        if (const bool inserted = m_mappings.emplace(priority, std::move(mapping)).second;
-            inserted) [[likely]] {
+    void InputListener::addInputMapping(
+        SharedInputMapping mapping, const int priority) { // NOLINT(*-unnecessary-value-param)
+        if (const bool inserted = m_mappings.emplace(priority, std::move(mapping)).second; inserted) [[likely]] {
             rebuildKeybindings_();
         }
     }
 
     bool InputListener::removeInputMapping(const InputMapping &mapping) {
-        const auto it = std::ranges::find_if(m_mappings, [&](const auto &entry) noexcept {
-            return entry.m_value.get() == &mapping;
-        });
+        const auto it = std::ranges::find_if(
+            m_mappings, [&](const auto &entry) noexcept { return entry.m_value.get() == &mapping; });
         if (it == m_mappings.end()) [[unlikely]] {
             return false;
         }
@@ -65,7 +63,9 @@ namespace pP {
     }
 
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
-    static void invokeIFP_(const TimeSpan dt, const std::optional<InputModifierEvent> &modifier, InputActionEvent &event, const InputMessage &) noexcept {
+    static void invokeIFP_(
+        const TimeSpan dt, const std::optional<InputModifierEvent> &modifier, InputActionEvent &event,
+        const InputMessage &) noexcept {
         if (modifier.has_value()) {
             // NOTE: actions are client-owned and never originally const (engine holds only a const view);
             // dispatch invokes the callback without mutating observable action state.
@@ -74,7 +74,8 @@ namespace pP {
         }
     }
 
-    static void invokeIFP_(const std::optional<InputTriggerEvent> &trigger, const InputActionEvent &event, const InputMessage &message) {
+    static void invokeIFP_(
+        const std::optional<InputTriggerEvent> &trigger, const InputActionEvent &event, const InputMessage &message) {
         if (trigger.has_value()) {
             // NOTE: see above; key mappings live in client-owned mappings viewed as const.
             auto &callback = const_cast<InputTriggerEvent &>(*trigger);
@@ -83,8 +84,7 @@ namespace pP {
     }
 
     EInputMessageResponse InputListener::postCharacterInput(hal::native::char_t codepoint) const {
-        if (m_listener_mode != EInputMessageResponse::unhandled and
-            m_character_input_callback) {
+        if (m_listener_mode != EInputMessageResponse::unhandled and m_character_input_callback) {
             return m_character_input_callback(codepoint);
         }
         return EInputMessageResponse::unhandled;
@@ -141,12 +141,14 @@ namespace pP {
                         m_action_callback(event, message.m_key);
                     }
 
-                    PPR_LOG(Input, verbose, "event completed", {
-                        {"action", event.m_source->m_description.view()},
-                        {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_key", message.m_key.m_name},
-                        {"input_value", event.m_value},
-                        {"consume", key_mapping.m_action->hasConsumeInput()},
+                    PPR_LOG(
+                        Input, verbose, "event completed",
+                        {
+                            {"action", event.m_source->m_description.view()},
+                            {"delta_time", event.m_elapsed_triggered_time},
+                            {"input_key", message.m_key.m_name},
+                            {"input_value", event.m_value},
+                            {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
                     break;
 
@@ -162,19 +164,19 @@ namespace pP {
                         m_action_callback(event, message.m_key);
                     }
 
-                    PPR_LOG(Input, verbose, "event started", {
-                        {"action", event.m_source->m_description.view()},
-                        {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_key", message.m_key.m_name},
-                        {"input_value", event.m_value},
-                        {"consume", key_mapping.m_action->hasConsumeInput()},
+                    PPR_LOG(
+                        Input, verbose, "event started",
+                        {
+                            {"action", event.m_source->m_description.view()},
+                            {"delta_time", event.m_elapsed_triggered_time},
+                            {"input_key", message.m_key.m_name},
+                            {"input_value", event.m_value},
+                            {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
 
                     [[fallthrough]];
-                case EInputMessageEvent::repeat:
-                    [[fallthrough]];
-                case EInputMessageEvent::double_click:
-                    [[fallthrough]];
+                case EInputMessageEvent::repeat: [[fallthrough]];
+                case EInputMessageEvent::double_click: [[fallthrough]];
                 case EInputMessageEvent::axis:
                     event.m_trigger_state = EInputTriggerEvent::triggered;
 
@@ -192,13 +194,15 @@ namespace pP {
                         m_action_callback(event, message.m_key);
                     }
 
-                    PPR_LOG(Input, debug, "event triggered", {
-                        {"action", event.m_source->m_description.view()},
-                        {"delta_time", event.m_elapsed_triggered_time},
-                        {"input_key", message.m_key.m_name},
-                        {"input_value", event.m_value},
-                        {"repeat_count", event.m_repeat_count},
-                        {"consume", key_mapping.m_action->hasConsumeInput()},
+                    PPR_LOG(
+                        Input, debug, "event triggered",
+                        {
+                            {"action", event.m_source->m_description.view()},
+                            {"delta_time", event.m_elapsed_triggered_time},
+                            {"input_key", message.m_key.m_name},
+                            {"input_value", event.m_value},
+                            {"repeat_count", event.m_repeat_count},
+                            {"consume", key_mapping.m_action->hasConsumeInput()},
                         });
                     break;
             }
@@ -237,7 +241,8 @@ namespace pP {
         // current consume state; consume short-circuits at dispatch time
         // (postKeyEvent) against the live action flags, so toggling
         // setConsumeInput needs no rebuild and shadowed actions keep entries.
-        const auto map_key = [&](const InputKey &key, const SharedInputAction &action, const InputBinding &binding) -> bool {
+        const auto map_key = [&](const InputKey &key, const SharedInputAction &action,
+                                 const InputBinding &binding) -> bool {
             if (const auto it = old_action_events.find(action); old_action_events.end() != it) {
                 m_action_events.emplace(action, std::move(it->second));
 
@@ -251,9 +256,9 @@ namespace pP {
         };
 
         std::size_t input_mapping = 0u;
-        for (const auto &mapped : m_mappings) {
+        for (const auto &mapped: m_mappings) {
             std::size_t key_mapping = 0u;
-            for (const auto &action_keymap : mapped.m_value->m_keymap) {
+            for (const auto &action_keymap: mapped.m_value->m_keymap) {
                 const InputBinding binding{
                     .m_input_mapping = InputMappingIndex(safe_narrowing(input_mapping)),
                     .m_key_mapping = KeyMappingIndex(safe_narrowing(key_mapping)),
@@ -263,12 +268,13 @@ namespace pP {
                     map_key(action_keymap.m_key, action_keymap.m_action, binding);
                 } else {
                     // expand EAnyKey to all possible keys for selected sources
-                    InputKey::enumerateAny(get<EAnyKey>(action_keymap.m_key.m_code), [&](const InputKey &key) -> std::error_code {
-                        if (key.m_value == action_keymap.m_key.m_value) {
-                            map_key(key, action_keymap.m_action, binding);
-                        }
-                        return default_value_v;
-                    });
+                    InputKey::enumerateAny(
+                        get<EAnyKey>(action_keymap.m_key.m_code), [&](const InputKey &key) -> std::error_code {
+                            if (key.m_value == action_keymap.m_key.m_value) {
+                                map_key(key, action_keymap.m_action, binding);
+                            }
+                            return default_value_v;
+                        });
                 }
 
                 ++key_mapping;
@@ -281,27 +287,25 @@ namespace pP {
     // input context
     // ------------------------------------------------------------------
 
-    InputContext::InputContext(safe_ptr<InputContext> parent_context) noexcept
-        : m_parent(std::move(parent_context)) {
+    InputContext::InputContext(safe_ptr<InputContext> parent_context) noexcept : m_parent(std::move(parent_context)) {
     }
 
     InputContext::InputContext(InputContext &&other) noexcept = default;
 
     bool InputContext::hasInputListener(const InputListener &listener) const noexcept {
         // NOTE: see hasInputMapping — locate by pointer identity.
-        return std::ranges::any_of(m_listeners, [&](const auto &entry) noexcept {
-            return entry.m_value.get() == &listener;
-        });
+        return std::ranges::any_of(
+            m_listeners, [&](const auto &entry) noexcept { return entry.m_value.get() == &listener; });
     }
 
-    void InputContext::addInputListener(safe_ptr<InputListener> listener, int priority) { // NOLINT(*-unnecessary-value-param)
+    void InputContext::addInputListener(
+        safe_ptr<InputListener> listener, int priority) { // NOLINT(*-unnecessary-value-param)
         m_listeners.emplace(priority, std::move(listener));
     }
 
     bool InputContext::removeInputListener(const InputListener &listener) {
-        const auto it = std::ranges::find_if(m_listeners, [&](const auto &entry) noexcept {
-            return entry.m_value.get() == &listener;
-        });
+        const auto it = std::ranges::find_if(
+            m_listeners, [&](const auto &entry) noexcept { return entry.m_value.get() == &listener; });
         if (it == m_listeners.end()) [[unlikely]] {
             return false;
         }
@@ -320,25 +324,17 @@ namespace pP {
 
         for (const auto &[_, listener]: m_listeners) {
             switch (listener->postCharacterInput(codepoint)) {
-                case consumed:
-                    return consumed;
-                case handled:
-                    response = handled;
-                    [[fallthrough]];
-                case unhandled:
-                    break;
+                case consumed: return consumed;
+                case handled: response = handled; [[fallthrough]];
+                case unhandled: break;
             }
         }
 
         if (const InputContext *const p_parent = m_parent.get()) {
             switch (p_parent->postCharacterInput(codepoint)) {
-                case consumed:
-                    return consumed;
-                case handled:
-                    response = handled;
-                    [[fallthrough]];
-                case unhandled:
-                    break;
+                case consumed: return consumed;
+                case handled: response = handled; [[fallthrough]];
+                case unhandled: break;
             }
         }
 
@@ -351,25 +347,17 @@ namespace pP {
 
         for (const auto &[_, listener]: m_listeners) {
             switch (listener->postKeyEvent(dt, message)) {
-                case consumed:
-                    return consumed;
-                case handled:
-                    response = handled;
-                    [[fallthrough]];
-                case unhandled:
-                    break;
+                case consumed: return consumed;
+                case handled: response = handled; [[fallthrough]];
+                case unhandled: break;
             }
         }
 
         if (const InputContext *const p_parent = m_parent.get()) {
             switch (p_parent->postKeyEvent(dt, message)) {
-                case consumed:
-                    return consumed;
-                case handled:
-                    response = handled;
-                    [[fallthrough]];
-                case unhandled:
-                    break;
+                case consumed: return consumed;
+                case handled: response = handled; [[fallthrough]];
+                case unhandled: break;
             }
         }
 
@@ -381,8 +369,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     WindowInputContext::WindowInputContext(safe_ptr<IInputService> inputs)
-        : m_inputs(std::move(inputs)),
-          m_context(safe_ptr(&m_inputs->getGlobalInputContext())) {
+        : m_inputs(std::move(inputs)), m_context(safe_ptr(&m_inputs->getGlobalInputContext())) {
         PPR_ASSERT(m_inputs.isValid());
 
         m_inputs->addInputContext(SharedInputContext(&m_context));
@@ -431,17 +418,20 @@ namespace pP {
         return default_value_v;
     }
 
-    void WindowInputContext::onWindowCharacterInput_([[maybe_unused]] const Window &window, const hal::native::char_t codepoint) const {
+    void WindowInputContext::onWindowCharacterInput_(
+        [[maybe_unused]] const Window &window, const hal::native::char_t codepoint) const {
         PPR_ASSERT(m_window.get() == &window);
         m_inputs->postKeyboardCharacterInput(m_context, codepoint);
     }
 
-    void WindowInputContext::onKeyboardPressed_([[maybe_unused]] const Window &window, const EKeyboardKey key, const bool pressed) const {
+    void WindowInputContext::onKeyboardPressed_(
+        [[maybe_unused]] const Window &window, const EKeyboardKey key, const bool pressed) const {
         PPR_ASSERT(m_window.get() == &window);
         m_inputs->postKeyboardKeyPressed(m_context, key, pressed);
     }
 
-    void WindowInputContext::onMouseClicked_([[maybe_unused]] const Window &window, const EMouseButton button, const bool clicked) const {
+    void WindowInputContext::onMouseClicked_(
+        [[maybe_unused]] const Window &window, const EMouseButton button, const bool clicked) const {
         PPR_ASSERT(m_window.get() == &window);
         m_inputs->postMouseButtonPressed(m_context, button, clicked);
     }

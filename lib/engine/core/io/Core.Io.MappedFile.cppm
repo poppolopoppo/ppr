@@ -20,8 +20,7 @@ export namespace pP {
 
         explicit MappedFile(hal::io::MapHandle map) noexcept;
 
-        MappedFile(MappedFile &&other) noexcept
-            : m_map(std::exchange(other.m_map, nullptr)) {
+        MappedFile(MappedFile &&other) noexcept : m_map(std::exchange(other.m_map, nullptr)) {
         }
 
         MappedFile &operator=(MappedFile &&other) noexcept;
@@ -51,14 +50,14 @@ export namespace pP {
         void unmap_() noexcept;
     };
 
-    template<> struct details::relocatable<MappedFile> : std::true_type {};
+    template<>
+    struct details::relocatable<MappedFile> : std::true_type {};
 
 }
 
 export namespace pP::io {
 
-    [[nodiscard]] std::expected<MappedFile, std::error_code>
-    mapFile(const std::filesystem::path &path,
-            const hal::io::OpenFlags flags = {}) noexcept;
+    [[nodiscard]] std::expected<MappedFile, std::error_code> mapFile(
+        const std::filesystem::path &path, const hal::io::OpenFlags flags = {}) noexcept;
 
 }

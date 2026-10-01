@@ -26,9 +26,9 @@ namespace pP::mesh {
 
             [[nodiscard]] Expected<u32> toU32(const std::size_t value) {
                 if (value > static_cast<std::size_t>(std::numeric_limits<u32>::max())) [[unlikely]] {
-                    PPR_LOG(Mesh, warning, "mesh count exceeds u32 range — rejecting value", {
-                        {"value", static_cast<u64>(value)}
-                        });
+                    PPR_LOG(
+                        Mesh, warning, "mesh count exceeds u32 range — rejecting value",
+                        {{"value", static_cast<u64>(value)}});
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
                 return static_cast<std::uint32_t>(value);
@@ -84,21 +84,20 @@ namespace pP::mesh {
 
             [[nodiscard]] bool skipJsonNumber(const char *&ptr, const char *end) noexcept {
                 const char *start = ptr;
-                while (ptr != end and
-                       ((*ptr >= '0' and *ptr <= '9') or
-                        *ptr == '-' or
-                        *ptr == '+' or
-                        *ptr == '.' or
-                        *ptr == 'e' or
-                        *ptr == 'E')) {
+                while (ptr != end and ((*ptr >= '0' and *ptr <= '9') or
+                                          *ptr == '-' or
+                                          *ptr == '+' or
+                                          *ptr == '.' or
+                                          *ptr == 'e' or
+                                          *ptr == 'E')) {
                     ++ptr;
                 }
                 return ptr != start;
             }
 
-            [[nodiscard]] bool matchJsonLiteral(const char *&ptr, const char *end, const std::string_view word) noexcept {
-                if (static_cast<std::size_t>(end - ptr) < word.size() or
-                    std::string_view{ptr, word.size()} != word) {
+            [[nodiscard]] bool matchJsonLiteral(
+                const char *&ptr, const char *end, const std::string_view word) noexcept {
+                if (static_cast<std::size_t>(end - ptr) < word.size() or std::string_view{ptr, word.size()} != word) {
                     return false;
                 }
 
@@ -129,7 +128,9 @@ namespace pP::mesh {
                     while (true) {
                         if (c == '{') {
                             if (*ptr != '"' or
-                                not skipJsonString(ptr, end) or not skipJsonWs(ptr, end) or *ptr != ':') {
+                                not skipJsonString(ptr, end) or
+                                not skipJsonWs(ptr, end) or
+                                *ptr != ':') {
                                 return false;
                             }
                             ++ptr;
@@ -250,8 +251,7 @@ namespace pP::mesh {
                         ++ptr;
                         continue;
                     }
-                    if (ptr != end and
-                        *ptr == '}') {
+                    if (ptr != end and *ptr == '}') {
                         ++ptr;
                         return true;
                     }
@@ -382,7 +382,7 @@ namespace pP::mesh {
             // convertImage fails those closed instead of reading dead views.
             // Over-limit containers (chunk iterations beyond the cap) fail
             // closed with invalid_argument — never a truncated silent success.
-            [[nodiscard]] Expected<Array<mem::SharedBuffer> > resolveGlbEmbeds(
+            [[nodiscard]] Expected<Array<mem::SharedBuffer>> resolveGlbEmbeds(
                 const mem::SharedBuffer &mapping, const MeshLimits &limits) {
                 Array<mem::SharedBuffer> table;
                 const mem::SharedBufferView bytes = mapping.getBufferData();
@@ -484,9 +484,10 @@ namespace pP::mesh {
                 return table;
             }
 
-            [[nodiscard]] Expected<ImageRef> convertImage(const m3d::ImageSource &source, const std::filesystem::path &dir,
-                                                          const u32 image_index, const Array<mem::SharedBuffer> &glb_embeds,
-                                                          Array<std::pair<std::string, mem::SharedBuffer> > &file_cache) {
+            [[nodiscard]] Expected<ImageRef> convertImage(
+                const m3d::ImageSource &source, const std::filesystem::path &dir, const u32 image_index,
+                const Array<mem::SharedBuffer> &glb_embeds,
+                Array<std::pair<std::string, mem::SharedBuffer>> &file_cache) {
                 ImageRef ref;
                 ref.m_name = source.name;
                 ref.m_ext = source.extension;
@@ -494,7 +495,8 @@ namespace pP::mesh {
                     // Non-File-backed embeds dangle (see above): use the
                     // PPR-resolved file-backed bytes, or fail closed — never
                     // read the mango view.
-                    if (image_index >= glb_embeds.size() or glb_embeds[image_index].getBufferData().empty()) [[unlikely]] {
+                    if (image_index >= glb_embeds.size() or glb_embeds[image_index].getBufferData().empty())
+                        [[unlikely]] {
                         PPR_LOG(Mesh, error, "embed image has no file-backed resolution — refusing the mango view");
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
@@ -525,12 +527,14 @@ namespace pP::mesh {
                 }
                 // Empty source: never referenced by slots (Mango filters them
                 // in imageIndexOf), but indices must stay 1:1 with Mango.
-                PPR_LOG(Mesh, warning, "mesh image source is empty — keeping 1:1 placeholder", {{"index", image_index}});
+                PPR_LOG(
+                    Mesh, warning, "mesh image source is empty — keeping 1:1 placeholder", {{"index", image_index}});
                 ref.m_is_file = false;
                 return ref;
             }
 
-            [[nodiscard]] Expected<MaterialImageSlot> convertSlot(const m3d::ImageSample &sample, const Array<ImageRef> &images) {
+            [[nodiscard]] Expected<MaterialImageSlot> convertSlot(
+                const m3d::ImageSample &sample, const Array<ImageRef> &images) {
                 MaterialImageSlot slot;
                 if (not sample.enabled()) {
                     return slot;
@@ -589,13 +593,16 @@ namespace pP::mesh {
                 return default_value_v;
             }
 
-            [[nodiscard]] Expected<MaterialAsset> convertMaterial(const m3d::Material &material, const Array<ImageRef> &images) {
+            [[nodiscard]] Expected<MaterialAsset> convertMaterial(
+                const m3d::Material &material, const Array<ImageRef> &images) {
                 if (const std::error_code err = checkDeferredModules(material)) [[unlikely]] {
                     return std::unexpected{err};
                 }
 
                 if (material.alphaMode == m3d::Material::AlphaMode::Blend) [[unlikely]] {
-                    PPR_LOG(Mesh, error, "AlphaMode::blend is deferred (no sorting/depth-write policy) — rejecting material");
+                    PPR_LOG(
+                        Mesh, error,
+                        "AlphaMode::blend is deferred (no sorting/depth-write policy) — rejecting material");
                     return std::unexpected{make_error_code(errc::function_not_supported)};
                 }
 
@@ -610,7 +617,8 @@ namespace pP::mesh {
                 // occlusion.scale (ImageSample.scale defaults to 1.0).
                 out.m_normal_scale = material.normal.scale;
                 out.m_occlusion_strength = material.occlusion.scale;
-                out.m_alpha_mode = material.alphaMode == m3d::Material::AlphaMode::Mask ? EAlphaMode::mask : EAlphaMode::opaque;
+                out.m_alpha_mode = material.alphaMode == m3d::Material::AlphaMode::Mask ? EAlphaMode::mask
+                                                                                        : EAlphaMode::opaque;
 
                 // MR resolve: Mango binds roughness=.g and metallic=.b of the
                 // shared ORM image (Linear); slots stay separate because glTF
@@ -711,13 +719,19 @@ namespace pP::mesh {
             // per-slot transforms to identity so a future shader consumer can
             // never double-apply them.
             [[nodiscard]] bool isIdentityUvTransform(const m3d::UvTransform &transform) noexcept {
-                return transform.scale.x == 1.0f and transform.scale.y == 1.0f and
-                       transform.offset.x == 0.0f and transform.offset.y == 0.0f and transform.rotation == 0.0f;
+                return transform.scale.x == 1.0f and
+                       transform.scale.y == 1.0f and
+                       transform.offset.x == 0.0f and
+                       transform.offset.y == 0.0f and
+                       transform.rotation == 0.0f;
             }
 
             [[nodiscard]] bool sameUvTransform(const m3d::UvTransform &lhs, const m3d::UvTransform &rhs) noexcept {
-                return lhs.scale.x == rhs.scale.x and lhs.scale.y == rhs.scale.y and lhs.offset.x == rhs.offset.x and
-                       lhs.offset.y == rhs.offset.y and lhs.rotation == rhs.rotation;
+                return lhs.scale.x == rhs.scale.x and
+                       lhs.scale.y == rhs.scale.y and
+                       lhs.offset.x == rhs.offset.x and
+                       lhs.offset.y == rhs.offset.y and
+                       lhs.rotation == rhs.rotation;
             }
 
             struct BakedUvTransform {
@@ -761,9 +775,9 @@ namespace pP::mesh {
 
                             if (UvSetId{slot->texCoord} != baseline_set or
                                 not sameUvTransform(slot->transform, baseline)) {
-                                if (not isIdentityUvTransform(slot->transform) or
-                                    not isIdentityUvTransform(baseline)) {
-                                    PPR_LOG(Mesh, error,
+                                if (not isIdentityUvTransform(slot->transform) or not isIdentityUvTransform(baseline)) {
+                                    PPR_LOG(
+                                        Mesh, error,
                                         "divergent KHR_texture_transform across slots needs multi-channel UVs — rejecting material");
                                     return std::unexpected{make_error_code(errc::function_not_supported)};
                                 }
@@ -774,7 +788,8 @@ namespace pP::mesh {
 
                 if (have_baseline and not isIdentityUvTransform(baseline)) {
                     if (baseline_set != UvSetId{0u}) {
-                        PPR_LOG(Mesh, error,
+                        PPR_LOG(
+                            Mesh, error,
                             "KHR_texture_transform on a non-zero set needs multi-channel UVs — rejecting material");
                         return std::unexpected{make_error_code(errc::function_not_supported)};
                     }
@@ -795,9 +810,11 @@ namespace pP::mesh {
                     for (StaticMeshVertex &vert: mesh_asset.m_vertices) {
                         const float u = vert.m_texcoord[0];
                         const float v = vert.m_texcoord[1];
-                        vert.m_texcoord[0] = rotation_c * transform.scale.x * u - rotation_s * transform.scale.y * v +
+                        vert.m_texcoord[0] = rotation_c * transform.scale.x * u -
+                                             rotation_s * transform.scale.y * v +
                                              transform.offset.x;
-                        vert.m_texcoord[1] = rotation_s * transform.scale.x * u + rotation_c * transform.scale.y * v +
+                        vert.m_texcoord[1] = rotation_s * transform.scale.x * u +
+                                             rotation_c * transform.scale.y * v +
                                              transform.offset.y;
                     }
                 }
@@ -869,8 +886,7 @@ namespace pP::mesh {
                     // mirrored bake flips facing: swap last two indices per triangle
                     for (const MeshPrimitiveRange &prim: baked.m_primitives) {
                         for (u32 k = 0u; k + 2u < prim.m_count; k += 3u) {
-                            std::swap(baked.m_indices[prim.m_start + k + 1u],
-                                baked.m_indices[prim.m_start + k + 2u]);
+                            std::swap(baked.m_indices[prim.m_start + k + 1u], baked.m_indices[prim.m_start + k + 2u]);
                         }
                     }
                 }
@@ -878,7 +894,8 @@ namespace pP::mesh {
                 const bool has_normal = any(baked.m_flags & EMeshAttribute::normal);
                 const bool has_tangent = any(baked.m_flags & EMeshAttribute::tangent);
                 for (StaticMeshVertex &vert: baked.m_vertices) {
-                    const float3 moved = world.transformPosition(float3(vert.m_position[0], vert.m_position[1], vert.m_position[2]));
+                    const float3 moved = world.transformPosition(
+                        float3(vert.m_position[0], vert.m_position[1], vert.m_position[2]));
 
                     baked.m_bounds.extend(moved);
 
@@ -893,7 +910,8 @@ namespace pP::mesh {
                     // an absent channel (zeros) saturates the same way and
                     // stays verbatim below the gate. No NaN is ever written.
                     const float3 bent = safeNormalize(
-                        world.transformNormal(float3(vert.m_normal[0], vert.m_normal[1], vert.m_normal[2])), math::axis_y);
+                        world.transformNormal(float3(vert.m_normal[0], vert.m_normal[1], vert.m_normal[2])),
+                        math::axis_y);
 
                     if (has_normal) {
                         vert.m_normal[0] = bent.x;
@@ -903,7 +921,8 @@ namespace pP::mesh {
 
                     if (has_tangent) {
                         // Gram-Schmidt orthonormalization:
-                        float3 twisted = world.transformVector(float3(vert.m_tangent[0], vert.m_tangent[1], vert.m_tangent[2]));
+                        float3 twisted = world.transformVector(
+                            float3(vert.m_tangent[0], vert.m_tangent[1], vert.m_tangent[2]));
                         twisted = orthonormalize(bent, twisted);
 
                         vert.m_tangent[0] = twisted.x;
@@ -929,7 +948,8 @@ namespace pP::mesh {
             // conversion. Restart sentinels split the strip/fan; resolved
             // indices are file-local + base in all cases.
             [[nodiscard]] std::error_code expandStripFan(
-                const m3d::Primitive &prim, const Array<u32> &file_indices, const u64 vert_count, Array<u32> &out_expanded) {
+                const m3d::Primitive &prim, const Array<u32> &file_indices, const u64 vert_count,
+                Array<u32> &out_expanded) {
                 const bool is_strip = prim.type == m3d::Primitive::Type::TriangleStrip;
                 const u64 base = prim.base;
 
@@ -998,7 +1018,8 @@ namespace pP::mesh {
             // warning-only path. No new dependency: Mesh/IndexedMesh/Vertex all
             // ride the existing PRIVATE mango-import3d edge.
             [[nodiscard]] bool regenTangents(
-                const m3d::IndexedMesh &mesh, const std::vector<m3d::Material> &materials, Array<float4> &out_tangents) {
+                const m3d::IndexedMesh &mesh, const std::vector<m3d::Material> &materials,
+                Array<float4> &out_tangents) {
                 if ((mesh.flags & m3d::Vertex::Tangent) != 0u) {
                     return false;
                 }
@@ -1185,7 +1206,8 @@ namespace pP::mesh {
 
                     const u64 start = prim.start;
                     const u64 count = prim.count;
-                    if (count < 3u or start > out.m_indices.size() or count > out.m_indices.size() - start) [[unlikely]] {
+                    if (count < 3u or start > out.m_indices.size() or count > out.m_indices.size() - start)
+                        [[unlikely]] {
                         return std::unexpected{make_error_code(errc::invalid_argument)};
                     }
 
@@ -1234,7 +1256,8 @@ namespace pP::mesh {
                             file_slice.push_back(out.m_indices[start + k]);
                         }
 
-                        if (const std::error_code err = expandStripFan(prim, file_slice, verts, expanded)) [[unlikely]] {
+                        if (const std::error_code err = expandStripFan(prim, file_slice, verts, expanded))
+                            [[unlikely]] {
                             return std::unexpected{err};
                         }
                         if (expanded.empty() or expanded.size() % 3u != 0u) [[unlikely]] {
@@ -1277,15 +1300,17 @@ namespace pP::mesh {
                     // Warning-only: tangents stay zero with no tangent flag —
                     // never a silent flat-tangent claim (§2.3 regen rule).
                     if (want_tangent) [[unlikely]] {
-                        PPR_LOG(Mesh, warning,
+                        PPR_LOG(
+                            Mesh, warning,
                             "normal-mapped mesh has no usable tangents (source TANGENT absent, MikkTSpace regen unavailable or failed); emitting zero tangents with no tangent flag");
                     }
                 }
                 return out;
             }
 
-            [[nodiscard]] Expected<SceneAsset> buildScene(const m3d::Scene &scene, const std::filesystem::path &dir,
-                                                          const Array<mem::SharedBuffer> &glb_embeds, const MeshLimits &limits) {
+            [[nodiscard]] Expected<SceneAsset> buildScene(
+                const m3d::Scene &scene, const std::filesystem::path &dir, const Array<mem::SharedBuffer> &glb_embeds,
+                const MeshLimits &limits) {
                 // Mango returns a silent-empty Scene on parse failure (no
                 // exception): fail closed instead of an empty asset.
                 if (scene.meshes.empty()) [[unlikely]] {
@@ -1306,16 +1331,18 @@ namespace pP::mesh {
 
                 // Production count caps: reject before reserving scene
                 // storage (fail-closed invalid_argument, never a throw).
-                if (scene.images.size() > limits.m_max_images or scene.materials.size() > limits.m_max_materials or
-                    scene.meshes.size() > limits.m_max_meshes or scene.nodes.size() > limits.m_max_nodes) [[unlikely]] {
+                if (scene.images.size() > limits.m_max_images or
+                    scene.materials.size() > limits.m_max_materials or
+                    scene.meshes.size() > limits.m_max_meshes or
+                    scene.nodes.size() > limits.m_max_nodes) [[unlikely]] {
                     PPR_LOG(Mesh, error, "scene exceeds production count caps — rejecting scene");
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
 
                 if (scene.images.size() > static_cast<std::size_t>(std::numeric_limits<u32>::max())) [[unlikely]] {
-                    PPR_LOG(Mesh, warning, "scene image count exceeds u32 range — rejecting scene", {
-                        {"images", (scene.images.size())}
-                        });
+                    PPR_LOG(
+                        Mesh, warning, "scene image count exceeds u32 range — rejecting scene",
+                        {{"images", (scene.images.size())}});
                     return std::unexpected{make_error_code(errc::invalid_argument)};
                 }
 
@@ -1323,12 +1350,10 @@ namespace pP::mesh {
 
                 // Index-aligned with glb_embeds (Scene.images pushes 1:1 with
                 // asset.images, empties included).
-                Array<std::pair<std::string, mem::SharedBuffer> > file_cache{};
+                Array<std::pair<std::string, mem::SharedBuffer>> file_cache{};
                 for (std::size_t i = 0u; i < scene.images.size(); ++i) {
                     Expected<ImageRef> ref = convertImage(
-                        scene.images[i], dir,
-                        static_cast<u32>(i),
-                        glb_embeds, file_cache);
+                        scene.images[i], dir, static_cast<u32>(i), glb_embeds, file_cache);
                     if (not ref.has_value()) [[unlikely]] {
                         return std::unexpected{ref.error()};
                     }
@@ -1486,12 +1511,16 @@ namespace pP::mesh {
     namespace {
         class MeshErrorCategory final : public std::error_category {
         public:
-            [[nodiscard]] const char *name() const noexcept override { return "mesh"; }
+            [[nodiscard]] const char *name() const noexcept override {
+                return "mesh";
+            }
 
             [[nodiscard]] std::string message(const int ev) const override {
                 switch (static_cast<errc>(ev)) {
-                    case errc::invalid_argument: return "invalid mesh content (silent-empty scene, missing POSITION, or bad indices)";
-                    case errc::function_not_supported: return "mesh content is deferred from MVP (skins, blend, or authored extension modules)";
+                    case errc::invalid_argument:
+                        return "invalid mesh content (silent-empty scene, missing POSITION, or bad indices)";
+                    case errc::function_not_supported:
+                        return "mesh content is deferred from MVP (skins, blend, or authored extension modules)";
                     case errc::import_failed: return "mango importer failed";
                     default: return std::format("unknown mesh result ({})", ev);
                 }
@@ -1528,9 +1557,7 @@ namespace pP::mesh {
         // hammer). Set-once never restores; std::call_once serializes the
         // single Mango write before any import continues.
         static std::once_flag mango_verbose_silenced;
-        std::call_once(mango_verbose_silenced, [] {
-            mango::printEnable(mango::Print::Verbose, false);
-        });
+        std::call_once(mango_verbose_silenced, [] { mango::printEnable(mango::Print::Verbose, false); });
 
         if (dir.empty() or file.empty()) [[unlikely]] {
             return std::unexpected{make_error_code(errc::invalid_argument)};
@@ -1561,7 +1588,7 @@ namespace pP::mesh {
                 return std::unexpected{make_error_code(errc::invalid_argument)};
             }
 
-            Expected<Array<mem::SharedBuffer> > embeds = details::resolveGlbEmbeds(*mapped, limits);
+            Expected<Array<mem::SharedBuffer>> embeds = details::resolveGlbEmbeds(*mapped, limits);
             if (not embeds.has_value()) [[unlikely]] {
                 PPR_LOG(Mesh, error, "GLB container exceeds production chunk cap — rejecting file");
                 return std::unexpected{embeds.error()};
@@ -1600,10 +1627,8 @@ namespace pP::mesh {
                 embed_bytes += embed.getBufferData().size();
             }
 
-            PPR_LOG(Mesh, info, "GLB import succeeded", {
-                {"embeds", (glb_embeds.size())},
-                {"embed_bytes", embed_bytes}
-                });
+            PPR_LOG(
+                Mesh, info, "GLB import succeeded", {{"embeds", (glb_embeds.size())}, {"embed_bytes", embed_bytes}});
         }
 
         // Scene drops here: every ImageRef owns PPR-mapped bytes or a

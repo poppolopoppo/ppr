@@ -35,7 +35,11 @@ export namespace pP::colony {
     /// High-level plan actions per Plan (waypoints live in PathComp).
     inline constexpr u32 kMaxPlanActions = 8u;
 
-    enum class EGoal : u32 { seek, work, flee };
+    enum class EGoal : u32 {
+        seek,
+        work,
+        flee
+    };
 
     struct AgentAction {
         u32 m_op{kOpMove};

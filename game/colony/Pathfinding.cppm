@@ -21,8 +21,7 @@ export namespace pP::colony {
     inline constexpr u32 kMaxSearchNodes = 4096u;
 
     /// Words of the membership bitset covering every world cell exactly once.
-    inline constexpr u32 kSearchBitWords =
-            (sim::kWorldEdge * sim::kWorldEdge + 63u) / 64u;
+    inline constexpr u32 kSearchBitWords = (sim::kWorldEdge * sim::kWorldEdge + 63u) / 64u;
 
     /// Durable path request. Lives in the existing ECS columns section, so it
     /// is snapshot-covered with no format bump; registration order is fixed by

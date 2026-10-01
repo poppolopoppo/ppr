@@ -36,10 +36,15 @@ namespace pP::colony {
         /// (a first-frame focus steal would take keyboard capture from frame
         /// 2 onward and silence every shortcut until the player clicked the
         /// world again).
-        constexpr ImGuiWindowFlags kChromeFlags =
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoDocking;
+        constexpr ImGuiWindowFlags kChromeFlags = ImGuiWindowFlags_NoTitleBar |
+                                                  ImGuiWindowFlags_NoMove |
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoCollapse |
+                                                  ImGuiWindowFlags_NoSavedSettings |
+                                                  ImGuiWindowFlags_NoFocusOnAppearing |
+                                                  ImGuiWindowFlags_NoScrollbar |
+                                                  ImGuiWindowFlags_NoScrollWithMouse |
+                                                  ImGuiWindowFlags_NoDocking;
 
         /// Font-relative padding: ImGui style padding does not scale with
         /// DpiEnableScaleFonts, so every gap derives from the current font
@@ -87,8 +92,8 @@ namespace pP::colony {
             }
         };
 
-        [[nodiscard]] const ColonyShortcut *findShortcut(const std::span<const ColonyShortcut> shortcuts,
-                                                         const EColonyIntent kind, const u32 arg) noexcept {
+        [[nodiscard]] const ColonyShortcut *findShortcut(
+            const std::span<const ColonyShortcut> shortcuts, const EColonyIntent kind, const u32 arg) noexcept {
             for (const ColonyShortcut &row: shortcuts) {
                 if (row.m_kind == kind and row.m_arg == arg) {
                     return &row;
@@ -101,8 +106,8 @@ namespace pP::colony {
         /// table ("" when it has no key of its own). First-run, camera, and
         /// tool copy name a key only through this, so Help can never drift
         /// from the bindings the Keyboard section renders.
-        [[nodiscard]] const char *boundKey(const std::span<const ColonyShortcut> shortcuts, const EColonyIntent kind,
-                                           const u32 arg) noexcept {
+        [[nodiscard]] const char *boundKey(
+            const std::span<const ColonyShortcut> shortcuts, const EColonyIntent kind, const u32 arg) noexcept {
             const ColonyShortcut *row = findShortcut(shortcuts, kind, arg);
             return row != nullptr ? row->m_key : "";
         }
@@ -211,8 +216,9 @@ namespace pP::colony {
         /// Bottom status line: hovered cell/element, pinned target, then the
         /// newest bounded notice (with its error code) or the standing tool
         /// instruction. Returns its height for the side-panel layout.
-        float drawStatusLine_(const ColonyDriver &driver, const ColonyUiView &view, ColonyUiState &state,
-                              std::optional<ColonyIntent> &intent) {
+        float drawStatusLine_(
+            const ColonyDriver &driver, const ColonyUiView &view, ColonyUiState &state,
+            std::optional<ColonyIntent> &intent) {
             const ImGuiIO &io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2{0.0f, io.DisplaySize.y}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
             ImGui::SetNextWindowSize(ImVec2{io.DisplaySize.x, 0.0f}, ImGuiCond_Always);
@@ -261,8 +267,8 @@ namespace pP::colony {
                     ImGui::Text("%s", state.m_notice.m_text.c_str());
                     ImGui::PopStyleColor();
                     ImGui::SameLine();
-                    ImGui::TextDisabled("(%s #%d)", state.m_notice.m_error.category().name(),
-                                        state.m_notice.m_error.value());
+                    ImGui::TextDisabled(
+                        "(%s #%d)", state.m_notice.m_error.category().name(), state.m_notice.m_error.value());
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
                     ImGui::Text("[ok] %s", state.m_notice.m_text.c_str());
@@ -285,9 +291,9 @@ namespace pP::colony {
         /// build/regenerate popups. Every button dispatches the same intent
         /// as its keyboard shortcut (parity by construction). Returns the
         /// bar height for the side-panel layout.
-        float drawTopBar_(const ColonyDriver &driver, const ColonyUiView &view,
-                          const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state,
-                          std::optional<ColonyIntent> &intent) {
+        float drawTopBar_(
+            const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
+            ColonyUiState &state, std::optional<ColonyIntent> &intent) {
             const ImGuiIO &io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2{0.0f, 0.0f}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{io.DisplaySize.x, 0.0f}, ImGuiCond_Always);
@@ -296,8 +302,8 @@ namespace pP::colony {
             const float fs = ImGui::GetFontSize();
             BarFlow flow{.m_avail = ImGui::GetContentRegionAvail().x, .m_gap = fs * 0.4f};
 
-            const auto place_button = [&flow, &intent, &shortcuts](const char *label, const EColonyIntent kind,
-                                                                   const u32 arg) {
+            const auto place_button = [&flow, &intent, &shortcuts](
+                                          const char *label, const EColonyIntent kind, const u32 arg) {
                 flow.place(framedWidth(label));
                 const bool pressed = ImGui::Button(label);
                 shortcutTip(shortcuts, kind, arg);
@@ -350,9 +356,9 @@ namespace pP::colony {
             // Tool selection. The active tool carries brackets + colour +
             // text together; Dig emits the same toggle_dig intent as G, and
             // Inspect emits the same select_tool intent as I.
-            const auto place_tool = [&flow, &intent, &shortcuts, &state](const char *label, const char *active_label,
-                                                                         const EColonyTool tool,
-                                                                         const EColonyIntent kind, const u32 arg) {
+            const auto place_tool = [&flow, &intent, &shortcuts, &state](
+                                        const char *label, const char *active_label, const EColonyTool tool,
+                                        const EColonyIntent kind, const u32 arg) {
                 const bool active = state.m_tool == tool;
                 const char *shown = active ? active_label : label;
                 flow.place(framedWidth(shown));
@@ -368,8 +374,9 @@ namespace pP::colony {
                     intent = ColonyIntent{.m_kind = kind, .m_arg = arg};
                 }
             };
-            place_tool("Inspect", "[Inspect]", EColonyTool::inspect, EColonyIntent::select_tool,
-                       static_cast<u32>(EColonyTool::inspect));
+            place_tool(
+                "Inspect", "[Inspect]", EColonyTool::inspect, EColonyIntent::select_tool,
+                static_cast<u32>(EColonyTool::inspect));
             place_tool("Dig", "[Dig]", EColonyTool::dig, EColonyIntent::toggle_dig, 0u);
             place_button("Build...", EColonyIntent::open_build_menu, 0u);
 
@@ -414,8 +421,8 @@ namespace pP::colony {
             std::snprintf(tool_label, sizeof(tool_label), "Tool: %s", toolName(state.m_tool));
             strip.place(plainWidth(tool_label));
             const ImVec4 tool_color = state.m_tool == EColonyTool::dig
-                                              ? kCyan
-                                              : (state.m_tool == EColonyTool::inspect ? kGreen : kOrange);
+                                          ? kCyan
+                                          : (state.m_tool == EColonyTool::inspect ? kGreen : kOrange);
             ImGui::PushStyleColor(ImGuiCol_Text, tool_color);
             ImGui::Text("%s", tool_label);
             ImGui::PopStyleColor();
@@ -436,14 +443,15 @@ namespace pP::colony {
             if (footprint) {
                 const ColonyPreviewView &preview = view.m_preview;
                 if (not preview.m_active) {
-                    std::snprintf(size_label, sizeof(size_label), "Rect: drag to size, max %u cells",
-                                  preview.m_max_edge);
+                    std::snprintf(
+                        size_label, sizeof(size_label), "Rect: drag to size, max %u cells", preview.m_max_edge);
                 } else if (preview.m_reason[0] != '\0') {
                     std::snprintf(size_label, sizeof(size_label), "Won't commit: %s", preview.m_reason);
                     size_hot = true;
                 } else if (preview.m_clamped_x or preview.m_clamped_y) {
-                    std::snprintf(size_label, sizeof(size_label), "Rect: %ux%u · Clamped to %u", preview.m_width,
-                                  preview.m_height, preview.m_max_edge);
+                    std::snprintf(
+                        size_label, sizeof(size_label), "Rect: %ux%u · Clamped to %u", preview.m_width,
+                        preview.m_height, preview.m_max_edge);
                 } else {
                     std::snprintf(size_label, sizeof(size_label), "Rect: %ux%u", preview.m_width, preview.m_height);
                 }
@@ -475,13 +483,13 @@ namespace pP::colony {
             }
             if (ImGui::BeginPopup("Build tools")) {
                 if (ImGui::MenuItem("Rock wall")) {
-                    intent = ColonyIntent{.m_kind = EColonyIntent::select_tool,
-                                          .m_arg = static_cast<u32>(EColonyTool::build_wall)};
+                    intent = ColonyIntent{
+                        .m_kind = EColonyIntent::select_tool, .m_arg = static_cast<u32>(EColonyTool::build_wall)};
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::MenuItem("Demolish")) {
-                    intent = ColonyIntent{.m_kind = EColonyIntent::select_tool,
-                                          .m_arg = static_cast<u32>(EColonyTool::demolish)};
+                    intent = ColonyIntent{
+                        .m_kind = EColonyIntent::select_tool, .m_arg = static_cast<u32>(EColonyTool::demolish)};
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::TextDisabled("Only these two so far; other blueprints come later.");
@@ -498,8 +506,8 @@ namespace pP::colony {
             }
             if (ImGui::BeginPopupModal("Regenerate world?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text("Replace the current colony with a new world?");
-                ImGui::TextDisabled("Seed %llu is discarded; this cannot be undone.",
-                                    static_cast<unsigned long long>(driver.seed()));
+                ImGui::TextDisabled(
+                    "Seed %llu is discarded; this cannot be undone.", static_cast<unsigned long long>(driver.seed()));
                 if (ImGui::Button("Regenerate")) {
                     intent = ColonyIntent{.m_kind = EColonyIntent::regenerate, .m_confirmed = true};
                     state.m_regen_confirm_open = false;
@@ -526,15 +534,16 @@ namespace pP::colony {
         /// element, temperature, pin/unpin, the Focus control, the selected
         /// colonist's stable key with its follow state, and the nearest
         /// colonist within 8 cells with honest empty states.
-        void drawInspector_(const ColonyDriver &driver, const ColonyUiView &view, ColonyUiState &state,
-                            std::optional<ColonyIntent> &intent) {
+        void drawInspector_(
+            const ColonyDriver &driver, const ColonyUiView &view, ColonyUiState &state,
+            std::optional<ColonyIntent> &intent) {
             ImGui::SeparatorText("Inspector");
 
             const bool pinned = state.m_pinned.has_value();
             const std::optional<sim::GlobalCellPos> target =
-                    pinned ? state.m_pinned
-                           : (view.m_hover.m_world ? std::optional<sim::GlobalCellPos>{view.m_hover.m_target}
-                                                   : std::nullopt);
+                pinned
+                    ? state.m_pinned
+                    : (view.m_hover.m_world ? std::optional<sim::GlobalCellPos>{view.m_hover.m_target} : std::nullopt);
 
             if (pinned) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kCyan);
@@ -574,9 +583,9 @@ namespace pP::colony {
             }
             ImGui::EndDisabled();
             ImGui::SetItemTooltip(
-                    view.m_selected_agent.has_value()
-                            ? "Jump to the selected colonist and follow it"
-                            : "No colonist selected - click one in the world, or use a row's Focus in the Colony section");
+                view.m_selected_agent.has_value()
+                    ? "Jump to the selected colonist and follow it"
+                    : "No colonist selected - click one in the world, or use a row's Focus in the Colony section");
 
             // Slice 4: name the held selection by its stable key and say
             // out loud whether the camera is following it, so "selected"
@@ -585,8 +594,9 @@ namespace pP::colony {
             // when no cell is hovered or pinned.
             if (view.m_selected_agent.has_value()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kCyan);
-                ImGui::Text("Colonist A%u · key %llu", keySuffix(*view.m_selected_agent),
-                            static_cast<unsigned long long>(*view.m_selected_agent));
+                ImGui::Text(
+                    "Colonist A%u · key %llu", keySuffix(*view.m_selected_agent),
+                    static_cast<unsigned long long>(*view.m_selected_agent));
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
                 if (view.m_following) {
@@ -641,9 +651,9 @@ namespace pP::colony {
         /// colonist control (same intent as F) and the Stop-follow control
         /// (same intent as Esc) — plus a shortcut pointer derived from the
         /// binding table.
-        void drawColonySection_(const ColonyDriver &driver, const ColonyUiView &view,
-                                const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state,
-                                std::optional<ColonyIntent> &intent) {
+        void drawColonySection_(
+            const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
+            ColonyUiState &state, std::optional<ColonyIntent> &intent) {
             const ColonyPanelCounts &counts = view.m_counts;
 
             ImGui::Text("Seed  %llu", static_cast<unsigned long long>(driver.seed()));
@@ -662,8 +672,8 @@ namespace pP::colony {
             ImGui::Text("Errands %u active", counts.m_errands);
             ImGui::Text("Dug     %u cells (wake %u)", counts.m_dug_total, counts.m_wake_radius);
             ImGui::Text("Edits   %u chunks", counts.m_affected_chunks);
-            ImGui::Text("Dig     %s · highlight %s", counts.m_dig_mode ? "ON" : "off",
-                        counts.m_show_highlight ? "ON" : "off");
+            ImGui::Text(
+                "Dig     %s · highlight %s", counts.m_dig_mode ? "ON" : "off", counts.m_show_highlight ? "ON" : "off");
 
             // Colonists: the two controls first, then one row per live
             // summary. Both controls dispatch intents the keyboard already
@@ -719,12 +729,13 @@ namespace pP::colony {
                 const char *prefix = selected ? "> " : "  ";
                 char label[192]{};
                 if (row.m_has_plan) {
-                    std::snprintf(label, sizeof(label), "%sA%u · plan · O2 %s · rest %s · %s · pc %u · replans %u",
-                                  prefix, keySuffix(row.m_key), o2_text, rest_text, goalName(row.m_goal), row.m_pc,
-                                  row.m_replans);
+                    std::snprintf(
+                        label, sizeof(label), "%sA%u · plan · O2 %s · rest %s · %s · pc %u · replans %u", prefix,
+                        keySuffix(row.m_key), o2_text, rest_text, goalName(row.m_goal), row.m_pc, row.m_replans);
                 } else {
-                    std::snprintf(label, sizeof(label), "%sA%u · idle · O2 %s · rest %s · no plan", prefix,
-                                  keySuffix(row.m_key), o2_text, rest_text);
+                    std::snprintf(
+                        label, sizeof(label), "%sA%u · idle · O2 %s · rest %s · no plan", prefix, keySuffix(row.m_key),
+                        o2_text, rest_text);
                 }
 
                 // Row chrome goes down first so the text sits on top: the
@@ -735,8 +746,9 @@ namespace pP::colony {
                 // accent as well as colour.
                 const bool one_line = plainWidth(label) + gap + focus_w <= ImGui::GetContentRegionAvail().x;
                 const float row_h = one_line ? std::max(ImGui::GetTextLineHeight(), ImGui::GetFrameHeight())
-                                             : ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y +
-                                                       ImGui::GetFrameHeight();
+                                             : ImGui::GetTextLineHeight() +
+                                                   ImGui::GetStyle().ItemSpacing.y +
+                                                   ImGui::GetFrameHeight();
                 const ImVec2 row_min = ImGui::GetCursorScreenPos();
                 if (selected or hovered) {
                     const ImVec4 tint = selected ? kSelectedRowBg : kHoveredRowBg;
@@ -745,8 +757,8 @@ namespace pP::colony {
                     if (selected) {
                         const ImVec2 bar_min{row_min.x - fs * 0.45f, row_min.y};
                         const ImVec2 bar_max{row_min.x - fs * 0.15f, row_min.y + row_h};
-                        ImGui::GetWindowDrawList()->AddRectFilled(bar_min, bar_max,
-                                                                  ImGui::ColorConvertFloat4ToU32(kCyan));
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            bar_min, bar_max, ImGui::ColorConvertFloat4ToU32(kCyan));
                     }
                 }
 
@@ -761,8 +773,8 @@ namespace pP::colony {
 
                 // Unique ID per key: every row's Focus reads the same.
                 char focus_label[40]{};
-                std::snprintf(focus_label, sizeof(focus_label), "Focus##agent%llu",
-                              static_cast<unsigned long long>(row.m_key));
+                std::snprintf(
+                    focus_label, sizeof(focus_label), "Focus##agent%llu", static_cast<unsigned long long>(row.m_key));
                 if (one_line) {
                     ImGui::SameLine(0.0f, gap);
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - focus_w);
@@ -833,14 +845,16 @@ namespace pP::colony {
             ImGui::Text("Avg        %.2f ms  since launch", perf.m_avg_frame_ms);
             ImGui::Text("Max        %.2f ms  since launch", perf.m_max_frame_ms);
             ImGui::Text("Frames     %llu since launch", static_cast<unsigned long long>(perf.m_frames));
-            ImGui::Text("Window     min %.2f  p50 %.2f  p95 %.2f  max %.2f ms", perf.m_min_ms, perf.m_p50_ms,
-                        perf.m_p95_ms, perf.m_window_max_ms);
-            ImGui::Text("Over       %llu in window above 16.67 ms",
-                        static_cast<unsigned long long>(perf.m_over_budget));
-            ImGui::Text("Samples    %llu/%u in window", static_cast<unsigned long long>(perf.m_window_samples),
-                        perf.m_window_def);
-            ImGui::TextDisabled("Window: %u-sample ring; nearest-rank percentiles; bounded refresh.",
-                                perf.m_window_def);
+            ImGui::Text(
+                "Window     min %.2f  p50 %.2f  p95 %.2f  max %.2f ms", perf.m_min_ms, perf.m_p50_ms, perf.m_p95_ms,
+                perf.m_window_max_ms);
+            ImGui::Text(
+                "Over       %llu in window above 16.67 ms", static_cast<unsigned long long>(perf.m_over_budget));
+            ImGui::Text(
+                "Samples    %llu/%u in window", static_cast<unsigned long long>(perf.m_window_samples),
+                perf.m_window_def);
+            ImGui::TextDisabled(
+                "Window: %u-sample ring; nearest-rank percentiles; bounded refresh.", perf.m_window_def);
             if (perf.m_gpu_validation) {
                 ImGui::TextDisabled("GPU validation: on (expect slower frames than Release).");
             } else {
@@ -886,10 +900,10 @@ namespace pP::colony {
         /// drawn earlier this frame. Returns the panel width for the
         /// caller's overlay clip (0 when a degenerate window skips the
         /// frame, so the clip falls back to the full width).
-        [[nodiscard]] float drawSidePanel_(const ColonyDriver &driver, const ColonyUiView &view,
-                                           const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state,
-                                           std::optional<ColonyIntent> &intent, const float bar_height,
-                                           const float status_height) {
+        [[nodiscard]] float drawSidePanel_(
+            const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
+            ColonyUiState &state, std::optional<ColonyIntent> &intent, const float bar_height,
+            const float status_height) {
             const ImGuiIO &io = ImGui::GetIO();
             const float fs = ImGui::GetFontSize();
             const float panel_w = std::min(std::max(fs * 34.0f, 220.0f), io.DisplaySize.x * 0.45f);
@@ -907,8 +921,8 @@ namespace pP::colony {
             // Section buttons (not a tab bar) so both emit intents and hand
             // keyboard capture back like every other chrome control.
             BarFlow tabs{.m_avail = ImGui::GetContentRegionAvail().x, .m_gap = fs * 0.4f};
-            const auto tab_button = [&tabs, &intent, &state](const char *label, const char *active_label,
-                                                             const EColonyPanelTab tab) {
+            const auto tab_button = [&tabs, &intent, &state](
+                                        const char *label, const char *active_label, const EColonyPanelTab tab) {
                 const bool active = state.m_tab == tab;
                 const char *shown = active ? active_label : label;
                 tabs.place(framedWidth(shown));
@@ -949,32 +963,35 @@ namespace pP::colony {
         /// bindings. The first-run block stays until dismissed and lives for
         /// this session only; the window itself reopens from the "?" button
         /// or F1 whenever the player wants the reference back.
-        void drawHelpWindow_(const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state,
-                             std::optional<ColonyIntent> &intent) {
+        void drawHelpWindow_(
+            const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state,
+            std::optional<ColonyIntent> &intent) {
             if (not state.m_help_open) {
                 return;
             }
 
             const ImGuiIO &io = ImGui::GetIO();
             const float fs = ImGui::GetFontSize();
-            ImGui::SetNextWindowPos(ImVec2{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always,
-                                    ImVec2{0.5f, 0.5f});
+            ImGui::SetNextWindowPos(
+                ImVec2{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, ImVec2{0.5f, 0.5f});
             ImGui::SetNextWindowSize(ImVec2{std::min(io.DisplaySize.x * 0.6f, fs * 70.0f), 0.0f}, ImGuiCond_Always);
             ImGui::Begin("##help", nullptr, kChromeFlags);
 
             if (not state.m_intro_dismissed) {
                 ImGui::SeparatorText("First run");
                 ImGui::TextDisabled(
-                        "Pick a tool (%s inspect, %s dig, %s build menu), then click or drag the world.",
-                        boundKey(shortcuts, EColonyIntent::select_tool, static_cast<u32>(EColonyTool::inspect)),
-                        boundKey(shortcuts, EColonyIntent::toggle_dig, 0u),
-                        boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
+                    "Pick a tool (%s inspect, %s dig, %s build menu), then click or drag the world.",
+                    boundKey(shortcuts, EColonyIntent::select_tool, static_cast<u32>(EColonyTool::inspect)),
+                    boundKey(shortcuts, EColonyIntent::toggle_dig, 0u),
+                    boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
                 ImGui::TextDisabled("Colonists keep working while you play.");
-                ImGui::TextDisabled("%s shows the chunk grid, %s the edit highlight.",
-                                    boundKey(shortcuts, EColonyIntent::toggle_grid_overlay, 0u),
-                                    boundKey(shortcuts, EColonyIntent::toggle_edit_highlight, 0u));
-                ImGui::TextDisabled("Reopen this window any time: the ? button in the top bar, or %s.",
-                                    boundKey(shortcuts, EColonyIntent::help, 0u));
+                ImGui::TextDisabled(
+                    "%s shows the chunk grid, %s the edit highlight.",
+                    boundKey(shortcuts, EColonyIntent::toggle_grid_overlay, 0u),
+                    boundKey(shortcuts, EColonyIntent::toggle_edit_highlight, 0u));
+                ImGui::TextDisabled(
+                    "Reopen this window any time: the ? button in the top bar, or %s.",
+                    boundKey(shortcuts, EColonyIntent::help, 0u));
                 if (ImGui::SmallButton("Got it")) {
                     state.m_intro_dismissed = true;
                 }
@@ -990,13 +1007,14 @@ namespace pP::colony {
 
             ImGui::Spacing();
             ImGui::SeparatorText("Tools");
-            const EColonyTool tools[4]{EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall,
-                                       EColonyTool::demolish};
+            const EColonyTool tools[4]{
+                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish};
             for (const EColonyTool tool: tools) {
                 ImGui::Text("%-11s %s", toolName(tool), gestureText(tool));
             }
-            ImGui::TextDisabled("%s opens the build menu (Rock wall, Demolish).",
-                                boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
+            ImGui::TextDisabled(
+                "%s opens the build menu (Rock wall, Demolish).",
+                boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
 
             ImGui::Spacing();
             ImGui::SeparatorText("Keyboard");
@@ -1016,8 +1034,9 @@ namespace pP::colony {
         }
     } // namespace
 
-    ColonyUiFrame drawColonyUi(const ColonyDriver &driver, const ColonyUiView &view,
-                               const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state) {
+    ColonyUiFrame drawColonyUi(
+        const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
+        ColonyUiState &state) {
         std::optional<ColonyIntent> intent{};
 
         pushChromeStyle();
@@ -1039,7 +1058,9 @@ namespace pP::colony {
         // cancel. While a popup owns the key, ImGui closes non-modal popups
         // itself and the regenerate modal handles its own Escape in
         // drawTopBar_; no cancel intent is emitted there.
-        if (not popup_open and not intent.has_value() and ImGui::GetIO().WantCaptureKeyboard and
+        if (not popup_open and
+            not intent.has_value() and
+            ImGui::GetIO().WantCaptureKeyboard and
             ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             intent = ColonyIntent{.m_kind = EColonyIntent::cancel};
         }
@@ -1054,8 +1075,8 @@ namespace pP::colony {
         // deselect). Never while a popup is open: a null focus request
         // closes every popup (FocusWindow(NULL) -> ClosePopupsOverWindow
         // (NULL) -> ClosePopupToLevel(0)).
-        frame.m_focus_release =
-                not popup_open and (ImGui::IsMouseReleased(ImGuiMouseButton_Left) or state.m_popup_visible_last_frame);
+        frame.m_focus_release = not popup_open and
+                                (ImGui::IsMouseReleased(ImGuiMouseButton_Left) or state.m_popup_visible_last_frame);
         state.m_popup_visible_last_frame = popup_open;
         return frame;
     }

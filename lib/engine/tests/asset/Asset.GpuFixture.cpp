@@ -25,12 +25,15 @@ namespace pP::tests::detail::SharedGpu {
     };
 
     struct SharedTestApp : Application {
-        SharedTestApp()
-            : Application(kSharedDomain, "AssetSharedGpu", std::span<const char *const>{}) {
+        SharedTestApp() : Application(kSharedDomain, "AssetSharedGpu", std::span<const char *const>{}) {
         }
 
-        [[nodiscard]] std::error_code boot() { return Application::initialize(); }
-        [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
+        [[nodiscard]] std::error_code boot() {
+            return Application::initialize();
+        }
+        [[nodiscard]] std::error_code teardown() {
+            return Application::shutdown();
+        }
     };
 
     struct Holder {

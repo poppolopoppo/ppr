@@ -6,8 +6,17 @@ AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignOperands: true
 AlignTrailingComments: false
+AlignAfterOpenBracket: DontAlign
+BreakAfterOpenBracketFunction: true
+BreakAfterOpenBracketBracedList: true
+BreakBeforeCloseBracketFunction: false
+BitFieldColonSpacing: After
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortLambdasOnASingleLine: All
 AlwaysBreakTemplateDeclarations: Yes
-BraceWrapping: 
+BraceWrapping:
   AfterCaseLabel: false
   AfterClass: false
   AfterControlStatement: false
@@ -24,13 +33,21 @@ BraceWrapping:
   SplitEmptyFunction: true
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
+BreakBeforeBinaryOperators: None
 BreakBeforeBraces: Custom
-BreakConstructorInitializers: AfterColon
+BreakBinaryOperations: RespectPrecedence
+BreakConstructorInitializers: BeforeColon
 BreakConstructorInitializersBeforeComma: false
+BreakStringLiterals: false
 ColumnLimit: 120
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
-ContinuationIndentWidth: 8
-IncludeCategories: 
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+FixNamespaceComments: false
+ForEachMacros:
+  - foreach
+  - PPR_UNIT_TEST
+IncludeCategories:
   - Regex: '^<.*'
     Priority: 1
   - Regex: '^".*'
@@ -41,12 +58,33 @@ IncludeIsMainRegex: '([-_](test|unittest))?$'
 IndentCaseLabels: true
 IndentWidth: 4
 InsertNewlineAtEOF: true
+KeepEmptyLines:
+  AtEndOfFile: true
+  AtStartOfBlock: true
+  AtStartOfFile: true
 MacroBlockBegin: ''
 MacroBlockEnd: ''
 MaxEmptyLinesToKeep: 2
 NamespaceIndentation: All
+PackConstructorInitializers: BinPack
+PenaltyBreakAssignment: 100
+SortIncludes: false
+SortUsingDeclarations: false
 SpaceAfterCStyleCast: true
 SpaceAfterTemplateKeyword: false
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterControlStatements: true
+  AfterForeachMacros: true
+  AfterFunctionDefinitionName: false
+  AfterFunctionDeclarationName: false
+  AfterIfMacros: true
+  AfterNot: true
+  AfterOverloadedOperator: false
+  AfterPlacementOperator: true
+  AfterRequiresInClause: true
+  AfterRequiresInExpression: true
+  BeforeNonEmptyParentheses: false
 SpaceBeforeRangeBasedForLoopColon: false
 SpaceInEmptyParentheses: false
 SpacesInAngles: false

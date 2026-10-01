@@ -78,8 +78,9 @@ namespace pP::colony {
         return {};
     }
 
-    void advanceErrands(sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder,
-                        Array<sim::ChunkPos> &touched, const u32 cell_budget) {
+    void advanceErrands(
+        sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
+        const u32 cell_budget) {
         Array<sim::Entity> live{};
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             if (errand.m_progress < errand.m_total) {

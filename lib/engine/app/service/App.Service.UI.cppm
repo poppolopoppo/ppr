@@ -16,9 +16,7 @@ export namespace pP {
     class IUIService : public virtual IService {
     public:
         [[nodiscard]] virtual std::error_code initialize(
-            WindowInputContext &window_input_context,
-            IRhiService &rhi_service,
-            IShaderService &shader_service,
+            WindowInputContext &window_input_context, IRhiService &rhi_service, IShaderService &shader_service,
             int input_listener_priority) = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;

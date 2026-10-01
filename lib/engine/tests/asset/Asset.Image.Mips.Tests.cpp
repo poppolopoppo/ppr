@@ -44,11 +44,12 @@ namespace pP::tests::detail {
             built.m_is_srgb = true;
             built.m_is_block = false;
             built.m_storage = frozen;
-            built.m_subresources.push_back(image::ImageSubresource{
-                .m_view = built.m_storage.subspan(0u, size),
-                .m_row_pitch = static_cast<u64>(width) * 4u,
-                .m_slice_pitch = static_cast<u64>(size),
-            });
+            built.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = built.m_storage.subspan(0u, size),
+                    .m_row_pitch = static_cast<u64>(width) * 4u,
+                    .m_slice_pitch = static_cast<u64>(size),
+                });
             return built;
         }
 
@@ -163,11 +164,12 @@ namespace pP::tests::detail {
             built.m_is_srgb = false;
             built.m_is_block = false;
             built.m_storage = frozen;
-            built.m_subresources.push_back(image::ImageSubresource{
-                .m_view = built.m_storage.subspan(0u, bytes),
-                .m_row_pitch = static_cast<u64>(size) * 4u,
-                .m_slice_pitch = static_cast<u64>(bytes),
-            });
+            built.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = built.m_storage.subspan(0u, bytes),
+                    .m_row_pitch = static_cast<u64>(size) * 4u,
+                    .m_slice_pitch = static_cast<u64>(bytes),
+                });
             return built;
         }
 
@@ -211,11 +213,12 @@ namespace pP::tests::detail {
             built.m_is_srgb = false;
             built.m_is_block = false;
             built.m_storage = frozen;
-            built.m_subresources.push_back(image::ImageSubresource{
-                .m_view = built.m_storage.subspan(0u, bytes),
-                .m_row_pitch = static_cast<u64>(size) * 4u,
-                .m_slice_pitch = static_cast<u64>(bytes),
-            });
+            built.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = built.m_storage.subspan(0u, bytes),
+                    .m_row_pitch = static_cast<u64>(size) * 4u,
+                    .m_slice_pitch = static_cast<u64>(bytes),
+                });
             return built;
         }
 
@@ -263,8 +266,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not image::generateMipChain(stable_plain, image::MipGenDesc{}));
             PPR_TEST_ASSERT(not image::generateMipChain(stable_kept, preserve));
             PPR_TEST_ASSERT(stable_plain.m_mip_count == stable_kept.m_mip_count);
-            PPR_TEST_ASSERT(std::ranges::equal(
-                stable_plain.m_storage.getBufferData(), stable_kept.m_storage.getBufferData()));
+            PPR_TEST_ASSERT(
+                std::ranges::equal(stable_plain.m_storage.getBufferData(), stable_kept.m_storage.getBufferData()));
         };
     } // namespace MipsCoverage
 } // namespace pP::tests::detail
@@ -314,11 +317,12 @@ namespace pP::tests::detail {
             built.m_is_srgb = true;
             built.m_is_block = false;
             built.m_storage = frozen;
-            built.m_subresources.push_back(image::ImageSubresource{
-                .m_view = built.m_storage.subspan(0u, kBytes),
-                .m_row_pitch = static_cast<u64>(kSize) * 4u,
-                .m_slice_pitch = static_cast<u64>(kBytes),
-            });
+            built.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = built.m_storage.subspan(0u, kBytes),
+                    .m_row_pitch = static_cast<u64>(kSize) * 4u,
+                    .m_slice_pitch = static_cast<u64>(kBytes),
+                });
             return built;
         }
 
@@ -407,11 +411,12 @@ namespace pP::tests::detail {
             built.m_is_srgb = false;
             built.m_is_block = false;
             built.m_storage = frozen;
-            built.m_subresources.push_back(image::ImageSubresource{
-                .m_view = built.m_storage.subspan(0u, bytes),
-                .m_row_pitch = static_cast<u64>(size) * 4u,
-                .m_slice_pitch = static_cast<u64>(bytes),
-            });
+            built.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = built.m_storage.subspan(0u, bytes),
+                    .m_row_pitch = static_cast<u64>(size) * 4u,
+                    .m_slice_pitch = static_cast<u64>(bytes),
+                });
             return built;
         }
 
@@ -485,8 +490,8 @@ namespace pP::tests::detail {
             // stay untouched, never decoded to recompress.
             const mem::SharedBuffer dds = makeDxt1Fixture_();
             PPR_TEST_ASSERT(dds.isValid());
-            Expected<image::ImageAsset> blocked =
-                    image::decodeToBlocks(dds.getBufferData(), ".dds", image::EBlockTag::bc1, image::ImageDecodeDesc{});
+            Expected<image::ImageAsset> blocked = image::decodeToBlocks(
+                dds.getBufferData(), ".dds", image::EBlockTag::bc1, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(blocked.has_value());
             PPR_TEST_ASSERT(blocked->m_mip_count == 1u);
             const std::error_code rejected = image::generateMipChain(*blocked, image::MipGenDesc{});

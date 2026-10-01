@@ -51,9 +51,15 @@ namespace pP::tests::detail {
 
         struct Mock {
             static inline int count = 0;
-            Mock() { count++; }
-            ~Mock() { count--; }
-            Mock(const Mock &) { count++; }
+            Mock() {
+                count++;
+            }
+            ~Mock() {
+                count--;
+            }
+            Mock(const Mock &) {
+                count++;
+            }
         };
 
         PPR_UNIT_TEST (lifetime_management) {

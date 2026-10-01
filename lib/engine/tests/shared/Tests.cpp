@@ -83,11 +83,9 @@ namespace pP::tests {
                 cli.m_context.m_shuffle_seed = rng();
             }
             if (cli.m_loops > 1 && cli.m_context.m_shuffle_seed.has_value()) {
-                std::cout << "[Running tests][Loop: " << iter << "/" << cli.m_loops
-                            << "][Shuffle: " << std::hex << std::uppercase
-                            << std::setw(16) << std::setfill('0')
-                            << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]"
-                            << std::endl;
+                std::cout << "[Running tests][Loop: " << iter << "/" << cli.m_loops << "][Shuffle: " << std::hex
+                          << std::uppercase << std::setw(16) << std::setfill('0')
+                          << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]" << std::endl;
             }
             UnitTest::run(cli.m_context, root);
         }

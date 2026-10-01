@@ -11,8 +11,7 @@ import engine.core;
 import std;
 
 namespace pP {
-    Player::Player(const PlayerIdentity id) noexcept
-        : m_id{id} {
+    Player::Player(const PlayerIdentity id) noexcept : m_id{id} {
     }
 
     void Player::pushDeviceView(SharedInputDevice device) noexcept {

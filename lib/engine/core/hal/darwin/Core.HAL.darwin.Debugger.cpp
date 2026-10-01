@@ -108,19 +108,23 @@ namespace pP::hal {
         std::ignore = ::pthread_setname_np(buffer);
     }
 
-    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+    [[nodiscard]] std::size_t getThreadName(
+        const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         const mach_port_t self = ::mach_task_self();
         thread_act_array_t threads = nullptr;
         mach_msg_type_number_t thread_count = 0u;
 
         PPR_PRAGMA_WARNING_PUSH()
-        PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wdeprecated - declarations) // task_threads: no public tid→pthread_t alternative
+        PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(
+            -Wdeprecated - declarations) // task_threads: no public tid→pthread_t alternative
         const kern_return_t result = ::task_threads(self, &threads, &thread_count);
         PPR_PRAGMA_WARNING_POP()
         if (result != KERN_SUCCESS) {
             return 0u;
         }
-        PPR_DEFER{::vm_deallocate(self, reinterpret_cast<vm_address_t>(threads), thread_count * sizeof(mach_port_t)); };
+        PPR_DEFER {
+            ::vm_deallocate(self, reinterpret_cast<vm_address_t>(threads), thread_count * sizeof(mach_port_t));
+        };
 
         for (mach_msg_type_number_t i = 0u; i < thread_count; ++i) {
             pthread_t pthread = ::pthread_from_mach_thread_np(threads[i]);

@@ -160,7 +160,9 @@ export namespace pP::colony {
     /// COUNTS, never us. Classification verified against StageTiming.h
     /// (CacheHit/CacheMiss/NeededCells/ChunksDrained are the counter rows).
     [[nodiscard]] constexpr bool stageIsCounter(const Stage stage) noexcept {
-        return stage == Stage::CacheHit or stage == Stage::CacheMiss or stage == Stage::NeededCells or
+        return stage == Stage::CacheHit or
+               stage == Stage::CacheMiss or
+               stage == Stage::NeededCells or
                stage == Stage::ChunksDrained;
     }
 
@@ -290,6 +292,7 @@ export namespace pP::colony {
     /// release while a popup is open: ImGui closes every popup for a null
     /// focus request (FocusWindow(NULL) -> ClosePopupsOverWindow(NULL)),
     /// so open popups own their own close path.
-    [[nodiscard]] ColonyUiFrame drawColonyUi(const ColonyDriver &driver, const ColonyUiView &view,
-                                             const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state);
+    [[nodiscard]] ColonyUiFrame drawColonyUi(
+        const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
+        ColonyUiState &state);
 } // namespace pP::colony

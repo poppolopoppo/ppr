@@ -65,9 +65,7 @@ namespace pP::hal {
         }
 #endif
 
-        ::SetErrorMode(SEM_NOGPFAULTERRORBOX |
-                       SEM_FAILCRITICALERRORS |
-                       SEM_NOOPENFILEERRORBOX);
+        ::SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
         ::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE);
     }
@@ -93,20 +91,15 @@ namespace pP::hal {
         }
 
         void __cdecl invalidParamHandler(
-            const wchar_t *expr,
-            const wchar_t *func,
-            const wchar_t *file,
-            const unsigned int line,
-            uintptr_t) {
+            const wchar_t *expr, const wchar_t *func, const wchar_t *file, const unsigned int line, uintptr_t) {
             char buf[2048];
             const auto w2a = [](const wchar_t *ws) -> std::string {
                 if (!ws)
                     return std::string("(null)");
                 return toString<char>(std::wstring_view(ws));
             };
-            const auto [end, _] = std::format_to_n(buf, sizeof(buf) - 1,
-                "Invalid parameter: {} in {} at {}:{}",
-                w2a(expr), w2a(func), w2a(file), line);
+            const auto [end, _] = std::format_to_n(
+                buf, sizeof(buf) - 1, "Invalid parameter: {} in {} at {}:{}", w2a(expr), w2a(func), w2a(file), line);
             *end = '\0';
 
             outputDebug(buf);
@@ -196,11 +189,13 @@ namespace pP::hal {
                 DWORD m_flags{0};
             };
             const ThreadNameInfo info{.m_name = legacy_buffer};
-            ::RaiseException(0x406D1388, 0u, sizeof(info) / sizeof(ULONG_PTR), reinterpret_cast<const ULONG_PTR *>(&info));
+            ::RaiseException(
+                0x406D1388, 0u, sizeof(info) / sizeof(ULONG_PTR), reinterpret_cast<const ULONG_PTR *>(&info));
         }
     }
 
-    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+    [[nodiscard]] std::size_t getThreadName(
+        const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         using GetThreadDescriptionFn = HRESULT(WINAPI *)(HANDLE, PWSTR *);
         static const auto get_thread_description = reinterpret_cast<GetThreadDescriptionFn>(
             ::GetProcAddress(::GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription"));
@@ -209,17 +204,22 @@ namespace pP::hal {
             return 0u;
         }
 
-        const HANDLE thread = ::OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(thread_id.m_value));
+        const HANDLE thread = ::OpenThread(
+            THREAD_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(thread_id.m_value));
         if (thread == nullptr) {
             return 0u;
         }
-        PPR_DEFER { ::CloseHandle(thread); };
+        PPR_DEFER {
+            ::CloseHandle(thread);
+        };
 
         PWSTR wide_name = nullptr;
         if (FAILED(get_thread_description(thread, &wide_name))) {
             return 0u;
         }
-        PPR_DEFER { ::LocalFree(wide_name); };
+        PPR_DEFER {
+            ::LocalFree(wide_name);
+        };
 
         if (out_buffer == nullptr || capacity == 0u) {
             return transcode(std::wstring_view(wide_name), static_cast<char *>(nullptr), 0u);

@@ -19,10 +19,9 @@ export namespace pP {
     }
 
     template<typename T>
-        requires requires (const T &x)
-    {
-        { clamp(x, x, x) } -> std::convertible_to<T>;
-    }
+        requires requires (const T &x) {
+            { clamp(x, x, x) } -> std::convertible_to<T>;
+        }
     [[nodiscard]] constexpr T saturate(T value) noexcept {
         return clamp(value, T(0), T(1));
     }
@@ -53,12 +52,14 @@ export namespace pP {
 
     template<typename T>
     [[nodiscard]] T *alignBackward(T *ptr, std::align_val_t alignment) noexcept {
-        return std::bit_cast<T *>(alignBackward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
+        return std::bit_cast<T *>(
+            alignBackward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
     }
 
     template<typename T>
     [[nodiscard]] T *alignForward(T *ptr, std::align_val_t alignment) noexcept {
-        return std::bit_cast<T *>(alignForward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
+        return std::bit_cast<T *>(
+            alignForward(std::bit_cast<std::uintptr_t>(ptr), static_cast<std::uintptr_t>(alignment)));
     }
 
     // ------------------------------------------------------------------
@@ -88,8 +89,9 @@ export namespace pP {
     }
 
     // return the first error which actually failed
-    [[nodiscard]] constexpr std::error_code make_error_code(const std::initializer_list<std::error_code> ilist) noexcept {
-        for (const std::error_code &err : ilist) {
+    [[nodiscard]] constexpr std::error_code make_error_code(
+        const std::initializer_list<std::error_code> ilist) noexcept {
+        for (const std::error_code &err: ilist) {
             if (err) [[unlikely]] {
                 return err;
             }
@@ -98,7 +100,8 @@ export namespace pP {
     }
 
     template<typename T>
-    [[nodiscard]] constexpr std::error_code make_error_code(const std::expected<T, std::error_code> &expected) noexcept {
+    [[nodiscard]] constexpr std::error_code make_error_code(
+        const std::expected<T, std::error_code> &expected) noexcept {
         return expected.error_or(default_value_v);
     }
 
@@ -116,10 +119,9 @@ export namespace pP {
     }
 
     template<typename T>
-        requires requires (const T &result)
-    {
-        { hasFailed(result) } -> std::convertible_to<bool>;
-    }
+        requires requires (const T &result) {
+            { hasFailed(result) } -> std::convertible_to<bool>;
+        }
     [[nodiscard]] PPR_FORCE_INLINE constexpr bool hasSucceeded(const T &result) noexcept {
         return not hasFailed(result);
     }
@@ -130,31 +132,25 @@ export namespace pP {
 
     namespace details {
         template<typename T, class F, T... Is>
-        PPR_FORCE_INLINE constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>)
-            noexcept(noexcept(std::declval<F>()(std::integral_constant<T, Is>{}...)))
-            requires std::invocable<F, std::integral_constant<T, Is>...> {
+        PPR_FORCE_INLINE constexpr decltype(auto) static_iota_expand(F &&f, std::integer_sequence<T, Is...>) noexcept(
+            noexcept(std::declval<F>()(std::integral_constant<T, Is>{}...)))
+            requires std::invocable<F, std::integral_constant<T, Is>...>
+        {
             return std::forward<F>(f)(std::integral_constant<T, Is>{}...);
         }
     }
 
     template<std::size_t N, class F>
-    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f)
-        noexcept(noexcept(details::static_iota_expand<std::size_t>(
-            std::forward<F>(f),
-            std::make_integer_sequence<std::size_t, N>{}))) {
+    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f) noexcept(noexcept(
+        details::static_iota_expand<std::size_t>(std::forward<F>(f), std::make_integer_sequence<std::size_t, N>{}))) {
         return details::static_iota_expand<std::size_t>(
-            std::forward<F>(f),
-            std::make_integer_sequence<std::size_t, N>{});
+            std::forward<F>(f), std::make_integer_sequence<std::size_t, N>{});
     }
 
     template<typename T, T N, class F>
-    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f)
-        noexcept(noexcept(details::static_iota_expand<T>(
-            std::forward<F>(f),
-            std::make_integer_sequence<T, N>{}))) {
-        return details::static_iota_expand<T>(
-            std::forward<F>(f),
-            std::make_integer_sequence<T, N>{});
+    PPR_FORCE_INLINE constexpr decltype(auto) static_iota(F &&f) noexcept(
+        noexcept(details::static_iota_expand<T>(std::forward<F>(f), std::make_integer_sequence<T, N>{}))) {
+        return details::static_iota_expand<T>(std::forward<F>(f), std::make_integer_sequence<T, N>{});
     }
 
     // ------------------------------------------------------------------
@@ -167,6 +163,6 @@ export namespace pP {
     /// element with the frame-stats convention (percent = round(q * 100),
     /// rank = ceil(percent * count / 100), 1-indexed). Empty samples return
     /// nullopt; only scratch[0, samples.size()) is written and sorted.
-    [[nodiscard]] std::optional<float> percentile_nearest_rank(std::span<const float> samples, std::span<float> scratch,
-                                                               float q) noexcept;
+    [[nodiscard]] std::optional<float> percentile_nearest_rank(
+        std::span<const float> samples, std::span<float> scratch, float q) noexcept;
 }

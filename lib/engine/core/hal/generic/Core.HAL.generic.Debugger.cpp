@@ -64,7 +64,8 @@ namespace pP::hal {
         (void) name;
     }
 
-    [[nodiscard]] std::size_t getThreadName(const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
+    [[nodiscard]] std::size_t getThreadName(
+        const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         (void) thread_id;
         (void) out_buffer;
         (void) capacity;

@@ -18,7 +18,9 @@ namespace pP::tests::detail {
                 path = std::move(base);
             }
 
-            ~TempDir() { std::filesystem::remove_all(path); }
+            ~TempDir() {
+                std::filesystem::remove_all(path);
+            }
 
             TempDir(const TempDir &) = delete;
 
@@ -35,7 +37,8 @@ namespace pP::tests::detail {
                 w.poll(ec);
                 if (ec && ec != std::errc::result_out_of_range)
                     return false;
-                if (not w.changes().empty()) return true;
+                if (not w.changes().empty())
+                    return true;
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
             }
             return false;

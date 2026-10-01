@@ -30,15 +30,19 @@ export namespace pP {
 
         struct FrameConstants {
             float4x4 m_view = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
-            float4x4 m_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
-            float4x4 m_view_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
-            float4x4 m_inverse_view_projection = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            float4x4 m_projection = float4x4{
+                float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            float4x4 m_view_projection = float4x4{
+                float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
+            float4x4 m_inverse_view_projection = float4x4{
+                float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
             // Zero default; uploadFrameConstants_ promotes origin to a point via float4{origin, 1}.
             float4 m_camera_position = float4{0, 0, 0, 0};
             float4 m_viewport_size = float4{0, 0, 0, 0};
         };
 
-        static_assert(sizeof(FrameConstants) == 288, "FrameConstants must match the HLSL layout (4 * float4x4 + 2 * float4)");
+        static_assert(
+            sizeof(FrameConstants) == 288, "FrameConstants must match the HLSL layout (4 * float4x4 + 2 * float4)");
 
         struct SubmittedInstance {
             TriangleBagHandle m_bag{};
@@ -118,8 +122,7 @@ export namespace pP {
         // variant, a resolved buffer pair, and an identical geometry range,
         // then assigns each group a contiguous payload interval. Renders
         // nothing, so it is unit-testable without a device.
-        [[nodiscard]] static Expected<DrawPlan> planDraws(
-            std::span<const ResolvedInstance> instances);
+        [[nodiscard]] static Expected<DrawPlan> planDraws(std::span<const ResolvedInstance> instances);
 
         // §7 uploadScene product: one bag per (mesh, prim) — full mesh verts
         // plus the prim index slice, Mango prim base riding the range —
@@ -158,7 +161,8 @@ export namespace pP {
         // lifecycle and rendering
         // ------------------------------------------------------------------
 
-        [[nodiscard]] std::error_code initialize(IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code initialize(
+            IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
 
@@ -188,8 +192,7 @@ export namespace pP {
         // submitInstance validates handles and snapshots {bag, material, model};
         // clearInstances drops the per-frame list (GPU entries stay cached).
         [[nodiscard]] Expected<TriangleBagHandle> uploadMesh(
-            std::span<const mesh::StaticMeshVertex> vertices,
-            std::span<const u32> indices);
+            std::span<const mesh::StaticMeshVertex> vertices, std::span<const u32> indices);
 
         [[nodiscard]] Expected<TextureHandle> uploadTexture(const image::ImageAsset &asset);
 
@@ -214,14 +217,20 @@ export namespace pP {
         // (invalid_argument) on mesh/table/slot mismatch. Pure CPU lookup,
         // so it is unit-testable without a device.
         [[nodiscard]] static Expected<JoinedInstancePrim> joinInstancePrim(
-            const mesh::SceneAsset &scene, const UploadedScene &uploaded,
-            const mesh::SceneInstance &instance, std::size_t prim_slot) noexcept;
+            const mesh::SceneAsset &scene, const UploadedScene &uploaded, const mesh::SceneInstance &instance,
+            std::size_t prim_slot) noexcept;
 
         [[nodiscard]] std::error_code releaseScene(const UploadedScene &uploaded) noexcept;
 
-        [[nodiscard]] TriangleBagCache &bagCache() noexcept { return m_bag_cache; }
-        [[nodiscard]] BindlessTextureCache &textureCache() noexcept { return m_texture_cache; }
-        [[nodiscard]] BindlessMaterialCache &materialCache() noexcept { return m_material_cache; }
+        [[nodiscard]] TriangleBagCache &bagCache() noexcept {
+            return m_bag_cache;
+        }
+        [[nodiscard]] BindlessTextureCache &textureCache() noexcept {
+            return m_texture_cache;
+        }
+        [[nodiscard]] BindlessMaterialCache &materialCache() noexcept {
+            return m_material_cache;
+        }
 
     private:
         // ------------------------------------------------------------------
@@ -230,7 +239,8 @@ export namespace pP {
 
         std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
-        std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        std::error_code createShaderProgram_(
+            IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
         // Pipeline-variant cache: target signature + twosided cull +
         // opaque/mask alpha. Blend is REJECTED with function_not_supported.
@@ -249,21 +259,18 @@ export namespace pP {
         };
 
         [[nodiscard]] Expected<CachedVariantPipeline *> pipelineFor_(
-            rhi::IDevice &device,
-            const RenderPipelineSignature &signature,
-            TrianglePipelineVariant variant);
+            rhi::IDevice &device, const RenderPipelineSignature &signature, TrianglePipelineVariant variant);
 
         [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
 
         // Fail-closed resolve of every submitted instance, all-or-nothing: one
         // stale handle or stride mismatch fails the whole frame before any
         // encode. Zero-count bags resolve but are dropped by the caller.
-        [[nodiscard]] Expected<Array<ResolvedInstance> > resolveInstances_() const;
+        [[nodiscard]] Expected<Array<ResolvedInstance>> resolveInstances_() const;
 
         [[nodiscard]] Expected<ResolvedInstance> resolveOne_(const SubmittedInstance &instance) const;
 
-        [[nodiscard]] Expected<DrawPlan> buildPlan_(
-            const Array<ResolvedInstance> &resolved_instances);
+        [[nodiscard]] Expected<DrawPlan> buildPlan_(const Array<ResolvedInstance> &resolved_instances);
 
         // Revision-stamped plan cache: the plan is camera-independent, so the
         // key is the submitted-sequence CONTENT (count + exact compare over
@@ -274,25 +281,18 @@ export namespace pP {
         // cached groups, whose source indices still name the same order.
         // Resolve still runs every frame ahead of the lookup, so a stale
         // handle or stride mismatch fails closed even on a key hit.
-        [[nodiscard]] bool planCacheHit_(
-            const Array<ResolvedInstance> &resolved_instances) const noexcept;
+        [[nodiscard]] bool planCacheHit_(const Array<ResolvedInstance> &resolved_instances) const noexcept;
 
-        void updatePlanCache_(
-            const Array<ResolvedInstance> &resolved_instances,
-            const DrawPlan &plan);
+        void updatePlanCache_(const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan);
 
         void invalidatePlanCache_() noexcept;
 
         // All-or-nothing payload upload: the whole compacted interval or fail.
         [[nodiscard]] std::error_code uploadPayloads_(
-            rhi::IDevice &device,
-            const Array<ResolvedInstance> &resolved_instances,
-            const DrawPlan &plan);
+            rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan);
 
         [[nodiscard]] std::error_code encodeGroup_(
-            const DrawContext &draw_context,
-            const Array<ResolvedInstance> &resolved_instances,
-            const DrawGroup &group);
+            const DrawContext &draw_context, const Array<ResolvedInstance> &resolved_instances, const DrawGroup &group);
 
         [[nodiscard]] std::error_code ensureDirectPayloads_(rhi::IDevice &device, u32 payload_count);
 

@@ -24,8 +24,7 @@ export namespace pP {
         // argument-dependent lookup participates and the probe cannot depend
         // on the Value(TOpaque) constructor it constrains. See TOpaque below.
         template<typename T>
-        concept HasAdlOpaqueValue = requires(const std::remove_cvref_t<T> &probe)
-        {
+        concept HasAdlOpaqueValue = requires (const std::remove_cvref_t<T> &probe) {
             { opaqueValue(probe) } -> std::same_as<opaque::Value>;
         };
     } // namespace details
@@ -50,9 +49,15 @@ export namespace pP {
                     return *this;
                 }
 
-                iterator &operator*() { return *this; }
-                iterator &operator++() { return *this; }
-                iterator operator++(int) { return *this; }
+                iterator &operator*() {
+                    return *this;
+                }
+                iterator &operator++() {
+                    return *this;
+                }
+                iterator operator++(int) {
+                    return *this;
+                }
             };
 
             [[nodiscard]] constexpr iterator out() noexcept {
@@ -125,13 +130,9 @@ export namespace pP {
 
                 String, WString, U8String,
 
-                Array,
-                Dict,
+                Array, Dict,
 
-                Delegate,
-                Formatter,
-                Struct,
-                Transform>;
+                Delegate, Formatter, Struct, Transform>;
 
             static_assert(sizeof(ValueVariant) == sizeof(void *) * 3u);
         } // namespace details
@@ -155,11 +156,10 @@ export namespace pP {
 
         namespace details {
             template<typename RandomRangeT>
-            concept TOpaqueRange =
-                    std::ranges::random_access_range<RandomRangeT> &&
-                    std::convertible_to<std::ranges::range_value_t<RandomRangeT>, Value> &&
-                    // avoid promotion of basic_string/_view/_literal
-                    not std::convertible_to<RandomRangeT, ValueVariant>;
+            concept TOpaqueRange = std::ranges::random_access_range<RandomRangeT> &&
+                                   std::convertible_to<std::ranges::range_value_t<RandomRangeT>, Value> &&
+                                   // avoid promotion of basic_string/_view/_literal
+                                   not std::convertible_to<RandomRangeT, ValueVariant>;
 
             // Non-recursive by construction: the ADL probe above never
             // re-enters this concept (the Value-converting overloads are
@@ -169,11 +169,9 @@ export namespace pP {
             // covered through std::opaqueValue(optional) below, whose own
             // constraint only descends into strictly smaller inner types.
             template<typename T>
-            concept TOpaque =
-                    not std::same_as<std::remove_cvref_t<T>, Value> &&
-                    not std::convertible_to<T, ValueVariant> &&
-                    (pP::details::HasAdlOpaqueValue<T> ||
-                     TOpaqueRange<std::remove_cvref_t<T>>);
+            concept TOpaque = not std::same_as<std::remove_cvref_t<T>, Value> &&
+                              not std::convertible_to<T, ValueVariant> &&
+                              (pP::details::HasAdlOpaqueValue<T> || TOpaqueRange<std::remove_cvref_t<T>>);
         }
 
         // --------------------------------------------------------------
@@ -188,46 +186,44 @@ export namespace pP {
 
             // Allow direct initialization from functors convertible to Delegate
             template<typename FunctorT>
-                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
-                          std::convertible_to<FunctorT, Delegate>)
+                requires (
+                    not std::convertible_to<FunctorT, details::ValueVariant> and
+                    std::convertible_to<FunctorT, Delegate>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(FunctorT &&delegate) noexcept
-                : super_t(Delegate{std::forward<FunctorT>(delegate)}) {
+            constexpr Value(FunctorT &&delegate) noexcept : super_t(Delegate{std::forward<FunctorT>(delegate)}) {
             }
 
             // Allow direct initialization from functors convertible to Formatter
             template<typename FunctorT>
-                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
-                          std::convertible_to<FunctorT, Formatter>)
+                requires (
+                    not std::convertible_to<FunctorT, details::ValueVariant> and
+                    std::convertible_to<FunctorT, Formatter>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(FunctorT &&formatter) noexcept
-                : super_t(Formatter{std::forward<FunctorT>(formatter)}) {
+            constexpr Value(FunctorT &&formatter) noexcept : super_t(Formatter{std::forward<FunctorT>(formatter)}) {
             }
 
             // Allow direct initialization from functors convertible to Struct
             template<typename FunctorT>
-                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
-                          std::convertible_to<FunctorT, Struct>)
+                requires (
+                    not std::convertible_to<FunctorT, details::ValueVariant> and std::convertible_to<FunctorT, Struct>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(FunctorT &&struct_) noexcept
-                : super_t(Struct{std::forward<FunctorT>(struct_)}) {
+            constexpr Value(FunctorT &&struct_) noexcept : super_t(Struct{std::forward<FunctorT>(struct_)}) {
             }
 
             // Allow direct initialization from functors convertible to Yield
             template<typename FunctorT>
-                requires (not std::convertible_to<FunctorT, details::ValueVariant> and
-                          std::convertible_to<FunctorT, Transform>)
+                requires (
+                    not std::convertible_to<FunctorT, details::ValueVariant> and
+                    std::convertible_to<FunctorT, Transform>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(FunctorT &&transform) noexcept
-                : super_t(Transform{std::forward<FunctorT>(transform)}) {
+            constexpr Value(FunctorT &&transform) noexcept : super_t(Transform{std::forward<FunctorT>(transform)}) {
             }
 
             // Allow direct promotion from values with an explicit opaqueValue() overload
             template<details::TOpaque OpaqueT>
                 requires (not std::convertible_to<OpaqueT, details::ValueVariant>)
             // ReSharper disable once CppNonExplicitConvertingConstructor
-            constexpr Value(OpaqueT &&value) noexcept
-                : super_t(opaqueValue(std::forward<OpaqueT>(value))) {
+            constexpr Value(OpaqueT &&value) noexcept : super_t(opaqueValue(std::forward<OpaqueT>(value))) {
             }
 
             // Note: operator== is intentionally not provided. std::variant::operator==
@@ -271,14 +267,11 @@ export namespace pP {
                 using RelativeView::operator=;
                 using RelativeView::operator[];
 
-                [[nodiscard]] const Value *
-                tryGet(string_literal key) const noexcept;
+                [[nodiscard]] const Value *tryGet(string_literal key) const noexcept;
 
-                [[nodiscard]] const Value &
-                get(string_literal key) const noexcept;
+                [[nodiscard]] const Value &get(string_literal key) const noexcept;
 
-                [[nodiscard]] const Value &
-                operator[](string_literal key) const noexcept;
+                [[nodiscard]] const Value &operator[](string_literal key) const noexcept;
             };
 
             using ValueVariant = std::variant<
@@ -296,16 +289,14 @@ export namespace pP {
 
                 String, WString, U8String,
 
-                Array,
-                Dict>;
+                Array, Dict>;
 
             struct Value : ValueVariant {
                 using super_t = ValueVariant;
                 using super_t::super_t;
 
                 template<typename T>
-                    requires requires(const ValueVariant &v)
-                    {
+                    requires requires (const ValueVariant &v) {
                         { std::get<T>(v) } -> std::same_as<const T &>;
                     }
                 [[nodiscard]] constexpr const T &get() const noexcept {
@@ -313,8 +304,7 @@ export namespace pP {
                 }
 
                 template<typename T>
-                    requires requires(const ValueVariant &v)
-                    {
+                    requires requires (const ValueVariant &v) {
                         { std::get_if<T>(v) } -> std::same_as<const T *>;
                     }
                 [[nodiscard]] constexpr const T *as() const noexcept {
@@ -350,7 +340,7 @@ export namespace pP {
                 template<pP::details::TChar CharT>
                 void operator()(const std::basic_string_view<CharT> str) const noexcept {
                     const std::span<CharT> local_cpy = m_arena.dup(str);
-                    m_target.emplace<RelativeView<CharT> >(local_cpy);
+                    m_target.emplace<RelativeView<CharT>>(local_cpy);
                 }
 
                 void operator()(const opaque::Array arr) const noexcept {
@@ -387,8 +377,7 @@ export namespace pP {
                         ArenaT &m_arena;
                         mem::Allocation<char, ArenaT> m_output{};
 
-                        explicit constexpr format_sink(ArenaT &arena PPR_LIFETIME_BOUND) noexcept
-                            : m_arena(arena) {
+                        explicit constexpr format_sink(ArenaT &arena PPR_LIFETIME_BOUND) noexcept : m_arena(arena) {
                         }
 
                         void write(const std::string_view sv) override {
@@ -407,7 +396,9 @@ export namespace pP {
                 void operator()(const Struct str) const noexcept {
                     struct struct_counter final : StructVisitor {
                         std::size_t m_index{0};
-                        void yield(string_literal, const opaque::Value &) noexcept override { m_index++; }
+                        void yield(string_literal, const opaque::Value &) noexcept override {
+                            m_index++;
+                        }
                     } counter;
                     str(counter);
 
@@ -532,75 +523,68 @@ export namespace pP {
         }
 
         constexpr std::size_t Block::sizeOf(const opaque::Value &value) noexcept {
-            return std::visit(
-                overloaded(
-                    [](const std::nullptr_t) constexpr noexcept -> std::size_t {
-                        return 0u;
-                    },
-                    []<typename NumericT>(const NumericT) constexpr noexcept -> std::size_t requires
-                        std::integral<NumericT> || std::floating_point<NumericT> {
-                        return 0u;
-                    },
-                    []<pP::details::TChar CharT>(const std::basic_string_view<CharT> str) constexpr noexcept -> std::size_t {
-                        return str.size() * sizeof(CharT);
-                    },
-                    [](const opaque::Array arr) constexpr noexcept -> std::size_t {
-                        std::size_t size_bytes = alignForward(arr.size() * sizeof(*arr.data()), max_align_v);
-                        for (const opaque::Value &it: arr) {
-                            size_bytes += sizeOf(it);
-                        }
-                        return size_bytes;
-                    },
-                    [](const opaque::Dict dict) constexpr noexcept -> std::size_t {
-                        std::size_t size_bytes = alignForward(dict.size() * sizeof(*dict.data()), max_align_v);
-                        for (const auto &[it_key, it_value]: dict) {
-                            size_bytes += alignForward(it_key.size() * sizeof(*it_key.data()), max_align_v);
-                            size_bytes += sizeOf(it_value);
-                        }
-                        return size_bytes;
-                    },
-                    [](const Delegate delegate) constexpr noexcept -> std::size_t {
-                        return sizeOf(delegate());
-                    },
-                    [](const Formatter fmt) constexpr noexcept -> std::size_t {
-                        // Concrete sink wrapping whatever output iterator this context uses.
-                        // Only count memory used to reserve the whole block.
-                        struct format_count final : format_context {
-                            std::size_t m_count{};
+            return std::visit(overloaded(
+                [](const std::nullptr_t) constexpr noexcept -> std::size_t { return 0u; },
+                []<typename NumericT>(const NumericT) constexpr noexcept -> std::size_t
+                    requires std::integral<NumericT> || std::floating_point<NumericT>
+                { return 0u; },
+                []<pP::details::TChar CharT>(const std::basic_string_view<CharT> str) constexpr noexcept
+                    -> std::size_t { return str.size() * sizeof(CharT); },
+                [](const opaque::Array arr) constexpr noexcept -> std::size_t {
+                    std::size_t size_bytes = alignForward(arr.size() * sizeof(*arr.data()), max_align_v);
+                    for (const opaque::Value &it: arr) {
+                        size_bytes += sizeOf(it);
+                    }
+                    return size_bytes;
+                },
+                [](const opaque::Dict dict) constexpr noexcept -> std::size_t {
+                    std::size_t size_bytes = alignForward(dict.size() * sizeof(*dict.data()), max_align_v);
+                    for (const auto &[it_key, it_value]: dict) {
+                        size_bytes += alignForward(it_key.size() * sizeof(*it_key.data()), max_align_v);
+                        size_bytes += sizeOf(it_value);
+                    }
+                    return size_bytes;
+                },
+                [](const Delegate delegate) constexpr noexcept -> std::size_t { return sizeOf(delegate()); },
+                [](const Formatter fmt) constexpr noexcept -> std::size_t {
+                    // Concrete sink wrapping whatever output iterator this context uses.
+                    // Only count memory used to reserve the whole block.
+                    struct format_count final : format_context {
+                        std::size_t m_count{};
 
-                            void write(const std::string_view sv) override {
-                                m_count += sv.size();
-                            }
-                        };
-
-                        format_count sink{};
-                        fmt(sink);
-                        return alignForward(sink.m_count * sizeof(char), max_align_v);
-                    },
-                    [](const Struct struct_) constexpr noexcept -> std::size_t {
-                        struct struct_counter final : StructVisitor {
-                            std::size_t count{0};
-                            std::size_t size_bytes{0};
-
-                            void yield(string_literal key, const opaque::Value &val) noexcept override {
-                                count++;
-                                size_bytes += alignForward(key.size() * sizeof(*key.data()), max_align_v);
-                                size_bytes += sizeOf(val);
-                            }
-                        } counter;
-                        struct_(counter);
-                        return alignForward(counter.count * sizeof(KeyValue), max_align_v) + counter.size_bytes;
-                    },
-                    [](const Transform transform) constexpr noexcept -> std::size_t {
-                        std::size_t n = 0u;
-                        std::size_t size_bytes = 0u;
-                        for (const opaque::Value it: transform()) {
-                            n++;
-                            size_bytes += sizeOf(it);
+                        void write(const std::string_view sv) override {
+                            m_count += sv.size();
                         }
-                        size_bytes += alignForward(n * sizeof(Value), max_align_v);
-                        return size_bytes;
-                    }),
+                    };
+
+                    format_count sink{};
+                    fmt(sink);
+                    return alignForward(sink.m_count * sizeof(char), max_align_v);
+                },
+                [](const Struct struct_) constexpr noexcept -> std::size_t {
+                    struct struct_counter final : StructVisitor {
+                        std::size_t count{0};
+                        std::size_t size_bytes{0};
+
+                        void yield(string_literal key, const opaque::Value &val) noexcept override {
+                            count++;
+                            size_bytes += alignForward(key.size() * sizeof(*key.data()), max_align_v);
+                            size_bytes += sizeOf(val);
+                        }
+                    } counter;
+                    struct_(counter);
+                    return alignForward(counter.count * sizeof(KeyValue), max_align_v) + counter.size_bytes;
+                },
+                [](const Transform transform) constexpr noexcept -> std::size_t {
+                    std::size_t n = 0u;
+                    std::size_t size_bytes = 0u;
+                    for (const opaque::Value it: transform()) {
+                        n++;
+                        size_bytes += sizeOf(it);
+                    }
+                    size_bytes += alignForward(n * sizeof(Value), max_align_v);
+                    return size_bytes;
+                }),
                 value);
         }
 
@@ -612,15 +596,14 @@ export namespace pP {
 
         public:
             Unique() noexcept(std::is_nothrow_default_constructible_v<AllocatorT>)
-                requires std::is_default_constructible_v<AllocatorT> = default;
+                requires std::is_default_constructible_v<AllocatorT>
+            = default;
 
-            explicit Unique(const AllocatorT &allocator)
-                noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
+            explicit Unique(const AllocatorT &allocator) noexcept(std::is_nothrow_copy_constructible_v<AllocatorT>)
                 : allocator_type(allocator) {
             }
 
-            explicit Unique(AllocatorT &&allocator)
-                noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
+            explicit Unique(AllocatorT &&allocator) noexcept(std::is_nothrow_move_constructible_v<AllocatorT>)
                 : allocator_type(std::move(allocator)) {
             }
 
@@ -633,8 +616,7 @@ export namespace pP {
             Unique &operator=(const Unique &) = delete;
 
             Unique(Unique &&other) noexcept(std::is_nothrow_move_constructible_v<allocator_type>)
-                : allocator_type(std::move(other)),
-                  m_alloc(std::exchange(other.m_alloc, {})),
+                : allocator_type(std::move(other)), m_alloc(std::exchange(other.m_alloc, {})),
                   m_block(std::exchange(other.m_block, default_value_v)) {
             }
 
@@ -691,10 +673,10 @@ export namespace pP {
         };
 
         template<mem::details::TAllocator AllocatorT>
-        Unique(const AllocatorT &) -> Unique<std::remove_cvref_t<AllocatorT> >;
+        Unique(const AllocatorT &) -> Unique<std::remove_cvref_t<AllocatorT>>;
 
         template<mem::details::TAllocator AllocatorT>
-        Unique(AllocatorT &&) -> Unique<std::remove_cvref_t<AllocatorT> >;
+        Unique(AllocatorT &&) -> Unique<std::remove_cvref_t<AllocatorT>>;
 
         template<mem::details::TAllocator AllocatorT>
         [[nodiscard]] auto makeUnique(const Dict &init, AllocatorT &&allocator = default_value_v) {
@@ -709,32 +691,25 @@ export namespace pP {
     // --------------------------------------------------------------
 
     template<details::TChar CharT>
-    struct details::relocatable<opaque::basic_format_context<CharT> > : std::true_type {
-    };
+    struct details::relocatable<opaque::basic_format_context<CharT>> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::Value> : std::true_type {
-    };
+    struct details::relocatable<opaque::Value> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::KeyValue> : std::true_type {
-    };
+    struct details::relocatable<opaque::KeyValue> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::Block> : std::true_type {
-    };
+    struct details::relocatable<opaque::Block> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::Block::Value> : std::true_type {
-    };
+    struct details::relocatable<opaque::Block::Value> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::Block::KeyValue> : std::true_type {
-    };
+    struct details::relocatable<opaque::Block::KeyValue> : std::true_type {};
 
     template<>
-    struct details::relocatable<opaque::Block::Dict> : std::true_type {
-    };
+    struct details::relocatable<opaque::Block::Dict> : std::true_type {};
 
     // --------------------------------------------------------------
     // opaqueValue traits
@@ -789,8 +764,7 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Formatter &fmt, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Formatter &fmt, FormatContextT &ctx) const -> decltype(ctx.out()) {
             // Concrete sink wrapping whatever output iterator this context uses.
             // Stack-allocated — zero heap overhead.
             struct format_sink final : pP::opaque::format_context {
@@ -819,29 +793,24 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Value &value, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Value &value, FormatContextT &ctx) const -> decltype(ctx.out()) {
             return visit(
                 pP::overloaded(
                     [&](const std::nullptr_t) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), PPR_LITERAL_FOR(CharT, "nil"));
                     },
                     [&]<pP::details::TChar StringCharT>(const basic_string_view<StringCharT> &inner_value) {
-                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
-                            inner_value);
+                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"), inner_value);
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
-                        requires formattable<ValueT, CharT> {
-                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"),
-                            inner_value);
-                    },
+                        requires formattable<ValueT, CharT>
+                    { return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), inner_value); },
                     [&]<typename UnformattableT>([[maybe_unused]] const UnformattableT &) noexcept {
                         // Fallback for cross-width types
-                        return format_to(ctx.out(),
-                            PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
-                            typeid(UnformattableT).name());
+                        return format_to(
+                            ctx.out(), PPR_LITERAL_FOR(CharT, "fallback <{}> ?"), typeid(UnformattableT).name());
                     }),
-                value);
+                    value);
         }
     };
 
@@ -853,8 +822,7 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Delegate &delegate, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Delegate &delegate, FormatContextT &ctx) const -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}"), delegate());
         }
     };
@@ -867,8 +835,7 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Struct &struct_, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Struct &struct_, FormatContextT &ctx) const -> decltype(ctx.out()) {
             auto out = ctx.out();
             out = format_to(out, PPR_LITERAL_FOR(CharT, "{{"));
 
@@ -901,8 +868,7 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Transform &transform, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Transform &transform, FormatContextT &ctx) const -> decltype(ctx.out()) {
             return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}"), transform());
         }
     };
@@ -915,29 +881,26 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Block::Value &value, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Block::Value &value, FormatContextT &ctx) const -> decltype(ctx.out()) {
             return visit(
                 pP::overloaded(
                     [&](const std::nullptr_t) {
                         return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), PPR_LITERAL_FOR(CharT, "nil"));
                     },
                     [&]<pP::details::TChar StringCharT>(const pP::RelativeView<StringCharT> &inner_value) {
-                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
+                        return format_to(
+                            ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}"),
                             std::basic_string_view<StringCharT>(inner_value.data(), inner_value.size()));
                     },
                     [&]<typename ValueT>(const ValueT &inner_value)
-                        requires formattable<ValueT, CharT> {
-                        return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"),
-                            inner_value);
-                    },
+                        requires formattable<ValueT, CharT>
+                    { return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:}"), inner_value); },
                     [&]<typename UnformattableT>([[maybe_unused]] const UnformattableT &) noexcept {
                         // Fallback for cross-width types
-                        return format_to(ctx.out(),
-                            PPR_LITERAL_FOR(CharT, "fallback <{}> ?"),
-                            typeid(UnformattableT).name());
+                        return format_to(
+                            ctx.out(), PPR_LITERAL_FOR(CharT, "fallback <{}> ?"), typeid(UnformattableT).name());
                     }),
-                value);
+                    value);
         }
     };
 
@@ -949,10 +912,8 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::KeyValue &pair, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
-            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"),
-                pair.first.view(), pair.second);
+        auto format(const pP::opaque::KeyValue &pair, FormatContextT &ctx) const -> decltype(ctx.out()) {
+            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"), pair.first.view(), pair.second);
         }
 
         static constexpr void set_brackets(basic_string_view<CharT>, basic_string_view<CharT>) noexcept {
@@ -970,10 +931,9 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Block::KeyValue &pair, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
-            return format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"),
-                std::string_view(pair.first.data(), pair.first.size()),
+        auto format(const pP::opaque::Block::KeyValue &pair, FormatContextT &ctx) const -> decltype(ctx.out()) {
+            return format_to(
+                ctx.out(), PPR_LITERAL_FOR(CharT, "{:?}: {:}"), std::string_view(pair.first.data(), pair.first.size()),
                 pair.second);
         }
 
@@ -985,8 +945,7 @@ export namespace std {
     };
 
     template<pP::details::TChar CharT>
-    struct formatter<pP::opaque::Dict, CharT>
-            : range_formatter<pP::opaque::KeyValue, CharT> {
+    struct formatter<pP::opaque::Dict, CharT> : range_formatter<pP::opaque::KeyValue, CharT> {
         using super_t = range_formatter<pP::opaque::KeyValue, CharT>;
 
         constexpr formatter() noexcept {
@@ -997,8 +956,7 @@ export namespace std {
     };
 
     template<pP::details::TChar CharT>
-    struct formatter<pP::opaque::Block::Dict, CharT>
-            : range_formatter<pP::opaque::Block::KeyValue, CharT> {
+    struct formatter<pP::opaque::Block::Dict, CharT> : range_formatter<pP::opaque::Block::KeyValue, CharT> {
         using super_t = range_formatter<pP::opaque::Block::KeyValue, CharT>;
 
         constexpr formatter() noexcept {
@@ -1009,14 +967,12 @@ export namespace std {
     };
 
     template<pP::details::TChar CharT>
-    struct formatter<pP::opaque::Block, CharT>
-            : formatter<pP::opaque::Block::Dict, CharT> {
+    struct formatter<pP::opaque::Block, CharT> : formatter<pP::opaque::Block::Dict, CharT> {
         using super_t = formatter<pP::opaque::Block::Dict, CharT>;
         using super_t::super_t;
 
         template<typename FormatContextT>
-        auto format(const pP::opaque::Block &block, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::opaque::Block &block, FormatContextT &ctx) const -> decltype(ctx.out()) {
             return super_t::format(*block.m_data, ctx);
         }
     };

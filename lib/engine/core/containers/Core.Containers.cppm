@@ -16,9 +16,8 @@ import std;
 namespace pP {
     namespace details {
         template<std::ranges::input_range RangeT>
-        using range_const_reference_t = std::common_reference_t<
-            const std::ranges::range_value_t<RangeT> &,
-            std::ranges::range_reference_t<RangeT> >;
+        using range_const_reference_t =
+            std::common_reference_t<const std::ranges::range_value_t<RangeT> &, std::ranges::range_reference_t<RangeT>>;
     }
 }
 
@@ -28,8 +27,9 @@ export namespace pP {
         inline constexpr bool is_iterator_of_v = std::is_convertible_v<std::iter_value_t<IteratorT>, T>;
 
         template<typename EqualToT, typename LhsT, typename RhsT = LhsT>
-        concept TEqualTo = requires(const std::remove_cvref_t<EqualToT> &cmp, const std::remove_cvref_t<LhsT> &lhs, const std::remove_cvref_t<RhsT> &rhs)
-        {
+        concept TEqualTo = requires (
+            const std::remove_cvref_t<EqualToT> &cmp, const std::remove_cvref_t<LhsT> &lhs,
+            const std::remove_cvref_t<RhsT> &rhs) {
             { cmp(lhs, rhs) } -> std::convertible_to<bool>;
         };
     }
@@ -41,17 +41,17 @@ export namespace pP {
     namespace details {
         template<typename T>
         struct relocatable : std::conjunction<
-                    std::is_trivially_copyable<T>,
-                    std::disjunction<std::is_fundamental<T>, std::is_pointer<T>, std::is_array<T> > > {
-        };
+                                 std::is_trivially_copyable<T>,
+                                 std::disjunction<std::is_fundamental<T>, std::is_pointer<T>, std::is_array<T>>> {};
 
         template<typename T>
         inline constexpr bool is_relocatable_v = relocatable<T>::value;
     }
 
-    template<typename T> requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
-    [[nodiscard]] constexpr T relocate(T *const src)
-        noexcept(details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
+    template<typename T>
+        requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
+    [[nodiscard]] constexpr T relocate(T *const src) noexcept(
+        details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
         PPR_ASSERT(src != nullptr);
         if constexpr (details::is_relocatable_v<T>) {
             alignas(T) T result{};
@@ -64,9 +64,10 @@ export namespace pP {
         }
     }
 
-    template<typename T> requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
-    constexpr void relocateUninitialized(T *const src, T *const uninitialized)
-        noexcept(details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
+    template<typename T>
+        requires (details::is_relocatable_v<T> or std::is_move_constructible_v<T>)
+    constexpr void relocateUninitialized(T *const src, T *const uninitialized) noexcept(
+        details::is_relocatable_v<T> or std::is_nothrow_move_constructible_v<T>) {
         PPR_ASSERT(src != nullptr && uninitialized != nullptr);
         if constexpr (details::is_relocatable_v<T>) {
             std::memcpy(uninitialized, src, sizeof(T));
@@ -80,8 +81,8 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename... ArgsT>
-    struct Collector : std23::function_ref<std::error_code (param_lvref_t<const ArgsT>... push_back)> {
-        using super_t = std23::function_ref<std::error_code (param_lvref_t<const ArgsT>... push_back)>;
+    struct Collector : std23::function_ref<std::error_code(param_lvref_t<const ArgsT>... push_back)> {
+        using super_t = std23::function_ref<std::error_code(param_lvref_t<const ArgsT>... push_back)>;
         using super_t::super_t;
         using super_t::operator=;
         using super_t::operator();
@@ -109,7 +110,8 @@ export namespace pP {
             return append(std::ranges::begin(input_range), std::ranges::end(input_range));
         }
 
-        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)> > enumerators) const {
+        [[nodiscard]] std::error_code combine(
+            std::initializer_list<std23::function_ref<std::error_code(Collector)>> enumerators) const {
             for (const auto enumerate: enumerators) {
                 if (const std::error_code err = enumerate(*this)) [[unlikely]] {
                     return err;
@@ -120,8 +122,8 @@ export namespace pP {
     };
 
     template<typename T>
-    struct Collector<T> : std23::function_ref<std::error_code (param_lvref_t<const T> push_back)> {
-        using super_t = std23::function_ref<std::error_code (param_lvref_t<const T> push_back)>;
+    struct Collector<T> : std23::function_ref<std::error_code(param_lvref_t<const T> push_back)> {
+        using super_t = std23::function_ref<std::error_code(param_lvref_t<const T> push_back)>;
         using super_t::super_t;
         using super_t::operator=;
         using super_t::operator();
@@ -149,7 +151,8 @@ export namespace pP {
             return append(std::ranges::begin(input_range), std::ranges::end(input_range));
         }
 
-        [[nodiscard]] std::error_code combine(std::initializer_list<std23::function_ref<std::error_code(Collector)> > enumerators) const {
+        [[nodiscard]] std::error_code combine(
+            std::initializer_list<std23::function_ref<std::error_code(Collector)>> enumerators) const {
             for (const auto enumerate: enumerators) {
                 if (const std::error_code err = enumerate(*this)) [[unlikely]] {
                     return err;
@@ -164,8 +167,7 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     template<typename ContainerT, typename T, std::integral IndexT = std::size_t>
-        requires requires(ContainerT &arr, IndexT index)
-        {
+        requires requires (ContainerT &arr, IndexT index) {
             { arr[index] } -> std::convertible_to<T>;
         }
     class IndexIterator {
@@ -216,7 +218,8 @@ export namespace pP {
         }
 
         [[nodiscard]] constexpr std::add_pointer_t<value_type> operator->() const noexcept
-            requires return_by_reference_v {
+            requires return_by_reference_v
+        {
             return std::addressof(operator*());
         }
 
@@ -265,20 +268,17 @@ export namespace pP {
             return *this;
         }
 
-        [[nodiscard]] friend constexpr IndexIterator
-        operator+(IndexIterator it, difference_type n) noexcept {
+        [[nodiscard]] friend constexpr IndexIterator operator+(IndexIterator it, difference_type n) noexcept {
             it += n;
             return it;
         }
 
-        [[nodiscard]] friend constexpr IndexIterator
-        operator+(difference_type n, IndexIterator it) noexcept {
+        [[nodiscard]] friend constexpr IndexIterator operator+(difference_type n, IndexIterator it) noexcept {
             it += n;
             return it;
         }
 
-        [[nodiscard]] friend constexpr IndexIterator
-        operator-(IndexIterator it, difference_type n) noexcept {
+        [[nodiscard]] friend constexpr IndexIterator operator-(IndexIterator it, difference_type n) noexcept {
             it -= n;
             return it;
         }
@@ -291,8 +291,7 @@ export namespace pP {
             return lhs.m_index == rhs.m_index;
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(IndexIterator lhs, IndexIterator rhs) noexcept {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(IndexIterator lhs, IndexIterator rhs) noexcept {
             PPR_ASSERT(lhs.m_container == rhs.m_container);
             return lhs.m_index <=> rhs.m_index;
         }
@@ -300,18 +299,18 @@ export namespace pP {
         // ------------------------------------------------------------
         // cross const comparisons
         // ------------------------------------------------------------
-        [[nodiscard]] friend constexpr bool
-        operator==(IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs,
-                   IndexIterator rhs) noexcept
-            requires (!std::is_same_v<std::add_const_t<T>, T>) {
+        [[nodiscard]] friend constexpr bool operator==(
+            IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs, IndexIterator rhs) noexcept
+            requires (!std::is_same_v<std::add_const_t<T>, T>)
+        {
             PPR_ASSERT(lhs.getContainer() == rhs.m_container);
             return lhs.getIndex() == rhs.m_index;
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs,
-                    IndexIterator rhs) noexcept
-            requires (!std::is_same_v<std::add_const_t<T>, T>) {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs, IndexIterator rhs) noexcept
+            requires (!std::is_same_v<std::add_const_t<T>, T>)
+        {
             PPR_ASSERT(lhs.getContainer() == rhs.m_container);
             return lhs.getIndex() <=> rhs.m_index;
         }
@@ -319,29 +318,26 @@ export namespace pP {
         // ------------------------------------------------------------
         // distance
         // ------------------------------------------------------------
-        [[nodiscard]] friend constexpr difference_type
-        operator-(IndexIterator lhs, IndexIterator rhs) noexcept {
+        [[nodiscard]] friend constexpr difference_type operator-(IndexIterator lhs, IndexIterator rhs) noexcept {
             PPR_ASSERT(lhs.m_container == rhs.m_container);
-            return static_cast<difference_type>(lhs.m_index)
-                   - static_cast<difference_type>(rhs.m_index);
+            return static_cast<difference_type>(lhs.m_index) - static_cast<difference_type>(rhs.m_index);
         }
 
-        [[nodiscard]] friend constexpr difference_type
-        operator-(IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs,
-                  IndexIterator rhs) noexcept
-            requires (!std::is_same_v<std::add_const_t<T>, T>) {
+        [[nodiscard]] friend constexpr difference_type operator-(
+            IndexIterator<std::add_const_t<ContainerT>, std::add_const_t<T>, IndexT> lhs, IndexIterator rhs) noexcept
+            requires (!std::is_same_v<std::add_const_t<T>, T>)
+        {
             PPR_ASSERT(lhs.getContainer() == rhs.m_container);
-            return static_cast<difference_type>(lhs.getIndex())
-                   - static_cast<difference_type>(rhs.m_index);
+            return static_cast<difference_type>(lhs.getIndex()) - static_cast<difference_type>(rhs.m_index);
         }
     };
 
     template<typename ContainerT, std::integral IndexT = std::size_t>
-        requires requires(ContainerT &arr, IndexT index)
-        {
+        requires requires (ContainerT &arr, IndexT index) {
             { arr[index] };
         }
-    IndexIterator(ContainerT &container, IndexT m_index) -> IndexIterator<ContainerT, typename ContainerT::value_type, IndexT>;
+    IndexIterator(ContainerT &container, IndexT m_index)
+        -> IndexIterator<ContainerT, typename ContainerT::value_type, IndexT>;
 
     // ------------------------------------------------------------------
     // Ranges for iterating over Bitmask bits (C++23)
@@ -349,12 +345,11 @@ export namespace pP {
 
     // Iterates over indices of set bits only, in ascending order.
     // Uses countr_zero + reset — O(popcount) cost, zero wasted work.
-    template<typename T = std::size_t, u32 N = bit_count_v<T> >
+    template<typename T = std::size_t, u32 N = bit_count_v<T>>
     struct SetBitsRange {
         using integral_type = unwrap_ref_decay_t<T>;
 
-        struct sentinel {
-        };
+        struct sentinel {};
 
         struct iterator {
             using value_type = u32;
@@ -390,20 +385,28 @@ export namespace pP {
 
         integral_type m_bits{};
 
-        [[nodiscard]] constexpr iterator begin() const noexcept { return {m_bits}; }
-        [[nodiscard]] static constexpr sentinel end() noexcept { return {}; }
+        [[nodiscard]] constexpr iterator begin() const noexcept {
+            return {m_bits};
+        }
+        [[nodiscard]] static constexpr sentinel end() noexcept {
+            return {};
+        }
 
-        [[nodiscard]] constexpr bool empty() const noexcept { return m_bits == 0; }
-        [[nodiscard]] constexpr u32 size() const noexcept { return static_cast<u32>(std::popcount(m_bits)); }
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return m_bits == 0;
+        }
+        [[nodiscard]] constexpr u32 size() const noexcept {
+            return static_cast<u32>(std::popcount(m_bits));
+        }
     };
 
-    static_assert(std::ranges::input_range<SetBitsRange<> >);
+    static_assert(std::ranges::input_range<SetBitsRange<>>);
 
     // ------------------------------------------------------------------
     // bit set using a single word
     // ------------------------------------------------------------------
 
-    template<typename T = std::size_t, u32 N = bit_count_v<T> >
+    template<typename T = std::size_t, u32 N = bit_count_v<T>>
     struct Bitmask {
         static_assert(N <= bit_count_v<T>);
         using integral_type = unwrap_ref_decay_t<T>;
@@ -579,79 +582,89 @@ export namespace pP {
             return {all_v << n};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[maybe_unused]] constexpr Bitmask &operator &=(const Bitmask<U> other) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[maybe_unused]] constexpr Bitmask &operator&=(const Bitmask<U> other) noexcept {
             ref() &= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[maybe_unused]] constexpr Bitmask &operator |=(const Bitmask<U> other) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[maybe_unused]] constexpr Bitmask &operator|=(const Bitmask<U> other) noexcept {
             ref() |= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[maybe_unused]] constexpr Bitmask &operator ^=(const Bitmask<U> other) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[maybe_unused]] constexpr Bitmask &operator^=(const Bitmask<U> other) noexcept {
             ref() ^= other.cref();
             return *this;
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[maybe_unused]] constexpr Bitmask &operator -=(const Bitmask<U> other) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[maybe_unused]] constexpr Bitmask &operator-=(const Bitmask<U> other) noexcept {
             ref() &= ~other.cref();
             return *this;
         }
 
-        [[nodiscard]] constexpr Bitmask<integral_type> operator ~() const noexcept {
+        [[nodiscard]] constexpr Bitmask<integral_type> operator~() const noexcept {
             return {~cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] constexpr Bitmask<integral_type> operator &(const Bitmask<U> other) const noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] constexpr Bitmask<integral_type> operator&(const Bitmask<U> other) const noexcept {
             return {cref() & other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] constexpr Bitmask<integral_type> operator |(const Bitmask<U> other) const noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] constexpr Bitmask<integral_type> operator|(const Bitmask<U> other) const noexcept {
             return {cref() | other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] constexpr Bitmask<integral_type> operator ^(const Bitmask<U> other) const noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] constexpr Bitmask<integral_type> operator^(const Bitmask<U> other) const noexcept {
             return {cref() ^ other.cref()};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] constexpr Bitmask<integral_type> operator -(const Bitmask<U> other) const noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] constexpr Bitmask<integral_type> operator-(const Bitmask<U> other) const noexcept {
             return {cref() & ~other.cref()};
         }
 
-        [[nodiscard]] constexpr Bitmask<integral_type> operator <<(const integral_type lshift) const noexcept {
+        [[nodiscard]] constexpr Bitmask<integral_type> operator<<(const integral_type lshift) const noexcept {
             return {cref() << lshift};
         }
 
-        [[nodiscard]] constexpr Bitmask<integral_type> operator >>(const integral_type rshift) const noexcept {
+        [[nodiscard]] constexpr Bitmask<integral_type> operator>>(const integral_type rshift) const noexcept {
             return {cref() >> rshift};
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] friend constexpr bool operator ==(const Bitmask lhs, const Bitmask<U> rhs) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] friend constexpr bool operator==(const Bitmask lhs, const Bitmask<U> rhs) noexcept {
             return lhs.cref() == rhs.cref();
         }
 
-        template<typename U> requires (Bitmask<U>::bit_count_v == bit_count_v)
-        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(const Bitmask lhs, const Bitmask<U> rhs) noexcept {
+        template<typename U>
+            requires (Bitmask<U>::bit_count_v == bit_count_v)
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            const Bitmask lhs, const Bitmask<U> rhs) noexcept {
             return lhs.cref() <=> rhs.cref();
         }
     };
 
-    template<typename T, std::size_t N = bit_count_v<T> >
+    template<typename T, std::size_t N = bit_count_v<T>>
     using BitmaskRef = Bitmask<std::reference_wrapper<T>, N>;
 
     template<typename T, std::size_t N>
-    struct details::relocatable<Bitmask<T, N> > : std::true_type {
-    };
+    struct details::relocatable<Bitmask<T, N>> : std::true_type {};
 
     // ------------------------------------------------------------------
     // pack a pointer to a relative offset, can't be moved,
@@ -677,34 +690,30 @@ export namespace pP {
             setData(nullptr);
         }
 
-        constexpr RelPtr(const RelPtr &other) noexcept
-            : RelPtr(other.getData()) {
+        constexpr RelPtr(const RelPtr &other) noexcept : RelPtr(other.getData()) {
         }
 
-        constexpr RelPtr &operator =(const RelPtr &other) & noexcept {
+        constexpr RelPtr &operator=(const RelPtr &other) & noexcept {
             setData(other.getData());
             return *this;
         }
 
         constexpr RelPtr(RelPtr &&) noexcept = delete;
 
-        constexpr RelPtr &operator =(RelPtr &&) noexcept = delete;
+        constexpr RelPtr &operator=(RelPtr &&) noexcept = delete;
 
-        constexpr RelPtr &operator =(pointer ptr PPR_LIFETIME_BOUND) & noexcept {
+        constexpr RelPtr &operator=(pointer ptr PPR_LIFETIME_BOUND) & noexcept {
             setData(ptr);
             return *this;
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr pointer getData() const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr pointer getData() const & noexcept {
             if (m_offset == 0) {
                 return nullptr;
             }
 
             // Use integer arithmetic to avoid pointer arithmetic UB
-            return std::bit_cast<pointer>(
-                std::bit_cast<std::uintptr_t>(this) +
-                static_cast<std::uintptr_t>(m_offset));
+            return std::bit_cast<pointer>(std::bit_cast<std::uintptr_t>(this) + static_cast<std::uintptr_t>(m_offset));
         }
 
         PPR_FORCE_INLINE constexpr void setData(pointer ptr) & noexcept {
@@ -714,27 +723,22 @@ export namespace pP {
             }
 
             // Use integer arithmetic to avoid pointer arithmetic UB
-            m_offset = checked_cast<OffsetT>(
-                std::bit_cast<std::intptr_t>(ptr) -
-                std::bit_cast<std::intptr_t>(this));
+            m_offset = checked_cast<OffsetT>(std::bit_cast<std::intptr_t>(ptr) - std::bit_cast<std::intptr_t>(this));
         }
 
         // ------------------------------------------------------------------
         //  Null / validity
         // ------------------------------------------------------------------
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool isNull() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isNull() const noexcept {
             return m_offset == 0;
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool isValid() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isValid() const noexcept {
             return m_offset != 0;
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        explicit constexpr operator bool() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE explicit constexpr operator bool() const noexcept {
             return isValid();
         }
 
@@ -743,33 +747,29 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         [[nodiscard]] PPR_FORCE_INLINE
-        // ReSharper disable once CppNonExplicitConversionOperator
-        constexpr operator pointer() const & noexcept {
+            // ReSharper disable once CppNonExplicitConversionOperator
+            constexpr operator pointer() const & noexcept {
             return getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr pointer operator->() const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr pointer operator->() const & noexcept {
             return getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr reference operator*() const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr reference operator*() const & noexcept {
             return *getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr reference operator[](const std::size_t offset) const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr reference operator[](const std::size_t offset) const & noexcept {
             return getData()[offset];
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool operator==(const RelPtr &other) const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool operator==(const RelPtr &other) const & noexcept {
             return getData() == other.getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr std::strong_ordering operator<=>(const RelPtr &other) const & noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::strong_ordering operator<=>(
+            const RelPtr &other) const & noexcept {
             return getData() <=> other.getData();
         }
     };
@@ -778,7 +778,7 @@ export namespace pP {
     RelPtr(T *ptr) -> RelPtr<T>;
 
     template<typename T, std::signed_integral OffsetT>
-    struct details::relocatable<RelPtr<T, OffsetT> > : std::false_type {
+    struct details::relocatable<RelPtr<T, OffsetT>> : std::false_type {
         // must be moved to conserve absolute pointer address
     };
 
@@ -786,21 +786,24 @@ export namespace pP {
     // allow packing a tag/flags into a pointer's unused bits
     // ------------------------------------------------------------------
 
-    template<typename T, typename TagT = std::uintptr_t, std::align_val_t Alignment = alignof_v<T> >
+    template<typename T, typename TagT = std::uintptr_t, std::align_val_t Alignment = alignof_v<T>>
     struct [[nodiscard]] TagPtr {
-        static_assert(static_cast<std::uintptr_t>(Alignment) >= 1u,
-            "Alignment must be at least 1.");
-        static_assert((static_cast<std::uintptr_t>(Alignment) & (static_cast<std::uintptr_t>(Alignment) - 1u)) == 0u,
+        static_assert(static_cast<std::uintptr_t>(Alignment) >= 1u, "Alignment must be at least 1.");
+        static_assert(
+            (static_cast<std::uintptr_t>(Alignment) & (static_cast<std::uintptr_t>(Alignment) - 1u)) == 0u,
             "Alignment must be a power of two.");
-        static_assert(sizeof(T *) == sizeof(std::uintptr_t),
+        static_assert(
+            sizeof(T *) == sizeof(std::uintptr_t),
             "sizeof(T*) != sizeof(uintptr_t): pointer tagging is unsafe on this platform.");
-        static_assert((std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u) < sizeof(std::uintptr_t),
+        static_assert(
+            (std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u) < sizeof(std::uintptr_t),
             "Alignment consumes the entire pointer width; no bits remain for the address.");
-        static_assert(sizeof(TagT) <= sizeof(std::uintptr_t),
-            "Tag type is too large to fit in the pointer's unused bits.");
+        static_assert(
+            sizeof(TagT) <= sizeof(std::uintptr_t), "Tag type is too large to fit in the pointer's unused bits.");
 
         /// Number of flag bits available in the LSBs of the pointer.
-        static constexpr std::size_t extra_bits = std::bit_width(static_cast<std::uintptr_t>(Alignment)) - 1u; // log2(Alignment)
+        static constexpr std::size_t extra_bits = std::bit_width(static_cast<std::uintptr_t>(Alignment)) -
+                                                  1u; // log2(Alignment)
 
         static constexpr std::uintptr_t FLAG_MASK = static_cast<std::uintptr_t>(Alignment) - 1u;
         static constexpr std::uintptr_t PTR_MASK = ~FLAG_MASK;
@@ -817,66 +820,63 @@ export namespace pP {
 
         constexpr void reset(T *const ptr, const TagT tag = {}) noexcept {
             m_packed = std::bit_cast<std::uintptr_t>(ptr) | static_cast<std::uintptr_t>(tag);
-            PPR_ASSERT((static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0u
-                && "TagPtr: flag value overflows the available LSBs.");
-            PPR_ASSERT((std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0u
-                && "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
+            PPR_ASSERT(
+                (static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0u &&
+                "TagPtr: flag value overflows the available LSBs.");
+            PPR_ASSERT(
+                (std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0u &&
+                "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
         }
 
         /// Returns the pointer with all flag bits stripped.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *getData() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T *getData() const noexcept {
             return std::bit_cast<T *>(m_packed & PTR_MASK);
         }
 
         /// Returns the pointer with all flag bits stripped.
         template<typename U>
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr U *getReinterpret() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr U *getReinterpret() const noexcept {
             return std::bit_cast<U *>(m_packed & PTR_MASK);
         }
 
         /// Returns only the flag bits.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr TagT getTag() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr TagT getTag() const noexcept {
             return static_cast<TagT>(m_packed & FLAG_MASK);
         }
 
-        [[nodiscard]] PPR_FLATTEN
-        constexpr std::tuple<T *, TagT> unpack() const noexcept {
+        [[nodiscard]] PPR_FLATTEN constexpr std::tuple<T *, TagT> unpack() const noexcept {
             return std::make_tuple(getData(), getTag());
         }
 
         /// Returns only the flag bits.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool hasTag(const TagT tag) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool hasTag(const TagT tag) const noexcept {
             PPR_ASSERT((static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0u);
             return (m_packed & static_cast<std::uintptr_t>(tag)) != 0u;
         }
 
         /// Replaces the pointer, preserving the current flags.
         PPR_FORCE_INLINE constexpr void setData(T *const ptr) noexcept {
-            PPR_ASSERT((std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0
-                && "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
+            PPR_ASSERT(
+                (std::bit_cast<std::uintptr_t>(ptr) & FLAG_MASK) == 0 &&
+                "TagPtr: pointer is not sufficiently aligned for the requested Alignment.");
             m_packed = (m_packed & FLAG_MASK) | std::bit_cast<std::uintptr_t>(ptr);
         }
 
         /// Replaces ALL flags at once.
         PPR_FORCE_INLINE constexpr void setTag(const TagT tag) noexcept {
-            PPR_ASSERT((static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0
-                && "TagPtr: tag value overflows the available LSBs.");
+            PPR_ASSERT(
+                (static_cast<std::uintptr_t>(tag) & PTR_MASK) == 0 &&
+                "TagPtr: tag value overflows the available LSBs.");
             m_packed = (m_packed & PTR_MASK) | static_cast<std::uintptr_t>(tag);
         }
 
         /// Returns a bitmask with only the extra bits
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr auto getBits() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto getBits() const noexcept {
             return Bitmask<std::uintptr_t, extra_bits>(m_packed);
         }
 
         /// Returns a bitmask reference with only the extra bits
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr auto getBits() noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr auto getBits() noexcept {
             return BitmaskRef<std::uintptr_t, extra_bits>(m_packed);
         }
 
@@ -884,18 +884,15 @@ export namespace pP {
         //  Null / validity
         // ------------------------------------------------------------------
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool isNull() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isNull() const noexcept {
             return getData() == nullptr;
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool isValid() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool isValid() const noexcept {
             return getData() != nullptr;
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        explicit constexpr operator bool() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE explicit constexpr operator bool() const noexcept {
             return isValid();
         }
 
@@ -903,18 +900,15 @@ export namespace pP {
         //  Pointer-like operators
         // ------------------------------------------------------------------
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T *operator->() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T *operator->() const noexcept {
             return getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T &operator*() const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T &operator*() const noexcept {
             return *getData();
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr T &operator[](const std::ptrdiff_t offset) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr T &operator[](const std::ptrdiff_t offset) const noexcept {
             return getData()[offset];
         }
 
@@ -923,26 +917,22 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         /// Full equality: pointer AND tags must both match.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool operator==(const TagPtr other) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool operator==(const TagPtr other) const noexcept {
             return m_packed == other.m_packed;
         }
 
         /// Pointer-only equality: tags are ignored.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr bool operator==(const T *const ptr) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr bool operator==(const T *const ptr) const noexcept {
             return (m_packed & PTR_MASK) == std::bit_cast<std::uintptr_t>(ptr);
         }
 
         /// Pointer-only three-way comparison (tags ignored). Produces a
         /// consistent total order within a single execution.
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr std::strong_ordering operator<=>(const TagPtr other) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::strong_ordering operator<=>(const TagPtr other) const noexcept {
             return (m_packed & PTR_MASK) <=> (other.m_packed & PTR_MASK);
         }
 
-        [[nodiscard]] PPR_FORCE_INLINE
-        constexpr std::strong_ordering operator<=>(const T *const ptr) const noexcept {
+        [[nodiscard]] PPR_FORCE_INLINE constexpr std::strong_ordering operator<=>(const T *const ptr) const noexcept {
             return (m_packed & PTR_MASK) <=> std::bit_cast<std::uintptr_t>(ptr);
         }
 
@@ -952,8 +942,7 @@ export namespace pP {
     };
 
     template<typename T, typename TagT, std::align_val_t Alignment>
-    struct details::relocatable<TagPtr<T, TagT, Alignment> > : std::true_type {
-    };
+    struct details::relocatable<TagPtr<T, TagT, Alignment>> : std::true_type {};
 
     // --------------------------------------------------------------
     // non-owning contiguous view helper
@@ -972,21 +961,18 @@ export namespace pP {
         constexpr ArrayView() noexcept = default;
 
         constexpr ArrayView(pointer data PPR_LIFETIME_BOUND, const std::size_t size) noexcept
-            : m_data(data),
-              m_size(size) {
+            : m_data(data), m_size(size) {
         }
 
         constexpr ArrayView(std::initializer_list<T> init_list PPR_LIFETIME_BOUND) noexcept
-            : m_data(std::data(init_list)),
-              m_size(init_list.size()) {
+            : m_data(std::data(init_list)), m_size(init_list.size()) {
         }
 
         template<std::ranges::contiguous_range RangeT>
-            requires std::convertible_to<std::add_pointer_t<std::ranges::range_reference_t<RangeT> >, pointer>
+            requires std::convertible_to<std::add_pointer_t<std::ranges::range_reference_t<RangeT>>, pointer>
         // ReSharper disable once CppNonExplicitConvertingConstructor
         constexpr ArrayView(RangeT &&contiguous_range PPR_LIFETIME_BOUND) noexcept
-            : m_data(std::ranges::data(contiguous_range)),
-              m_size(std::ranges::size(contiguous_range)) {
+            : m_data(std::ranges::data(contiguous_range)), m_size(std::ranges::size(contiguous_range)) {
         }
 
         [[nodiscard]] constexpr bool empty() const noexcept {
@@ -1016,7 +1002,7 @@ export namespace pP {
         }
     };
 
-    static_assert(std::ranges::contiguous_range<ArrayView<int> >);
+    static_assert(std::ranges::contiguous_range<ArrayView<int>>);
 
     template<typename T>
     ArrayView(const T *data, std::size_t size) -> ArrayView<T>;
@@ -1025,11 +1011,10 @@ export namespace pP {
     ArrayView(std::initializer_list<T> list) -> ArrayView<T>;
 
     template<std::ranges::contiguous_range RangeT>
-    ArrayView(RangeT &&contiguous_range) -> ArrayView<std::ranges::range_value_t<RangeT> >;
+    ArrayView(RangeT &&contiguous_range) -> ArrayView<std::ranges::range_value_t<RangeT>>;
 
     template<typename T>
-    struct details::relocatable<ArrayView<T> > : std::true_type {
-    };
+    struct details::relocatable<ArrayView<T>> : std::true_type {};
 
     // --------------------------------------------------------------
     // non-owning contiguous view helper with relative pointers (half the size of ArrayView<>)
@@ -1059,7 +1044,7 @@ export namespace pP {
 
         template<typename ValueT, std::size_t ExtentV = std::dynamic_extent>
             requires std::convertible_to<std::add_pointer_t<ValueT>, pointer>
-        constexpr RelativeView &operator =(const std::span<ValueT, ExtentV> &span) noexcept {
+        constexpr RelativeView &operator=(const std::span<ValueT, ExtentV> &span) noexcept {
             reset(span.data(), span.size());
             return *this;
         }
@@ -1111,13 +1096,13 @@ export namespace pP {
     };
 
     static_assert(sizeof(RelativeView<int>) == sizeof(u64));
-    static_assert(std::ranges::contiguous_range<RelativeView<int> >);
+    static_assert(std::ranges::contiguous_range<RelativeView<int>>);
 
     template<typename T>
     RelativeView(ArrayView<T> view) -> RelativeView<T>;
 
     template<typename T>
-    struct details::relocatable<RelativeView<T> > : std::false_type {
+    struct details::relocatable<RelativeView<T>> : std::false_type {
         // must be moved to conserve absolute pointer address
     };
 
@@ -1143,21 +1128,18 @@ export namespace pP {
 
     public:
         TransformView(const std::size_t size, std23::function_ref<T(std::size_t) noexcept> transform) noexcept
-            : m_transform(std::move(transform)),
-              m_size(size) {
+            : m_transform(std::move(transform)), m_size(size) {
         }
 
         template<std::convertible_to<T> ConvertibleT, std::size_t ExtentV>
         explicit TransformView(std::span<const ConvertibleT, ExtentV> span) noexcept
-            : m_transform(std23::nontype<&passThroughSpan_<ConvertibleT>>, span.data()),
-              m_size(span.size()) {
+            : m_transform(std23::nontype<&passThroughSpan_<ConvertibleT>>, span.data()), m_size(span.size()) {
         }
 
         template<std::ranges::random_access_range RangeT>
             requires std::convertible_to<std::ranges::range_value_t<RangeT>, T>
         explicit TransformView(const RangeT &range) noexcept
-            : m_transform(std23::nontype<&passThroughRange_<RangeT>>, &range),
-              m_size(std::ranges::size(range)) {
+            : m_transform(std23::nontype<&passThroughRange_<RangeT>>, &range), m_size(std::ranges::size(range)) {
         }
 
         [[nodiscard]] bool empty() const noexcept {
@@ -1202,8 +1184,9 @@ export namespace pP {
         std::size_t m_count{0};
 
         constexpr Stack() noexcept {
-            PPR_EXPR_IF_DEBUG(mem::details::poisonFlood(mem::details::PoisonPattern::reserved,
-                static_cast<void *>(m_storage.data()), N * sizeof(T)));
+            PPR_EXPR_IF_DEBUG(
+                mem::details::poisonFlood(
+                    mem::details::PoisonPattern::reserved, static_cast<void *>(m_storage.data()), N * sizeof(T)));
             mem::annotateEmptyContiguousContainer(m_storage.data(), N);
         }
 
@@ -1251,11 +1234,7 @@ export namespace pP {
         // Takes T by value — move or copy, caller's choice
         [[nodiscard]] constexpr bool push(T value) noexcept {
             if (m_count < N) [[likely]] {
-                mem::annotateContiguousContainer(
-                    m_storage.data(),
-                    N,
-                    m_count,
-                    m_count + 1u);
+                mem::annotateContiguousContainer(m_storage.data(), N, m_count, m_count + 1u);
 
                 m_storage[m_count++] = std::move(value);
                 return true;
@@ -1265,11 +1244,7 @@ export namespace pP {
 
         constexpr void pushAssumeCapacity(T value) noexcept {
             PPR_ASSERT(m_count < N);
-            mem::annotateContiguousContainer(
-                m_storage.data(),
-                N,
-                m_count,
-                m_count + 1u);
+            mem::annotateContiguousContainer(m_storage.data(), N, m_count, m_count + 1u);
 
             m_storage[m_count++] = std::move(value);
         }
@@ -1280,11 +1255,7 @@ export namespace pP {
                 --m_count;
                 T return_value = std::move(m_storage[m_count]);
 
-                mem::annotateContiguousContainer(
-                    m_storage.data(),
-                    N,
-                    old_count,
-                    m_count);
+                mem::annotateContiguousContainer(m_storage.data(), N, old_count, m_count);
 
                 return return_value;
             }
@@ -1297,11 +1268,7 @@ export namespace pP {
             --m_count;
             T return_value = std::move(m_storage[m_count]);
 
-            mem::annotateContiguousContainer(
-                m_storage.data(),
-                N,
-                old_count,
-                m_count);
+            mem::annotateContiguousContainer(m_storage.data(), N, old_count, m_count);
             return return_value;
         }
 
@@ -1310,16 +1277,24 @@ export namespace pP {
             m_count = 0u;
         }
 
-        [[nodiscard]] constexpr T *begin() noexcept { return m_storage.data(); }
-        [[nodiscard]] constexpr T *end() noexcept { return m_storage.data() + m_count; }
+        [[nodiscard]] constexpr T *begin() noexcept {
+            return m_storage.data();
+        }
+        [[nodiscard]] constexpr T *end() noexcept {
+            return m_storage.data() + m_count;
+        }
 
-        [[nodiscard]] constexpr const T *begin() const noexcept { return m_storage.data(); }
-        [[nodiscard]] constexpr const T *end() const noexcept { return m_storage.data() + m_count; }
+        [[nodiscard]] constexpr const T *begin() const noexcept {
+            return m_storage.data();
+        }
+        [[nodiscard]] constexpr const T *end() const noexcept {
+            return m_storage.data() + m_count;
+        }
     };
 
-    template<typename T, std::size_t N> requires std::is_trivial_v<T>
-    struct details::relocatable<Stack<T, N> > : relocatable<T> {
-    };
+    template<typename T, std::size_t N>
+        requires std::is_trivial_v<T>
+    struct details::relocatable<Stack<T, N>> : relocatable<T> {};
 
     // ------------------------------------------------------------------
     // bounded single-thread ring-buffer
@@ -1344,8 +1319,7 @@ export namespace pP {
         i32 m_front_pos{0};
 
 #if PPR_ENABLE_SANITIZER_ADDRESS
-        constexpr
-        RingBuffer() noexcept {
+        constexpr RingBuffer() noexcept {
             mem::poisonReserved(m_storage.data(), m_storage.size());
         }
 
@@ -1379,8 +1353,9 @@ export namespace pP {
             return m_storage[arrIndex(static_cast<i32>(static_cast<std::size_t>(m_front_pos) + index))];
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] bool pushFront(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        [[nodiscard]] bool pushFront(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             if (!isFull()) [[likely]] {
                 pushFrontAssumeNotFull(std::forward<ArgsT>(args)...);
                 return true;
@@ -1388,8 +1363,9 @@ export namespace pP {
             return false;
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        void pushFrontAssumeNotFull(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        void pushFrontAssumeNotFull(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             PPR_ASSERT(!isFull());
             --m_front_pos;
             T &dst = m_storage[arrIndex(m_front_pos)];
@@ -1397,8 +1373,9 @@ export namespace pP {
             std::construct_at(&dst, std::forward<ArgsT>(args)...);
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        [[nodiscard]] bool pushBack(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        [[nodiscard]] bool pushBack(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             if (!isFull()) [[likely]] {
                 pushBackAssumeNotFull(std::forward<ArgsT>(args)...);
                 return true;
@@ -1406,8 +1383,9 @@ export namespace pP {
             return false;
         }
 
-        template<typename... ArgsT> requires std::is_constructible_v<T, ArgsT &&...>
-        void pushBackAssumeNotFull(ArgsT &&... args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+        template<typename... ArgsT>
+            requires std::is_constructible_v<T, ArgsT &&...>
+        void pushBackAssumeNotFull(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
             PPR_ASSERT(!isFull());
             T &dst = m_storage[arrIndex(m_back_pos)];
             mem::unpoisonUninitialized(&dst);
@@ -1462,18 +1440,24 @@ export namespace pP {
         using iterator = IndexIterator<RingBuffer, T, i32>;
         using const_iterator = IndexIterator<const RingBuffer, const T, i32>;
 
-        [[nodiscard]] constexpr iterator begin() noexcept { return iterator(*this, 0); }
-        [[nodiscard]] constexpr iterator end() noexcept { return iterator(*this, m_back_pos - m_front_pos); }
+        [[nodiscard]] constexpr iterator begin() noexcept {
+            return iterator(*this, 0);
+        }
+        [[nodiscard]] constexpr iterator end() noexcept {
+            return iterator(*this, m_back_pos - m_front_pos);
+        }
 
-        [[nodiscard]] constexpr const_iterator begin() const noexcept { return const_iterator(*this, 0); }
+        [[nodiscard]] constexpr const_iterator begin() const noexcept {
+            return const_iterator(*this, 0);
+        }
         [[nodiscard]] constexpr const_iterator end() const noexcept {
             return const_iterator(*this, m_back_pos - m_front_pos);
         }
     };
 
-    template<typename T, std::size_t N> requires std::is_trivial_v<T>
-    struct details::relocatable<RingBuffer<T, N> > : relocatable<T> {
-    };
+    template<typename T, std::size_t N>
+        requires std::is_trivial_v<T>
+    struct details::relocatable<RingBuffer<T, N>> : relocatable<T> {};
 
     // ------------------------------------------------------------------
     // sorting
@@ -1551,11 +1535,11 @@ export namespace pP {
             // ---------------------------------------------------------------
             template<typename IteratorT, typename CompT, typename ProjT>
             concept TNothrowSortable =
-                    noexcept(std::declval<CompT &>()(
-                        std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()),
-                        std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()))) &&
-                    noexcept(std::ranges::iter_move(std::declval<IteratorT>())) &&
-                    noexcept(*std::declval<IteratorT>() = std::ranges::iter_move(std::declval<IteratorT>()));
+                noexcept(std::declval<CompT &>()(
+                    std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()),
+                    std::invoke(std::declval<ProjT &>(), *std::declval<IteratorT>()))) &&
+                noexcept(std::ranges::iter_move(std::declval<IteratorT>())) &&
+                noexcept(*std::declval<IteratorT>() = std::ranges::iter_move(std::declval<IteratorT>()));
         } // namespace details
 
         // ------------------------------------------------------------------
@@ -1563,22 +1547,16 @@ export namespace pP {
         // a compatible sentinel, plus optional comparator and projection.
         // ------------------------------------------------------------------
         template<
-            std::random_access_iterator IteratorT,
-            std::sentinel_for<IteratorT> S,
-            typename CompT = std::ranges::less,
+            std::random_access_iterator IteratorT, std::sentinel_for<IteratorT> S, typename CompT = std::ranges::less,
             typename ProjT = std::identity>
             requires std::sortable<IteratorT, CompT, ProjT>
-        constexpr void inplaceShell(
-            IteratorT first,
-            S last,
-            CompT comp = {},
-            ProjT proj = {}
-        ) noexcept(details::TNothrowSortable<IteratorT, CompT, ProjT>) {
+        constexpr void inplaceShell(IteratorT first, S last, CompT comp = {}, ProjT proj = {}) noexcept(
+            details::TNothrowSortable<IteratorT, CompT, ProjT>) {
             const auto n = static_cast<std::size_t>(std::ranges::distance(first, last));
-            if (n < 2u) [[unlikely]] return;
+            if (n < 2u) [[unlikely]]
+                return;
 
-            auto gap_idx =
-                    static_cast<std::ptrdiff_t>(details::sedgewick_gaps_v.size()) - 1;
+            auto gap_idx = static_cast<std::ptrdiff_t>(details::sedgewick_gaps_v.size()) - 1;
 
             while (gap_idx > 0 && details::sedgewick_gaps_v[static_cast<std::size_t>(gap_idx)] >= n)
                 --gap_idx;
@@ -1593,10 +1571,8 @@ export namespace pP {
                     auto j = it;
 
                     // Compute (j - gap) directly in the loop checks to avoid out-of-bounds decrements
-                    while (j - first >= gap
-                           && std::invoke(comp,
-                               std::invoke(proj, key),
-                               std::invoke(proj, *(j - gap)))) {
+                    while (
+                        j - first >= gap && std::invoke(comp, std::invoke(proj, key), std::invoke(proj, *(j - gap)))) {
                         *j = std::ranges::iter_move(j - gap);
                         j -= gap;
                     }
@@ -1609,31 +1585,17 @@ export namespace pP {
         // Range overload — accepts any random-access range:
         // std::span, std::array, std::vector, views::take results, etc.
         // ------------------------------------------------------------------
-        template<
-            std::ranges::random_access_range R,
-            typename CompT = std::ranges::less,
-            typename ProjT = std::identity>
+        template<std::ranges::random_access_range R, typename CompT = std::ranges::less, typename ProjT = std::identity>
             requires std::sortable<std::ranges::iterator_t<R>, CompT, ProjT>
-        constexpr void inplaceShell(
-            R &&r,
-            CompT comp = {},
-            ProjT proj = {}
-        ) noexcept(
-            noexcept(inplaceShell(
-                std::ranges::begin(std::forward<R>(r)),
-                std::ranges::end(std::forward<R>(r)),
-                std::move(comp),
-                std::move(proj)))
-        ) {
+        constexpr void inplaceShell(R &&r, CompT comp = {}, ProjT proj = {}) noexcept(noexcept(inplaceShell(
+            std::ranges::begin(std::forward<R>(r)), std::ranges::end(std::forward<R>(r)), std::move(comp),
+            std::move(proj)))) {
             inplaceShell(
-                std::ranges::begin(std::forward<R>(r)),
-                std::ranges::end(std::forward<R>(r)),
-                std::move(comp),
+                std::ranges::begin(std::forward<R>(r)), std::ranges::end(std::forward<R>(r)), std::move(comp),
                 std::move(proj));
         }
     }
 
     template<hash::THashable T>
-    struct details::relocatable<hash::Memoizer<T> > : relocatable<T> {
-    };
+    struct details::relocatable<hash::Memoizer<T>> : relocatable<T> {};
 }

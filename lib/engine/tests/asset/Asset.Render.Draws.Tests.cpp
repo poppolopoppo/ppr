@@ -49,10 +49,11 @@ namespace pP::tests::detail {
 
             static void push_(const Log::Entry &entry) noexcept {
                 try {
-                    s_entries.push_back(Captured{
-                        entry.m_site.m_verbosity,
-                        std::string(entry.m_message),
-                    });
+                    s_entries.push_back(
+                        Captured{
+                            entry.m_site.m_verbosity,
+                            std::string(entry.m_message),
+                        });
                 } catch (...) {
                 }
             }
@@ -87,12 +88,10 @@ namespace pP::tests::detail {
         // shared helpers (pixel tests)
         // ------------------------------------------------------------------
 
-        [[nodiscard]] CameraSnapshot drawsCamera_(
-            const float3 &eye, const float3 &target, const float2 &extent) {
+        [[nodiscard]] CameraSnapshot drawsCamera_(const float3 &eye, const float3 &target, const float2 &extent) {
             CameraSnapshot snapshot{};
             snapshot.m_view = float4x4::lookat(target, eye, math::axis_y);
-            snapshot.m_projection = rhi::getPerspectiveMatrix(
-                pi_v<float> / 3.0f, extent.x / extent.y, 0.05f, 100.0f);
+            snapshot.m_projection = rhi::getPerspectiveMatrix(pi_v<float> / 3.0f, extent.x / extent.y, 0.05f, 100.0f);
             snapshot.m_view_projection = snapshot.m_view * snapshot.m_projection;
             snapshot.m_origin = eye;
             snapshot.m_viewport_size = extent;
@@ -145,8 +144,8 @@ namespace pP::tests::detail {
         [[nodiscard]] Expected<DrawsPixels> drawsReadback_(rhi::IDevice &device, rhi::ITexture &target) {
             shader::ComPtr<ISlangBlob> blob{};
             rhi::SubresourceLayout layout{};
-            if (const std::error_code err =
-                make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
+            if (const std::error_code err = make_error_code(
+                    device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
             if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
@@ -159,11 +158,9 @@ namespace pP::tests::detail {
             return pixels;
         }
 
-        [[nodiscard]] std::array<u8, 4u> drawsTexel_(
-            const DrawsPixels &pixels, const u32 x, const u32 y) {
-            const std::size_t off =
-                static_cast<std::size_t>(y) * static_cast<std::size_t>(pixels.m_row_pitch) +
-                static_cast<std::size_t>(x) * 4u;
+        [[nodiscard]] std::array<u8, 4u> drawsTexel_(const DrawsPixels &pixels, const u32 x, const u32 y) {
+            const std::size_t off = static_cast<std::size_t>(y) * static_cast<std::size_t>(pixels.m_row_pitch) +
+                                    static_cast<std::size_t>(x) * 4u;
             return {
                 static_cast<u8>(pixels.m_bytes[off]),
                 static_cast<u8>(pixels.m_bytes[off + 1u]),
@@ -172,8 +169,7 @@ namespace pP::tests::detail {
             };
         }
 
-        [[nodiscard]] u32 drawsDist_(
-            const std::array<u8, 4u> &a, const std::array<u8, 4u> &b) noexcept {
+        [[nodiscard]] u32 drawsDist_(const std::array<u8, 4u> &a, const std::array<u8, 4u> &b) noexcept {
             u32 dist = 0u;
             for (u32 i = 0u; i < 4u; ++i) {
                 const u32 delta = a[i] > b[i] ? static_cast<u32>(a[i] - b[i]) : static_cast<u32>(b[i] - a[i]);
@@ -223,15 +219,12 @@ namespace pP::tests::detail {
         // Untextured material of a flat base colour: the shader multiplies the
         // albedo factor by the fallback white texture, so the drawn result is
         // that colour modulated by the fixed light rig.
-        [[nodiscard]] Expected<MaterialHandle> drawsColorMaterial_(
-            TrianglePass &pass, const float4 &rgb) {
+        [[nodiscard]] Expected<MaterialHandle> drawsColorMaterial_(TrianglePass &pass, const float4 &rgb) {
             mesh::MaterialAsset material{};
             material.m_base_color = float4{rgb.x, rgb.y, rgb.z, 1.0f};
             material.m_roughness = 1.0f;
             material.m_metallic = 0.0f;
-            const TextureHandle none[4] = {
-                TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}
-            };
+            const TextureHandle none[4] = {TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
             return pass.packMaterial(material, none);
         }
 
@@ -265,7 +258,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.25f);
             const Array<u32> indices = drawsQuadIndices_();
@@ -290,8 +285,7 @@ namespace pP::tests::detail {
                 {.m_payload = {.m_vb_offset = 4u, .m_index_count = 6u}, .m_variant = opaque, .m_count = 6u},
                 {.m_payload = {.m_vb_offset = 0u, .m_index_count = 6u}, .m_variant = opaque, .m_count = 6u},
             };
-            const Expected<TrianglePass::DrawPlan> plan = TrianglePass::planDraws(
-                planner_instances);
+            const Expected<TrianglePass::DrawPlan> plan = TrianglePass::planDraws(planner_instances);
             PPR_TEST_ASSERT(plan.has_value());
             PPR_TEST_ASSERT(plan->m_groups.size() == 2u);
             PPR_TEST_ASSERT(plan->m_groups[0].m_first_payload == 0u);
@@ -310,11 +304,18 @@ namespace pP::tests::detail {
                 rhi::IBuffer *const bucket_b_v = reinterpret_cast<rhi::IBuffer *>(0x3000);
                 rhi::IBuffer *const bucket_b_i = reinterpret_cast<rhi::IBuffer *>(0x4000);
                 const TrianglePass::ResolvedInstance mixed_instances[] = {
-                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
-                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_b_v, .m_index_buffer = bucket_b_i},
+                    {.m_payload = {.m_index_count = 6u},
+                        .m_variant = opaque,
+                        .m_count = 6u,
+                        .m_vertex_buffer = bucket_a_v,
+                        .m_index_buffer = bucket_a_i},
+                    {.m_payload = {.m_index_count = 6u},
+                        .m_variant = opaque,
+                        .m_count = 6u,
+                        .m_vertex_buffer = bucket_b_v,
+                        .m_index_buffer = bucket_b_i},
                 };
-                const Expected<TrianglePass::DrawPlan> split = TrianglePass::planDraws(
-                    mixed_instances);
+                const Expected<TrianglePass::DrawPlan> split = TrianglePass::planDraws(mixed_instances);
                 PPR_TEST_ASSERT(split.has_value());
                 PPR_TEST_ASSERT(split->m_groups.size() == 2u);
                 PPR_TEST_ASSERT(split->m_groups[0].m_vertex_buffer == bucket_a_v);
@@ -322,11 +323,18 @@ namespace pP::tests::detail {
                 // The same two inputs batch when the buffers agree, which is
                 // what makes the split above attributable to the buffer pair.
                 const TrianglePass::ResolvedInstance shared_instances[] = {
-                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
-                    {.m_payload = {.m_index_count = 6u}, .m_variant = opaque, .m_count = 6u, .m_vertex_buffer = bucket_a_v, .m_index_buffer = bucket_a_i},
+                    {.m_payload = {.m_index_count = 6u},
+                        .m_variant = opaque,
+                        .m_count = 6u,
+                        .m_vertex_buffer = bucket_a_v,
+                        .m_index_buffer = bucket_a_i},
+                    {.m_payload = {.m_index_count = 6u},
+                        .m_variant = opaque,
+                        .m_count = 6u,
+                        .m_vertex_buffer = bucket_a_v,
+                        .m_index_buffer = bucket_a_i},
                 };
-                const Expected<TrianglePass::DrawPlan> batched = TrianglePass::planDraws(
-                    shared_instances);
+                const Expected<TrianglePass::DrawPlan> batched = TrianglePass::planDraws(shared_instances);
                 PPR_TEST_ASSERT(batched.has_value());
                 PPR_TEST_ASSERT(batched->m_groups.size() == 1u);
                 PPR_TEST_ASSERT(batched->m_groups[0].m_instance_count == 2u);
@@ -338,7 +346,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.submitInstance(*red_bag, *red, drawsPlace_(0.8f, 0.0f, 0.0f)));
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(
+                not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
 
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
@@ -384,7 +393,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.2f);
             const Array<u32> indices = drawsQuadIndices_();
@@ -402,7 +413,8 @@ namespace pP::tests::detail {
             }
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(
+                not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
 
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
@@ -441,7 +453,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(
+                not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
 
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
@@ -486,7 +499,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.3f);
             const Array<u32> indices = drawsQuadIndices_();
@@ -498,7 +513,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(material.has_value());
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(
+                not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
 
@@ -557,7 +573,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.3f);
             const Array<u32> indices = drawsQuadIndices_();
@@ -579,7 +597,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(material.has_value());
 
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(
+                not pass.update(TimeSpan{}, drawsCamera_(eye, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
 
@@ -626,12 +645,15 @@ namespace pP::tests::detail {
         };
 
         struct LossTestApp : Application {
-            LossTestApp()
-                : Application(kLossDomain, "AssetDrawLoss", std::span<const char *const>{}) {
+            LossTestApp() : Application(kLossDomain, "AssetDrawLoss", std::span<const char *const>{}) {
             }
 
-            [[nodiscard]] std::error_code boot() { return Application::initialize(); }
-            [[nodiscard]] std::error_code teardown() { return Application::shutdown(); }
+            [[nodiscard]] std::error_code boot() {
+                return Application::initialize();
+            }
+            [[nodiscard]] std::error_code teardown() {
+                return Application::shutdown();
+            }
         };
 
         // Geometry, camera, readback, and target helpers are shared with the
@@ -666,7 +688,9 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (device_loss_restart_reproduces_the_frame) {
             LossTestApp loss_app{};
             PPR_TEST_ASSERT(not loss_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not loss_app.teardown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not loss_app.teardown());
+            };
             const auto rhi = loss_app.getServices().get<IRhiService>();
             PPR_TEST_ASSERT(rhi.isValid());
             const auto shader = loss_app.getServices().get<IShaderService>();
@@ -687,9 +711,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(bag.has_value());
             mesh::MaterialAsset material{};
             material.m_base_color = float4{0.2f, 0.6f, 0.9f, 1.0f};
-            const TextureHandle none[4] = {
-                TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}
-            };
+            const TextureHandle none[4] = {TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
             const Expected<MaterialHandle> packed = pass.packMaterial(material, none);
             PPR_TEST_ASSERT(packed.has_value());
 

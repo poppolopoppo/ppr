@@ -36,9 +36,7 @@ namespace pP::hal {
     [[nodiscard]] const std::filesystem::directory_entry &appDataLocalDir() {
         static const auto g_directory = []() -> std::filesystem::directory_entry {
             if (const char *home = std::getenv("HOME")) {
-                return std::filesystem::directory_entry(
-                    std::filesystem::path(home) / "Library/Application Support"
-                );
+                return std::filesystem::directory_entry(std::filesystem::path(home) / "Library/Application Support");
             }
             return {};
         }();

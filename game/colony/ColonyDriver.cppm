@@ -94,7 +94,7 @@ export namespace pP::colony {
         bool m_cache_valid{false};
         Array<sim::ChunkPos> m_cached_needed{};
         Array<sim::ChunkPos> m_cached_listed{};
-        Array<Array<u16> > m_cached_pool{};
+        Array<Array<u16>> m_cached_pool{};
         Array<physics::ColliderChunkView> m_cached_views{};
         PathCounts m_counts{};
         u32 m_errands{};
@@ -125,8 +125,8 @@ export namespace pP::colony {
 
         void mirrorBodyStates() noexcept;
 
-        std::error_code rebuildChunks(std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed,
-                                      u32 max);
+        std::error_code rebuildChunks(
+            std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, u32 max);
 
         void applyToolEdits() noexcept;
 
@@ -147,12 +147,12 @@ export namespace pP::colony {
         /// verbatim. Returns false when the full preparation must run instead
         /// (empty history, inconsistent sizes, or out-of-range input); outputs
         /// are untouched on false. Reuse proof lives on the definition.
-        [[nodiscard]] bool buildColliderViewsDelta(std::span<const sim::ChunkPos> sorted_needed,
-            std::span<const sim::ChunkPos> dirty, Array<sim::ChunkPos> &listed_out,
-            Array<Array<u16> > &pool_out, Array<physics::ColliderChunkView> &views_out);
+        [[nodiscard]] bool buildColliderViewsDelta(
+            std::span<const sim::ChunkPos> sorted_needed, std::span<const sim::ChunkPos> dirty,
+            Array<sim::ChunkPos> &listed_out, Array<Array<u16>> &pool_out,
+            Array<physics::ColliderChunkView> &views_out);
 
     public:
-
     public:
         [[nodiscard]] std::error_code init(const ColonyDriverDesc &desc);
 
@@ -211,7 +211,7 @@ export namespace pP::colony {
         /// merged with the translator's submit-side table. Submit runs on the
         /// presentation boundary with its own lifetime, so both tables are
         /// reported side by side instead of summed).
-        [[nodiscard]] const StageTimings& stageTimings() const noexcept;
+        [[nodiscard]] const StageTimings &stageTimings() const noexcept;
 
         /// Clears the accumulated stage timings (same paths as clearToolState).
         void resetStageTimings() noexcept;

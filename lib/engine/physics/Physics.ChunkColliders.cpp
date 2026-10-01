@@ -20,8 +20,8 @@ namespace pP::physics {
             Vertex to;
         };
 
-        [[nodiscard]] const ColliderChunkView *findChunk(const std::span<const ColliderChunkView> chunks,
-                                                         const ColliderChunkPos pos) noexcept {
+        [[nodiscard]] const ColliderChunkView *findChunk(
+            const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos) noexcept {
             const auto it = std::ranges::find(chunks, pos, &ColliderChunkView::m_pos);
             return it == chunks.end() ? nullptr : &*it;
         }
@@ -63,8 +63,8 @@ namespace pP::physics {
                 return x * 0x9E3779B1u ^ y * 0x85EBCA6Bu;
             }
 
-            [[nodiscard]] i32 find(const std::span<const ColliderChunkView> chunks,
-                                   const ColliderChunkPos pos) const noexcept {
+            [[nodiscard]] i32 find(
+                const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos) const noexcept {
                 if (m_overflow) {
                     const auto it = std::ranges::find(chunks, pos, &ColliderChunkView::m_pos);
                     return it == chunks.end() ? -1 : static_cast<i32>(it - chunks.begin());
@@ -97,11 +97,12 @@ namespace pP::physics {
 
             // Duplicate check for views[upto]: indexed while the table holds
             // exactly views[0, upto), prefix-identical linear scan on overflow.
-            [[nodiscard]] bool seenDuplicate(const std::span<const ColliderChunkView> chunks,
-                                             const std::size_t upto) const noexcept {
+            [[nodiscard]] bool seenDuplicate(
+                const std::span<const ColliderChunkView> chunks, const std::size_t upto) const noexcept {
                 if (m_overflow) {
-                    return std::ranges::find(chunks.begin(), chunks.begin() + upto, chunks[upto].m_pos,
-                                             &ColliderChunkView::m_pos) != chunks.begin() + upto;
+                    return std::ranges::find(
+                               chunks.begin(), chunks.begin() + upto, chunks[upto].m_pos, &ColliderChunkView::m_pos) !=
+                           chunks.begin() + upto;
                 }
                 return find(chunks, chunks[upto].m_pos) >= 0;
             }
@@ -117,15 +118,16 @@ namespace pP::physics {
             }
         };
 
-        [[nodiscard]] const ColliderChunkView *findChunk(const ChunkIndex &index,
-                                                         const std::span<const ColliderChunkView> chunks,
-                                                         const ColliderChunkPos pos) noexcept {
+        [[nodiscard]] const ColliderChunkView *findChunk(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks,
+            const ColliderChunkPos pos) noexcept {
             const i32 entry = index.find(chunks, pos);
             return entry < 0 ? nullptr : &chunks[static_cast<std::size_t>(entry)];
         }
 
-        [[nodiscard]] bool solid(const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge,
-                                 const i32 x, const i32 y) noexcept {
+        [[nodiscard]] bool solid(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
+            const i32 y) noexcept {
             const auto floorDiv = [edge](const i32 v) { return v >= 0 ? v / edge : (v + 1) / edge - 1; };
             const ColliderChunkPos pos{floorDiv(x), floorDiv(y)};
             const ColliderChunkView *const chunk = findChunk(index, chunks, pos);
@@ -138,8 +140,9 @@ namespace pP::physics {
         }
 
         template<class F>
-        void cellEdges(const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
-                       const i32 y, F &&append) {
+        void cellEdges(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
+            const i32 y, F &&append) {
             if (not solid(index, chunks, edge, x, y)) {
                 return;
             }
@@ -166,9 +169,9 @@ namespace pP::physics {
             return cross > 0 ? 0 : (cross == 0 ? 1 : 2);
         }
 
-        [[nodiscard]] std::optional<Edge> exteriorEdge(const ChunkIndex &index, const std::span<const ColliderChunkView> chunks,
-                                                       const i32 edge, const ColliderChunkPos owner, const Vertex vertex, const Edge adjacent,
-                                                       const bool before) {
+        [[nodiscard]] std::optional<Edge> exteriorEdge(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge,
+            const ColliderChunkPos owner, const Vertex vertex, const Edge adjacent, const bool before) {
             std::optional<Edge> best;
             int rank = 4;
             for (const i32 y: {vertex.y - 1, vertex.y}) {
@@ -179,7 +182,8 @@ namespace pP::physics {
                     }
                     cellEdges(index, chunks, edge, x, y, [&](const Edge candidate) {
                         if ((before ? candidate.to == vertex : candidate.from == vertex)) {
-                            const int next_rank = before ? turnRank(candidate, adjacent) : turnRank(adjacent, candidate);
+                            const int next_rank = before ? turnRank(candidate, adjacent)
+                                                         : turnRank(adjacent, candidate);
                             if (next_rank < rank) {
                                 best = candidate;
                                 rank = next_rank;
@@ -202,8 +206,9 @@ namespace pP::physics {
             bool loop{};
         };
 
-        [[nodiscard]] std::vector<Polyline> extract(const ChunkIndex &index, const std::span<const ColliderChunkView> chunks,
-                                                    const ColliderChunkPos pos, const i32 edge) {
+        [[nodiscard]] std::vector<Polyline> extract(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos,
+            const i32 edge) {
             std::vector<Edge> edges;
             const std::size_t cells = static_cast<std::size_t>(edge) * static_cast<std::size_t>(edge);
             edges.reserve(2u * cells); // ~2 boundary edges per solid cell; sizes the walk output up front.
@@ -280,8 +285,8 @@ namespace pP::physics {
                     if (used[seed]) {
                         continue;
                     }
-                    const bool has_predecessor =
-                        std::ranges::binary_search(outEnd, endpointOrder.end(), edges[seed].from, {}, toOf);
+                    const bool has_predecessor = std::ranges::binary_search(
+                        outEnd, endpointOrder.end(), edges[seed].from, {}, toOf);
                     if (phase == 0 and has_predecessor) {
                         continue;
                     }
@@ -304,25 +309,15 @@ namespace pP::physics {
                     }
                     if (not line.loop) {
                         const Vertex end{
-                            static_cast<i32>(line.points.back().m_x),
-                            static_cast<i32>(line.points.back().m_y)
-                        };
+                            static_cast<i32>(line.points.back().m_x), static_cast<i32>(line.points.back().m_y)};
                         const Edge first = edges[seed];
                         const Edge last = edges[last_index];
                         const auto before = exteriorEdge(index, chunks, edge, pos, start, first, true);
                         const auto after = exteriorEdge(index, chunks, edge, pos, end, last, false);
-                        line.before = before
-                                          ? point(before->from)
-                                          : point({
-                                              2 * start.x - first.to.x,
-                                              2 * start.y - first.to.y
-                                          });
-                        line.after = after
-                                         ? point(after->to)
-                                         : point({
-                                             2 * end.x - last.from.x,
-                                             2 * end.y - last.from.y
-                                         });
+                        line.before = before ? point(before->from)
+                                             : point({2 * start.x - first.to.x, 2 * start.y - first.to.y});
+                        line.after = after ? point(after->to)
+                                           : point({2 * end.x - last.from.x, 2 * end.y - last.from.y});
                     }
                     lines.push_back(std::move(line));
                 }
@@ -331,8 +326,9 @@ namespace pP::physics {
         }
     }
 
-    std::error_code ChunkColliders::rebuildDirtyChunks(Scene &scene, const std::span<const ColliderChunkView> chunks,
-                                                       const std::span<const ColliderChunkPos> dirty, const u32 edge, const u32 max_chunks, u32 &processed) noexcept {
+    std::error_code ChunkColliders::rebuildDirtyChunks(
+        Scene &scene, const std::span<const ColliderChunkView> chunks, const std::span<const ColliderChunkPos> dirty,
+        const u32 edge, const u32 max_chunks, u32 &processed) noexcept {
         processed = 0u;
         if (edge == 0u or edge > 1024u or max_chunks == 0u) {
             return std::make_error_code(std::errc::invalid_argument);
@@ -355,11 +351,9 @@ namespace pP::physics {
                 if (not findChunk(index, chunks, pos)) {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
-                for (const ColliderChunkPos adjacent: {
-                         pos, ColliderChunkPos{pos.m_x - 1, pos.m_y},
-                         ColliderChunkPos{pos.m_x + 1, pos.m_y}, ColliderChunkPos{pos.m_x, pos.m_y - 1},
-                         ColliderChunkPos{pos.m_x, pos.m_y + 1}
-                     }) {
+                for (const ColliderChunkPos adjacent:
+                    {pos, ColliderChunkPos{pos.m_x - 1, pos.m_y}, ColliderChunkPos{pos.m_x + 1, pos.m_y},
+                        ColliderChunkPos{pos.m_x, pos.m_y - 1}, ColliderChunkPos{pos.m_x, pos.m_y + 1}}) {
                     if (findChunk(index, chunks, adjacent)) {
                         m_pending.insert(adjacent);
                     }
@@ -440,7 +434,7 @@ namespace pP::physics {
                 // commit phase below then performs no allocation.
                 std::vector<ChainHandle> merged;
                 merged.reserve(lines.size());
-                std::vector<std::pair<std::size_t, ChainHandle> > created;
+                std::vector<std::pair<std::size_t, ChainHandle>> created;
                 created.reserve(lines.size());
                 const bool needShapeNode = not snapshot.empty() and shapeIt == m_shapes.end();
                 auto shapeCommit = shapeIt;
@@ -544,8 +538,9 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code ChunkColliders::materializeForQuery(Scene &scene,
-                                                        const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos, const u32 edge) noexcept {
+    std::error_code ChunkColliders::materializeForQuery(
+        Scene &scene, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos,
+        const u32 edge) noexcept {
         if (not findChunk(chunks, pos)) {
             return std::make_error_code(std::errc::invalid_argument);
         }

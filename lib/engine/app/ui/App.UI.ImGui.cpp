@@ -123,7 +123,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             std::error_code createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature);
 
-            std::error_code uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources);
+            std::error_code uploadDrawData_(
+                rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources);
 
             void drainPendingDeselect_();
 
@@ -142,14 +143,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
         public:
             ImGuiService() noexcept {
                 ImGui::SetAllocatorFunctions(
-                    [](const std::size_t sz, [[maybe_unused]] void *user_data) -> void * {
-                        return std::malloc(sz);
-                    },
-                    [](void *ptr, [[maybe_unused]] void *user_data) -> void {
-                        std::free(ptr);
-                    },
-                    nullptr
-                );
+                    [](const std::size_t sz, [[maybe_unused]] void *user_data) -> void * { return std::malloc(sz); },
+                    [](void *ptr, [[maybe_unused]] void *user_data) -> void { std::free(ptr); }, nullptr);
 
                 m_input_any_keyboard_key.setStarted(&onInputAnyDigital_);
                 m_input_any_keyboard_key.setTriggered(&onInputAnyDigital_);
@@ -179,29 +174,32 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_gamepad_trigger), InputKey::gamepad_right_trigger_axis);
 
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_cursor), InputKey::mouse_2d);
-                m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_x,
+                m_input_mapping.mapInputKey(
+                    safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_x,
                     []([[maybe_unused]] const TimeSpan dt, InputValue &output) noexcept {
                         output = InputValue(std::get<InputAxis1D>(output), InputAxis1D{});
                     });
-                m_input_mapping.mapInputKey(safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_y,
+                m_input_mapping.mapInputKey(
+                    safe_ptr(&m_input_mouse_wheel), InputKey::mouse_wheel_axis_y,
                     []([[maybe_unused]] const TimeSpan dt, InputValue &output) noexcept {
                         output = InputValue(InputAxis1D{}, std::get<InputAxis1D>(output));
                     });
 
                 m_input_listener.addInputMapping(&m_input_mapping, 0);
                 m_input_listener.setCharacterInputCallback(&onInputCharacter_);
-                m_input_listener.setRawKeyCallback([this]([[maybe_unused]] const TimeSpan dt, const InputMessage &message) {
-                    if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
-                        button not_eq nullptr and InputBackgroundLatch::isBackgroundDragButton(*button)) {
-                        if (message.m_event == EInputMessageEvent::pressed or
-                            message.m_event == EInputMessageEvent::repeat) [[likely]] {
-                            if (not hasMouseCaptureUnlessPopupClose()) [[likely]] {
-                                m_pending_deselect = true;
+                m_input_listener.setRawKeyCallback(
+                    [this]([[maybe_unused]] const TimeSpan dt, const InputMessage &message) {
+                        if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
+                            button not_eq nullptr and InputBackgroundLatch::isBackgroundDragButton(*button)) {
+                            if (message.m_event == EInputMessageEvent::pressed or
+                                message.m_event == EInputMessageEvent::repeat) [[likely]] {
+                                if (not hasMouseCaptureUnlessPopupClose()) [[likely]] {
+                                    m_pending_deselect = true;
+                                }
                             }
                         }
-                    }
-                    return EInputMessageResponse::unhandled;
-                });
+                        return EInputMessageResponse::unhandled;
+                    });
             }
 
             ~ImGuiService() noexcept override {
@@ -233,9 +231,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             [[nodiscard]] std::error_code initialize(
-                WindowInputContext &window_input_context,
-                IRhiService &rhi_service,
-                IShaderService &shader_service,
+                WindowInputContext &window_input_context, IRhiService &rhi_service, IShaderService &shader_service,
                 const int input_listener_priority) override {
                 PPR_ASSERT(m_imgui_context == nullptr);
 
@@ -352,10 +348,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 io.DeltaTime = static_cast<float>(time::seconds(dt));
 
                 const int2 &display_size = viewport.getViewport().getClientRect().m_extent;
-                io.DisplaySize = ImVec2{
-                    static_cast<float>(display_size.x),
-                    static_cast<float>(display_size.y)
-                };
+                io.DisplaySize = ImVec2{static_cast<float>(display_size.x), static_cast<float>(display_size.y)};
 
                 const float2 &content_scale = viewport.getWindow().m_content_scale;
                 io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
@@ -393,12 +386,14 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 if (not m_render_pipeline_key.has_value() or
                     *m_render_pipeline_key != draw_context.m_render_pipeline_key) {
-                    PPR_RETURN_ERROR_ON_FAIL(UI, createRenderPipeline_(draw_context.m_device, draw_context.m_render_pipeline_key));
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        UI, createRenderPipeline_(draw_context.m_device, draw_context.m_render_pipeline_key));
                     m_render_pipeline_key = draw_context.m_render_pipeline_key;
                 }
 
                 rhi::ShaderCursor shader_cursor{};
-                if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(m_render_pipeline.get()); PPR_ENSURE(shader_object)) {
+                if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(m_render_pipeline.get());
+                    PPR_ENSURE(shader_object)) {
                     shader_cursor = rhi::ShaderCursor(shader_object);
                 } else {
                     return make_error_code(std::errc::broken_pipe);
@@ -421,7 +416,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 render_state.vertexBuffers[0] = rhi::BufferOffsetPair(resources.m_vertex_buffer.get(), 0u);
                 render_state.vertexBufferCount = 1u;
                 render_state.indexBuffer = rhi::BufferOffsetPair(resources.m_index_buffer.get(), 0u);
-                render_state.indexFormat = sizeof(ImDrawIdx) == 2u ? rhi::IndexFormat::Uint16 : rhi::IndexFormat::Uint32;
+                render_state.indexFormat = sizeof(ImDrawIdx) == 2u ? rhi::IndexFormat::Uint16
+                                                                   : rhi::IndexFormat::Uint32;
                 render_state.scissorRectCount = 1u;
 
                 const float4 clip_offset = imVec(draw_data->DisplayPos).xyxy;
@@ -442,17 +438,14 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         }
 
                         const float4 clip_rect = (imVec(cmd->ClipRect) - clip_offset) * clip_scale;
-                        const uint4 scissor_rect = roundToUInt<float, 4u>(float4(
-                            max(clip_rect.xy, float2(0)),
-                            min(clip_rect.zw, float2(framebuffer_extent))));
+                        const uint4 scissor_rect = roundToUInt<float, 4u>(
+                            float4(max(clip_rect.xy, float2(0)), min(clip_rect.zw, float2(framebuffer_extent))));
                         if (scissor_rect.z <= scissor_rect.x or scissor_rect.w <= scissor_rect.y) {
                             continue;
                         }
 
                         render_state.scissorRects[0] = rhi::ScissorRect{
-                            scissor_rect.x, scissor_rect.y,
-                            scissor_rect.z, scissor_rect.w
-                        };
+                            scissor_rect.x, scissor_rect.y, scissor_rect.z, scissor_rect.w};
 
                         draw_context.m_pass.setRenderState(render_state);
 
@@ -487,11 +480,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 {"COLOR", 0, rhi::Format::RGBA8Unorm, PPR_OFFSETOF(ImDrawVert, col), 0},
             };
 
-            PPR_RETURN_ERROR_ON_FAIL(UI, device.createInputLayout(
-                safe_narrowing(sizeof(ImDrawVert)),
-                elements,
-                3u,
-                m_vertex_layout.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                UI,
+                device.createInputLayout(safe_narrowing(sizeof(ImDrawVert)), elements, 3u, m_vertex_layout.writeRef()));
 
             rhi::SamplerDesc sampler_desc{};
             sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
@@ -509,11 +500,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
         std::error_code ImGuiService::createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device) {
             shader::ComPtr<shader::IModule> shader_module{};
-            PPR_RETURN_ERROR_ON_FAIL(UI, shader_service.loadModuleFromSource(
-                "imgui",
-                "imgui.slang",
-                kImGuiShader,
-                shader_module.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                UI,
+                shader_service.loadModuleFromSource("imgui", "imgui.slang", kImGuiShader, shader_module.writeRef()));
 
             shader::ComPtr<shader::IEntryPoint> vertex_ep;
             PPR_RETURN_ERROR_ON_FAIL(UI, shader_module->findEntryPointByName("vertexMain", vertex_ep.writeRef()));
@@ -530,7 +519,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             program_desc.slangEntryPointCount = std::size(entryPoints);
 
             shader::Diagnose diagnostics;
-            PPR_RETURN_ERROR_ON_FAIL(UI, device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                UI, device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
 
             return default_value_v;
         }
@@ -545,10 +535,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // NOTE: height feeds an integer division below (staging row pitch); reject a
             // degenerate atlas with an error instead of faulting on division by zero.
             if (pixels == nullptr or width <= 0 or height <= 0) [[unlikely]] {
-                PPR_LOG(UI, error, "font atlas has no pixels", {
-                    {"width", width},
-                    {"height", height},
-                });
+                PPR_LOG(
+                    UI, error, "font atlas has no pixels",
+                    {
+                        {"width", width},
+                        {"height", height},
+                    });
                 return std::make_error_code(std::errc::invalid_argument);
             }
 
@@ -582,17 +574,13 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             rhi::Offset3D dst_offset{0, 0, 0};
             encoder->copyBufferToTexture(
-                texture.get(), 0, 0, dst_offset,
-                staging_buffer.get(), 0, pixelDataSize,
+                texture.get(), 0, 0, dst_offset, staging_buffer.get(), 0, pixelDataSize,
                 static_cast<u32>(pixelDataSize / static_cast<u64>(height)),
                 {static_cast<u32>(width), static_cast<u32>(height), 1});
 
-            encoder->setTextureState(texture.get(), rhi::SubresourceRange{
-                .layer = 0,
-                .layerCount = 1,
-                .mip = 0,
-                .mipCount = 1
-            }, rhi::ResourceState::ShaderResource);
+            encoder->setTextureState(
+                texture.get(), rhi::SubresourceRange{.layer = 0, .layerCount = 1, .mip = 0, .mipCount = 1},
+                rhi::ResourceState::ShaderResource);
 
             rhi::ComPtr<rhi::ICommandBuffer> cmd_buffer;
             PPR_RETURN_ERROR_ON_FAIL(UI, encoder->finish(cmd_buffer.writeRef()));
@@ -609,22 +597,27 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             io.Fonts->SetTexID(m_font_texture_view.get());
 
-            PPR_LOG(UI, info, "font texture created", {
-                {"width", width},
-                {"height", height},
-            });
+            PPR_LOG(
+                UI, info, "font texture created",
+                {
+                    {"width", width},
+                    {"height", height},
+                });
             return default_value_v;
         }
 
-        std::error_code ImGuiService::createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature) {
+        std::error_code ImGuiService::createRenderPipeline_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature) {
             // The sample count is a SampleCount by construction — all four
             // enumerators are accepted — so only the color shape and the
             // absent depth attachment are checked.
             if (signature.colorFormats().size() != 1u || signature.m_depth_stencil_format.has_value()) {
-                PPR_LOG(UI, error, "unsupported render pipeline signature", {
-                    {"color_format_count", signature.colorFormats().size()},
-                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
-                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
+                PPR_LOG(
+                    UI, error, "unsupported render pipeline signature",
+                    {
+                        {"color_format_count", signature.colorFormats().size()},
+                        {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                        {"sample_count", static_cast<u32>(signature.m_sample_count)},
                     });
                 return make_error_code(std::errc::invalid_argument);
             }
@@ -657,7 +650,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             return default_value_v;
         }
 
-        std::error_code ImGuiService::uploadDrawData_(rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
+        std::error_code ImGuiService::uploadDrawData_(
+            rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
             const u32 total_vtx_count = checked_cast<u32>(draw_data.TotalVtxCount);
             const u32 total_idx_count = checked_cast<u32>(draw_data.TotalIdxCount);
             if (total_vtx_count == 0 || total_idx_count == 0) {
@@ -676,8 +670,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 vb_desc.defaultState = rhi::ResourceState::General;
                 vb_desc.label = "imgui_vertex_buffer";
 
-                PPR_RETURN_ERROR_ON_FAIL(UI, device.createBuffer(
-                    vb_desc, nullptr, resources.m_vertex_buffer.writeRef()));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, device.createBuffer(vb_desc, nullptr, resources.m_vertex_buffer.writeRef()));
             }
 
             if (not resources.m_index_buffer or
@@ -692,15 +686,17 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 ib_desc.defaultState = rhi::ResourceState::General;
                 ib_desc.label = "imgui_index_buffer";
 
-                PPR_RETURN_ERROR_ON_FAIL(UI, device.createBuffer(
-                    ib_desc, nullptr, resources.m_index_buffer.writeRef()));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, device.createBuffer(ib_desc, nullptr, resources.m_index_buffer.writeRef()));
             }
 
             void *mapped_vtx = nullptr;
-            PPR_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(resources.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx));
+            PPR_RETURN_ERROR_ON_FAIL(
+                UI, device.mapBuffer(resources.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_vtx));
 
             void *mapped_idx = nullptr;
-            PPR_RETURN_ERROR_ON_FAIL(UI, device.mapBuffer(resources.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
+            PPR_RETURN_ERROR_ON_FAIL(
+                UI, device.mapBuffer(resources.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
 
             auto *vtx_dst = static_cast<ImDrawVert *>(mapped_vtx);
             auto *idx_dst = static_cast<ImDrawIdx *>(mapped_idx);
@@ -708,8 +704,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
             for (int n = 0; n < draw_data.CmdListsCount; n++) {
                 const ImDrawList *cmd_list = draw_data.CmdLists[n];
 
-                std::memcpy(vtx_dst, cmd_list->VtxBuffer.Data, checked_cast<std::size_t>(cmd_list->VtxBuffer.Size) * sizeof(ImDrawVert));
-                std::memcpy(idx_dst, cmd_list->IdxBuffer.Data, checked_cast<std::size_t>(cmd_list->IdxBuffer.Size) * sizeof(ImDrawIdx));
+                std::memcpy(
+                    vtx_dst, cmd_list->VtxBuffer.Data,
+                    checked_cast<std::size_t>(cmd_list->VtxBuffer.Size) * sizeof(ImDrawVert));
+                std::memcpy(
+                    idx_dst, cmd_list->IdxBuffer.Data,
+                    checked_cast<std::size_t>(cmd_list->IdxBuffer.Size) * sizeof(ImDrawIdx));
 
                 vtx_dst += cmd_list->VtxBuffer.Size;
                 idx_dst += cmd_list->IdxBuffer.Size;
@@ -739,8 +739,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             if (ImGuiIO &io = ImGui::GetIO(); io.WantTextInput) {
                 char8_t utf8_input[8]{};
                 const std::size_t utf8_len = hal::native::utf8(
-                    {&codepoint, 1u},
-                    utf8_input, std::size(utf8_input) - 1u/*\0*/);
+                    {&codepoint, 1u}, utf8_input, std::size(utf8_input) - 1u /*\0*/);
 
                 if (utf8_len < std::size(utf8_input)) {
                     utf8_input[utf8_len] = u8'\0';
@@ -753,50 +752,43 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         void ImGuiService::onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept {
-            std::visit(overloaded(
-                [&](const EKeyboardKey keyboard_key) noexcept {
-                    if (const ImGuiKey imgui_key = keyboardKeyToImGuiKey(keyboard_key); imgui_key != ImGuiKey_None) {
-                        const bool is_key_down = event.getDigitalValue();
+            std::visit(
+                overloaded(
+                    [&](const EKeyboardKey keyboard_key) noexcept {
+                        if (const ImGuiKey imgui_key = keyboardKeyToImGuiKey(keyboard_key);
+                            imgui_key != ImGuiKey_None) {
+                            const bool is_key_down = event.getDigitalValue();
 
-                        ImGuiIO &io = ImGui::GetIO();
-                        io.AddKeyEvent(imgui_key, is_key_down);
+                            ImGuiIO &io = ImGui::GetIO();
+                            io.AddKeyEvent(imgui_key, is_key_down);
 
-                        // handle modifier keys:
-                        switch (keyboard_key) {
-                            case EKeyboardKey::left_control:
-                            case EKeyboardKey::right_control:
-                                io.AddKeyEvent(ImGuiMod_Ctrl, is_key_down);
-                                break;
-                            case EKeyboardKey::left_shift:
-                            case EKeyboardKey::right_shift:
-                                io.AddKeyEvent(ImGuiMod_Shift, is_key_down);
-                                break;
-                            case EKeyboardKey::left_alt:
-                            case EKeyboardKey::right_alt:
-                                io.AddKeyEvent(ImGuiMod_Alt, is_key_down);
-                                break;
-                            case EKeyboardKey::left_super:
-                            case EKeyboardKey::right_super:
-                                io.AddKeyEvent(ImGuiMod_Super, is_key_down);
-                                break;
-                            default: break;
+                            // handle modifier keys:
+                            switch (keyboard_key) {
+                                case EKeyboardKey::left_control:
+                                case EKeyboardKey::right_control: io.AddKeyEvent(ImGuiMod_Ctrl, is_key_down); break;
+                                case EKeyboardKey::left_shift:
+                                case EKeyboardKey::right_shift: io.AddKeyEvent(ImGuiMod_Shift, is_key_down); break;
+                                case EKeyboardKey::left_alt:
+                                case EKeyboardKey::right_alt: io.AddKeyEvent(ImGuiMod_Alt, is_key_down); break;
+                                case EKeyboardKey::left_super:
+                                case EKeyboardKey::right_super: io.AddKeyEvent(ImGuiMod_Super, is_key_down); break;
+                                default: break;
+                            }
                         }
-                    }
-                },
-                [&](const EGamepadButton gamepad_button) noexcept {
-                    if (const ImGuiKey imgui_key = gamepadButtonToImGuiKey(gamepad_button); imgui_key != ImGuiKey_None) {
-                        ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
-                    }
-                },
-                [&](const EMouseButton mouse_button) noexcept {
-                    if (const ImGuiMouseButton imgui_button = mouseButtonToImGui(mouse_button); imgui_button >= 0) {
-                        ImGui::GetIO().AddMouseButtonEvent(imgui_button, event.getDigitalValue());
-                    }
-                },
-                [](auto) noexcept {
-                    std::unreachable();
-                }
-            ), trigger.m_code);
+                    },
+                    [&](const EGamepadButton gamepad_button) noexcept {
+                        if (const ImGuiKey imgui_key = gamepadButtonToImGuiKey(gamepad_button);
+                            imgui_key != ImGuiKey_None) {
+                            ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
+                        }
+                    },
+                    [&](const EMouseButton mouse_button) noexcept {
+                        if (const ImGuiMouseButton imgui_button = mouseButtonToImGui(mouse_button); imgui_button >= 0) {
+                            ImGui::GetIO().AddMouseButtonEvent(imgui_button, event.getDigitalValue());
+                        }
+                    },
+                    [](auto) noexcept { std::unreachable(); }),
+                trigger.m_code);
         }
 
         void ImGuiService::onInputMouseCursor_(const InputActionEvent &event, const InputKey &) noexcept {
@@ -821,8 +813,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             const float2 stick_value = event.getAxis2DValue().m_absolute;
             constexpr ImGuiKey stick_axes[][4] = {
-                {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight, ImGuiKey_GamepadLStickUp, ImGuiKey_GamepadLStickDown},
-                {ImGuiKey_GamepadRStickLeft, ImGuiKey_GamepadRStickRight, ImGuiKey_GamepadRStickUp, ImGuiKey_GamepadRStickDown},
+                {ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight, ImGuiKey_GamepadLStickUp,
+                    ImGuiKey_GamepadLStickDown},
+                {ImGuiKey_GamepadRStickLeft, ImGuiKey_GamepadRStickRight, ImGuiKey_GamepadRStickUp,
+                    ImGuiKey_GamepadRStickDown},
             };
 
             // left

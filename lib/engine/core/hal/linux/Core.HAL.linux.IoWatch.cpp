@@ -20,8 +20,7 @@ namespace pP::hal::io {
     namespace {
         ::inotify_event *nextEvent_(::inotify_event *e) noexcept {
             const auto offset = sizeof(::inotify_event) + e->len;
-            return reinterpret_cast<::inotify_event *>(
-                reinterpret_cast<std::byte *>(e) + offset);
+            return reinterpret_cast<::inotify_event *>(reinterpret_cast<std::byte *>(e) + offset);
         }
     }
 
@@ -33,11 +32,10 @@ namespace pP::hal::io {
         std::unordered_map<int, std::filesystem::path> m_wd_to_relpath;
     };
 
-    static int addWatchRecursive_(WatchHandleData *data, const std::filesystem::path &dir,
-                                   const std::filesystem::path &rel) noexcept {
-        const uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY |
-                              IN_MOVED_FROM | IN_MOVED_TO |
-                              IN_ONLYDIR | IN_EXCL_UNLINK;
+    static int addWatchRecursive_(
+        WatchHandleData *data, const std::filesystem::path &dir, const std::filesystem::path &rel) noexcept {
+        const uint32_t mask =
+            IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_ONLYDIR | IN_EXCL_UNLINK;
         const int wd = ::inotify_add_watch(data->m_inotify_fd, dir.c_str(), mask);
         if (wd >= 0) {
             data->m_wd_to_relpath[wd] = rel;
@@ -48,8 +46,7 @@ namespace pP::hal::io {
     WatchHandle openWatch(const std::filesystem::path &dir, const bool recursive) noexcept(false) {
         const int fd = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
         if (fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(),
-                                    "pP::io: openWatch inotify_init1 failed");
+            throw std::system_error(errno, std::generic_category(), "pP::io: openWatch inotify_init1 failed");
         }
 
         auto *data = new WatchHandleData();
@@ -62,8 +59,7 @@ namespace pP::hal::io {
             const int saved_errno = errno;
             ::close(fd);
             delete data;
-            throw std::system_error(saved_errno, std::generic_category(),
-                                    "pP::io: openWatch inotify_add_watch failed");
+            throw std::system_error(saved_errno, std::generic_category(), "pP::io: openWatch inotify_add_watch failed");
         }
         data->m_root_wd = wd;
 
@@ -72,9 +68,10 @@ namespace pP::hal::io {
 
     void closeWatch(const WatchHandle watch) noexcept {
         auto *data = static_cast<WatchHandleData *>(watch);
-        if (data == nullptr) return;
+        if (data == nullptr)
+            return;
 
-        for (const auto &[wd, _] : data->m_wd_to_relpath) {
+        for (const auto &[wd, _]: data->m_wd_to_relpath) {
             ::inotify_rm_watch(data->m_inotify_fd, wd);
         }
         ::close(data->m_inotify_fd);
@@ -83,16 +80,19 @@ namespace pP::hal::io {
 
     std::size_t pollWatch(const WatchHandle watch, const std::span<std::byte> buffer, std::error_code &ec) noexcept {
         auto *data = static_cast<WatchHandleData *>(watch);
-        if (data == nullptr) return 0u;
+        if (data == nullptr)
+            return 0u;
 
         alignas(::inotify_event) std::byte raw_buf[16384];
         const auto nread = ::read(data->m_inotify_fd, raw_buf, sizeof(raw_buf));
         if (nread < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0u;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return 0u;
             ec = std::error_code(errno, std::generic_category());
             return 0u;
         }
-        if (nread == 0) return 0u;
+        if (nread == 0)
+            return 0u;
 
         auto *write_ptr = buffer.data();
         const auto *write_end = buffer.data() + buffer.size();
@@ -101,7 +101,8 @@ namespace pP::hal::io {
 
         while (raw_ptr + static_cast<std::ptrdiff_t>(sizeof(::inotify_event)) <= raw_end) {
             const auto *ev = reinterpret_cast<const ::inotify_event *>(raw_ptr);
-            if (raw_ptr + static_cast<std::ptrdiff_t>(sizeof(::inotify_event) + ev->len) > raw_end) break;
+            if (raw_ptr + static_cast<std::ptrdiff_t>(sizeof(::inotify_event) + ev->len) > raw_end)
+                break;
 
             if (ev->mask & IN_Q_OVERFLOW) {
                 ec = std::make_error_code(std::errc::result_out_of_range);
@@ -110,11 +111,16 @@ namespace pP::hal::io {
             }
 
             WatchEvent::Action action{};
-            if (ev->mask & IN_CREATE)     action = WatchEvent::Action::added;
-            else if (ev->mask & IN_DELETE) action = WatchEvent::Action::removed;
-            else if (ev->mask & IN_MODIFY) action = WatchEvent::Action::modified;
-            else if (ev->mask & IN_MOVED_FROM) action = WatchEvent::Action::renamed_old;
-            else if (ev->mask & IN_MOVED_TO)   action = WatchEvent::Action::renamed_new;
+            if (ev->mask & IN_CREATE)
+                action = WatchEvent::Action::added;
+            else if (ev->mask & IN_DELETE)
+                action = WatchEvent::Action::removed;
+            else if (ev->mask & IN_MODIFY)
+                action = WatchEvent::Action::modified;
+            else if (ev->mask & IN_MOVED_FROM)
+                action = WatchEvent::Action::renamed_old;
+            else if (ev->mask & IN_MOVED_TO)
+                action = WatchEvent::Action::renamed_new;
             else {
                 raw_ptr = reinterpret_cast<std::byte *>(nextEvent_(const_cast<::inotify_event *>(ev)));
                 continue;
@@ -140,7 +146,8 @@ namespace pP::hal::io {
             const u32 path_len = checked_cast<u32>(rel_str.size() + 1u);
 
             constexpr std::size_t event_header = sizeof(u8) + sizeof(u32);
-            if (write_ptr + event_header + path_len > write_end) break;
+            if (write_ptr + event_header + path_len > write_end)
+                break;
 
             write_ptr[0] = static_cast<std::byte>(action);
             write_ptr += sizeof(u8);
@@ -158,7 +165,8 @@ namespace pP::hal::io {
 
     std::size_t waitWatch(const WatchHandle watch, const std::span<std::byte> buffer, std::error_code &ec) noexcept {
         auto *data = static_cast<WatchHandleData *>(watch);
-        if (data == nullptr) return 0u;
+        if (data == nullptr)
+            return 0u;
 
         struct ::pollfd pfd{};
         pfd.fd = data->m_inotify_fd;
@@ -173,20 +181,24 @@ namespace pP::hal::io {
         return pollWatch(watch, buffer, ec);
     }
 
-    std::size_t parseWatchEvents(const std::span<const std::byte> raw,
-                                  const std::span<WatchEvent> out_events,
-                                  const std::span<char> out_names) noexcept {
+    std::size_t parseWatchEvents(
+        const std::span<const std::byte> raw, const std::span<WatchEvent> out_events,
+        const std::span<char> out_names) noexcept {
         std::size_t event_idx = 0u;
         std::size_t name_offset = 0u;
         auto *p = raw.data();
         const auto *const end = p + raw.size();
 
         while (p + static_cast<std::ptrdiff_t>(sizeof(u8) + sizeof(u32)) <= end && event_idx < out_events.size()) {
-            const auto action = static_cast<WatchEvent::Action>(*p); p += sizeof(u8);
+            const auto action = static_cast<WatchEvent::Action>(*p);
+            p += sizeof(u8);
             u32 name_len = 0u;
-            std::memcpy(&name_len, p, sizeof(u32)); p += sizeof(u32);
-            if (p + static_cast<std::ptrdiff_t>(name_len) > end) break;
-            if (name_offset + name_len > out_names.size()) break;
+            std::memcpy(&name_len, p, sizeof(u32));
+            p += sizeof(u32);
+            if (p + static_cast<std::ptrdiff_t>(name_len) > end)
+                break;
+            if (name_offset + name_len > out_names.size())
+                break;
 
             out_events[event_idx].m_action = action;
             out_events[event_idx].m_name_offset = checked_cast<u32>(name_offset);

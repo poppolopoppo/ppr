@@ -16,7 +16,8 @@ namespace pP::tests::detail {
             Camera cam;
             CameraModel model{};
             model.m_camera_mode = ECameraProjection::orthographic;
-            cam.updateModel(std::chrono::milliseconds{16}, model,
+            cam.updateModel(
+                std::chrono::milliseconds{16}, model,
                 Viewport{PixelRect{int2{0, 0}, int2{800, 600}}, ViewportLayout{}});
             return cam.getSnapshot();
         }
@@ -117,15 +118,13 @@ namespace pP::tests::detail {
 
             const GridTilePayload payload_a{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}, .m_material = 2u};
             const GridTilePayload views_a[] = {payload_a};
-            const Expected<u32> uploaded_a = pass.requestUpload(
-                {.m_chunk_id = 7u, .m_tile_data_view = views_a});
+            const Expected<u32> uploaded_a = pass.requestUpload({.m_chunk_id = 7u, .m_tile_data_view = views_a});
             PPR_TEST_ASSERT(uploaded_a.has_value());
             PPR_TEST_ASSERT(*uploaded_a == 1u);
 
             const GridTilePayload payload_b{.m_rect = {128.0f, 0.0f, 256.0f, 128.0f}, .m_material = 5u};
             const GridTilePayload views_b[] = {payload_b};
-            const Expected<u32> uploaded_b = pass.requestUpload(
-                {.m_chunk_id = 9u, .m_tile_data_view = views_b});
+            const Expected<u32> uploaded_b = pass.requestUpload({.m_chunk_id = 9u, .m_tile_data_view = views_b});
             PPR_TEST_ASSERT(uploaded_b.has_value());
             PPR_TEST_ASSERT(*uploaded_b == 1u);
             PPR_TEST_ASSERT(pass.uploadCount() == 2u);
@@ -161,8 +160,8 @@ namespace pP::tests::detail {
 
             // Unknown chunks fail closed: there is no cache entry to serve.
             PPR_TEST_ASSERT(pass.resolveCached(99u).error() == std::make_error_code(std::errc::invalid_argument));
-            PPR_TEST_ASSERT(pass.requestUpload({.m_chunk_id = 99u}).error() ==
-                            std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.requestUpload({.m_chunk_id = 99u}).error() == std::make_error_code(std::errc::invalid_argument));
         };
 
         // Reject malformed optional cell views and mismatched chunk geometry
@@ -179,13 +178,12 @@ namespace pP::tests::detail {
             const GridTilePayload original_view[] = {original};
             const GridTilePayload replacement_view[] = {replacement};
             const Expected<u32> first = pass.requestUpload({.m_chunk_id = 1u, .m_tile_data_view = original_view});
-            PPR_TEST_ASSERT(first.has_value() and * first == 1u);
+            PPR_TEST_ASSERT(first.has_value() and *first == 1u);
 
             std::vector<u16> cells(GridPass::kCellsPerChunk, 0xffffu);
             const auto rejects = [&pass, &replacement_view](const u32 chunk_id, std::span<const u16> input) {
-                const Expected<u32> result = pass.requestUpload({
-                    .m_chunk_id = chunk_id, .m_tile_data_view = replacement_view, .m_cell_materials = input
-                });
+                const Expected<u32> result = pass.requestUpload(
+                    {.m_chunk_id = chunk_id, .m_tile_data_view = replacement_view, .m_cell_materials = input});
                 PPR_TEST_ASSERT(not result.has_value());
                 PPR_TEST_ASSERT(result.error() == std::make_error_code(std::errc::invalid_argument));
             };
@@ -210,7 +208,7 @@ namespace pP::tests::detail {
 
             // The same wrong range is still legal in the legacy flat lane.
             const Expected<u32> flat = pass.requestUpload({.m_chunk_id = 1u, .m_tile_data_view = replacement_view});
-            PPR_TEST_ASSERT(flat.has_value() and * flat == 1u);
+            PPR_TEST_ASSERT(flat.has_value() and *flat == 1u);
             PPR_TEST_ASSERT(pass.resolveCached(1u)->m_material == 9u);
 
             const GridTileSubmission clean_wrong_range[] = {
@@ -236,18 +234,18 @@ namespace pP::tests::detail {
             cells[0] = 4u;
             cells[GridPass::kCellsPerChunk - 1u] = 7u;
             GridTilePayload payload{.m_rect = {128.0f, 128.0f, 256.0f, 256.0f}, .m_material = 4u};
-            const Expected<u32> uploaded = pass.requestUpload({
-                .m_chunk_id = 33u, .m_tile_data_view = std::span{&payload, 1u}, .m_cell_materials = cells
-            });
-            PPR_TEST_ASSERT(uploaded.has_value() and * uploaded == 1u);
+            const Expected<u32> uploaded = pass.requestUpload(
+                {.m_chunk_id = 33u, .m_tile_data_view = std::span{&payload, 1u}, .m_cell_materials = cells});
+            PPR_TEST_ASSERT(uploaded.has_value() and *uploaded == 1u);
             cells.clear(); // borrowed input must not be required after return
             payload.m_material = 99u;
             PPR_TEST_ASSERT(pass.resolveCached(33u)->m_material == 4u);
 
             const GridTilePayload replacement{.m_rect = {128.0f, 128.0f, 256.0f, 256.0f}, .m_material = 8u};
             const GridTilePayload replacement_view[] = {replacement};
-            const Expected<u32> replaced = pass.requestUpload({.m_chunk_id = 33u, .m_tile_data_view = replacement_view});
-            PPR_TEST_ASSERT(replaced.has_value() and * replaced == 1u);
+            const Expected<u32> replaced = pass.requestUpload(
+                {.m_chunk_id = 33u, .m_tile_data_view = replacement_view});
+            PPR_TEST_ASSERT(replaced.has_value() and *replaced == 1u);
             PPR_TEST_ASSERT(pass.cachedTileCount() == 1u);
             PPR_TEST_ASSERT(pass.resolveCached(33u)->m_material == 8u);
 
@@ -257,15 +255,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.submitTiles(clean));
             cells.resize(GridPass::kCellsPerChunk, 12u);
             const Expected<u32> no_op = pass.requestUpload({.m_chunk_id = 33u, .m_cell_materials = cells});
-            PPR_TEST_ASSERT(no_op.has_value() and * no_op == 0u);
+            PPR_TEST_ASSERT(no_op.has_value() and *no_op == 0u);
             PPR_TEST_ASSERT(pass.uploadCount() == 2u);
             PPR_TEST_ASSERT(pass.resolveCached(33u)->m_material == 8u);
 
             // Even though clean requests do not write, supplied spans must
             // still be validated before returning the zero-upload result.
-            const Expected<u32> malformed_clean = pass.requestUpload({
-                .m_chunk_id = 33u, .m_cell_materials = std::span<const u16>{cells.data(), 1u}
-            });
+            const Expected<u32> malformed_clean = pass.requestUpload(
+                {.m_chunk_id = 33u, .m_cell_materials = std::span<const u16>{cells.data(), 1u}});
             PPR_TEST_ASSERT(not malformed_clean.has_value());
             PPR_TEST_ASSERT(malformed_clean.error() == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(pass.resolveCached(33u)->m_material == 8u);
@@ -280,17 +277,17 @@ namespace pP::tests::detail {
             const GridTilePayload view[] = {payload};
             PPR_TEST_ASSERT(not pass.submitTiles(staged));
             std::vector<u16> cells(GridPass::kCellsPerChunk, 5u);
-            const Expected<u32> initial = pass.requestUpload({
-                .m_chunk_id = 0u, .m_tile_data_view = view, .m_cell_materials = cells
-            });
-            PPR_TEST_ASSERT(initial.has_value() and * initial == 1u);
+            const Expected<u32> initial = pass.requestUpload(
+                {.m_chunk_id = 0u, .m_tile_data_view = view, .m_cell_materials = cells});
+            PPR_TEST_ASSERT(initial.has_value() and *initial == 1u);
 
             pass.clearTiles();
             PPR_TEST_ASSERT(pass.stagedTileCount() == 0u);
             PPR_TEST_ASSERT(pass.cachedTileCount() == 1u);
             PPR_TEST_ASSERT(pass.resolveCached(0u)->m_material == 5u);
-            PPR_TEST_ASSERT(pass.requestUpload({.m_chunk_id = 0u, .m_tile_data_view = view}).error() ==
-                            std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(
+                pass.requestUpload({.m_chunk_id = 0u, .m_tile_data_view = view}).error() ==
+                std::make_error_code(std::errc::invalid_argument));
 
             PPR_TEST_ASSERT(not pass.submitTiles(staged));
             pass.clearCache(); // regeneration: remove old cache but retain staged tiles
@@ -298,7 +295,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.cachedTileCount() == 0u);
             PPR_TEST_ASSERT(pass.resolveCached(0u).error() == std::make_error_code(std::errc::invalid_argument));
             const Expected<u32> regenerated = pass.requestUpload({.m_chunk_id = 0u, .m_tile_data_view = view});
-            PPR_TEST_ASSERT(regenerated.has_value() and * regenerated == 1u);
+            PPR_TEST_ASSERT(regenerated.has_value() and *regenerated == 1u);
             PPR_TEST_ASSERT(pass.resolveCached(0u)->m_material == 5u);
         };
 
@@ -316,15 +313,14 @@ namespace pP::tests::detail {
                 for (u32 chunk_x = 0u; chunk_x < 32u; ++chunk_x) {
                     const i32 min_x = static_cast<i32>(chunk_x * GridPass::kGridTileEdge);
                     const i32 min_y = static_cast<i32>(chunk_y * GridPass::kGridTileEdge);
-                    staged.push_back(GridTileSubmission{
-                        .m_chunk_id = chunk_y * 32u + chunk_x,
-                        .m_tile_range = {
-                            min_x, min_y,
-                            min_x + static_cast<i32>(GridPass::kGridTileEdge),
-                            min_y + static_cast<i32>(GridPass::kGridTileEdge)
-                        },
-                        .m_dirty_mask = 1u,
-                    });
+                    staged.push_back(
+                        GridTileSubmission{
+                            .m_chunk_id = chunk_y * 32u + chunk_x,
+                            .m_tile_range =
+                                {min_x, min_y, min_x + static_cast<i32>(GridPass::kGridTileEdge),
+                                    min_y + static_cast<i32>(GridPass::kGridTileEdge)},
+                            .m_dirty_mask = 1u,
+                        });
                 }
             }
             PPR_TEST_ASSERT(not pass.submitTiles({staged.data(), staged.size()}));
@@ -332,8 +328,7 @@ namespace pP::tests::detail {
             for (u32 chunk_id = 0u; chunk_id < GridPass::kGridTileCacheCapacity; ++chunk_id) {
                 const GridTilePayload payload{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}};
                 const GridTilePayload views[] = {payload};
-                const Expected<u32> uploaded = pass.requestUpload(
-                    {.m_chunk_id = chunk_id, .m_tile_data_view = views});
+                const Expected<u32> uploaded = pass.requestUpload({.m_chunk_id = chunk_id, .m_tile_data_view = views});
                 PPR_TEST_ASSERT(uploaded.has_value());
                 PPR_TEST_ASSERT(*uploaded == 1u);
             }
@@ -343,19 +338,14 @@ namespace pP::tests::detail {
             // Overwriting a live entry reuses its slot: still exactly one tile.
             const GridTilePayload refill{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}};
             const GridTilePayload refill_views[] = {refill};
-            const Expected<u32> overwrite = pass.requestUpload(
-                {.m_chunk_id = 0u, .m_tile_data_view = refill_views});
+            const Expected<u32> overwrite = pass.requestUpload({.m_chunk_id = 0u, .m_tile_data_view = refill_views});
             PPR_TEST_ASSERT(overwrite.has_value());
             PPR_TEST_ASSERT(*overwrite == 1u);
             PPR_TEST_ASSERT(pass.cachedTileCount() == GridPass::kGridTileCacheCapacity);
 
             // A 1025th distinct chunk has no slot left: fail closed.
             const GridTileSubmission overflow[] = {
-                {
-                    .m_chunk_id = GridPass::kGridTileCacheCapacity,
-                    .m_tile_range = {0, 0, 128, 128},
-                    .m_dirty_mask = 1u
-                },
+                {.m_chunk_id = GridPass::kGridTileCacheCapacity, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(overflow));
             const Expected<u32> clamped = pass.requestUpload(
@@ -386,7 +376,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plan.has_value());
             PPR_TEST_ASSERT(plan->m_tiles.size() == 2u);
 
-            const Expected<Array<rhi::IndirectDrawArguments> > args = GridPass::compactIndirect(*plan);
+            const Expected<Array<rhi::IndirectDrawArguments>> args = GridPass::compactIndirect(*plan);
             PPR_TEST_ASSERT(args.has_value());
             PPR_TEST_ASSERT(args->size() == 2u);
 
@@ -408,34 +398,37 @@ namespace pP::tests::detail {
         // the same policy as the tile-cache upload lane.
         PPR_UNIT_TEST (grid_indirect_compaction_clamps_and_handles_empty) {
             const GridTilePlan empty_plan{};
-            const Expected<Array<rhi::IndirectDrawArguments> > empty_args = GridPass::compactIndirect(empty_plan);
+            const Expected<Array<rhi::IndirectDrawArguments>> empty_args = GridPass::compactIndirect(empty_plan);
             PPR_TEST_ASSERT(empty_args.has_value());
             PPR_TEST_ASSERT(empty_args->empty());
 
             GridTilePlan full_plan{};
             full_plan.m_tiles.reserve(GridPass::kGridTileCacheCapacity);
             for (u32 index = 0u; index < GridPass::kGridTileCacheCapacity; ++index) {
-                full_plan.m_tiles.push_back(GridPlannedTile{
-                    .m_submission_index = index,
-                    .m_chunk_id = index,
-                });
+                full_plan.m_tiles.push_back(
+                    GridPlannedTile{
+                        .m_submission_index = index,
+                        .m_chunk_id = index,
+                    });
             }
-            const Expected<Array<rhi::IndirectDrawArguments> > full_args = GridPass::compactIndirect(full_plan);
+            const Expected<Array<rhi::IndirectDrawArguments>> full_args = GridPass::compactIndirect(full_plan);
             PPR_TEST_ASSERT(full_args.has_value());
             PPR_TEST_ASSERT(full_args->size() == GridPass::kGridTileCacheCapacity);
             PPR_TEST_ASSERT((*full_args)[0u].startInstanceLocation == 0u);
-            PPR_TEST_ASSERT((*full_args)[GridPass::kGridTileCacheCapacity - 1u].startInstanceLocation ==
-                            GridPass::kGridTileCacheCapacity - 1u);
+            PPR_TEST_ASSERT(
+                (*full_args)[GridPass::kGridTileCacheCapacity - 1u].startInstanceLocation ==
+                GridPass::kGridTileCacheCapacity - 1u);
 
             GridTilePlan over_plan{};
             over_plan.m_tiles.reserve(GridPass::kGridTileCacheCapacity + 1u);
             for (u32 index = 0u; index <= GridPass::kGridTileCacheCapacity; ++index) {
-                over_plan.m_tiles.push_back(GridPlannedTile{
-                    .m_submission_index = index,
-                    .m_chunk_id = index,
-                });
+                over_plan.m_tiles.push_back(
+                    GridPlannedTile{
+                        .m_submission_index = index,
+                        .m_chunk_id = index,
+                    });
             }
-            const Expected<Array<rhi::IndirectDrawArguments> > over_args = GridPass::compactIndirect(over_plan);
+            const Expected<Array<rhi::IndirectDrawArguments>> over_args = GridPass::compactIndirect(over_plan);
             PPR_TEST_ASSERT(not over_args.has_value());
             PPR_TEST_ASSERT(over_args.error() == std::make_error_code(std::errc::no_buffer_space));
         };
@@ -464,7 +457,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plan->m_tiles[0].m_chunk_id == 10u);
             PPR_TEST_ASSERT(plan->m_tiles[1].m_chunk_id == 12u);
 
-            const Expected<Array<rhi::IndirectDrawArguments> > args = GridPass::compactIndirect(*plan);
+            const Expected<Array<rhi::IndirectDrawArguments>> args = GridPass::compactIndirect(*plan);
             PPR_TEST_ASSERT(args.has_value());
             PPR_TEST_ASSERT(args->size() == plan->m_tiles.size());
 

@@ -59,8 +59,9 @@ export namespace pP::colony {
     /// total: setCell (temperature preserved) + sim markDirty + touched-chunk
     /// record for presentation sync + Pathfinder scratch reset on any write.
     /// Structural mutation of errand rows happens only between view passes.
-    void advanceErrands(sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder,
-                        Array<sim::ChunkPos> &touched, u32 cell_budget);
+    void advanceErrands(
+        sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
+        u32 cell_budget);
 
     /// Live (incomplete) errand rows.
     [[nodiscard]] u32 liveErrandCount(sim::Registry &registry);

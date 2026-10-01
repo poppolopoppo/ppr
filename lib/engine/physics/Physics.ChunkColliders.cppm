@@ -35,20 +35,20 @@ export namespace pP::physics {
             bool m_loop{};
         };
 
-        std::map<ColliderChunkPos, std::vector<ChainHandle> > m_chains;
-        std::map<ColliderChunkPos, std::vector<StoredChain> > m_shapes;
+        std::map<ColliderChunkPos, std::vector<ChainHandle>> m_chains;
+        std::map<ColliderChunkPos, std::vector<StoredChain>> m_shapes;
         std::set<ColliderChunkPos> m_pending;
 
     public:
         /// Dirty positions are delta notifications; caller resubmits only on a new edit.
         /// Per-chunk replacement is atomic; processed receives number of chunks this call.
-        [[nodiscard]] std::error_code rebuildDirtyChunks(Scene &scene, std::span<const ColliderChunkView> chunks,
-                                                         std::span<const ColliderChunkPos> dirty, u32 edge,
-                                                         u32 max_chunks, u32 &processed) noexcept;
+        [[nodiscard]] std::error_code rebuildDirtyChunks(
+            Scene &scene, std::span<const ColliderChunkView> chunks, std::span<const ColliderChunkPos> dirty, u32 edge,
+            u32 max_chunks, u32 &processed) noexcept;
 
         /// Explicit query activates this chunk even if it has no active-body interest.
-        [[nodiscard]] std::error_code materializeForQuery(Scene &scene, std::span<const ColliderChunkView> chunks,
-                                                          ColliderChunkPos pos, u32 edge) noexcept;
+        [[nodiscard]] std::error_code materializeForQuery(
+            Scene &scene, std::span<const ColliderChunkView> chunks, ColliderChunkPos pos, u32 edge) noexcept;
 
         [[nodiscard]] std::size_t chainCount(ColliderChunkPos pos) const noexcept;
 

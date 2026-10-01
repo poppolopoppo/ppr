@@ -31,12 +31,9 @@ export namespace pP {
 
         bool m_primary_monitor{};
 
-        Monitor(MonitorHandle handle,
-                std::string name,
-                VideoMode mode,
-                const int2 &physical_size,
-                const int2 &virtual_position,
-                bool primary_monitor) noexcept;
+        Monitor(
+            MonitorHandle handle, std::string name, VideoMode mode, const int2 &physical_size,
+            const int2 &virtual_position, bool primary_monitor) noexcept;
 
         Monitor(const Monitor &) = delete;
 

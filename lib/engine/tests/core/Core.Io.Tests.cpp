@@ -11,14 +11,9 @@ namespace pP::tests::detail {
         namespace File {
             PPR_UNIT_TEST (open_and_close) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_open.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -66,14 +61,9 @@ namespace pP::tests::detail {
 
             PPR_UNIT_TEST (move_semantics) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_move.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -98,14 +88,9 @@ namespace pP::tests::detail {
 
             PPR_UNIT_TEST (double_close_safe) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_dclose.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -127,14 +112,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (read_content) {
                 constexpr std::string_view kContent = "Hello, MappedFile!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -154,14 +134,9 @@ namespace pP::tests::detail {
 
             PPR_UNIT_TEST (empty_file) {
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_empty.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -178,14 +153,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (move_semantics) {
                 constexpr std::string_view kContent = "move";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap_move.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -214,21 +184,17 @@ namespace pP::tests::detail {
                 constexpr std::string_view kInitial = "Hello, World!";
                 constexpr std::string_view kWrite = "MappedWrite";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_mmap_write.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
                     ofs.write(kInitial.data(), static_cast<std::streamsize>(kInitial.size()));
                 }
 
-                auto mapped_result = io::mapFile(path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
+                auto mapped_result = io::mapFile(
+                    path, hal::io::OpenFlags{hal::io::OpenFlags::read | hal::io::OpenFlags::write});
                 PPR_TEST_ASSERT(mapped_result.has_value());
                 auto &mapped = *mapped_result;
                 PPR_TEST_ASSERT(mapped.isValid());
@@ -280,14 +246,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (read_completes) {
                 constexpr std::string_view kContent = "AsyncRead!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_read.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -325,14 +286,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (reset_and_reuse) {
                 constexpr std::string_view kContent = "Reuse!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_reuse.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -368,14 +324,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (select_with_timer) {
                 constexpr std::string_view kContent = "TimerRead!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_timer.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -404,14 +355,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (cancel_inflight) {
                 constexpr std::string_view kContent = "CancelIo!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_inflight.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -442,14 +388,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (cancel_idempotent) {
                 constexpr std::string_view kContent = "Idempotent!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_idem.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -493,14 +434,9 @@ namespace pP::tests::detail {
             PPR_UNIT_TEST (cancel_then_destroy) {
                 constexpr std::string_view kContent = "Destroy!";
                 const auto path = std::filesystem::temp_directory_path() / "ppr_io_test_cancel_destroy.bin";
-                PPR_DEFER{
+                PPR_DEFER {
                     std::error_code ec;
                     std::filesystem::remove(path, ec);
-
-
-
-
-
                 };
                 {
                     std::ofstream ofs(path, std::ios::binary);
@@ -538,21 +474,16 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (file){
+        PPR_UNIT_TEST (file) {
             _.recurse({
                 File::open_and_close,
                 File::move_semantics,
                 File::default_constructed_invalid,
                 File::double_close_safe,
             });
-
-
-
-
-
         };
 
-        PPR_UNIT_TEST (mapped){
+        PPR_UNIT_TEST (mapped) {
             _.recurse({
                 Mapped::read_content,
                 Mapped::empty_file,
@@ -560,14 +491,9 @@ namespace pP::tests::detail {
                 Mapped::default_constructed_invalid,
                 Mapped::write_content,
             });
-
-
-
-
-
         };
 
-        PPR_UNIT_TEST (request){
+        PPR_UNIT_TEST (request) {
             _.recurse({
                 Request::default_state,
                 Request::i_event_interface,
@@ -580,22 +506,12 @@ namespace pP::tests::detail {
                 Request::cancel_i_event,
                 Request::cancel_then_destroy,
             });
-
-
-
-
-
         };
 
-        PPR_UNIT_TEST (port){
+        PPR_UNIT_TEST (port) {
             _.recurse({
                 Port::move_semantics,
             });
-
-
-
-
-
         };
     }
 } // namespace pP::tests::detail

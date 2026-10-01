@@ -119,7 +119,8 @@ namespace pP::image {
             return static_cast<float>(covered) / static_cast<float>(count);
         }
 
-        [[nodiscard]] float coverageAtScale_(const std::vector<float> &rgba, const float scale, const float cutoff) noexcept {
+        [[nodiscard]] float coverageAtScale_(
+            const std::vector<float> &rgba, const float scale, const float cutoff) noexcept {
             std::size_t covered = 0u;
             const std::size_t count = rgba.size() / 4u;
             for (std::size_t i = 0u; i < count; ++i) {
@@ -215,8 +216,8 @@ namespace pP::image {
         if (not asset.m_storage.isValid() or not asset.m_storage.isMaterialized()) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
-        if (desc.m_has_preserve_coverage and
-            (not (desc.m_alpha_cutoff > 0.0f) or not (desc.m_alpha_cutoff <= 1.0f))) [[unlikely]] {
+        if (desc.m_has_preserve_coverage and (not (desc.m_alpha_cutoff > 0.0f) or not (desc.m_alpha_cutoff <= 1.0f)))
+            [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         const u32 count = mipCountFor(asset.m_width, asset.m_height);
@@ -227,7 +228,8 @@ namespace pP::image {
         // no headroom left and fails closed here.
         u64 chain_bytes = 0u;
         for (u32 level = 0u; level < count; ++level) {
-            chain_bytes += slicePitchFor(mipExtentAt(asset.m_width, level), mipExtentAt(asset.m_height, level), EBlockTag::none);
+            chain_bytes += slicePitchFor(
+                mipExtentAt(asset.m_width, level), mipExtentAt(asset.m_height, level), EBlockTag::none);
         }
         if (chain_bytes > desc.m_limits.m_max_decoded_bytes) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
@@ -294,8 +296,9 @@ namespace pP::image {
             const int source_h_int = static_cast<int>(source_h);
             const int level_w_int = static_cast<int>(level_w);
             const int level_h_int = static_cast<int>(level_h);
-            if (stbir_resize_float_linear(source, source_w_int, source_h_int, 0, next.data(), level_w_int, level_h_int, 0,
-                    STBIR_RGBA) == nullptr) [[unlikely]] {
+            if (stbir_resize_float_linear(
+                    source, source_w_int, source_h_int, 0, next.data(), level_w_int, level_h_int, 0, STBIR_RGBA) ==
+                nullptr) [[unlikely]] {
                 return make_error_code(errc::invalid_argument);
             }
             if (desc.m_has_preserve_coverage) {
@@ -321,8 +324,8 @@ namespace pP::image {
         if (const std::error_code err = job.moveToShared(&frozen)) [[unlikely]] {
             return err;
         }
-        if (not frozen.isMaterialized() or
-            frozen.getBufferData().size() != static_cast<std::size_t>(chain_bytes)) [[unlikely]] {
+        if (not frozen.isMaterialized() or frozen.getBufferData().size() != static_cast<std::size_t>(chain_bytes))
+            [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
         asset.m_storage = frozen;
@@ -334,11 +337,13 @@ namespace pP::image {
             const u32 level_h = mipExtentAt(asset.m_height, level);
             const u64 row_pitch = rowPitchFor(level_w, EBlockTag::none);
             const u64 slice_pitch = slicePitchFor(level_w, level_h, EBlockTag::none);
-            asset.m_subresources.push_back(ImageSubresource{
-                .m_view = asset.m_storage.subspan(static_cast<std::size_t>(sub_offset), static_cast<std::size_t>(slice_pitch)),
-                .m_row_pitch = row_pitch,
-                .m_slice_pitch = slice_pitch,
-            });
+            asset.m_subresources.push_back(
+                ImageSubresource{
+                    .m_view = asset.m_storage.subspan(
+                        static_cast<std::size_t>(sub_offset), static_cast<std::size_t>(slice_pitch)),
+                    .m_row_pitch = row_pitch,
+                    .m_slice_pitch = slice_pitch,
+                });
             sub_offset += slice_pitch;
         }
 

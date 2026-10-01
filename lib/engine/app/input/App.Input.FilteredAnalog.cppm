@@ -25,7 +25,7 @@ export namespace pP {
     // faster rates (see camera controller).
     // ------------------------------------------------------------------
 
-    template <typename T>
+    template<typename T>
     class FilteredAnalog {
     public:
         using value_type = T;
@@ -61,8 +61,11 @@ export namespace pP {
         float m_sensitivity{2.0f};
     };
 
-    template<> void FilteredAnalog<Quaternion>::update(TimeSpan dt) noexcept;
-    template<> void FilteredAnalog<Quaternion>::addClamp(const Quaternion &offset, const Quaternion &vmin, const Quaternion &vmax) noexcept;
+    template<>
+    void FilteredAnalog<Quaternion>::update(TimeSpan dt) noexcept;
+    template<>
+    void FilteredAnalog<Quaternion>::addClamp(
+        const Quaternion &offset, const Quaternion &vmin, const Quaternion &vmax) noexcept;
 
     extern template class FilteredAnalog<float>;
     extern template class FilteredAnalog<float2>;

@@ -18,9 +18,7 @@ namespace pP {
         PPR_ASSERT(nullptr != m_native && "invalid native handle");
     }
 
-    Window::Window(Window &&other) noexcept
-        : WindowModel(std::move(other)),
-          m_handle(std::move(other.m_handle)) {
+    Window::Window(Window &&other) noexcept : WindowModel(std::move(other)), m_handle(std::move(other.m_handle)) {
         other.m_handle = default_value_v;
     }
 

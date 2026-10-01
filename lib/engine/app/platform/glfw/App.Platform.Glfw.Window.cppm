@@ -34,8 +34,8 @@ export namespace pP {
         WindowResizedCallback m_when_window_resized{};
         WindowScaledCallback m_when_window_scaled{};
 
-        Array<std::unique_ptr<Window> > m_windows{};
-        Array<std::unique_ptr<Monitor> > m_monitors{};
+        Array<std::unique_ptr<Window>> m_windows{};
+        Array<std::unique_ptr<Monitor>> m_monitors{};
 
         safe_ptr<const Monitor> m_primary_monitor{};
         safe_ptr<const Window> m_main_window{};
@@ -62,33 +62,37 @@ export namespace pP {
 
         [[nodiscard]] SharedMonitor getPrimaryMonitor() const noexcept override;
 
-        [[nodiscard]] std::error_code enumerateMonitorVideoModes(const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept override;
+        [[nodiscard]] std::error_code enumerateMonitorVideoModes(
+            const Monitor &monitor, Collector<VideoMode> each_video_mode) const noexcept override;
 
         void setMonitorGamma(const Monitor &monitor, float gamma) noexcept override;
 
         // monitor callbacks:
-        [[nodiscard]] MonitorCallback::Handle whenMonitorConnected(MonitorCallback::Event on_connected) noexcept override;
+        [[nodiscard]] MonitorCallback::Handle whenMonitorConnected(
+            MonitorCallback::Event on_connected) noexcept override;
 
-        [[nodiscard]] MonitorCallback::Handle whenMonitorDisconnected(MonitorCallback::Event on_disconnected) noexcept override;
+        [[nodiscard]] MonitorCallback::Handle whenMonitorDisconnected(
+            MonitorCallback::Event on_disconnected) noexcept override;
 
         // windows:
         [[nodiscard]] std::error_code createWindow(
-            WindowModel &&definition,
-            safe_ptr<Window> *window_write_ref) override;
+            WindowModel &&definition, safe_ptr<Window> *window_write_ref) override;
 
         [[nodiscard]] std::error_code destroyWindow(SharedWindow &&window) override;
 
-        [[nodiscard]] const SharedWindow &getFocusedWindow() const noexcept override { return m_focused_window; }
-        [[nodiscard]] const SharedWindow &getMainWindow() const noexcept override { return m_main_window; }
+        [[nodiscard]] const SharedWindow &getFocusedWindow() const noexcept override {
+            return m_focused_window;
+        }
+        [[nodiscard]] const SharedWindow &getMainWindow() const noexcept override {
+            return m_main_window;
+        }
 
         SharedWindow setMainWindow(SharedWindow window) override;
 
         [[nodiscard]] SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept override;
 
         void setWindowMonitor(
-            const Window &window,
-            const Monitor &monitor,
-            const int2 &window_position,
+            const Window &window, const Monitor &monitor, const int2 &window_position,
             const int2 &window_size) override;
 
         [[nodiscard]] bool getWindowShouldClose(const Window &window) const noexcept override;
@@ -130,14 +134,19 @@ export namespace pP {
 
         [[nodiscard]] WindowCallback::Handle whenWindowClosed(WindowCallback::Event on_closed) noexcept override;
 
-        [[nodiscard]] WindowFocusedCallback::Handle whenWindowFocused(WindowFocusedCallback::Event on_focused) noexcept override;
+        [[nodiscard]] WindowFocusedCallback::Handle whenWindowFocused(
+            WindowFocusedCallback::Event on_focused) noexcept override;
 
-        [[nodiscard]] WindowIconifiedCallback::Handle whenWindowIconified(WindowIconifiedCallback::Event on_iconified) noexcept override;
+        [[nodiscard]] WindowIconifiedCallback::Handle whenWindowIconified(
+            WindowIconifiedCallback::Event on_iconified) noexcept override;
 
-        [[nodiscard]] WindowMovedCallback::Handle whenWindowMoved(WindowMovedCallback::Event on_moved) noexcept override;
+        [[nodiscard]] WindowMovedCallback::Handle whenWindowMoved(
+            WindowMovedCallback::Event on_moved) noexcept override;
 
-        [[nodiscard]] WindowResizedCallback::Handle whenWindowResized(WindowResizedCallback::Event on_resized) noexcept override;
+        [[nodiscard]] WindowResizedCallback::Handle whenWindowResized(
+            WindowResizedCallback::Event on_resized) noexcept override;
 
-        [[nodiscard]] WindowScaledCallback::Handle whenWindowScaled(WindowScaledCallback::Event on_scaled) noexcept override;
+        [[nodiscard]] WindowScaledCallback::Handle whenWindowScaled(
+            WindowScaledCallback::Event on_scaled) noexcept override;
     };
 }

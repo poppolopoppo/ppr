@@ -105,7 +105,8 @@ namespace pP {
                 sources[index] = *source;
             }
 
-            const u64 slice_pitch = image::slicePitchFor(reference->m_width, reference->m_height, image::EBlockTag::none);
+            const u64 slice_pitch = image::slicePitchFor(
+                reference->m_width, reference->m_height, image::EBlockTag::none);
             mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(safe_narrowing(slice_pitch));
             PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, storage.materialize());
             Expected<mem::MutableBufferView> destination = storage.getMutableData();
@@ -113,7 +114,8 @@ namespace pP {
                 return std::unexpected{destination.error()};
             }
 
-            const auto channel = [](const OrmSource &source, const u32 x, const u32 y, const u32 component, const u8 fallback) {
+            const auto channel = [](const OrmSource &source, const u32 x, const u32 y, const u32 component,
+                                     const u8 fallback) {
                 if (source.m_bytes.empty()) {
                     return fallback;
                 }
@@ -138,11 +140,12 @@ namespace pP {
             composite.m_width = reference->m_width;
             composite.m_height = reference->m_height;
             composite.m_storage = frozen;
-            composite.m_subresources.push_back(image::ImageSubresource{
-                .m_view = frozen.subspan(0u, safe_narrowing(slice_pitch)),
-                .m_row_pitch = image::rowPitchFor(reference->m_width, image::EBlockTag::none),
-                .m_slice_pitch = slice_pitch,
-            });
+            composite.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = frozen.subspan(0u, safe_narrowing(slice_pitch)),
+                    .m_row_pitch = image::rowPitchFor(reference->m_width, image::EBlockTag::none),
+                    .m_slice_pitch = slice_pitch,
+                });
             return composite;
         }
 
@@ -182,7 +185,8 @@ namespace pP {
     // pass lifecycle and asset APIs
     // ------------------------------------------------------------------
 
-    std::error_code TrianglePass::initialize(IRhiService &rhi_service, IShaderService &shader_service, const fs::path &content_dir) {
+    std::error_code TrianglePass::initialize(
+        IRhiService &rhi_service, IShaderService &shader_service, const fs::path &content_dir) {
         rhi::IDevice &device = rhi_service.getDevice();
 
         bool invariant_state_started = false;
@@ -230,16 +234,20 @@ namespace pP {
         // Pass-owned GPU caches (§2.4): bag → texture → sampler → material,
         // with per-acquisition rollback in reverse order on partial failure.
         if (const std::error_code err = m_bag_cache.initialize(device)) {
-            PPR_LOG(TrianglePass, error, "bag cache init failed", {
-                {"message", err.message()},
+            PPR_LOG(
+                TrianglePass, error, "bag cache init failed",
+                {
+                    {"message", err.message()},
                 });
             return err;
         }
         bag_cache_ready = true;
-        if (const std::error_code err =
-                m_texture_cache.initialize(device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
-            PPR_LOG(TrianglePass, error, "texture cache init failed", {
-                {"message", err.message()},
+        if (const std::error_code err = m_texture_cache.initialize(
+                device, rhi::kBindlessTextureBudget, m_fallback_descriptor)) {
+            PPR_LOG(
+                TrianglePass, error, "texture cache init failed",
+                {
+                    {"message", err.message()},
                 });
             return err;
         }
@@ -254,18 +262,21 @@ namespace pP {
         sampler_desc.addressW = rhi::TextureAddressingMode::Wrap;
         sampler_desc.maxAnisotropy = 1;
         sampler_started = true;
-        if (const std::error_code err =
-                make_error_code(device.createSampler(sampler_desc, m_shared_sampler.writeRef()))) {
-            PPR_LOG(TrianglePass, error, "shared sampler creation failed", {
-                {"message", err.message()},
+        if (const std::error_code err = make_error_code(
+                device.createSampler(sampler_desc, m_shared_sampler.writeRef()))) {
+            PPR_LOG(
+                TrianglePass, error, "shared sampler creation failed",
+                {
+                    {"message", err.message()},
                 });
             return err;
         }
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            m_shared_sampler->getDescriptorHandle(&m_sampler_handle));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, m_shared_sampler->getDescriptorHandle(&m_sampler_handle));
         if (const std::error_code err = m_material_cache.initialize(device, m_shared_sampler.get())) {
-            PPR_LOG(TrianglePass, error, "material cache init failed", {
-                {"message", err.message()},
+            PPR_LOG(
+                TrianglePass, error, "material cache init failed",
+                {
+                    {"message", err.message()},
                 });
             return err;
         }
@@ -322,8 +333,7 @@ namespace pP {
             .m_emissive = none_v,
         };
         TextureBindlessIndex *const slot_refs[] = {
-            &slots.m_albedo, &slots.m_metallic_roughness, &slots.m_normal, &slots.m_emissive
-        };
+            &slots.m_albedo, &slots.m_metallic_roughness, &slots.m_normal, &slots.m_emissive};
         for (u32 i = 0u; i < 4u; ++i) {
             if (resolved[i]->isValid()) {
                 Expected<TextureBindlessIndex> index = m_texture_cache.residentIndex(resolved[i]);
@@ -338,8 +348,7 @@ namespace pP {
 
     namespace {
         [[nodiscard]] TextureHandle resolveImageSlot_(
-            const mesh::MaterialImageSlot &slot,
-            const std::span<const TextureHandle> textures) noexcept {
+            const mesh::MaterialImageSlot &slot, const std::span<const TextureHandle> textures) noexcept {
             if (not slot.enabled()) {
                 return TextureHandle{};
             }
@@ -417,7 +426,9 @@ namespace pP {
             const std::span<const TextureHandle> texture_span(uploaded.m_textures.data(), images.size());
 
             TextureHandle orm{};
-            if (material.m_metallic_map.enabled() or material.m_roughness_map.enabled() or material.m_occlusion_map.enabled()) {
+            if (material.m_metallic_map.enabled() or
+                material.m_roughness_map.enabled() or
+                material.m_occlusion_map.enabled()) {
                 Expected<image::ImageAsset> composite = composeOrm_(material, images);
                 if (not composite.has_value()) [[unlikely]] {
                     rollback();
@@ -469,16 +480,16 @@ namespace pP {
     }
 
     Expected<TrianglePass::JoinedInstancePrim> TrianglePass::joinInstancePrim(
-        const mesh::SceneAsset &scene, const UploadedScene &uploaded,
-        const mesh::SceneInstance &instance, const std::size_t prim_slot) noexcept {
+        const mesh::SceneAsset &scene, const UploadedScene &uploaded, const mesh::SceneInstance &instance,
+        const std::size_t prim_slot) noexcept {
         const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
         if (mesh_index >= scene.m_meshes.size() or mesh_index >= uploaded.m_mesh_prim_base.size()) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
         const std::size_t prim_index = static_cast<std::size_t>(uploaded.m_mesh_prim_base[mesh_index]) + prim_slot;
-        if (prim_slot >= scene.m_meshes[mesh_index].m_primitives.size() or
-            prim_index >= uploaded.m_primitives.size()) [[unlikely]] {
+        if (prim_slot >= scene.m_meshes[mesh_index].m_primitives.size() or prim_index >= uploaded.m_primitives.size())
+            [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
@@ -525,8 +536,8 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        if (not m_bag_cache.resolveForDraw(bag).has_value() or
-            not m_material_cache.materialIndex(material).has_value()) [[unlikely]] {
+        if (not m_bag_cache.resolveForDraw(bag).has_value() or not m_material_cache.materialIndex(material).has_value())
+            [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
@@ -565,16 +576,17 @@ namespace pP {
             }
 
             if (group == nullptr) {
-                plan.m_groups.push_back(DrawGroup{
-                    .m_variant = instance.m_variant,
-                    .m_vertex_buffer = instance.m_vertex_buffer,
-                    .m_index_buffer = instance.m_index_buffer,
-                    .m_vb_offset = instance.m_payload.m_vb_offset,
-                    .m_ib_start = instance.m_payload.m_ib_start,
-                    .m_count = instance.m_payload.m_index_count,
-                    .m_base_vertex = instance.m_payload.m_base_vertex,
-                    .m_instance_count = 0u,
-                });
+                plan.m_groups.push_back(
+                    DrawGroup{
+                        .m_variant = instance.m_variant,
+                        .m_vertex_buffer = instance.m_vertex_buffer,
+                        .m_index_buffer = instance.m_index_buffer,
+                        .m_vb_offset = instance.m_payload.m_vb_offset,
+                        .m_ib_start = instance.m_payload.m_ib_start,
+                        .m_count = instance.m_payload.m_index_count,
+                        .m_base_vertex = instance.m_payload.m_base_vertex,
+                        .m_instance_count = 0u,
+                    });
                 group = &plan.m_groups.back();
             }
 
@@ -595,16 +607,16 @@ namespace pP {
     // never reach a pipeline. A signature change invalidates every cached
     // variant, because the cached pipelines were built for the old signature.
     Expected<TrianglePass::CachedVariantPipeline *> TrianglePass::pipelineFor_(
-        rhi::IDevice &device,
-        const RenderPipelineSignature &signature,
-        const TrianglePipelineVariant variant) {
+        rhi::IDevice &device, const RenderPipelineSignature &signature, const TrianglePipelineVariant variant) {
         if (m_shader_program == nullptr) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
         if (const std::error_code err = checkPipelineVariant(variant)) {
-            PPR_LOG(TrianglePass, error, "pipeline variant rejected", {
-                {"message", err.message()},
+            PPR_LOG(
+                TrianglePass, error, "pipeline variant rejected",
+                {
+                    {"message", err.message()},
                 });
             return std::unexpected{err};
         }
@@ -614,10 +626,12 @@ namespace pP {
         // The sample count is a SampleCount by construction — all four
         // enumerators are accepted — so only the color shape is checked.
         if (signature.colorFormats().size() != 1u) {
-            PPR_LOG(TrianglePass, error, "unsupported render pipeline signature", {
-                {"color_format_count", signature.colorFormats().size()},
-                {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
-                {"sample_count", static_cast<u32>(signature.m_sample_count)},
+            PPR_LOG(
+                TrianglePass, error, "unsupported render pipeline signature",
+                {
+                    {"color_format_count", signature.colorFormats().size()},
+                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
                 });
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -650,8 +664,7 @@ namespace pP {
         pipeline_desc.depthStencil.depthTestEnable = signature.m_depth_stencil_format.has_value();
         pipeline_desc.depthStencil.depthWriteEnable = signature.m_depth_stencil_format.has_value();
         pipeline_desc.depthStencil.depthFunc = rhi::ComparisonFunc::LessEqual;
-        pipeline_desc.rasterizer.cullMode =
-                variant.m_is_two_sided ? rhi::CullMode::None : rhi::CullMode::Back;
+        pipeline_desc.rasterizer.cullMode = variant.m_is_two_sided ? rhi::CullMode::None : rhi::CullMode::Back;
         pipeline_desc.label = "mesh bindless pipeline";
 
         rhi::ComPtr<rhi::IRenderPipeline> pipeline{};
@@ -664,8 +677,8 @@ namespace pP {
         // Rebinding this object per encode replaces the per-draw object the
         // 1-arg overload used to build.
         rhi::ComPtr<rhi::IShaderObject> root_object{};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass,
-            device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            TrianglePass, device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
 
         // Cache-lifetime state, written ONCE per variant: the material and
         // texture containers are created once per cache lifetime (never
@@ -685,17 +698,19 @@ namespace pP {
         const rhi::ShaderCursor texture_cursor = invariant_cursor["g_textures"];
         const rhi::ShaderCursor sampler_cursor = invariant_cursor["g_sampler"];
         const rhi::ShaderCursor frame_field = invariant_cursor["g_frame"];
-        if (not material_cursor.isValid() or not texture_cursor.isValid() or
-            not sampler_cursor.isValid() or not frame_field.isValid()) [[unlikely]] {
+        if (not material_cursor.isValid() or
+            not texture_cursor.isValid() or
+            not sampler_cursor.isValid() or
+            not frame_field.isValid()) [[unlikely]] {
             // A missing field means the pass and the shader disagree; fail
             // closed rather than write through a null cursor.
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, material_cursor.setBinding(
-            rhi::Binding(material_buffer, makeFullRange(material_buffer))));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, texture_cursor.setBinding(
-            rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            TrianglePass, material_cursor.setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            TrianglePass, texture_cursor.setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
         PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, sampler_cursor.setDescriptorHandle(m_sampler_handle));
 
         // Dereferenced ONCE here: the per-frame path then only writes
@@ -705,11 +720,12 @@ namespace pP {
 
         m_render_pipeline_key.emplace(signature);
 
-        const auto [cached_variant_it, _] = m_variant_pipelines.emplace(variant, CachedVariantPipeline{
-            .m_pipeline = std::move(pipeline),
-            .m_root_object = std::move(root_object),
-            .m_frame_cursor = frame_cursor,
-        });
+        const auto [cached_variant_it, _] = m_variant_pipelines.emplace(
+            variant, CachedVariantPipeline{
+                         .m_pipeline = std::move(pipeline),
+                         .m_root_object = std::move(root_object),
+                         .m_frame_cursor = frame_cursor,
+                     });
 
         return &cached_variant_it->second;
     }
@@ -734,7 +750,7 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        Expected<Array<ResolvedInstance> > resolved_instances = resolveInstances_();
+        Expected<Array<ResolvedInstance>> resolved_instances = resolveInstances_();
         if (not resolved_instances.has_value()) [[unlikely]] {
             return resolved_instances.error();
         }
@@ -757,8 +773,8 @@ namespace pP {
             updatePlanCache_(*resolved_instances, *plan);
             active_plan = &m_cached_plan;
         }
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            uploadPayloads_(draw_context.m_device, *resolved_instances, *active_plan));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, uploadPayloads_(draw_context.m_device, *resolved_instances, *active_plan));
 
         // Per-frame state, identical for every group: uploaded and applied
         // once, not re-done per draw.
@@ -771,22 +787,18 @@ namespace pP {
         });
 
         for (const DrawGroup &group: active_plan->m_groups) {
-            PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-                encodeGroup_(draw_context, *resolved_instances, group));
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, encodeGroup_(draw_context, *resolved_instances, group));
         }
         return default_value_v;
     }
 
     // The planner is a pure static function over resolved instances, so it is
     // unit-testable without a device; this is the only production caller.
-    Expected<TrianglePass::DrawPlan> TrianglePass::buildPlan_(
-        const Array<ResolvedInstance> &resolved_instances) {
+    Expected<TrianglePass::DrawPlan> TrianglePass::buildPlan_(const Array<ResolvedInstance> &resolved_instances) {
         if (resolved_instances.empty()) {
             return DrawPlan{};
         }
-        return planDraws(std::span<const ResolvedInstance>{
-            resolved_instances.data(), resolved_instances.size()
-        });
+        return planDraws(std::span<const ResolvedInstance>{resolved_instances.data(), resolved_instances.size()});
     }
 
     namespace {
@@ -829,8 +841,7 @@ namespace pP {
         }
     }
 
-    bool TrianglePass::planCacheHit_(
-        const Array<ResolvedInstance> &resolved_instances) const noexcept {
+    bool TrianglePass::planCacheHit_(const Array<ResolvedInstance> &resolved_instances) const noexcept {
         if (not m_plan_cache_valid) {
             return false;
         }
@@ -853,9 +864,7 @@ namespace pP {
         return true;
     }
 
-    void TrianglePass::updatePlanCache_(
-        const Array<ResolvedInstance> &resolved_instances,
-        const DrawPlan &plan) {
+    void TrianglePass::updatePlanCache_(const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan) {
         m_plan_submitted_key.clear();
         m_plan_submitted_key.reserve(m_submitted_instances.size());
         for (const SubmittedInstance &instance: m_submitted_instances) {
@@ -879,9 +888,7 @@ namespace pP {
     }
 
     std::error_code TrianglePass::uploadPayloads_(
-        rhi::IDevice &device,
-        const Array<ResolvedInstance> &resolved_instances,
-        const DrawPlan &plan) {
+        rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan) {
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureDirectPayloads_(device, plan.m_payload_count));
 
         // One rotation per submit: every group encoded after this point reads
@@ -912,9 +919,8 @@ namespace pP {
 
                 std::memcpy(
                     static_cast<std::byte *>(mapped_payloads) +
-                    static_cast<u64>(group.m_first_payload + offset) * sizeof(InstancePayload),
-                    &resolved_instances[source_index].m_payload,
-                    sizeof(InstancePayload));
+                        static_cast<u64>(group.m_first_payload + offset) * sizeof(InstancePayload),
+                    &resolved_instances[source_index].m_payload, sizeof(InstancePayload));
             }
         }
         return default_value_v;
@@ -942,13 +948,13 @@ namespace pP {
         payload_desc.label = "direct instance payloads";
         for (u32 slot = 0u; slot < kPayloadRingSize; ++slot) {
             if (const std::error_code err = make_error_code(
-                device.createBuffer(payload_desc, nullptr, m_direct_payloads[slot].writeRef()))) [[unlikely]] {
+                    device.createBuffer(payload_desc, nullptr, m_direct_payloads[slot].writeRef()))) [[unlikely]] {
                 releaseDirectPayloads_(std::addressof(device));
                 return err;
             }
             if (const std::error_code err = make_error_code(device.mapBuffer(
-                m_direct_payloads[slot].get(), rhi::CpuAccessMode::Write,
-                std::addressof(m_direct_payload_mapped[slot])))) [[unlikely]] {
+                    m_direct_payloads[slot].get(), rhi::CpuAccessMode::Write,
+                    std::addressof(m_direct_payload_mapped[slot])))) [[unlikely]] {
                 releaseDirectPayloads_(std::addressof(device));
                 return err;
             }
@@ -980,9 +986,7 @@ namespace pP {
     }
 
     std::error_code TrianglePass::encodeGroup_(
-        const DrawContext &draw_context,
-        const Array<ResolvedInstance> &resolved_instances,
-        const DrawGroup &group) {
+        const DrawContext &draw_context, const Array<ResolvedInstance> &resolved_instances, const DrawGroup &group) {
         if (group.m_instance_count == 0u or
             group.m_source_indices.empty() or
             group.m_source_indices.size() != group.m_instance_count) [[unlikely]] {
@@ -999,8 +1003,11 @@ namespace pP {
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
         rhi::IBuffer *const texture_buffer = m_texture_cache.descriptorBuffer();
         rhi::IBuffer *const payload_buffer = m_direct_payloads[m_payload_ring_cursor].get();
-        if (vertex_buffer == nullptr or index_buffer == nullptr or material_buffer == nullptr or
-            texture_buffer == nullptr or payload_buffer == nullptr) [[unlikely]] {
+        if (vertex_buffer == nullptr or
+            index_buffer == nullptr or
+            material_buffer == nullptr or
+            texture_buffer == nullptr or
+            payload_buffer == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 
@@ -1012,19 +1019,19 @@ namespace pP {
             index_buffer->getDesc().elementSize != sizeof(u32) or
             payload_buffer->getDesc().elementSize != sizeof(InstancePayload) or
             material_buffer->getDesc().elementSize != sizeof(GpuMaterial)) [[unlikely]] {
-            PPR_LOG(TrianglePass, error, "bag/payload/material stride mismatch vs shader expectation", {
-                {"vertex_stride", vertex_buffer->getDesc().elementSize},
-                {"index_stride", index_buffer->getDesc().elementSize},
-                {"payload_stride", payload_buffer->getDesc().elementSize},
-                {"material_stride", material_buffer->getDesc().elementSize},
+            PPR_LOG(
+                TrianglePass, error, "bag/payload/material stride mismatch vs shader expectation",
+                {
+                    {"vertex_stride", vertex_buffer->getDesc().elementSize},
+                    {"index_stride", index_buffer->getDesc().elementSize},
+                    {"payload_stride", payload_buffer->getDesc().elementSize},
+                    {"material_stride", material_buffer->getDesc().elementSize},
                 });
             return make_error_code(std::errc::invalid_argument);
         }
 
         Expected<CachedVariantPipeline *> cached = pipelineFor_(
-            draw_context.m_device,
-            draw_context.m_render_pipeline_key,
-            group.m_variant);
+            draw_context.m_device, draw_context.m_render_pipeline_key, group.m_variant);
         if (not cached.has_value()) [[unlikely]] {
             return cached.error();
         }
@@ -1050,18 +1057,21 @@ namespace pP {
         // starts at instance 0; binding both would double-count the offset for
         // any non-zero base.
         const u32 payload_base = group.m_first_payload;
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            shader_cursor["g_payload_base"].setData(&payload_base, sizeof(payload_base)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, shader_cursor["g_payload_base"].setData(&payload_base, sizeof(payload_base)));
 
         // Full-buffer ranges via makeFullRange (never bare Binding()).
         // g_materials/g_textures/g_sampler ride the persistent root object
         // (set once at creation); geometry and payloads vary per group/frame.
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_vertices"].setBinding(
-            rhi::Binding(vertex_buffer, makeFullRange(vertex_buffer))));
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_indices"].setBinding(
-            rhi::Binding(index_buffer, makeFullRange(index_buffer))));
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_cursor["g_payloads"].setBinding(
-            rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass,
+            shader_cursor["g_vertices"].setBinding(rhi::Binding(vertex_buffer, makeFullRange(vertex_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass,
+            shader_cursor["g_indices"].setBinding(rhi::Binding(index_buffer, makeFullRange(index_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass,
+            shader_cursor["g_payloads"].setBinding(rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
 
         draw_context.m_pass.draw({
             .vertexCount = group.m_count,
@@ -1085,7 +1095,7 @@ namespace pP {
     // exactly where the arena scope would have restored. Per-frame heap churn
     // is accepted over incorrectness; no hard cap (dropping instances would
     // change rendered output).
-    Expected<Array<TrianglePass::ResolvedInstance> > TrianglePass::resolveInstances_() const {
+    Expected<Array<TrianglePass::ResolvedInstance>> TrianglePass::resolveInstances_() const {
         Array<ResolvedInstance> resolved{};
 
         for (const SubmittedInstance &instance: m_submitted_instances) {
@@ -1153,8 +1163,10 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code TrianglePass::shutdown() {
-        PPR_LOG(TrianglePass, info, "TrianglePass shut down", {
-            {"instances", m_submitted_instances.size()},
+        PPR_LOG(
+            TrianglePass, info, "TrianglePass shut down",
+            {
+                {"instances", m_submitted_instances.size()},
             });
 
         // Teardown order, mirroring notifyDeviceLost: cached roots first (their
@@ -1231,29 +1243,31 @@ namespace pP {
         fallback_desc.defaultState = rhi::ResourceState::ShaderResource;
         fallback_desc.label = "bindless fallback white";
 
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            device.createTexture(fallback_desc, &init_data, m_fallback_texture.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, device.createTexture(fallback_desc, &init_data, m_fallback_texture.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(TrianglePass, m_fallback_texture->getDefaultView(m_fallback_view.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass,
             m_fallback_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &m_fallback_descriptor));
 
         return default_value_v;
     }
 
-    std::error_code TrianglePass::createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const fs::path &content_dir) {
+    std::error_code TrianglePass::createShaderProgram_(
+        IShaderService &shader_service, rhi::IDevice &device, const fs::path &content_dir) {
         shader::SharedModule triangle_shader{};
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, shader_service.loadModuleFromFile(
-            content_dir / TEXT("shaders") / TEXT("mesh_bindless.slang"),
-            "mesh_bindless",
-            triangle_shader.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, shader_service.loadModuleFromFile(
+                              content_dir / TEXT("shaders") / TEXT("mesh_bindless.slang"), "mesh_bindless",
+                              triangle_shader.writeRef()));
 
         shader::ComPtr<slang::IEntryPoint> vertex_ep;
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            triangle_shader->findEntryPointByName("vertexIndirectMain", vertex_ep.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, triangle_shader->findEntryPointByName("vertexIndirectMain", vertex_ep.writeRef()));
 
         shader::ComPtr<slang::IEntryPoint> fragment_ep;
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
-            triangle_shader->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, triangle_shader->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
 
         // One program: the payload-indexed vertex entry reads
         // g_payloads[g_payload_base + SV_InstanceID]. The group's payload base
@@ -1269,7 +1283,8 @@ namespace pP {
         program_desc.slangEntryPointCount = 2u;
 
         shader::Diagnose diagnostics;
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass,
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass,
             device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
 
         return default_value_v;

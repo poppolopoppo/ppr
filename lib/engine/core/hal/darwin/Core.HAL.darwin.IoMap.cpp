@@ -17,7 +17,7 @@ import std;
 
 namespace pP::hal::io {
     struct MapHandleData {
-        void       *m_data{nullptr};
+        void *m_data{nullptr};
         std::size_t m_size{0};
     };
 
@@ -35,9 +35,11 @@ namespace pP::hal::io {
             throw std::system_error(errno, std::generic_category(), "pP::io: mapFile open failed");
         }
 
-        PPR_DEFER { ::close(fd); };
+        PPR_DEFER {
+            ::close(fd);
+        };
 
-        struct ::stat st {};
+        struct ::stat st{};
         if (::fstat(fd, &st) < 0) [[unlikely]] {
             throw std::system_error(errno, std::generic_category(), "pP::io: mapFile fstat failed");
         }
@@ -47,8 +49,7 @@ namespace pP::hal::io {
             return static_cast<MapHandle>(md);
         }
 
-        void *const data = ::mmap(nullptr, static_cast<std::size_t>(st.st_size),
-                                  prot, MAP_SHARED, fd, 0);
+        void *const data = ::mmap(nullptr, static_cast<std::size_t>(st.st_size), prot, MAP_SHARED, fd, 0);
         if (data == MAP_FAILED) [[unlikely]] {
             throw std::system_error(errno, std::generic_category(), "pP::io: mapFile mmap failed");
         }

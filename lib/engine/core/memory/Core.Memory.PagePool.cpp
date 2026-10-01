@@ -58,7 +58,8 @@ namespace pP::mem {
         }
 
         bool must_commit_pages = false;
-        const auto [page_first, page_count] = m_committed_pages.allocateContiguous(m_tree_infos, bundle_max_count, must_commit_pages);
+        const auto [page_first, page_count] = m_committed_pages.allocateContiguous(
+            m_tree_infos, bundle_max_count, must_commit_pages);
         if (page_first >= m_tree_infos.m_desired_size || page_count == 0u) {
             throw std::bad_alloc{};
         }
@@ -71,8 +72,7 @@ namespace pP::mem {
             hal::pageCommit(free_bucket, bucket_size_bytes);
 
             m_highest_committed_space = std::max(
-                m_highest_committed_space,
-                static_cast<std::byte *>(free_bucket) + bucket_size_bytes);
+                m_highest_committed_space, static_cast<std::byte *>(free_bucket) + bucket_size_bytes);
         }
 
         for (u32 i = 1u; i < page_count; i++) {
@@ -100,14 +100,13 @@ namespace pP::mem {
         sort::inplaceShell(m_full_bundle);
     }
 
-    PagePool::PagePool(const std::size_t page_size,
-                       const std::size_t num_reserved_pages)
-        : m_reserved_space(static_cast<std::byte *>(hal::pageAlloc(
-              num_reserved_pages * page_size,
-              false, {},
-              std::max(hal::page_granularity, std::align_val_t{page_size})).ptr)),
-          m_highest_committed_space{m_reserved_space},
-          m_page_size(page_size),
+    PagePool::PagePool(const std::size_t page_size, const std::size_t num_reserved_pages)
+        : m_reserved_space(
+              static_cast<std::byte *>(hal::pageAlloc(
+                  num_reserved_pages * page_size, false, {},
+                  std::max(hal::page_granularity, std::align_val_t{page_size}))
+                      .ptr)),
+          m_highest_committed_space{m_reserved_space}, m_page_size(page_size),
           m_tree_infos(checked_cast<u32>(num_reserved_pages)) {
         PPR_ASSERT(page_size % hal::page_size == 0u);
         PPR_ASSERT(alignBackward(m_reserved_space, std::align_val_t{hal::page_size}) == m_reserved_space);
@@ -115,14 +114,9 @@ namespace pP::mem {
 
         m_full_bundle.fill(max_v);
 
-        const std::size_t metadata_size_bytes = alignForward(
-            m_tree_infos.getAllocationSize(),
-            hal::page_granularity);
+        const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
 
-        m_committed_pages.initialize(
-            m_tree_infos,
-            hal::pageAlloc(metadata_size_bytes),
-            false);
+        m_committed_pages.initialize(m_tree_infos, hal::pageAlloc(metadata_size_bytes), false);
     }
 
     PagePool::~PagePool() {
@@ -130,23 +124,23 @@ namespace pP::mem {
 
         m_barrier.lock();
 
-        const std::size_t metadata_size_bytes = alignForward(
-            m_tree_infos.getAllocationSize(),
-            hal::page_granularity);
+        const std::size_t metadata_size_bytes = alignForward(m_tree_infos.getAllocationSize(), hal::page_granularity);
         hal::pageFree(m_committed_pages.getAllocationPtr(), metadata_size_bytes);
 
-        const std::size_t reserved_size_bytes = static_cast<std::size_t>(m_tree_infos.m_desired_size) * static_cast<std::size_t>(m_page_size);
-        const std::size_t committed_size_bytes = checked_cast<std::size_t>(m_highest_committed_space - m_reserved_space);
+        const std::size_t reserved_size_bytes = static_cast<std::size_t>(m_tree_infos.m_desired_size) *
+                                                static_cast<std::size_t>(m_page_size);
+        const std::size_t committed_size_bytes = checked_cast<std::size_t>(
+            m_highest_committed_space - m_reserved_space);
         hal::pageFree(m_reserved_space, std::min(reserved_size_bytes, committed_size_bytes));
     }
 
     bool PagePool::owns(const void *const ptr, const std::size_t size) const noexcept {
         return static_cast<const std::byte *>(ptr) >= m_reserved_space &&
-               static_cast<const std::byte *>(ptr) + size < m_reserved_space + m_page_size * m_tree_infos.m_desired_size;
+               static_cast<const std::byte *>(ptr) + size <
+                   m_reserved_space + m_page_size * m_tree_infos.m_desired_size;
     }
 
-    std::allocation_result<void *> PagePool::allocateRaw(const std::size_t bytes,
-                                                         const std::align_val_t alignment) {
+    std::allocation_result<void *> PagePool::allocateRaw(const std::size_t bytes, const std::align_val_t alignment) {
         PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
 
         const std::lock_guard scope_guard{m_barrier};
@@ -159,8 +153,7 @@ namespace pP::mem {
         return allocateRawFallback_();
     }
 
-    void PagePool::deallocateRaw(const void *const ptr, const std::size_t bytes,
-                                 const std::align_val_t alignment) {
+    void PagePool::deallocateRaw(const void *const ptr, const std::size_t bytes, const std::align_val_t alignment) {
         PPR_ASSERT(bytes > 0u && bytes <= m_page_size && static_cast<std::size_t>(alignment) <= hal::page_size);
         PPR_ASSUME(ptr != nullptr);
 
@@ -181,7 +174,8 @@ namespace pP::mem {
         decommitFullBundle_();
 
         if (!m_partial_bundle.isEmpty()) {
-            std::ranges::copy(m_partial_bundle.m_arr | std::views::take(m_partial_bundle.m_count), m_full_bundle.begin());
+            std::ranges::copy(
+                m_partial_bundle.m_arr | std::views::take(m_partial_bundle.m_count), m_full_bundle.begin());
             m_partial_bundle.m_count = 0u;
 
             sort::inplaceShell(m_full_bundle);
@@ -232,7 +226,8 @@ namespace pP::mem {
         } while (d);
     }
 
-    constexpr auto BitmapTree::nodesAtDepth(const BuildInfos &infos, const std::size_t depth) const noexcept -> std::span<const word_t> {
+    constexpr auto BitmapTree::nodesAtDepth(const BuildInfos &infos, const std::size_t depth) const noexcept
+        -> std::span<const word_t> {
         PPR_ASSERT(depth < infos.m_tree_depth);
 
         u32 offset = infos.m_leaves_first_word;
@@ -246,8 +241,11 @@ namespace pP::mem {
     }
 
     // must call setupMemoryRequirements() before
-    constexpr void BitmapTree::initialize(const BuildInfos &infos, const std::allocation_result<void *> storage, const bool enabled_by_default) noexcept {
-        PPR_ASSERT(storage.ptr && storage.count >= infos.getAllocationSize() &&
+    constexpr void BitmapTree::initialize(
+        const BuildInfos &infos, const std::allocation_result<void *> storage, const bool enabled_by_default) noexcept {
+        PPR_ASSERT(
+            storage.ptr &&
+            storage.count >= infos.getAllocationSize() &&
             "Storage must be properly allocated and sized according to setupMemoryRequirements()");
         m_bits = static_cast<word_t *>(storage.ptr);
 
@@ -282,7 +280,8 @@ namespace pP::mem {
             }
 
             if (infos.m_desired_size % word_bit_count) {
-                m_bits[infos.getNumTotalWords() - 1] = mask_t::unsetFirstN(infos.m_desired_size % word_bit_count).m_bits;
+                m_bits[infos.getNumTotalWords() - 1] =
+                    mask_t::unsetFirstN(infos.m_desired_size % word_bit_count).m_bits;
             }
         }
     }
@@ -327,7 +326,8 @@ namespace pP::mem {
         }
     }
 
-    constexpr auto BitmapTree::allocateContiguous(const BuildInfos &infos, const u32 requested_count, bool &out_was_empty) noexcept -> AllocRange {
+    constexpr auto BitmapTree::allocateContiguous(
+        const BuildInfos &infos, const u32 requested_count, bool &out_was_empty) noexcept -> AllocRange {
         PPR_ASSERT(requested_count > 0u);
         // returns leaf index or UMax if full
         if (isFull()) [[unlikely]] {
@@ -343,7 +343,8 @@ namespace pP::mem {
             bit = bit * word_bit_count + jmp;
 
             if (infos.m_tree_depth - 1u == d) {
-                const u32 n_contiguous = std::min(requested_count, std::min((m >> jmp).countTrailingZeros(), mask_t::bit_count_v - jmp));
+                const u32 n_contiguous = std::min(
+                    requested_count, std::min((m >> jmp).countTrailingZeros(), mask_t::bit_count_v - jmp));
                 PPR_ASSERT(n_contiguous > 0u);
                 mask_t alloc_m = mask_t::setFirstN(n_contiguous) << jmp;
                 PPR_ASSERT((m & alloc_m).none());
@@ -372,7 +373,7 @@ namespace pP::mem {
 
         u32 bit = 0u;
         u32 offset = 0u;
-        for (u32 d = 0u; d < infos.m_tree_depth; ++d) [[likely]]{
+        for (u32 d = 0u; d < infos.m_tree_depth; ++d) [[likely]] {
             const mask_t m{wordAt_(offset)};
             const u32 jmp = m.countTrailingOnes();
 
@@ -449,8 +450,7 @@ namespace pP::mem {
         PPR_ASSERT(was_empty);
         PPR_ASSERT(tree.isAllocated(infos, 0u));
 
-        const auto [m_first_bit, m_bit_count] =
-            tree.allocateContiguous(infos, 10u, was_empty);
+        const auto [m_first_bit, m_bit_count] = tree.allocateContiguous(infos, 10u, was_empty);
         PPR_ASSERT(m_first_bit == 1u);
         PPR_ASSERT(m_bit_count == 10u);
         PPR_ASSERT(!was_empty);

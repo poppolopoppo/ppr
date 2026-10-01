@@ -26,8 +26,7 @@ export namespace pP {
         IoFile() noexcept = default;
 
         IoFile(IoFile &&other) noexcept
-            : m_port_handle(std::exchange(other.m_port_handle, nullptr)),
-              m_file(std::exchange(other.m_file, nullptr)) {
+            : m_port_handle(std::exchange(other.m_port_handle, nullptr)), m_file(std::exchange(other.m_file, nullptr)) {
         }
 
         IoFile &operator=(IoFile &&other) noexcept;
@@ -51,8 +50,7 @@ export namespace pP {
     private:
         friend class io::IoPort;
 
-        IoFile(hal::io::IoHandle port, hal::io::FileHandle file) noexcept
-            : m_port_handle(port), m_file(file) {
+        IoFile(hal::io::IoHandle port, hal::io::FileHandle file) noexcept : m_port_handle(port), m_file(file) {
         }
 
         void close_() noexcept;
@@ -125,8 +123,7 @@ export namespace pP {
     };
 
     template<>
-    struct details::relocatable<IoFile> : std::true_type {
-    };
+    struct details::relocatable<IoFile> : std::true_type {};
 }
 
 export namespace pP::io {
@@ -146,21 +143,17 @@ export namespace pP::io {
 
         IoPort &operator=(const IoPort &) = delete;
 
-        IoPort(IoPort &&other) noexcept
-            : m_handle(std::exchange(other.m_handle, nullptr)) {
+        IoPort(IoPort &&other) noexcept : m_handle(std::exchange(other.m_handle, nullptr)) {
         }
 
         IoPort &operator=(IoPort &&other) noexcept;
 
-        [[nodiscard]] std::expected<IoFile, std::error_code>
-        open(const std::filesystem::path &path,
-             const hal::io::OpenFlags flags = {}) noexcept;
+        [[nodiscard]] std::expected<IoFile, std::error_code> open(
+            const std::filesystem::path &path, const hal::io::OpenFlags flags = {}) noexcept;
 
-        void read(IoRequest &req, const IoFile &file,
-                  std::span<std::byte> buffer, const u64 file_offset) noexcept;
+        void read(IoRequest &req, const IoFile &file, std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
-        void write(IoRequest &req, const IoFile &file,
-                   std::span<std::byte> buffer, const u64 file_offset) noexcept;
+        void write(IoRequest &req, const IoFile &file, std::span<std::byte> buffer, const u64 file_offset) noexcept;
 
         [[nodiscard]] std::size_t pollCompletions() noexcept;
 

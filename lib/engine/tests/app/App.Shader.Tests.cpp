@@ -191,7 +191,8 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
             {
                 shader::SharedModule handle;
-                const auto ec = svc->loadModuleFromSource("triangle", "triangle.slang", kTriangleShader, handle.writeRef());
+                const auto ec = svc->loadModuleFromSource(
+                    "triangle", "triangle.slang", kTriangleShader, handle.writeRef());
                 PPR_TEST_ASSERT(!ec);
 
                 auto *module = handle.get();
@@ -234,15 +235,17 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 }
 )";
 
-        PPR_UNIT_TEST(compile_invalid_shader_recovery, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (compile_invalid_shader_recovery, UnitTest::expect_crash) {
             const auto svc = IShaderService::get();
             PPR_TEST_ASSERT(!svc->initialize());
 
             shader::SharedModule handle;
-            const auto bad_ec = svc->loadModuleFromSource("bad", "bad.slang", "this is not valid shader code @@@", handle.writeRef());
+            const auto bad_ec = svc->loadModuleFromSource(
+                "bad", "bad.slang", "this is not valid shader code @@@", handle.writeRef());
             PPR_TEST_ASSERT(!!bad_ec);
 
-            const auto recovery_ec = svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef());
+            const auto recovery_ec = svc->loadModuleFromSource(
+                "recovery", "recovery.slang", kTriangleShader, handle.writeRef());
             PPR_TEST_ASSERT(!recovery_ec);
             PPR_TEST_ASSERT(handle.get() != nullptr);
 
@@ -255,7 +258,8 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
             {
                 shader::SharedModule handle;
-                const auto ec = svc->loadModuleFromSource("test_params", "test_params.slang", kParamShader, handle.writeRef());
+                const auto ec = svc->loadModuleFromSource(
+                    "test_params", "test_params.slang", kParamShader, handle.writeRef());
                 PPR_TEST_ASSERT(!ec);
 
                 auto *module = handle.get();
@@ -305,7 +309,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             std::ignore = svc->shutdown();
         };
 
-        PPR_UNIT_TEST(set_target_format_lifecycle, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (set_target_format_lifecycle, UnitTest::expect_crash) {
             const auto svc = IShaderService::get();
             std::ignore = svc->shutdown();
 
@@ -322,7 +326,8 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
             {
                 shader::SharedModule handle;
-                PPR_TEST_ASSERT(!svc->loadModuleFromSource("target_probe", "target_probe.slang", kTriangleShader, handle.writeRef()));
+                PPR_TEST_ASSERT(!svc->loadModuleFromSource(
+                    "target_probe", "target_probe.slang", kTriangleShader, handle.writeRef()));
                 PPR_TEST_ASSERT(handle.get() != nullptr);
 
                 // Changing the format after modules are loaded must fail
@@ -361,9 +366,11 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             shader::SharedModule handle;
             {
                 ExpectedFailureLogGuard expected_failure_log{};
-                PPR_TEST_ASSERT(!!svc->loadModuleFromFile("nonexistent/shaders/missing.slang", "missing", handle.writeRef()));
+                PPR_TEST_ASSERT(
+                    !!svc->loadModuleFromFile("nonexistent/shaders/missing.slang", "missing", handle.writeRef()));
             }
-            PPR_TEST_ASSERT(!svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef()));
+            PPR_TEST_ASSERT(
+                !svc->loadModuleFromSource("recovery", "recovery.slang", kTriangleShader, handle.writeRef()));
             PPR_TEST_ASSERT(handle.get() != nullptr);
             PPR_TEST_ASSERT(!svc->shutdown());
         };

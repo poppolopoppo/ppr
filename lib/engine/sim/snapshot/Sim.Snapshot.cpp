@@ -63,8 +63,7 @@ namespace pP::sim {
         /// or fails without moving the offset.
         class Reader {
         public:
-            explicit Reader(const std::span<const u8> bytes) noexcept
-                : m_bytes(bytes) {
+            explicit Reader(const std::span<const u8> bytes) noexcept : m_bytes(bytes) {
             }
 
             [[nodiscard]] std::size_t remaining() const noexcept {
@@ -180,9 +179,12 @@ namespace pP::sim {
                 const bool invalid_generation = snapshot.m_ecs.m_generations[entity.m_index] != entity.m_generation;
                 const bool dead = snapshot.m_ecs.m_alive[entity.m_index] != 1u;
                 const bool unordered = not first and entity.m_index <= previous;
-                const bool invalid_state = not std::isfinite(state.m_x) or not std::isfinite(state.m_y) or
-                    not std::isfinite(state.m_angle) or not std::isfinite(state.m_velocity_x) or
-                    not std::isfinite(state.m_velocity_y) or not std::isfinite(state.m_angular_velocity);
+                const bool invalid_state = not std::isfinite(state.m_x) or
+                                           not std::isfinite(state.m_y) or
+                                           not std::isfinite(state.m_angle) or
+                                           not std::isfinite(state.m_velocity_x) or
+                                           not std::isfinite(state.m_velocity_y) or
+                                           not std::isfinite(state.m_angular_velocity);
                 if (invalid_generation or dead or unordered or invalid_state) {
                     return make_error_code(errc::invalid_payload);
                 }
@@ -247,7 +249,7 @@ namespace pP::sim {
         snapshot.m_seed = seed;
 
         for (const ChunkPos chunk: grid.dirtyChunks()) {
-            const std::optional<std::span<const Cell> > payload = grid.residentCells(chunk);
+            const std::optional<std::span<const Cell>> payload = grid.residentCells(chunk);
 
             // Invariant: dirty chunks are resident.
             PPR_ASSERT(payload.has_value());
@@ -341,7 +343,7 @@ namespace pP::sim {
         return {};
     }
 
-    Expected<Array<u8> > save(const Snapshot &snapshot) {
+    Expected<Array<u8>> save(const Snapshot &snapshot) {
         if (const std::error_code error = validate(snapshot); error) {
             return std::unexpected{error};
         }
@@ -400,10 +402,9 @@ namespace pP::sim {
             putU32(bytes, record.m_entity.m_index);
             putU32(bytes, record.m_entity.m_generation);
             const BodyState &state = record.m_state;
-            for (const float value: {
-                     state.m_x, state.m_y, state.m_angle,
-                     state.m_velocity_x, state.m_velocity_y, state.m_angular_velocity
-                 }) {
+            for (const float value:
+                {state.m_x, state.m_y, state.m_angle, state.m_velocity_x, state.m_velocity_y,
+                    state.m_angular_velocity}) {
                 putU32(bytes, std::bit_cast<u32>(value));
             }
             bytes.push_back(static_cast<u8>(record.m_awake));
@@ -594,10 +595,8 @@ namespace pP::sim {
                 return std::unexpected{make_error_code(errc::invalid_payload)};
             }
             record.m_state = {
-                std::bit_cast<float>(values[0]), std::bit_cast<float>(values[1]),
-                std::bit_cast<float>(values[2]), std::bit_cast<float>(values[3]),
-                std::bit_cast<float>(values[4]), std::bit_cast<float>(values[5])
-            };
+                std::bit_cast<float>(values[0]), std::bit_cast<float>(values[1]), std::bit_cast<float>(values[2]),
+                std::bit_cast<float>(values[3]), std::bit_cast<float>(values[4]), std::bit_cast<float>(values[5])};
             record.m_awake = awake != 0u;
             snapshot.m_bodies.m_records.push_back(record);
         }

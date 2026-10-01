@@ -20,9 +20,9 @@ namespace pP::tests::detail {
 
             Widget(Widget &&) noexcept = default;
 
-            Widget &operator =(const Widget &) = default;
+            Widget &operator=(const Widget &) = default;
 
-            Widget &operator =(Widget &&) noexcept = default;
+            Widget &operator=(Widget &&) noexcept = default;
 
             ~Widget() noexcept {
                 ++destroyed;
@@ -47,13 +47,13 @@ namespace pP::tests::detail {
             mutable std::size_t restore_calls{0u};
             mutable std::size_t reset_calls{0u};
 
-            [[nodiscard]] std::allocation_result<void *>
-            allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
+            [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                const std::size_t bytes, const std::align_val_t alignment) noexcept {
                 ++allocate_calls;
 
-                void *const ptr = (alignment > max_align_v
-                                       ? ::operator new(bytes, alignment, std::nothrow)
-                                       : ::operator new(bytes, std::nothrow));
+                void *const ptr =
+                    (alignment > max_align_v ? ::operator new(bytes, alignment, std::nothrow)
+                                             : ::operator new(bytes, std::nothrow));
                 if (ptr) {
                     blocks.push_back(Block{ptr, bytes, alignment});
                 }
@@ -71,9 +71,7 @@ namespace pP::tests::detail {
             void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
                 ++deallocate_calls;
 
-                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
-                    return block.ptr == ptr;
-                });
+                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) { return block.ptr == ptr; });
 
                 if (it != blocks.end()) {
                     const Block block = *it;
@@ -91,27 +89,25 @@ namespace pP::tests::detail {
 
             [[nodiscard]] bool owns(const void *const ptr, const std::size_t size) const noexcept {
                 ++owns_calls;
-                return std::ranges::any_of(blocks, [ptr, size](const Block &block) {
-                    return block.ptr == ptr && size <= block.bytes;
-                });
+                return std::ranges::any_of(
+                    blocks, [ptr, size](const Block &block) { return block.ptr == ptr && size <= block.bytes; });
             }
 
             [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, std::size_t &new_size) noexcept {
                 ++resize_calls;
 
-                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
-                    return block.ptr == ptr;
-                });
+                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) { return block.ptr == ptr; });
 
                 if (it == blocks.end() || new_size == 0u || new_size > old_size) {
                     return false;
                 }
 
-                //it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
+                // it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
                 return true;
             }
 
-            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
+            [[nodiscard]] bool resizeRaw(
+                void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
                 std::size_t requested_size = new_size;
                 return resizeRaw(ptr, old_size, requested_size);
             }
@@ -154,11 +150,11 @@ namespace pP::tests::detail {
 
             std::vector<Block> blocks{};
 
-            [[nodiscard]] std::allocation_result<void *>
-            allocateRaw(const std::size_t bytes, const std::align_val_t alignment) noexcept {
-                void *const ptr = (alignment > max_align_v
-                                       ? ::operator new(bytes, alignment, std::nothrow)
-                                       : ::operator new(bytes, std::nothrow));
+            [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                void *const ptr =
+                    (alignment > max_align_v ? ::operator new(bytes, alignment, std::nothrow)
+                                             : ::operator new(bytes, std::nothrow));
                 if (ptr) {
                     blocks.push_back(Block{ptr, bytes, alignment});
                 }
@@ -174,9 +170,7 @@ namespace pP::tests::detail {
             }
 
             void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
-                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
-                    return block.ptr == ptr;
-                });
+                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) { return block.ptr == ptr; });
 
                 if (it != blocks.end()) {
                     const Block block = *it;
@@ -193,19 +187,18 @@ namespace pP::tests::detail {
             }
 
             [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, std::size_t &new_size) noexcept {
-                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) {
-                    return block.ptr == ptr;
-                });
+                const auto it = std::ranges::find_if(blocks, [ptr](const Block &block) { return block.ptr == ptr; });
 
                 if (it == blocks.end() || new_size == 0u || new_size > old_size) {
                     return false;
                 }
 
-                //it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
+                // it->bytes = new_size; // do not resize the tracked block, since it will break deallocateRaw()
                 return true;
             }
 
-            [[nodiscard]] bool resizeRaw(void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
+            [[nodiscard]] bool resizeRaw(
+                void *const ptr, const std::size_t old_size, const std::size_t &new_size) noexcept {
                 std::size_t requested_size = new_size;
                 return resizeRaw(ptr, old_size, requested_size);
             }

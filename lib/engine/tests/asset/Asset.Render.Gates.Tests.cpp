@@ -34,10 +34,18 @@ namespace pP::tests::detail {
                 : ApplicationEditor(name, argv) {
             }
 
-            [[nodiscard]] std::error_code boot() { return ApplicationEditor::initialize(); }
-            [[nodiscard]] std::error_code teardown() { return ApplicationEditor::shutdown(); }
-            [[nodiscard]] std::error_code tick(const TimeSpan dt) { return ApplicationEditor::update(dt); }
-            [[nodiscard]] std::error_code draw() { return ApplicationEditor::render(); }
+            [[nodiscard]] std::error_code boot() {
+                return ApplicationEditor::initialize();
+            }
+            [[nodiscard]] std::error_code teardown() {
+                return ApplicationEditor::shutdown();
+            }
+            [[nodiscard]] std::error_code tick(const TimeSpan dt) {
+                return ApplicationEditor::update(dt);
+            }
+            [[nodiscard]] std::error_code draw() {
+                return ApplicationEditor::render();
+            }
         };
 
         [[nodiscard]] std::filesystem::path gateMeshDir() {
@@ -45,8 +53,7 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] Expected<image::ImageAsset> decodeFilePng(const std::string_view name) {
-            Expected<mem::SharedBuffer> mapped =
-                    mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
+            Expected<mem::SharedBuffer> mapped = mem::SharedBuffer::mapFile(gateMeshDir() / std::string{name});
             if (not mapped.has_value()) {
                 return std::unexpected{mapped.error()};
             }
@@ -54,15 +61,15 @@ namespace pP::tests::detail {
                 mapped->getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
         }
 
-        [[nodiscard]] mem::SharedBuffer gatePngBytes(const std::string_view name, const std::array<std::byte, 64u> &rgba) {
+        [[nodiscard]] mem::SharedBuffer gatePngBytes(
+            const std::string_view name, const std::array<std::byte, 64u> &rgba) {
             const std::filesystem::path dir = std::filesystem::current_path() / "temp_gate_fixtures";
             std::error_code ec{};
             std::filesystem::create_directories(dir, ec);
             const std::filesystem::path path = dir / name;
             const mango::image::Surface surface{
                 4, 4, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
-                16u, rgba.data()
-            };
+                16u, rgba.data()};
             if (not static_cast<bool>(surface.save(path.string()))) {
                 return {};
             }
@@ -94,19 +101,18 @@ namespace pP::tests::detail {
             CameraSnapshot snapshot{};
             // Mango lookat takes (target, viewer, up) — not the GL order.
             snapshot.m_view = float4x4::lookat(target, eye, math::axis_y);
-            snapshot.m_projection = rhi::getPerspectiveMatrix(
-                pi_v<float> / 3.0f, extent.x / extent.y, 0.05f, 100.0f);
+            snapshot.m_projection = rhi::getPerspectiveMatrix(pi_v<float> / 3.0f, extent.x / extent.y, 0.05f, 100.0f);
             snapshot.m_view_projection = snapshot.m_view * snapshot.m_projection;
             snapshot.m_origin = eye;
             snapshot.m_viewport_size = extent;
             return snapshot;
         }
 
-        [[nodiscard]] rhi::ITexture &targetRef_(const Expected<rhi::ComPtr<rhi::ITexture> > &target) {
+        [[nodiscard]] rhi::ITexture &targetRef_(const Expected<rhi::ComPtr<rhi::ITexture>> &target) {
             return *(*target).get();
         }
 
-        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeRenderTarget_(rhi::IDevice &device, const u32 size) {
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeRenderTarget_(rhi::IDevice &device, const u32 size) {
             rhi::TextureDesc desc{};
             desc.type = rhi::TextureType::Texture2D;
             desc.size = {size, size, 1u};
@@ -129,7 +135,7 @@ namespace pP::tests::detail {
         // invalid by the RHI's texture validation) is the only difference, so
         // a multisampled pass with a single-sample resolve target can be built
         // without touching the pipeline path.
-        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeMsaaTarget_(
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeMsaaTarget_(
             rhi::IDevice &device, const u32 size, const u32 sample_count, const char *const label) {
             rhi::TextureDesc desc{};
             desc.type = sample_count > 1u ? rhi::TextureType::Texture2DMS : rhi::TextureType::Texture2D;
@@ -174,19 +180,16 @@ namespace pP::tests::detail {
         // Untextured flat-colour material: the shader multiplies the albedo by
         // the fallback white texture, so the drawn colour is this colour under
         // the fixed light rig (see Draws::drawsColorMaterial_).
-        [[nodiscard]] Expected<MaterialHandle> msaaColorMaterial_(
-            TrianglePass &pass, const float4 &rgb) {
+        [[nodiscard]] Expected<MaterialHandle> msaaColorMaterial_(TrianglePass &pass, const float4 &rgb) {
             mesh::MaterialAsset material{};
             material.m_base_color = float4{rgb.x, rgb.y, rgb.z, 1.0f};
             material.m_roughness = 1.0f;
             material.m_metallic = 0.0f;
-            const TextureHandle none[4] = {
-                TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}
-            };
+            const TextureHandle none[4] = {TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
             return pass.packMaterial(material, none);
         }
 
-        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture> > makeDepthTarget_(rhi::IDevice &device, const u32 size) {
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeDepthTarget_(rhi::IDevice &device, const u32 size) {
             rhi::TextureDesc desc{};
             desc.type = rhi::TextureType::Texture2D;
             desc.size = {size, size, 1u};
@@ -211,12 +214,11 @@ namespace pP::tests::detail {
             u32 m_size = 0u;
         };
 
-        [[nodiscard]] Expected<GatePixels> readback_(
-            rhi::IDevice &device, rhi::ITexture &target, const u32 size) {
+        [[nodiscard]] Expected<GatePixels> readback_(rhi::IDevice &device, rhi::ITexture &target, const u32 size) {
             shader::ComPtr<ISlangBlob> blob{};
             rhi::SubresourceLayout layout{};
-            if (const std::error_code err =
-                    make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
+            if (const std::error_code err = make_error_code(
+                    device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) {
                 return std::unexpected{err};
             }
             if (blob.get() == nullptr or blob->getBufferPointer() == nullptr) {
@@ -262,9 +264,7 @@ namespace pP::tests::detail {
         // instance per (scene instance, prim) with the node world matrix,
         // joined through the shared mesh-major table.
         [[nodiscard]] std::error_code submitScene_(
-            TrianglePass &pass,
-            const mesh::SceneAsset &scene,
-            const TrianglePass::UploadedScene &uploaded) {
+            TrianglePass &pass, const mesh::SceneAsset &scene, const TrianglePass::UploadedScene &uploaded) {
             pass.clearInstances();
             for (const mesh::SceneInstance &instance: scene.m_instances) {
                 const std::size_t mesh_index = static_cast<std::size_t>(*instance.m_mesh);
@@ -273,16 +273,15 @@ namespace pP::tests::detail {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
                 const float4x4 world = scene.m_nodes[node_index].m_world.toMatrix();
-                for (std::size_t prim_slot = 0u;
-                     prim_slot < scene.m_meshes[mesh_index].m_primitives.size();
-                     ++prim_slot) {
-                    Expected<TrianglePass::JoinedInstancePrim> joined =
-                            TrianglePass::joinInstancePrim(scene, uploaded, instance, prim_slot);
+                for (std::size_t prim_slot = 0u; prim_slot < scene.m_meshes[mesh_index].m_primitives.size();
+                    ++prim_slot) {
+                    Expected<TrianglePass::JoinedInstancePrim> joined = TrianglePass::joinInstancePrim(
+                        scene, uploaded, instance, prim_slot);
                     if (not joined.has_value()) {
                         return joined.error();
                     }
-                    if (const std::error_code submit_err =
-                            pass.submitInstance(joined->m_bag, joined->m_material, world)) {
+                    if (const std::error_code submit_err = pass.submitInstance(
+                            joined->m_bag, joined->m_material, world)) {
                         return submit_err;
                     }
                 }
@@ -302,7 +301,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
@@ -325,12 +326,13 @@ namespace pP::tests::detail {
             const float3 eye{center.x + 0.25f * max_dim, center.y + 0.2f * max_dim, center.z + 2.2f * max_dim};
             PPR_TEST_ASSERT(not pass.update(TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
 
-            const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
             Renderer &renderer = *p_renderer;
-            PPR_TEST_ASSERT(not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(
+                not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
 
             const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);
@@ -371,7 +373,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
@@ -426,9 +430,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.submitInstance(primitive.m_bag, *red_gpu_material, red_transform));
             PPR_TEST_ASSERT(not pass.submitInstance(primitive.m_bag, *green_gpu_material, green_transform));
 
-            const Expected<rhi::ComPtr<rhi::ITexture> > color_target = makeRenderTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture>> color_target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(color_target.has_value());
-            const Expected<rhi::ComPtr<rhi::ITexture> > depth_target = makeDepthTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture>> depth_target = makeDepthTarget_(device, 256u);
             PPR_TEST_ASSERT(depth_target.has_value());
             const rhi::ComPtr<rhi::ITextureView> color_view = targetRef_(*color_target).getDefaultView();
             const rhi::ComPtr<rhi::ITextureView> depth_view = targetRef_(*depth_target).getDefaultView();
@@ -439,7 +443,8 @@ namespace pP::tests::detail {
 
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
-            PPR_TEST_ASSERT(not p_renderer->render(string_literal{std::in_place, "triangle depth gate"},
+            PPR_TEST_ASSERT(not p_renderer->render(
+                string_literal{std::in_place, "triangle depth gate"},
                 rhi::RenderPassDesc{
                     .colorAttachments = &color_attachment,
                     .colorAttachmentCount = 1u,
@@ -468,7 +473,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             Expected<mesh::SceneAsset> imported = mesh::importAndConvert(gateMeshDir(), "textured_box.gltf");
             PPR_TEST_ASSERT(imported.has_value());
@@ -504,7 +511,9 @@ namespace pP::tests::detail {
 
             const Expected<TrianglePass::UploadedScene> uploaded = pass.uploadScene(scene, images);
             PPR_TEST_ASSERT(uploaded.has_value());
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.releaseScene(*uploaded)); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.releaseScene(*uploaded));
+            };
             PPR_TEST_ASSERT(not submitScene_(pass, scene, *uploaded));
 
             const mesh::StaticMeshAsset &box = scene.m_meshes.front();
@@ -512,16 +521,16 @@ namespace pP::tests::detail {
             const float3 size = box.m_bounds.size();
             const float max_dim = std::max({size.x, size.y, size.z});
             const float3 eye{center.x + 0.25f * max_dim, center.y + 0.2f * max_dim, center.z + 2.2f * max_dim};
-            PPR_TEST_ASSERT(not pass.update(
-                TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, gateCamera_(eye, center, float2{256.0f, 256.0f})));
 
             rhi::IDevice &device = rhi->getDevice();
-            const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
             Renderer *const p_renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(p_renderer != nullptr);
             Renderer &renderer = *p_renderer;
-            PPR_TEST_ASSERT(not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(
+                not renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
             const Expected<GatePixels> pixels = readback_(device, targetRef_(target), 256u);
             PPR_TEST_ASSERT(pixels.has_value());
@@ -561,7 +570,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(gateMeshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
@@ -581,8 +592,7 @@ namespace pP::tests::detail {
                 for (u32 c = 0u; c < 3u; ++c) {
                     const mesh::StaticMeshVertex &src = quad.m_vertices[quad.m_indices[t + c]];
                     m3d::Vertex corner{};
-                    corner.position =
-                            m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
+                    corner.position = m3d::float32x3{src.m_position[0], src.m_position[1], src.m_position[2]};
                     corner.normal = m3d::float32x3{src.m_normal[0], src.m_normal[1], src.m_normal[2]};
                     corner.texcoord = m3d::float32x2{src.m_texcoord[0], src.m_texcoord[1]};
                     tri.vertex[c] = corner;
@@ -631,12 +641,10 @@ namespace pP::tests::detail {
             const float3 size = quad.m_bounds.size();
             const float max_dim = std::max({size.x, size.y, size.z});
             float3 face_normal{
-                quad.m_vertices.front().m_normal[0],
-                quad.m_vertices.front().m_normal[1],
-                quad.m_vertices.front().m_normal[2]
-            };
-            const float normal_len =
-                    std::sqrt(face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
+                quad.m_vertices.front().m_normal[0], quad.m_vertices.front().m_normal[1],
+                quad.m_vertices.front().m_normal[2]};
+            const float normal_len = std::sqrt(
+                face_normal.x * face_normal.x + face_normal.y * face_normal.y + face_normal.z * face_normal.z);
             face_normal.x /= normal_len;
             face_normal.y /= normal_len;
             face_normal.z /= normal_len;
@@ -651,7 +659,7 @@ namespace pP::tests::detail {
                 if (const std::error_code submit_err = pass.submitInstance(bag, mat, float4x4::identity())) {
                     return std::unexpected{submit_err};
                 }
-                const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 128u);
+                const Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 128u);
                 if (not target.has_value()) {
                     pass.clearInstances();
                     return std::unexpected{target.error()};
@@ -659,8 +667,8 @@ namespace pP::tests::detail {
                 Renderer *const p_renderer = SharedGpu::renderer();
                 PPR_TEST_ASSERT(p_renderer != nullptr);
                 Renderer &renderer = *p_renderer;
-                const std::error_code render_err =
-                        renderer.renderToTexture(targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
+                const std::error_code render_err = renderer.renderToTexture(
+                    targetRef_(target), {DrawSubmission{pass}}, ColorAttachmentOps{});
                 pass.clearInstances();
                 if (render_err) {
                     return std::unexpected{render_err};
@@ -685,44 +693,37 @@ namespace pP::tests::detail {
             // from quad factors, emissive black.
             const auto analytic = [&](const float t[3], const float w) -> float3 {
                 const float3 n{
-                    quad.m_vertices.front().m_normal[0],
-                    quad.m_vertices.front().m_normal[1],
-                    quad.m_vertices.front().m_normal[2]
-                };
+                    quad.m_vertices.front().m_normal[0], quad.m_vertices.front().m_normal[1],
+                    quad.m_vertices.front().m_normal[2]};
                 const float b[3] = {
                     w * (n.y * t[2] - n.z * t[1]),
                     w * (n.z * t[0] - n.x * t[2]),
                     w * (n.x * t[1] - n.y * t[0]),
                 };
                 constexpr float kTex[3] = {
-                    2.0f * 128.0f / 255.0f - 1.0f, 2.0f * 255.0f / 255.0f - 1.0f,
-                    2.0f * 128.0f / 255.0f - 1.0f
-                };
+                    2.0f * 128.0f / 255.0f - 1.0f, 2.0f * 255.0f / 255.0f - 1.0f, 2.0f * 128.0f / 255.0f - 1.0f};
                 float shaded[3] = {
                     t[0] * kTex[0] + b[0] * kTex[1] + n.x * kTex[2],
                     t[1] * kTex[0] + b[1] * kTex[1] + n.y * kTex[2],
                     t[2] * kTex[0] + b[2] * kTex[1] + n.z * kTex[2],
                 };
-                const float len = std::sqrt(
-                    shaded[0] * shaded[0] + shaded[1] * shaded[1] + shaded[2] * shaded[2]);
+                const float len = std::sqrt(shaded[0] * shaded[0] + shaded[1] * shaded[1] + shaded[2] * shaded[2]);
                 shaded[0] /= len;
                 shaded[1] /= len;
                 shaded[2] /= len;
                 constexpr float kLight[3] = {-0.35f, 0.55f, 0.76f};
-                const float light_len =
-                        std::sqrt(kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
-                const float diff = std::max(0.0f,
-                    (shaded[0] * kLight[0] + shaded[1] * kLight[1] + shaded[2] * kLight[2]) / light_len);
+                const float light_len = std::sqrt(
+                    kLight[0] * kLight[0] + kLight[1] * kLight[1] + kLight[2] * kLight[2]);
+                const float diff = std::max(
+                    0.0f, (shaded[0] * kLight[0] + shaded[1] * kLight[1] + shaded[2] * kLight[2]) / light_len);
                 float view[3] = {eye.x - center.x, eye.y - center.y, eye.z - center.z};
                 const float view_len = std::sqrt(view[0] * view[0] + view[1] * view[1] + view[2] * view[2]);
                 view[0] /= view_len;
                 view[1] /= view_len;
                 view[2] /= view_len;
                 float half_v[3] = {
-                    kLight[0] / light_len + view[0], kLight[1] / light_len + view[1], kLight[2] / light_len + view[2]
-                };
-                const float half_len =
-                        std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
+                    kLight[0] / light_len + view[0], kLight[1] / light_len + view[1], kLight[2] / light_len + view[2]};
+                const float half_len = std::sqrt(half_v[0] * half_v[0] + half_v[1] * half_v[1] + half_v[2] * half_v[2]);
                 const float spec = std::pow(
                     std::max(0.0f, (shaded[0] * half_v[0] + shaded[1] * half_v[1] + shaded[2] * half_v[2]) / half_len),
                     64.0f + (8.0f - 64.0f) * quad_mat.m_roughness);
@@ -732,7 +733,9 @@ namespace pP::tests::detail {
             };
 
             const auto closeEnough = [](const float3 &lhs, const float3 &rhs, const float tol) noexcept {
-                return std::abs(lhs.x - rhs.x) < tol and std::abs(lhs.y - rhs.y) < tol and std::abs(lhs.z - rhs.z) < tol;
+                return std::abs(lhs.x - rhs.x) < tol and
+                       std::abs(lhs.y - rhs.y) < tol and
+                       std::abs(lhs.z - rhs.z) < tol;
             };
 
             Array<mesh::StaticMeshVertex> ref_verts(quad.m_vertices.begin(), quad.m_vertices.end());
@@ -952,11 +955,11 @@ namespace pP::tests::detail {
             Renderer &renderer = *p_renderer;
 
             constexpr u32 kSize = 64u;
-            const Expected<rhi::ComPtr<rhi::ITexture> > msaa_target =
-                    makeMsaaTarget_(device, kSize, 4u, "gate msaa target");
+            const Expected<rhi::ComPtr<rhi::ITexture>> msaa_target = makeMsaaTarget_(
+                device, kSize, 4u, "gate msaa target");
             PPR_TEST_ASSERT(msaa_target.has_value());
-            const Expected<rhi::ComPtr<rhi::ITexture> > resolve_target =
-                    makeMsaaTarget_(device, kSize, 1u, "gate resolve target");
+            const Expected<rhi::ComPtr<rhi::ITexture>> resolve_target = makeMsaaTarget_(
+                device, kSize, 1u, "gate resolve target");
             PPR_TEST_ASSERT(resolve_target.has_value());
 
             const rhi::ComPtr<rhi::ITextureView> msaa_view = targetRef_(msaa_target).getDefaultView();
@@ -1009,7 +1012,9 @@ namespace pP::tests::detail {
 
             TrianglePass pass{};
             PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER{PPR_TEST_ASSERT(not pass.shutdown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
 
             constexpr u32 kSize = 256u;
 
@@ -1017,23 +1022,21 @@ namespace pP::tests::detail {
             const Array<u32> indices = msaaQuadIndices_();
             const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, indices);
             PPR_TEST_ASSERT(bag.has_value());
-            const Expected<MaterialHandle> material = msaaColorMaterial_(
-                pass, float4{0.0f, 0.0f, 1.0f, 1.0f});
+            const Expected<MaterialHandle> material = msaaColorMaterial_(pass, float4{0.0f, 0.0f, 1.0f, 1.0f});
             PPR_TEST_ASSERT(material.has_value());
 
             // Camera faces the quad head-on: its centre lands mid-frame.
             pass.clearInstances();
             PPR_TEST_ASSERT(not pass.submitInstance(*bag, *material, float4x4::identity()));
             const float3 eye{0.0f, 0.0f, 3.0f};
-            PPR_TEST_ASSERT(not pass.update(
-                TimeSpan{}, gateCamera_(eye, float3{zero_v}, float2{256.0f, 256.0f})));
+            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, gateCamera_(eye, float3{zero_v}, float2{256.0f, 256.0f})));
 
             for (const u32 sample_count: {2u, 4u}) {
-                const Expected<rhi::ComPtr<rhi::ITexture> > msaa_target =
-                        makeMsaaTarget_(device, kSize, sample_count, "gate msaa draw target");
+                const Expected<rhi::ComPtr<rhi::ITexture>> msaa_target = makeMsaaTarget_(
+                    device, kSize, sample_count, "gate msaa draw target");
                 PPR_TEST_ASSERT(msaa_target.has_value());
-                const Expected<rhi::ComPtr<rhi::ITexture> > resolve_target =
-                        makeMsaaTarget_(device, kSize, 1u, "gate msaa draw resolve");
+                const Expected<rhi::ComPtr<rhi::ITexture>> resolve_target = makeMsaaTarget_(
+                    device, kSize, 1u, "gate msaa draw resolve");
                 PPR_TEST_ASSERT(resolve_target.has_value());
 
                 const rhi::ComPtr<rhi::ITextureView> msaa_view = targetRef_(msaa_target).getDefaultView();
@@ -1081,7 +1084,9 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (editor_scene_flow) {
             GateEditorApp test_app{"AssetEditorFlow", std::span<const char *const>{}};
             PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER{PPR_TEST_ASSERT(not test_app.teardown()); };
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
 
             PPR_TEST_ASSERT(not test_app.loadScene(gateMeshDir(), "textured_box.gltf"));
             PPR_TEST_ASSERT(not test_app.tick(TimeSpan{}));
@@ -1098,15 +1103,14 @@ namespace pP::tests::detail {
             const float3 box_size = bounds_scene->m_meshes.front().m_bounds.size();
             const float box_max = std::max({box_size.x, box_size.y, box_size.z});
             const float3 box_eye{
-                box_center.x + 0.25f * box_max, box_center.y + 0.2f * box_max,
-                box_center.z + 2.2f * box_max
-            };
-            PPR_TEST_ASSERT(not test_app.getTrianglePass().update(TimeSpan{}, gateCamera_(box_eye, box_center, float2{256.0f, 256.0f})));
+                box_center.x + 0.25f * box_max, box_center.y + 0.2f * box_max, box_center.z + 2.2f * box_max};
+            PPR_TEST_ASSERT(not test_app.getTrianglePass().update(
+                TimeSpan{}, gateCamera_(box_eye, box_center, float2{256.0f, 256.0f})));
 
             const auto rhi = test_app.getServices().get<IRhiService>();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
-            const Expected<rhi::ComPtr<rhi::ITexture> > target = makeRenderTarget_(device, 256u);
+            const Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
             Renderer &renderer = test_app.getRenderer();
             PPR_TEST_ASSERT(not renderer.renderToTexture(

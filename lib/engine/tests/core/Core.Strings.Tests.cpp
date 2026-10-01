@@ -62,13 +62,12 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (helpers){
+        PPR_UNIT_TEST (helpers) {
             _.recurse({
                 Helper::char_helpers,
                 Helper::escape_functions,
                 Helper::case_fold_char,
             });
-
         };
 
         namespace Literal {
@@ -100,13 +99,12 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (literal){
+        PPR_UNIT_TEST (literal) {
             _.recurse({
                 Literal::static_interop,
                 Literal::basic_view_and_equality,
                 Literal::empty_string,
             });
-
         };
 
         namespace Static {
@@ -155,7 +153,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (static_string){
+        PPR_UNIT_TEST (static_string) {
             _.recurse({
                 Static::basic_view_and_equality,
                 Static::copy_and_move,
@@ -163,7 +161,6 @@ namespace pP::tests::detail {
                 Static::concatenation,
                 Static::edge_cases,
             });
-
         };
 
         namespace Range {
@@ -262,7 +259,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (range){
+        PPR_UNIT_TEST (range) {
             _.recurse({
                 Range::compare,
                 Range::promote,
@@ -271,7 +268,6 @@ namespace pP::tests::detail {
                 Range::hashing,
                 Range::to_string_conversion,
             });
-
         };
 
         namespace Lazy {
@@ -365,7 +361,7 @@ namespace pP::tests::detail {
             };
         }
 
-        PPR_UNIT_TEST (lazy){
+        PPR_UNIT_TEST (lazy) {
             _.recurse({
                 Lazy::trim_functions,
                 Lazy::truncate_and_filter,
@@ -376,7 +372,6 @@ namespace pP::tests::detail {
                 Lazy::xml_escape,
                 Lazy::hex_encode,
             });
-
         };
     }
 } // namespace pP::tests::detail

@@ -49,7 +49,7 @@ namespace pP {
             m_keyboard.resetInputState();
             m_mouse.resetInputState();
 
-            for (GamepadDevice &gamepad : m_gamepads) {
+            for (GamepadDevice &gamepad: m_gamepads) {
                 gamepad.resetInputState();
             }
 
@@ -62,7 +62,7 @@ namespace pP {
 
         g_glfw_input.reset();
 
-        for (const auto &[device_id, device] : m_devices_by_id) {
+        for (const auto &[device_id, device]: m_devices_by_id) {
             PPR_RETURN_ERROR_ON_FAIL(GlfwInput, m_when_device_disconnected(*device));
         }
 
@@ -110,11 +110,11 @@ namespace pP {
     }
 
     bool GlfwInput::hasInputContext(const InputContext &context) const noexcept {
-        return &m_global_context == &context ||
-               m_all_contexts.contains(&context);
+        return &m_global_context == &context || m_all_contexts.contains(&context);
     }
 
-    void GlfwInput::addInputContext(SharedInputContext context) { // NOLINT(*-make-member-function-const, *-unnecessary-value-param)
+    void GlfwInput::addInputContext(
+        SharedInputContext context) { // NOLINT(*-make-member-function-const, *-unnecessary-value-param)
         PPR_ASSERT(context.isValid());
         PPR_ASSERT(not hasInputContext(*context));
 
@@ -125,7 +125,8 @@ namespace pP {
         return m_all_contexts.erase(&context) > 0u;
     }
 
-    void GlfwInput::assignInputContextToDevice(const InputDeviceID device_id, SharedInputContext context) { // NOLINT(*-unnecessary-value-param)
+    void GlfwInput::assignInputContextToDevice(
+        const InputDeviceID device_id, SharedInputContext context) { // NOLINT(*-unnecessary-value-param)
         PPR_ASSERT(getInputDeviceByID(device_id).isValid());
 
         if (context.isValid()) {
@@ -151,7 +152,8 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code GlfwInput::enumerateInputContextDeviceAssignments(Collector<IInputDevice, InputContext> each_assignment) const {
+    std::error_code GlfwInput::enumerateInputContextDeviceAssignments(
+        Collector<IInputDevice, InputContext> each_assignment) const {
         for (const auto &[device_id, context]: m_context_by_device) {
             const SharedInputDevice &input_device = m_devices_by_id.at(device_id);
             PPR_RETURN_ERROR_ON_FAIL(GlfwInput, each_assignment(*input_device, *context));
@@ -241,9 +243,7 @@ namespace pP {
                 gamepad.m_friendly_name.clear();
                 break;
 
-            default:
-                PPR_ASSERT(false && "unhandled GLFW joystick callback event");
-                break;
+            default: PPR_ASSERT(false && "unhandled GLFW joystick callback event"); break;
         }
     }
 
@@ -258,53 +258,59 @@ namespace pP {
         }
 
         // axes:
-        gamepad.postGamepadAxis2DMoved(m_delta_time, context, EGamepadAxis::left_stick, float2(
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_X],
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_Y]
-        ));
+        gamepad.postGamepadAxis2DMoved(
+            m_delta_time, context, EGamepadAxis::left_stick,
+            float2(glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_X], glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_Y]));
 
-        gamepad.postGamepadAxis2DMoved(m_delta_time, context, EGamepadAxis::right_stick, float2(
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_RIGHT_X],
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y]
-        ));
+        gamepad.postGamepadAxis2DMoved(
+            m_delta_time, context, EGamepadAxis::right_stick,
+            float2(glfw_state.axes[GLFW_GAMEPAD_AXIS_RIGHT_X], glfw_state.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y]));
 
-        gamepad.postGamepadAxis1DMoved(m_delta_time, context, EGamepadAxis::left_trigger,
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]);
-        gamepad.postGamepadAxis1DMoved(m_delta_time, context, EGamepadAxis::right_trigger,
-            glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]);
+        gamepad.postGamepadAxis1DMoved(
+            m_delta_time, context, EGamepadAxis::left_trigger, glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]);
+        gamepad.postGamepadAxis1DMoved(
+            m_delta_time, context, EGamepadAxis::right_trigger, glfw_state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]);
 
         // buttons:
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::start,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_START] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::back,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_BACK] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::start, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_START] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::back, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_BACK] == GLFW_PRESS);
 
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::A,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_A] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::B,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_B] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::X,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_X] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::Y,
-            glfw_state.buttons[GLFW_GAMEPAD_BUTTON_Y] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::A, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_A] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::B, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_B] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::X, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_X] == GLFW_PRESS);
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::Y, glfw_state.buttons[GLFW_GAMEPAD_BUTTON_Y] == GLFW_PRESS);
 
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::dpad_down,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::dpad_down,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::dpad_left,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::dpad_left,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::dpad_right,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::dpad_right,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::dpad_up,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::dpad_up,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] == GLFW_PRESS);
 
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::left_shoulder,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::left_shoulder,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::right_shoulder,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::right_shoulder,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] == GLFW_PRESS);
 
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::left_thumb,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::left_thumb,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_LEFT_THUMB] == GLFW_PRESS);
-        gamepad.postGamepadButtonPressed(m_delta_time, context, EGamepadButton::right_thumb,
+        gamepad.postGamepadButtonPressed(
+            m_delta_time, context, EGamepadButton::right_thumb,
             glfw_state.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB] == GLFW_PRESS);
 
         PPR_RETURN_ERROR_ON_FAIL(GlfwInput, gamepad.pollInputMessages(m_delta_time));

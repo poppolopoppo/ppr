@@ -19,8 +19,7 @@ namespace pP {
         // Budgets are exported (kTriangleBagVertexCapacity and friends) so
         // telemetry tests name the same limits the caches enforce.
 
-        [[nodiscard]] bool storageBytesEqual_(
-            const mem::SharedBuffer &lhs, const mem::SharedBuffer &rhs) noexcept {
+        [[nodiscard]] bool storageBytesEqual_(const mem::SharedBuffer &lhs, const mem::SharedBuffer &rhs) noexcept {
             const mem::SharedBufferView lhs_view = lhs.getBufferData();
             const mem::SharedBufferView rhs_view = rhs.getBufferData();
             if (lhs_view.size() != rhs_view.size()) {
@@ -37,9 +36,7 @@ namespace pP {
     // material packing and pipeline variants
     // ------------------------------------------------------------------
 
-    Expected<GpuMaterial> buildGpuMaterial(
-        const mesh::MaterialAsset &asset,
-        const GpuTextureRefs resolved) noexcept {
+    Expected<GpuMaterial> buildGpuMaterial(const mesh::MaterialAsset &asset, const GpuTextureRefs resolved) noexcept {
         if (asset.m_alpha_mode == mesh::EAlphaMode::blend) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::function_not_supported)};
         }
@@ -125,9 +122,10 @@ namespace pP {
         if (m_initialized and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "TriangleBagCache shut down", {
-            {"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()},
-            {"index_used", indexUsed()}, {"index_capacity", indexCapacity()}, {"ranges", rangeCount()}});
+        PPR_LOG(
+            GpuCaches, info, "TriangleBagCache shut down",
+            {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"index_used", indexUsed()},
+                {"index_capacity", indexCapacity()}, {"ranges", rangeCount()}});
         for (BagBucket &bucket: m_buckets) {
             bucket.m_vertex_buffer.setNull();
             bucket.m_index_buffer.setNull();
@@ -153,9 +151,10 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "TriangleBagCache device lost", {
-            {"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()},
-            {"index_used", indexUsed()}, {"index_capacity", indexCapacity()}});
+        PPR_LOG(
+            GpuCaches, info, "TriangleBagCache device lost",
+            {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"index_used", indexUsed()},
+                {"index_capacity", indexCapacity()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
         return default_value_v;
@@ -179,18 +178,15 @@ namespace pP {
         // Composed lookup: the container checks the full 32-bit generation
         // and the record carries the minted identity alongside — a wrapping
         // 8-bit seed alone never resolves.
-        if (const BagRangeRecord *const record = m_ranges.tryGet(key);
-            record != nullptr and record->m_identity == key) [[likely]] {
+        if (const BagRangeRecord *const record = m_ranges.tryGet(key); record != nullptr and record->m_identity == key)
+            [[likely]] {
             return record;
         }
         return nullptr;
     }
 
     Expected<TriangleBagHandle> TriangleBagCache::uploadBytes_(
-        const std::span<const std::byte> vert_bytes,
-        const u64 stride,
-        const std::span<const u32> idx,
-        const i32 base) {
+        const std::span<const std::byte> vert_bytes, const u64 stride, const std::span<const u32> idx, const i32 base) {
         if (not m_initialized or m_device == nullptr) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::not_connected)};
         }
@@ -243,10 +239,10 @@ namespace pP {
             BagBucket bucket{};
             bucket.m_vertex_capacity = kTriangleBagVertexCapacity;
             bucket.m_index_capacity = kTriangleBagIndexCapacity;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-                m_device->createBuffer(vb_desc, nullptr, bucket.m_vertex_buffer.writeRef()));
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-                m_device->createBuffer(ib_desc, nullptr, bucket.m_index_buffer.writeRef()));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GpuCaches, m_device->createBuffer(vb_desc, nullptr, bucket.m_vertex_buffer.writeRef()));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GpuCaches, m_device->createBuffer(ib_desc, nullptr, bucket.m_index_buffer.writeRef()));
 
             bucket_id = BagBucketId{safe_narrowing(m_buckets.size())};
             m_buckets.push_back(std::move(bucket));
@@ -260,18 +256,16 @@ namespace pP {
         }
 
         void *mapped_verts = nullptr;
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->mapBuffer(bucket.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_verts));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GpuCaches, m_device->mapBuffer(bucket.m_vertex_buffer.get(), rhi::CpuAccessMode::Write, &mapped_verts));
         std::memcpy(static_cast<std::byte *>(mapped_verts) + bucket.m_vertex_used, vert_bytes.data(), vert_bytes_size);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->unmapBuffer(bucket.m_vertex_buffer.get()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, m_device->unmapBuffer(bucket.m_vertex_buffer.get()));
 
         void *mapped_idx = nullptr;
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->mapBuffer(bucket.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GpuCaches, m_device->mapBuffer(bucket.m_index_buffer.get(), rhi::CpuAccessMode::Write, &mapped_idx));
         std::memcpy(static_cast<std::byte *>(mapped_idx) + bucket.m_index_used, idx.data(), index_bytes_size);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->unmapBuffer(bucket.m_index_buffer.get()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, m_device->unmapBuffer(bucket.m_index_buffer.get()));
 
         const u64 vb_offset = bucket.m_vertex_used / stride;
         const u64 ib_start = bucket.m_index_used / sizeof(u32);
@@ -291,8 +285,7 @@ namespace pP {
         return TriangleBagHandle{identity};
     }
 
-    Expected<ResolvedBag> TriangleBagCache::resolveForDraw(
-        const TriangleBagHandle handle) const noexcept {
+    Expected<ResolvedBag> TriangleBagCache::resolveForDraw(const TriangleBagHandle handle) const noexcept {
         if (m_residency == CacheResidency::device_lost) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_such_device)};
         }
@@ -330,7 +323,8 @@ namespace pP {
         // Single-load contract: the CPU range record retires, but the bucket
         // bytes and the slot are never reclaimed or reused (documented; a
         // free-list waits for a streaming phase that needs one).
-        PPR_LOG(GpuCaches, info, "TriangleBagCache released range",
+        PPR_LOG(
+            GpuCaches, info, "TriangleBagCache released range",
             {{"vertex_used", vertexUsed()}, {"vertex_capacity", vertexCapacity()}, {"ranges", rangeCount()}});
         return default_value_v;
     }
@@ -400,11 +394,12 @@ namespace pP {
         descriptor_desc.usage = rhi::BufferUsage::ShaderResource;
         descriptor_desc.defaultState = rhi::ResourceState::ShaderResource;
         descriptor_desc.label = "bindless texture descriptors";
-        PPR_RETURN_ERROR_ON_FAIL(GpuCaches, device.createBuffer(descriptor_desc, nullptr, m_descriptor_buffer.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GpuCaches, device.createBuffer(descriptor_desc, nullptr, m_descriptor_buffer.writeRef()));
         const u64 packed_fallback = fallback_descriptor.value;
         void *mapped = nullptr;
-        if (const std::error_code err = make_error_code(device.mapBuffer(
-            m_descriptor_buffer.get(), rhi::CpuAccessMode::Write, &mapped))) [[unlikely]] {
+        if (const std::error_code err = make_error_code(
+                device.mapBuffer(m_descriptor_buffer.get(), rhi::CpuAccessMode::Write, &mapped))) [[unlikely]] {
             m_descriptor_buffer.setNull();
             return err;
         }
@@ -428,7 +423,8 @@ namespace pP {
         if (m_initialized and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "BindlessTextureCache shut down",
+        PPR_LOG(
+            GpuCaches, info, "BindlessTextureCache shut down",
             {{"used", textureUsed()}, {"budget", textureBudget()}, {"entries", entryCount()}});
         m_dedup.clear();
         m_entries.clear();
@@ -453,7 +449,8 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "BindlessTextureCache device lost",
+        PPR_LOG(
+            GpuCaches, info, "BindlessTextureCache device lost",
             {{"used", textureUsed()}, {"budget", textureBudget()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
@@ -500,8 +497,8 @@ namespace pP {
         }
         // Composed lookup: full-generation container check plus the minted
         // identity stored alongside — a wrapping seed alone never resolves.
-        if (const TextureEntry *const entry = m_entries.tryGet(key);
-            entry != nullptr and entry->m_identity == key) [[likely]] {
+        if (const TextureEntry *const entry = m_entries.tryGet(key); entry != nullptr and entry->m_identity == key)
+            [[likely]] {
             return entry;
         }
         return nullptr;
@@ -539,11 +536,10 @@ namespace pP {
             // composed identity must match as well as the container
             // generation — a recycled slot with a wrapping seed never aliases.
             if (TextureEntry *const entry = m_entries.tryGet(*found->second);
-                entry != nullptr and
-                entry->m_identity == *found->second and
-                bytesEqual_(entry->m_pinned, asset)) {
+                entry != nullptr and entry->m_identity == *found->second and bytesEqual_(entry->m_pinned, asset)) {
                 ++entry->m_refcount;
-                PPR_LOG(GpuCaches, debug, "texture upload dedup hit",
+                PPR_LOG(
+                    GpuCaches, debug, "texture upload dedup hit",
                     {{"slot", *entry->m_slot}, {"used", textureUsed()}, {"budget", textureBudget()}});
                 return found->second;
             }
@@ -552,7 +548,8 @@ namespace pP {
             // upload rather than consuming a slot for a texture dedup could
             // never reach. Byte equality alone confirms a hit — a hash match
             // never does.
-            PPR_LOG(GpuCaches, error, "texture upload refused: dedup key without byte equality",
+            PPR_LOG(
+                GpuCaches, error, "texture upload refused: dedup key without byte equality",
                 {{"used", textureUsed()}, {"budget", textureBudget()}});
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -590,11 +587,12 @@ namespace pP {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
 
-            init_data.push_back(rhi::SubresourceData{
-                .data = bytes.data(),
-                .rowPitch = safe_narrowing(sub.m_row_pitch),
-                .slicePitch = safe_narrowing(sub.m_slice_pitch),
-            });
+            init_data.push_back(
+                rhi::SubresourceData{
+                    .data = bytes.data(),
+                    .rowPitch = safe_narrowing(sub.m_row_pitch),
+                    .slicePitch = safe_narrowing(sub.m_slice_pitch),
+                });
         }
 
         rhi::TextureDesc texture_desc{};
@@ -613,11 +611,11 @@ namespace pP {
         texture_desc.label = "bindless texture";
 
         TextureEntry entry{};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->createTexture(texture_desc, init_data.data(), entry.m_texture.writeRef()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GpuCaches, m_device->createTexture(texture_desc, init_data.data(), entry.m_texture.writeRef()));
         PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, entry.m_texture->getDefaultView(entry.m_view.writeRef()));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            entry.m_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &entry.m_descriptor));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GpuCaches, entry.m_view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &entry.m_descriptor));
 
         entry.m_slot = TextureBindlessIndex{m_next_slot};
         const u64 packed_descriptor = entry.m_descriptor.value;
@@ -625,11 +623,9 @@ namespace pP {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             GpuCaches, m_device->mapBuffer(m_descriptor_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
         std::memcpy(
-            static_cast<std::byte *>(mapped) + static_cast<u64>(*entry.m_slot) * sizeof(u64),
-            &packed_descriptor,
+            static_cast<std::byte *>(mapped) + static_cast<u64>(*entry.m_slot) * sizeof(u64), &packed_descriptor,
             sizeof(packed_descriptor));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches,
-            m_device->unmapBuffer(m_descriptor_buffer.get()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GpuCaches, m_device->unmapBuffer(m_descriptor_buffer.get()));
         ++m_next_slot;
         entry.m_pinned = asset.m_storage;
         entry.m_refcount = 1u;
@@ -653,8 +649,7 @@ namespace pP {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
         // Allowed while device_lost (CPU record only; GPU objects are gone).
-        if (TextureEntry *const entry = m_entries.tryGet(key);
-            entry != nullptr and entry->m_identity == key) {
+        if (TextureEntry *const entry = m_entries.tryGet(key); entry != nullptr and entry->m_identity == key) {
             if (entry->m_refcount == 0u) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
@@ -664,9 +659,11 @@ namespace pP {
                 // single-load contract), it just stops being reachable.
                 std::ignore = m_dedup.erase(entry->m_key);
                 std::ignore = m_entries.erase(key);
-                PPR_LOG(GpuCaches, debug, "texture entry retired", {{"used", textureUsed()}, {"budget", textureBudget()}});
+                PPR_LOG(
+                    GpuCaches, debug, "texture entry retired", {{"used", textureUsed()}, {"budget", textureBudget()}});
             }
-            PPR_LOG(GpuCaches, info, "BindlessTextureCache released texture",
+            PPR_LOG(
+                GpuCaches, info, "BindlessTextureCache released texture",
                 {{"used", textureUsed()}, {"budget", textureBudget()}});
             return default_value_v;
         }
@@ -738,7 +735,7 @@ namespace pP {
         buffer_desc.label = "bindless materials";
 
         if (const std::error_code err = make_error_code(
-            device.createBuffer(buffer_desc, nullptr, m_material_buffer.writeRef()))) [[unlikely]] {
+                device.createBuffer(buffer_desc, nullptr, m_material_buffer.writeRef()))) [[unlikely]] {
             m_material_buffer.setNull();
             m_device = nullptr;
             m_shared_sampler = nullptr;
@@ -756,7 +753,8 @@ namespace pP {
         if (m_initialized and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "BindlessMaterialCache shut down",
+        PPR_LOG(
+            GpuCaches, info, "BindlessMaterialCache shut down",
             {{"used", materialUsed()}, {"capacity", materialCapacity()}, {"entries", entryCount()}});
         m_material_buffer.setNull();
         m_entries.clear();
@@ -780,7 +778,8 @@ namespace pP {
         if (not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        PPR_LOG(GpuCaches, info, "BindlessMaterialCache device lost",
+        PPR_LOG(
+            GpuCaches, info, "BindlessMaterialCache device lost",
             {{"used", materialUsed()}, {"capacity", materialCapacity()}});
         dropGpuObjects_();
         m_residency = CacheResidency::device_lost;
@@ -795,14 +794,15 @@ namespace pP {
         return std::this_thread::get_id() == m_owner;
     }
 
-    const BindlessMaterialCache::MaterialEntry *BindlessMaterialCache::findEntry_(const SparseHandle key) const noexcept {
+    const BindlessMaterialCache::MaterialEntry *BindlessMaterialCache::findEntry_(
+        const SparseHandle key) const noexcept {
         if (not key.isValid() or m_residency == CacheResidency::device_lost) [[unlikely]] {
             return nullptr;
         }
         // Composed lookup: full-generation container check plus the minted
         // identity stored alongside — a wrapping seed alone never resolves.
-        if (const MaterialEntry *const entry = m_entries.tryGet(key);
-            entry != nullptr and entry->m_identity == key) [[likely]] {
+        if (const MaterialEntry *const entry = m_entries.tryGet(key); entry != nullptr and entry->m_identity == key)
+            [[likely]] {
             return entry;
         }
         return nullptr;
@@ -813,12 +813,12 @@ namespace pP {
             return std::make_error_code(std::errc::invalid_argument);
         }
         void *mapped = nullptr;
-        PPR_RETURN_ERROR_ON_FAIL(GpuCaches,
-            m_device->mapBuffer(m_material_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
-        std::memcpy(static_cast<std::byte *>(mapped) + static_cast<std::size_t>(slot) * sizeof(GpuMaterial),
-            &gpu, sizeof(GpuMaterial));
-        PPR_RETURN_ERROR_ON_FAIL(GpuCaches,
-            m_device->unmapBuffer(m_material_buffer.get()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GpuCaches, m_device->mapBuffer(m_material_buffer.get(), rhi::CpuAccessMode::Write, &mapped));
+        std::memcpy(
+            static_cast<std::byte *>(mapped) + static_cast<std::size_t>(slot) * sizeof(GpuMaterial), &gpu,
+            sizeof(GpuMaterial));
+        PPR_RETURN_ERROR_ON_FAIL(GpuCaches, m_device->unmapBuffer(m_material_buffer.get()));
         return default_value_v;
     }
 
@@ -860,13 +860,14 @@ namespace pP {
 
         // Allowed while device_lost (CPU record only); the slot rewrite is
         // skipped then — the GPU buffer is gone, so there is nothing to zero.
-        if (const MaterialEntry *const entry = m_entries.tryGet(key);
-            entry != nullptr and entry->m_identity == key) {
+        if (const MaterialEntry *const entry = m_entries.tryGet(key); entry != nullptr and entry->m_identity == key) {
             const u32 slot = entry->m_slot;
             std::ignore = m_entries.erase(key);
-            PPR_LOG(GpuCaches, info, "BindlessMaterialCache released material",
+            PPR_LOG(
+                GpuCaches, info, "BindlessMaterialCache released material",
                 {{"used", materialUsed()}, {"capacity", materialCapacity()}});
-            PPR_LOG(GpuCaches, debug, "material entry retired",
+            PPR_LOG(
+                GpuCaches, debug, "material entry retired",
                 {{"slot", slot}, {"used", materialUsed()}, {"capacity", materialCapacity()}});
 
             if (m_residency == CacheResidency::device_lost) {

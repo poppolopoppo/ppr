@@ -53,7 +53,8 @@ namespace pP {
         if (range.m_max_x <= range.m_min_x or range.m_max_y <= range.m_min_y) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        if (range.m_min_x < 0 or range.m_min_y < 0 or range.m_max_x > kGridWorldEdge or range.m_max_y > kGridWorldEdge) [[unlikely]] {
+        if (range.m_min_x < 0 or range.m_min_y < 0 or range.m_max_x > kGridWorldEdge or range.m_max_y > kGridWorldEdge)
+            [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
         // Chunk-sized tiles use bit 0 only; higher bits name tiles that do
@@ -68,8 +69,7 @@ namespace pP {
     // whose epsilon-expanded tile boxes intersect the snapshot frustum, in
     // submission order. Quiescent/off-screen tiles never reach the plan.
     Expected<GridTilePlan> GridPass::planTiles(
-        const CameraSnapshot &snapshot,
-        const std::span<const GridTileSubmission> submissions) {
+        const CameraSnapshot &snapshot, const std::span<const GridTileSubmission> submissions) {
         GridTilePlan plan{};
         for (std::size_t index = 0u; index < submissions.size(); ++index) {
             const GridTileSubmission &submission = submissions[index];
@@ -79,12 +79,13 @@ namespace pP {
             if (not snapshot.m_frustum.isVisible(tileBox_(submission.m_tile_range))) {
                 continue;
             }
-            plan.m_tiles.push_back(GridPlannedTile{
-                .m_submission_index = static_cast<u32>(index),
-                .m_chunk_id = submission.m_chunk_id,
-                .m_tile_range = submission.m_tile_range,
-                .m_material_id = submission.m_material_id,
-            });
+            plan.m_tiles.push_back(
+                GridPlannedTile{
+                    .m_submission_index = static_cast<u32>(index),
+                    .m_chunk_id = submission.m_chunk_id,
+                    .m_tile_range = submission.m_tile_range,
+                    .m_material_id = submission.m_material_id,
+                });
         }
         return plan;
     }
@@ -94,7 +95,7 @@ namespace pP {
     // Past the tile-cache budget the lane fails closed (no_buffer_space)
     // under the same policy as requestUpload, never a partial args buffer.
     // An empty plan compacts to zero args: zero tiles, zero draws.
-    Expected<Array<rhi::IndirectDrawArguments> > GridPass::compactIndirect(const GridTilePlan &plan) {
+    Expected<Array<rhi::IndirectDrawArguments>> GridPass::compactIndirect(const GridTilePlan &plan) {
         if (plan.m_tiles.size() > kGridTileCacheCapacity) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
@@ -102,12 +103,13 @@ namespace pP {
         Array<rhi::IndirectDrawArguments> args{};
         args.reserve(plan.m_tiles.size());
         for (std::size_t index = 0u; index < plan.m_tiles.size(); ++index) {
-            args.push_back(rhi::IndirectDrawArguments{
-                .vertexCountPerInstance = kGridTileVertexCount,
-                .instanceCount = 1u,
-                .startVertexLocation = 0u,
-                .startInstanceLocation = safe_narrowing(index),
-            });
+            args.push_back(
+                rhi::IndirectDrawArguments{
+                    .vertexCountPerInstance = kGridTileVertexCount,
+                    .instanceCount = 1u,
+                    .startVertexLocation = 0u,
+                    .startInstanceLocation = safe_narrowing(index),
+                });
         }
         return args;
     }
@@ -116,25 +118,20 @@ namespace pP {
     // pass lifecycle and submission APIs
     // ------------------------------------------------------------------
 
-    std::error_code GridPass::initialize(IRhiService &rhi_service, IShaderService &shader_service, const fs::path &content_dir) {
+    std::error_code GridPass::initialize(
+        IRhiService &rhi_service, IShaderService &shader_service, const fs::path &content_dir) {
         rhi::IDevice &device = rhi_service.getDevice();
 
         bool shader_state_started = false;
         bool initialization_complete = false;
-        PPR_DEFER{
+        PPR_DEFER {
             if (not initialization_complete) {
                 if (shader_state_started) {
                     m_cached_pipeline.reset();
                     m_render_pipeline_key.reset();
                     m_shader_program.setNull();
-
-
-
                 }
                 m_ready = false;
-
-
-
             }
         };
 
@@ -220,19 +217,18 @@ namespace pP {
         }
 
         const bool is_new_entry = m_tile_cache.find(request.m_chunk_id) == m_tile_cache.end();
-        if (is_new_entry and m_tile_cache.size() >= kGridTileCacheCapacity)
-        [[unlikely]] {
+        if (is_new_entry and m_tile_cache.size() >= kGridTileCacheCapacity) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::no_buffer_space)};
         }
 
         // Pack before touching either cache. The low halfword is even cell i,
         // the high halfword is cell i+1 (including transparent 0xffff).
-        std::unique_ptr<std::array<u32, kCellWordsPerChunk> > packed{};
+        std::unique_ptr<std::array<u32, kCellWordsPerChunk>> packed{};
         if (has_cells) {
-            packed = std::make_unique<std::array<u32, kCellWordsPerChunk> >();
+            packed = std::make_unique<std::array<u32, kCellWordsPerChunk>>();
             for (u32 word = 0u; word < kCellWordsPerChunk; ++word) {
-                (*packed)[word] = static_cast<u32>(request.m_cell_materials[word * 2u])
-                                  | (static_cast<u32>(request.m_cell_materials[word * 2u + 1u]) << 16u);
+                (*packed)[word] = static_cast<u32>(request.m_cell_materials[word * 2u]) |
+                                  (static_cast<u32>(request.m_cell_materials[word * 2u + 1u]) << 16u);
             }
         }
 
@@ -278,8 +274,8 @@ namespace pP {
         desc.label = atlas_required ? "grid cell material atlas" : "grid cell material dummy";
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, buffer.writeRef()));
         if (atlas_required) {
-            if (const std::error_code err = make_error_code(device.mapBuffer(
-                buffer.get(), rhi::CpuAccessMode::Write, &m_cell_atlas_mapped))) [[unlikely]] {
+            if (const std::error_code err = make_error_code(
+                    device.mapBuffer(buffer.get(), rhi::CpuAccessMode::Write, &m_cell_atlas_mapped))) [[unlikely]] {
                 buffer.setNull();
                 return err;
             }
@@ -287,13 +283,13 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code GridPass::prepareCellUploads(rhi::IDevice &device,
-                                                 std23::function_ref<std::error_code()> wait_for_gpu_idle) {
+    std::error_code GridPass::prepareCellUploads(
+        rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle) {
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        const Expected<GridTilePlan> plan = planTiles(m_camera_view,
-            std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
+        const Expected<GridTilePlan> plan = planTiles(
+            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -301,7 +297,8 @@ namespace pP {
         Array<u32> pending{};
         for (const GridPlannedTile &tile: plan->m_tiles) {
             const auto found = m_cell_cache.find(tile.m_chunk_id);
-            if (found != m_cell_cache.end() and found->second.m_pending and
+            if (found != m_cell_cache.end() and
+                found->second.m_pending and
                 std::find(pending.begin(), pending.end(), tile.m_chunk_id) == pending.end()) {
                 pending.push_back(tile.m_chunk_id);
             }
@@ -320,8 +317,9 @@ namespace pP {
         auto *const atlas = static_cast<u32 *>(m_cell_atlas_mapped);
         for (const u32 chunk_id: pending) {
             GridCachedCells &cells = m_cell_cache.find(chunk_id)->second;
-            std::memcpy(atlas + static_cast<std::size_t>(chunk_id) * kCellWordsPerChunk,
-                cells.m_words->data(), sizeof(u32) * kCellWordsPerChunk);
+            std::memcpy(
+                atlas + static_cast<std::size_t>(chunk_id) * kCellWordsPerChunk, cells.m_words->data(),
+                sizeof(u32) * kCellWordsPerChunk);
             cells.m_pending = false;
         }
         return default_value_v;
@@ -377,8 +375,8 @@ namespace pP {
             return default_value_v;
         }
 
-        Expected<GridTilePlan> plan = planTiles(m_camera_view,
-            std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
+        Expected<GridTilePlan> plan = planTiles(
+            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -413,8 +411,7 @@ namespace pP {
             payloads.push_back(staged_payload);
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            ensureTilePayloads_(draw_context.m_device, safe_narrowing(payloads.size())));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTilePayloads_(draw_context.m_device, safe_narrowing(payloads.size())));
 
         // One rotation per submit: the draw encoded after this point reads the
         // slot just advanced onto, which the previous submit did not write.
@@ -427,7 +424,8 @@ namespace pP {
         if (mapped_payloads == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
-        std::memcpy(mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
+        std::memcpy(
+            mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
 
         draw_context.m_pass.setRenderState({
             .viewports = {draw_context.m_viewport},
@@ -438,16 +436,17 @@ namespace pP {
         });
 
         rhi::IBuffer *const payload_buffer = m_tile_payloads[m_tile_ring_cursor].get();
-        if (payload_buffer == nullptr or payload_buffer->getDesc().elementSize != sizeof(GridTilePayload)) [[unlikely]] {
-            PPR_LOG(GridPass, error, "tile payload stride mismatch vs shader expectation", {
-                {"payload_stride", payload_buffer == nullptr ? 0u : payload_buffer->getDesc().elementSize},
-            });
+        if (payload_buffer == nullptr or payload_buffer->getDesc().elementSize != sizeof(GridTilePayload))
+            [[unlikely]] {
+            PPR_LOG(
+                GridPass, error, "tile payload stride mismatch vs shader expectation",
+                {
+                    {"payload_stride", payload_buffer == nullptr ? 0u : payload_buffer->getDesc().elementSize},
+                });
             return make_error_code(std::errc::invalid_argument);
         }
 
-        Expected<GridCachedPipeline *> cached = pipelineFor_(
-            draw_context.m_device,
-            draw_context.m_render_pipeline_key);
+        Expected<GridCachedPipeline *> cached = pipelineFor_(draw_context.m_device, draw_context.m_render_pipeline_key);
         if (not cached.has_value()) [[unlikely]] {
             return cached.error();
         }
@@ -469,14 +468,14 @@ namespace pP {
         // the vertex entry's uniform param instead and the draw starts at
         // instance 0; binding both would double-count the offset.
         const u32 tile_base = 0u;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tiles"].setBinding(
-            rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, shader_cursor["g_tiles"].setBinding(rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
         rhi::IBuffer *const cell_buffer = has_cells ? m_cell_atlas.get() : m_cell_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_cell_materials"].setBinding(
-            rhi::Binding(cell_buffer, makeFullRange(cell_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            shader_cursor["g_cell_materials"].setBinding(rhi::Binding(cell_buffer, makeFullRange(cell_buffer))));
 
         draw_context.m_pass.draw({
             .vertexCount = 6u,
@@ -508,8 +507,8 @@ namespace pP {
             return default_value_v;
         }
 
-        Expected<GridTilePlan> plan = planTiles(m_camera_view,
-            std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
+        Expected<GridTilePlan> plan = planTiles(
+            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -522,7 +521,7 @@ namespace pP {
         });
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(draw_context.m_device, has_cells));
 
-        Expected<Array<rhi::IndirectDrawArguments> > args = compactIndirect(*plan);
+        Expected<Array<rhi::IndirectDrawArguments>> args = compactIndirect(*plan);
         if (not args.has_value()) [[unlikely]] {
             return args.error();
         }
@@ -549,10 +548,8 @@ namespace pP {
             payloads.push_back(staged_payload);
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            ensureTilePayloads_(draw_context.m_device, safe_narrowing(payloads.size())));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            ensureIndirectArgs_(draw_context.m_device, safe_narrowing(args->size())));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTilePayloads_(draw_context.m_device, safe_narrowing(payloads.size())));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureIndirectArgs_(draw_context.m_device, safe_narrowing(args->size())));
 
         // One rotation per submit, shared with the payload ring: the draws
         // encoded after this point read the slot just advanced onto, which
@@ -564,8 +561,10 @@ namespace pP {
         if (mapped_payloads == nullptr or mapped_args == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
-        std::memcpy(mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
-        std::memcpy(mapped_args, args->data(), static_cast<std::size_t>(args->size()) * sizeof(rhi::IndirectDrawArguments));
+        std::memcpy(
+            mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
+        std::memcpy(
+            mapped_args, args->data(), static_cast<std::size_t>(args->size()) * sizeof(rhi::IndirectDrawArguments));
 
         draw_context.m_pass.setRenderState({
             .viewports = {draw_context.m_viewport},
@@ -576,24 +575,28 @@ namespace pP {
         });
 
         rhi::IBuffer *const payload_buffer = m_tile_payloads[m_tile_ring_cursor].get();
-        if (payload_buffer == nullptr or payload_buffer->getDesc().elementSize != sizeof(GridTilePayload)) [[unlikely]] {
-            PPR_LOG(GridPass, error, "tile payload stride mismatch vs shader expectation", {
-                {"payload_stride", payload_buffer == nullptr ? 0u : payload_buffer->getDesc().elementSize},
-            });
+        if (payload_buffer == nullptr or payload_buffer->getDesc().elementSize != sizeof(GridTilePayload))
+            [[unlikely]] {
+            PPR_LOG(
+                GridPass, error, "tile payload stride mismatch vs shader expectation",
+                {
+                    {"payload_stride", payload_buffer == nullptr ? 0u : payload_buffer->getDesc().elementSize},
+                });
             return make_error_code(std::errc::invalid_argument);
         }
 
         rhi::IBuffer *const args_buffer = m_indirect_args[m_tile_ring_cursor].get();
-        if (args_buffer == nullptr or args_buffer->getDesc().elementSize != sizeof(rhi::IndirectDrawArguments)) [[unlikely]] {
-            PPR_LOG(GridPass, error, "indirect args stride mismatch vs drawIndirect expectation", {
-                {"args_stride", args_buffer == nullptr ? 0u : args_buffer->getDesc().elementSize},
-            });
+        if (args_buffer == nullptr or args_buffer->getDesc().elementSize != sizeof(rhi::IndirectDrawArguments))
+            [[unlikely]] {
+            PPR_LOG(
+                GridPass, error, "indirect args stride mismatch vs drawIndirect expectation",
+                {
+                    {"args_stride", args_buffer == nullptr ? 0u : args_buffer->getDesc().elementSize},
+                });
             return make_error_code(std::errc::invalid_argument);
         }
 
-        Expected<GridCachedPipeline *> cached = pipelineFor_(
-            draw_context.m_device,
-            draw_context.m_render_pipeline_key);
+        Expected<GridCachedPipeline *> cached = pipelineFor_(draw_context.m_device, draw_context.m_render_pipeline_key);
         if (not cached.has_value()) [[unlikely]] {
             return cached.error();
         }
@@ -612,18 +615,16 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_((*cached)->m_frame_cursor));
 
         const u32 tile_base = 0u;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tiles"].setBinding(
-            rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, shader_cursor["g_tiles"].setBinding(rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
         rhi::IBuffer *const cell_buffer = has_cells ? m_cell_atlas.get() : m_cell_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_cell_materials"].setBinding(
-            rhi::Binding(cell_buffer, makeFullRange(cell_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            shader_cursor["g_cell_materials"].setBinding(rhi::Binding(cell_buffer, makeFullRange(cell_buffer))));
 
-        draw_context.m_pass.drawIndirect(
-            safe_narrowing(args->size()),
-            rhi::BufferOffsetPair{args_buffer});
+        draw_context.m_pass.drawIndirect(safe_narrowing(args->size()), rhi::BufferOffsetPair{args_buffer});
 
         return default_value_v;
     }
@@ -650,13 +651,13 @@ namespace pP {
         payload_desc.label = "grid tile payloads";
         for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
             if (const std::error_code err = make_error_code(
-                device.createBuffer(payload_desc, nullptr, m_tile_payloads[slot].writeRef()))) [[unlikely]] {
+                    device.createBuffer(payload_desc, nullptr, m_tile_payloads[slot].writeRef()))) [[unlikely]] {
                 releaseTilePayloads_(std::addressof(device));
                 return err;
             }
             if (const std::error_code err = make_error_code(device.mapBuffer(
-                m_tile_payloads[slot].get(), rhi::CpuAccessMode::Write,
-                std::addressof(m_tile_payload_mapped[slot])))) [[unlikely]] {
+                    m_tile_payloads[slot].get(), rhi::CpuAccessMode::Write,
+                    std::addressof(m_tile_payload_mapped[slot])))) [[unlikely]] {
                 releaseTilePayloads_(std::addressof(device));
                 return err;
             }
@@ -709,13 +710,13 @@ namespace pP {
         args_desc.label = "grid indirect args";
         for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
             if (const std::error_code err = make_error_code(
-                device.createBuffer(args_desc, nullptr, m_indirect_args[slot].writeRef()))) [[unlikely]] {
+                    device.createBuffer(args_desc, nullptr, m_indirect_args[slot].writeRef()))) [[unlikely]] {
                 releaseIndirectArgs_(std::addressof(device));
                 return err;
             }
             if (const std::error_code err = make_error_code(device.mapBuffer(
-                m_indirect_args[slot].get(), rhi::CpuAccessMode::Write,
-                std::addressof(m_indirect_args_mapped[slot])))) [[unlikely]] {
+                    m_indirect_args[slot].get(), rhi::CpuAccessMode::Write,
+                    std::addressof(m_indirect_args_mapped[slot])))) [[unlikely]] {
                 releaseIndirectArgs_(std::addressof(device));
                 return err;
             }
@@ -745,8 +746,7 @@ namespace pP {
     }
 
     Expected<GridPass::GridCachedPipeline *> GridPass::pipelineFor_(
-        rhi::IDevice &device,
-        const RenderPipelineSignature &signature) {
+        rhi::IDevice &device, const RenderPipelineSignature &signature) {
         if (m_shader_program == nullptr) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
@@ -756,11 +756,13 @@ namespace pP {
         // The sample count is a SampleCount by construction — all four
         // enumerators are accepted — so only the color shape is checked.
         if (signature.colorFormats().size() != 1u) {
-            PPR_LOG(GridPass, error, "unsupported render pipeline signature", {
-                {"color_format_count", signature.colorFormats().size()},
-                {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
-                {"sample_count", static_cast<u32>(signature.m_sample_count)},
-            });
+            PPR_LOG(
+                GridPass, error, "unsupported render pipeline signature",
+                {
+                    {"color_format_count", signature.colorFormats().size()},
+                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
+                });
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
 
@@ -803,8 +805,8 @@ namespace pP {
         // to a RootShaderObject, so createShaderObject(type, container) —
         // which returns a plain ShaderObject — cannot back it.
         rhi::ComPtr<rhi::IShaderObject> root_object{};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass,
-            device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
 
         const rhi::ShaderCursor invariant_cursor{root_object.get()};
         const rhi::ShaderCursor frame_field = invariant_cursor["g_grid_frame"];
@@ -820,11 +822,12 @@ namespace pP {
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, frame_field.getDereferenced(frame_cursor));
 
         m_render_pipeline_key.emplace(signature);
-        m_cached_pipeline.emplace(GridCachedPipeline{
-            .m_pipeline = std::move(pipeline),
-            .m_root_object = std::move(root_object),
-            .m_frame_cursor = frame_cursor,
-        });
+        m_cached_pipeline.emplace(
+            GridCachedPipeline{
+                .m_pipeline = std::move(pipeline),
+                .m_root_object = std::move(root_object),
+                .m_frame_cursor = frame_cursor,
+            });
 
         return &m_cached_pipeline.value();
     }
@@ -834,10 +837,12 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code GridPass::shutdown() {
-        PPR_LOG(GridPass, info, "GridPass shut down", {
-            {"staged_tiles", m_submitted_tiles.size()},
-            {"cached_tiles", m_tile_cache.size()},
-        });
+        PPR_LOG(
+            GridPass, info, "GridPass shut down",
+            {
+                {"staged_tiles", m_submitted_tiles.size()},
+                {"cached_tiles", m_tile_cache.size()},
+            });
 
         // Teardown order: stop submissions first (no new work), then drop the
         // cached pipeline root (its bindings reference the payload ring),
@@ -885,20 +890,20 @@ namespace pP {
         return first_err;
     }
 
-    std::error_code GridPass::createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device, const fs::path &content_dir) {
+    std::error_code GridPass::createShaderProgram_(
+        IShaderService &shader_service, rhi::IDevice &device, const fs::path &content_dir) {
         shader::SharedModule grid_shader{};
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_service.loadModuleFromFile(
-            content_dir / TEXT("shaders") / TEXT("grid_tiles.slang"),
-            "grid_tiles",
-            grid_shader.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            shader_service.loadModuleFromFile(
+                content_dir / TEXT("shaders") / TEXT("grid_tiles.slang"), "grid_tiles", grid_shader.writeRef()));
 
         shader::ComPtr<slang::IEntryPoint> vertex_ep;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            grid_shader->findEntryPointByName("vertexGridMain", vertex_ep.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, grid_shader->findEntryPointByName("vertexGridMain", vertex_ep.writeRef()));
 
         shader::ComPtr<slang::IEntryPoint> fragment_ep;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            grid_shader->findEntryPointByName("fragmentGridMain", fragment_ep.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, grid_shader->findEntryPointByName("fragmentGridMain", fragment_ep.writeRef()));
 
         // One program: the tile-indexed vertex entry reads
         // g_tiles[g_tile_base + SV_InstanceID]. The draw's tile base arrives
@@ -914,8 +919,8 @@ namespace pP {
         program_desc.slangEntryPointCount = 2u;
 
         shader::Diagnose diagnostics;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass,
-            device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
 
         return default_value_v;
     }

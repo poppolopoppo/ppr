@@ -118,7 +118,8 @@ namespace pP::hal::io {
 
         // Caller holds d->m_mutex. Copies ready CQEs into entries, advances the
         // CQ head, and drains the registered eventfd. No user callback runs here.
-        [[nodiscard]] std::size_t drainLocked_(IoHandleData *const d, const std::span<CompletionEntry> entries) noexcept {
+        [[nodiscard]] std::size_t drainLocked_(
+            IoHandleData *const d, const std::span<CompletionEntry> entries) noexcept {
             if (d->m_ring_fd < 0 || entries.empty()) {
                 return 0u;
             }
@@ -185,14 +186,11 @@ namespace pP::hal::io {
         data->m_ring_fd = ring_fd;
         data->m_params = params;
 
-        const std::size_t sq_size =
-            static_cast<std::size_t>(params.sq_off.array) +
-            static_cast<std::size_t>(params.sq_entries) * sizeof(std::uint32_t);
-        const std::size_t cq_size =
-            static_cast<std::size_t>(params.cq_off.cqes) +
-            static_cast<std::size_t>(params.cq_entries) * sizeof(::io_uring_cqe);
-        const std::size_t sqes_size =
-            static_cast<std::size_t>(params.sq_entries) * sizeof(::io_uring_sqe);
+        const std::size_t sq_size = static_cast<std::size_t>(params.sq_off.array) +
+                                    static_cast<std::size_t>(params.sq_entries) * sizeof(std::uint32_t);
+        const std::size_t cq_size = static_cast<std::size_t>(params.cq_off.cqes) +
+                                    static_cast<std::size_t>(params.cq_entries) * sizeof(::io_uring_cqe);
+        const std::size_t sqes_size = static_cast<std::size_t>(params.sq_entries) * sizeof(::io_uring_sqe);
 
         const bool single = (params.features & IORING_FEAT_SINGLE_MMAP) != 0u;
         data->m_single_mmap = single;
@@ -213,8 +211,8 @@ namespace pP::hal::io {
 
         if (single) {
             const std::size_t ring_size = std::max(sq_size, cq_size);
-            void *const ptr = ::mmap(nullptr, ring_size, PROT_READ | PROT_WRITE,
-                                     MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
+            void *const ptr = ::mmap(
+                nullptr, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
             if (ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
                 throw std::system_error(errno, std::generic_category(), "pP::io: io_uring ring mmap failed");
@@ -224,8 +222,8 @@ namespace pP::hal::io {
             data->m_sq_size = ring_size;
             data->m_cq_size = ring_size;
         } else {
-            void *const sq_ptr = ::mmap(nullptr, sq_size, PROT_READ | PROT_WRITE,
-                                        MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
+            void *const sq_ptr = ::mmap(
+                nullptr, sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
             if (sq_ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
                 throw std::system_error(errno, std::generic_category(), "pP::io: io_uring SQ mmap failed");
@@ -233,8 +231,8 @@ namespace pP::hal::io {
             data->m_sq_ptr = sq_ptr;
             data->m_sq_size = sq_size;
 
-            void *const cq_ptr = ::mmap(nullptr, cq_size, PROT_READ | PROT_WRITE,
-                                        MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_CQ_RING);
+            void *const cq_ptr = ::mmap(
+                nullptr, cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_CQ_RING);
             if (cq_ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
                 throw std::system_error(errno, std::generic_category(), "pP::io: io_uring CQ mmap failed");
@@ -243,8 +241,8 @@ namespace pP::hal::io {
             data->m_cq_size = cq_size;
         }
 
-        void *const sqes = ::mmap(nullptr, sqes_size, PROT_READ | PROT_WRITE,
-                                  MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQES);
+        void *const sqes = ::mmap(
+            nullptr, sqes_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQES);
         if (sqes == MAP_FAILED) [[unlikely]] {
             cleanup();
             throw std::system_error(errno, std::generic_category(), "pP::io: io_uring SQE mmap failed");
@@ -255,8 +253,7 @@ namespace pP::hal::io {
         const int efd = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
         if (efd >= 0) {
             data->m_eventfd = efd;
-            std::ignore = ::syscall(SYS_io_uring_register, ring_fd,
-                                    IORING_REGISTER_EVENTFD, &data->m_eventfd, 1);
+            std::ignore = ::syscall(SYS_io_uring_register, ring_fd, IORING_REGISTER_EVENTFD, &data->m_eventfd, 1);
         }
 
         return static_cast<IoHandle>(data);
@@ -358,7 +355,7 @@ namespace pP::hal::io {
         std::size_t submitted = 0u;
         {
             std::lock_guard lock{io_data->m_mutex};
-            for (auto &entry : entries) {
+            for (auto &entry: entries) {
                 const auto *file_data = static_cast<const FileHandleData *>(entry.m_file);
                 if (file_data == nullptr || file_data->m_fd < 0) {
                     continue;
@@ -369,8 +366,8 @@ namespace pP::hal::io {
                 if (sqe == nullptr) {
                     // SQ full: flush queued work so the kernel consumes
                     // entries, then retry once before giving up on this entry.
-                    std::ignore = ::syscall(SYS_io_uring_enter, io_data->m_ring_fd,
-                                            static_cast<unsigned>(submitted), 0u, 0u, nullptr, 0);
+                    std::ignore = ::syscall(
+                        SYS_io_uring_enter, io_data->m_ring_fd, static_cast<unsigned>(submitted), 0u, 0u, nullptr, 0);
                     submitted = 0u;
                     sqe = allocSqeLocked_(io_data);
                     if (sqe == nullptr) {
@@ -423,8 +420,8 @@ namespace pP::hal::io {
             // Block without holding the mutex so wake()/submit() from another
             // thread can post a completion. The kernel returns immediately
             // when a CQE is already pending, so no wakeup is lost.
-            const long ret = ::syscall(SYS_io_uring_enter, io_data->m_ring_fd,
-                                       0u, 1u, IORING_ENTER_GETEVENTS, nullptr, 0);
+            const long ret = ::syscall(
+                SYS_io_uring_enter, io_data->m_ring_fd, 0u, 1u, IORING_ENTER_GETEVENTS, nullptr, 0);
             if (ret < 0 && errno != EINTR) {
                 std::lock_guard lock{io_data->m_mutex};
                 const std::size_t n = drainLocked_(io_data, entries);

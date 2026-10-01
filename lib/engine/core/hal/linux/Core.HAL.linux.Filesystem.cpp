@@ -39,9 +39,7 @@ namespace pP::hal {
             if (const char *xdg = std::getenv("XDG_DATA_HOME")) {
                 return std::filesystem::directory_entry(std::filesystem::path(xdg));
             }
-            return std::filesystem::directory_entry(
-                std::filesystem::path(std::getenv("HOME")) / ".local/share"
-            );
+            return std::filesystem::directory_entry(std::filesystem::path(std::getenv("HOME")) / ".local/share");
         }();
         return g_directory;
     }
@@ -51,9 +49,7 @@ namespace pP::hal {
             if (const char *xdg = std::getenv("XDG_CONFIG_HOME")) {
                 return std::filesystem::directory_entry(std::filesystem::path(xdg));
             }
-            return std::filesystem::directory_entry(
-                std::filesystem::path(std::getenv("HOME")) / ".config"
-            );
+            return std::filesystem::directory_entry(std::filesystem::path(std::getenv("HOME")) / ".config");
         }();
         return g_directory;
     }

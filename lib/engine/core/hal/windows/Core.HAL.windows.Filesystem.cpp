@@ -19,9 +19,7 @@ namespace pP::hal {
             wchar_t buffer[MAX_PATH];
             const DWORD len = ::GetEnvironmentVariableW(L"USERPROFILE", buffer, MAX_PATH);
             if (len > 0 && len < MAX_PATH) {
-                return std::filesystem::directory_entry(
-                    std::filesystem::path(buffer)
-                );
+                return std::filesystem::directory_entry(std::filesystem::path(buffer));
             }
 
             wchar_t drive[MAX_PATH], path[MAX_PATH];
@@ -30,8 +28,7 @@ namespace pP::hal {
 
             if (dlen > 0 && plen > 0) {
                 return std::filesystem::directory_entry(
-                    std::filesystem::path(std::wstring(drive) + std::wstring(path))
-                );
+                    std::filesystem::path(std::wstring(drive) + std::wstring(path)));
             }
 
             return {};
@@ -45,9 +42,7 @@ namespace pP::hal {
             const UINT len = ::GetSystemDirectoryW(buffer, MAX_PATH);
 
             if (len > 0 && len < MAX_PATH) {
-                return std::filesystem::directory_entry(
-                    std::filesystem::path(buffer)
-                );
+                return std::filesystem::directory_entry(std::filesystem::path(buffer));
             }
 
             return {};

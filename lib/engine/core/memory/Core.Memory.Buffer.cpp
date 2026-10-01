@@ -19,47 +19,36 @@ namespace pP::mem {
     static_assert(pP::details::TEnumFlags<details::BufferOwner::EFlags>);
 
     details::BufferOwner::BufferOwner(const MutableBufferView mutable_view) noexcept
-        : m_mutable_storage(mutable_view.data()),
-          m_size_bytes(mutable_view.size_bytes()),
-          m_flags(materialized) {
+        : m_mutable_storage(mutable_view.data()), m_size_bytes(mutable_view.size_bytes()), m_flags(materialized) {
     }
 
     details::BufferOwner::BufferOwner(const SharedBufferView immutable_view) noexcept
-        : m_immutable_storage(immutable_view.data()),
-          m_size_bytes(immutable_view.size_bytes()),
+        : m_immutable_storage(immutable_view.data()), m_size_bytes(immutable_view.size_bytes()),
           m_flags(immutable | materialized) {
     }
 
-    details::BufferOwner::BufferOwner(void *const mutable_data, const std::size_t size_bytes,
-                                      const Deleter deleter, void *const user_data,
-                                      const EFlags flags) noexcept
-        : m_mutable_storage(mutable_data),
-          m_size_bytes(size_bytes),
-          m_flags(flags + materialized),
+    details::BufferOwner::BufferOwner(
+        void *const mutable_data, const std::size_t size_bytes, const Deleter deleter, void *const user_data,
+        const EFlags flags) noexcept
+        : m_mutable_storage(mutable_data), m_size_bytes(size_bytes), m_flags(flags + materialized), m_delete(deleter),
+          m_user_data(user_data) {
+    }
+
+    details::BufferOwner::BufferOwner(
+        const void *const immutable_data, const std::size_t size_bytes, const Deleter deleter, void *const user_data,
+        const EFlags flags) noexcept
+        : m_immutable_storage(immutable_data), m_size_bytes(size_bytes), m_flags(flags + materialized + immutable),
           m_delete(deleter), m_user_data(user_data) {
     }
 
-    details::BufferOwner::BufferOwner(const void *const immutable_data, const std::size_t size_bytes,
-                                      const Deleter deleter, void *const user_data,
-                                      const EFlags flags) noexcept
-        : m_immutable_storage(immutable_data),
-          m_size_bytes(size_bytes),
-          m_flags(flags + materialized + immutable),
-          m_delete(deleter),
+    details::BufferOwner::BufferOwner(
+        const Materializer materialize, const std::size_t size_bytes, const Deleter deleter, void *const user_data,
+        const EFlags flags) noexcept
+        : m_materialize(materialize), m_size_bytes(size_bytes), m_flags(flags - materialized), m_delete(deleter),
           m_user_data(user_data) {
     }
 
-    details::BufferOwner::BufferOwner(const Materializer materialize, const std::size_t size_bytes,
-                                      const Deleter deleter, void *const user_data,
-                                      const EFlags flags) noexcept
-        : m_materialize(materialize),
-          m_size_bytes(size_bytes),
-          m_flags(flags - materialized),
-          m_delete(deleter),
-          m_user_data(user_data) {
-    }
-
-    details::BufferOwner &details::BufferOwner::operator =(BufferOwner &&other) noexcept {
+    details::BufferOwner &details::BufferOwner::operator=(BufferOwner &&other) noexcept {
         if (this == &other) [[unlikely]] {
             return *this;
         }
@@ -153,8 +142,7 @@ namespace pP::mem {
     // UniqueBuffer is mutable and can't be shared
     // ------------------------------------------------------------------
 
-    UniqueBuffer::UniqueBuffer(BufferOwner &&owner)
-        : m_owner(std::make_unique<BufferOwner>(std::move(owner))) {
+    UniqueBuffer::UniqueBuffer(BufferOwner &&owner) : m_owner(std::make_unique<BufferOwner>(std::move(owner))) {
     }
 
     // ReSharper disable once CppMemberFunctionMayBeConst
@@ -172,7 +160,7 @@ namespace pP::mem {
         return default_value_v;
     }
 
-    UniqueBuffer UniqueBuffer::makeOwned() &&/* only on ref values */ {
+    UniqueBuffer UniqueBuffer::makeOwned() && /* only on ref values */ {
         if (isOwned()) {
             return std::move(*this);
         }
@@ -255,8 +243,7 @@ namespace pP::mem {
     // SharedBuffer is immutable and can be assigned without copying content
     // ------------------------------------------------------------------
 
-    SharedBuffer::SharedBuffer(BufferOwner &&owner)
-        : m_owner(std::make_shared<BufferOwner>(std::move(owner))) {
+    SharedBuffer::SharedBuffer(BufferOwner &&owner) : m_owner(std::make_shared<BufferOwner>(std::move(owner))) {
     }
 
     bool SharedBuffer::isUniqueOwnedMutable() const noexcept {
@@ -319,7 +306,8 @@ namespace pP::mem {
         const SharedBufferView source_view{getBufferData()};
         const std::size_t size = source_view.size_bytes();
         if (offset > size or (count != std::dynamic_extent and count > size - offset)) [[unlikely]] {
-            throw std::out_of_range{std::format("SharedBuffer::subspan out of range: offset {} count {} size {}", offset, count, size)};
+            throw std::out_of_range{
+                std::format("SharedBuffer::subspan out of range: offset {} count {} size {}", offset, count, size)};
         }
 
         const SharedBufferView buffer_view{source_view.subspan(offset, count)};
@@ -334,9 +322,7 @@ namespace pP::mem {
             [](void *user_data, std::allocation_result<void *>) {
                 std::default_delete<SharedBuffer>{}(static_cast<SharedBuffer *>(user_data));
             },
-            outer_owner.release(),
-            BufferOwner::immutable | BufferOwner::materialized
-        };
+            outer_owner.release(), BufferOwner::immutable | BufferOwner::materialized};
         PPR_ASSERT(not inner_owner.isOwned());
 
         return SharedBuffer(std::move(inner_owner));
@@ -358,7 +344,8 @@ namespace pP::mem {
     // IO file mapping helpers
     // ------------------------------------------------------------------
 
-    [[nodiscard]] static Expected<details::BufferOwner> mapBufferOwnerToFile_(const std::filesystem::path &file_path, const hal::io::OpenFlags flags) {
+    [[nodiscard]] static Expected<details::BufferOwner> mapBufferOwnerToFile_(
+        const std::filesystem::path &file_path, const hal::io::OpenFlags flags) {
         auto mapped_file = io::mapFile(file_path, flags);
         if (not mapped_file.has_value()) {
             return std::unexpected{mapped_file.error()};
@@ -367,17 +354,13 @@ namespace pP::mem {
         const MutableBufferView mapped_view{mapped_file->span()};
 
         return details::BufferOwner{
-            mapped_view.data(),
-            mapped_view.size_bytes(),
-            [](void *const map_handle, std::allocation_result<void *>) {
-                hal::io::unmapFile(map_handle);
-            },
-            mapped_file->discard(),
-            details::BufferOwner::materialized | details::BufferOwner::owned
-        };
+            mapped_view.data(), mapped_view.size_bytes(),
+            [](void *const map_handle, std::allocation_result<void *>) { hal::io::unmapFile(map_handle); },
+            mapped_file->discard(), details::BufferOwner::materialized | details::BufferOwner::owned};
     }
 
-    Expected<UniqueBuffer> UniqueBuffer::mapFile(const std::filesystem::path &file_path, const hal::io::OpenFlags flags) {
+    Expected<UniqueBuffer> UniqueBuffer::mapFile(
+        const std::filesystem::path &file_path, const hal::io::OpenFlags flags) {
         if (Expected<BufferOwner> owner = mapBufferOwnerToFile_(file_path, flags); owner.has_value()) {
             return UniqueBuffer(std::move(*owner));
         } else {
@@ -385,7 +368,8 @@ namespace pP::mem {
         }
     }
 
-    std::error_code UniqueBuffer::mapFile(const std::filesystem::path &file_path, UniqueBuffer *out_write_ref, const hal::io::OpenFlags flags) {
+    std::error_code UniqueBuffer::mapFile(
+        const std::filesystem::path &file_path, UniqueBuffer *out_write_ref, const hal::io::OpenFlags flags) {
         if (Expected<UniqueBuffer> mapped = mapFile(file_path, flags); mapped.has_value()) {
             *out_write_ref = std::move(*mapped);
             return default_value_v;

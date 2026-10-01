@@ -54,19 +54,16 @@ export namespace pP {
 
     class IInputService : public virtual IService {
     public:
-        [[nodiscard]] virtual const KeyboardDevice &
-        getKeyboard() const noexcept = 0;
+        [[nodiscard]] virtual const KeyboardDevice &getKeyboard() const noexcept = 0;
 
-        [[nodiscard]] virtual const MouseDevice &
-        getMouse() const noexcept = 0;
+        [[nodiscard]] virtual const MouseDevice &getMouse() const noexcept = 0;
 
-        [[nodiscard]] virtual const GamepadDevice &
-        getGamepad(int controller_index) const noexcept = 0;
+        [[nodiscard]] virtual const GamepadDevice &getGamepad(int controller_index) const noexcept = 0;
 
-        [[nodiscard]] virtual SharedInputDevice
-        getInputDeviceByID(const InputDeviceID &device_id) const noexcept = 0;
+        [[nodiscard]] virtual SharedInputDevice getInputDeviceByID(const InputDeviceID &device_id) const noexcept = 0;
 
-        [[nodiscard]] virtual std::error_code enumerateInputDevices(Collector<SharedInputDevice> each_device) const noexcept = 0;
+        [[nodiscard]] virtual std::error_code enumerateInputDevices(
+            Collector<SharedInputDevice> each_device) const noexcept = 0;
 
         [[nodiscard]] virtual std::error_code enumerateInputKeysSupported(Collector<InputKey> supports_key) const = 0;
 
@@ -84,7 +81,8 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code enumerateInputContexts(Collector<InputContext> each_context) const = 0;
 
-        [[nodiscard]] virtual std::error_code enumerateInputContextDeviceAssignments(Collector<IInputDevice, InputContext> each_assignment) const = 0;
+        [[nodiscard]] virtual std::error_code enumerateInputContextDeviceAssignments(
+            Collector<IInputDevice, InputContext> each_assignment) const = 0;
 
         [[nodiscard]] virtual std::error_code pollInputDevices(TimeSpan dt) = 0;
 
@@ -100,14 +98,14 @@ export namespace pP {
 
         virtual void postMouseScrollWheel(const InputContext &context, const float2 &delta) = 0;
 
-        using DeviceCallback = BroadcastCallback<std::error_code (const IInputDevice &device)>;
+        using DeviceCallback = BroadcastCallback<std::error_code(const IInputDevice &device)>;
 
         [[nodiscard]] virtual DeviceCallback::Handle whenDeviceConnected(DeviceCallback::Event on_connected) = 0;
 
         [[nodiscard]] virtual DeviceCallback::Handle whenDeviceDisconnected(DeviceCallback::Event on_disconnected) = 0;
     };
 
-    extern template class BroadcastCallback<std::error_code (const IInputDevice &)>;
-    extern template class BroadcastCallback<std::error_code (const InputActionEvent &, const InputKey &)>;
-    extern template class BroadcastCallback<std::error_code (const InputKey &)>;
+    extern template class BroadcastCallback<std::error_code(const IInputDevice &)>;
+    extern template class BroadcastCallback<std::error_code(const InputActionEvent &, const InputKey &)>;
+    extern template class BroadcastCallback<std::error_code(const InputKey &)>;
 }

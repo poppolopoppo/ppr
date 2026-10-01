@@ -26,7 +26,8 @@ export namespace pP {
         unhandled = 0,
         // listener trigger at least one mapping, but did not consume the input
         handled,
-        // listener trigger at least one mapping, and input was consumed (message won't be handled by any other listener)
+        // listener trigger at least one mapping, and input was consumed (message won't be handled by any other
+        // listener)
         consumed,
     };
 
@@ -38,12 +39,8 @@ export namespace pP {
         EInputMessageEvent m_event{};
 
         constexpr InputMessage(
-            InputKey key,
-            InputValue value,
-            const InputDeviceID device_id,
-            const EInputMessageEvent event) noexcept
-            : m_key{std::move(key)}, m_value{std::move(value)},
-              m_device_id{device_id}, m_event{event} {
+            InputKey key, InputValue value, const InputDeviceID device_id, const EInputMessageEvent event) noexcept
+            : m_key{std::move(key)}, m_value{std::move(value)}, m_device_id{device_id}, m_event{event} {
         }
 
         constexpr ~InputMessage() noexcept = default;
@@ -86,8 +83,7 @@ export namespace pP {
     };
 
     template<>
-    struct details::relocatable<InputMessage> : std::true_type {
-    };
+    struct details::relocatable<InputMessage> : std::true_type {};
 
     // ------------------------------------------------------------------
     // abstract input device
@@ -126,8 +122,7 @@ export namespace pP {
         float m_dead_zone{epsilon_v<float>};
         float m_sensitivity{2.0f};
 
-        [[nodiscard]] constexpr const details::input_value<value_type> &
-        get(const bool use_filtered) const noexcept {
+        [[nodiscard]] constexpr const details::input_value<value_type> &get(const bool use_filtered) const noexcept {
             return use_filtered ? m_filtered : m_raw;
         }
 
@@ -146,12 +141,8 @@ export namespace pP {
         void update(double elapsed_seconds) noexcept;
 
         bool postInputMessages(
-            TimeSpan dt,
-            const InputContext &context,
-            InputDeviceID device_id,
-            InputKey input_key,
-            bool enable_filtered_inputs,
-            bool emit_terminal_inactive = false) noexcept;
+            TimeSpan dt, const InputContext &context, InputDeviceID device_id, InputKey input_key,
+            bool enable_filtered_inputs, bool emit_terminal_inactive = false) noexcept;
 
         void reset() noexcept;
 
@@ -177,10 +168,7 @@ export namespace pP {
         InputDigitalState() noexcept = default;
 
         bool postInputMessages(
-            TimeSpan dt,
-            const InputContext &context,
-            InputDeviceID device_id,
-            ButtonT button, bool pressed);
+            TimeSpan dt, const InputContext &context, InputDeviceID device_id, ButtonT button, bool pressed);
 
         void resetInputState() noexcept {
             m_pressed.clear();

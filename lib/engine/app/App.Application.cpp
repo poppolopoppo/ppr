@@ -16,12 +16,10 @@ import std;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
-    Application::Application(ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv)
-        : m_application_clock(ITimerClock::steady()),
-          m_platform(IPlatform::create()),
-          m_arguments(argv.begin(), argv.end()),
-          m_name(name),
-          m_domain(std::move(domain)) {
+    Application::Application(
+        ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv)
+        : m_application_clock(ITimerClock::steady()), m_platform(IPlatform::create()),
+          m_arguments(argv.begin(), argv.end()), m_name(name), m_domain(std::move(domain)) {
         PPR_ASSERT(m_platform != nullptr);
 
         hal::disableSystemErrorReporting();
@@ -33,7 +31,8 @@ namespace pP {
 
     std::optional<TimeSpan> Application::getTargetFrameTime() const noexcept {
         if (m_has_background_priority) {
-            constexpr TimeSpan background_frame_duration = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 5.0});
+            constexpr TimeSpan background_frame_duration = std::chrono::duration_cast<TimeSpan>(
+                TimeDuration{1.0 / 5.0});
             return background_frame_duration; // 5fps
         }
         return m_target_frame_time;
@@ -41,10 +40,7 @@ namespace pP {
 
     void Application::requestExit(const std::error_code clause) const noexcept {
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
-            PPR_LOG(App, info, "request exit", {
-                {"category", clause.category().name()},
-                {"cause", clause.message()}
-                });
+            PPR_LOG(App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
 
             m_request_exit(clause);
         }
@@ -91,8 +87,7 @@ namespace pP {
 
             // throttle if necessary to target desired frame rate, if any provided
             TimeSpan dt{};
-            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt,
-                getTargetFrameTime().value_or({})));
+            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt, getTargetFrameTime().value_or({})));
 
             try {
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
@@ -123,10 +118,12 @@ namespace pP {
     std::error_code Application::initialize() {
         m_application_clock.reset();
 
-        PPR_LOG(App, info, "starting application", {
-            {"name", m_name},
-            {"platform", hal::platformName()},
-            {"args", opaqueValue(m_arguments)},
+        PPR_LOG(
+            App, info, "starting application",
+            {
+                {"name", m_name},
+                {"platform", hal::platformName()},
+                {"args", opaqueValue(m_arguments)},
             });
 
         PPR_RETURN_ERROR_ON_FAIL(App, m_platform->initialize(*this));
@@ -167,10 +164,7 @@ namespace pP {
     }
 
     std::error_code Application::shutdown() {
-        PPR_LOG(App, info, "shut down application", {
-            {"name", m_name},
-            {"platform", hal::platformName()}
-            });
+        PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
 
         std::error_code first_err{};
 

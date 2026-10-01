@@ -14,14 +14,16 @@ namespace pP::physics {
         }
 
         [[nodiscard]] bool validGeometry(const EGeometry geometry, const float width, const float height) noexcept {
-            return (geometry == EGeometry::box or
-                geometry == EGeometry::circle) and
-                std::isfinite(width) and width > 0.0f and
-                std::isfinite(height) and height > 0.0f;
+            return (geometry == EGeometry::box or geometry == EGeometry::circle) and
+                   std::isfinite(width) and
+                   width > 0.0f and
+                   std::isfinite(height) and
+                   height > 0.0f;
         }
 
-        [[nodiscard]] b2ShapeId makeShape(const b2BodyId body, const EGeometry geometry,
-                                          const float width, const float height, const b2ShapeDef &definition) noexcept {
+        [[nodiscard]] b2ShapeId makeShape(
+            const b2BodyId body, const EGeometry geometry, const float width, const float height,
+            const b2ShapeDef &definition) noexcept {
             if (geometry == EGeometry::circle) {
                 const b2Circle circle{{0.0f, 0.0f}, width};
                 return b2CreateCircleShape(body, &definition, &circle);
@@ -55,19 +57,13 @@ namespace pP::physics {
         [[nodiscard]] Entry *find(const BodyHandle handle) noexcept {
             const auto it = m_bodies.find(handle.m_entity);
             const bool matching_serial = it != m_bodies.end() and it->second.m_serial == handle.m_serial;
-            return matching_serial and
-                handle.m_serial != 0u
-                ? &it->second
-                : nullptr;
+            return matching_serial and handle.m_serial != 0u ? &it->second : nullptr;
         }
 
         [[nodiscard]] const Entry *find(const BodyHandle handle) const noexcept {
             const auto it = m_bodies.find(handle.m_entity);
             const bool matching_serial = it != m_bodies.end() and it->second.m_serial == handle.m_serial;
-            return matching_serial and
-                handle.m_serial != 0u
-                ? &it->second
-                : nullptr;
+            return matching_serial and handle.m_serial != 0u ? &it->second : nullptr;
         }
 
         [[nodiscard]] u64 entityOf(const b2ShapeId shape) const noexcept {
@@ -104,12 +100,13 @@ namespace pP::physics {
     std::error_code Scene::initialize(const Desc desc) noexcept {
         const bool invalid_gravity = not std::isfinite(desc.m_gravity_x) or not std::isfinite(desc.m_gravity_y);
         const bool invalid_timestep = not std::isfinite(desc.m_fixed_dt) or desc.m_fixed_dt <= 0.0f;
-        const bool invalid_substeps = desc.m_substeps == 0u or desc.m_substeps > static_cast<u32>(std::numeric_limits<int>::max());
+        const bool invalid_substeps = desc.m_substeps == 0u or
+                                      desc.m_substeps > static_cast<u32>(std::numeric_limits<int>::max());
         if (m_runtime or invalid_gravity or invalid_timestep or invalid_substeps) {
             return error(std::errc::invalid_argument);
         }
 
-        std::unique_ptr<Runtime> runtime{new(std::nothrow) Runtime{}};
+        std::unique_ptr<Runtime> runtime{new (std::nothrow) Runtime{}};
         if (not runtime) {
             return error(std::errc::not_enough_memory);
         }
@@ -185,8 +182,9 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code Scene::createBodies(const std::span<const u64> entities,
-                                        const std::span<const BodyDefinition> definitions, const std::span<BodyHandle> handles) {
+    std::error_code Scene::createBodies(
+        const std::span<const u64> entities, const std::span<const BodyDefinition> definitions,
+        const std::span<BodyHandle> handles) {
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
         }
@@ -198,7 +196,8 @@ namespace pP::physics {
         for (std::size_t i = 0; i < entities.size(); ++i) {
             const BodyDefinition &def = definitions[i];
             const bool invalid_entity = entities[i] == 0u or m_runtime->m_bodies.contains(entities[i]);
-            const bool repeated_entity = std::find(entities.begin(), entities.begin() + i, entities[i]) != entities.begin() + i;
+            const bool repeated_entity = std::find(entities.begin(), entities.begin() + i, entities[i]) !=
+                                         entities.begin() + i;
             const bool invalid_motion = def.m_motion > EMotion::dynamic;
             const bool invalid_geometry = not validGeometry(def.m_geometry, def.m_half_width, def.m_half_height);
             const bool invalid_position = not std::isfinite(def.m_x) or not std::isfinite(def.m_y);
@@ -210,8 +209,14 @@ namespace pP::physics {
             const bool invalid_body = invalid_motion or invalid_position or invalid_rotation or invalid_velocity;
             const bool invalid_shape = invalid_geometry or invalid_density or invalid_friction or invalid_restitution;
             const bool invalid_filter = def.m_category_bits == 0u;
-            const bool invalid_serial = m_next_serial == 0u or entities.size() > std::numeric_limits<u64>::max() - m_next_serial;
-            if (invalid_entity or repeated_entity or invalid_body or invalid_shape or invalid_filter or invalid_serial) {
+            const bool invalid_serial = m_next_serial == 0u or
+                                        entities.size() > std::numeric_limits<u64>::max() - m_next_serial;
+            if (invalid_entity or
+                repeated_entity or
+                invalid_body or
+                invalid_shape or
+                invalid_filter or
+                invalid_serial) {
                 return error(std::errc::invalid_argument);
             }
         }
@@ -296,13 +301,12 @@ namespace pP::physics {
         const bool invalid_serial = m_next_serial == 0u;
         const bool invalid_material = definition.m_material_count != 1u or definition.m_material_index != 0u;
         const bool too_few_points = definition.m_points.size() < (definition.m_loop ? 4u : 2u);
-        const bool too_many_points = definition.m_points.size() > static_cast<std::size_t>(std::numeric_limits<int>::max() - 2);
+        const bool too_many_points = definition.m_points.size() >
+                                     static_cast<std::size_t>(std::numeric_limits<int>::max() - 2);
         if (invalid_serial or invalid_material or too_few_points or too_many_points) {
             return std::unexpected{error(std::errc::invalid_argument)};
         }
-        const auto valid = [](const ChainPoint p) {
-            return std::isfinite(p.m_x) and std::isfinite(p.m_y);
-        };
+        const auto valid = [](const ChainPoint p) { return std::isfinite(p.m_x) and std::isfinite(p.m_y); };
         if (not std::ranges::all_of(definition.m_points, valid) or
             (not definition.m_loop and (not valid(definition.m_ghost_before) or not valid(definition.m_ghost_after)))) {
             return std::unexpected{error(std::errc::invalid_argument)};
@@ -368,8 +372,8 @@ namespace pP::physics {
         }
     }
 
-    std::expected<ChainHandle, std::error_code> Scene::replaceChunkChain(const ChainHandle old,
-                                                                         const ChainDefinition definition) noexcept {
+    std::expected<ChainHandle, std::error_code> Scene::replaceChunkChain(
+        const ChainHandle old, const ChainDefinition definition) noexcept {
         if (not m_runtime) {
             return std::unexpected{error(std::errc::operation_not_permitted)};
         }
@@ -410,7 +414,8 @@ namespace pP::physics {
         if (not entry) {
             return error(std::errc::invalid_argument);
         }
-        const bool invalid_geometry = not validGeometry(definition.m_geometry, definition.m_half_width, definition.m_half_height);
+        const bool invalid_geometry = not validGeometry(
+            definition.m_geometry, definition.m_half_width, definition.m_half_height);
         const bool invalid_filter = definition.m_category_bits == 0u;
         if (invalid_geometry or invalid_filter) {
             return error(std::errc::invalid_argument);
@@ -427,8 +432,8 @@ namespace pP::physics {
         shape_def.filter.categoryBits = definition.m_category_bits;
         shape_def.filter.maskBits = definition.m_mask_bits;
         shape_def.filter.groupIndex = definition.m_group_index;
-        const b2ShapeId shape = makeShape(entry->m_body, definition.m_geometry,
-            definition.m_half_width, definition.m_half_height, shape_def);
+        const b2ShapeId shape = makeShape(
+            entry->m_body, definition.m_geometry, definition.m_half_width, definition.m_half_height, shape_def);
         if (B2_IS_NULL(shape)) {
             return error(std::errc::resource_unavailable_try_again);
         }
@@ -455,7 +460,8 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code Scene::drainContactEvents(const std::span<ContactEvent> destination, std::size_t &written) noexcept {
+    std::error_code Scene::drainContactEvents(
+        const std::span<ContactEvent> destination, std::size_t &written) noexcept {
         written = 0u;
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
@@ -468,9 +474,9 @@ namespace pP::physics {
         try {
             std::vector<ContactEvent> contacts;
             contacts.reserve(static_cast<std::size_t>(events.beginCount + events.endCount + events.hitCount));
-            const auto append = [this, &contacts](const b2ShapeId shape_a, const b2ShapeId shape_b,
-                                                  const b2Vec2 point, const b2Vec2 normal,
-                                                  const bool begin, const bool hit, const float approach_speed) {
+            const auto append = [this, &contacts](
+                                    const b2ShapeId shape_a, const b2ShapeId shape_b, const b2Vec2 point,
+                                    const b2Vec2 normal, const bool begin, const bool hit, const float approach_speed) {
                 const bool valid_a = b2Shape_IsValid(shape_a);
                 const bool valid_b = b2Shape_IsValid(shape_b);
                 if (not valid_a or not valid_b) {
@@ -480,17 +486,17 @@ namespace pP::physics {
                 const b2BodyId body_b = b2Shape_GetBody(shape_b);
                 const u64 entity_a = m_runtime->entityOf(shape_a);
                 const u64 entity_b = m_runtime->entityOf(shape_b);
-                const bool chain_a = not B2_IS_NULL(m_runtime->m_chain_body) and B2_ID_EQUALS(body_a, m_runtime->m_chain_body);
-                const bool chain_b = not B2_IS_NULL(m_runtime->m_chain_body) and B2_ID_EQUALS(body_b, m_runtime->m_chain_body);
+                const bool chain_a = not B2_IS_NULL(m_runtime->m_chain_body) and
+                                     B2_ID_EQUALS(body_a, m_runtime->m_chain_body);
+                const bool chain_b = not B2_IS_NULL(m_runtime->m_chain_body) and
+                                     B2_ID_EQUALS(body_b, m_runtime->m_chain_body);
                 if ((entity_a == 0u and not chain_a) or (entity_b == 0u and not chain_b)) {
                     return;
                 }
                 const bool swap = entity_b < entity_a;
-                contacts.push_back({
-                    swap ? entity_b : entity_a, swap ? entity_a : entity_b,
-                    point.x, point.y, swap ? -normal.x : normal.x, swap ? -normal.y : normal.y,
-                    begin, hit, approach_speed
-                });
+                contacts.push_back(
+                    {swap ? entity_b : entity_a, swap ? entity_a : entity_b, point.x, point.y,
+                        swap ? -normal.x : normal.x, swap ? -normal.y : normal.y, begin, hit, approach_speed});
             };
             for (int i = 0; i < events.beginCount; ++i) {
                 const auto &event = events.beginEvents[i];
@@ -508,9 +514,8 @@ namespace pP::physics {
             std::ranges::sort(contacts, {}, [](const ContactEvent &event) {
                 const int kind = event.m_hit ? 2 : event.m_begin ? 1 : 0;
                 return std::tuple{
-                    event.m_entity_a, event.m_entity_b, kind, event.m_x, event.m_y,
-                    event.m_normal_x, event.m_normal_y, event.m_approach_speed
-                };
+                    event.m_entity_a, event.m_entity_b, kind, event.m_x, event.m_y, event.m_normal_x, event.m_normal_y,
+                    event.m_approach_speed};
             });
             if (destination.size() < contacts.size()) {
                 return error(std::errc::no_buffer_space);
@@ -570,8 +575,7 @@ namespace pP::physics {
         const b2Vec2 position = b2Body_GetPosition(entry->m_body);
         const b2Vec2 velocity = b2Body_GetLinearVelocity(entry->m_body);
         return BodyState{
-            position.x, position.y, b2Rot_GetAngle(b2Body_GetRotation(entry->m_body)),
-            velocity.x, velocity.y, b2Body_GetAngularVelocity(entry->m_body)
-        };
+            position.x, position.y, b2Rot_GetAngle(b2Body_GetRotation(entry->m_body)), velocity.x, velocity.y,
+            b2Body_GetAngularVelocity(entry->m_body)};
     }
 }

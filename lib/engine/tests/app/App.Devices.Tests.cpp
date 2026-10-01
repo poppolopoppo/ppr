@@ -16,10 +16,11 @@ namespace pP::tests::detail {
             InputContext context{};
 
             Capture() noexcept {
-                listener.setRawKeyCallback([this](const TimeSpan, const InputMessage &message) -> EInputMessageResponse {
-                    messages.push_back(message);
-                    return EInputMessageResponse::handled;
-                });
+                listener.setRawKeyCallback(
+                    [this](const TimeSpan, const InputMessage &message) -> EInputMessageResponse {
+                        messages.push_back(message);
+                        return EInputMessageResponse::handled;
+                    });
                 context.addInputListener(safe_ptr{&listener}, 0);
             }
         };
@@ -143,8 +144,10 @@ namespace pP::tests::detail {
             const float resting_value = device.m_left_stick.m_dead_zone / 2.0f;
             device.postGamepadAxis2DMoved(dt, capture.context, EGamepadAxis::left_stick, float2{0.0f, resting_value});
             PPR_TEST_ASSERT(capture.messages.size() == 2u);
-            PPR_TEST_ASSERT(distance(capture.messages[1u].getAxis2DValue().m_absolute, float2{zero_v}) < epsilon_v<float>);
-            PPR_TEST_ASSERT(distance(capture.messages[1u].getAxis2DValue().m_relative, float2{zero_v}) < epsilon_v<float>);
+            PPR_TEST_ASSERT(
+                distance(capture.messages[1u].getAxis2DValue().m_absolute, float2{zero_v}) < epsilon_v<float>);
+            PPR_TEST_ASSERT(
+                distance(capture.messages[1u].getAxis2DValue().m_relative, float2{zero_v}) < epsilon_v<float>);
 
             device.postGamepadAxis2DMoved(dt, capture.context, EGamepadAxis::left_stick, float2{0.0f, resting_value});
             PPR_TEST_ASSERT(capture.messages.size() == 2u);

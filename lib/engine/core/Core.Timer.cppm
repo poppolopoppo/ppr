@@ -48,6 +48,7 @@ export namespace pP {
     class TimerManager final : public ITimerClock {
     public:
         using Callback = std23::move_only_function<std::error_code(TimePoint)>;
+
     private:
         struct Event {
             TimePoint m_date{};
@@ -93,8 +94,7 @@ export namespace std {
         }
 
         template<typename FormatContextT>
-        auto format(const pP::TimeSpan &td, FormatContextT &ctx) const
-            -> decltype(ctx.out()) {
+        auto format(const pP::TimeSpan &td, FormatContextT &ctx) const -> decltype(ctx.out()) {
             using namespace std::chrono;
             const auto ns = duration_cast<nanoseconds>(td).count();
 
@@ -105,12 +105,15 @@ export namespace std {
                 return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}µs"), static_cast<double>(ns) / 1'000.0);
             }
             if (ns < 1'000'000) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{}µs"), duration_cast<microseconds>(td).count());
+                return std::format_to(
+                    ctx.out(), PPR_LITERAL_FOR(CharT, "{}µs"), duration_cast<microseconds>(td).count());
             }
             if (ns < 1'000'000'000LL) {
-                return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), static_cast<double>(ns) / 1'000'000.0);
+                return std::format_to(
+                    ctx.out(), PPR_LITERAL_FOR(CharT, "{:.1f}ms"), static_cast<double>(ns) / 1'000'000.0);
             }
-            return std::format_to(ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), static_cast<double>(ns) / 1'000'000'000.0);
+            return std::format_to(
+                ctx.out(), PPR_LITERAL_FOR(CharT, "{:.2f}s"), static_cast<double>(ns) / 1'000'000'000.0);
         }
     };
 

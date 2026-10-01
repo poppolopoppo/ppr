@@ -116,7 +116,7 @@ export namespace pP::sim {
         };
 
         Array<ChunkState> m_states;
-        Array<std::optional<Array<Cell> > > m_payloads;
+        Array<std::optional<Array<Cell>>> m_payloads;
 
     public:
         ChunkGrid();
@@ -131,7 +131,7 @@ export namespace pP::sim {
 
         /// Borrowed view of a resident chunk payload; empty optional when the
         /// chunk has never been written.
-        [[nodiscard]] std::optional<std::span<const Cell> > residentCells(ChunkPos pos) const noexcept;
+        [[nodiscard]] std::optional<std::span<const Cell>> residentCells(ChunkPos pos) const noexcept;
 
         [[nodiscard]] bool isResident(ChunkPos pos) const noexcept;
 

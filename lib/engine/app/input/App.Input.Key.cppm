@@ -280,12 +280,9 @@ export namespace pP {
 
         EKeyboardKey,
 
-        EGamepadAxis,
-        EGamepadButton,
+        EGamepadAxis, EGamepadButton,
 
-        EMouseAxis,
-        EMouseButton
-    >;
+        EMouseAxis, EMouseButton>;
 
     struct InputKey;
     [[nodiscard]] hash_t hashValue(const InputKey &value) noexcept;
@@ -296,10 +293,7 @@ export namespace pP {
         InputKeyCode m_code;
         EInputValueType m_value;
 
-        constexpr InputKey(
-            const string_literal name,
-            const InputKeyCode code,
-            const EInputValueType value) noexcept
+        constexpr InputKey(const string_literal name, const InputKeyCode code, const EInputValueType value) noexcept
             : m_name(name), m_code(code), m_value(value) {
         }
 
@@ -323,13 +317,12 @@ export namespace pP {
 
         [[nodiscard]] bool isMouse() const noexcept;
 
-        [[nodiscard]] friend constexpr bool
-        operator==(const InputKey &lhs, const InputKey &rhs) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(const InputKey &lhs, const InputKey &rhs) noexcept {
             return lhs.m_code == rhs.m_code;
         }
 
-        [[nodiscard]] friend constexpr std::strong_ordering
-        operator<=>(const InputKey &lhs, const InputKey &rhs) noexcept {
+        [[nodiscard]] friend constexpr std::strong_ordering operator<=>(
+            const InputKey &lhs, const InputKey &rhs) noexcept {
             return lhs.m_code <=> rhs.m_code;
         }
 
@@ -553,11 +546,7 @@ export namespace pP {
     using InputAxis3D = details::input_value<float3>;
 
     namespace details {
-        using InputValueVariant = std::variant<
-            InputDigital,
-            InputAxis1D,
-            InputAxis2D,
-            InputAxis3D>;
+        using InputValueVariant = std::variant<InputDigital, InputAxis1D, InputAxis2D, InputAxis3D>;
     }
 
     struct InputValue;
@@ -612,6 +601,5 @@ export namespace pP {
     };
 
     template<>
-    struct details::relocatable<InputValue> : std::true_type {
-    };
+    struct details::relocatable<InputValue> : std::true_type {};
 }
