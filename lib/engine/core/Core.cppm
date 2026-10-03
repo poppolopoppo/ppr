@@ -11,6 +11,8 @@ export import :containers.stl;
 export import :concurrency.channel;
 export import :concurrency.context;
 export import :concurrency.event;
+export import :concurrency.scheduler;
+export import :concurrency.thread;
 export import :enums;
 export import :function.callback;
 export import :function.ref;

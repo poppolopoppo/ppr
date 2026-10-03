@@ -70,6 +70,15 @@ export namespace pP {
     inline constexpr std::align_val_t alignof_v{alignof(T)};
     inline constexpr std::align_val_t max_align_v = alignof_v<std::max_align_t>;
 
+    template<typename T, std::align_val_t AlignV>
+    struct alignas_padded final : T {
+        using T::T;
+        using T::operator=;
+
+    private:
+        std::byte m_alignment_padding[alignForward(sizeof(T), AlignV) - sizeof(T)];
+    };
+
     // ------------------------------------------------------------------
     // bit count needed to store any type
     // ------------------------------------------------------------------
@@ -103,6 +112,10 @@ export namespace pP {
     [[nodiscard]] constexpr std::error_code make_error_code(
         const std::expected<T, std::error_code> &expected) noexcept {
         return expected.error_or(default_value_v);
+    }
+
+    [[nodiscard]] constexpr std::error_code operator|(const std::error_code a, const std::error_code b) noexcept {
+        return a ? a : b;
     }
 
     [[nodiscard]] constexpr bool hasFailed(const bool result) noexcept {

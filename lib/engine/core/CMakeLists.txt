@@ -35,6 +35,8 @@ target_sources(engine.core
             concurrency/Core.Concurrency.Channel.cppm
             concurrency/Core.Concurrency.Context.cppm
             concurrency/Core.Concurrency.Event.cppm
+            concurrency/Core.Concurrency.Scheduler.cppm
+            concurrency/Core.Concurrency.Thread.cppm
             containers/Core.Containers.HashMap.cppm
             containers/Core.Containers.STL.cppm
             containers/Core.Containers.SparseVector.cppm
@@ -68,6 +70,8 @@ target_sources(engine.core
         concurrency/Core.Concurrency.Channel.cpp
         concurrency/Core.Concurrency.Context.cpp
         concurrency/Core.Concurrency.Event.cpp
+        concurrency/Core.Concurrency.Scheduler.cpp
+        concurrency/Core.Concurrency.Thread.cpp
         containers/Core.Containers.HashMap.cpp
         containers/Core.Containers.StableVector.cpp
         io/Core.Io.FileWatcher.cpp
