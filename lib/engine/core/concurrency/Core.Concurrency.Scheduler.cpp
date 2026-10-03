@@ -10,6 +10,10 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Scheduler, debug, none);
 
+    [[noreturn]] void rethrowScheduler() {
+        PPR_RETHROW(Scheduler);
+    }
+
     namespace {
         class SchedulerErrorCategory final : public std::error_category {
         public:
@@ -47,13 +51,13 @@ namespace pP {
         string_literal description, const std::size_t num_workers, const std::size_t queue_bytes_per_worker, SharedContext parent)
         : m_description(description) {
         if (num_workers == 0u) [[unlikely]] {
-            throw std::system_error(std::make_error_code(std::errc::invalid_argument));
+            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::invalid_argument)));
         }
         if (num_workers > (std::numeric_limits<u32>::max)()) [[unlikely]] {
-            throw std::system_error(std::make_error_code(std::errc::not_enough_memory));
+            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::not_enough_memory)));
         }
         if (queue_bytes_per_worker == 0u) [[unlikely]] {
-            throw std::system_error(std::make_error_code(std::errc::invalid_argument));
+            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::invalid_argument)));
         }
         PPR_ASSERT(num_workers > 0u);
         PPR_ASSERT(queue_bytes_per_worker > 0u);

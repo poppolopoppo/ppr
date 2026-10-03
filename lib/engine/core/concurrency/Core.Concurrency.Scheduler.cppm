@@ -12,6 +12,10 @@ import :hal;
 
 import std;
 
+namespace pP {
+    [[noreturn]] void rethrowScheduler();
+}
+
 export namespace pP {
     // ------------------------------------------------------------------
     // multi-tasking scheduler for fixed-size pool of parallel workers
@@ -230,7 +234,7 @@ export namespace pP {
         } catch (...) {
             worker.m_tasks_queued.producerDiscard(*reserved);
             worker.m_num_outstanding.fetch_sub(1u, std::memory_order_acq_rel);
-            throw;
+            rethrowScheduler();
         }
 
         const auto *const p_task = new (reserved->data()) TaskEnvelope_{
