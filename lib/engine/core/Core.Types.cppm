@@ -250,7 +250,11 @@ export namespace pP {
         explicit constexpr Numeric(const char (&magick)[sizeof(T) + 1 /*'\0'*/]) noexcept
             requires std::is_integral_v<T> and std::is_trivially_copyable_v<T>
         {
-            std::memcpy(&m_value, &magick[0], sizeof(T));
+            std::array<char, sizeof(T)> buf{};
+            std::copy_n(magick, sizeof(T), buf.begin());
+
+            m_value = std::bit_cast<T>(buf);
+
             if constexpr (std::endian::native == std::endian::little) {
                 m_value = std::byteswap(m_value); // make it readable in the debugger
             }
