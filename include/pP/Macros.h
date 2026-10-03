@@ -268,6 +268,39 @@ extern "C" void _ReadWriteBarrier();
 // works with std::error_code and rhi::Result via pP::failed()
 // ------------------------------------------------------------------
 
+#if PPR_ENABLE_LOGGING
+#define PPR_THROW(_CATEGORY, ...)                                                                                      \
+    do {                                                                                                               \
+        static_assert(std::derived_from<std::remove_cvref_t<decltype((__VA_ARGS__))>, std::exception>);                \
+        try {                                                                                                          \
+            throw __VA_ARGS__;                                                                                         \
+        } catch (const std::exception &PPR_ANONYMIZE(_ppr_e)) {                                                        \
+            PPR_LOG(                                                                                                   \
+                _CATEGORY, error, "throw exception",                                                                   \
+                {{"what", PPR_ANONYMIZE(_ppr_e).what()}, {"type", typeid(PPR_ANONYMIZE(_ppr_e)).name()}});             \
+            throw;                                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+#define PPR_RETHROW(_CATEGORY)                                                                                         \
+    do {                                                                                                               \
+        try {                                                                                                          \
+            throw;                                                                                                     \
+        } catch (const std::exception &PPR_ANONYMIZE(_ppr_e)) {                                                        \
+            PPR_LOG(                                                                                                   \
+                _CATEGORY, error, "rethrow exception",                                                                 \
+                {{"what", PPR_ANONYMIZE(_ppr_e).what()}, {"type", typeid(PPR_ANONYMIZE(_ppr_e)).name()}});             \
+            throw;                                                                                                     \
+        } catch (...) {                                                                                                \
+            PPR_LOG(_CATEGORY, error, "rethrow foreign exception");                                                    \
+            throw;                                                                                                     \
+        }                                                                                                              \
+    } while (0)
+#else
+#define PPR_THROW(_CATEGORY, ...) throw __VA_ARGS__
+#define PPR_RETHROW(_CATEGORY) throw
+#endif
+
 #define PPR_RETURN_ON_FAIL(_CATEGORY, ...)                                                                             \
     if (auto const PPR_ANONYMIZE(_ppr_result) = (__VA_ARGS__); hasFailed(PPR_ANONYMIZE(_ppr_result))) [[unlikely]] {   \
         PPR_LOG(_CATEGORY, error, "FAILED: " PPR_STRINGIZE(__VA_ARGS__), pP::opaque::Dict{});                          \
