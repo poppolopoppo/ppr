@@ -11,14 +11,17 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::process {
     [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
         std::error_code ec;
         auto path = std::filesystem::read_symlink("/proc/self/exe", ec);
         if (ec) {
-            throw std::runtime_error("Failed to read /proc/self/exe");
+            PPR_THROW(Hal, std::runtime_error("Failed to read /proc/self/exe"));
         }
         return path;
     }
@@ -40,7 +43,7 @@ namespace pP::hal::process {
         }
 
         if (pid < 0) {
-            throw std::runtime_error("fork failed");
+            PPR_THROW(Hal, std::runtime_error("fork failed"));
         }
 
         int status = 0;

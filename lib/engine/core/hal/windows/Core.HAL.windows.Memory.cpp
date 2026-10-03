@@ -13,7 +13,10 @@ import :hal;
 import :memory;
 import :memory.poison;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal {
     const std::size_t page_size = []() noexcept -> std::size_t {
@@ -124,7 +127,7 @@ namespace pP::hal {
             aligned_size, alignment, MEM_RESERVE | (commit ? MEM_COMMIT : 0), pageProtectionFlags_(allowed));
 
         if (!p_result) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
 
         PPR_ASSERT(alignForward(p_result, alignment) == p_result);
@@ -151,7 +154,7 @@ namespace pP::hal {
         PPR_ASSERT(size % page_size == 0u);
 
         if (::VirtualAlloc(ptr, size, MEM_COMMIT, pageProtectionFlags_(allowed)) == nullptr) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
 
         mem::unpoisonUninitialized(ptr, size);
@@ -166,14 +169,14 @@ namespace pP::hal {
         // pages, so writing poison patterns here would fault. Decommit itself
         // makes the memory inaccessible, catching use-after-free at the OS level.
         if (::VirtualFree(ptr, size, MEM_DECOMMIT) == FALSE) {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
     void pageProtect(void *const ptr, const std::size_t size, const PageProtection allowed) {
         ::DWORD old_protect;
         if (::VirtualProtect(ptr, size, pageProtectionFlags_(allowed), &old_protect) == FALSE) {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -181,7 +184,7 @@ namespace pP::hal {
         // Genuine OS page mapping: offered pages must not be poisoned (the
         // offer itself makes the memory dead, catching use-after-free).
         if (::OfferVirtualMemory(ptr, size, VmOfferPriorityNormal) != ERROR_SUCCESS) {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -198,7 +201,7 @@ namespace pP::hal {
         // pages, so writing poison patterns here would fault. Unmapping itself
         // makes the memory inaccessible, catching use-after-free at the OS level.
         if (!::VirtualFree(ptr, 0u, MEM_RELEASE)) {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 }

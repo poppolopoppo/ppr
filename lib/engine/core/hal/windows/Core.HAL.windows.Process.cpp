@@ -8,14 +8,17 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::process {
     [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
         wchar_t buffer[MAX_PATH];
         const DWORD len = ::GetModuleFileNameW(nullptr, buffer, MAX_PATH);
         if (len == 0 || len >= MAX_PATH) {
-            throw std::runtime_error("Failed to get executable path");
+            PPR_THROW(Hal, std::runtime_error("Failed to get executable path"));
         }
         return std::filesystem::path(buffer, buffer + len);
     }
@@ -41,7 +44,7 @@ namespace pP::hal::process {
         if (!::CreateProcessW(
                 executable.c_str(), cmdline.data(), nullptr, nullptr, FALSE, creationFlags, nullptr, nullptr, &si,
                 &pi)) {
-            throw std::runtime_error("Failed to create process");
+            PPR_THROW(Hal, std::runtime_error("Failed to create process"));
         }
 
         ::CloseHandle(pi.hThread);

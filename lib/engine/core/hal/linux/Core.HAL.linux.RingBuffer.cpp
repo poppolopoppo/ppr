@@ -18,6 +18,8 @@ import std;
 
 namespace pP::hal {
     void *ringBufferAlloc(const std::size_t buffer_size) noexcept(false) {
+        // NOTE: no PPR_THROW here — this is a logger-bootstrap path (RawChannel ctor); logging would recurse into
+        // Handler::get() static init.
         PPR_ASSERT(alignForward(buffer_size, page_granularity) == buffer_size);
 
         const int fd = static_cast<int>(::syscall(SYS_memfd_create, "pP::ring", static_cast<unsigned>(MFD_CLOEXEC)));
@@ -62,6 +64,8 @@ namespace pP::hal {
     }
 
     void ringBufferFree(const void *ring_buffer, const std::size_t buffer_size) noexcept(false) {
+        // NOTE: no PPR_THROW here — this is a logger-bootstrap path (RawChannel ctor); logging would recurse into
+        // Handler::get() static init.
         PPR_ASSERT(ring_buffer != nullptr);
         PPR_ASSERT(alignForward(buffer_size, page_granularity) == buffer_size);
 

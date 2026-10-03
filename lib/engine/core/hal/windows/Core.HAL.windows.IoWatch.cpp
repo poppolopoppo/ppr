@@ -10,7 +10,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct WatchHandleData {
@@ -43,7 +46,7 @@ namespace pP::hal::io {
             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
 
         if (hDir == INVALID_HANDLE_VALUE) [[unlikely]] {
-            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
+            PPR_THROW(Hal, std::system_error(std::error_code(::GetLastError(), std::system_category())));
         }
 
         auto *data = new WatchHandleData();
@@ -54,7 +57,7 @@ namespace pP::hal::io {
         if (data->m_event == nullptr) [[unlikely]] {
             ::CloseHandle(hDir);
             delete data;
-            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
+            PPR_THROW(Hal, std::system_error(std::error_code(::GetLastError(), std::system_category())));
         }
 
         startWatch_(data);

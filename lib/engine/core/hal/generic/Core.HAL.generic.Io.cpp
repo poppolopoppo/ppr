@@ -8,7 +8,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct IoHandleData {
@@ -19,16 +22,20 @@ namespace pP::hal::io {
     };
 
     IoHandle init() noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported), "IoPort not supported on this platform");
+        PPR_THROW(
+            Hal,
+            std::system_error(
+                std::make_error_code(std::errc::operation_not_supported), "IoPort not supported on this platform"));
     }
 
     void deinit(const IoHandle) noexcept {
     }
 
     FileHandle openFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported), "IoPort not supported on this platform");
+        PPR_THROW(
+            Hal,
+            std::system_error(
+                std::make_error_code(std::errc::operation_not_supported), "IoPort not supported on this platform"));
     }
 
     void closeFile(const IoHandle, const FileHandle) noexcept {

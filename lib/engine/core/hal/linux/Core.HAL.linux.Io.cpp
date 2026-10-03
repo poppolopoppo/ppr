@@ -18,7 +18,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct IoHandleData {
@@ -179,7 +182,7 @@ namespace pP::hal::io {
         ::io_uring_params params{};
         const int ring_fd = static_cast<int>(::syscall(SYS_io_uring_setup, kEntries, &params));
         if (ring_fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: io_uring_setup failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: io_uring_setup failed"));
         }
 
         auto *data = new IoHandleData();
@@ -215,7 +218,7 @@ namespace pP::hal::io {
                 nullptr, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
             if (ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
-                throw std::system_error(errno, std::generic_category(), "pP::io: io_uring ring mmap failed");
+                PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: io_uring ring mmap failed"));
             }
             data->m_sq_ptr = ptr;
             data->m_cq_ptr = ptr;
@@ -226,7 +229,7 @@ namespace pP::hal::io {
                 nullptr, sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQ_RING);
             if (sq_ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
-                throw std::system_error(errno, std::generic_category(), "pP::io: io_uring SQ mmap failed");
+                PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: io_uring SQ mmap failed"));
             }
             data->m_sq_ptr = sq_ptr;
             data->m_sq_size = sq_size;
@@ -235,7 +238,7 @@ namespace pP::hal::io {
                 nullptr, cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_CQ_RING);
             if (cq_ptr == MAP_FAILED) [[unlikely]] {
                 cleanup();
-                throw std::system_error(errno, std::generic_category(), "pP::io: io_uring CQ mmap failed");
+                PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: io_uring CQ mmap failed"));
             }
             data->m_cq_ptr = cq_ptr;
             data->m_cq_size = cq_size;
@@ -245,7 +248,7 @@ namespace pP::hal::io {
             nullptr, sqes_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, ring_fd, IORING_OFF_SQES);
         if (sqes == MAP_FAILED) [[unlikely]] {
             cleanup();
-            throw std::system_error(errno, std::generic_category(), "pP::io: io_uring SQE mmap failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: io_uring SQE mmap failed"));
         }
         data->m_sqes = static_cast<::io_uring_sqe *>(sqes);
         data->m_sqes_size = sqes_size;
@@ -301,7 +304,7 @@ namespace pP::hal::io {
     FileHandle openFile(const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
         auto *io_data = static_cast<IoHandleData *>(io);
         if (io_data == nullptr) [[unlikely]] {
-            throw std::invalid_argument("pP::io: invalid IoHandle");
+            PPR_THROW(Hal, std::invalid_argument("pP::io: invalid IoHandle"));
         }
 
         int oflags = O_CLOEXEC;
@@ -323,7 +326,7 @@ namespace pP::hal::io {
 
         const int fd = ::open(path.c_str(), oflags, 0644);
         if (fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: openFile open failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: openFile open failed"));
         }
 
         auto *file_data = new FileHandleData();

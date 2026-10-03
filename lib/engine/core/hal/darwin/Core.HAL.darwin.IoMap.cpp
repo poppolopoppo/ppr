@@ -13,7 +13,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct MapHandleData {
@@ -32,7 +35,7 @@ namespace pP::hal::io {
 
         const int fd = ::open(path.c_str(), oflags);
         if (fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile open failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: mapFile open failed"));
         }
 
         PPR_DEFER {
@@ -41,7 +44,7 @@ namespace pP::hal::io {
 
         struct ::stat st{};
         if (::fstat(fd, &st) < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile fstat failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: mapFile fstat failed"));
         }
 
         if (st.st_size == 0) {
@@ -51,7 +54,7 @@ namespace pP::hal::io {
 
         void *const data = ::mmap(nullptr, static_cast<std::size_t>(st.st_size), prot, MAP_SHARED, fd, 0);
         if (data == MAP_FAILED) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: mapFile mmap failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: mapFile mmap failed"));
         }
 
         auto *md = new MapHandleData();

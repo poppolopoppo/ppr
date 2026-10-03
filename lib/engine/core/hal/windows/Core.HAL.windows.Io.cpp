@@ -12,7 +12,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct IoHandleData {
@@ -35,7 +38,7 @@ namespace pP::hal::io {
     IoHandle init() noexcept(false) {
         const ::HANDLE port = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
         if (port == nullptr) [[unlikely]] {
-            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
+            PPR_THROW(Hal, std::system_error(std::error_code(::GetLastError(), std::system_category())));
         }
 
         auto *data = new IoHandleData();
@@ -54,7 +57,7 @@ namespace pP::hal::io {
     FileHandle openFile(const IoHandle io, const std::filesystem::path &path, const OpenFlags flags) noexcept(false) {
         const auto *io_data = static_cast<const IoHandleData *>(io);
         if (io_data == nullptr) [[unlikely]] {
-            throw std::invalid_argument("pP::io: invalid IoHandle");
+            PPR_THROW(Hal, std::invalid_argument("pP::io: invalid IoHandle"));
         }
 
         ::DWORD access = 0;
@@ -80,13 +83,13 @@ namespace pP::hal::io {
             nullptr);
 
         if (file == INVALID_HANDLE_VALUE) [[unlikely]] {
-            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
+            PPR_THROW(Hal, std::system_error(std::error_code(::GetLastError(), std::system_category())));
         }
 
         if (::CreateIoCompletionPort(file, io_data->m_port, std::bit_cast<::ULONG_PTR>(file), 0) == nullptr)
             [[unlikely]] {
             ::CloseHandle(file);
-            throw std::system_error(std::error_code(::GetLastError(), std::system_category()));
+            PPR_THROW(Hal, std::system_error(std::error_code(::GetLastError(), std::system_category())));
         }
 
         ::SetFileCompletionNotificationModes(file, FILE_SKIP_SET_EVENT_ON_HANDLE);

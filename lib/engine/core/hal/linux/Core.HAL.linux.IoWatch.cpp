@@ -14,7 +14,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     namespace {
@@ -46,7 +49,7 @@ namespace pP::hal::io {
     WatchHandle openWatch(const std::filesystem::path &dir, const bool recursive) noexcept(false) {
         const int fd = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
         if (fd < 0) [[unlikely]] {
-            throw std::system_error(errno, std::generic_category(), "pP::io: openWatch inotify_init1 failed");
+            PPR_THROW(Hal, std::system_error(errno, std::generic_category(), "pP::io: openWatch inotify_init1 failed"));
         }
 
         auto *data = new WatchHandleData();
@@ -59,7 +62,9 @@ namespace pP::hal::io {
             const int saved_errno = errno;
             ::close(fd);
             delete data;
-            throw std::system_error(saved_errno, std::generic_category(), "pP::io: openWatch inotify_add_watch failed");
+            PPR_THROW(
+                Hal,
+                std::system_error(saved_errno, std::generic_category(), "pP::io: openWatch inotify_add_watch failed"));
         }
         data->m_root_wd = wd;
 

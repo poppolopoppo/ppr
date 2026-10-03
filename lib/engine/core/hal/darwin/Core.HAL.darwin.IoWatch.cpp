@@ -8,13 +8,17 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     WatchHandle openWatch(const std::filesystem::path &, bool) noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported),
-            "pP::io: directory watching not implemented on darwin");
+        PPR_THROW(
+            Hal, std::system_error(
+                     std::make_error_code(std::errc::operation_not_supported),
+                     "pP::io: directory watching not implemented on darwin"));
     }
 
     void closeWatch(const WatchHandle) noexcept {

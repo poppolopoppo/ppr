@@ -7,7 +7,10 @@ module engine.core;
 import :function.ref;
 import :hal;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::timer {
 
@@ -33,7 +36,7 @@ namespace pP::hal::timer {
                 },
                 data, static_cast<DWORD>(ms.count()), 0, WT_EXECUTEDEFAULT)) {
             delete data;
-            throw std::runtime_error("CreateTimerQueueTimer failed");
+            PPR_THROW(Hal, std::runtime_error("CreateTimerQueueTimer failed"));
         }
 
         data->h_timer = hTimer;

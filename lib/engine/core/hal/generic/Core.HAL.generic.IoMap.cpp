@@ -8,7 +8,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct MapHandleData {
@@ -17,9 +20,10 @@ namespace pP::hal::io {
     };
 
     MapHandle mapFile(const std::filesystem::path &, const OpenFlags) noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported),
-            "pP::io: memory-mapped files not supported on this platform");
+        PPR_THROW(
+            Hal, std::system_error(
+                     std::make_error_code(std::errc::operation_not_supported),
+                     "pP::io: memory-mapped files not supported on this platform"));
     }
 
     void unmapFile(const MapHandle) noexcept {

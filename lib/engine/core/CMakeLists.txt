@@ -87,6 +87,8 @@ target_sources(engine.core
         Core.Service.cpp
         Core.Timer.cpp
         Core.Utility.cpp
+        hal/Core.HAL.Log.hpp
+        hal/Core.HAL.Log.cpp
         ${HAL_PLATFORM_SOURCES}
 )
 

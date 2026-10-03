@@ -13,7 +13,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal {
     const std::size_t page_size = []() noexcept -> std::size_t {
@@ -55,7 +58,7 @@ namespace pP::hal {
             void *mapped_ptr = ::mmap(nullptr, aligned_size, prot, flags, -1, 0);
 
             if (mapped_ptr == MAP_FAILED) [[unlikely]] {
-                throw std::bad_alloc();
+                PPR_THROW(Hal, std::bad_alloc());
             }
 
             if (!commit) {
@@ -69,7 +72,7 @@ namespace pP::hal {
         const std::size_t reserved_size = aligned_size + align_bytes - granularity;
         void *const reservation = ::mmap(nullptr, reserved_size, PROT_NONE, flags, -1, 0);
         if (reservation == MAP_FAILED) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
 
         void *const aligned_ptr = alignForward(reservation, alignment);
@@ -79,17 +82,17 @@ namespace pP::hal {
 
         if (::mprotect(aligned_ptr, aligned_size, prot) != 0) [[unlikely]] {
             ::munmap(reservation, reserved_size);
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
         if (head_slop > 0u && ::munmap(reservation, head_slop) != 0) [[unlikely]] {
             ::munmap(aligned_ptr, aligned_size);
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
         if (tail_slop > 0u) {
             void *const tail = static_cast<std::byte *>(aligned_ptr) + aligned_size;
             if (::munmap(tail, tail_slop) != 0) [[unlikely]] {
                 ::munmap(aligned_ptr, aligned_size);
-                throw std::bad_alloc();
+                PPR_THROW(Hal, std::bad_alloc());
             }
         }
 
@@ -109,7 +112,7 @@ namespace pP::hal {
 
         const int prot = pageProtectionFlags_(allowed);
         if (::mprotect(ptr, size, prot) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -119,14 +122,14 @@ namespace pP::hal {
         PPR_ASSERT(size % page_size == 0u);
 
         if (::madvise(ptr, size, MADV_DONTNEED) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
     void pageProtect(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
         const int prot = pageProtectionFlags_(allowed);
         if (::mprotect(ptr, size, prot) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -137,7 +140,7 @@ namespace pP::hal {
         if (::madvise(ptr, size, MADV_DONTNEED) != 0) [[unlikely]]
 #endif
         {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -155,7 +158,7 @@ namespace pP::hal {
 #endif
 
         if (::munmap(ptr, size) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 }

@@ -8,7 +8,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal {
     const std::size_t page_size = 4096u;
@@ -21,14 +24,14 @@ namespace pP::hal {
         (void) commit;
         (void) allowed;
         (void) alignment;
-        throw std::bad_alloc();
+        PPR_THROW(Hal, std::bad_alloc());
     }
 
     void pageCommit(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
         (void) ptr;
         (void) size;
         (void) allowed;
-        throw std::bad_alloc();
+        PPR_THROW(Hal, std::bad_alloc());
     }
 
     void pageDecommit(void *const ptr, const std::size_t size) noexcept(false) {

@@ -8,7 +8,10 @@ module engine.core;
 import :function.ref;
 import :hal;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::timer {
 
@@ -35,7 +38,7 @@ namespace pP::hal::timer {
 
         if (::timer_create(CLOCK_MONOTONIC, &sev, &data->m_timer_id) != 0) {
             delete data;
-            throw std::runtime_error("timer_create failed");
+            PPR_THROW(Hal, std::runtime_error("timer_create failed"));
         }
 
         struct itimerspec its{};
@@ -45,7 +48,7 @@ namespace pP::hal::timer {
         if (::timer_settime(data->m_timer_id, 0, &its, nullptr) != 0) {
             ::timer_delete(data->m_timer_id);
             delete data;
-            throw std::runtime_error("timer_settime failed");
+            PPR_THROW(Hal, std::runtime_error("timer_settime failed"));
         }
 
         return DeadlineHandle{data};

@@ -15,7 +15,10 @@ import :hal;
 import :memory;
 import :memory.poison;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal {
     const std::size_t page_size = []() noexcept -> std::size_t {
@@ -52,7 +55,7 @@ namespace pP::hal {
         void *mapped_ptr = ::mmap(nullptr, aligned_size, prot, flags, -1, 0);
 
         if (mapped_ptr == MAP_FAILED) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
 
         mem::unpoisonUninitialized(mapped_ptr, aligned_size);
@@ -67,7 +70,7 @@ namespace pP::hal {
 
         const int prot = pageProtectionFlags_(allowed);
         if (::mprotect(ptr, size, prot) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
 
         mem::unpoisonUninitialized(ptr, size);
@@ -82,14 +85,14 @@ namespace pP::hal {
         // pages, so writing poison patterns here would fault. Decommit itself
         // makes the memory inaccessible, catching use-after-free at the OS level.
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
     void pageProtect(void *const ptr, const std::size_t size, const PageProtection allowed) noexcept(false) {
         const int prot = pageProtectionFlags_(allowed);
         if (::mprotect(ptr, size, prot) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -97,7 +100,7 @@ namespace pP::hal {
         // Genuine OS page mapping: offered pages must not be poisoned (the
         // offer itself makes the memory dead, catching use-after-free).
         if (::madvise(ptr, size, MADV_FREE) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 
@@ -118,7 +121,7 @@ namespace pP::hal {
         // pages, so writing poison patterns here would fault. Unmapping itself
         // makes the memory inaccessible, catching use-after-free at the OS level.
         if (::munmap(ptr, size) != 0) [[unlikely]] {
-            throw std::bad_alloc();
+            PPR_THROW(Hal, std::bad_alloc());
         }
     }
 }

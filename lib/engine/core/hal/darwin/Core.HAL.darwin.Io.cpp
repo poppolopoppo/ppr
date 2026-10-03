@@ -8,7 +8,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::io {
     struct IoHandleData {
@@ -20,8 +23,10 @@ namespace pP::hal::io {
     };
 
     IoHandle init() noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported), "pP::io: kqueue not yet implemented on Darwin");
+        PPR_THROW(
+            Hal, std::system_error(
+                     std::make_error_code(std::errc::operation_not_supported),
+                     "pP::io: kqueue not yet implemented on Darwin"));
     }
 
     void deinit(const IoHandle handle) noexcept {
@@ -29,8 +34,10 @@ namespace pP::hal::io {
     }
 
     FileHandle openFile(const IoHandle, const std::filesystem::path &, const OpenFlags) noexcept(false) {
-        throw std::system_error(
-            std::make_error_code(std::errc::operation_not_supported), "pP::io: openFile not yet implemented on Darwin");
+        PPR_THROW(
+            Hal, std::system_error(
+                     std::make_error_code(std::errc::operation_not_supported),
+                     "pP::io: openFile not yet implemented on Darwin"));
     }
 
     void closeFile(const IoHandle, const FileHandle file) noexcept {

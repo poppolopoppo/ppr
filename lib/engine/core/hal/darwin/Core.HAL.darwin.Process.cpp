@@ -12,7 +12,10 @@ import :assert;
 import :hal;
 import :memory;
 
+import :logger;
 import std;
+
+#include "../Core.HAL.Log.hpp"
 
 namespace pP::hal::process {
     [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false) {
@@ -21,7 +24,7 @@ namespace pP::hal::process {
 
         std::string path_buf(buf_size, '\0');
         if (::_NSGetExecutablePath(path_buf.data(), &buf_size) != 0) {
-            throw std::runtime_error("Failed to get executable path");
+            PPR_THROW(Hal, std::runtime_error("Failed to get executable path"));
         }
 
         return std::filesystem::path(std::move(path_buf));
@@ -44,7 +47,7 @@ namespace pP::hal::process {
         }
 
         if (pid < 0) {
-            throw std::runtime_error("fork failed");
+            PPR_THROW(Hal, std::runtime_error("fork failed"));
         }
 
         int status = 0;
