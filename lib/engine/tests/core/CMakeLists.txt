@@ -22,6 +22,7 @@ target_sources(engine.tests.core
         Core.Containers.StableVector.Tests.cpp
         Core.Containers.SparseVector.Tests.cpp
         Core.Concurrency.Channel.Tests.cpp
+        Core.Concurrency.Scheduler.Tests.cpp
         Core.Concurrency.Event.Tests.cpp
         Core.Concurrency.Context.Tests.cpp
         Core.Io.Tests.cpp

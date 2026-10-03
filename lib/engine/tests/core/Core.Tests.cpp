@@ -15,6 +15,8 @@ namespace pP::tests {
 
     const UnitTest &channelTests() noexcept;
 
+    const UnitTest &schedulerTests() noexcept;
+
     const UnitTest &eventTests() noexcept;
 
     const UnitTest &contextTests() noexcept;
@@ -109,6 +111,7 @@ namespace pP::tests {
             containers,
             opaqueTests(),
             channelTests(),
+            schedulerTests(),
             eventTests(),
             contextTests(),
             ioTests(),
