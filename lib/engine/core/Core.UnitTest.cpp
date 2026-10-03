@@ -27,6 +27,8 @@ namespace std {
 }
 
 namespace pP {
+    PPR_DEFINE_LOG_CATEGORY(UnitTest, debug, none)
+
     // ------------------------------------------------------------------
     // Unit test helper
     // ------------------------------------------------------------------
@@ -35,7 +37,7 @@ namespace pP {
         const std::string text = std::format(
             "{}({}): TEST assert failed: \"{}\"\n\tin function: {}\n", site.file_name(), site.line(), message,
             site.function_name());
-        throw std::logic_error{text};
+        PPR_THROW(UnitTest, std::logic_error{text});
     }
 
     bool UnitTest::startInChildProcess_(RunImpl &run) const {
@@ -162,11 +164,12 @@ namespace pP {
     }
 
     void UnitTest::RunImpl::logEntry(const Log::Entry &entry) {
-        if (entry.m_site.m_verbosity >= Log::ELevel::error) {
-            failWith(entry.m_message.data());
-        } else {
-            log(entry.m_message.data());
-        }
+        // NOTE: the logger is optional/best-effort and must never decide the verdict.
+        // Route every entry (including error) to the normal log/capture path so it is
+        // still reported, without marking the test failed. Failures come only from
+        // explicit paths: PPR_TEST_ASSERT / onAssertFailure, expected-exception
+        // assertions, and unexpected escapes handled in UnitTest::run.
+        log(entry.m_message.data());
     }
 
     void UnitTest::RunImpl::log(const char *msg) {
@@ -195,7 +198,7 @@ namespace pP {
         } else if (m_context.m_fail_with.has_value()) {
             (*m_context.m_fail_with)(*this, msg);
         } else {
-            throw std::logic_error{msg};
+            PPR_THROW(UnitTest, std::logic_error{msg});
         }
     }
 
@@ -260,7 +263,7 @@ namespace pP {
             std::cerr.flush();
         }
 
-        throw std::logic_error(condition.m_message);
+        PPR_THROW(UnitTest, std::logic_error(condition.m_message));
     }
 #endif
 
