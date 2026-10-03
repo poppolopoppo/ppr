@@ -16,11 +16,7 @@ export namespace pP {
 
     // inspired from BPF ring buffer: https://www.kernel.org/doc/html/latest/bpf/ringbuf.html
 
-    PPR_PRAGMA_WARNING_PUSH()
-    PPR_PRAGMA_WARNING_DISABLE_MSVC(4324) // ignore padding due to cache-line alignment
-    PPR_PRAGMA_WARNING_DISABLE_MSVC(4265) // ignore the absence of virtual destructor for this class
-
-    class alignas(hal::cacheline_size_v) RawChannel : public IEvent {
+    class RawChannel : public IEvent {
         void advanceCommit_() noexcept;
 
         void *const m_data{};
@@ -96,11 +92,7 @@ export namespace pP {
                 return m_header;
             }
 
-            [[nodiscard]] void *data() noexcept {
-                return m_header.get().data();
-            }
-
-            [[nodiscard]] const void *data() const noexcept {
+            [[nodiscard]] void *data() const noexcept {
                 return m_header.get().data();
             }
 
@@ -113,9 +105,9 @@ export namespace pP {
             }
         };
 
-        explicit RawChannel(const std::size_t buffer_size) noexcept;
-        explicit RawChannel() noexcept;
-        RawChannel(const std::size_t num_elements, const std::size_t element_size) noexcept;
+        explicit RawChannel(std::size_t buffer_size);
+        explicit RawChannel();
+        RawChannel(std::size_t num_elements, std::size_t element_size);
         virtual ~RawChannel() noexcept;
 
         RawChannel(const RawChannel &) = delete;
@@ -150,11 +142,11 @@ export namespace pP {
 
     private:
         [[nodiscard]] std::expected<Record, errc> producerReserveAssumeNotClosed_(
-            const std::size_t size_bytes, const EBackPressure policy) noexcept;
+            std::size_t size_bytes, EBackPressure policy) noexcept;
 
     public:
         [[nodiscard]] std::expected<Record, errc> producerReserve(
-            const std::size_t size_bytes, const EBackPressure policy = wait_if_full) noexcept;
+            std::size_t size_bytes, EBackPressure policy = wait_if_full) noexcept;
 
         void producerSubmit(RecordHeader &written) noexcept;
 
@@ -165,8 +157,7 @@ export namespace pP {
             peek_without_blocking,
         };
 
-        [[nodiscard]] std::expected<Record, errc> consumerAcquire(
-            const EPolling policy = block_until_available) noexcept;
+        [[nodiscard]] std::expected<Record, errc> consumerAcquire(EPolling policy = block_until_available) noexcept;
 
         void consumerRelease(const RecordHeader &read) noexcept;
 
@@ -174,16 +165,14 @@ export namespace pP {
         // IEvent interface implementation
         // ------------------------------------------------------------------
 
-        [[nodiscard]] TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept final;
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept final;
+        [[nodiscard]] TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept final;
+        void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept final;
         [[nodiscard]] bool pollEvent() noexcept final;
         void resetEvent() noexcept final;
     };
-
-    PPR_PRAGMA_WARNING_POP()
 }
 
-template<>
+export template<>
 struct std::is_error_code_enum<pP::RawChannel::errc> : std::true_type { // NOLINT(*-dcl58-cpp)
 };
 

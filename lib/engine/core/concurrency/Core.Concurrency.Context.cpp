@@ -9,39 +9,45 @@ import :timer;
 import std;
 
 namespace pP::context {
-    // BackgroundContext
-    class BackgroundContext final : public IContext {
-        NeverEvent m_done{};
+    namespace {
+        // --------------------------------------------------------------
+        // background context is the default pass-through / noop
+        // --------------------------------------------------------------
 
-    public:
-        BackgroundContext() noexcept = default;
+        class BackgroundContext final : public IContext {
+            NeverEvent m_done{};
 
-        [[nodiscard]] std::error_code error() const noexcept override {
-            return default_value_v;
-        }
+        public:
+            BackgroundContext() noexcept = default;
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *> value(const string_literal) const noexcept override {
-            return std::nullopt;
-        }
+            [[nodiscard]] std::error_code error() const noexcept override {
+                return default_value_v;
+            }
 
-        // IEvent interface:
+            [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+                const string_literal) const noexcept override {
+                return std::nullopt;
+            }
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            return m_done.subscribeEvent(signal);
-        }
+            // IEvent interface:
 
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            m_done.unsubscribeEvent(signal, restore);
-        }
+            TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+                return m_done.subscribeEvent(std::move(signal));
+            }
 
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return m_done.pollEvent();
-        }
+            void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+                m_done.unsubscribeEvent(std::move(signal), std::move(restore));
+            }
 
-        void resetEvent() noexcept override {
-            m_done.resetEvent();
-        }
-    };
+            [[nodiscard]] bool pollEvent() noexcept override {
+                return m_done.pollEvent();
+            }
+
+            void resetEvent() noexcept override {
+                m_done.resetEvent();
+            }
+        };
+    }
 
     // --------------------------------------------------------------
     // cancelable context, with or without an explicit error code
@@ -56,7 +62,7 @@ namespace pP::context {
 
     protected: // ISignal interface
         // ReSharper disable once CppOverrideWithDifferentVisibility
-        void notify(const std::size_t) noexcept final {
+        void notify(std::size_t) noexcept final {
             m_done.emitEvent();
         }
 
@@ -65,13 +71,13 @@ namespace pP::context {
         }
 
     public:
-        explicit CancelContext(SharedContext parent) noexcept
+        explicit CancelContext(SharedContext parent) noexcept // NOLINT(*-pro-type-member-init)
             : m_parent(std::move(parent)), m_restore(m_parent->subscribeEvent(TagPtr<ISignal>(this, 0u))),
               m_error_code(std::error_code{}) {
             PPR_ASSERT(m_parent.get());
         }
 
-        ~CancelContext() noexcept override {
+        ~CancelContext() noexcept override { // NOLINT(*-use-equals-default)
             m_parent->unsubscribeEvent(TagPtr<ISignal>(this, 0u), m_restore);
         }
 
@@ -85,6 +91,9 @@ namespace pP::context {
             // 16-byte CAS also compares padding: a fresh expect_no_error{}
             // never matches bitwise. Failure refreshes expect with the exact
             // stored bits, so retry while it still reports "no error".
+            if (m_error_code.load(std::memory_order_acquire)) {
+                return;
+            }
             std::error_code expect_no_error{};
             while (not expect_no_error) {
                 if (m_error_code.compare_exchange_strong(expect_no_error, err, std::memory_order_acq_rel)) {
@@ -109,12 +118,12 @@ namespace pP::context {
 
         // IEvent interface:
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            return m_done.subscribeEvent(signal);
+        TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+            return m_done.subscribeEvent(std::move(signal));
         }
 
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            m_done.unsubscribeEvent(signal, restore);
+        void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+            m_done.unsubscribeEvent(std::move(signal), std::move(restore));
         }
 
         [[nodiscard]] bool pollEvent() noexcept override {
@@ -130,178 +139,187 @@ namespace pP::context {
     // withoutCancel: Severs cancellation, preserves values
     // --------------------------------------------------------------
 
-    class WithoutCancelContext final : public IContext {
-        const SharedContext m_parent{};
-        NeverEvent m_done{}; // Never fires
+    namespace {
+        class WithoutCancelContext final : public IContext {
+            const SharedContext m_parent{};
+            NeverEvent m_done{}; // Never fires
 
-    public:
-        explicit WithoutCancelContext(SharedContext parent) noexcept : m_parent(std::move(parent)) {
-            PPR_ASSERT(m_parent.get());
-            // Notice: We specifically DO NOT subscribe to m_parent->done()
-        }
+        public:
+            explicit WithoutCancelContext(SharedContext parent) noexcept : m_parent(std::move(parent)) {
+                PPR_ASSERT(m_parent.get());
+                // Notice: We specifically DO NOT subscribe to m_parent->done()
+            }
 
-        // IContext interface:
+            // IContext interface:
 
-        [[nodiscard]] std::error_code error() const noexcept override {
-            return default_value_v; // Never has an error
-        }
+            [[nodiscard]] std::error_code error() const noexcept override {
+                return default_value_v; // Never has an error
+            }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
-            const string_literal user_key) const noexcept override {
-            return m_parent->value(user_key); // Values still flow down
-        }
+            [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+                const string_literal user_key) const noexcept override {
+                return m_parent->value(user_key); // Values still flow down
+            }
 
-        // IEvent interface:
+            // IEvent interface:
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            return m_done.subscribeEvent(signal);
-        }
+            TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+                return m_done.subscribeEvent(std::move(signal));
+            }
 
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            m_done.unsubscribeEvent(signal, restore);
-        }
+            void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+                m_done.unsubscribeEvent(std::move(signal), std::move(restore));
+            }
 
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return m_done.pollEvent();
-        }
+            [[nodiscard]] bool pollEvent() noexcept override {
+                return m_done.pollEvent();
+            }
 
-        void resetEvent() noexcept override {
-            m_done.resetEvent();
-        }
-    };
+            void resetEvent() noexcept override {
+                m_done.resetEvent();
+            }
+        };
+    }
 
     // --------------------------------------------------------------
     // execute a callback after cancel or destruction
     // --------------------------------------------------------------
 
-    class AfterContext final : public IContext {
-        const SharedContext m_parent{};
-        AfterFunc m_execute_after;
+    namespace {
+        class AfterContext final : public IContext {
+            const SharedContext m_parent{};
+            AfterFunc m_execute_after;
 
-    public:
-        AfterContext(SharedContext parent, AfterFunc &&execute_after) noexcept
-            : m_parent(std::move(parent)), m_execute_after(std::move(execute_after)) {
-            PPR_ASSERT(m_parent.get());
-        }
+        public:
+            AfterContext(SharedContext parent, AfterFunc &&execute_after) noexcept // NOLINT(*-pro-type-member-init)
+                : m_parent(std::move(parent)), m_execute_after(std::move(execute_after)) {
+                PPR_ASSERT(m_parent.get());
+            }
 
-        ~AfterContext() noexcept override {
-            m_execute_after(*this);
-        }
+            ~AfterContext() noexcept override { // NOLINT(*-use-equals-default)
+                m_execute_after(*this);
+            }
 
-        // IContext interface:
+            // IContext interface:
 
-        [[nodiscard]] std::error_code error() const noexcept override {
-            return m_parent->error();
-        }
+            [[nodiscard]] std::error_code error() const noexcept override {
+                return m_parent->error();
+            }
 
-        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
-            const string_literal user_key) const noexcept override {
-            return m_parent->value(user_key);
-        }
+            [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+                const string_literal user_key) const noexcept override {
+                return m_parent->value(user_key);
+            }
 
-        // IEvent interface:
+            // IEvent interface:
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            return m_parent->subscribeEvent(signal);
-        }
+            TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+                return m_parent->subscribeEvent(std::move(signal));
+            }
 
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            m_parent->unsubscribeEvent(signal, restore);
-        }
+            void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+                m_parent->unsubscribeEvent(std::move(signal), std::move(restore));
+            }
 
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return m_parent->pollEvent();
-        }
+            [[nodiscard]] bool pollEvent() noexcept override {
+                return m_parent->pollEvent();
+            }
 
-        void resetEvent() noexcept override {
-            m_parent->resetEvent();
-        }
-    };
+            void resetEvent() noexcept override {
+                m_parent->resetEvent();
+            }
+        };
+    }
 
     // --------------------------------------------------------------
     // associate opaque data with the context
     // --------------------------------------------------------------
 
-    class ValueContext final : public IContext {
-        const SharedContext m_parent;
-        const opaque::Unique<mem::GPA> m_opaque;
+    namespace {
+        class ValueContext final : public IContext {
+            const SharedContext m_parent;
+            const opaque::Unique<mem::GPA> m_opaque;
 
-    public:
-        ValueContext(SharedContext parent, const opaque::Dict &values)
-            : m_parent(std::move(parent)), m_opaque(opaque::makeUnique<mem::GPA>(values)) {
-            PPR_ASSERT(m_parent.get());
-        }
-
-        // IContext interface:
-
-        [[nodiscard]] std::error_code error() const noexcept override {
-            return m_parent->error();
-        }
-
-        [[nodiscard]] std::optional<const opaque::Block::Value *> value(
-            const string_literal user_key) const noexcept override {
-            if (const opaque::Block::Value *const p_value = m_opaque->tryGet(user_key)) {
-                return p_value;
+        public:
+            ValueContext(SharedContext parent, const opaque::Dict &values) // NOLINT(*-pro-type-member-init)
+                : m_parent(std::move(parent)), m_opaque(opaque::makeUnique<mem::GPA>(values)) {
+                PPR_ASSERT(m_parent.get());
             }
-            return m_parent->value(user_key);
-        }
 
-        // IEvent interface:
+            // IContext interface:
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override {
-            return m_parent->subscribeEvent(signal);
-        }
+            [[nodiscard]] std::error_code error() const noexcept override {
+                return m_parent->error();
+            }
 
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override {
-            m_parent->unsubscribeEvent(signal, restore);
-        }
+            [[nodiscard]] std::optional<const opaque::Block::Value *> value(
+                const string_literal user_key) const noexcept override {
+                if (const opaque::Block::Value *const p_value = m_opaque->tryGet(user_key)) {
+                    return p_value;
+                }
+                return m_parent->value(user_key);
+            }
 
-        [[nodiscard]] bool pollEvent() noexcept override {
-            return m_parent->pollEvent();
-        }
+            // IEvent interface:
 
-        void resetEvent() noexcept override {
-            m_parent->resetEvent();
-        }
-    };
+            TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+                return m_parent->subscribeEvent(std::move(signal));
+            }
+
+            void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+                m_parent->unsubscribeEvent(std::move(signal), std::move(restore));
+            }
+
+            [[nodiscard]] bool pollEvent() noexcept override {
+                return m_parent->pollEvent();
+            }
+
+            void resetEvent() noexcept override {
+                m_parent->resetEvent();
+            }
+        };
+    }
 
     // --------------------------------------------------------------
     // cancels on timeout or parent cancel
     // --------------------------------------------------------------
 
-    class DeadlineContext : public CancelContext {
-        const TimePoint m_deadline;
-        const std::error_code m_cause;
+    namespace {
+        class DeadlineContext : public CancelContext {
+            const TimePoint m_deadline;
+            const std::error_code m_cause;
 
-    public:
-        DeadlineContext(SharedContext parent, const TimePoint deadline, const std::error_code cause) noexcept
-            : CancelContext(std::move(parent)), m_deadline(deadline), m_cause(cause) {
-        }
-
-        [[nodiscard]] static SharedContext schedule(
-            SharedContext parent, const TimePoint deadline, const std::error_code cause, TimerManager &timer) {
-            auto ctx = std::make_shared<DeadlineContext>(std::move(parent), deadline, cause);
-
-            timer.schedule(deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept -> std::error_code {
-                if (const std::shared_ptr<DeadlineContext> self = weak_self.lock()) [[likely]] {
-                    self->cancelDeadline(now);
-                }
-                return default_value_v;
-            });
-
-            return std::move(ctx);
-        }
-
-        [[nodiscard]] TimePoint deadline() const noexcept {
-            return m_deadline;
-        }
-
-        void cancelDeadline(const TimePoint now) noexcept {
-            if (PPR_ENSURE(now >= m_deadline)) [[likely]] {
-                cancelCause(m_cause);
+        public:
+            DeadlineContext(SharedContext parent, const TimePoint deadline, const std::error_code cause) noexcept
+                : CancelContext(std::move(parent)), m_deadline(deadline), m_cause(cause) {
             }
-        }
-    };
+
+            [[nodiscard]] static SharedContext schedule(
+                SharedContext parent, const TimePoint deadline, const std::error_code cause, TimerManager &timer) {
+                auto ctx = std::make_shared<DeadlineContext>(std::move(parent), deadline, cause);
+
+                timer.schedule(
+                    deadline, [weak_self(std::weak_ptr(ctx))](const TimePoint now) noexcept -> std::error_code {
+                        if (const std::shared_ptr<DeadlineContext> self = weak_self.lock()) [[likely]] {
+                            self->cancelDeadline(now);
+                        }
+                        return default_value_v;
+                    });
+
+                return std::move(ctx);
+            }
+
+            [[nodiscard]] TimePoint deadline() const noexcept {
+                return m_deadline;
+            }
+
+            void cancelDeadline(const TimePoint now) noexcept {
+                if (PPR_ENSURE(now >= m_deadline)) [[likely]] {
+                    cancelCause(m_cause);
+                }
+            }
+        };
+    }
 
     SharedContext background() {
         return std::make_shared<BackgroundContext>();

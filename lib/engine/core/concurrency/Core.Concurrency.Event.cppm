@@ -23,7 +23,7 @@ export namespace pP {
         ~ISignal() = default;
 
     public:
-        virtual void notify(const std::size_t event_tag) noexcept = 0;
+        virtual void notify(std::size_t event_tag) noexcept = 0;
 
         virtual void wait() noexcept = 0;
     };
@@ -34,8 +34,8 @@ export namespace pP {
         ~IEvent() = default;
 
     public:
-        virtual TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept = 0;
-        virtual void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept = 0;
+        [[nodiscard]] virtual TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept = 0;
+        virtual void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept = 0;
 
         [[nodiscard]] virtual bool pollEvent() noexcept = 0;
 
@@ -120,7 +120,7 @@ export namespace pP {
                     break;
                 }
             };
-            const std::size_t ready_index = checked_cast<std::size_t>(std::countr_zero(pending));
+            const auto ready_index = checked_cast<std::size_t>(std::countr_zero(pending));
             return getOptionalEvent_(ready_index);
         }
 
@@ -259,7 +259,7 @@ export namespace pP {
         TagPtr<ISignal> const m_restore;
 
     public:
-        explicit Signal(EventT &event PPR_LIFETIME_BOUND) noexcept
+        explicit Signal(EventT &event PPR_LIFETIME_BOUND) noexcept // NOLINT(*-pro-type-member-init)
             : m_event(event), m_restore(m_event.subscribeEvent(TagPtr<ISignal>{this, 0u})) {
         }
 
@@ -422,8 +422,8 @@ export namespace pP {
     public:
         PulseEvent() noexcept = default;
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override;
+        TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override;
+        void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override;
         [[nodiscard]] bool pollEvent() noexcept override;
         void resetEvent() noexcept override;
         void emitEvent() noexcept;
@@ -436,7 +436,7 @@ export namespace pP {
     class [[nodiscard]] BroadcastEvent final : public IEvent {
         std::mutex m_subscriptions_mutex{};
         std::atomic_flag m_signal{};
-        StableVectorInplace<TagPtr<ISignal>, mem::PMR> m_subscriptions;
+        StableVectorInplace<TagPtr<ISignal>, mem::PMR> m_subscriptions{};
 
     public:
         BroadcastEvent() noexcept = default;
@@ -444,8 +444,8 @@ export namespace pP {
         explicit BroadcastEvent(const mem::PMR &allocator) noexcept : m_subscriptions(allocator) {
         }
 
-        TagPtr<ISignal> subscribeEvent(const TagPtr<ISignal> signal) noexcept override;
-        void unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept override;
+        TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override;
+        void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override;
         [[nodiscard]] bool pollEvent() noexcept override;
         void resetEvent() noexcept override;
         void emitEvent() noexcept;

@@ -43,16 +43,16 @@ namespace pP {
         return std::error_code{static_cast<int>(error), g_channel_error_category};
     }
 
-    RawChannel::RawChannel(const std::size_t buffer_size) noexcept
+    RawChannel::RawChannel(const std::size_t buffer_size)
         : m_data{hal::ringBufferAlloc(buffer_size)}, m_capacity(buffer_size) {
         PPR_ASSERT(std::has_single_bit(m_capacity) && "buffer size must be a power of 2");
         mem::poisonReserved(m_data, m_capacity);
     }
 
-    RawChannel::RawChannel() noexcept : RawChannel(static_cast<std::size_t>(hal::page_granularity)) {
+    RawChannel::RawChannel() : RawChannel(static_cast<std::size_t>(hal::page_granularity)) {
     }
 
-    RawChannel::RawChannel(const std::size_t num_elements, const std::size_t element_size) noexcept
+    RawChannel::RawChannel(const std::size_t num_elements, const std::size_t element_size)
         : RawChannel(std::bit_ceil(alignForward(num_elements * alignSize(element_size), hal::page_granularity))) {
     }
 
@@ -83,12 +83,12 @@ namespace pP {
         return m_capacity;
     }
 
-    TagPtr<ISignal> RawChannel::subscribeEvent(const TagPtr<ISignal> signal) noexcept {
-        return m_on_produced.subscribeEvent(signal);
+    TagPtr<ISignal> RawChannel::subscribeEvent(TagPtr<ISignal> signal) noexcept {
+        return m_on_produced.subscribeEvent(std::move(signal));
     }
 
-    void RawChannel::unsubscribeEvent(const TagPtr<ISignal> signal, const TagPtr<ISignal> restore) noexcept {
-        return m_on_produced.unsubscribeEvent(signal, restore);
+    void RawChannel::unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept {
+        return m_on_produced.unsubscribeEvent(std::move(signal), std::move(restore));
     }
 
     bool RawChannel::pollEvent() noexcept {
@@ -115,7 +115,7 @@ namespace pP {
         // C++23 std::start_lifetime_as is unavailable in this libc++; launder over
         // reinterpreted storage is the portable spelling (MSVC accepts both).
         // noinspection ClangdErrorsAndWarnings
-        *std::launder(reinterpret_cast<std::atomic_flag **>(hdr->data())) = &flush_signal;
+        *std::launder(static_cast<std::atomic_flag **>(hdr->data())) = &flush_signal;
         hdr->m_header.get().m_flags |= RecordHeader::flag_flush;
 
         producerSubmit(*hdr);
@@ -162,13 +162,11 @@ namespace pP {
 
         std::unique_lock lock(m_producer_mutex);
         while (true) {
-            if (const std::size_t used = m_write - m_read.load(std::memory_order_acquire);
-                used + record_size > m_capacity) [[unlikely]] {
+            const std::size_t read_pos = m_read.load(std::memory_order_acquire);
+            if (const std::size_t used = m_write - read_pos; used + record_size > m_capacity) [[unlikely]] {
                 switch (policy) {
                     case drop_if_full: return std::unexpected(error_full);
-                    case wait_if_full:
-                        m_read.wait(m_read.load(std::memory_order_acquire), std::memory_order_acquire);
-                        continue;
+                    case wait_if_full: m_read.wait(read_pos, std::memory_order_acquire); continue;
                     case yield_if_full:
                         lock.unlock();
                         std::this_thread::yield();
