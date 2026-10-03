@@ -25,6 +25,8 @@ namespace pP {
         hal::disableSystemErrorReporting();
         hal::installDebugAssertHooks();
         hal::setThreadName("Application");
+
+        this_thread::setGroup(thread::main_group);
     }
 
     Application::~Application() noexcept = default;
