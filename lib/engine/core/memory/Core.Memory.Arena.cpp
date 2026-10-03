@@ -2,10 +2,12 @@ module;
 #include "pP/Macros.h"
 
 module engine.core;
+import :logger;
 import :memory.arena;
 import std;
 
 namespace pP::mem {
+    PPR_DECLARE_LOG_CATEGORY(Memory);
 
     // ------------------------------------------------------------------
     // slab allocator has a single chunk of fixed size, which it does not own
@@ -17,7 +19,7 @@ namespace pP::mem {
         void *aligned_ptr = m_data + m_offset;
 
         if (std::align(static_cast<std::size_t>(alignment), bytes, aligned_ptr, space) == nullptr) [[unlikely]] {
-            throw std::bad_alloc{};
+            PPR_THROW(Memory, std::bad_alloc{});
         }
 
         const u32 old_offset = m_offset;

@@ -9,6 +9,10 @@ import :memory.poison;
 
 import std;
 
+namespace pP::mem {
+    [[noreturn]] void throwBadAlloc();
+}
+
 export namespace pP::mem {
     // ------------------------------------------------------------------
     // pointer memory aliasing
@@ -89,6 +93,17 @@ export namespace pP::mem {
     public:
         static_assert(alignof(T) <= static_cast<std::size_t>(AlignmentV));
         static_assert(std::is_same_v<std::remove_cvref_t<T>, T>);
+
+        using allocator_type = AllocatorT;
+        using size_type = Size_T;
+        using value_type = T;
+        using pointer = std::add_pointer_t<value_type>;
+        using const_pointer = std::add_pointer_t<std::add_const_t<value_type>>;
+        using reference = std::add_lvalue_reference_t<value_type>;
+        using const_reference = std::add_lvalue_reference_t<std::add_const_t<value_type>>;
+        using allocation_result = std::allocation_result<void *, Size_T>;
+
+        static constexpr std::align_val_t alignment_v = AlignmentV;
 
         std::allocation_result<void *, Size_T> m_block{};
 
@@ -1078,7 +1093,7 @@ export namespace pP::mem {
                 }
             }
             if (free_pool_index >= m_pools.size()) {
-                throw std::bad_alloc();
+                throwBadAlloc();
             }
 
             // now we can safely assume that a new pool is indeed needed
@@ -1088,7 +1103,7 @@ export namespace pP::mem {
             m_pools[free_pool_index] = static_cast<std::byte *>(
                 BlockAllocatorT::allocateRaw(pool_size_v, AlignmentV).ptr);
             if (m_pools[free_pool_index] == nullptr) {
-                throw std::bad_alloc();
+                throwBadAlloc();
             }
             poisonReserved(m_pools[free_pool_index], pool_size_v);
 

@@ -4,9 +4,18 @@ module;
 #include "pP/Macros.h"
 
 module engine.core;
+import :logger;
 import :memory;
 import :memory.pointer;
 import std;
+
+namespace pP::mem {
+    PPR_DEFINE_LOG_CATEGORY(Memory, debug, none);
+
+    [[noreturn]] void throwBadAlloc() {
+        PPR_THROW(Memory, std::bad_alloc{});
+    }
+}
 
 namespace pP {
     // ------------------------------------------------------------------

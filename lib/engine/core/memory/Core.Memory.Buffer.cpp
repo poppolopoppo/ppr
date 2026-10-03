@@ -4,6 +4,7 @@ module;
 module engine.core;
 
 import :enums;
+import :logger;
 import :memory.buffer;
 import :types;
 import :utility;
@@ -12,6 +13,8 @@ import std;
 
 
 namespace pP::mem {
+    PPR_DECLARE_LOG_CATEGORY(Memory);
+
     // ------------------------------------------------------------------
     // BufferOwner owns an allocation & deleter to deallocate when destroyed
     // ------------------------------------------------------------------
@@ -306,8 +309,9 @@ namespace pP::mem {
         const SharedBufferView source_view{getBufferData()};
         const std::size_t size = source_view.size_bytes();
         if (offset > size or (count != std::dynamic_extent and count > size - offset)) [[unlikely]] {
-            throw std::out_of_range{
-                std::format("SharedBuffer::subspan out of range: offset {} count {} size {}", offset, count, size)};
+            PPR_THROW(
+                Memory, std::out_of_range{std::format(
+                            "SharedBuffer::subspan out of range: offset {} count {} size {}", offset, count, size)});
         }
 
         const SharedBufferView buffer_view{source_view.subspan(offset, count)};

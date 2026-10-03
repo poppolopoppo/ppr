@@ -2,10 +2,13 @@ module;
 #include "pP/Macros.h"
 
 module engine.core;
+import :logger;
 import :memory.page_pool;
 import std;
 
 namespace pP::mem {
+    PPR_DECLARE_LOG_CATEGORY(Memory);
+
     // ------------------------------------------------------------------
     // OS page pooling allocator
     // ------------------------------------------------------------------
@@ -61,7 +64,7 @@ namespace pP::mem {
         const auto [page_first, page_count] = m_committed_pages.allocateContiguous(
             m_tree_infos, bundle_max_count, must_commit_pages);
         if (page_first >= m_tree_infos.m_desired_size || page_count == 0u) {
-            throw std::bad_alloc{};
+            PPR_THROW(Memory, std::bad_alloc{});
         }
         PPR_ASSERT(page_first + page_count <= m_tree_infos.m_desired_size);
 
