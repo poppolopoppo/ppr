@@ -482,7 +482,7 @@ namespace pP::physics {
                         if (shapePreinserted) {
                             m_shapes.erase(shapeCommit);
                         }
-                        throw;
+                        PPR_RETHROW(Physics);
                     }
                 }
                 if (existing != m_chains.end()) {
@@ -561,7 +561,7 @@ namespace pP::physics {
                 return result;
             } catch (...) {
                 m_pending.merge(delayed);
-                throw;
+                PPR_RETHROW(Physics);
             }
         } catch (const std::bad_alloc &) {
             return std::make_error_code(std::errc::not_enough_memory);

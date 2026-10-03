@@ -8,6 +8,9 @@ import :scene;
 import std;
 
 namespace pP::physics {
+    // ReSharper disable once CppUseInternalLinkage
+    PPR_DEFINE_LOG_CATEGORY(Physics, debug, none);
+
     namespace {
         [[nodiscard]] std::error_code error(const std::errc code) noexcept {
             return std::make_error_code(code);
@@ -263,7 +266,7 @@ namespace pP::physics {
                     m_runtime->m_bodies.emplace(entities[i], Runtime::Entry{body, m_next_serial});
                 } catch (...) {
                     b2DestroyBody(body);
-                    throw;
+                    PPR_RETHROW(Physics);
                 }
                 handles[i] = {entities[i], m_next_serial++};
                 ++created;
@@ -364,7 +367,7 @@ namespace pP::physics {
                 m_runtime->m_chains.emplace(m_next_serial, chain);
             } catch (...) {
                 b2DestroyChain(chain);
-                throw;
+                PPR_RETHROW(Physics);
             }
             return ChainHandle{m_next_serial++};
         } catch (const std::bad_alloc &) {

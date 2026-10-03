@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 
 export module engine.physics:scene;
 
@@ -6,6 +7,8 @@ import engine.core;
 import std;
 
 export namespace pP::physics {
+    PPR_DECLARE_LOG_CATEGORY(Physics);
+
     struct BodyHandle {
         u64 m_entity{};
         u64 m_serial{};
