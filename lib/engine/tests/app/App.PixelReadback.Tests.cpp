@@ -37,7 +37,7 @@ namespace pP::tests::detail {
 
         protected:
             [[nodiscard]] std::error_code update([[maybe_unused]] const TimeSpan dt) override {
-                throw 42;
+                throw std::runtime_error{"pixel-readback test failure"};
             }
         };
     }

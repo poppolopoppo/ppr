@@ -33,6 +33,8 @@ namespace pP::tests {
 
     const UnitTest &loggerTests() noexcept;
 
+    const UnitTest &errorTests() noexcept;
+
     const UnitTest &page_poolTests() noexcept;
 
     const UnitTest &arenaTests() noexcept;
@@ -120,6 +122,7 @@ namespace pP::tests {
             utilityTests(),
             serviceTests(),
             loggerTests(),
+            errorTests(),
         });
     };
 } // namespace pP::tests
