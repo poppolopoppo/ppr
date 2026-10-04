@@ -97,6 +97,18 @@ export namespace pP {
         return err;
     }
 
+    [[nodiscard]] constexpr const std::error_code &make_error_code(const std::unexpected<std::error_code> &unexpected) noexcept {
+        return unexpected.error();
+    }
+
+    template<typename T>
+    [[nodiscard]] constexpr const std::error_code &make_error_code(const std::expected<T, std::error_code> &expected) noexcept {
+        if (not expected.has_value()) {
+            return expected.error();
+        }
+        return default_value_v;
+    }
+
     // return the first error which actually failed
     [[nodiscard]] constexpr std::error_code make_error_code(
         const std::initializer_list<std::error_code> ilist) noexcept {

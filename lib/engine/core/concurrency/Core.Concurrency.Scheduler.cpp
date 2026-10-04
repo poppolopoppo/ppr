@@ -7,12 +7,7 @@ import :concurrency.thread;
 import std;
 
 namespace pP {
-    // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Scheduler, debug, none);
-
-    [[noreturn]] void rethrowScheduler() {
-        PPR_RETHROW(Scheduler);
-    }
 
     namespace {
         class SchedulerErrorCategory final : public std::error_category {
@@ -48,27 +43,29 @@ namespace pP {
     }
 
     ParallelScheduler::ParallelScheduler( // NOLINT(*-pro-type-member-init)
-        string_literal description, const std::size_t num_workers, const std::size_t queue_bytes_per_worker, SharedContext parent)
-        : m_description(description) {
+        string_literal description, const std::size_t num_workers, const std::size_t queue_bytes_per_worker, SharedContext parent,
+        hal::EPriority thread_priority)
+        : m_description(description), m_thread_priority(thread_priority) {
+        std::error_code err{};
         if (num_workers == 0u) [[unlikely]] {
-            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::invalid_argument)));
+            err = std::make_error_code(std::errc::invalid_argument);
         }
         if (num_workers > (std::numeric_limits<u32>::max)()) [[unlikely]] {
-            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::not_enough_memory)));
+            err = std::make_error_code(std::errc::not_enough_memory);
         }
         if (queue_bytes_per_worker == 0u) [[unlikely]] {
-            PPR_THROW(Scheduler, std::system_error(std::make_error_code(std::errc::invalid_argument)));
+            err = std::make_error_code(std::errc::invalid_argument);
         }
-        PPR_ASSERT(num_workers > 0u);
-        PPR_ASSERT(queue_bytes_per_worker > 0u);
+        if (err) [[unlikely]] {
+            PPR_THROW(Scheduler, std::system_error(err)); // NOLINT(*-exception-baseclass)
+        }
+
         m_workers.resize(num_workers);
         if (not parent) [[unlikely]] {
             parent = context::background();
         }
 
-        auto [lifecycle, request_stop] = context::withCancelClause(std::move(parent));
-        m_lifecycle = std::move(lifecycle);
-        m_request_stop = std::move(request_stop);
+        std::tie(m_lifecycle, m_request_stop) = context::withCancelClause(std::move(parent));
 
         // RawChannel requires a power-of-two capacity; round up to at least one
         // HAL page. Validation above never enters the RawChannel lane itself.
@@ -81,13 +78,15 @@ namespace pP {
 
         PPR_LOG(
             Scheduler, info, "started new task scheduler",
-            {{"description", m_description}, {"num_workers", m_workers.size()}});
+            {{"description", m_description}, {"num_workers", m_workers.size()},
+                {"priority", enumOrd(m_thread_priority)}});
     }
 
     ParallelScheduler::~ParallelScheduler() {
         PPR_LOG(
             Scheduler, info, "stopped task scheduler",
-            {{"description", m_description}, {"num_workers", m_workers.size()}});
+            {{"description", m_description}, {"num_workers", m_workers.size()},
+                {"priority", enumOrd(m_thread_priority)}});
 
         PPR_LOG_WARNING_ON_FAIL(Scheduler, join());
         PPR_ASSERT(getNumOutstandingTasks() == 0u);
@@ -116,7 +115,7 @@ namespace pP {
         // Let in-flight admissions finish before closing, while consumers keep draining.
         const std::unique_lock producer_guard{m_producer_mutex};
 
-        m_joined = true;
+        m_has_joined = true;
 
         // Close each channel once; already-closed is ignored.
         for (const std::unique_ptr<WorkerState_> &worker: m_workers) {
@@ -141,7 +140,7 @@ namespace pP {
         return default_value_v;
     }
 
-    ParallelScheduler::WorkerState_::WorkerState_(
+    ParallelScheduler::WorkerState_::WorkerState_( // NOLINT(*-pro-type-member-init)
         safe_ptr<const ParallelScheduler> owner, const std::size_t index, const std::size_t capacity_bytes)
         : m_tasks_queued(std::bit_ceil(capacity_bytes)), m_lifecycle(owner->m_lifecycle),
           m_index(checked_cast<u32>(index)), m_thread(&WorkerState_::workerLoop, this), m_owner(std::move(owner)) {
@@ -168,8 +167,9 @@ namespace pP {
     }
 
     void ParallelScheduler::WorkerState_::workerLoop() noexcept {
+        hal::setThreadPriority(m_owner->m_thread_priority);
 #if PPR_ENABLE_LOGGING
-        hal::setThreadName(std::format("{}#{}", m_owner->m_description, m_index));
+        hal::setThreadName(std::format("{}#{}", m_owner->m_description.view(), m_index));
 #endif
 
         this_thread::setGroup(thread::worker_group);
@@ -232,21 +232,27 @@ namespace pP {
         }
     }
 
-    std::error_code ParallelScheduler::shouldCancel_() const noexcept {
+    std::error_code ParallelScheduler::shouldCancel_(const std::optional<WaitGroup> &wg) const noexcept {
+        // Cancel if the scheduler was joined or caught an error or an exception
         if (m_lifecycle->pollEvent()) [[unlikely]] {
             const std::error_code err = m_lifecycle->error();
             return err ? err : std::make_error_code(std::errc::operation_canceled);
         }
+
+        // Cancel if provided WaitGroup has already caught an error or an exception
+        if (wg.has_value() and wg->error()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_canceled);
+        }
+
+        // Task should be scheduled
         return default_value_v;
     }
 
-    // ReSharper disable once CppMemberFunctionMayBeConst
-    std::error_code ParallelScheduler::selectWorker_(
-        const std23::function_ref<std::error_code(WorkerState_ &)> producer) noexcept {
+    std::pair<std::size_t, std::size_t> ParallelScheduler::selectNextWorkers_() const noexcept {
         const std::size_t num_workers = m_workers.size();
         PPR_ASSERT(num_workers > 0u);
         if (num_workers == 1u) {
-            return producer(*m_workers.front());
+            return {0u, 0u};
         }
 
         // Power-of-two choices: sample two distinct workers, prefer the less loaded one.
@@ -257,34 +263,23 @@ namespace pP {
         const std::size_t offset = std::uniform_int_distribution<std::size_t>{1u, num_workers - 1u}(rng);
         const std::size_t b = (a + offset) % num_workers; // distinct from a
 
-        WorkerState_ &worker_a = *m_workers[a];
-        WorkerState_ &worker_b = *m_workers[b];
+        const u32 a_num_tasks = m_workers[a]->m_num_outstanding.load(std::memory_order_acquire);
+        const u32 b_num_tasks = m_workers[b]->m_num_outstanding.load(std::memory_order_acquire);
 
-        const u32 a_num_tasks = worker_a.m_num_outstanding.load(std::memory_order_acquire);
-        const u32 b_num_tasks = worker_b.m_num_outstanding.load(std::memory_order_acquire);
-        WorkerState_ *first = &worker_a;
-        WorkerState_ *second = &worker_b;
         if (b_num_tasks < a_num_tasks) {
-            first = &worker_b;
-            second = &worker_a;
+            return {b, a};
         }
-
-        std::error_code err = producer(*first);
-        if (err and err == make_error_code(RawChannel::error_full)) {
-            err = producer(*second);
-        }
-
-        return err;
+        return {a, b};
     }
 
     // ReSharper disable once CppMemberFunctionMayBeConst
     std::error_code ParallelScheduler::dispatchWork_(
-        WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> wg) {
+        WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg) {
         // Register the intent asap to signal the worker loop than more work is coming
         worker.m_num_outstanding.fetch_add(1u, std::memory_order_acq_rel);
 
         // Parent cancellation rejects admission; queued work still drains elsewhere.
-        if (const std::error_code err = shouldCancel_()) [[unlikely]] {
+        if (const std::error_code err = shouldCancel_(wg)) [[unlikely]] {
             worker.m_num_outstanding.fetch_sub(1u, std::memory_order_acq_rel);
             return err;
         }
@@ -298,9 +293,9 @@ namespace pP {
             return make_error_code(reserved.error());
         }
 
-        const auto *const p_task = new (reserved->data()) TaskEnvelope_{.m_run = work, .m_wait_group = std::move(wg)};
-
-        if (p_task->m_wait_group) {
+        if (const auto *const p_task = new (reserved->data())
+                TaskEnvelope_{.m_run = work, .m_wait_group = std::move(wg)};
+            p_task->m_wait_group) {
             p_task->m_wait_group->add();
         }
 
@@ -312,9 +307,29 @@ namespace pP {
     // parallel task helpers
     // ------------------------------------------------------------------
 
+    ParallelScheduler &parallel::foregroundPool() {
+        static const std::size_t kNumWorkers = std::thread::hardware_concurrency() > 2u
+                                                   ? std::thread::hardware_concurrency() - 2u
+                                                   : 1u;
+        static const std::size_t kWorkerQueueSizeBytes = 4u * static_cast<std::size_t>(hal::page_granularity);
+        static ParallelScheduler g_instance{
+            "Foreground", kNumWorkers, kWorkerQueueSizeBytes, context::application(), hal::EPriority::normal};
+        return g_instance;
+    }
+
+    ParallelScheduler &parallel::backgroundPool() {
+        static const std::size_t kNumWorkers = std::thread::hardware_concurrency() > 2u
+                                                   ? (std::thread::hardware_concurrency() - 1u) / 2u
+                                                   : 1u;
+        static const std::size_t kWorkerQueueSizeBytes = 4u * static_cast<std::size_t>(hal::page_granularity);
+        static ParallelScheduler g_instance{
+            "Background", kNumWorkers, kWorkerQueueSizeBytes, context::application(), hal::EPriority::low};
+        return g_instance;
+    }
+
     static std::error_code forRangeInternal_(
-        ParallelScheduler &scheduler, std::size_t first, const std::size_t last,
-        const std23::function_ref<void(std::size_t index)> closure, const WaitGroup &wg) {
+        std::size_t first, const std::size_t last, const std23::function_ref<void(std::size_t index)> closure,
+        ParallelScheduler &scheduler, const WaitGroup &wg) {
         // Serial nested fallback: a worker participates synchronously instead of scheduling.
         if (not scheduler.isWorkerThread()) [[likely]] {
             const std::size_t total = last - first;
@@ -353,8 +368,8 @@ namespace pP {
     }
 
     std::error_code parallel::forRange(
-        ParallelScheduler &scheduler, const std::size_t first, const std::size_t last,
-        const std23::function_ref<void(std::size_t index)> closure) {
+        const std::size_t first, const std::size_t last, const std23::function_ref<void(std::size_t index)> closure,
+        ParallelScheduler &scheduler) {
         if (first > last) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -366,7 +381,7 @@ namespace pP {
         }
 
         const WaitGroup wg;
-        std::error_code err = forRangeInternal_(scheduler, first, last, closure, wg);
+        std::error_code err = forRangeInternal_(first, last, closure, scheduler, wg);
         err = err | wg.wait();
         err = err | scheduler.error();
         return err;
