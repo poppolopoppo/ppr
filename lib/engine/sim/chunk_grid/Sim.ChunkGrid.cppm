@@ -140,8 +140,8 @@ export namespace pP::sim {
             u16 m_max_y{0u};
         };
 
-        Array<ChunkState> m_states;
-        Array<std::optional<Array<Cell>>> m_payloads;
+        Array<ChunkState> m_states{};
+        Array<std::optional<Array<Cell>>> m_payloads{};
 
     public:
         ChunkGrid();
@@ -152,6 +152,8 @@ export namespace pP::sim {
         [[nodiscard]] std::error_code setCell(GlobalCellPos pos, Cell cell);
 
         [[nodiscard]] std::error_code setCells(ChunkPos pos, std::span<const Cell> cells);
+
+        [[nodiscard]] std::error_code setCells(ChunkPos pos, Array<Cell> &&cells);
 
         /// Reads a cell. A non-resident chunk reads back as `Cell{}`.
         [[nodiscard]] Expected<Cell> getCell(GlobalCellPos pos) const;

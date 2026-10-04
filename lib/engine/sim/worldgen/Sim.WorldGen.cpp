@@ -44,7 +44,7 @@ namespace pP::sim {
         // snapshot-local, so neither is usable here)
         // ------------------------------------------------------------------
 
-        [[nodiscard]] constexpr u64 mixOnce(u64 value) noexcept {
+        [[nodiscard]] static constexpr u64 mixOnce(u64 value) noexcept {
             value ^= value >> 30;
             value *= 0xBF58476D1CE4E5B9ULL;
             value ^= value >> 27;
@@ -57,7 +57,7 @@ namespace pP::sim {
             return mixOnce(state);
         }
 
-        [[nodiscard]] constexpr u64 hashCell(const u32 x, const u32 y, const u64 seed) noexcept {
+        [[nodiscard]] static constexpr u64 hashCell(const u32 x, const u32 y, const u64 seed) noexcept {
             const u64 packed = (static_cast<u64>(x) << 32) | y;
             return mixOnce(seed + 0x9E3779B97F4A7C15ULL + packed * 0xBF58476D1CE4E5B9ULL);
         }
@@ -65,7 +65,7 @@ namespace pP::sim {
         /// White noise in [0, 1): top 53 bits of the cell hash over 2^53,
         /// resolved in `double` so the full 53 bits survive (a `float`
         /// mantissa would quantize the output).
-        [[nodiscard]] constexpr float hash01(const u32 x, const u32 y, const u64 seed) noexcept {
+        [[nodiscard]] static constexpr float hash01(const u32 x, const u32 y, const u64 seed) noexcept {
             constexpr double kTwoToNeg53 = 1.0 / 9007199254740992.0;
             const double unit = static_cast<double>(hashCell(x, y, seed) >> 11) * kTwoToNeg53;
             return static_cast<float>(unit);
@@ -73,7 +73,7 @@ namespace pP::sim {
 
         /// Coherent region-mask noise in [0, 1]: lattice hashes at `scale`
         /// with smoothstep bilinear interpolation.
-        [[nodiscard]] float smooth(const u32 x, const u32 y, const u64 seed, const u32 scale) noexcept {
+        [[nodiscard]] static float smooth(const u32 x, const u32 y, const u64 seed, const u32 scale) noexcept {
             const u32 lattice_x = x / scale;
             const u32 lattice_y = y / scale;
             const float frac_x = static_cast<float>(x % scale) / static_cast<float>(scale);
@@ -110,7 +110,7 @@ namespace pP::sim {
             u32 m_worm_angle[kWormCount]{};
         };
 
-        [[nodiscard]] Layout deriveLayout(const u64 seed) noexcept {
+        [[nodiscard]] static Layout deriveLayout(const u64 seed) noexcept {
             Layout layout{};
             u64 state = seed + 0x9E3779B97F4A7C15ULL;
             layout.m_pocket_x = 1024u + static_cast<u32>(nextStream(state) % 2048u);
@@ -155,7 +155,7 @@ namespace pP::sim {
             float m_vent_r2[kVentCount]{};
         };
 
-        [[nodiscard]] Tuned tuneLayout(const Layout &layout) noexcept {
+        [[nodiscard]] static Tuned tuneLayout(const Layout &layout) noexcept {
             Tuned tuned{};
             const float pocket_radius = static_cast<float>(layout.m_pocket_radius);
             tuned.m_pocket_core2 = pocket_radius * pocket_radius * 0.3025f;
@@ -171,7 +171,7 @@ namespace pP::sim {
             return tuned;
         }
 
-        [[nodiscard]] constexpr u32 edgeDistance(const u32 x, const u32 y) noexcept {
+        [[nodiscard]] constexpr static u32 edgeDistance(const u32 x, const u32 y) noexcept {
             u32 distance = x;
             if (y < distance) {
                 distance = y;
@@ -187,13 +187,14 @@ namespace pP::sim {
             return distance;
         }
 
-        [[nodiscard]] constexpr float squaredDistance(const u32 ax, const u32 ay, const u32 bx, const u32 by) noexcept {
+        [[nodiscard]] constexpr static float squaredDistance(
+            const u32 ax, const u32 ay, const u32 bx, const u32 by) noexcept {
             const float dx = static_cast<float>(ax) - static_cast<float>(bx);
             const float dy = static_cast<float>(ay) - static_cast<float>(by);
             return dx * dx + dy * dy;
         }
 
-        [[nodiscard]] Cell baseCell(
+        [[nodiscard]] static Cell baseCell(
             const u32 x, const u32 y, const u64 seed, const Layout &layout, const Tuned &tuned) noexcept {
             const u32 edge = edgeDistance(x, y);
             const float white = hash01(x, y, seed);
@@ -322,13 +323,13 @@ namespace pP::sim {
             {2.7716386f, -1.1480503f},
         };
 
-        void carveCaverns(ChunkGrid &grid, const u64 seed, const Layout &layout) {
+        static void carveCaverns(ChunkGrid &grid, const u64 seed, const Layout &layout) {
             const u64 turn_seed = seed ^ 0xB09A11uLL;
             const u64 radius_seed = seed ^ 0xCA9E0uLL;
             for (u32 worm = 0u; worm < kWormCount; ++worm) {
-                float px = static_cast<float>(layout.m_worm_x[worm]);
-                float py = static_cast<float>(layout.m_worm_y[worm]);
-                i32 heading = static_cast<i32>((layout.m_worm_angle[worm] * 16u) / 6283u % 16u);
+                auto px = static_cast<float>(layout.m_worm_x[worm]);
+                auto py = static_cast<float>(layout.m_worm_y[worm]);
+                auto heading = static_cast<i32>((layout.m_worm_angle[worm] * 16u) / 6283u % 16u);
 
                 for (u32 step = 0u; step < layout.m_worm_steps[worm]; ++step) {
                     // Same hashed turn stream as before (`hash01` in
@@ -359,7 +360,7 @@ namespace pP::sim {
             }
         }
 
-        void carveVentShafts(ChunkGrid &grid, const Layout &layout) {
+        static void carveVentShafts(ChunkGrid &grid, const Layout &layout) {
             for (u32 index = 0u; index < kVentCount; ++index) {
                 const u32 vent_x = layout.m_vent_x[index];
                 const u32 vent_y = layout.m_vent_y[index];
@@ -388,36 +389,44 @@ namespace pP::sim {
         }
     } // namespace WorldGen
 
-    void generate(const u64 seed, ChunkGrid &grid) {
+    void generate(u64 seed, ChunkGrid &grid) {
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
         const WorldGen::Tuned tuned = WorldGen::tuneLayout(layout);
 
-        const std::size_t num_workers = std::thread::hardware_concurrency() > 2u
-                                            ? std::thread::hardware_concurrency() - 2u
-                                            : 1u;
-        const std::size_t queue_bytes = 4u * static_cast<std::size_t>(hal::page_granularity);
-        ParallelScheduler fill_pool{
-            "WorldGen", num_workers, queue_bytes, context::background(), hal::EPriority::normal};
+        const WaitGroup wg{};
+        ParallelScheduler &worker_pool = parallel::foregroundPool();
 
-        Array<Cell> staging{};
-        staging.resize(kCellsPerChunk);
+        std::error_code admission_err{};
+        for (u32 c = 0u; c < kChunkCount; ++c) {
+            grid.markDirty(ChunkPos{c % kChunksPerEdge, c / kChunksPerEdge});
 
-        for (u32 chunk_y = 0u; chunk_y < kChunksPerEdge; ++chunk_y) {
-            for (u32 chunk_x = 0u; chunk_x < kChunksPerEdge; ++chunk_x) {
-                const std::error_code range_err = parallel::forRange(
-                    0u, kCellsPerChunk,
-                    [&](const std::size_t i) {
-                        const u32 lx = static_cast<u32>(i % kChunkEdge);
-                        const u32 ly = static_cast<u32>(i / kChunkEdge);
+            const std::error_code err = worker_pool.schedule(
+                [&grid, &layout, &tuned, seed, c](const IContext &) -> void {
+                    Array<Cell> chunk{};
+                    chunk.resize(kCellsPerChunk);
+
+                    const u32 chunk_x = c % kChunksPerEdge;
+                    const u32 chunk_y = c / kChunksPerEdge;
+                    for (u32 i = 0u; i < kCellsPerChunk; ++i) {
+                        const u32 lx = i % kChunkEdge;
+                        const u32 ly = i / kChunkEdge;
                         const u32 x = chunk_x * kChunkEdge + lx;
                         const u32 y = chunk_y * kChunkEdge + ly;
-                        staging[i] = WorldGen::baseCell(x, y, seed, layout, tuned);
-                    },
-                    fill_pool);
-                PPR_VERIFY(not range_err);
-                PPR_VERIFY(not grid.setCells(ChunkPos{chunk_x, chunk_y}, staging));
+                        chunk[i] = WorldGen::baseCell(x, y, seed, layout, tuned);
+                    }
+
+                    const ChunkPos pos{chunk_x, chunk_y};
+                    PPR_VERIFY(not grid.setCells(pos, std::move(chunk)));
+                },
+                wg, ParallelScheduler::wait_if_full);
+
+            if (err) [[unlikely]] {
+                admission_err = admission_err ? admission_err : err;
             }
         }
+
+        PPR_VERIFY(not wg.wait());
+        PPR_VERIFY(not admission_err);
 
         WorldGen::carveCaverns(grid, seed, layout);
         WorldGen::carveVentShafts(grid, layout);

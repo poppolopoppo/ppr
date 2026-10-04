@@ -24,7 +24,7 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   non-finite temperature). `setCell` grows its chunk dirty box (`DirtyBounds`, superset
   semantics; clean chunks have no bounds via `dirtyBounds()`); `markDirty` sets the full-chunk
   box; `clearDirty`/`clearAllDirty` reset boxes to empty; `setCells` is the bulk whole-chunk
-  writer. `markDirty` returns void because
+  writer (`Array&&` adopt overload: validated move-adoption with no copy; pre-materialization is the caller's duty for concurrent use). `markDirty` returns void because
   allocation failure follows the engine allocator contract. `dirtyChunks()`/
   `activeDirtyChunks()` list dirty chunks row-major (the latter restricted to
   `EChunkActivity::active`); `residentCells()` borrows a resident payload.

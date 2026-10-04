@@ -285,6 +285,86 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(last_cell.has_value());
             PPR_TEST_ASSERT(*last_cell == cells[kCellsPerChunk - 1u]);
         };
+
+        PPR_UNIT_TEST (adopt_rejects_wrong_size_without_mutation) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{1u, 2u};
+
+            Array<Cell> empty{};
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::move(empty)) == std::make_error_code(std::errc::invalid_argument));
+
+            Array<Cell> short_cells{};
+            short_cells.resize(kCellsPerChunk - 1u);
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::move(short_cells)) == std::make_error_code(std::errc::invalid_argument));
+
+            PPR_TEST_ASSERT(not grid.isResident(chunk));
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
+        };
+
+        PPR_UNIT_TEST (adopt_rejects_non_finite_without_mutation) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{3u, 4u};
+
+            Array<Cell> cells{};
+            cells.resize(kCellsPerChunk, Cell{1u, 293.0f});
+            cells.back().m_temperature = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::move(cells)) == std::make_error_code(std::errc::invalid_argument));
+
+            PPR_TEST_ASSERT(not grid.isResident(chunk));
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
+
+            // A resident payload is left untouched by a failed adopting write.
+            Array<Cell> good{};
+            good.resize(kCellsPerChunk, Cell{4u, 300.0f});
+            const Array<Cell> expected = good;
+            PPR_TEST_ASSERT(not grid.setCells(chunk, std::move(good)));
+
+            Array<Cell> bad = expected;
+            bad.back().m_temperature = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(grid.setCells(chunk, std::move(bad)) == std::make_error_code(std::errc::invalid_argument));
+
+            const std::optional<std::span<const Cell>> payload = grid.residentCells(chunk);
+            PPR_TEST_ASSERT(payload.has_value());
+            PPR_TEST_ASSERT(std::ranges::equal(*payload, expected));
+        };
+
+        PPR_UNIT_TEST (adopt_moves_payload_and_marks_full_bounds) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{2u, 1u};
+
+            Array<Cell> cells{};
+            cells.resize(kCellsPerChunk);
+            for (u32 index = 0u; index < kCellsPerChunk; ++index) {
+                cells[index] = Cell{static_cast<u16>(index % 7u), 200.0f + static_cast<float>(index % 100u) * 0.5f};
+            }
+            const Array<Cell> expected = cells;
+            PPR_TEST_ASSERT(not grid.setCells(chunk, std::move(cells)));
+
+            PPR_TEST_ASSERT(grid.isResident(chunk));
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 1u);
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 1u);
+
+            const std::optional<DirtyBounds> full = grid.dirtyBounds(chunk);
+            PPR_TEST_ASSERT(full.has_value());
+            PPR_TEST_ASSERT(*full == (DirtyBounds{0u, 0u, kChunkEdge - 1u, kChunkEdge - 1u}));
+
+            const GlobalCellPos first = globalOf(chunk, LocalCellPos{0u, 0u});
+            const Expected<Cell> first_cell = grid.getCell(first);
+            PPR_TEST_ASSERT(first_cell.has_value());
+            PPR_TEST_ASSERT(*first_cell == expected[0u]);
+
+            const GlobalCellPos last = globalOf(chunk, LocalCellPos{kChunkEdge - 1u, kChunkEdge - 1u});
+            const Expected<Cell> last_cell = grid.getCell(last);
+            PPR_TEST_ASSERT(last_cell.has_value());
+            PPR_TEST_ASSERT(*last_cell == expected[kCellsPerChunk - 1u]);
+        };
     } // namespace Grid
 } // namespace pP::tests::detail
 
@@ -304,6 +384,9 @@ namespace pP::tests {
             detail::Grid::setCells_rejects_wrong_size_without_mutation,
             detail::Grid::setCells_rejects_non_finite_without_mutation,
             detail::Grid::setCells_writes_and_marks_full_bounds,
+            detail::Grid::adopt_rejects_wrong_size_without_mutation,
+            detail::Grid::adopt_rejects_non_finite_without_mutation,
+            detail::Grid::adopt_moves_payload_and_marks_full_bounds,
         });
     };
 

@@ -69,7 +69,30 @@ namespace pP::sim {
         state.m_min_y = 0u;
         state.m_max_x = static_cast<u16>(kChunkEdge - 1u);
         state.m_max_y = static_cast<u16>(kChunkEdge - 1u);
+        return {};
+    }
 
+    std::error_code ChunkGrid::setCells(const ChunkPos pos, Array<Cell> &&cells) {
+        PPR_ASSERT(isInsideChunkGrid(pos));
+
+        if (cells.size() != kCellsPerChunk) [[unlikely]] {
+            return make_error_code(std::errc::invalid_argument);
+        }
+
+        for (const Cell &cell: cells) {
+            if (not isFinite<float>(cell.m_temperature)) [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
+            }
+        }
+
+        m_payloads[chunkIndexOf(pos)] = std::move(cells);
+
+        ChunkState &state = m_states[chunkIndexOf(pos)];
+        state.m_dirty = true;
+        state.m_min_x = 0u;
+        state.m_min_y = 0u;
+        state.m_max_x = static_cast<u16>(kChunkEdge - 1u);
+        state.m_max_y = static_cast<u16>(kChunkEdge - 1u);
         return {};
     }
 
