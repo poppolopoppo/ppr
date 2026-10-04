@@ -137,7 +137,7 @@ TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
 - `StageTiming.h` — per-stage wall-clock timing vocabulary (plain header).
 - `ColonySmoke.cppm` / `ColonySmoke.cpp` — headless offscreen smoke entry.
   Slice 5 dig smoke aggregates `SMOKE-DIG dug=... result=PASS`: D6 pins
-  snapshot v3 with capture-is-not-flush, restore-clear, and matched-command
+  snapshot v4 with capture-is-not-flush, restore-clear, and matched-command
   next-tick checks; D7 proves same-seed live double-run plus symmetric
   restored-pair equality (entity-keyed, per-tick, live-contact waiver).
   CPU-refresh evidence (D5 translator/GridPass upload deltas) is distinct

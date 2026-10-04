@@ -91,13 +91,26 @@ namespace pP::colony {
                 want.m_goal = EGoal::seek;
                 want.m_site = agent.m_spawn;
                 want.m_op = kOpMove;
-                u32 best_y = sim::kWorldEdge;
-                for (u32 y = 0u; y < agent.m_spawn.m_y; y += 4u) {
-                    for (u32 x = 0u; x < sim::kWorldEdge; x += 16u) {
-                        if (isWalkable(grid, {x, y}) and y < best_y) {
-                            best_y = y;
+                // Old code guarded on `isWalkable and y < best_y`: after the
+                // first hit best_y == y blocks same-row overwrites, so the
+                // first hit in (y-asc, x-asc) order wins (smallest y, then
+                // smallest x). Scan rows ascending (y step 4) and x ascending
+                // (step 16 from 0), breaking on the first walkable hit, which
+                // lands on the same cell. Worst case is still a full scan when
+                // nothing is walkable; typical cost is at most one row of probes.
+                constexpr u32 kXStep = 16u;
+                constexpr u32 kYStep = 4u;
+                for (u32 y = 0u; y < agent.m_spawn.m_y; y += kYStep) {
+                    bool found = false;
+                    for (u32 x = 0u; x < sim::kWorldEdge; x += kXStep) {
+                        if (isWalkable(grid, {x, y})) {
                             want.m_site = {x, y};
+                            found = true;
+                            break;
                         }
+                    }
+                    if (found) {
+                        break;
                     }
                 }
                 return want;

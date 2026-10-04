@@ -814,6 +814,12 @@ namespace pP::colony {
         }
         // Materialize the spawn neighbourhood synchronously so agents never
         // free-fall through unbuilt chains on their first ticks.
+        // Rebuild the slot-indexed body lookup wholesale (restoreBodies
+        // inherits this via createAgentBodies).
+        m_body_by_slot.assign(m_registry.slotCount(), none_v);
+        for (u32 index = 0u; index < m_bodies.size(); ++index) {
+            m_body_by_slot[m_bodies[index].m_entity.m_index] = index;
+        }
         Array<sim::ChunkPos> coverage{};
         agentNeighbourhood(m_registry, coverage);
 
@@ -853,15 +859,10 @@ namespace pP::colony {
                 continue;
             }
 
-            u32 entry = 0u;
-            bool known = false;
-            for (u32 index = 0u; index < m_bodies.size(); ++index) {
-                if (m_bodies[index].m_entity == entity) {
-                    entry = index;
-                    known = true;
-                    break;
-                }
-            }
+            const u32 slot = entity.m_index;
+            bool known = slot < m_body_by_slot.size() and m_body_by_slot[slot] != none_v;
+            const u32 entry = known ? m_body_by_slot[slot] : 0u;
+            known = known and m_bodies[entry].m_entity == entity;
             if (known and
                 m_bodies[entry].m_velocity_x == intent.m_velocity_x and
                 m_bodies[entry].m_velocity_y == intent.m_velocity_y) {
@@ -914,6 +915,10 @@ namespace pP::colony {
                         .m_handle = made[0u],
                         .m_velocity_x = intent.m_velocity_x,
                         .m_velocity_y = intent.m_velocity_y});
+                if (m_body_by_slot.size() < m_registry.slotCount()) {
+                    m_body_by_slot.resize(m_registry.slotCount(), none_v);
+                }
+                m_body_by_slot[slot] = safe_narrowing(m_bodies.size() - 1u);
             }
         }
     }

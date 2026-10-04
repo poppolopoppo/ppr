@@ -1658,7 +1658,7 @@ namespace pP::colony {
             }
             std::println(stderr, "SMOKE-DIG-STAGE D4 noop witnesses=2 vacuum={},{}", vacuum.m_x, vacuum.m_y);
 
-            // D6: snapshot v3 pin + capture-is-not-flush + restore-clear +
+            // D6: snapshot v4 pin + capture-is-not-flush + restore-clear +
             // matched-command. sim::apply writes deltas only, never a
             // baseline (Sim.Snapshot.cpp:322-341); capture covers dirty
             // chunks only (:244-260). Blank grids serve delta-cell spot
@@ -1683,7 +1683,7 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             const sim::Snapshot snap = driver.snapshotWithBodies();
-            if (snap.m_version != 3u or snap.m_version != sim::kSnapshotVersion) {
+            if (snap.m_version != 4u or snap.m_version != sim::kSnapshotVersion) {
                 return fail("D6", "snapshot version");
             }
             const auto bytes = sim::save(snap);
@@ -1694,7 +1694,7 @@ namespace pP::colony {
             if (not loaded) {
                 return std::unexpected{loaded.error()};
             }
-            if (loaded->m_version != 3u or not (*loaded == snap)) {
+            if (loaded->m_version != 4u or not (*loaded == snap)) {
                 return fail("D6", "round trip");
             }
 
@@ -1855,7 +1855,7 @@ namespace pP::colony {
                 return fail("D6", "matched grids");
             }
             const sim::Snapshot snap_post = still_rock.snapshotWithBodies();
-            if (snap_post.m_version != 3u or snap_post.m_version != sim::kSnapshotVersion) {
+            if (snap_post.m_version != 4u or snap_post.m_version != sim::kSnapshotVersion) {
                 return fail("D6", "post-tick version");
             }
             const auto bytes_post = sim::save(snap_post);
@@ -1891,7 +1891,7 @@ namespace pP::colony {
             if (const std::error_code error = cleared.shutdown()) {
                 return std::unexpected{error};
             }
-            std::println(stderr, "SMOKE-DIG-STAGE D6 version=3 pre=rock post=vacuum matched=16");
+            std::println(stderr, "SMOKE-DIG-STAGE D6 version=4 pre=rock post=vacuum matched=16");
 
             // D7: determinism. Identical command schedules on two fresh
             // drivers compare exact entity-keyed state with nonzero agents,

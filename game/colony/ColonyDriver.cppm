@@ -101,6 +101,13 @@ export namespace pP::colony {
         physics::Scene m_scene{};
         physics::ChunkColliders m_colliders{};
         Array<AgentBody> m_bodies{};
+        /// Slot-indexed row lookup for m_bodies (none_v = no body). Rebuilt
+        /// wholesale by createAgentBodies/restoreBodies; extended in
+        /// moveAgents when a new body row is appended. DERIVED state only:
+        /// never snapshotted, never compared. Invariant: agents are never
+        /// destroyed mid-run in this slice so rows are never removed; a
+        /// future destroy path must rebuild the map.
+        Array<u32> m_body_by_slot{};
         Array<AgentSummary> m_agents{};
         std::error_code m_step_error{};
         const char *m_step_stage{""};
