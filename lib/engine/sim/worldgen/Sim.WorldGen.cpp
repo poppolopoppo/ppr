@@ -392,10 +392,30 @@ namespace pP::sim {
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
         const WorldGen::Tuned tuned = WorldGen::tuneLayout(layout);
 
-        for (u32 y = 0u; y < kWorldEdge; ++y) {
-            for (u32 x = 0u; x < kWorldEdge; ++x) {
-                const Cell cell = WorldGen::baseCell(x, y, seed, layout, tuned);
-                PPR_VERIFY(not grid.setCell(GlobalCellPos{x, y}, cell));
+        const std::size_t num_workers = std::thread::hardware_concurrency() > 2u
+                                            ? std::thread::hardware_concurrency() - 2u
+                                            : 1u;
+        const std::size_t queue_bytes = 4u * static_cast<std::size_t>(hal::page_granularity);
+        ParallelScheduler fill_pool{
+            "WorldGen", num_workers, queue_bytes, context::background(), hal::EPriority::normal};
+
+        Array<Cell> staging{};
+        staging.resize(kCellsPerChunk);
+
+        for (u32 chunk_y = 0u; chunk_y < kChunksPerEdge; ++chunk_y) {
+            for (u32 chunk_x = 0u; chunk_x < kChunksPerEdge; ++chunk_x) {
+                const std::error_code range_err = parallel::forRange(
+                    0u, kCellsPerChunk,
+                    [&](const std::size_t i) {
+                        const u32 lx = static_cast<u32>(i % kChunkEdge);
+                        const u32 ly = static_cast<u32>(i / kChunkEdge);
+                        const u32 x = chunk_x * kChunkEdge + lx;
+                        const u32 y = chunk_y * kChunkEdge + ly;
+                        staging[i] = WorldGen::baseCell(x, y, seed, layout, tuned);
+                    },
+                    fill_pool);
+                PPR_VERIFY(not range_err);
+                PPR_VERIFY(not grid.setCells(ChunkPos{chunk_x, chunk_y}, staging));
             }
         }
 
