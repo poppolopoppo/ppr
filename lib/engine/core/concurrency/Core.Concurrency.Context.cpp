@@ -328,8 +328,10 @@ namespace pP::context {
     static std::atomic<SharedContext> g_app_context{};
 
     SharedContext application() noexcept {
-        PPR_ASSERT(g_app_context.load() && "trying to use app context before it was set");
-        return g_app_context;
+        if (SharedContext context = g_app_context.load()) {
+            return context;
+        }
+        return background();
     }
 
     SharedContext setApplication(SharedContext app_context) {
