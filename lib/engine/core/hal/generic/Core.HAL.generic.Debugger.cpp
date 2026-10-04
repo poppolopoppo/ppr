@@ -64,6 +64,10 @@ namespace pP::hal {
         (void) name;
     }
 
+    void setThreadPriority(EPriority priority) noexcept {
+        (void) priority;
+    }
+
     [[nodiscard]] std::size_t getThreadName(
         const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         (void) thread_id;

@@ -2,7 +2,9 @@ module;
 
 #include <mach/mach.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 
@@ -106,6 +108,35 @@ namespace pP::hal {
         char buffer[64]{}; // MAXTHREADNAMESIZE: 63 chars + NUL
         std::memcpy(buffer, name.data(), std::min(name.size(), sizeof(buffer) - 1u));
         std::ignore = ::pthread_setname_np(buffer);
+    }
+
+    void setThreadPriority(EPriority priority) noexcept {
+        int nice_value = 0;
+        qos_class_t qos_class = QOS_CLASS_DEFAULT;
+        switch (priority) {
+            case EPriority::idle:
+                nice_value = 19;
+                qos_class = QOS_CLASS_BACKGROUND;
+                break;
+            case EPriority::low:
+                nice_value = 10;
+                qos_class = QOS_CLASS_UTILITY;
+                break;
+            case EPriority::normal:
+                nice_value = 0;
+                qos_class = QOS_CLASS_DEFAULT;
+                break;
+            case EPriority::high:
+                nice_value = -10;
+                qos_class = QOS_CLASS_USER_INITIATED;
+                break;
+            case EPriority::realtime:
+                nice_value = -20;
+                qos_class = QOS_CLASS_USER_INTERACTIVE;
+                break;
+        }
+        std::ignore = ::setpriority(PRIO_PROCESS, 0, nice_value);
+        std::ignore = ::pthread_set_qos_class_self_np(qos_class, 0);
     }
 
     [[nodiscard]] std::size_t getThreadName(

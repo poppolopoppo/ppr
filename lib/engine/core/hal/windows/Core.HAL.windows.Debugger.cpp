@@ -194,6 +194,18 @@ namespace pP::hal {
         }
     }
 
+    void setThreadPriority(EPriority priority) noexcept {
+        int level = THREAD_PRIORITY_NORMAL;
+        switch (priority) {
+            case EPriority::idle: level = THREAD_PRIORITY_IDLE; break;
+            case EPriority::low: level = THREAD_PRIORITY_BELOW_NORMAL; break;
+            case EPriority::normal: level = THREAD_PRIORITY_NORMAL; break;
+            case EPriority::high: level = THREAD_PRIORITY_ABOVE_NORMAL; break;
+            case EPriority::realtime: level = THREAD_PRIORITY_TIME_CRITICAL; break;
+        }
+        std::ignore = ::SetThreadPriority(::GetCurrentThread(), level);
+    }
+
     [[nodiscard]] std::size_t getThreadName(
         const ThreadId thread_id, char *out_buffer, const std::size_t capacity) noexcept {
         using GetThreadDescriptionFn = HRESULT(WINAPI *)(HANDLE, PWSTR *);

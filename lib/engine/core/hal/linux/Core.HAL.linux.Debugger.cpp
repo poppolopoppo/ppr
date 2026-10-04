@@ -1,7 +1,10 @@
 module;
 
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -90,6 +93,28 @@ namespace pP::hal {
         char buffer[16]{}; // comm limit: 15 chars + NUL
         std::memcpy(buffer, name.data(), std::min(name.size(), sizeof(buffer) - 1u));
         std::ignore = ::prctl(PR_SET_NAME, buffer, 0u, 0u, 0u);
+    }
+
+    void setThreadPriority(EPriority priority) noexcept {
+        if (priority == EPriority::realtime) {
+            sched_param param{};
+            param.sched_priority = ::sched_get_priority_max(SCHED_FIFO);
+            if (::pthread_setschedparam(::pthread_self(), SCHED_FIFO, &param) == 0) {
+                return;
+            }
+            std::ignore = ::setpriority(PRIO_PROCESS, 0, -20);
+            return;
+        }
+
+        int nice_value = 0;
+        switch (priority) {
+            case EPriority::idle: nice_value = 19; break;
+            case EPriority::low: nice_value = 10; break;
+            case EPriority::normal: nice_value = 0; break;
+            case EPriority::high: nice_value = -10; break;
+            case EPriority::realtime: nice_value = -20; break;
+        }
+        std::ignore = ::setpriority(PRIO_PROCESS, 0, nice_value);
     }
 
     [[nodiscard]] std::size_t getThreadName(

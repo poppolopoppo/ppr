@@ -424,6 +424,16 @@ export namespace pP {
 
         void setThreadName(std::string_view name) noexcept;
 
+        enum class EPriority : u8 {
+            idle,
+            low,
+            normal,
+            high,
+            realtime,
+        };
+
+        void setThreadPriority(EPriority priority) noexcept;
+
         // buffer-based query, transcode convention: returns chars written;
         // when the buffer is too small, returns the full required size (caller detects truncation).
         // `nullptr, 0` returns the full required size. Never allocates.
