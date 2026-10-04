@@ -7,9 +7,10 @@ import engine.core;
 import std;
 
 // Scheduler tests against the approved Oracle contract:
-// - schedule/broadcast are nonblocking and take an optional tracking
-//   group; a saturated queue reports RawChannel::error_full instead of
-//   blocking. Admission failure touches neither the group counter nor its
+// - schedule/broadcast take an optional tracking group and an optional
+//   producer policy (default wait_if_full: a saturated queue blocks the
+//   producer; drop_if_full reports RawChannel::error_full instead of
+//   blocking). Admission failure touches neither the group counter nor its
 //   error slot; success registers exactly once and the worker envelope
 //   settles the group via done(err) exactly once.
 // - WaitGroup::done(err) records the first error and reports whether the
@@ -29,9 +30,9 @@ import std;
 // - Constructor failures throw (nonzero translated error); a null parent
 //   is normalized to the background context.
 // - forRange composes caller-lane error, then group error, then scheduler
-//   error (first failure wins); queue-full falls back to the caller lane;
-//   nested same-scheduler calls run serially. There is no parallel::sort
-//   in the scheduler API.
+//   error (first failure wins); queue-full falls back to the caller lane
+//   via its internal drop_if_full admission; nested same-scheduler calls
+//   run serially. There is no parallel::sort in the scheduler API.
 //
 // Synchronization rules used throughout:
 // - PPR_TEST_ASSERT throws std::logic_error on failure, so worker bodies
@@ -47,6 +48,15 @@ namespace pP::tests::detail {
         }
 
         constexpr int kMaxFillAttempts = 4096;
+
+        // Shorthand for the admission policy under test: success-path calls
+        // pass wait_if_full explicitly, saturation probes pass drop_if_full.
+        using Policy = ParallelScheduler::EProducerPolicy;
+
+        // Generous-but-bounded prove-blocking delay: while the worker is
+        // pinned and the queue is saturated, no drain is possible, so a
+        // wait_if_full producer is still pending after this elapses.
+        constexpr auto kBlockProveDelay = std::chrono::milliseconds{200};
 
         void openGate(std::atomic<bool> &gate) noexcept {
             gate.store(true, std::memory_order_release);
@@ -151,10 +161,12 @@ namespace pP::tests::detail {
             WaitGroup wg{};
             std::atomic<int> ran{0};
             wg.add(1u);
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                ran.fetch_add(1, std::memory_order_acq_rel);
-                wg.done();
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    ran.fetch_add(1, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.error());
             PPR_TEST_ASSERT(not sched.join());
@@ -171,16 +183,18 @@ namespace pP::tests::detail {
                 WaitGroup wg{};
                 std::atomic<int> ran{0};
                 wg.add(1u);
-                PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                    ran.fetch_add(1, std::memory_order_acq_rel);
-                    wg.done();
-                }));
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &) {
+                        ran.fetch_add(1, std::memory_order_acq_rel);
+                        wg.done();
+                    },
+                    std::nullopt, Policy::wait_if_full));
                 PPR_TEST_ASSERT(not sched.join());
                 PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
             }
             {
                 ParallelScheduler sched{"scheduler-test", 1u, 1u};
-                PPR_TEST_ASSERT(not sched.schedule([](const IContext &) {}));
+                PPR_TEST_ASSERT(not sched.schedule([](const IContext &) {}, std::nullopt, Policy::wait_if_full));
                 PPR_TEST_ASSERT(not sched.join());
                 PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
             }
@@ -192,10 +206,12 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             wg.add(1u);
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                ran.fetch_add(1, std::memory_order_acq_rel);
-                wg.done();
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    ran.fetch_add(1, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
@@ -232,12 +248,13 @@ namespace pP::tests::detail {
             // broadcast copies per worker, so move-only is schedule-only.
             auto payload = std::make_unique<Tracked>(std::addressof(destroyed));
             wg.add(1u);
-            PPR_TEST_ASSERT(
-                not sched.schedule([owned(std::move(payload)), &wg, &ran, &owned_nonnull](const IContext &) mutable {
+            PPR_TEST_ASSERT(not sched.schedule(
+                [owned(std::move(payload)), &wg, &ran, &owned_nonnull](const IContext &) mutable {
                     owned_nonnull.store(owned != nullptr, std::memory_order_release);
                     ran.fetch_add(1, std::memory_order_acq_rel);
                     wg.done();
-                }));
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
@@ -318,7 +335,8 @@ namespace pP::tests::detail {
                             obs.id = intact ? obs.id : -2;
                             observations[i] = obs;
                             wg.done();
-                        }));
+                        },
+                        std::nullopt, Policy::wait_if_full));
                 }
                 PPR_TEST_ASSERT(not wg.wait());
             }
@@ -336,10 +354,12 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", num_workers, queueBytes()};
 
             wg.add(num_workers);
-            PPR_TEST_ASSERT(not sched.broadcast([&](const IContext &) {
-                ran.fetch_add(1u, std::memory_order_acq_rel);
-                wg.done();
-            }));
+            PPR_TEST_ASSERT(not sched.broadcast(
+                [&](const IContext &) {
+                    ran.fetch_add(1u, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == num_workers);
@@ -355,11 +375,13 @@ namespace pP::tests::detail {
 
             wg.add(num_workers);
             int per_copy = 0;
-            PPR_TEST_ASSERT(not sched.broadcast([count = per_copy, &ran, &wg](const IContext &) mutable {
-                ++count;
-                ran.fetch_add(1u, std::memory_order_acq_rel);
-                wg.done();
-            }));
+            PPR_TEST_ASSERT(not sched.broadcast(
+                [count = per_copy, &ran, &wg](const IContext &) mutable {
+                    ++count;
+                    ran.fetch_add(1u, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == num_workers);
@@ -373,8 +395,8 @@ namespace pP::tests::detail {
             std::atomic<int> ran{0};
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            PPR_TEST_ASSERT(
-                not sched.schedule([&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, wg));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, wg, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
@@ -388,8 +410,8 @@ namespace pP::tests::detail {
             std::atomic<std::size_t> ran{0u};
             ParallelScheduler sched{"scheduler-test", num_workers, queueBytes()};
 
-            PPR_TEST_ASSERT(
-                not sched.broadcast([&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, wg));
+            PPR_TEST_ASSERT(not sched.broadcast(
+                [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, wg, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == num_workers);
@@ -397,10 +419,11 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (tracked_schedule_admission_failure_leaves_group_untouched) {
             // Admission failure touches neither the group counter nor its
-            // error slot: the queue is proven saturated with untracked fills
-            // while the worker is pinned, so the tracked attempt fails and
-            // the never-registered group still waits cleanly. The scope
-            // guard releases the worker even if an assert throws.
+            // error slot: the queue is proven saturated with untracked
+            // drop_if_full fills while the worker is pinned, so the tracked
+            // drop_if_full attempt fails and the never-registered group still
+            // waits cleanly. The scope guard releases the worker even if an
+            // assert throws.
             std::latch worker_pinned{1};
             std::atomic<bool> release{false};
             WaitGroup wg{};
@@ -409,22 +432,26 @@ namespace pP::tests::detail {
                 openGate(release);
             };
 
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                worker_pinned.count_down();
-                awaitGate(release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_pinned.wait();
 
             std::error_code saturate_err{};
             for (int i = 0; i < kMaxFillAttempts; ++i) {
-                if (const std::error_code err = sched.schedule([](const IContext &) {})) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
                     saturate_err = err;
                     break;
                 }
             }
             PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
 
-            PPR_TEST_ASSERT(sched.schedule([](const IContext &) {}, wg) == RawChannel::error_full);
+            PPR_TEST_ASSERT(
+                sched.schedule([](const IContext &) {}, wg, Policy::drop_if_full) == RawChannel::error_full);
             PPR_TEST_ASSERT(not wg.wait());
 
             openGate(release);
@@ -439,8 +466,9 @@ namespace pP::tests::detail {
             WaitGroup wg{};
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            PPR_TEST_ASSERT(
-                not sched.schedule([](const IContext &) { throw std::runtime_error("tracked helper failure"); }, wg));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [](const IContext &) { throw std::runtime_error("tracked helper failure"); }, wg,
+                Policy::wait_if_full));
             PPR_TEST_ASSERT(wg.wait() == expected);
             PPR_TEST_ASSERT(sched.error() == expected);
             PPR_TEST_ASSERT(sched.join() == expected);
@@ -456,10 +484,12 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             wg.add(1u);
-            const std::error_code ec = sched.schedule([&](const IContext &) {
-                ran.fetch_add(1, std::memory_order_acq_rel);
-                wg.done();
-            });
+            const std::error_code ec = sched.schedule(
+                [&](const IContext &) {
+                    ran.fetch_add(1, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::wait_if_full);
             PPR_TEST_ASSERT(not ec);
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
@@ -471,7 +501,7 @@ namespace pP::tests::detail {
             // the future delivers the task's return value.
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            auto result = sched.schedule([](const IContext &) { return 42; });
+            auto result = sched.schedule([](const IContext &) { return 42; }, std::nullopt, Policy::wait_if_full);
             PPR_TEST_ASSERT(result.has_value());
             std::future<int> fut = std::move(*result);
             PPR_TEST_ASSERT(fut.valid());
@@ -487,7 +517,7 @@ namespace pP::tests::detail {
             WaitGroup wg{};
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            auto result = sched.schedule([](const IContext &) { return 7; }, wg);
+            auto result = sched.schedule([](const IContext &) { return 7; }, wg, Policy::wait_if_full);
             PPR_TEST_ASSERT(result.has_value());
             std::future<int> fut = std::move(*result);
             PPR_TEST_ASSERT(fut.get() == 7);
@@ -502,7 +532,8 @@ namespace pP::tests::detail {
             std::future<int> fut{};
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            PPR_TEST_ASSERT(not sched.schedule([](const IContext &) { return 11; }, &fut));
+            PPR_TEST_ASSERT(
+                not sched.schedule([](const IContext &) { return 11; }, &fut, std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(fut.valid());
             PPR_TEST_ASSERT(fut.get() == 11);
             PPR_TEST_ASSERT(not sched.join());
@@ -519,7 +550,8 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             auto result = sched.schedule(
-                [](const IContext &) -> int { throw std::runtime_error("value task failure"); }, wg);
+                [](const IContext &) -> int { throw std::runtime_error("value task failure"); }, wg,
+                Policy::wait_if_full);
             PPR_TEST_ASSERT(result.has_value());
             std::future<int> fut = std::move(*result);
 
@@ -539,11 +571,12 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (schedule_value_task_admission_failure_yields_full) {
-            // Saturated queue: both value-task overloads report error_full
-            // with no future, and the never-registered group still waits
-            // cleanly. Void fills prove saturation (a small record failing
-            // means the larger promise payload fails too). The scope guard
-            // releases the worker even if an assert throws.
+            // Saturated queue with explicit drop_if_full: both value-task
+            // overloads report error_full with no future, and the
+            // never-registered group still waits cleanly. Void fills prove
+            // saturation (a small record failing means the larger promise
+            // payload fails too). The scope guard releases the worker even
+            // if an assert throws.
             std::latch worker_pinned{1};
             std::atomic<bool> release{false};
             WaitGroup wg{};
@@ -552,28 +585,33 @@ namespace pP::tests::detail {
                 openGate(release);
             };
 
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                worker_pinned.count_down();
-                awaitGate(release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_pinned.wait();
 
             std::error_code saturate_err{};
             for (int i = 0; i < kMaxFillAttempts; ++i) {
-                if (const std::error_code err = sched.schedule([](const IContext &) {})) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
                     saturate_err = err;
                     break;
                 }
             }
             PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
 
-            auto result = sched.schedule([](const IContext &) { return 1; }, wg);
+            auto result = sched.schedule([](const IContext &) { return 1; }, wg, Policy::drop_if_full);
             PPR_TEST_ASSERT(not result.has_value());
             PPR_TEST_ASSERT(result.error() == RawChannel::error_full);
             PPR_TEST_ASSERT(not wg.wait());
 
             std::future<int> out{};
-            PPR_TEST_ASSERT(sched.schedule([](const IContext &) { return 2; }, &out, wg) == RawChannel::error_full);
+            PPR_TEST_ASSERT(
+                sched.schedule([](const IContext &) { return 2; }, &out, wg, Policy::drop_if_full) ==
+                RawChannel::error_full);
             PPR_TEST_ASSERT(not out.valid());
             PPR_TEST_ASSERT(not wg.wait());
 
@@ -605,13 +643,15 @@ namespace pP::tests::detail {
             };
 
             for (std::size_t i = 0u; i < num_tasks; ++i) {
-                PPR_TEST_ASSERT(not sched.schedule([&, i](const IContext &) {
-                    if (i < 2u) {
-                        entered.count_down();
-                        awaitGate(release);
-                    }
-                    ran.fetch_add(1u, std::memory_order_acq_rel);
-                }));
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&, i](const IContext &) {
+                        if (i < 2u) {
+                            entered.count_down();
+                            awaitGate(release);
+                        }
+                        ran.fetch_add(1u, std::memory_order_acq_rel);
+                    },
+                    std::nullopt, Policy::wait_if_full));
             }
 
             std::jthread opener([&] {
@@ -625,10 +665,12 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (schedule_racing_join) {
-            // Producers race join: every attempt either admits (then the
-            // task must run to completion via the drain) or fails with
-            // error_closed. Producer threads never assert (an exception
-            // there would terminate); all checks happen on the parent.
+            // Producers race join with explicit drop_if_full, so every
+            // attempt either admits (then the task must run to completion
+            // via the drain) or fails with error_closed. A blocking policy
+            // would serialize the race instead of racing it. Producer
+            // threads never assert (an exception there would terminate);
+            // all checks happen on the parent.
             constexpr int kProducers = 2;
             std::atomic<int> admitted{0};
             std::atomic<int> ran{0};
@@ -641,7 +683,8 @@ namespace pP::tests::detail {
                 producers.emplace_back([&] {
                     for (int i = 0; i < 64; ++i) {
                         const std::error_code err = sched.schedule(
-                            [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); });
+                            [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, std::nullopt,
+                            Policy::drop_if_full);
                         if (not err) {
                             admitted.fetch_add(1, std::memory_order_acq_rel);
                         } else if (err != RawChannel::error_closed) {
@@ -660,7 +703,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == admitted.load(std::memory_order_acquire));
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
             // Post-join admission is rejected.
-            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {})));
+            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full)));
         };
 
         PPR_UNIT_TEST (worker_originated_join_rejected) {
@@ -673,13 +716,16 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
 
             wg.add(1u);
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                PPR_DEFER {
-                    wg.done();
-                };
-                const std::error_code err = sched.join();
-                worker_saw_deadlock.store(err == std::errc::resource_deadlock_would_occur, std::memory_order_release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    PPR_DEFER {
+                        wg.done();
+                    };
+                    const std::error_code err = sched.join();
+                    worker_saw_deadlock.store(
+                        err == std::errc::resource_deadlock_would_occur, std::memory_order_release);
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(worker_saw_deadlock.load(std::memory_order_acquire));
             PPR_TEST_ASSERT(not sched.join());
@@ -699,11 +745,13 @@ namespace pP::tests::detail {
 
             wg.add(num_tasks);
             for (std::size_t i = 0u; i < num_tasks; ++i) {
-                PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                    arrived.count_down();
-                    awaitGate(release);
-                    wg.done();
-                }));
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &) {
+                        arrived.count_down();
+                        awaitGate(release);
+                        wg.done();
+                    },
+                    std::nullopt, Policy::wait_if_full));
             }
 
             // Both tasks are admitted and executing; none can complete yet.
@@ -726,8 +774,9 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes(), parent};
 
             for (int i = 0; i < num_tasks; ++i) {
-                PPR_TEST_ASSERT(
-                    not sched.schedule([&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }));
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, std::nullopt,
+                    Policy::wait_if_full));
             }
 
             cancel();
@@ -737,7 +786,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(join_err == std::errc::operation_canceled);
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == num_tasks);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
-            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {})));
+            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full)));
         };
 
         PPR_UNIT_TEST (join_with_cause_cancels_and_drains) {
@@ -748,20 +797,23 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             for (int i = 0; i < num_tasks; ++i) {
-                PPR_TEST_ASSERT(
-                    not sched.schedule([&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }));
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, std::nullopt,
+                    Policy::wait_if_full));
             }
 
             PPR_TEST_ASSERT(bool(sched.join(std::make_error_code(std::errc::operation_canceled))));
             PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == num_tasks);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
-            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {})));
+            PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full)));
         };
 
         PPR_UNIT_TEST (schedule_saturated_returns_full) {
-            // One worker pinned in a gated task, then fill its queue until
-            // admission is rejected nonblockingly with error_full. The scope
-            // guard opens the gate even if an assert throws.
+            // One worker pinned in a gated task, then fill its queue with
+            // explicit drop_if_full until admission is rejected nonblockingly
+            // with error_full (the default wait_if_full would block here
+            // instead). The scope guard opens the gate even if an assert
+            // throws.
             std::latch worker_pinned{1};
             std::atomic<bool> release{false};
             std::atomic<std::size_t> ran{0u};
@@ -770,18 +822,21 @@ namespace pP::tests::detail {
                 openGate(release);
             };
 
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                worker_pinned.count_down();
-                awaitGate(release);
-                ran.fetch_add(1u, std::memory_order_acq_rel);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                    ran.fetch_add(1u, std::memory_order_acq_rel);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_pinned.wait();
 
             std::size_t admitted = 0u;
             std::error_code saturate_err{};
             for (int i = 0; i < kMaxFillAttempts; ++i) {
                 const std::error_code err = sched.schedule(
-                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); });
+                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, std::nullopt,
+                    Policy::drop_if_full);
                 if (err) {
                     saturate_err = err;
                     break;
@@ -801,6 +856,8 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (join_drains_full_channel) {
             // Saturated-close regression: join starts while the channel is
             // still full of queued work and drains every accepted task. The
+            // saturation probe uses explicit drop_if_full (the default
+            // wait_if_full would block instead of proving fullness). The
             // opener releases the pinned worker once join is underway; the
             // scope guard covers any throwing assert before that.
             std::latch worker_pinned{1};
@@ -812,18 +869,21 @@ namespace pP::tests::detail {
                 openGate(release);
             };
 
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                worker_pinned.count_down();
-                awaitGate(release);
-                ran.fetch_add(1u, std::memory_order_acq_rel);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                    ran.fetch_add(1u, std::memory_order_acq_rel);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_pinned.wait();
 
             std::size_t admitted = 0u;
             std::error_code saturate_err{};
             for (int i = 0; i < kMaxFillAttempts; ++i) {
                 const std::error_code err = sched.schedule(
-                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); });
+                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, std::nullopt,
+                    Policy::drop_if_full);
                 if (err) {
                     saturate_err = err;
                     break;
@@ -845,12 +905,236 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
         };
 
+        PPR_UNIT_TEST (schedule_default_blocks_until_drained) {
+            // wait_if_full is the new default: this submission passes no
+            // policy argument, so it pins the default at the call site. The
+            // worker is pinned and the queue is proven saturated with
+            // drop_if_full fills, so the default-policy submission from
+            // another thread must stay pending across a generous wait (no
+            // drain is possible while the gate is closed) and complete only
+            // after the drain. No assert sits between spawn and join, so a
+            // throwing assert can never strand the submitter; the scope guard
+            // still releases the worker on any earlier failure.
+            std::latch worker_pinned{1};
+            std::atomic<bool> release{false};
+            std::atomic<bool> submit_returned{false};
+            std::atomic<bool> submitted_ran{false};
+            std::error_code submit_err = std::make_error_code(std::errc::operation_canceled);
+            ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
+            PPR_DEFER {
+                openGate(release);
+            };
+
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
+            worker_pinned.wait();
+
+            std::error_code saturate_err{};
+            for (int i = 0; i < kMaxFillAttempts; ++i) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
+                    saturate_err = err;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
+
+            WaitGroup wg{};
+            std::jthread submitter([&] {
+                const std::error_code err = sched.schedule(
+                    [&](const IContext &) { submitted_ran.store(true, std::memory_order_release); }, wg);
+                submit_err = err;
+                submit_returned.store(true, std::memory_order_release);
+            });
+
+            std::this_thread::sleep_for(kBlockProveDelay);
+            const bool returned_early = submit_returned.load(std::memory_order_acquire);
+            const bool ran_early = submitted_ran.load(std::memory_order_acquire);
+
+            openGate(release);
+            submitter.join();
+
+            PPR_TEST_ASSERT(not returned_early);
+            PPR_TEST_ASSERT(not ran_early);
+            PPR_TEST_ASSERT(not submit_err);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(submitted_ran.load(std::memory_order_acquire));
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (schedule_wait_if_full_blocks_until_drained) {
+            // Explicit wait_if_full behaves like the default: a saturated
+            // queue blocks the producer until the drain instead of reporting
+            // error_full. Same deterministic shape as the default-policy test
+            // above (generous prove-blocking wait, no asserts between spawn
+            // and join).
+            std::latch worker_pinned{1};
+            std::atomic<bool> release{false};
+            std::atomic<bool> submit_returned{false};
+            std::atomic<bool> submitted_ran{false};
+            std::error_code submit_err = std::make_error_code(std::errc::operation_canceled);
+            ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
+            PPR_DEFER {
+                openGate(release);
+            };
+
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
+            worker_pinned.wait();
+
+            std::error_code saturate_err{};
+            for (int i = 0; i < kMaxFillAttempts; ++i) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
+                    saturate_err = err;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
+
+            WaitGroup wg{};
+            std::jthread submitter([&] {
+                const std::error_code err = sched.schedule(
+                    [&](const IContext &) { submitted_ran.store(true, std::memory_order_release); }, wg,
+                    Policy::wait_if_full);
+                submit_err = err;
+                submit_returned.store(true, std::memory_order_release);
+            });
+
+            std::this_thread::sleep_for(kBlockProveDelay);
+            const bool returned_early = submit_returned.load(std::memory_order_acquire);
+            const bool ran_early = submitted_ran.load(std::memory_order_acquire);
+
+            openGate(release);
+            submitter.join();
+
+            PPR_TEST_ASSERT(not returned_early);
+            PPR_TEST_ASSERT(not ran_early);
+            PPR_TEST_ASSERT(not submit_err);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(submitted_ran.load(std::memory_order_acquire));
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (broadcast_drop_if_full_reports_full) {
+            // Explicit drop_if_full on broadcast: with the worker pinned and
+            // the queue proven saturated, admission reports error_full and
+            // the never-registered group still waits cleanly. The scope guard
+            // releases the worker even if an assert throws.
+            std::latch worker_pinned{1};
+            std::atomic<bool> release{false};
+            std::atomic<std::size_t> ran{0u};
+            WaitGroup wg{};
+            ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
+            PPR_DEFER {
+                openGate(release);
+            };
+
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
+            worker_pinned.wait();
+
+            std::error_code saturate_err{};
+            for (int i = 0; i < kMaxFillAttempts; ++i) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
+                    saturate_err = err;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
+
+            PPR_TEST_ASSERT(
+                sched.broadcast(
+                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, wg,
+                    Policy::drop_if_full) == RawChannel::error_full);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 0u);
+
+            openGate(release);
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (broadcast_wait_if_full_blocks_until_drained) {
+            // Explicit wait_if_full on broadcast: a saturated queue blocks
+            // the producer until the drain, then the single worker runs its
+            // copy exactly once. Same deterministic shape as the schedule
+            // blocking tests (generous prove-blocking wait, no asserts
+            // between spawn and join).
+            std::latch worker_pinned{1};
+            std::atomic<bool> release{false};
+            std::atomic<bool> submit_returned{false};
+            std::atomic<std::size_t> ran{0u};
+            std::error_code submit_err = std::make_error_code(std::errc::operation_canceled);
+            ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
+            PPR_DEFER {
+                openGate(release);
+            };
+
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
+            worker_pinned.wait();
+
+            std::error_code saturate_err{};
+            for (int i = 0; i < kMaxFillAttempts; ++i) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
+                    saturate_err = err;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
+
+            WaitGroup wg{};
+            std::jthread submitter([&] {
+                const std::error_code err = sched.broadcast(
+                    [&](const IContext &) { ran.fetch_add(1u, std::memory_order_acq_rel); }, wg, Policy::wait_if_full);
+                submit_err = err;
+                submit_returned.store(true, std::memory_order_release);
+            });
+
+            std::this_thread::sleep_for(kBlockProveDelay);
+            const bool returned_early = submit_returned.load(std::memory_order_acquire);
+            const std::size_t ran_early = ran.load(std::memory_order_acquire);
+
+            openGate(release);
+            submitter.join();
+
+            PPR_TEST_ASSERT(not returned_early);
+            PPR_TEST_ASSERT(ran_early == 0u);
+            PPR_TEST_ASSERT(not submit_err);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1u);
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
         PPR_UNIT_TEST (burst_admission_with_retry_on_full) {
-            // Admission is nonblocking, so a burst may meet a momentarily
-            // full queue: retry only on error_full, blocking on observed
-            // drain progress (atomic wait/notify, never a yield loop).
-            // wg.add precedes each attempt so the group stays balanced even
-            // if the retry budget is exhausted and the test fails cleanly.
+            // Admission uses explicit drop_if_full, so a burst may meet a
+            // momentarily full queue: retry only on error_full, blocking on
+            // observed drain progress (atomic wait/notify, never a yield
+            // loop). wg.add precedes each attempt so the group stays
+            // balanced even if the retry budget is exhausted and the test
+            // fails cleanly.
             constexpr int num_tasks = 256;
             WaitGroup wg{};
             std::atomic<int> completed{0};
@@ -862,12 +1146,14 @@ namespace pP::tests::detail {
                 int last_completed = completed.load(std::memory_order_acquire);
                 for (int attempt = 0;; ++attempt) {
                     wg.add(1u);
-                    const std::error_code err = sched.schedule([&](const IContext &) {
-                        const int prior = completed.fetch_add(1, std::memory_order_acq_rel);
-                        static_cast<void>(prior);
-                        completed.notify_all();
-                        wg.done();
-                    });
+                    const std::error_code err = sched.schedule(
+                        [&](const IContext &) {
+                            const int prior = completed.fetch_add(1, std::memory_order_acq_rel);
+                            static_cast<void>(prior);
+                            completed.notify_all();
+                            wg.done();
+                        },
+                        std::nullopt, Policy::drop_if_full);
                     if (not err) {
                         ++admitted;
                         break;
@@ -933,14 +1219,16 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             wg.add(1u);
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                PPR_DEFER {
-                    wg.done();
-                };
-                const std::error_code err = parallel::forRange(
-                    0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
-                nested_ok.store(not err, std::memory_order_release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    PPR_DEFER {
+                        wg.done();
+                    };
+                    const std::error_code err = parallel::forRange(
+                        0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
+                    nested_ok.store(not err, std::memory_order_release);
+                },
+                std::nullopt, Policy::wait_if_full));
             PPR_TEST_ASSERT(not wg.wait());
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(nested_ok.load(std::memory_order_acquire));
@@ -984,16 +1272,18 @@ namespace pP::tests::detail {
             };
 
             wg.add(1u);
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                PPR_DEFER {
-                    wg.done();
-                };
-                worker_arrived.count_down();
-                awaitGate(release);
-                const std::error_code err = parallel::forRange(
-                    0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
-                nested_cancelled.store(err == std::errc::operation_canceled, std::memory_order_release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    PPR_DEFER {
+                        wg.done();
+                    };
+                    worker_arrived.count_down();
+                    awaitGate(release);
+                    const std::error_code err = parallel::forRange(
+                        0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
+                    nested_cancelled.store(err == std::errc::operation_canceled, std::memory_order_release);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_arrived.wait();
             cancel();
             openGate(release);
@@ -1006,9 +1296,13 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (forrange_full_queue_completes_via_caller) {
-            // The worker is pinned and the queue is proven saturated, so no
-            // feeder can be admitted: the caller lane still completes every
-            // index, and forRange reports success once all work finished.
+            // Observable forRange behavior is unchanged: it pins drop_if_full
+            // internally for its caller-drain protocol. The worker is pinned
+            // and the queue is proven saturated with explicit drop_if_full
+            // fills (the default wait_if_full would block the fill loop
+            // forever), so no feeder can be admitted: the caller lane still
+            // completes every index, and forRange reports success once all
+            // work finished.
             constexpr std::size_t n = 8u;
             std::array<std::atomic<int>, n> visits{};
             std::latch worker_pinned{1};
@@ -1018,14 +1312,17 @@ namespace pP::tests::detail {
                 openGate(release);
             };
 
-            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
-                worker_pinned.count_down();
-                awaitGate(release);
-            }));
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    worker_pinned.count_down();
+                    awaitGate(release);
+                },
+                std::nullopt, Policy::wait_if_full));
             worker_pinned.wait();
 
             for (int i = 0; i < kMaxFillAttempts; ++i) {
-                if (const std::error_code err = sched.schedule([](const IContext &) {})) {
+                if (const std::error_code err = sched.schedule(
+                        [](const IContext &) {}, std::nullopt, Policy::drop_if_full)) {
                     break;
                 }
             }
@@ -1036,6 +1333,7 @@ namespace pP::tests::detail {
 
             openGate(release);
             PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
             for (const auto &v: visits) {
                 PPR_TEST_ASSERT(v.load(std::memory_order_acquire) == 1);
             }
@@ -1124,7 +1422,9 @@ namespace pP::tests::detail {
             cancel(std::error_code{});
             PPR_TEST_ASSERT(parent->pollEvent());
 
-            PPR_TEST_ASSERT(sched.schedule([](const IContext &) {}) == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(
+                sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full) ==
+                std::errc::operation_canceled);
             PPR_TEST_ASSERT(sched.join() == std::errc::operation_canceled);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
         };
@@ -1168,6 +1468,10 @@ namespace pP::tests {
             detail::Scheduler::join_with_cause_cancels_and_drains,
             detail::Scheduler::schedule_saturated_returns_full,
             detail::Scheduler::join_drains_full_channel,
+            detail::Scheduler::schedule_default_blocks_until_drained,
+            detail::Scheduler::schedule_wait_if_full_blocks_until_drained,
+            detail::Scheduler::broadcast_drop_if_full_reports_full,
+            detail::Scheduler::broadcast_wait_if_full_blocks_until_drained,
             detail::Scheduler::burst_admission_with_retry_on_full,
             detail::Scheduler::forrange_empty_invokes_nothing,
             detail::Scheduler::forrange_invalid_range_rejected,

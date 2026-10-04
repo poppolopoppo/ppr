@@ -274,7 +274,7 @@ namespace pP {
 
     // ReSharper disable once CppMemberFunctionMayBeConst
     std::error_code ParallelScheduler::dispatchWork_(
-        WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg) {
+        WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg, const EProducerPolicy policy) {
         // Register the intent asap to signal the worker loop than more work is coming
         worker.m_num_outstanding.fetch_add(1u, std::memory_order_acq_rel);
 
@@ -287,7 +287,7 @@ namespace pP {
         constexpr std::size_t kEnvelopeSize = sizeof(TaskEnvelope_);
 
         // Non-blocking admission only: a full queue reports error_full to the caller.
-        const auto reserved = worker.m_tasks_queued.producerReserve(kEnvelopeSize, RawChannel::drop_if_full);
+        const auto reserved = worker.m_tasks_queued.producerReserve(kEnvelopeSize, policy);
         if (not reserved.has_value()) [[unlikely]] {
             worker.m_num_outstanding.fetch_sub(1u, std::memory_order_acq_rel);
             return make_error_code(reserved.error());
@@ -348,7 +348,7 @@ namespace pP {
                             closure(i);
                         }
                     },
-                    wg);
+                    wg, ParallelScheduler::drop_if_full);
 
                 if (chunk_err) [[unlikely]] {
                     if (chunk_err == make_error_code(RawChannel::error_full)) {

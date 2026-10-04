@@ -43,6 +43,9 @@ export namespace pP {
             err_task_exception,
         };
 
+        using EProducerPolicy = RawChannel::EBackPressure;
+        using enum EProducerPolicy;
+
         [[nodiscard]] friend std::error_code make_error_code(errc err) noexcept;
 
         ParallelScheduler(
@@ -80,20 +83,25 @@ export namespace pP {
             requires std::is_copy_constructible_v<TaskF> and
                      std::is_nothrow_move_constructible_v<TaskF> and
                      std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
+                     // ReSharper disable once CppRedundantQualifier
                      std::is_void_v<ParallelScheduler::task_result_t<TaskF>>
-        [[nodiscard]] std::error_code broadcast(const TaskF &work, const std::optional<WaitGroup> &wg = std::nullopt);
+        [[nodiscard]] std::error_code broadcast(
+            const TaskF &work, const std::optional<WaitGroup> &wg = std::nullopt,
+            EProducerPolicy policy = wait_if_full);
 
         template<std::invocable<const IContext &> TaskF>
             requires std::is_nothrow_move_constructible_v<TaskF> and std::is_nothrow_destructible_v<std::decay_t<TaskF>>
-        [[nodiscard]] schedule_result_t<TaskF> schedule(TaskF &&work, std::optional<WaitGroup> wg = std::nullopt);
+        [[nodiscard]] schedule_result_t<TaskF> schedule(
+            TaskF &&work, std::optional<WaitGroup> wg = std::nullopt, EProducerPolicy policy = wait_if_full);
 
         template<std::invocable<const IContext &> TaskF>
             requires std::is_nothrow_move_constructible_v<TaskF> and
                      std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
+                     // ReSharper disable once CppRedundantQualifier
                      (not std::is_void_v<ParallelScheduler::task_result_t<TaskF>>)
         [[nodiscard]] std::error_code schedule(
-            TaskF &&work, std::future<task_result_t<TaskF>> *out_future_ref,
-            std::optional<WaitGroup> wg = std::nullopt);
+            TaskF &&work, std::future<task_result_t<TaskF>> *out_future_ref, std::optional<WaitGroup> wg = std::nullopt,
+            EProducerPolicy policy = wait_if_full);
 
         [[nodiscard]] std::error_code join(std::error_code cause = {});
 
@@ -152,16 +160,18 @@ export namespace pP {
                      std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                      std::invocable<std::decay_t<TaskF> &, const IContext &>
         [[nodiscard]] std::error_code dispatchWork_(
-            std::pair<std::size_t, std::size_t> worker_indices, TaskF &&work, std::optional<WaitGroup> &&wg);
+            std::pair<std::size_t, std::size_t> worker_indices, TaskF &&work, std::optional<WaitGroup> &&wg,
+            EProducerPolicy policy);
 
         template<typename TaskF>
             requires std::is_nothrow_move_constructible_v<TaskF> and
                      std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                      std::invocable<std::decay_t<TaskF> &, const IContext &>
-        [[nodiscard]] std::error_code dispatchWork_(WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg);
+        [[nodiscard]] std::error_code dispatchWork_(
+            WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg, EProducerPolicy policy);
 
         [[nodiscard]] std::error_code dispatchWork_(
-            WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg);
+            WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg, EProducerPolicy policy);
 
         Array<std::unique_ptr<WorkerState_>> m_workers;
 
@@ -205,7 +215,8 @@ export namespace pP {
                  std::is_nothrow_move_constructible_v<TaskF> and
                  std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                  std::is_void_v<ParallelScheduler::task_result_t<TaskF>>
-    std::error_code ParallelScheduler::broadcast(const TaskF &work, const std::optional<WaitGroup> &wg) {
+    std::error_code ParallelScheduler::broadcast(
+        const TaskF &work, const std::optional<WaitGroup> &wg, const EProducerPolicy policy) {
         const std::shared_lock join_guard{m_producer_mutex};
 
         if (m_has_joined) [[unlikely]] {
@@ -218,7 +229,7 @@ export namespace pP {
         // Independent copies per worker; partial successes are kept, first error reported.
         std::error_code first_err{};
         for (const std::unique_ptr<WorkerState_> &worker: m_workers) {
-            if (const std::error_code err = dispatchWork_(*worker, work, std::optional{wg})) [[unlikely]] {
+            if (const std::error_code err = dispatchWork_(*worker, work, std::optional{wg}, policy)) [[unlikely]] {
                 first_err = first_err ? first_err : err;
             }
         }
@@ -230,9 +241,10 @@ export namespace pP {
                  std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                  (not std::is_void_v<ParallelScheduler::task_result_t<TaskF>>)
     std::error_code ParallelScheduler::schedule(
-        TaskF &&work, std::future<task_result_t<TaskF>> *out_future_ref, std::optional<WaitGroup> wg) {
+        TaskF &&work, std::future<task_result_t<TaskF>> *out_future_ref, std::optional<WaitGroup> wg,
+        const EProducerPolicy policy) {
         std::expected<std::future<task_result_t<TaskF>>, std::error_code> expected = schedule(
-            std::forward<TaskF>(work), std::move(wg));
+            std::forward<TaskF>(work), std::move(wg), policy);
 
         if (expected.has_value()) [[likely]] {
             *out_future_ref = std::move(*expected);
@@ -243,7 +255,8 @@ export namespace pP {
 
     template<std::invocable<const IContext &> TaskF>
         requires std::is_nothrow_move_constructible_v<TaskF> and std::is_nothrow_destructible_v<std::decay_t<TaskF>>
-    auto ParallelScheduler::schedule(TaskF &&work, std::optional<WaitGroup> wg) -> schedule_result_t<TaskF> {
+    auto ParallelScheduler::schedule(TaskF &&work, std::optional<WaitGroup> wg, const EProducerPolicy policy)
+        -> schedule_result_t<TaskF> {
         const std::shared_lock join_guard{m_producer_mutex};
         using unexpected_t = unexpected_result_t<TaskF>;
 
@@ -260,11 +273,11 @@ export namespace pP {
 
         // Use an additional TaskPromise_<> adapter if task return type is not void
         if constexpr (std::is_void_v<task_result_t<TaskF>>) { // NOLINT(*-branch-clone)
-            return dispatchWork_(worker_indices, std::forward<TaskF>(work), std::move(wg));
+            return dispatchWork_(worker_indices, std::forward<TaskF>(work), std::move(wg), policy);
         } else {
             TaskPromise_ promise{std::forward<TaskF>(work)};
             std::future future = promise.m_promise.get_future();
-            if (const std::error_code err = dispatchWork_(worker_indices, std::move(promise), std::move(wg)))
+            if (const std::error_code err = dispatchWork_(worker_indices, std::move(promise), std::move(wg), policy))
                 [[unlikely]] {
                 return unexpected_t{err};
             }
@@ -277,11 +290,13 @@ export namespace pP {
                  std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                  std::invocable<std::decay_t<TaskF> &, const IContext &>
     std::error_code ParallelScheduler::dispatchWork_(
-        const std::pair<std::size_t, std::size_t> worker_indices, TaskF &&work, std::optional<WaitGroup> &&wg) {
-        std::error_code err{dispatchWork_(*m_workers[worker_indices.first], std::forward<TaskF>(work), std::move(wg))};
+        const std::pair<std::size_t, std::size_t> worker_indices, TaskF &&work, std::optional<WaitGroup> &&wg,
+        const EProducerPolicy policy) {
+        std::error_code err{
+            dispatchWork_(*m_workers[worker_indices.first], std::forward<TaskF>(work), std::move(wg), policy)};
 
         if (err == make_error_code(RawChannel::error_full)) {
-            err = dispatchWork_(*m_workers[worker_indices.second], std::forward<TaskF>(work), std::move(wg));
+            err = dispatchWork_(*m_workers[worker_indices.second], std::forward<TaskF>(work), std::move(wg), policy);
         }
         return err;
     }
@@ -307,7 +322,7 @@ export namespace pP {
                  std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                  std::invocable<std::decay_t<TaskF> &, const IContext &>
     std::error_code ParallelScheduler::dispatchWork_(
-        WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg) {
+        WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg, const EProducerPolicy policy) {
         using decayed_t = std::decay_t<TaskF>;
 
         // Register the intent asap to signal the worker loop than more work is coming
@@ -324,7 +339,7 @@ export namespace pP {
         const std::size_t reserve_bytes = kEnvelopeSize + kPayloadSize;
 
         // Non-blocking admission only: a full queue reports error_full to the caller.
-        const auto reserved = worker.m_tasks_queued.producerReserve(reserve_bytes, RawChannel::drop_if_full);
+        const auto reserved = worker.m_tasks_queued.producerReserve(reserve_bytes, policy);
         if (not reserved.has_value()) [[unlikely]] {
             worker.m_num_outstanding.fetch_sub(1u, std::memory_order_acq_rel);
             return make_error_code(reserved.error());
