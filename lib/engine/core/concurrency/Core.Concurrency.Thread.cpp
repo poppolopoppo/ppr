@@ -54,6 +54,11 @@ namespace pP {
         return prev == 1u;
     }
 
+    std::error_code WaitGroup::error() const noexcept {
+        std::unique_lock done_guard{m_state->m_mutex};
+        return m_state->m_error;
+    }
+
     std::error_code WaitGroup::wait() const noexcept {
         std::unique_lock done_guard{m_state->m_mutex};
         m_state->m_done.wait(done_guard, [this] { return m_state->m_count == 0u; });

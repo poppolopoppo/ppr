@@ -29,6 +29,9 @@ export namespace pP {
     namespace context {
         [[nodiscard]] SharedContext background();
 
+        [[nodiscard]] SharedContext application() noexcept;
+        SharedContext setApplication(SharedContext app_context);
+
         // --------------------------------------------------------------
         // cancelable context, with or without an explicit error code
         // --------------------------------------------------------------
@@ -40,6 +43,8 @@ export namespace pP {
             [[nodiscard]] bool isValid() const noexcept;
 
             void operator()() const noexcept;
+
+            void reset();
         };
 
         struct CancelClauseFunc {
@@ -48,6 +53,8 @@ export namespace pP {
             [[nodiscard]] bool isValid() const noexcept;
 
             void operator()(std::error_code clause) const noexcept;
+
+            void reset();
         };
 
         [[nodiscard]] std::pair<SharedContext, CancelFunc> withCancel(SharedContext parent);

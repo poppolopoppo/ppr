@@ -325,6 +325,17 @@ namespace pP::context {
         return std::make_shared<BackgroundContext>();
     }
 
+    static std::atomic<SharedContext> g_app_context{};
+
+    SharedContext application() noexcept {
+        PPR_ASSERT(g_app_context.load() && "trying to use app context before it was set");
+        return g_app_context;
+    }
+
+    SharedContext setApplication(SharedContext app_context) {
+        return g_app_context.exchange(std::move(app_context));
+    }
+
     std::pair<SharedContext, CancelFunc> withCancel(SharedContext parent) {
         auto context = std::make_shared<CancelContext>(parent);
         CancelFunc cancel{context};
@@ -382,6 +393,10 @@ namespace pP::context {
         }
     }
 
+    void CancelFunc::reset() {
+        m_context.reset();
+    }
+
     bool CancelClauseFunc::isValid() const noexcept {
         return not m_context.expired();
     }
@@ -390,5 +405,9 @@ namespace pP::context {
         if (const std::shared_ptr<CancelContext> ctx = m_context.lock()) [[likely]] {
             ctx->cancelCause(clause);
         }
+    }
+
+    void CancelClauseFunc::reset() {
+        m_context.reset();
     }
 }

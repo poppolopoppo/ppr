@@ -55,6 +55,8 @@ export namespace pP {
 
         bool done(std::error_code err = {}) const noexcept; // NOLINT(*-use-nodiscard)
 
+        [[nodiscard]] std::error_code error() const noexcept;
+
         [[nodiscard]] std::error_code wait() const noexcept;
 
     private:
