@@ -3,8 +3,10 @@
 ## Responsibility
 
 `engine.image` owns CPU-side image assets (decode to native format + plain layout; no GPU/RHI
-types cross — RHI mapping happens at upload inside `engine.app` caches). P1 implements the frozen
-`docs/plans/asset-pipeline.md` §2.2 contract: `:types` vocabulary + `:decode` PNG/JPG/KTX2/DDS
+types cross — RHI mapping happens at upload inside `engine.app` caches). P1 implements the
+§2.2 contract formerly specified in `docs/plans/asset-pipeline.md` (absent from the main
+tree; surviving copies live only under `.slim/` and carry no frozen authority):
+`:types` vocabulary + `:decode` PNG/JPG/KTX2/DDS
 decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8 M1).
 
 ## Design

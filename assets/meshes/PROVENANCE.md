@@ -1,7 +1,10 @@
 # assets/meshes/ — fixture provenance
 
 MVP mesh fixtures for `engine.mesh:convert` and the `engine.tests.asset` suite
-(docs/plans/asset-pipeline.md §8). Each fixture is <100 KB, CC0, and exercises
+(the `docs/plans/asset-pipeline.md` §8 plan formerly cited here is absent from
+the main tree; surviving copies live only under `.slim/`
+(`.slim/worktrees/preview-main-wsl/docs/plans/asset-pipeline.md`,
+`.slim/deepwork/asset-pipeline.md`) and carry no frozen authority). Each fixture is <100 KB, CC0, and exercises
 one image-source path through `importAndConvert`:
 
 - `textured_quad.glb` — 1 quad (POSITION + NORMAL + TEXCOORD), base-color PNG

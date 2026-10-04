@@ -7,11 +7,12 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
 (save/load) contract, and the ECS registry/views substrate. Later phases still to come are
   renderer/HRC integration — only the state those phases build on. Scripting/modding attaches
   outside this module (see Flow/Integration) — `engine.sim` never imports a script engine.
-  `:footprint` adds plain ECS body, occupancy and sensor components without importing physics.
+  `:footprint` adds plain ECS body vocabulary (`BodyState`/`BodyDefinition` live; `SolidFootprint`
+  (Sim.Footprint.cppm:45-50) and `Sensor` (:52-57) declared but zero external refs) without importing physics.
 
 ## Design
 
-- Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:tick`, `:snapshot`, and `:worldgen`.
+- Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:snapshot`, `:tick`, and `:worldgen` (snapshot before tick per Sim.cppm:5-10).
 - `:chunk_grid` holds the geometry vocabulary (`kChunkEdge`=128, `kChunksPerEdge`=32,
   `kWorldEdge`=4096, `kChunkCount`=1024, `kCellsPerChunk`=16384), the `GlobalCellPos`/`ChunkPos`/
   `LocalCellPos` strong coordinate types with constexpr converters (`chunkOf`, `localOf`,
@@ -21,9 +22,11 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   evicted in phase 1, so residency is monotonic and **dirty ⇒ resident**. A non-resident chunk
   reads back as `Cell{}`. `ChunkPos` arguments are programmer invariants (`PPR_ASSERT`);
   `GlobalCellPos` is validated operationally (`result_out_of_range`, `invalid_argument` for
-  non-finite temperature). `setCell` grows its chunk dirty box (`DirtyBounds`, superset
-  semantics; clean chunks have no bounds via `dirtyBounds()`); `markDirty` sets the full-chunk
-  box; `clearDirty`/`clearAllDirty` reset boxes to empty; `setCells` is the bulk whole-chunk
+  non-finite temperature). `setCell` sets the box on first write in a clean chunk, then grows it
+  (`DirtyBounds`, superset semantics; clean chunks have no bounds via `dirtyBounds()`)
+  (Sim.ChunkGrid.cpp:32-43); `markDirty` sets the full-chunk
+  box; `clearDirty`/`clearAllDirty` write 0,0,0,0 and rely on `m_dirty==false` for `nullopt`
+  (Sim.ChunkGrid.cpp:147-166,198-209); `setCells` is the bulk whole-chunk
   writer (`Array&&` adopt overload: validated move-adoption with no copy; pre-materialization is the caller's duty for concurrent use). `markDirty` returns void because
   allocation failure follows the engine allocator contract. `dirtyChunks()`/
   `activeDirtyChunks()` list dirty chunks row-major (the latter restricted to
@@ -60,19 +63,26 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   references (pending placeholders occupy their id) and is validated **before** anything is
   committed — empty/duplicate name → `std::errc::invalid_argument`, self-reference or cycle
   (back-edge) → `std::errc::resource_deadlock_would_occur`, leaving `m_steps`/`m_order` untouched. `order()` is a
-   stable Kahn result (lowest id first), listing declared steps only. `runSystems` refuses
-   an unbound declared step before invoking any system and executes bound steps in that order.
+   stable Kahn result (lowest id first), listing declared steps only. `addSystem` fail-closes with
+   `invalid_argument` on unknown id/pending/empty fn/rebind (Sim.Tick.cpp:140-147, Sim.Tick.cppm:115-117).
+   `runSystems` refuses an unbound declared step before invoking any system and executes bound steps in that order.
 - `:snapshot` holds `kSnapshotVersion` (=4), `sim::errc` (+ `error_category()`/`make_error_code()`
   and `std::is_error_code_enum` — same shape as `image::errc`), `RngStream`, `ChunkDelta`
   (rect-scoped run of `m_width * m_height` cells, row-major over the w x h rect at local
-  (`m_x`, `m_y`)), `Snapshot`, and `capture`/`apply`/`save`/`load`. A file-local `validate()` gate is
+  (`m_x`, `m_y`)), `BodyRecord` (:63-80), `BodiesSection` (:82-90), `Snapshot`, and
+  `capture`/`apply`/`save`/`load` plus exported `restore()` (Sim.Snapshot.cppm:121).
+  ECS section vocabulary (`EcsSection`/`EcsColumnData`, Sim.Ecs.cppm:117-134) lives in `:ecs`.
+  A file-local `validate()` gate is
     shared by save/load/apply/restore: version agreement, chunk index bounds, rect bounds
     (non-empty, inside the chunk) with `m_cells.size() == m_width * m_height`, duplicate
     chunk indices (fail-closed — never resolved last-wins), finite temperatures, and ECS section validity
     (including exact free-slot allocation order with no live, duplicate, or missing dead slots).
+  `validateBodies` requires finite state, strictly ascending slots, generation match,
+  alive-required, records<=slot_count (Sim.Snapshot.cpp:165-195,242).
   `apply` validates the whole snapshot before touching the grid and writes only the rect cells
-  (untouched cells keep content and dirty state); `load` checks the
-  version first (→ `version_mismatch`), then short reads (→ `truncated`), then malformed counts,
+  (untouched cells keep content and dirty state); `load` returns `truncated` for 0-3 byte input
+  before the version compare (Sim.Snapshot.cpp:453-460), then `version_mismatch`, then short reads
+  (→ `truncated`), then malformed counts,
   out-of-range chunk indices, rect overflows, trailing bytes, duplicate chunk indices and non-finite temperatures
   (→ `invalid_payload`).
   `save`/`load` are little-endian: `u32 version`, `u64 seed`, `u32 delta_count`, per delta
@@ -82,7 +92,8 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
      column count, and per-column id/stride/owner rows/raw bytes, then bodies
      version (`u32`), replay cursor (`u64` fixed ticks), body count (`u32`) and
      sorted rows (`u32` slot, `u32` generation, six LE `f32` bit patterns, `u8`
-     awake). ECS already round-trips slot generations and head-to-tail free order.
+     awake — capture always writes `m_awake=true` (Sim.Snapshot.cpp:303), patched later by driver
+     (ColonyDriver.cpp:1388-1398)). ECS already round-trips slot generations and head-to-tail free order.
      Runtime body IDs never serialize. Bodies are captured from the registered
      `BodyState` column of the dumped ECS section (sorted by slot index, not via views)
      and checked against ECS rows before registry replacement.
@@ -99,6 +110,8 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   seeded region masks (border ring, frozen band, pocket disc, reservoir lens, street-grid
   district, vent discs over a temperate default) with unconditional geometric cores so every
   archetype exists for any seed, then carves vacuum tunnels/shafts while sparing the border.
+  The 1024-chunk fill fans out on `parallel::foregroundPool` with `WaitGroup`
+  (Sim.WorldGen.cpp:399-432), not single-threaded.
   Writes go through `setCells` for the fill and `setCell` for carving, so every chunk ends dirty and `capture`-ready. The sim never
   names biomes; the numeric ids match the colony-owned `game/colony/Colony.Elements.h`
   registry (vacuum 0, confirmed by the physics `!= 0u` solid test).
@@ -138,19 +151,20 @@ injected parameters, and per-call errors isolate without throwing into the run l
   for their driver-owned scenes.
 - Build: `Sim.cppm`, `chunk_grid/Sim.ChunkGrid.cppm`, `ecs/Sim.Ecs.cppm`, `footprint/Sim.Footprint.cppm`, `tick/Sim.Tick.cppm`,
   `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm` in `FILE_SET CXX_MODULES`; the matching `.cpp` files as PRIVATE
-  sources; `setup_ppr_project(engine.sim INTERNAL_PUBLIC_DEPS engine.core engine.math)`.
+  sources (`:footprint` has no `.cpp`; CMakeLists.txt:7-18, 5 `.cpp` files have `.cpp`);
+  `setup_ppr_project(engine.sim INTERNAL_PUBLIC_DEPS engine.core engine.math)`.
 
 ## Key Files
 
 - `Sim.cppm` — umbrella re-export only.
 - `chunk_grid/Sim.ChunkGrid.cppm` — geometry, `Cell`, `ChunkGrid` interface.
 - `chunk_grid/Sim.ChunkGrid.cpp` — lazy residency, dirty/activity bookkeeping.
-- `ecs/Sim.Ecs.cppm` — `Entity`, `ComponentMask`, `Registry`, `View` interface.
+- `ecs/Sim.Ecs.cppm` — `Entity`, `ComponentMask`, `Registry`, `View`, `EcsSection`/`EcsColumnData` interface.
 - `ecs/Sim.Ecs.cpp` — slot lifecycle, column bookkeeping, `sim.ecs` error category.
 - `footprint/Sim.Footprint.cppm` — pointer-free BodyState, BodyDefinition, SolidFootprint and Sensor vocabulary.
 - `tick/Sim.Tick.cppm` — `FixedTimestep`, `TickReport`, `StepRegistry` interface.
 - `tick/Sim.Tick.cpp` — accumulator/policy math, fail-closed declaration + stable Kahn order.
-- `snapshot/Sim.Snapshot.cppm` — `sim::errc`, snapshot vocabulary, capture/apply/save/load.
+- `snapshot/Sim.Snapshot.cppm` — `sim::errc`, snapshot vocabulary (`BodyRecord`, `BodiesSection`), capture/apply/save/load plus exported `restore()`.
 - `snapshot/Sim.Snapshot.cpp` — error category, shared `validate()`, LE codec.
 - `worldgen/Sim.WorldGen.cppm` — `generate(seed, grid)` interface.
 - `worldgen/Sim.WorldGen.cpp` — seeded hash-noise regions + vacuum carving.

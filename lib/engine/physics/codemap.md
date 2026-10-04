@@ -13,8 +13,14 @@ observed awake transitions through caller-owned buffers, and reserves two
 explicitly unsupported force/velocity seams. `engine.physics` and `engine.sim`
 are siblings and neither imports the other; the sim-side pointer-free
 `BodyState`/`BodyDefinition` vocabulary (`Sim.Footprint.cppm`) mirrors the
-physics structs field-for-field so the game driver can copy between them
-without a dependency.
+physics structs only in part: `BodyState` alone is field-identical
+(`Physics.Scene.cppm:53-62` vs `Sim.Footprint.cppm:19-26`), while
+`physics::BodyDefinition` (`Physics.Scene.cppm:30-51`) carries six extra
+pose/velocity fields — `m_x`, `m_y`, `m_angle`, `m_velocity_x`,
+`m_velocity_y`, `m_angular_velocity` — that `sim::BodyDefinition`
+(`Sim.Footprint.cppm:28-43`) lacks. The game driver merges the two sides
+via `mirrorDefinition` (`game/colony/ColonyDriver.cpp:40-66`) without a
+dependency between the modules.
 
 ## Seams
 

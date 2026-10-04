@@ -4,7 +4,9 @@
 
 `engine.mesh` owns CPU-side static mesh assets (static geometry + PBR factors + texture refs;
 STATIC glTF/GLB only in MVP — skins/animations, OBJ/FBX deferred). P1 vocabulary + conversion
-per `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 live here (`:types` + `:convert`); GPU
+formerly specified in `docs/plans/asset-pipeline.md` §§2.1/2.3/2.5/3 (absent from the main
+tree; surviving copies live only under `.slim/` and carry no frozen authority) live
+here (`:types` + `:convert`); GPU
 `TriangleBagCache` buckets live in `engine.app` passes (vertex-type-agnostic, static only).
 
 ## Design

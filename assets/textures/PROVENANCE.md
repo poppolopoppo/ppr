@@ -1,7 +1,10 @@
 # assets/textures/ — Provenance
 
 All texture fixtures staged here are CC0 or equivalently license-free, under
-100 KB each, per `docs/plans/asset-pipeline.md` §8.
+100 KB each. (The `docs/plans/asset-pipeline.md` §8 plan formerly cited here is
+absent from the main tree; surviving copies live only under `.slim/`
+(`.slim/worktrees/preview-main-wsl/docs/plans/asset-pipeline.md`,
+`.slim/deepwork/asset-pipeline.md`) and carry no frozen authority.)
 
 ## Runtime-generated fixtures (P1, Lane A)
 

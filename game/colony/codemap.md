@@ -2,21 +2,25 @@
 
 ## Responsibility
 
-Slice 1 view-only colony hookup, wired into `main.cpp`. `Colony` RAII-owns the
+Slice 1 view-only colony hookup, wired into `main.cpp`, extended by Slice 4-6
+game-side UI: selection + follow, pin/Inspector, feedback overlay, footprint
+preview, tool strip, help, and the Performance tab
+(`main.cpp:164-227,1043-1341,1826-2175`).
+`Colony` RAII-owns the
 simulation grid (`init` generates, `shutdown` releases); `generateWorld` is the
 thin game→sim wrapper over `sim::generate`. `Colony.Elements.h` is the canonical
 element-id registry (including the vacuum id 0 convention). `ColonyDriver` owns
 the single `Colony` plus its fixed-step clock and pause/step/speed/regenerate
 controls. `ColonyTranslator` stages resident chunks to `GridPass` each frame and
 uploads only unseen/explicitly invalidated chunk materials (vacuum becomes
-`0xffff`). `ColonyPanel` is the read-only ImGui status overlay.
+`0xffff`). `ColonyPanel` is the game-owned panel (tools, tabs, intents, chrome frame).
 `ColonySmoke` is the separate headless `--smoke` entry (`runColonySmoke`).
 `TimeTrials` (`game.colony.timetrials`, `runTimeTrials`) is the deterministic
 headless `--time-trials` runner: S1 steady plus S2 scripted wall-building,
 driver-only CSVs, no renderer or translator. `ColonySmoke` also exposes
 `runLoad100`, the Slice 6 `--load100` gate: 100-agent sustained driver plus
 translator/GridPass load over 600 fixed-1/60 frames with driver/translator
-timing CSVs.
+timing CSVs, scripted 4-waypoint pan (period 150) and pan-invariance upload check.
 `game.colony.pathfinding` is bounded budgeted BFS over vacuum cells, resumable
 across ticks, with counters for the panel.
 
@@ -30,6 +34,7 @@ across ticks, with counters for the panel.
 - `Colony.cppm` (`game.colony`) — `ColonyDesc{m_seed}` (only degree of
   freedom; grid dims are fixed by `engine.sim`) and `Colony` (non-copyable,
   movable; private data first). `init` regenerates from the new descriptor;
+  `isInitialized` reports grid ownership (`Colony.cppm:49`, `Colony.cpp:18-20`);
   `shutdown` is idempotent; both return `std::error_code`.
 - `WorldGen.cppm` (`game.colony.worldgen`) + `WorldGen.cpp` — `generateWorld`
   forwards to `sim::generate`; infallible in practice but keeps the
@@ -37,36 +42,52 @@ across ticks, with counters for the panel.
 - `ColonyDriver.cppm/.cpp` (`game.colony.driver`) — owns one `Colony` plus the
   fixed-step accumulator (default 60 Hz tick, 5-slice clamp, physics
   `fixed_dt` 1/60 s); explicit elapsed-time input, deterministic
-  tick accounting, boundary-owned RNG seeds only. Stages record wall-clock
+  tick accounting, boundary-owned RNG seeds only. Six fixed-timestep steps run
+  in declaration order each tick — `tool`, `build`, `pathfind`, `aiplan`,
+  `movestep`, `physics` (`ColonyDriver.cpp:22-28,175-210`). Stages record wall-clock
   `StageTimings` (`StageTiming.h`) under `hal::ProfileScope` `Colony.*`
   names (observation only, never sim state); the spawn-count override
   persists across regeneration; collider views are cached derived state
-  (never snapshotted, never compared). No app/renderer imports; PRIVATE engine.physics via the Slice 4 Oracle grant.
+  (never snapshotted, never compared). Per-tick `mirrorBodyStates`
+  (`ColonyDriver.cpp:930-947`) copies physics poses back; `snapshotWithBodies`/
+  `restoreBodies`/`rebuildReplayColliders` (`:1339-1401`) cover save/load plus
+  replay continuation. Panel read-outs ride `AgentSummary`/`DigStats`
+  (`ColonyDriver.cppm:24-28,88-111`); dig queue is a 256-entry FIFO
+  (`kMaxPendingDigs`, `ColonyDriver.cppm:76`) with wake radius `kDigWakeCells` = 8
+  (`ColonyDriver.cppm:20`).
+  No app/renderer imports; PRIVATE engine.physics via the Slice 4 Oracle grant.
 - `ColonyTranslator.cppm/.cpp` (`game.colony.translator`) — render-thread-confined
   presentation revisions separate from sim dirty flags; submits every resident
   chunk descriptor per frame, copies cell materials only for unseen/invalidated
   chunks, `reset` clears pass staging/cache on regeneration. Never clears sim dirt.
-- `ColonyPanel.cppm/.cpp` (`game.colony.panel`) — read-only
-  `drawColonyPanel(driver, counts)`; caller supplies presentation counts.
+- `ColonyPanel.cppm/.cpp` (`game.colony.panel`) — single export
+  `drawColonyUi(const ColonyDriver &, const ColonyUiView &, std::span<const ColonyShortcut>, ColonyUiState &) -> ColonyUiFrame`
+  (`ColonyPanel.cppm:295-297`, called `main.cpp:1574`); caller supplies the
+  read-only view plus shortcuts, owns the returned chrome frame.
 - `ColonySmoke.cppm/.cpp` (`game.colony.smoke`) — `runColonySmoke(argv)` drives a
   headless rendering-enabled `Application` for one offscreen GridPass frame with
   GPU readback; separate from the interactive `TurboLarbin` editor path.
   `runLoad100()` drives the Slice 6 sustained-load host (100 agents, 600
   fixed-1/60 ticked frames, translator submit plus GridPass uploads, stderr
-  diagnostics, driver/translator CSVs; `--load100` only).
+  diagnostics, driver/translator CSVs; `--load100` only) with a scripted
+  4-waypoint camera pan (period 150) and a pan-invariance upload check
+  (pure pans add no uploads; `ColonySmoke.cpp:2503-2516,2668-2669,3366-3385`).
 - `Agents.cppm/.cpp` (`game.colony.agents`) — first agents (GOAP-lite):
   durable `Agent` (key/speed/seed-spawn), `Needs` (o2/rest), `Plan`
   (goal/site/bounded actions/pc/replans) + seed-derived `spawnAgents`
   (splitmix64), `planAgent` (first needy agent, own-PathReq refresh),
   `agentIntent` (waypoint follow, ladder-zone climb, presence work/rest).
-  Imports sim + pathfinding + buildings; no physics (driver translates).
+  Counts/speeds: `kAgentCount` = 3, `kAgentCountMax` = 128, `kAgentSpeed`,
+  `kWaypointRadius`, `kMaxPlanActions` = 8, live `AgentSummary` rows
+  (`Agents.cppm:12-36,88`). Imports sim + pathfinding + buildings; no physics (driver translates).
 - `Pathfinding.cppm/.cpp` (`game.colony.pathfinding`) — bounded deterministic
   BFS over vacuum cells (`isWalkable` = `m_element == kElementVacuum`,
   non-resident reads walkable): durable `PathReq`/`PathComp` (bounded inline
   `kMaxPathPts` = 256 waypoints, snapshot-covered, fixed registration order via
   `registerPathfindingComponents`) plus driver-owned transient `Pathfinder`
   scratch (frontier/visited/parents, never snapshotted). `stepPathfinding`
-  charges `kExpansionsPerTick` = 256 expansions per call with cross-tick resume;
+  charges `kExpansionsPerTick` = 256 expansions per call with cross-tick resume
+  (plus `kMaxSearchNodes` = 4096, `kSearchBitWords`; `Pathfinding.cppm:21,24`);
   `pathCounts` classifies complete/partial/blocked. Imports sim+core only.
 - `Buildings.cppm/.cpp` (`game.colony.buildings`) — game-local edit domain:
   `Footprint` (min/size/element/solid/ladder, validated) + `BuildErrand`
@@ -74,7 +95,8 @@ across ticks, with counters for the panel.
   `registerColonyComponents` (Req, Comp, Footprint, Errand append-only).
   `advanceErrands` writes cells (temperature preserved) + sim dirt + touched
   chunks + finder reset. Driver exposes `buildWall`/`demolish`/`requestPath`/
-  `presentEdits`; `build` step runs before `pathfind` each tick.
+  `presentEdits`; the `build` step runs before `pathfind` inside the six-step
+  `tool, build, pathfind, aiplan, movestep, physics` tick order each tick.
 - `DigTool.cppm/.cpp` (`game.colony.digtool`) — immediate rect clear:
   `DigRect` (min/size, edges in [1, `kMaxDigEdge` = 32]) + `DigResult`
   (exact cleared count + deduped touched chunks). `digCells` validates,
@@ -84,10 +106,13 @@ across ticks, with counters for the panel.
 - `TimeTrials.cppm/.cpp` (`game.colony.timetrials`) — deterministic headless
   timing runner (`runTimeTrials`, no renderer): S1 steady world plus S2
   scripted alternating build/demolish wall schedule (fixed 8x2 rock rects,
-  period 30 ticks), each printing one driver `stage,calls,total_us,mean_us,max_us`
-  CSV per segment to stdout. Imports core+sim+buildings+driver only.
+  period 30 ticks), each stage printing FOUR driver `stage,calls,total_us,mean_us,max_us`
+  CSVs to stdout (worldgen plus segments 0-300/300-500/500-600) with `[...]`
+  banners on stderr; S2 stage banners also report `issued_cells`/`dirty_chunks`
+  (`TimeTrials.cpp:64-94,114-215`). Both stages run 100 agents. Imports core+sim+buildings+driver only.
 - `StageTiming.h` — plain header (not a module, `Colony.Elements.h`
-  precedent): `Stage` vocabulary, `StageStat`/`StageTimings` tables,
+  precedent): `Stage` vocabulary (19 rows through `Count`, including the
+  `CacheHit`/`CacheMiss`/`NeededCells`/`ChunksDrained` counter rows), `StageStat`/`StageTimings` tables,
   `stageName` (`Colony.*` profile-scope names), and RAII `StageTimer`, including a `WorldGen` row for generation.
   Observation side-channel only: never sim state, never snapshotted.
 - `CMakeLists.txt` (parent `game/`) — colony `.cppm` files via
@@ -98,19 +123,24 @@ across ticks, with counters for the panel.
 ## Flow
 
 `Colony::init(desc)` → `colony::generateWorld(seed, grid)` (driver times generation as `Colony.WorldGen`) →
-`sim::generate(seed, grid)` fills every cell through `setCell` (all chunks
-end up dirty), then carves cavern worms and vent shafts to vacuum.
+`sim::generate(seed, grid)` fills every chunk wholesale through `setCells`
+adopt (`Sim.WorldGen.cpp:406-424`), then carves cavern worms and vent
+shafts to vacuum via `setCell` (`Sim.WorldGen.cpp:298,387`) — all chunks end up dirty.
 `Colony::shutdown()` resets to a fresh `ChunkGrid`. Interactive:
 `TurboLarbin::update` → `driver.update(dt)` → `translator.submit(grid, gridPass)`
-→ `drawColonyPanel`; `R` regenerates with a boundary seed + `translator.reset`.
+→ `drawColonyUi`; `R` only opens the regen confirm modal, and Confirm defers
+regeneration plus `translator.reset` to the next `update()` via `m_regen_pending`
+(`main.cpp:846-859,2338-2355,229-245`).
 Pathfinding: `PathReq` rows → `stepPathfinding` advances one request per tick →
 emplaces `PathComp` on completion → `pathCounts` for the panel.
 Dig: `digCells(grid, rect)` validates → collects non-vacuum cells row-major →
 applies vacuum writes (`setCell` auto-dirties) → returns `DigResult`
 (`m_dug` + deduped `m_touched`); failures change nothing.
 TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
-`stepOne`, driver CSV) → S2 wall-building (scripted `buildWall` rects, 600x
-`stepOne` with `presentEdits` skipped headless, driver CSV).
+`stepOne`, FOUR driver CSVs: worldgen + segments 0-300/300-500/500-600) →
+S2 wall-building (scripted `buildWall` rects, 600x `stepOne` with
+`presentEdits` skipped headless, FOUR driver CSVs plus stderr
+`issued_cells`/`dirty_chunks` banners).
 
 ## Integration
 
@@ -129,7 +159,7 @@ TimeTrials: `runTimeTrials` → S1 steady (init seed 1234567/100 agents, 600x
 - `WorldGen.cppm` / `WorldGen.cpp` — `generateWorld` wrapper.
 - `ColonyDriver.cppm` / `ColonyDriver.cpp` — fixed-step driver, pause/step/speed.
 - `ColonyTranslator.cppm` / `ColonyTranslator.cpp` — grid→GridPass presentation.
-- `ColonyPanel.cppm` / `ColonyPanel.cpp` — read-only status overlay.
+- `ColonyPanel.cppm` / `ColonyPanel.cpp` — game-owned colony panel: tools, tabs, intents, chrome frame.
 - `Agents.cppm` / `Agents.cpp` — GOAP-lite agents (spawn/plan/intent).
 - `Buildings.cppm` / `Buildings.cpp` — edit domain (footprints, errands).
 - `DigTool.cppm` / `DigTool.cpp` — immediate rect-clear dig edits.
