@@ -153,6 +153,8 @@ namespace pP::colony {
         }
         m_timings = StageTimings{};
 
+        const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
+        const StageTimer timer_worldgen{m_timings, Stage::WorldGen};
         const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed});
         if (init_error) [[unlikely]] {
             // A failed generation must not expose a partially written world.
@@ -429,6 +431,8 @@ namespace pP::colony {
         m_finder = Pathfinder{};
         clearToolState();
         m_timings = StageTimings{};
+        const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
+        const StageTimer timer_worldgen{m_timings, Stage::WorldGen};
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};

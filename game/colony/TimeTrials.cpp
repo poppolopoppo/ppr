@@ -61,6 +61,8 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
+            std::fprintf(stderr, "[timetrials] S1 [worldgen]\n");
+            printTimingsCsv(driver.stageTimings());
             driver.resetStageTimings();
 
             // Phase: step. Fixed tick count, no wall-clock in the workload.
@@ -109,6 +111,8 @@ namespace pP::colony {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
+            std::fprintf(stderr, "[timetrials] S2 [worldgen]\n");
+            printTimingsCsv(driver.stageTimings());
             driver.resetStageTimings();
 
             // Phase: step. Alternating build/demolish schedule on top of the

@@ -46,6 +46,7 @@ namespace pP::colony {
         CacheMiss,
         NeededCells,
         ChunksDrained,
+        WorldGen,
         Count
     };
 
@@ -80,6 +81,7 @@ namespace pP::colony {
             case Stage::CacheMiss: return "Colony.Colliders.CacheMiss";
             case Stage::NeededCells: return "Colony.Colliders.NeededCells";
             case Stage::ChunksDrained: return "Colony.Colliders.ChunksDrained";
+            case Stage::WorldGen: return "Colony.WorldGen";
             default: return "Colony.Unknown";
         }
     }

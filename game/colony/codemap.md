@@ -88,7 +88,7 @@ across ticks, with counters for the panel.
   CSV per segment to stdout. Imports core+sim+buildings+driver only.
 - `StageTiming.h` — plain header (not a module, `Colony.Elements.h`
   precedent): `Stage` vocabulary, `StageStat`/`StageTimings` tables,
-  `stageName` (`Colony.*` profile-scope names), and RAII `StageTimer`.
+  `stageName` (`Colony.*` profile-scope names), and RAII `StageTimer`, including a `WorldGen` row for generation.
   Observation side-channel only: never sim state, never snapshotted.
 - `CMakeLists.txt` (parent `game/`) — colony `.cppm` files via
   `FILE_SET CXX_MODULES`, `.cpp` files as PRIVATE sources; `engine.sim`
@@ -97,7 +97,7 @@ across ticks, with counters for the panel.
 
 ## Flow
 
-`Colony::init(desc)` → `colony::generateWorld(seed, grid)` →
+`Colony::init(desc)` → `colony::generateWorld(seed, grid)` (driver times generation as `Colony.WorldGen`) →
 `sim::generate(seed, grid)` fills every cell through `setCell` (all chunks
 end up dirty), then carves cavern worms and vent shafts to vacuum.
 `Colony::shutdown()` resets to a fresh `ChunkGrid`. Interactive:
