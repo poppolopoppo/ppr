@@ -14,6 +14,7 @@ import engine.shader;
 import std;
 
 namespace pP {
+    // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
     Application::Application(
@@ -24,8 +25,9 @@ namespace pP {
 
         hal::disableSystemErrorReporting();
         hal::installDebugAssertHooks();
-        hal::setThreadName("Application");
 
+        hal::setThreadName("Application");
+        // hal::setThreadPriority(hal::EPriority::high);
         this_thread::setGroup(thread::main_group);
     }
 
@@ -95,6 +97,7 @@ namespace pP {
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
 
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
+
             } catch (const std::system_error &e) {
                 m_request_exit(e.code());
             } catch (const std::invalid_argument &) {
@@ -147,6 +150,8 @@ namespace pP {
 
         std::tie(m_lifecycle, m_request_exit) = context::withCancelClause(context::background());
 
+        context::setApplication(m_lifecycle);
+
         if (m_domain.m_needs_rendering) {
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
             PPR_RETURN_ERROR_ON_FAIL(App, shader_service->initialize());
@@ -167,6 +172,13 @@ namespace pP {
 
     std::error_code Application::shutdown() {
         PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
+
+        PPR_DEFER {
+            context::setApplication(SharedContext{});
+
+            m_lifecycle.reset();
+            m_request_exit.reset();
+        };
 
         std::error_code first_err{};
 

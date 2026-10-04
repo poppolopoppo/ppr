@@ -114,7 +114,7 @@ export namespace pP {
         [[nodiscard]] virtual std::error_code shutdown();
 
     private:
-        std::unique_ptr<Renderer> m_renderer;
+        std::unique_ptr<Renderer> m_renderer{};
         TimerManager m_application_clock{};
         std::optional<TimeSpan> m_target_frame_time{};
 
