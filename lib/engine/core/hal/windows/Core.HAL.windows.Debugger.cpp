@@ -138,20 +138,128 @@ namespace pP::hal {
 #endif
     }
 
+    namespace {
+        constexpr bool profileStringsEqual_(const char *lhs, const char *rhs) noexcept {
+            while (*lhs != '\0' and *rhs != '\0') {
+                if (*lhs != *rhs) {
+                    return false;
+                }
+                ++lhs;
+                ++rhs;
+            }
+            return *lhs == *rhs;
+        }
+
+        // Reserved-red predicate: only the exact case-sensitive Blocking
+        // category takes the red override; every near-miss still hashes.
+        constexpr bool profileIsBlocking_(const char *category) noexcept {
+            return category != nullptr and profileStringsEqual_(category, profile_blocking_category);
+        }
+
+        struct ProfileRgb_ {
+            UINT8 m_red;
+            UINT8 m_green;
+            UINT8 m_blue;
+        };
+
+        // Integer HSV-to-RGB with S = 0.65, V = 0.90 over hue 60..300:
+        // chroma = 149, match lift = 80 (in 0..255). Pure arithmetic.
+        constexpr ProfileRgb_ profileRgbForHue_(const u32 hue) noexcept {
+            const u32 sector = hue / 60u;
+            const u32 frac = hue % 60u;
+            const u32 rise = (149u * frac + 30u) / 60u;
+            const u32 fall = (149u * (60u - frac) + 30u) / 60u;
+
+            u32 red = 0u;
+            u32 green = 0u;
+            u32 blue = 0u;
+            switch (sector) {
+                case 1u:
+                    red = fall;
+                    green = 149u;
+                    break;
+                case 2u:
+                    green = 149u;
+                    blue = rise;
+                    break;
+                case 3u:
+                    green = fall;
+                    blue = 149u;
+                    break;
+                case 4u:
+                    red = rise;
+                    blue = 149u;
+                    break;
+                default:
+                    red = 149u;
+                    blue = fall;
+                    break;
+            }
+            return ProfileRgb_{
+                static_cast<UINT8>(red + 80u), static_cast<UINT8>(green + 80u), static_cast<UINT8>(blue + 80u)};
+        }
+
+        // Hue 300 is magenta, never Blocking red (reserved-red exclusion).
+        static_assert(profileRgbForHue_(300u).m_red == 229u, "hue 300 must render magenta, not red");
+        static_assert(profileRgbForHue_(300u).m_green == 80u, "hue 300 must render magenta, not red");
+        static_assert(profileRgbForHue_(300u).m_blue == 229u, "hue 300 must render magenta, not red");
+        static_assert(profileIsBlocking_(profile_blocking_category), "exact Blocking category must take red");
+        static_assert(not profileIsBlocking_(nullptr), "uncategorized scopes must hash, never take red");
+        static_assert(not profileIsBlocking_("blocking"), "Blocking match is case-sensitive");
+        static_assert(not profileIsBlocking_("App"), "ordinary segments must hash, never take red");
+
+        // Deterministic segment color: FNV-1a (32-bit, over unsigned bytes)
+        // of the explicit category, or of the name segment up to the first
+        // '.' when uncategorized. 241 is prime, so the spread multiplier
+        // permutes residues without collapsing them; 91 keeps the six live
+        // segments (App/Sim/Physics/Shader/RHI/Colony) at least 24 degrees
+        // apart. Allocation-free, no caches.
+        constexpr u32 kHueSpread_ = 91u;
+
+        constexpr UINT profileColorFor_(const char *name, const char *category) noexcept {
+            if (profileIsBlocking_(category)) {
+                return PIX_COLOR(255u, 64u, 64u);
+            }
+
+            const char *text = category != nullptr ? category : name;
+            std::size_t length = 0u;
+            while (text[length] != '\0' and (category != nullptr or text[length] != '.')) {
+                ++length;
+            }
+
+            u32 hash = 2166136261u;
+            for (std::size_t i = 0u; i < length; ++i) {
+                hash ^= static_cast<u32>(static_cast<unsigned char>(text[i]));
+                hash *= 16777619u;
+            }
+
+            // Reduce before spreading: the full hash times the spread would
+            // overflow u32; residues stay below 240 * 91.
+            const u32 hue = 60u + ((hash % 241u) * kHueSpread_) % 241u;
+            const ProfileRgb_ rgb = profileRgbForHue_(hue);
+            return PIX_COLOR(rgb.m_red, rgb.m_green, rgb.m_blue);
+        }
+    }
+
     // ------------------------------------------------------------------
     // profiling markers (PIX on Windows, no-op elsewhere)
     // ------------------------------------------------------------------
 
-    void profileBegin(const char *name) noexcept {
-        ::PIXBeginEvent(PIX_COLOR(200u, 200u, 200u), name);
+    void profileBegin(const char *name, const char *category) noexcept {
+        PPR_ASSERT(name != nullptr);
+        PPR_ASSERT(name[0] != '\0');
+        if (category != nullptr) {
+            PPR_ASSERT(category[0] != '\0');
+        }
+        ::PIXBeginEvent(profileColorFor_(name, category), name);
     }
 
     void profileEnd() noexcept {
         ::PIXEndEvent();
     }
 
-    ProfileScope::ProfileScope(const char *name) noexcept {
-        profileBegin(name);
+    ProfileScope::ProfileScope(const char *name, const char *category) noexcept {
+        profileBegin(name, category);
     }
 
     ProfileScope::~ProfileScope() noexcept {

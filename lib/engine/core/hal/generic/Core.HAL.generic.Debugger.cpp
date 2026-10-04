@@ -37,15 +37,16 @@ namespace pP::hal {
     // profiling markers (PIX on Windows, no-op elsewhere)
     // ------------------------------------------------------------------
 
-    void profileBegin(const char *name) noexcept {
+    void profileBegin(const char *name, const char *category) noexcept {
         (void) name;
+        (void) category;
     }
 
     void profileEnd() noexcept {
     }
 
-    ProfileScope::ProfileScope(const char *name) noexcept {
-        profileBegin(name);
+    ProfileScope::ProfileScope(const char *name, const char *category) noexcept {
+        profileBegin(name, category);
     }
 
     ProfileScope::~ProfileScope() noexcept {

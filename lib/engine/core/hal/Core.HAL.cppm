@@ -381,12 +381,20 @@ export namespace pP {
         // profiling markers (PIX on Windows, no-op elsewhere)
         // ------------------------------------------------------------------
 
-        void profileBegin(const char *name) noexcept;
+        // Category for scopes bracketing confirmed CPU waits (host fence
+        // waits, sleeps, joins, semaphore waits). Rendered distinctly from
+        // hashed segment colors; see the Windows backend.
+        inline constexpr const char *profile_blocking_category = "Blocking";
+
+        // name and category are borrowed only for the duration of the call
+        // and never retained. A null category hashes the name segment up to
+        // the first '.' for its color.
+        void profileBegin(const char *name, const char *category = nullptr) noexcept;
 
         void profileEnd() noexcept;
 
         struct ProfileScope {
-            explicit ProfileScope(const char *name) noexcept;
+            explicit ProfileScope(const char *name, const char *category = nullptr) noexcept;
 
             ~ProfileScope() noexcept;
 
