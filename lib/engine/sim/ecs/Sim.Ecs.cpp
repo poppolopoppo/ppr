@@ -109,6 +109,7 @@ namespace pP::sim {
     }
 
     EcsSection Registry::dump() const {
+        const hal::ProfileScope scope{"Sim.Ecs.Dump"};
         EcsSection section{};
         section.m_generations.reserve(m_slots.size());
         section.m_alive.reserve(m_slots.size());
@@ -137,6 +138,7 @@ namespace pP::sim {
     }
 
     std::error_code Registry::restore(const EcsSection &section) {
+        const hal::ProfileScope scope{"Sim.Ecs.Restore"};
         const std::error_code invalid = std::make_error_code(std::errc::invalid_argument);
         if (section.m_ecs_version != 1u or
             section.m_generations.size() != section.m_alive.size() or

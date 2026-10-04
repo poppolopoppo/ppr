@@ -34,6 +34,7 @@ namespace pP::sim {
     }
 
     Expected<TickReport> FixedTimestep::advance(const TimeSpan elapsed) {
+        const hal::ProfileScope scope{"Sim.Tick.Advance"};
         if (elapsed < TimeSpan{}) [[unlikely]] {
             return std::unexpected{make_error_code(std::errc::invalid_argument)};
         }
@@ -146,6 +147,7 @@ namespace pP::sim {
     }
 
     std::error_code StepRegistry::runSystems(Registry &registry) {
+        const hal::ProfileScope scope{"Sim.Tick.RunSystems"};
         for (const u32 step: m_order) {
             if (not m_systems[step]) [[unlikely]] {
                 return make_error_code(std::errc::invalid_argument);
@@ -153,6 +155,7 @@ namespace pP::sim {
         }
 
         for (const u32 step: m_order) {
+            const hal::ProfileScope scope_system{"Sim.Tick.System"};
             m_systems[step](registry);
         }
 
@@ -188,6 +191,7 @@ namespace pP::sim {
     }
 
     bool StepRegistry::resolve(const Array<Step> &steps, Array<u32> &out) {
+        const hal::ProfileScope scope{"Sim.Tick.Resolve"};
         const u32 count = safe_narrowing(steps.size());
 
         Array<u32> indegree{};

@@ -4,6 +4,7 @@ module;
 module engine.physics;
 
 import :chunk_colliders;
+import engine.core;
 import std;
 
 namespace pP::physics {
@@ -329,6 +330,7 @@ namespace pP::physics {
     std::error_code ChunkColliders::rebuildDirtyChunks(
         Scene &scene, const std::span<const ColliderChunkView> chunks, const std::span<const ColliderChunkPos> dirty,
         const u32 edge, const u32 max_chunks, u32 &processed) noexcept {
+        const hal::ProfileScope scope{"Physics.Colliders.RebuildDirtyChunks"};
         processed = 0u;
         if (edge == 0u or edge > 1024u or max_chunks == 0u) {
             return std::make_error_code(std::errc::invalid_argument);
@@ -541,6 +543,7 @@ namespace pP::physics {
     std::error_code ChunkColliders::materializeForQuery(
         Scene &scene, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos,
         const u32 edge) noexcept {
+        const hal::ProfileScope scope{"Physics.Colliders.MaterializeForQuery"};
         if (not findChunk(chunks, pos)) {
             return std::make_error_code(std::errc::invalid_argument);
         }

@@ -289,6 +289,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code Renderer::initialize(IRhiService &rhi_service) {
+        const hal::ProfileScope scope{"App.Renderer.Initialize"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -306,6 +307,7 @@ namespace pP {
     }
 
     std::error_code Renderer::shutdown() {
+        const hal::ProfileScope scope{"App.Renderer.Shutdown"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -343,6 +345,7 @@ namespace pP {
     }
 
     std::error_code Renderer::waitOnHost() {
+        const hal::ProfileScope scope{"App.Renderer.WaitOnHost", hal::profile_blocking_category};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -356,6 +359,7 @@ namespace pP {
     std::error_code Renderer::render(
         string_literal description, const rhi::RenderPassDesc &render_pass,
         const std::initializer_list<DrawSubmission> draws) {
+        const hal::ProfileScope scope{"App.Renderer.Render"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -366,6 +370,7 @@ namespace pP {
     std::error_code Renderer::renderDraws_(
         string_literal description, const rhi::RenderPassDesc &render_pass,
         const std::span<const DrawSubmission> draws) {
+        const hal::ProfileScope scope_profile{"App.Renderer.Draws"};
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
@@ -477,6 +482,7 @@ namespace pP {
 
     std::error_code Renderer::renderAndPresent(
         const Window &window, const std::initializer_list<SurfaceRenderPass> passes) {
+        const hal::ProfileScope scope{"App.Renderer.Present"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -520,7 +526,10 @@ namespace pP {
         }
 
         rhi::ComPtr<rhi::ITexture> image;
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, record->m_surface->acquireNextImage(image.writeRef()));
+        {
+            const hal::ProfileScope scope_acquire{"App.Renderer.Acquire"};
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, record->m_surface->acquireNextImage(image.writeRef()));
+        }
         const rhi::ComPtr<rhi::ITextureView> image_view = image->getDefaultView();
 
         // Fail early when the acquired backbuffer no longer matches the
@@ -606,29 +615,36 @@ namespace pP {
         // pass skips every remaining pass and abandons the encoder without
         // finish/submit: the encoded-but-unsubmitted work is discarded when
         // the encoder is destroyed, while the present below still runs.
-        if (not first_err) {
-            rhi::ComPtr<rhi::ICommandEncoder> encoder;
-            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
-
-            for (const BuiltSurfacePass &built: built_passes) {
-                if (first_err) {
-                    break;
-                }
-                first_err = encodeRenderPass_(
-                    *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
-                    m_rhi_service->getDevice());
-            }
-
+        {
+            const hal::ProfileScope scope_submit{"App.Renderer.Submit"};
             if (not first_err) {
-                rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
-                PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, encoder->finish(command_buffer.writeRef()));
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_RETAIN_ERROR_ON_FAIL(
+                    Renderer, first_err, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
+
+                for (const BuiltSurfacePass &built: built_passes) {
+                    if (first_err) {
+                        break;
+                    }
+                    first_err = encodeRenderPass_(
+                        *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
+                        m_rhi_service->getDevice());
+                }
+
                 if (not first_err) {
-                    PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->submit(command_buffer.get()));
+                    rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
+                    PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, encoder->finish(command_buffer.writeRef()));
+                    if (not first_err) {
+                        PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->submit(command_buffer.get()));
+                    }
                 }
             }
         }
 
-        PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, record->m_surface->present());
+        {
+            const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, record->m_surface->present());
+        }
         return first_err;
     }
 

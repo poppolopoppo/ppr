@@ -253,6 +253,7 @@ namespace pP::sim {
     }
 
     Snapshot capture(const ChunkGrid &grid, const u64 seed) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Capture"};
         Snapshot snapshot{};
         snapshot.m_version = kSnapshotVersion;
         snapshot.m_seed = seed;
@@ -287,6 +288,7 @@ namespace pP::sim {
     }
 
     Snapshot capture(const ChunkGrid &grid, const Registry &registry, const u64 seed) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Capture"};
         Snapshot snapshot = capture(grid, seed);
         snapshot.m_ecs = registry.dump();
         // MSVC C1001 ICEs on const-View and const Registry::get<BodyState> across partitions;
@@ -308,6 +310,7 @@ namespace pP::sim {
     }
 
     std::error_code restore(Registry &registry, const Snapshot &snapshot) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Restore"};
         if (const std::error_code error = validate(snapshot); error) {
             return error;
         }
@@ -344,6 +347,7 @@ namespace pP::sim {
     }
 
     std::error_code apply(ChunkGrid &grid, const Snapshot &snapshot) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Apply"};
         if (const std::error_code error = validate(snapshot); error) {
             return error;
         }
@@ -369,6 +373,7 @@ namespace pP::sim {
     }
 
     Expected<Array<u8>> save(const Snapshot &snapshot) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Save"};
         if (const std::error_code error = validate(snapshot); error) {
             return std::unexpected{error};
         }
@@ -442,6 +447,7 @@ namespace pP::sim {
     }
 
     Expected<Snapshot> load(const std::span<const u8> bytes) {
+        const hal::ProfileScope scope{"Sim.Snapshot.Load"};
         Reader reader{bytes};
 
         u32 version{};

@@ -164,6 +164,7 @@ namespace pP {
             // ------------------------------------------------------------------
 
             std::error_code initialize() override {
+                const hal::ProfileScope scope{"Shader.Initialize"};
                 if (m_global_session or m_session) {
                     if (m_global_session and m_session) {
                         PPR_LOG(Shader, warning, "Shader service already initialized");
@@ -199,6 +200,7 @@ namespace pP {
             }
 
             std::error_code setTargetFormat(const SlangCompileTarget target_format) override {
+                const hal::ProfileScope scope{"Shader.SetTarget"};
                 if (not m_global_session) {
                     PPR_LOG(Shader, error, "cannot set target format before initialization");
                     return errc::uninitialized;
@@ -252,7 +254,11 @@ namespace pP {
 
             std::error_code loadModuleFromFile(
                 const std::filesystem::path &path, const char *module_name, IModule **out_module) override {
-                auto mapped = io::mapFile(path);
+                const hal::ProfileScope scope{"Shader.LoadFile"};
+                auto mapped = [&] {
+                    const hal::ProfileScope scope_map{"Shader.MapFile"};
+                    return io::mapFile(path);
+                }();
                 if (not mapped) {
                     PPR_LOG(
                         Shader, error, "failed to map shader file",
@@ -265,8 +271,11 @@ namespace pP {
                 const std::string path_string = path.generic_string();
 
                 Diagnose diagnostics;
-                *out_module = m_session->loadModuleFromSource(
-                    module_name, path_string.c_str(), source_blob, diagnostics.writeRef());
+                {
+                    const hal::ProfileScope scope_compile{"Shader.Compile"};
+                    *out_module = m_session->loadModuleFromSource(
+                        module_name, path_string.c_str(), source_blob, diagnostics.writeRef());
+                }
 
                 if (not *out_module) {
                     diagnoseIfNeeded(diagnostics.m_diagnostics.get());
@@ -284,6 +293,7 @@ namespace pP {
 
             std::error_code loadModuleFromSource(
                 const char *module_name, const char *path, const string_literal source, IModule **out_module) override {
+                const hal::ProfileScope scope{"Shader.LoadSource"};
                 Diagnose diagnostics;
                 *out_module = m_session->loadModuleFromSourceString(
                     module_name, path, source.data(), diagnostics.writeRef());

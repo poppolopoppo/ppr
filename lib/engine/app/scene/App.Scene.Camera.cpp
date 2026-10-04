@@ -31,6 +31,7 @@ namespace pP {
     }
 
     void Camera::updateModel(const TimeSpan dt, const CameraModel &new_model, const Viewport &viewport) noexcept {
+        const hal::ProfileScope scope{"App.Camera.Update"};
         PPR_ASSERT(not isNan<float, 3u>(new_model.m_origin));
         PPR_ASSERT(not isNan(new_model.m_basis));
         PPR_ASSERT(not isNan(new_model.m_fov));
@@ -169,6 +170,7 @@ namespace pP {
     }
 
     void Camera::updateModel(const TimeSpan dt, ICameraController &controller, const Viewport &viewport) noexcept {
+        const hal::ProfileScope scope{"App.Camera.Update"};
         CameraModel new_model = m_actual_state;
         if (m_camera_mode != m_actual_state.m_camera_mode) {
             new_model.m_camera_mode = m_camera_mode;

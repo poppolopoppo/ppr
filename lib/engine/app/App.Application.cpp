@@ -87,16 +87,27 @@ namespace pP {
         PPR_LOG(App, emphasis, "🏁 run application loop");
 
         while (not m_lifecycle->pollEvent()) {
+            const hal::ProfileScope scope{"App.Frame"};
             std::error_code first_err{};
 
             // throttle if necessary to target desired frame rate, if any provided
             TimeSpan dt{};
-            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_application_clock.tick(&dt, getTargetFrameTime().value_or({})));
+            {
+                const hal::ProfileScope scope_clock{"App.Frame.Clock"};
+                PPR_RETAIN_ERROR_ON_FAIL(
+                    App, first_err, m_application_clock.tick(&dt, getTargetFrameTime().value_or({})));
+            }
 
             try {
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
+                {
+                    const hal::ProfileScope scope_update{"App.Frame.Update"};
+                    PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
+                }
 
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
+                {
+                    const hal::ProfileScope scope_render{"App.Frame.Render"};
+                    PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
+                }
 
             } catch (const std::system_error &e) {
                 m_request_exit(e.code());
@@ -121,6 +132,7 @@ namespace pP {
     }
 
     std::error_code Application::initialize() {
+        const hal::ProfileScope scope{"App.Initialize"};
         m_application_clock.reset();
 
         PPR_LOG(
@@ -154,15 +166,24 @@ namespace pP {
 
         if (m_domain.m_needs_rendering) {
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
-            PPR_RETURN_ERROR_ON_FAIL(App, shader_service->initialize());
+            {
+                const hal::ProfileScope scope_shader{"App.Initialize.Shader"};
+                PPR_RETURN_ERROR_ON_FAIL(App, shader_service->initialize());
+            }
             m_services.insert_or_assign(shader_service);
 
             const safe_ptr<IRhiService> rhi_service = IRhiService::get();
-            PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default, *shader_service));
+            {
+                const hal::ProfileScope scope_rhi{"App.Initialize.RHI"};
+                PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default, *shader_service));
+            }
             m_services.insert_or_assign(rhi_service);
 
             auto renderer = std::make_unique<Renderer>();
-            PPR_RETURN_ERROR_ON_FAIL(App, renderer->initialize(*rhi_service));
+            {
+                const hal::ProfileScope scope_renderer{"App.Initialize.Renderer"};
+                PPR_RETURN_ERROR_ON_FAIL(App, renderer->initialize(*rhi_service));
+            }
             m_renderer = std::move(renderer);
         }
 
@@ -215,6 +236,7 @@ namespace pP {
     }
 
     std::error_code Application::update(TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Update"};
         if (not m_platform) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }
@@ -224,6 +246,7 @@ namespace pP {
     }
 
     std::error_code Application::render() {
+        const hal::ProfileScope scope{"App.Render"};
         if (m_domain.m_needs_rendering and not m_renderer) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }

@@ -3,6 +3,7 @@ module;
 module engine.physics;
 
 import :coupling;
+import engine.core;
 import std;
 
 namespace pP::physics {
@@ -10,6 +11,7 @@ namespace pP::physics {
         Scene &scene, const std::span<const BodyHandle> handles, const std::span<BodyState> states,
         const std::span<SensorEvent> sensors, std::size_t &sensor_count, const std::span<WakeRecord> wakes,
         std::size_t &wake_count, const std::span<ContactRecord> contacts, std::size_t &contact_count) noexcept {
+        const hal::ProfileScope scope{"Physics.Coupling.PublishUpdates"};
         sensor_count = 0u;
         wake_count = 0u;
         contact_count = 0u;

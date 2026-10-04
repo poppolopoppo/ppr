@@ -187,7 +187,14 @@ namespace pP {
         public:
             rhi::ComPtr<rhi::IDevice> m_device{};
             // Default off; set explicitly at the application boundary before initialize().
-            bool m_gpu_assisted_validation{false};
+            rhi::DebugLayerOptions m_debug_options{
+                .coreValidation = PPR_ENABLE_DEBUG,
+#if PPR_ENABLE_SANITIZER_ADDRESS
+                .GPUAssistedValidation = true,
+#else
+                .GPUAssistedValidation = false,
+#endif
+            };
 
             [[nodiscard]] rhi::IRHI &getInstance() const noexcept override {
                 return *slang_rhi::getRHI();
@@ -197,16 +204,25 @@ namespace pP {
                 return *m_device;
             }
 
+            void setCoreValidation(const bool enabled) noexcept override {
+                m_debug_options.coreValidation = enabled;
+            }
+
+            [[nodiscard]] bool isCoreValidationEnabled() const noexcept override {
+                return m_debug_options.coreValidation;
+            }
+
             void setGpuAssistedValidation(const bool enabled) noexcept override {
-                m_gpu_assisted_validation = enabled;
+                m_debug_options.GPUAssistedValidation = enabled;
             }
 
             [[nodiscard]] bool isGpuAssistedValidationEnabled() const noexcept override {
-                return m_gpu_assisted_validation;
+                return m_debug_options.GPUAssistedValidation;
             }
 
             [[nodiscard]] std::error_code initialize(
                 const rhi::DeviceType device_type, IShaderService &shader_service) override {
+                const hal::ProfileScope scope{"RHI.Initialize"};
                 if (m_device) {
                     PPR_LOG(RHI, warning, "RHI already initialized");
                     return rhi::errc::ok;
@@ -233,20 +249,6 @@ namespace pP {
                     }
                 };
 
-#if PPR_ENABLE_DEBUG
-                // Effective opt-in state: off unless the application boundary
-                // set it before initialize() (--gpu-validation).
-                const bool gpu_assisted = m_gpu_assisted_validation;
-                PPR_LOG(
-                    RHI, info, "enabled Slang RHI debug layers",
-                    {{"coreValidation", true}, {"GPUAssistedValidation", gpu_assisted}});
-
-                PPR_RETURN_ERROR_ON_FAIL(
-                    RHI, p_instance->setDebugLayerOptions(
-                             {.required = true, .coreValidation = true, .GPUAssistedValidation = gpu_assisted}));
-
-                p_instance->enableDebugLayers();
-#endif
 
                 constexpr slang_rhi::Feature required_features[] = {
                     slang_rhi::Feature::Surface,
@@ -268,14 +270,29 @@ namespace pP {
                 desc.bindless.samplerCount = rhi::kBindlessSamplerBudget;
                 desc.bindless.bufferCount = rhi::kBindlessBufferBudget;
 
-#if PPR_ENABLE_DEBUG
-                desc.enableValidation = true;
-#endif
 #if PPR_ENABLE_LOGGING
-                desc.debugCallback = SlangRhiDebugCallback::get();
+                if (m_debug_options.isDebugLayersEnabled()) {
+                    // Effective opt-in state: off unless the application boundary
+                    // set it before initialize() (--gpu-validation).
+                    PPR_LOG(
+                        RHI, info, "enabled Slang RHI debug and validation layers",
+                        {{"coreValidation", m_debug_options.coreValidation},
+                            { "GPUAssistedValidation",
+                                m_debug_options.GPUAssistedValidation }});
+
+                    PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->setDebugLayerOptions(m_debug_options));
+
+                    p_instance->enableDebugLayers();
+
+                    desc.enableValidation = true;
+                    desc.debugCallback = SlangRhiDebugCallback::get();
+                }
 #endif
 
-                PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
+                {
+                    const hal::ProfileScope scope_create{"RHI.CreateDevice"};
+                    PPR_RETURN_ERROR_ON_FAIL(RHI, p_instance->createDevice(desc, device.writeRef()));
+                }
 
                 if (not device->hasFeature(rhi::Feature::Bindless)) {
                     PPR_LOG(

@@ -324,6 +324,7 @@ namespace pP::sim {
         };
 
         static void carveCaverns(ChunkGrid &grid, const u64 seed, const Layout &layout) {
+            const hal::ProfileScope scope{"Sim.WorldGen.CarveCaverns"};
             const u64 turn_seed = seed ^ 0xB09A11uLL;
             const u64 radius_seed = seed ^ 0xCA9E0uLL;
             for (u32 worm = 0u; worm < kWormCount; ++worm) {
@@ -361,6 +362,7 @@ namespace pP::sim {
         }
 
         static void carveVentShafts(ChunkGrid &grid, const Layout &layout) {
+            const hal::ProfileScope scope{"Sim.WorldGen.CarveVentShafts"};
             for (u32 index = 0u; index < kVentCount; ++index) {
                 const u32 vent_x = layout.m_vent_x[index];
                 const u32 vent_y = layout.m_vent_y[index];
@@ -390,6 +392,7 @@ namespace pP::sim {
     } // namespace WorldGen
 
     void generate(u64 seed, ChunkGrid &grid) {
+        const hal::ProfileScope scope{"Sim.WorldGen.Generate"};
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
         const WorldGen::Tuned tuned = WorldGen::tuneLayout(layout);
 

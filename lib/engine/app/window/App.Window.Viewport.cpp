@@ -157,6 +157,7 @@ namespace pP {
     }
 
     bool WindowViewport::updateFromWindow() noexcept {
+        const hal::ProfileScope scope{"App.Viewport.Update"};
         const Viewport old_viewport = m_viewport;
         m_viewport = Viewport{*m_window, m_layout};
 

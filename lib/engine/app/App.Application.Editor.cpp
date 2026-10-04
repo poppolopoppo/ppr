@@ -432,6 +432,7 @@ namespace pP {
     }
 
     std::error_code ApplicationEditor::update(TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Editor.Update"};
         if (not m_main_viewport) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }
@@ -461,6 +462,7 @@ namespace pP {
     }
 
     std::error_code ApplicationEditor::render() {
+        const hal::ProfileScope scope{"App.Editor.Render"};
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::render());
 
         Renderer &renderer = getRenderer();
@@ -473,7 +475,11 @@ namespace pP {
             return make_error_code(std::errc::not_connected);
         }
         const auto wait_for_gpu_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle));
+        {
+            const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle));
+        }
 
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {

@@ -368,6 +368,7 @@ namespace pP {
     //            whole or the frame stays empty. A caller that needs
     //            whole-frame atomicity must discard the pass.
     std::error_code GridPass::render(const DrawContext &draw_context) {
+        const hal::ProfileScope scope{"App.Pass.Grid"};
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }

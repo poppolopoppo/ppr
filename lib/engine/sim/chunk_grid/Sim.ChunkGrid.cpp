@@ -47,6 +47,7 @@ namespace pP::sim {
     }
 
     std::error_code ChunkGrid::setCells(const ChunkPos pos, const std::span<const Cell> cells) {
+        const hal::ProfileScope scope{"Sim.ChunkGrid.SetCells"};
         PPR_ASSERT(isInsideChunkGrid(pos));
 
         if (cells.size() != kCellsPerChunk) [[unlikely]] {
@@ -73,6 +74,7 @@ namespace pP::sim {
     }
 
     std::error_code ChunkGrid::setCells(const ChunkPos pos, Array<Cell> &&cells) {
+        const hal::ProfileScope scope{"Sim.ChunkGrid.SetCells"};
         PPR_ASSERT(isInsideChunkGrid(pos));
 
         if (cells.size() != kCellsPerChunk) [[unlikely]] {
@@ -129,6 +131,7 @@ namespace pP::sim {
     }
 
     void ChunkGrid::markDirty(const ChunkPos pos) {
+        const hal::ProfileScope scope{"Sim.ChunkGrid.MarkDirty"};
         PPR_ASSERT(isInsideChunkGrid(pos));
 
         materialize(pos);
@@ -225,6 +228,7 @@ namespace pP::sim {
     }
 
     void ChunkGrid::materialize(const ChunkPos pos) {
+        const hal::ProfileScope scope{"Sim.ChunkGrid.Materialize"};
         std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(pos)];
         if (payload.has_value()) {
             return;

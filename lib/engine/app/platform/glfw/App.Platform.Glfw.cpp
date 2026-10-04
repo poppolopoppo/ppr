@@ -191,6 +191,7 @@ namespace pP {
     }
 
     std::error_code GlfwPlatform::update(const TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Platform.Update"};
         // Clear transient input state BEFORE window-event dispatch appends this
         // frame's characters. Safe to run first: device polling is event-pump
         // independent (gamepads poll via glfwGetGamepadState, keyboard/mouse polls

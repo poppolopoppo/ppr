@@ -5,6 +5,7 @@ module;
 
 module engine.app;
 import std;
+import engine.core;
 
 import :input.key;
 import :platform.glfw.input;
@@ -166,6 +167,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code GlfwInput::pollInputDevices(const TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Input.Poll"};
         m_timestamp += dt;
         m_delta_time = dt;
 

@@ -5,6 +5,7 @@ module;
 module engine.physics;
 
 import :scene;
+import engine.core;
 import std;
 
 namespace pP::physics {
@@ -101,6 +102,7 @@ namespace pP::physics {
     }
 
     std::error_code Scene::initialize(const Desc desc) noexcept {
+        const hal::ProfileScope scope{"Physics.Initialize"};
         const bool invalid_gravity = not std::isfinite(desc.m_gravity_x) or not std::isfinite(desc.m_gravity_y);
         const bool invalid_timestep = not std::isfinite(desc.m_fixed_dt) or desc.m_fixed_dt <= 0.0f;
         const bool invalid_substeps = desc.m_substeps == 0u or
@@ -154,15 +156,20 @@ namespace pP::physics {
     }
 
     std::error_code Scene::step() noexcept {
+        const hal::ProfileScope scope{"Physics.Step"};
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
         }
 
         m_runtime->m_events.clear();
         m_runtime->m_contacts_drained = false;
-        b2World_Step(m_runtime->m_world, m_runtime->m_dt, m_runtime->m_substeps);
+        {
+            const hal::ProfileScope scope_world{"Physics.Step.World"};
+            b2World_Step(m_runtime->m_world, m_runtime->m_dt, m_runtime->m_substeps);
+        }
         const b2SensorEvents events = b2World_GetSensorEvents(m_runtime->m_world);
 
+        const hal::ProfileScope scope_sensors{"Physics.Step.Sensors"};
         try {
             m_runtime->m_events.reserve(static_cast<std::size_t>(events.beginCount + events.endCount));
             const auto append = [this](const b2ShapeId sensor, const b2ShapeId visitor, const bool begin) {
@@ -188,6 +195,7 @@ namespace pP::physics {
     std::error_code Scene::createBodies(
         const std::span<const u64> entities, const std::span<const BodyDefinition> definitions,
         const std::span<BodyHandle> handles) {
+        const hal::ProfileScope scope{"Physics.CreateBodies"};
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
         }
@@ -465,6 +473,7 @@ namespace pP::physics {
 
     std::error_code Scene::drainContactEvents(
         const std::span<ContactEvent> destination, std::size_t &written) noexcept {
+        const hal::ProfileScope scope{"Physics.DrainContacts"};
         written = 0u;
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);

@@ -147,6 +147,7 @@ namespace pP {
     }
 
     std::error_code KeyboardDevice::pollInputMessages(const TimeSpan) {
+        const hal::ProfileScope scope{"App.Input.Keyboard"};
         // reset character inputs every frame: MUST HAPPEN **BEFORE** POLLING WINDOW EVENTS
         m_character_inputs.clear();
         return default_value_v;
@@ -206,6 +207,7 @@ namespace pP {
     }
 
     std::error_code MouseDevice::pollInputMessages(const TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Input.Mouse"};
         std::ignore = dt;
         return default_value_v;
     }
@@ -290,6 +292,7 @@ namespace pP {
     }
 
     std::error_code GamepadDevice::pollInputMessages(const TimeSpan dt) {
+        const hal::ProfileScope scope{"App.Input.Gamepad"};
         const double elapsed_seconds = time::seconds(dt);
 
         m_left_rumble.update(elapsed_seconds);

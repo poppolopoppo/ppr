@@ -233,6 +233,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             [[nodiscard]] std::error_code initialize(
                 WindowInputContext &window_input_context, IRhiService &rhi_service, IShaderService &shader_service,
                 const int input_listener_priority) override {
+                const hal::ProfileScope scope{"App.UI.Init"};
                 PPR_ASSERT(m_imgui_context == nullptr);
 
                 m_frame_revision = 0u;
@@ -339,6 +340,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             [[nodiscard]] std::error_code update(const TimeSpan dt, const WindowViewport &viewport) override {
+                const hal::ProfileScope scope{"App.UI.Update"};
                 if (not m_imgui_context) {
                     return std::make_error_code(std::errc::not_connected);
                 }
@@ -372,6 +374,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
 
             [[nodiscard]] std::error_code render(const DrawContext &draw_context) override {
+                const hal::ProfileScope scope{"App.UI.Render"};
                 if (not m_imgui_context) {
                     return std::make_error_code(std::errc::not_connected);
                 }
@@ -652,6 +655,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
         std::error_code ImGuiService::uploadDrawData_(
             rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
+            const hal::ProfileScope scope{"App.UI.Upload"};
             const u32 total_vtx_count = checked_cast<u32>(draw_data.TotalVtxCount);
             const u32 total_idx_count = checked_cast<u32>(draw_data.TotalIdxCount);
             if (total_vtx_count == 0 || total_idx_count == 0) {
