@@ -153,6 +153,138 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
             PPR_TEST_ASSERT(grid.dirtyChunks().empty());
         };
+
+        PPR_UNIT_TEST (dirty_bounds_grow_with_writes) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{};
+
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+
+            PPR_TEST_ASSERT(not grid.setCell(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}));
+            const std::optional<DirtyBounds> single = grid.dirtyBounds(chunk);
+            PPR_TEST_ASSERT(single.has_value());
+            PPR_TEST_ASSERT(*single == (DirtyBounds{10u, 20u, 10u, 20u}));
+            PPR_TEST_ASSERT(single->width() == 1u);
+            PPR_TEST_ASSERT(single->height() == 1u);
+
+            PPR_TEST_ASSERT(not grid.setCell(GlobalCellPos{12u, 21u}, Cell{7u, 44.0f}));
+            const std::optional<DirtyBounds> grown = grid.dirtyBounds(chunk);
+            PPR_TEST_ASSERT(grown.has_value());
+            PPR_TEST_ASSERT(*grown == (DirtyBounds{10u, 20u, 12u, 21u}));
+            PPR_TEST_ASSERT(grown->width() == 3u);
+            PPR_TEST_ASSERT(grown->height() == 2u);
+
+            // A write inside the box keeps the superset; other chunks stay clean.
+            PPR_TEST_ASSERT(not grid.setCell(GlobalCellPos{11u, 20u}, Cell{5u, 13.5f}));
+            PPR_TEST_ASSERT(grid.dirtyBounds(chunk) == grown);
+            PPR_TEST_ASSERT(not grid.dirtyBounds(ChunkPos{1u, 0u}).has_value());
+
+            grid.clearDirty(chunk);
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+
+            PPR_TEST_ASSERT(not grid.setCell(GlobalCellPos{10u, 20u}, Cell{3u, 12.5f}));
+            PPR_TEST_ASSERT(grid.dirtyBounds(chunk) == single);
+            grid.clearAllDirty();
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+        };
+
+        PPR_UNIT_TEST (mark_dirty_sets_full_bounds) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{4u, 6u};
+
+            grid.markDirty(chunk);
+            const std::optional<DirtyBounds> full = grid.dirtyBounds(chunk);
+            PPR_TEST_ASSERT(full.has_value());
+            PPR_TEST_ASSERT(*full == (DirtyBounds{0u, 0u, kChunkEdge - 1u, kChunkEdge - 1u}));
+            PPR_TEST_ASSERT(full->width() == kChunkEdge);
+            PPR_TEST_ASSERT(full->height() == kChunkEdge);
+
+            grid.clearDirty(chunk);
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+        };
+
+        PPR_UNIT_TEST (setCells_rejects_wrong_size_without_mutation) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{1u, 2u};
+
+            Array<Cell> empty{};
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::span<const Cell>{empty}) ==
+                std::make_error_code(std::errc::invalid_argument));
+
+            Array<Cell> short_cells{};
+            short_cells.resize(kCellsPerChunk - 1u);
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::span<const Cell>{short_cells}) ==
+                std::make_error_code(std::errc::invalid_argument));
+
+            PPR_TEST_ASSERT(not grid.isResident(chunk));
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
+        };
+
+        PPR_UNIT_TEST (setCells_rejects_non_finite_without_mutation) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{3u, 4u};
+
+            Array<Cell> cells{};
+            cells.resize(kCellsPerChunk, Cell{1u, 293.0f});
+            cells.back().m_temperature = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::span<const Cell>{cells}) ==
+                std::make_error_code(std::errc::invalid_argument));
+
+            PPR_TEST_ASSERT(not grid.isResident(chunk));
+            PPR_TEST_ASSERT(not grid.dirtyBounds(chunk).has_value());
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
+
+            // A resident payload is left untouched by a failed bulk write.
+            Array<Cell> good{};
+            good.resize(kCellsPerChunk, Cell{4u, 300.0f});
+            PPR_TEST_ASSERT(not grid.setCells(chunk, std::span<const Cell>{good}));
+
+            Array<Cell> bad = good;
+            bad.back().m_temperature = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(
+                grid.setCells(chunk, std::span<const Cell>{bad}) == std::make_error_code(std::errc::invalid_argument));
+
+            const std::optional<std::span<const Cell>> payload = grid.residentCells(chunk);
+            PPR_TEST_ASSERT(payload.has_value());
+            PPR_TEST_ASSERT(std::ranges::equal(*payload, good));
+        };
+
+        PPR_UNIT_TEST (setCells_writes_and_marks_full_bounds) {
+            ChunkGrid grid{};
+            const ChunkPos chunk{2u, 1u};
+
+            Array<Cell> cells{};
+            cells.resize(kCellsPerChunk);
+            for (u32 index = 0u; index < kCellsPerChunk; ++index) {
+                cells[index] = Cell{static_cast<u16>(index % 7u), 200.0f + static_cast<float>(index % 100u) * 0.5f};
+            }
+            PPR_TEST_ASSERT(not grid.setCells(chunk, std::span<const Cell>{cells}));
+
+            PPR_TEST_ASSERT(grid.isResident(chunk));
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 1u);
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 1u);
+
+            const std::optional<DirtyBounds> full = grid.dirtyBounds(chunk);
+            PPR_TEST_ASSERT(full.has_value());
+            PPR_TEST_ASSERT(*full == (DirtyBounds{0u, 0u, kChunkEdge - 1u, kChunkEdge - 1u}));
+
+            const GlobalCellPos first = globalOf(chunk, LocalCellPos{0u, 0u});
+            const Expected<Cell> first_cell = grid.getCell(first);
+            PPR_TEST_ASSERT(first_cell.has_value());
+            PPR_TEST_ASSERT(*first_cell == cells[0u]);
+
+            const GlobalCellPos last = globalOf(chunk, LocalCellPos{kChunkEdge - 1u, kChunkEdge - 1u});
+            const Expected<Cell> last_cell = grid.getCell(last);
+            PPR_TEST_ASSERT(last_cell.has_value());
+            PPR_TEST_ASSERT(*last_cell == cells[kCellsPerChunk - 1u]);
+        };
     } // namespace Grid
 } // namespace pP::tests::detail
 
@@ -167,6 +299,11 @@ namespace pP::tests {
             detail::Grid::rejects_invalid_cells,
             detail::Grid::mark_dirty_implies_residency,
             detail::Grid::dirty_and_activity_queries,
+            detail::Grid::dirty_bounds_grow_with_writes,
+            detail::Grid::mark_dirty_sets_full_bounds,
+            detail::Grid::setCells_rejects_wrong_size_without_mutation,
+            detail::Grid::setCells_rejects_non_finite_without_mutation,
+            detail::Grid::setCells_writes_and_marks_full_bounds,
         });
     };
 

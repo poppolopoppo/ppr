@@ -20,7 +20,8 @@ export namespace pP::sim {
 
     /// Serialization contract of `save`/`load`. Bump on any byte-layout change;
     /// `load` fail-closes on any other value before touching the payload.
-    inline constexpr u32 kSnapshotVersion = 3u;
+    /// v4 = rect-scoped deltas.
+    inline constexpr u32 kSnapshotVersion = 4u;
 
     enum class errc : int {
         ok = 0,
@@ -45,10 +46,14 @@ export namespace pP::sim {
         [[nodiscard]] constexpr bool operator==(const RngStream &) const noexcept = default;
     };
 
-    /// One chunk captured as a dense run of exactly `kCellsPerChunk` cells.
-    /// Sub-chunk tracking is a later phase.
+    /// One chunk captured as a rect-scoped run of `m_width * m_height` cells,
+    /// row-major over the w x h rect at local (m_x, m_y).
     struct ChunkDelta {
         u32 m_chunk{};
+        u32 m_x{};
+        u32 m_y{};
+        u32 m_width{};
+        u32 m_height{};
         Array<Cell> m_cells{};
 
         [[nodiscard]] bool operator==(const ChunkDelta &) const = default;
@@ -115,7 +120,7 @@ export namespace pP::sim {
     /// Replaces ECS state without altering the grid. Validates before mutation.
     [[nodiscard]] std::error_code restore(Registry &registry, const Snapshot &snapshot);
 
-    /// Little-endian v3 encoding: the ECS tail is followed by a versioned,
+    /// Little-endian v4 encoding: the ECS tail is followed by a versioned,
     /// entity-keyed bodies section and a fixed-tick replay cursor.
     [[nodiscard]] Expected<Array<u8>> save(const Snapshot &snapshot);
 

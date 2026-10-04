@@ -26,8 +26,49 @@ namespace pP::sim {
         }
 
         const ChunkPos chunk = chunkOf(pos);
+        const LocalCellPos local = localOf(pos);
         cellAt(pos) = cell;
-        m_states[chunkIndexOf(chunk)].m_dirty = true;
+
+        ChunkState &state = m_states[chunkIndexOf(chunk)];
+        if (not state.m_dirty) {
+            state.m_min_x = static_cast<u16>(local.m_x);
+            state.m_min_y = static_cast<u16>(local.m_y);
+            state.m_max_x = static_cast<u16>(local.m_x);
+            state.m_max_y = static_cast<u16>(local.m_y);
+        } else {
+            state.m_min_x = std::min(state.m_min_x, static_cast<u16>(local.m_x));
+            state.m_min_y = std::min(state.m_min_y, static_cast<u16>(local.m_y));
+            state.m_max_x = std::max(state.m_max_x, static_cast<u16>(local.m_x));
+            state.m_max_y = std::max(state.m_max_y, static_cast<u16>(local.m_y));
+        }
+        state.m_dirty = true;
+
+        return {};
+    }
+
+    std::error_code ChunkGrid::setCells(const ChunkPos pos, const std::span<const Cell> cells) {
+        PPR_ASSERT(isInsideChunkGrid(pos));
+
+        if (cells.size() != kCellsPerChunk) [[unlikely]] {
+            return make_error_code(std::errc::invalid_argument);
+        }
+
+        for (const Cell &cell: cells) {
+            if (not isFinite<float>(cell.m_temperature)) [[unlikely]] {
+                return make_error_code(std::errc::invalid_argument);
+            }
+        }
+
+        materialize(pos);
+
+        std::ranges::copy(cells, (*m_payloads[chunkIndexOf(pos)]).begin());
+
+        ChunkState &state = m_states[chunkIndexOf(pos)];
+        state.m_dirty = true;
+        state.m_min_x = 0u;
+        state.m_min_y = 0u;
+        state.m_max_x = static_cast<u16>(kChunkEdge - 1u);
+        state.m_max_y = static_cast<u16>(kChunkEdge - 1u);
 
         return {};
     }
@@ -68,18 +109,33 @@ namespace pP::sim {
         PPR_ASSERT(isInsideChunkGrid(pos));
 
         materialize(pos);
-        m_states[chunkIndexOf(pos)].m_dirty = true;
+
+        ChunkState &state = m_states[chunkIndexOf(pos)];
+        state.m_dirty = true;
+        state.m_min_x = 0u;
+        state.m_min_y = 0u;
+        state.m_max_x = static_cast<u16>(kChunkEdge - 1u);
+        state.m_max_y = static_cast<u16>(kChunkEdge - 1u);
     }
 
     void ChunkGrid::clearDirty(const ChunkPos pos) noexcept {
         PPR_ASSERT(isInsideChunkGrid(pos));
 
-        m_states[chunkIndexOf(pos)].m_dirty = false;
+        ChunkState &state = m_states[chunkIndexOf(pos)];
+        state.m_dirty = false;
+        state.m_min_x = 0u;
+        state.m_min_y = 0u;
+        state.m_max_x = 0u;
+        state.m_max_y = 0u;
     }
 
     void ChunkGrid::clearAllDirty() noexcept {
         for (ChunkState &state: m_states) {
             state.m_dirty = false;
+            state.m_min_x = 0u;
+            state.m_min_y = 0u;
+            state.m_max_x = 0u;
+            state.m_max_y = 0u;
         }
     }
 
@@ -111,6 +167,19 @@ namespace pP::sim {
 
     u32 ChunkGrid::dirtyChunkCount() const noexcept {
         return safe_narrowing(std::ranges::count_if(m_states, [](const ChunkState &state) { return state.m_dirty; }));
+    }
+
+    std::optional<DirtyBounds> ChunkGrid::dirtyBounds(const ChunkPos pos) const noexcept {
+        PPR_ASSERT(isInsideChunkGrid(pos));
+
+        const ChunkState &state = m_states[chunkIndexOf(pos)];
+        if (not state.m_dirty) {
+            return std::nullopt;
+        }
+
+        return DirtyBounds{
+            static_cast<u32>(state.m_min_x), static_cast<u32>(state.m_min_y), static_cast<u32>(state.m_max_x),
+            static_cast<u32>(state.m_max_y)};
     }
 
     Array<ChunkPos> ChunkGrid::gatherDirty(const bool activeOnly) const {

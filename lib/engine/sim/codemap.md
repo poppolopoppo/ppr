@@ -16,12 +16,15 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   `kWorldEdge`=4096, `kChunkCount`=1024, `kCellsPerChunk`=16384), the `GlobalCellPos`/`ChunkPos`/
   `LocalCellPos` strong coordinate types with constexpr converters (`chunkOf`, `localOf`,
   `globalOf`, `chunkIndexOf`), the content-free `Cell` (`m_element` + `m_temperature`), and
-  `ChunkGrid`. Grid metadata (dirty flag + `EChunkActivity`) exists for every chunk from
-  construction; cell payloads materialize on first write (`setCell`/`markDirty`) and are never
+  `ChunkGrid`. Grid metadata (dirty flag + `EChunkActivity` + inclusive dirty
+  box) exists for every chunk from construction; cell payloads materialize on first write (`setCell`/`markDirty`/`setCells`) and are never
   evicted in phase 1, so residency is monotonic and **dirty ⇒ resident**. A non-resident chunk
   reads back as `Cell{}`. `ChunkPos` arguments are programmer invariants (`PPR_ASSERT`);
   `GlobalCellPos` is validated operationally (`result_out_of_range`, `invalid_argument` for
-  non-finite temperature). `setCell` marks its chunk dirty; `markDirty` returns void because
+  non-finite temperature). `setCell` grows its chunk dirty box (`DirtyBounds`, superset
+  semantics; clean chunks have no bounds via `dirtyBounds()`); `markDirty` sets the full-chunk
+  box; `clearDirty`/`clearAllDirty` reset boxes to empty; `setCells` is the bulk whole-chunk
+  writer. `markDirty` returns void because
   allocation failure follows the engine allocator contract. `dirtyChunks()`/
   `activeDirtyChunks()` list dirty chunks row-major (the latter restricted to
   `EChunkActivity::active`); `residentCells()` borrows a resident payload.
@@ -59,20 +62,22 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   (back-edge) → `std::errc::resource_deadlock_would_occur`, leaving `m_steps`/`m_order` untouched. `order()` is a
    stable Kahn result (lowest id first), listing declared steps only. `runSystems` refuses
    an unbound declared step before invoking any system and executes bound steps in that order.
-- `:snapshot` holds `kSnapshotVersion`, `sim::errc` (+ `error_category()`/`make_error_code()`
+- `:snapshot` holds `kSnapshotVersion` (=4), `sim::errc` (+ `error_category()`/`make_error_code()`
   and `std::is_error_code_enum` — same shape as `image::errc`), `RngStream`, `ChunkDelta`
-  (dense full-chunk run of exactly `kCellsPerChunk` cells — sub-chunk tracking is a later
-  phase), `Snapshot`, and `capture`/`apply`/`save`/`load`. A file-local `validate()` gate is
-    shared by save/load/apply/restore: version agreement, chunk index bounds, cell count, duplicate
+  (rect-scoped run of `m_width * m_height` cells, row-major over the w x h rect at local
+  (`m_x`, `m_y`)), `Snapshot`, and `capture`/`apply`/`save`/`load`. A file-local `validate()` gate is
+    shared by save/load/apply/restore: version agreement, chunk index bounds, rect bounds
+    (non-empty, inside the chunk) with `m_cells.size() == m_width * m_height`, duplicate
     chunk indices (fail-closed — never resolved last-wins), finite temperatures, and ECS section validity
     (including exact free-slot allocation order with no live, duplicate, or missing dead slots).
-  `apply` validates the whole snapshot before touching the grid; `load` checks the
+  `apply` validates the whole snapshot before touching the grid and writes only the rect cells
+  (untouched cells keep content and dirty state); `load` checks the
   version first (→ `version_mismatch`), then short reads (→ `truncated`), then malformed counts,
-  out-of-range chunk indices, trailing bytes, duplicate chunk indices and non-finite temperatures
+  out-of-range chunk indices, rect overflows, trailing bytes, duplicate chunk indices and non-finite temperatures
   (→ `invalid_payload`).
   `save`/`load` are little-endian: `u32 version`, `u64 seed`, `u32 delta_count`, per delta
-  `u32 chunk` + `u32 cell_count` + cells as `u16 element` + `u32` temperature bit pattern, then
-    `u32 stream_count` and per stream `u32 system` + `u64 state`; v3 appends ECS version,
+  `u32 chunk` + `u32 x` + `u32 y` + `u32 width` + `u32 height` + cells as `u16 element` + `u32` temperature bit pattern, then
+    `u32 stream_count` and per stream `u32 system` + `u64 state`; v4 appends ECS version,
     slot count, per-slot generation/alive, free count + head-to-tail `u32` free indices,
      column count, and per-column id/stride/owner rows/raw bytes, then bodies
      version (`u32`), replay cursor (`u64` fixed ticks), body count (`u32`) and
@@ -94,7 +99,7 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
   seeded region masks (border ring, frozen band, pocket disc, reservoir lens, street-grid
   district, vent discs over a temperate default) with unconditional geometric cores so every
   archetype exists for any seed, then carves vacuum tunnels/shafts while sparing the border.
-  Writes go through `setCell`, so every chunk ends dirty and `capture`-ready. The sim never
+  Writes go through `setCells` for the fill and `setCell` for carving, so every chunk ends dirty and `capture`-ready. The sim never
   names biomes; the numeric ids match the colony-owned `game/colony/Colony.Elements.h`
   registry (vacuum 0, confirmed by the physics `!= 0u` solid test).
 
@@ -106,9 +111,10 @@ Simulation work later phases submit stays outside this module: a driver advances
 and `capture` → `save` for a checkpoint (`load` → `apply` restores grid deltas;
 `restore(registry, snapshot)` replaces ECS state when matching components are registered).
 `capture(grid, registry, seed)` includes ECS state. `capture` is purely
-observational — it lists the currently dirty chunks in row-major order and leaves the grid alone;
-`apply` MERGES: it writes every cell of every delta (the written chunks therefore end up resident
-and dirty) and leaves every other chunk's content and dirty state untouched (`clearAllDirty` is the
+observational — it lists the currently dirty chunks in row-major order, copying only each
+chunk's `dirtyBounds` rect, and leaves the grid alone;
+`apply` MERGES: it writes every rect cell of every delta (the written chunks therefore end up resident
+and dirty) and leaves every other cell's content and dirty state untouched (`clearAllDirty` is the
 reset path), so `capture(apply(g)) == snapshot` holds only for a clean `g` and a duplicate-free
 snapshot.
 

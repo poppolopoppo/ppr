@@ -136,6 +136,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(grid.dirtyChunkCount() == kChunkCount);
             PPR_TEST_ASSERT(grid.dirtyChunks().size() == kChunkCount);
         };
+
+        PPR_UNIT_TEST (generation_content_pinned) {
+            ChunkGrid grid{};
+            generate(1234567u, grid);
+
+            constexpr u64 kPinnedHash = 12692632048894322839u;
+            PPR_TEST_ASSERT(gridHash(grid) == kPinnedHash);
+        };
     } // namespace WorldGen
 } // namespace pP::tests::detail
 
@@ -146,6 +154,7 @@ namespace pP::tests {
             detail::WorldGen::regen_from_seed_reproduces_grid,
             detail::WorldGen::fixed_seed_contains_every_archetype,
             detail::WorldGen::generation_marks_every_chunk_dirty,
+            detail::WorldGen::generation_content_pinned,
         });
     };
 

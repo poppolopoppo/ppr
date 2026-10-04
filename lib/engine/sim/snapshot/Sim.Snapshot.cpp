@@ -36,8 +36,8 @@ namespace pP::sim {
             }
         };
 
-        /// Minimum bytes a delta header occupies: chunk index + cell count.
-        constexpr u32 kMinimumDeltaBytes = 8u;
+        /// Minimum bytes a delta header occupies: chunk index + x/y/w/h rect.
+        constexpr u32 kMinimumDeltaBytes = 20u;
 
         /// Minimum bytes a stream occupies: system id + rng state.
         constexpr u32 kMinimumStreamBytes = 12u;
@@ -212,8 +212,17 @@ namespace pP::sim {
             seen.reserve(snapshot.m_deltas.size());
 
             for (const ChunkDelta &delta: snapshot.m_deltas) {
+                const u64 end_x = static_cast<u64>(delta.m_x) + delta.m_width;
+                const u64 end_y = static_cast<u64>(delta.m_y) + delta.m_height;
+                const u64 area = static_cast<u64>(delta.m_width) * delta.m_height;
                 if (delta.m_chunk >= kChunkCount or
-                    delta.m_cells.size() != kCellsPerChunk or
+                    delta.m_x >= kChunkEdge or
+                    delta.m_y >= kChunkEdge or
+                    delta.m_width == 0u or
+                    delta.m_height == 0u or
+                    end_x > kChunkEdge or
+                    end_y > kChunkEdge or
+                    delta.m_cells.size() != area or
                     std::ranges::find(seen, delta.m_chunk) != seen.end()) {
                     return make_error_code(errc::invalid_payload);
                 }
@@ -254,9 +263,22 @@ namespace pP::sim {
             // Invariant: dirty chunks are resident.
             PPR_ASSERT(payload.has_value());
 
+            const std::optional<DirtyBounds> bounds = grid.dirtyBounds(chunk);
+            PPR_ASSERT(bounds.has_value());
+
             ChunkDelta delta{};
             delta.m_chunk = chunkIndexOf(chunk);
-            delta.m_cells.assign(payload->begin(), payload->end());
+            delta.m_x = bounds->m_min_x;
+            delta.m_y = bounds->m_min_y;
+            delta.m_width = bounds->width();
+            delta.m_height = bounds->height();
+            delta.m_cells.reserve(static_cast<std::size_t>(delta.m_width) * delta.m_height);
+
+            for (u32 row = 0u; row < delta.m_height; ++row) {
+                const u32 source = (delta.m_y + row) * kChunkEdge + delta.m_x;
+                delta.m_cells.insert(
+                    delta.m_cells.end(), payload->begin() + source, payload->begin() + source + delta.m_width);
+            }
 
             snapshot.m_deltas.push_back(std::move(delta));
         }
@@ -331,11 +353,14 @@ namespace pP::sim {
         for (const ChunkDelta &delta: snapshot.m_deltas) {
             const ChunkPos chunk{delta.m_chunk % kChunksPerEdge, delta.m_chunk / kChunksPerEdge};
 
-            for (u32 index = 0u; index < kCellsPerChunk; ++index) {
-                const LocalCellPos local{index % kChunkEdge, index / kChunkEdge};
+            for (u32 row = 0u; row < delta.m_height; ++row) {
+                for (u32 col = 0u; col < delta.m_width; ++col) {
+                    const LocalCellPos local{delta.m_x + col, delta.m_y + row};
+                    const Cell &cell = delta.m_cells[row * delta.m_width + col];
 
-                if (const std::error_code error = grid.setCell(globalOf(chunk, local), delta.m_cells[index]); error) {
-                    return error;
+                    if (const std::error_code error = grid.setCell(globalOf(chunk, local), cell); error) {
+                        return error;
+                    }
                 }
             }
         }
@@ -356,7 +381,10 @@ namespace pP::sim {
 
         for (const ChunkDelta &delta: snapshot.m_deltas) {
             putU32(bytes, delta.m_chunk);
-            putU32(bytes, safe_narrowing(delta.m_cells.size()));
+            putU32(bytes, delta.m_x);
+            putU32(bytes, delta.m_y);
+            putU32(bytes, delta.m_width);
+            putU32(bytes, delta.m_height);
 
             for (const Cell &cell: delta.m_cells) {
                 putU16(bytes, cell.m_element);
@@ -442,18 +470,39 @@ namespace pP::sim {
 
         for (u32 index = 0u; index < delta_count; ++index) {
             u32 chunk{};
-            u32 cell_count{};
-            if (not reader.readU32(chunk) or not reader.readU32(cell_count)) {
+            u32 x{};
+            u32 y{};
+            u32 width{};
+            u32 height{};
+            if (not reader.readU32(chunk) or
+                not reader.readU32(x) or
+                not reader.readU32(y) or
+                not reader.readU32(width) or
+                not reader.readU32(height)) {
                 return std::unexpected{make_error_code(errc::truncated)};
             }
 
-            if (chunk >= kChunkCount or cell_count != kCellsPerChunk) {
+            const u64 end_x = static_cast<u64>(x) + width;
+            const u64 end_y = static_cast<u64>(y) + height;
+            const u64 area = static_cast<u64>(width) * height;
+            if (chunk >= kChunkCount or
+                x >= kChunkEdge or
+                y >= kChunkEdge or
+                width == 0u or
+                height == 0u or
+                end_x > kChunkEdge or
+                end_y > kChunkEdge or
+                area > kCellsPerChunk) {
                 return std::unexpected{make_error_code(errc::invalid_payload)};
             }
 
             ChunkDelta delta{};
             delta.m_chunk = chunk;
-            delta.m_cells.resize(cell_count);
+            delta.m_x = x;
+            delta.m_y = y;
+            delta.m_width = width;
+            delta.m_height = height;
+            delta.m_cells.resize(static_cast<std::size_t>(area));
 
             for (Cell &cell: delta.m_cells) {
                 u16 element{};

@@ -103,6 +103,27 @@ export namespace pP::sim {
     // ChunkGrid — fixed cell world with lazy chunk payloads
     // ------------------------------------------------------------------
 
+    /// Inclusive dirty box of one chunk in local cell coordinates.
+    /// Superset semantics: the box always covers every cell written since the
+    /// last clear; it may cover untouched cells but never misses a dirty one.
+    /// An empty box is never stored — a clean chunk has no bounds.
+    struct DirtyBounds {
+        u32 m_min_x{};
+        u32 m_min_y{};
+        u32 m_max_x{};
+        u32 m_max_y{};
+
+        [[nodiscard]] constexpr u32 width() const noexcept {
+            return m_max_x - m_min_x + 1u;
+        }
+
+        [[nodiscard]] constexpr u32 height() const noexcept {
+            return m_max_y - m_min_y + 1u;
+        }
+
+        [[nodiscard]] constexpr bool operator==(const DirtyBounds &) const noexcept = default;
+    };
+
     /// Fixed 4096x4096 cell world stored as 32x32 chunks of 128x128 cells.
     /// Every chunk carries metadata (dirty flag + activity) from construction;
     /// cell payloads materialize on first write and are never evicted in phase 1,
@@ -113,6 +134,10 @@ export namespace pP::sim {
         struct ChunkState {
             bool m_dirty{false};
             EChunkActivity m_activity{EChunkActivity::active};
+            u16 m_min_x{0u};
+            u16 m_min_y{0u};
+            u16 m_max_x{0u};
+            u16 m_max_y{0u};
         };
 
         Array<ChunkState> m_states;
@@ -125,6 +150,8 @@ export namespace pP::sim {
         /// first write. Returns `result_out_of_range` when `pos` is outside the
         /// world and `invalid_argument` for a non-finite temperature.
         [[nodiscard]] std::error_code setCell(GlobalCellPos pos, Cell cell);
+
+        [[nodiscard]] std::error_code setCells(ChunkPos pos, std::span<const Cell> cells);
 
         /// Reads a cell. A non-resident chunk reads back as `Cell{}`.
         [[nodiscard]] Expected<Cell> getCell(GlobalCellPos pos) const;
@@ -158,6 +185,9 @@ export namespace pP::sim {
         [[nodiscard]] u32 residentChunkCount() const noexcept;
 
         [[nodiscard]] u32 dirtyChunkCount() const noexcept;
+
+        /// Inclusive dirty box of `pos` widened to u32; empty when clean.
+        [[nodiscard]] std::optional<DirtyBounds> dirtyBounds(ChunkPos pos) const noexcept;
 
     private:
         [[nodiscard]] Array<ChunkPos> gatherDirty(bool activeOnly) const;
