@@ -86,6 +86,14 @@ if (PPR_RELEASE_PERF_FLAGS)
     endif ()
 endif ()
 
+# Profiling markers (msvc-profile preset): PPR_ENABLE_PROFILING=ON defines
+# USE_PIX=1 for the Release config, where pix3.h would otherwise see only
+# empty stubs (Release defines NDEBUG, not _DEBUG). Never define _DEBUG here.
+# Release-genexed so Debug / Edit & Continue configs are untouched.
+if (PPR_ENABLE_PROFILING)
+    add_compile_options("$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/DUSE_PIX=1>")
+endif ()
+
 # The /Zc:__cplusplus compiler option enables the __cplusplus preprocessor macro to report an updated
 # value for recent C++ language standards support.
 # By default, Visual Studio always returns the value 199711L for the __cplusplus preprocessor macro.

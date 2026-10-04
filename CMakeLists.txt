@@ -66,6 +66,39 @@ option(PPR_ENABLE_CLANG_TIDY "Enable clang-tidy" FALSE)
 option(PPR_ENABLE_CPPCHECK "Enable cppcheck" FALSE)
 option(PPR_WARNINGS_AS_ERRORS "Treat warnings as errors" FALSE)
 option(PPR_EDIT_AND_CONTINUE "Enable Edit & Continue (Debug, /ZI). VS generator cannot be used with import std." FALSE)
+option(PPR_ENABLE_PROFILING "Enable profiling markers (PIX events on Windows via USE_PIX)" FALSE)
+set(PPR_LOGGING_LEVEL "WARNING" CACHE STRING "Minimum log severity compiled in (OFF, DEBUG, VERBOSE, INFO, EMPHASIS, WARNING, ERROR, FATAL)")
+set_property(CACHE PPR_LOGGING_LEVEL PROPERTY STRINGS OFF DEBUG VERBOSE INFO EMPHASIS WARNING ERROR FATAL)
+
+# Logging threshold (compiler-independent): translate the PPR_LOGGING_LEVEL
+# string option into the numeric PPR_LOG_LEVEL_THRESHOLD compile definition
+# consumed by include/pP/Macros.h. Severity order matches pP::Log::ELevel
+# (debug=0, verbose=1, info=2, emphasis=3, warning=4, error=5, fatal=6);
+# OFF (7) compiles out every PPR_LOG. Directory-scoped definition placed here
+# (before any add_subdirectory/targets) so every toolchain — MSVC, Clang,
+# GCC — validates the value and agrees. Ship default: WARNING.
+if(PPR_LOGGING_LEVEL STREQUAL "OFF")
+    set(_ppr_log_level_threshold 7)
+elseif(PPR_LOGGING_LEVEL STREQUAL "DEBUG")
+    set(_ppr_log_level_threshold 0)
+elseif(PPR_LOGGING_LEVEL STREQUAL "VERBOSE")
+    set(_ppr_log_level_threshold 1)
+elseif(PPR_LOGGING_LEVEL STREQUAL "INFO")
+    set(_ppr_log_level_threshold 2)
+elseif(PPR_LOGGING_LEVEL STREQUAL "EMPHASIS")
+    set(_ppr_log_level_threshold 3)
+elseif(PPR_LOGGING_LEVEL STREQUAL "WARNING")
+    set(_ppr_log_level_threshold 4)
+elseif(PPR_LOGGING_LEVEL STREQUAL "ERROR")
+    set(_ppr_log_level_threshold 5)
+elseif(PPR_LOGGING_LEVEL STREQUAL "FATAL")
+    set(_ppr_log_level_threshold 6)
+else()
+    message(FATAL_ERROR "Unknown PPR_LOGGING_LEVEL='${PPR_LOGGING_LEVEL}' "
+            "(expected OFF, DEBUG, VERBOSE, INFO, EMPHASIS, WARNING, ERROR, FATAL).")
+endif()
+add_compile_definitions(PPR_LOG_LEVEL_THRESHOLD=${_ppr_log_level_threshold})
+unset(_ppr_log_level_threshold)
 
 if(PPR_ENABLE_DEVELOPER_MODE)
     message(STATUS "Enable developer mode with config=${CMAKE_BUILD_TYPE}")

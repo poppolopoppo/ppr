@@ -24,7 +24,8 @@
       "description": "Developer mode with warnings as errors and sanitizers",
       "inherits": "default",
       "cacheVariables": {
-        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       }
     },
     {
@@ -98,7 +99,8 @@
       "inherits": "windows-msvc-toolchain",
       "cacheVariables": {
         "PPR_ENABLE_DEVELOPER_MODE": "ON",
-        "PPR_ENABLE_SANITIZER_ADDRESS": "ON"
+        "PPR_ENABLE_SANITIZER_ADDRESS": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       }
     },
     {
@@ -113,6 +115,17 @@
       }
     },
     {
+      "name": "msvc-profile",
+      "displayName": "MSVC Profile (Instrumented Release)",
+      "description": "Instrumented release for profiling: same flags as msvc-rel (/O2 /Ob2 /GL /Gw, LTCG, NDEBUG, PDBSTRIPPED) plus PIX markers (USE_PIX) and EMPHASIS logging.",
+      "inherits": "msvc-rel",
+      "binaryDir": "${sourceDir}/out/build/msvc-profile",
+      "cacheVariables": {
+        "PPR_ENABLE_PROFILING": "ON",
+        "PPR_LOGGING_LEVEL": "EMPHASIS"
+      }
+    },
+    {
       "name": "clang-cl-dev",
       "displayName": "Clang-cl Developer",
       "description": "Target Windows with the clang-cl compiler, debug build type",
@@ -120,7 +133,8 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
-        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
@@ -164,7 +178,8 @@
         "PPR_ENABLE_SANITIZER_UNDEFINED": "OFF",
         "ENABLE_CACHE": "OFF",
         "PPR_RELEASE_PERF_FLAGS": "OFF",
-        "PPR_EDIT_AND_CONTINUE": "ON"
+        "PPR_EDIT_AND_CONTINUE": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
@@ -181,7 +196,8 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++",
-        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       }
     },
     {
@@ -205,7 +221,8 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "PPR_ENABLE_DEVELOPER_MODE": "ON"
+        "PPR_ENABLE_DEVELOPER_MODE": "ON",
+        "PPR_LOGGING_LEVEL": "DEBUG"
       }
     },
     {

@@ -212,7 +212,36 @@ extern "C" void _ReadWriteBarrier();
 // logging
 // ------------------------------------------------------------------
 
+// Authoritative compile-time logging threshold, fed by the PPR_LOGGING_LEVEL
+// CMake option (OFF, DEBUG, VERBOSE, INFO, EMPHASIS, WARNING, ERROR, FATAL)
+// via the numeric PPR_LOG_LEVEL_THRESHOLD compile definition. Severity order
+// matches pP::Log::ELevel: debug=0, verbose=1, info=2, emphasis=3, warning=4,
+// error=5, fatal=6. OFF (7) compiles out every PPR_LOG. Phase 1 only wires
+// the threshold; Phase 2 gates PPR_LOG call sites against it (no arg
+// evaluation below threshold). PPR_ENABLE_LOGGING stays as the coarse
+// backward-compatible switch derived from the threshold.
+#define PPR_LOG_LEVEL_DEBUG 0
+#define PPR_LOG_LEVEL_VERBOSE 1
+#define PPR_LOG_LEVEL_INFO 2
+#define PPR_LOG_LEVEL_EMPHASIS 3
+#define PPR_LOG_LEVEL_WARNING 4
+#define PPR_LOG_LEVEL_ERROR 5
+#define PPR_LOG_LEVEL_FATAL 6
+#define PPR_LOG_LEVEL_OFF 7
+
+#ifndef PPR_LOG_LEVEL_THRESHOLD
+#define PPR_LOG_LEVEL_THRESHOLD PPR_LOG_LEVEL_WARNING
+#endif
+
+#if PPR_LOG_LEVEL_THRESHOLD > PPR_LOG_LEVEL_OFF
+#error "PPR_LOG_LEVEL_THRESHOLD out of range (expected 0..7)"
+#endif
+
+#if PPR_LOG_LEVEL_THRESHOLD >= PPR_LOG_LEVEL_OFF
+#define PPR_ENABLE_LOGGING 0
+#else
 #define PPR_ENABLE_LOGGING 1
+#endif
 
 #if PPR_ENABLE_LOGGING
 #define PPR_DECLARE_LOG_CATEGORY(_NAME)                                                                                \
