@@ -158,8 +158,7 @@ export namespace pP {
             requires std::is_nothrow_move_constructible_v<TaskF> and
                      std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                      std::invocable<std::decay_t<TaskF> &, const IContext &>
-        [[nodiscard]] std::error_code dispatchWork_(
-            WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg);
+        [[nodiscard]] std::error_code dispatchWork_(WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg);
 
         [[nodiscard]] std::error_code dispatchWork_(
             WorkerState_ &worker, const TaskEntryPoint &work, std::optional<WaitGroup> &&wg);
@@ -265,7 +264,8 @@ export namespace pP {
         } else {
             TaskPromise_ promise{std::forward<TaskF>(work)};
             std::future future = promise.m_promise.get_future();
-            if (const std::error_code err = dispatchWork_(worker_indices, std::move(promise), std::move(wg))) [[unlikely]] {
+            if (const std::error_code err = dispatchWork_(worker_indices, std::move(promise), std::move(wg)))
+                [[unlikely]] {
                 return unexpected_t{err};
             }
             return future;
@@ -306,7 +306,8 @@ export namespace pP {
         requires std::is_nothrow_move_constructible_v<TaskF> and
                  std::is_nothrow_destructible_v<std::decay_t<TaskF>> and
                  std::invocable<std::decay_t<TaskF> &, const IContext &>
-    std::error_code ParallelScheduler::dispatchWork_(WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg) {
+    std::error_code ParallelScheduler::dispatchWork_(
+        WorkerState_ &worker, TaskF &&work, std::optional<WaitGroup> &&wg) {
         using decayed_t = std::decay_t<TaskF>;
 
         // Register the intent asap to signal the worker loop than more work is coming

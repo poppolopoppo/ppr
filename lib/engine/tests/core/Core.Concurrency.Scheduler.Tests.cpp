@@ -15,7 +15,13 @@ import std;
 // - WaitGroup::done(err) records the first error and reports whether the
 //   caller was the last completer; wait() returns the recorded error
 //   (empty on success) once the count reaches zero.
-// - Task exceptions surface as ParallelScheduler::err_task_exception.
+// - schedule on a non-void task returns
+//   std::expected<std::future<R>, std::error_code> (void tasks return
+//   std::error_code; broadcast is void-only); the future delivers the
+//   task's return value or its exception.
+// - Task exceptions surface as ParallelScheduler::err_task_exception via
+//   the safety net; value tasks additionally surface the original
+//   exception through their std::future.
 // - join gracefully DRAINS accepted tasks before returning; a nonzero
 //   cause cancels first, an empty cause does not.
 // - Cancelling the parent still drains accepted tasks but rejects later
@@ -441,6 +447,140 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
         };
 
+        PPR_UNIT_TEST (schedule_void_task_returns_error_code) {
+            // Void schedule reports admission as std::error_code (not a
+            // future): binding the result to error_code pins the overload
+            // surface at compile time.
+            WaitGroup wg{};
+            std::atomic<int> ran{0};
+            ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
+
+            wg.add(1u);
+            const std::error_code ec = sched.schedule([&](const IContext &) {
+                ran.fetch_add(1, std::memory_order_acq_rel);
+                wg.done();
+            });
+            PPR_TEST_ASSERT(not ec);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
+        };
+
+        PPR_UNIT_TEST (schedule_value_task_future_delivers_value) {
+            // Non-void schedule returns expected<future<R>, error_code>;
+            // the future delivers the task's return value.
+            ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
+
+            auto result = sched.schedule([](const IContext &) { return 42; });
+            PPR_TEST_ASSERT(result.has_value());
+            std::future<int> fut = std::move(*result);
+            PPR_TEST_ASSERT(fut.valid());
+            PPR_TEST_ASSERT(fut.get() == 42);
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (tracked_value_schedule_settles_group_empty) {
+            // Tracked value schedule: admission registers the group exactly
+            // once; the future delivers the value and the group settles with
+            // an empty error.
+            WaitGroup wg{};
+            ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
+
+            auto result = sched.schedule([](const IContext &) { return 7; }, wg);
+            PPR_TEST_ASSERT(result.has_value());
+            std::future<int> fut = std::move(*result);
+            PPR_TEST_ASSERT(fut.get() == 7);
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (schedule_value_task_out_param_delivers_value) {
+            // The future* overload reports admission as error_code and moves
+            // the future out on success.
+            std::future<int> fut{};
+            ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
+
+            PPR_TEST_ASSERT(not sched.schedule([](const IContext &) { return 11; }, &fut));
+            PPR_TEST_ASSERT(fut.valid());
+            PPR_TEST_ASSERT(fut.get() == 11);
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (schedule_value_task_exception_surfaces_via_future_and_group) {
+            // TaskPromise_ stores the exception in the promise AND rethrows,
+            // so future.get() surfaces the original while the safety net and
+            // envelope still settle the tracked group and scheduler error
+            // with err_task_exception.
+            const std::error_code expected = make_error_code(ParallelScheduler::err_task_exception);
+            WaitGroup wg{};
+            ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
+
+            auto result = sched.schedule(
+                [](const IContext &) -> int { throw std::runtime_error("value task failure"); }, wg);
+            PPR_TEST_ASSERT(result.has_value());
+            std::future<int> fut = std::move(*result);
+
+            bool caught_runtime = false;
+            try {
+                static_cast<void>(fut.get());
+            } catch (const std::runtime_error &) {
+                caught_runtime = true;
+            } catch (...) {
+                caught_runtime = false;
+            }
+            PPR_TEST_ASSERT(caught_runtime);
+            PPR_TEST_ASSERT(wg.wait() == expected);
+            PPR_TEST_ASSERT(sched.error() == expected);
+            PPR_TEST_ASSERT(sched.join() == expected);
+            PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+        };
+
+        PPR_UNIT_TEST (schedule_value_task_admission_failure_yields_full) {
+            // Saturated queue: both value-task overloads report error_full
+            // with no future, and the never-registered group still waits
+            // cleanly. Void fills prove saturation (a small record failing
+            // means the larger promise payload fails too). The scope guard
+            // releases the worker even if an assert throws.
+            std::latch worker_pinned{1};
+            std::atomic<bool> release{false};
+            WaitGroup wg{};
+            ParallelScheduler sched{"scheduler-test", 1u, queueBytes()};
+            PPR_DEFER {
+                openGate(release);
+            };
+
+            PPR_TEST_ASSERT(not sched.schedule([&](const IContext &) {
+                worker_pinned.count_down();
+                awaitGate(release);
+            }));
+            worker_pinned.wait();
+
+            std::error_code saturate_err{};
+            for (int i = 0; i < kMaxFillAttempts; ++i) {
+                if (const std::error_code err = sched.schedule([](const IContext &) {})) {
+                    saturate_err = err;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(saturate_err == RawChannel::error_full);
+
+            auto result = sched.schedule([](const IContext &) { return 1; }, wg);
+            PPR_TEST_ASSERT(not result.has_value());
+            PPR_TEST_ASSERT(result.error() == RawChannel::error_full);
+            PPR_TEST_ASSERT(not wg.wait());
+
+            std::future<int> out{};
+            PPR_TEST_ASSERT(sched.schedule([](const IContext &) { return 2; }, &out, wg) == RawChannel::error_full);
+            PPR_TEST_ASSERT(not out.valid());
+            PPR_TEST_ASSERT(not wg.wait());
+
+            openGate(release);
+            PPR_TEST_ASSERT(not sched.join());
+        };
+
         PPR_UNIT_TEST (idle_join_and_repeated_join) {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
@@ -753,9 +893,9 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             PPR_TEST_ASSERT(not parallel::forRange(
-                sched, 0u, 0u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }));
+                0u, 0u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }, sched));
             PPR_TEST_ASSERT(not parallel::forRange(
-                sched, 5u, 5u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }));
+                5u, 5u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }, sched));
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(calls.load(std::memory_order_acquire) == 0);
         };
@@ -763,7 +903,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (forrange_invalid_range_rejected) {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            PPR_TEST_ASSERT(parallel::forRange(sched, 5u, 3u, [&](std::size_t) {}) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(parallel::forRange(5u, 3u, [&](std::size_t) {}, sched) == std::errc::invalid_argument);
             PPR_TEST_ASSERT(not sched.join());
         };
 
@@ -774,7 +914,7 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 3u, queueBytes()};
 
             PPR_TEST_ASSERT(not parallel::forRange(
-                sched, 0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }));
+                0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched));
             PPR_TEST_ASSERT(not sched.join());
             for (const auto &v: visits) {
                 PPR_TEST_ASSERT(v.load(std::memory_order_acquire) == 1);
@@ -798,7 +938,7 @@ namespace pP::tests::detail {
                     wg.done();
                 };
                 const std::error_code err = parallel::forRange(
-                    sched, 0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); });
+                    0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
                 nested_ok.store(not err, std::memory_order_release);
             }));
             PPR_TEST_ASSERT(not wg.wait());
@@ -819,7 +959,7 @@ namespace pP::tests::detail {
 
             cancel();
             const std::error_code err = parallel::forRange(
-                sched, 0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); });
+                0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
             PPR_TEST_ASSERT(err == std::errc::operation_canceled);
             PPR_TEST_ASSERT(sched.join() == std::errc::operation_canceled);
             for (const auto &v: visits) {
@@ -851,7 +991,7 @@ namespace pP::tests::detail {
                 worker_arrived.count_down();
                 awaitGate(release);
                 const std::error_code err = parallel::forRange(
-                    sched, 0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); });
+                    0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
                 nested_cancelled.store(err == std::errc::operation_canceled, std::memory_order_release);
             }));
             worker_arrived.wait();
@@ -891,7 +1031,7 @@ namespace pP::tests::detail {
             }
 
             const std::error_code err = parallel::forRange(
-                sched, 0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); });
+                0u, n, [&](std::size_t i) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, sched);
             PPR_TEST_ASSERT(not err);
 
             openGate(release);
@@ -911,13 +1051,16 @@ namespace pP::tests::detail {
             ParallelScheduler outer{"scheduler-outer", 4u, queueBytes()};
             ParallelScheduler inner{"scheduler-inner", 4u, queueBytes()};
 
-            PPR_TEST_ASSERT(not parallel::forRange(outer, 0u, n, [&](std::size_t i) {
-                const std::error_code err = parallel::forRange(
-                    inner, 0u, 2u, [&](std::size_t) { visits[i].fetch_add(1, std::memory_order_acq_rel); });
-                if (err) {
-                    nested_ok.store(false, std::memory_order_release);
-                }
-            }));
+            PPR_TEST_ASSERT(not parallel::forRange(
+                0u, n,
+                [&](std::size_t i) {
+                    const std::error_code err = parallel::forRange(
+                        0u, 2u, [&](std::size_t) { visits[i].fetch_add(1, std::memory_order_acq_rel); }, inner);
+                    if (err) {
+                        nested_ok.store(false, std::memory_order_release);
+                    }
+                },
+                outer));
             PPR_TEST_ASSERT(not outer.join());
             PPR_TEST_ASSERT(not inner.join());
             PPR_TEST_ASSERT(nested_ok.load(std::memory_order_acquire));
@@ -936,12 +1079,15 @@ namespace pP::tests::detail {
             const std::error_code helper_err = make_error_code(ParallelScheduler::err_task_exception);
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
-            const std::error_code err = parallel::forRange(sched, 0u, 6u, [&](std::size_t i) {
-                if (i < 4u) {
-                    throw std::runtime_error("helper chunk failure");
-                }
-                throw std::system_error(caller_err);
-            });
+            const std::error_code err = parallel::forRange(
+                0u, 6u,
+                [&](std::size_t i) {
+                    if (i < 4u) {
+                        throw std::runtime_error("helper chunk failure");
+                    }
+                    throw std::system_error(caller_err);
+                },
+                sched);
             PPR_TEST_ASSERT(err == caller_err);
             PPR_TEST_ASSERT(sched.join() == helper_err);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
@@ -952,7 +1098,7 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             PPR_TEST_ASSERT(not parallel::forRange(
-                sched, 0u, 16u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }));
+                0u, 16u, [&](std::size_t) { calls.fetch_add(1, std::memory_order_acq_rel); }, sched));
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(calls.load(std::memory_order_acquire) == 16);
         };
@@ -963,7 +1109,7 @@ namespace pP::tests::detail {
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
             // Borrowed mutable view: forEach mutates in place, not on a copy.
-            PPR_TEST_ASSERT(not parallel::forEach(sched, std::span<int>(values), [](int &x) { x *= 2; }));
+            PPR_TEST_ASSERT(not parallel::forEach(std::span<int>(values), [](int &x) { x *= 2; }, sched));
             PPR_TEST_ASSERT(not sched.join());
             PPR_TEST_ASSERT(values == expected);
         };
@@ -1007,6 +1153,12 @@ namespace pP::tests {
             detail::Scheduler::tracked_broadcast_settles_group_on_all_workers,
             detail::Scheduler::tracked_schedule_admission_failure_leaves_group_untouched,
             detail::Scheduler::tracked_schedule_helper_throw_surfaces_task_exception,
+            detail::Scheduler::schedule_void_task_returns_error_code,
+            detail::Scheduler::schedule_value_task_future_delivers_value,
+            detail::Scheduler::tracked_value_schedule_settles_group_empty,
+            detail::Scheduler::schedule_value_task_out_param_delivers_value,
+            detail::Scheduler::schedule_value_task_exception_surfaces_via_future_and_group,
+            detail::Scheduler::schedule_value_task_admission_failure_yields_full,
             detail::Scheduler::idle_join_and_repeated_join,
             detail::Scheduler::join_drains_accepted_tasks,
             detail::Scheduler::schedule_racing_join,
