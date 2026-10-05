@@ -242,6 +242,7 @@ namespace pP {
 
     std::error_code ApplicationEditor::setLoadedScene(
         const std::filesystem::path &dir, mesh::SceneAsset &&loaded_scene) {
+        const hal::ProfileScope profile_scope{"ApplicationEditor::setLoadedScene", "Scene"};
         Array<image::ImageAsset> images{};
         for (const mesh::ImageRef &ref: loaded_scene.m_images) {
             mem::SharedBuffer bytes{};
@@ -305,6 +306,7 @@ namespace pP {
     }
 
     std::error_code ApplicationEditor::submitSceneInstances_() {
+        const hal::ProfileScope profile_scope{"App.Editor.Update.SubmitInstances", "Update"};
         m_triangle_pass->clearInstances();
 
         const mesh::SceneAsset &scene = *m_scene;
@@ -442,10 +444,6 @@ namespace pP {
         m_main_viewport->updateFromWindow();
 
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());
-
-        const safe_ptr window_service{getPlatform().getWindowService()};
-        window_service->renameWindow(
-            m_main_viewport->getWindow(), std::format("{} - Frame = {:.2f} ms", getName(), time::seconds(dt) * 1000.0));
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_camera->getSnapshot()));
