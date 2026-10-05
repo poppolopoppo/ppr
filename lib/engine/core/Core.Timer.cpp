@@ -84,6 +84,12 @@ namespace pP {
         callback(current_tick);
     }
 
+    void TimerManager::scheduleAfter(const TimeDuration duration, Callback &&callback) noexcept {
+        PPR_ASSERT(duration.count() >= 0);
+        const TimeSpan span = std::chrono::duration_cast<TimeSpan>(duration);
+        schedule(time::now() + span, std::move(callback));
+    }
+
     std::error_code TimerManager::tick(TimeSpan *out_delta_time, const TimeSpan target_period) noexcept {
         StableVectorInplace<Callback> ready_callbacks{};
 
