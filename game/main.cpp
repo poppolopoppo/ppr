@@ -104,6 +104,10 @@ namespace demo {
         u64 m_profile_frame_index{0u};
         bool m_profile_edits{false};
         bool m_profile_pan{false};
+        // Bounded-run fixture: `--auto-exit S` (alias `--exit-after S`) exits
+        // gracefully after S wall-clock seconds from the first update();
+        // the start stamps lazily to avoid pre-initialize issues.
+        std::optional<TimeDuration> m_auto_exit_seconds{};
         // Non-owning view of the editor-owned pan controller (stashed at
         // initialize, cleared before super shutdown); the scripted pan
         // route snaps it with teleport so each waypoint lands exactly.
@@ -1643,6 +1647,19 @@ namespace demo {
             m_profile_pan = enabled;
         }
 
+        /// Bounded run: exit gracefully after the given wall-clock seconds
+        /// from the first update() (lazy start). Non-positive, NaN, and
+        /// infinite values are rejected at the CLI; the setter stores as-is.
+        void setAutoExitSeconds(const TimeDuration seconds) noexcept {
+            m_auto_exit_seconds = seconds;
+        }
+
+        /// Focus-throttle opt-out: forwards to Application so profiling and
+        /// bounded runs keep full frame rate when the window loses focus.
+        void setNoFocusThrottle(const bool enabled) noexcept {
+            Application::setNoFocusThrottle(enabled);
+        }
+
         /// Label attached to every profile-csv banner/frame line. Default "live".
         void setProfileLabel(std::string label) {
             m_profile_label = std::move(label);
@@ -1782,6 +1799,20 @@ namespace demo {
 
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
+
+            // Phase: auto-exit. Bounded runs (`--auto-exit S`, alias
+            // `--exit-after S`) exit gracefully after S wall-clock seconds
+            // from the first update(); the start stamps lazily on first
+            // entry. Graceful requestExit, never std::exit — the same
+            // teardown rule as the CSV exit above.
+            if (m_auto_exit_seconds.has_value()) {
+                PPR_LOG(Demo, warning, "auto-exit timeout setup", {{"timeout_s", m_auto_exit_seconds->count()}});
+
+                getTimerManager().scheduleAfter(m_auto_exit_seconds.value(), [&](const TimePoint) -> std::error_code {
+                    requestExit();
+                    return default_value_v;
+                });
+            }
             return {};
         }
 
@@ -2448,7 +2479,6 @@ namespace demo {
             // still digs exactly once; errors stay sticky and abort.
             // digTotal moves only in applyDig, so the post-tick delta below
             // attributes exactly this frame's tool activity.
-            const u32 dug_before = m_driver.digTotal();
             const bool tool_active = m_tool.m_accepted_click.has_value() or not m_tool.m_drag_queue.empty();
             if (m_tool.m_accepted_click.has_value()) {
                 const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
@@ -2540,6 +2570,7 @@ namespace demo {
                     requestExit();
                 }
             }
+
             return {};
         }
 
@@ -2825,20 +2856,28 @@ int main(const int argc, char *argv[]) {
     // them from every table; the N-frame countdown runs post-skip (K + N total).
     // `--profile-edits` / `--profile-pan` add the scripted S2 edit schedule /
     // camera route inside measured windows (frame 0 first, combinable).
+    // `--auto-exit S` (alias `--exit-after S`, both `--flag value` and
+    // `--flag=value`) exits gracefully after S wall-clock seconds.
+    // Profiling/bounded runs (--profile100, --profile-csv, --auto-exit)
+    // disable the focus throttle; `--no-focus-throttle` forces it off.
+    bool profiling{false};
     for (std::size_t index = 0u; index < args.size(); ++index) {
         const std::string_view arg{args[index]};
         if (arg == "--profile100") {
             app.setAgentCount(100u);
+            profiling = true;
         } else if (arg == "--profile-csv" and index + 1u < args.size()) {
             pP::u64 frames = 0u;
             const std::string_view count{args[++index]};
             std::from_chars(count.data(), count.data() + count.size(), frames);
             app.setProfileCsvFrames(frames);
+            profiling = true;
         } else if (arg.starts_with("--profile-csv=")) {
             pP::u64 frames = 0u;
             const std::string_view count = arg.substr(std::string_view{"--profile-csv="}.size());
             std::from_chars(count.data(), count.data() + count.size(), frames);
             app.setProfileCsvFrames(frames);
+            profiling = true;
         } else if (arg == "--profile-label" and index + 1u < args.size()) {
             const std::string_view label{args[++index]};
             app.setProfileLabel(std::string{label});
@@ -2859,9 +2898,42 @@ int main(const int argc, char *argv[]) {
             app.setProfileEdits(true);
         } else if (arg == "--profile-pan") {
             app.setProfilePan(true);
+        } else if (arg == "--no-focus-throttle") {
+            profiling = true;
+        } else if ((arg == "--auto-exit" or arg == "--exit-after") and index + 1u < args.size()) {
+            const std::string_view text{args[++index]};
+            double seconds{0};
+            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), seconds);
+            if (ec != std::errc{} or ptr != text.data() + text.size() or not std::isfinite(seconds) or seconds <= 0.0) {
+                std::fprintf(
+                    stderr, "[cli] --auto-exit: invalid seconds '%.*s' (expected a positive number)\n",
+                    static_cast<int>(text.size()), text.data());
+                return 2;
+            }
+            app.setAutoExitSeconds(pP::TimeDuration(seconds));
+            profiling = true;
+        } else if (arg.starts_with("--auto-exit=") or arg.starts_with("--exit-after=")) {
+            const std::string_view text = arg.starts_with("--auto-exit=")
+                                              ? arg.substr(std::string_view{"--auto-exit="}.size())
+                                              : arg.substr(std::string_view{"--exit-after="}.size());
+            double seconds = 0.0;
+            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), seconds);
+            if (ec != std::errc{} or ptr != text.data() + text.size() or not std::isfinite(seconds) or seconds <= 0.0) {
+                std::fprintf(
+                    stderr, "[cli] --auto-exit: invalid seconds '%.*s' (expected a positive number)\n",
+                    static_cast<int>(text.size()), text.data());
+                return 2;
+            }
+            app.setAutoExitSeconds(pP::TimeDuration(seconds));
+            profiling = true;
+        } else if (arg == "--core-validation") {
+            pP::IRhiService::get()->setCoreValidation(true);
         } else if (arg == "--gpu-validation") {
             pP::IRhiService::get()->setGpuAssistedValidation(true);
         }
+    }
+    if (profiling) {
+        app.setNoFocusThrottle(true);
     }
     // Make run-loop failures visible: a bare .value() turns any loop error
     // into a silent terminate (exit 3). Catch, print, then propagate.
