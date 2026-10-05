@@ -54,6 +54,10 @@ namespace pP {
         m_has_background_priority = throttle;
     }
 
+    void Application::setNoFocusThrottle(const bool enabled) noexcept {
+        m_no_focus_throttle = enabled;
+    }
+
     void Application::setTargetFrameDuration(const TimeDuration frame_time) noexcept {
         m_target_frame_time = std::chrono::duration_cast<TimeSpan>(frame_time);
     }

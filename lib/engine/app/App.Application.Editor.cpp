@@ -417,7 +417,7 @@ namespace pP {
     }
 
     void ApplicationEditor::onMainWindowFocused_([[maybe_unused]] const Window &window, const bool focused) {
-        setBackgroundPriority(not focused);
+        setBackgroundPriority(not focused and not getNoFocusThrottle());
 
         if (not focused) {
             // Session reset (Routing latch) is separate from motion reset (controller).

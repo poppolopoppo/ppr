@@ -96,6 +96,13 @@ export namespace pP {
 
         void setBackgroundPriority(bool throttle) noexcept;
 
+        /// Opt out of the background focus throttle (profiling/bounded runs).
+        void setNoFocusThrottle(bool enabled) noexcept;
+
+        [[nodiscard]] bool getNoFocusThrottle() const noexcept {
+            return m_no_focus_throttle;
+        }
+
         void setTargetFrameDuration(TimeDuration frame_time) noexcept;
 
         void setTargetFrameDuration(std::nullopt_t) noexcept;
@@ -127,6 +134,9 @@ export namespace pP {
 
         /// throttle refresh loop to low frame-rate when application is in background
         bool m_has_background_priority{false};
+
+        /// opt out of the background focus throttle
+        bool m_no_focus_throttle{false};
 
         const Array<std::string> m_arguments{};
         const std::string m_name{};
