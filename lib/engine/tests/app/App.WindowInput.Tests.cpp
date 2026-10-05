@@ -898,6 +898,22 @@ namespace pP::tests::detail {
             }
         };
 
+        struct ExitAfterFramesApp final : HeadlessApp {
+            using HeadlessApp::HeadlessApp;
+
+            int m_frames{0};
+            int m_exit_after{3};
+            std::error_code m_clause{};
+
+        protected:
+            [[nodiscard]] std::error_code update([[maybe_unused]] const TimeSpan dt) override {
+                if (++m_frames >= m_exit_after) {
+                    requestExit(m_clause);
+                }
+                return std::error_code{};
+            }
+        };
+
         struct MockGraphicsService : IService {
             int m_tag{7};
         };
@@ -1134,6 +1150,62 @@ namespace pP::tests::detail {
         // scope exit so no safe_ptr outlives its stack owner.
         PPR_TEST_ASSERT(test_app.getServices().erase(graphics));
     };
+
+    PPR_UNIT_TEST (app_empty_request_exit_signals_exit_without_error) {
+        // Empty requestExit is graceful exit, not cancellation: the run loop
+        // observes termination while the lifecycle records no error and fires
+        // no event. Fails on the A2-broken tree (empty cancel is a no-op, so
+        // no termination is observable); single-threaded, no timing.
+        AppLifecycle::HeadlessApp test_app{"EmptyExitSignal"};
+        PPR_TEST_ASSERT(not test_app.boot());
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not test_app.teardown());
+        };
+        PPR_TEST_ASSERT(not test_app.isExitRequested());
+        test_app.requestExit();
+        PPR_TEST_ASSERT(test_app.isExitRequested());
+        PPR_TEST_ASSERT(not test_app.getLifecycle()->error());
+        PPR_TEST_ASSERT(not test_app.getLifecycle()->pollEvent());
+    };
+
+    PPR_UNIT_TEST (app_error_request_exit_latches_cause) {
+        // Nonzero requestExit keeps latching the cause and emitting as
+        // before: the loop observes termination AND run() reports the cause.
+        const std::error_code expected = std::make_error_code(std::errc::operation_canceled);
+        AppLifecycle::HeadlessApp test_app{"ErrorExitSignal"};
+        PPR_TEST_ASSERT(not test_app.boot());
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not test_app.teardown());
+        };
+        test_app.requestExit(expected);
+        PPR_TEST_ASSERT(test_app.isExitRequested());
+        PPR_TEST_ASSERT(test_app.getLifecycle()->error() == expected);
+        PPR_TEST_ASSERT(test_app.getLifecycle()->pollEvent());
+    };
+
+    PPR_UNIT_TEST (app_empty_request_exit_run_returns_success) {
+        // End-to-end through run(): the frame-3 empty exit terminates the
+        // loop after exactly 3 frames and run() returns success. run() owns
+        // cleanup via its shutdown defer, so no teardown follows. Pre-fix
+        // this spins forever — the hang IS the bug; the signal test above is
+        // the clean failing-then-passing proof.
+        AppLifecycle::ExitAfterFramesApp test_app{"EmptyExitRun"};
+        PPR_TEST_ASSERT(not test_app.run());
+        PPR_TEST_ASSERT(test_app.m_frames == 3);
+        // The latch survives shutdown; only initialize() re-arms it, so a
+        // repeated run() starts unrequested.
+        PPR_TEST_ASSERT(test_app.isExitRequested());
+    };
+
+    PPR_UNIT_TEST (app_error_request_exit_run_reports_cause) {
+        // End-to-end through run(): the frame-3 error exit terminates the
+        // loop and run() reports the latched cause.
+        const std::error_code expected = std::make_error_code(std::errc::operation_canceled);
+        AppLifecycle::ExitAfterFramesApp test_app{"ErrorExitRun"};
+        test_app.m_clause = expected;
+        PPR_TEST_ASSERT(test_app.run() == expected);
+        PPR_TEST_ASSERT(test_app.m_frames == 3);
+    };
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -1220,5 +1292,30 @@ namespace pP::tests {
 
     const UnitTest &app_preserves_pre_registered_graphics_servicesTests() noexcept {
         return app_preserves_pre_registered_graphics_services;
+    }
+
+    const UnitTest app_empty_request_exit_signals_exit_without_error =
+        detail::app_empty_request_exit_signals_exit_without_error;
+
+    const UnitTest &app_empty_request_exit_signals_exit_without_errorTests() noexcept {
+        return app_empty_request_exit_signals_exit_without_error;
+    }
+
+    const UnitTest app_error_request_exit_latches_cause = detail::app_error_request_exit_latches_cause;
+
+    const UnitTest &app_error_request_exit_latches_causeTests() noexcept {
+        return app_error_request_exit_latches_cause;
+    }
+
+    const UnitTest app_empty_request_exit_run_returns_success = detail::app_empty_request_exit_run_returns_success;
+
+    const UnitTest &app_empty_request_exit_run_returns_successTests() noexcept {
+        return app_empty_request_exit_run_returns_success;
+    }
+
+    const UnitTest app_error_request_exit_run_reports_cause = detail::app_error_request_exit_run_reports_cause;
+
+    const UnitTest &app_error_request_exit_run_reports_causeTests() noexcept {
+        return app_error_request_exit_run_reports_cause;
     }
 } // namespace pP::tests

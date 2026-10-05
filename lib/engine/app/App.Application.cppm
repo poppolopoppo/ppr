@@ -94,6 +94,11 @@ export namespace pP {
 
         void requestExit(std::error_code clause = {}) const noexcept;
 
+        // Run-loop termination query: true once a graceful exit was
+        // requested or a cancel error latched. Consulted by run() alongside
+        // (not instead of) cancel state — exit is not cancellation.
+        [[nodiscard]] bool isExitRequested() const noexcept;
+
         void setBackgroundPriority(bool throttle) noexcept;
 
         /// Opt out of the background focus throttle (profiling/bounded runs).
@@ -131,6 +136,12 @@ export namespace pP {
         ServicesStore m_services{};
         SharedContext m_lifecycle{};
         context::CancelClauseFunc m_request_exit{};
+
+        // Graceful-exit latch, distinct from the cancel error above: an empty
+        // requestExit raises this (run() still returns success); a nonzero
+        // clause latches the cause on the lifecycle instead. Mutable so the
+        // const requestExit can raise it; re-armed by initialize().
+        mutable std::atomic<bool> m_exit_requested{false};
 
         /// throttle refresh loop to low frame-rate when application is in background
         bool m_has_background_priority{false};

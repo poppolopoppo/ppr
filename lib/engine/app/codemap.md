@@ -27,7 +27,7 @@ application.
   (install/content/working resolved; config left default). Ctor wires `IPlatform::create()` plus
   `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")` + `main_group` (`App.Application.cpp:31`). Forward-declares `IClientService`. Accessors:
   `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services/TimerManager` (const + mutable overloads),
-  `getTargetFrameTime`, dir getters; `requestExit(clause = {})`, `setBackgroundPriority(throttle)`,
+  `getTargetFrameTime`, dir getters; `requestExit(clause = {})` (empty raises only the `m_exit_requested` latch — `run()` returns success; nonzero latches the cause + emits), `isExitRequested()` (latch OR latched cancel error), `setBackgroundPriority(throttle)`,
   `setTargetFrameDuration(TimeDuration/nullopt)`,
   `setTargetFrameRate(fps)` (non-positive clears throttle), `run()`.
 - `ApplicationDomain` — immutable-after-construction bitfield struct: `m_is_headless` (false), `m_is_interactive`
@@ -72,8 +72,8 @@ application.
 
 ## Flow
 
-1. `Application::run()` → `initialize()` → `PPR_DEFER shutdown()` →
-   loop `while (not m_lifecycle->pollEvent())`: single `m_application_clock.tick(&dt, target)` (`App.Application.cpp:100-105`),
+1. `Application::run()` → `initialize()` (re-arms the `m_exit_requested` latch) → `PPR_DEFER shutdown()` →
+   loop `while (not isExitRequested())` — exit latch OR latched cancel error, never the consumable event pulse alone: single `m_application_clock.tick(&dt, target)` (`App.Application.cpp:100-105`),
    `update(m_application_clock.m_elapsed)` + `render()` with first-error-wins `PPR_RETAIN_ERROR_ON_FAIL`; exceptions map
    to exit clauses (`system_error→e.code()`, `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`)
    via `m_request_exit`; no per-frame flush — shutdown drain only (`Log::flush(true)`, `App.Application.cpp:77-86`); exit retains `m_lifecycle->error()` as the final error.

@@ -107,6 +107,13 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(!!ctx->error());
                 PPR_TEST_ASSERT(ctx->error().value() == 42);
             };
+
+            PPR_UNIT_TEST (empty_clause_is_noop) {
+                const auto [ctx, cancel_] = context::withCancelClause(context::background());
+                cancel_(std::error_code{});
+                PPR_TEST_ASSERT(not ctx->pollEvent());
+                PPR_TEST_ASSERT(not ctx->error());
+            };
         }
 
 
@@ -114,6 +121,7 @@ namespace pP::tests::detail {
             _.recurse({
                 CancelClause::clause_fires_done_with_error,
                 CancelClause::clause_error_matches,
+                CancelClause::empty_clause_is_noop,
             });
         };
 
@@ -268,6 +276,7 @@ namespace pP::tests {
         _.recurse({
             detail::Context::CancelClause::clause_fires_done_with_error,
             detail::Context::CancelClause::clause_error_matches,
+            detail::Context::CancelClause::empty_clause_is_noop,
         });
     };
     const UnitTest without_cancel = UnitTest::Named("without_cancel") / [](UnitTest::IRun &_) -> void {

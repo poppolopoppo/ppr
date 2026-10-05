@@ -46,8 +46,22 @@ namespace pP {
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
             PPR_LOG(App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
 
+            if (not clause) {
+                // Graceful exit is not cancellation: raise the exit latch so
+                // the run loop terminates, but record no error — run() still
+                // returns success.
+                m_exit_requested.store(true, std::memory_order_release);
+                return;
+            }
             m_request_exit(clause);
         }
+    }
+
+    bool Application::isExitRequested() const noexcept {
+        if (m_exit_requested.load(std::memory_order_acquire)) {
+            return true;
+        }
+        return m_lifecycle and m_lifecycle->error();
     }
 
     void Application::setBackgroundPriority(const bool throttle) noexcept {
@@ -93,7 +107,10 @@ namespace pP {
 
         PPR_LOG(App, emphasis, "🏁 run application loop");
 
-        while (not m_lifecycle->pollEvent()) {
+        // Run-loop invariant (A1 lesson): terminate on stable state — the
+        // graceful-exit latch or the latched cancel error — never on the
+        // consumable event pulse alone. run() reports the same stable error.
+        while (not isExitRequested()) {
             const hal::ProfileScope scope{"App.Frame"};
             std::error_code first_err{};
 
@@ -166,6 +183,9 @@ namespace pP {
         m_install_dir = m_content_dir;
 
         std::tie(m_lifecycle, m_request_exit) = context::withCancelClause(context::background());
+
+        // Re-arm the graceful-exit latch for repeated run() invocations.
+        m_exit_requested.store(false, std::memory_order_release);
 
         context::setApplication(m_lifecycle);
 

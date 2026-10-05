@@ -1413,19 +1413,28 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (empty_clause_cancellation_normalized) {
-            // An empty cancellation clause still trips the context event;
-            // the scheduler normalizes it to operation_canceled on both
-            // admission and join.
+            // An empty cancellation clause is a no-op: it records no error
+            // and fires no event, so admission and join are unaffected.
             auto [parent, cancel] = context::withCancelClause(context::background());
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes(), parent};
 
             cancel(std::error_code{});
-            PPR_TEST_ASSERT(parent->pollEvent());
+            PPR_TEST_ASSERT(not parent->pollEvent());
+            PPR_TEST_ASSERT(not parent->error());
 
-            PPR_TEST_ASSERT(
-                sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full) ==
-                std::errc::operation_canceled);
-            PPR_TEST_ASSERT(sched.join() == std::errc::operation_canceled);
+            WaitGroup wg{};
+            std::atomic<int> ran{0};
+            wg.add(1u);
+            PPR_TEST_ASSERT(not sched.schedule(
+                [&](const IContext &) {
+                    ran.fetch_add(1, std::memory_order_acq_rel);
+                    wg.done();
+                },
+                std::nullopt, Policy::drop_if_full));
+            PPR_TEST_ASSERT(not wg.wait());
+            PPR_TEST_ASSERT(not sched.error());
+            PPR_TEST_ASSERT(not sched.join());
+            PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 1);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
         };
 

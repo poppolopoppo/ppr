@@ -86,6 +86,11 @@ namespace pP::context {
         }
 
         void cancelCause(const std::error_code err) noexcept {
+            // An empty cause cancels nothing: return before the CAS loop,
+            // which would otherwise store an empty error and still emit.
+            if (not err) {
+                return;
+            }
             // std::error_code carries indeterminate padding and
             // std::atomic<std::error_code> is not lock-free here, so the
             // 16-byte CAS also compares padding: a fresh expect_no_error{}

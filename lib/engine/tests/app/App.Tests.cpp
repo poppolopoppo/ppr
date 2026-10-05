@@ -43,6 +43,14 @@ namespace pP::tests {
 
     const UnitTest &app_preserves_pre_registered_graphics_servicesTests() noexcept;
 
+    const UnitTest &app_empty_request_exit_signals_exit_without_errorTests() noexcept;
+
+    const UnitTest &app_error_request_exit_latches_causeTests() noexcept;
+
+    const UnitTest &app_empty_request_exit_run_returns_successTests() noexcept;
+
+    const UnitTest &app_error_request_exit_run_reports_causeTests() noexcept;
+
     const UnitTest &app_headless_lifecycle_is_idempotentTests() noexcept;
 
     const UnitTest &app_run_shutdowns_after_nonstandard_hook_exceptionTests() noexcept;
@@ -87,6 +95,10 @@ namespace pP::tests {
             app_teardown_double_shutdown_no_refireTests(),
             app_teardown_reports_subsystem_failure_but_completesTests(),
             app_preserves_pre_registered_graphics_servicesTests(),
+            app_empty_request_exit_signals_exit_without_errorTests(),
+            app_error_request_exit_latches_causeTests(),
+            app_empty_request_exit_run_returns_successTests(),
+            app_error_request_exit_run_reports_causeTests(),
             app_headless_lifecycle_is_idempotentTests(),
             app_run_shutdowns_after_nonstandard_hook_exceptionTests(),
             cameraTests(),
