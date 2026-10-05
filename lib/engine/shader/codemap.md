@@ -31,7 +31,7 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
   `SlangCompileTarget m_target_format = SLANG_DXBC`, `bool m_modules_loaded`): `initialize()` is idempotent
   (both sessions set → warning + `errc::ok`; exactly one set → error + `errc::internal_fail`; else
   `createGlobalSession` → single-target session with
-  `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`); `setTargetFormat(target)` requires prior
+  `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`); DXIL targets pin `sm_6_6` (`Shader.cpp:146-151,185,223`); `setTargetFormat(target)` requires prior
   `initialize()` (`uninitialized` otherwise), rejects post-load changes (`invalid_arg`), no-ops on the
   current target (`default_value_v`), else stores the target, nulls `m_session`, and recreates it with the
   same row-major single-target desc; `shutdown()` warns when `m_modules_loaded` (modules are session-owned
@@ -50,8 +50,7 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
 
 ## Flow
 
-`IShaderService::get()->initialize()` (global session + row-major session) → `engine.rhi` calls
-`setTargetFormat(toSlangCompileTarget_(deviceType))` before device creation → `loadModuleFromFile/Source`
+`IShaderService::get()->initialize()` (global session + row-major session) → `engine.rhi` creates the device first (`RHI.cpp:294`), then calls `setTargetFormat(toSlangCompileTarget_(device->getDeviceType()))` on the ACTUAL device type (`RHI.cpp:303,305`) → `loadModuleFromFile/Source`
 compiles into the session (owned until `shutdown()`) → `shutdown()` drops session then global session.
 
 ## Integration

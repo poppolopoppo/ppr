@@ -172,7 +172,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files

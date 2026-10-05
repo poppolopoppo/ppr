@@ -12,7 +12,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `EXPORT_COMPILE_COMMANDS ON`), project `PPR`; version-gated `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` UUIDs
   (4.2/4.3/4.4+) + `EXPORT_BUILD_DATABASE` before `project()`; `CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES`
   exposes `include/` (Macros.h) to module scanning; prevents in-source builds, `enable_testing()`, developer-mode
-  flag fan-out (`ENABLE_CACHE` for ccache on non-module TUs, ASan + UBSan + cppcheck + warnings-as-errors); guards reject bad `PPR_ENABLE_*` combos
+  flag fan-out (`ENABLE_CACHE` for ccache on non-module TUs, ASan + UBSan + cppcheck + warnings-as-errors;
+  UBSan — like leak/thread/memory — is a no-op on MSVC that only prints a message (`Sanitizers.cmake:46-57`)); guards reject bad `PPR_ENABLE_*` combos
   (`PPR_EDIT_AND_CONTINUE` requires Ninja + MSVC + Debug and no ASan; THREAD excludes ADDRESS/LEAK; MEMORY
   excludes ADDRESS/THREAD/LEAK); LNK4075 validators reject EnC-breaking link flags (`/INCREMENTAL:NO`,
   `/OPT:REF/ICF`, `/DEBUG:FASTLINK`, `/LTCG`) at configure time — configuration, not build, is the validated gate.
@@ -21,7 +22,10 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `vcpkg` (toolchain from `$VCPKG_ROOT`), hidden `windows-default` (MSVC/Clang: `VS_SEGMENT_HEAP_ALLOWLIST`
   for game+tests, `SegmentHeap.cmake`, `x64-windows` triplet), hidden `windows-msvc-toolchain` (native VS 18
   Insiders x64 `cl`/`link`/`lib` and vcpkg VS selection, inherited only by `msvc-*`), and `unix-like-default` (inherits `vcpkg`),
-  `msvc-dev`/`msvc-rel` (rel: shipping link set + `BUILD_TESTING OFF`, tests excluded), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
+  `msvc-dev`/`msvc-rel` (rel: shipping link set + `BUILD_TESTING OFF`, tests excluded), `msvc-profile`
+  (inherits `msvc-rel`, so `BUILD_TESTING OFF` carries over: same `/O2`/`/Ob2`/`/GL`/`/Gw`, LTCG, NDEBUG,
+  PDBSTRIPPED + `PPR_ENABLE_PROFILING=ON` (`/DUSE_PIX`) + `PPR_LOGGING_LEVEL=EMPHASIS`,
+  `CMakePresets.json:117-127`), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
   `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
   `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
   hidden `gcc-dev`/`gcc-rel` (**no modules**).
@@ -36,7 +40,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   (`cmake/Compilers.cmake`): the single helper every PPR target uses — applies target-local
   `cxx_std_23`/`CXX_MODULE_STD` opt-in (never global, per contract),
   warning sets, PUBLIC `include/` (Macros.h) exposure, the `enable_sanitizers()` hook, and link edges.
-  `app.game` links all six engine modules (`engine.core engine.app engine.math engine.shader engine.rhi engine.sim`); `engine.app` additionally links
+  `app.game` links all six engine modules (`engine.core engine.app engine.math engine.shader engine.rhi engine.sim`, `game/CMakeLists.txt:33`)
+  plus PRIVATE `engine.physics` (`game/CMakeLists.txt:38`, box2d stays behind `engine.physics`); `engine.app` additionally links
   `imgui` PUBLIC so `import imgui;` resolves from importers. Applies the live-only EnC link contract per target
   (no-op unless `PPR_EDIT_AND_CONTINUE` is ON, so `msvc-rel` static+LTCG is untouched) and opts every PPR
   target out of the compiler-cache launcher via `ppr_disable_compiler_cache()` (module BMIs are uncacheable).
@@ -84,6 +89,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 - `CMakeLists.txt` — root configuration, options, option guards, module setup.
 - `CMakePresets.json` — curated preset set above (`default`, `developer`, `vcpkg`, `msvc-dev/rel`,
+  `msvc-profile` (inherits `msvc-rel`, `BUILD_TESTING OFF` included),
   `clang-cl-dev/rel`, `msvc-live`, `clang-dev/rel`, hidden `windows-default/windows-msvc-toolchain/unix-like-default`, hidden `gcc-dev/rel`).
 - `vcpkg.json` — vcpkg manifest mode configuration.
 - `cmake/MSVCToolchain.cmake` — native MSVC pre-project guard and vcpkg VS path normalization.

@@ -7,7 +7,7 @@ add_subdirectory(rhi)
 add_subdirectory(sim)
 add_subdirectory(physics)
 add_subdirectory(app)
-# Dev-only test aggregates (engine.tests, engine.tests.core, engine.tests.app):
+# Dev-only test aggregates (core/app/sim/asset: engine.tests, engine.tests.core, engine.tests.app, engine.tests.sim, engine.tests.asset):
 # excluded from shipping configs with tests disabled (e.g. msvc-rel).
 # NOTE: tolerates undefined BUILD_TESTING as ON (CTest convention; root
 # CMakeLists calls enable_testing() without include(CTest), so the option only

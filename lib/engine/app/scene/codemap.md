@@ -80,7 +80,7 @@ location no longer exists.
    `Camera::updateModel(dt, controller, viewport)` runs `controller.updateCameraModel` → `updateCameraPose_` then
    snapshots view/projection/jitter/frusta/velocities (degenerate viewports skip in place).
 3. Snapshot is consumed directly (e.g. `TrianglePass::update`).
-4. `TrianglePass::draw()` uploads the snapshot-fed frame constants; per-frame submission stays in `Renderer`.
+4. `TrianglePass::render(DrawContext)` uploads the snapshot-fed frame constants; per-frame submission stays in `Renderer` (no `draw()`).
 
 ## Integration
 

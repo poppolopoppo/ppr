@@ -174,8 +174,7 @@ holds by construction: Box2D headers (`box2d/box2d.h`) and every `b2*` id
 (`b2WorldId`, `b2BodyId`, `b2ShapeId`, `b2ChainId`) appear only in
 `Physics.Scene.cpp`, behind the file-local `Scene::Runtime`. No exported
 partition mentions Box2D — `:scene` exposes only engine-core scalars, `std`
-spans, `std::expected`, and `std::error_code`; `:chunk_colliders` and
-`:coupling` import only `:scene`, `engine.core`, and `std`. Box2D types must
+spans, `std::expected`, and `std::error_code`; `:chunk_colliders` imports `:scene`, `engine.core`, and `std`, while `:coupling` imports `:scene` + `std` only (`Physics.Coupling.cppm:5-6`). Box2D types must
 never leak past this module boundary.
 
 Consumers link PRIVATE, mirroring each other: `engine.tests.sim` links

@@ -25,7 +25,7 @@ application.
   `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`,
   `Array<string>` args, `string` name, `const ApplicationDomain m_domain`, `directory_entry` dirs
   (install/content/working resolved; config left default). Ctor wires `IPlatform::create()` plus
-  `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")`. Forward-declares `IClientService`. Accessors:
+  `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")` + `main_group` (`App.Application.cpp:31`). Forward-declares `IClientService`. Accessors:
   `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services/TimerManager` (const + mutable overloads),
   `getTargetFrameTime`, dir getters; `requestExit(clause = {})`, `setBackgroundPriority(throttle)`,
   `setTargetFrameDuration(TimeDuration/nullopt)`,
@@ -44,7 +44,7 @@ application.
    5 fps via `setBackgroundPriority` and, on focus loss, resets the routing latch + camera-controller motion state.
     Public `getGridPass()` exposes editor-owned tile staging; `replaceMainCameraController(unique_ptr<ICameraController>,
     ECameraProjection)` prepares a fresh mapping, detaches the previous mapping and resets input, then attaches the
-    replacement at camera priority (invalid null → `invalid_argument`; absent editor state → `not_connected`).
+    replacement at camera priority (invalid null → `invalid_argument`; absent editor state → `not_connected`; projection + cut `App.Application.Editor.cpp:224-225`).
     Input-chain order comes from `:service.input`: listener `EInputListenerPriority { ui = 0, detector = 1, player = 2 }`
    with mapping `EInputMappingPriority::camera = 1`.
 - `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
@@ -72,18 +72,18 @@ application.
 
 ## Flow
 
-1. `Application::run()` (torn-down guard → `operation_not_permitted`) → `initialize()` → `PPR_DEFER shutdown()` →
-   loop `while (not m_lifecycle->pollEvent())`: `tickThrottle(now, target)` when throttled else `tick(now)`,
+1. `Application::run()` → `initialize()` → `PPR_DEFER shutdown()` →
+   loop `while (not m_lifecycle->pollEvent())`: single `m_application_clock.tick(&dt, target)` (`App.Application.cpp:100-105`),
    `update(m_application_clock.m_elapsed)` + `render()` with first-error-wins `PPR_RETAIN_ERROR_ON_FAIL`; exceptions map
    to exit clauses (`system_error→e.code()`, `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`)
-   via `m_request_exit`, `Log::flush()` per frame; exit retains `m_lifecycle->error()` as the final error.
-2. `Application::initialize()` → `m_platform->initialize(*this)` → `PPR_DEFER`-on-failure `shutdown()` rollback
-   (`success` flag; service registrations torn down explicitly via `shutdown()`, not the defer pair) → clock
-   reset, `content/install` = executable parent (`install` aliases `content`), `working` = `current_path`
+   via `m_request_exit`; no per-frame flush — shutdown drain only (`Log::flush(true)`, `App.Application.cpp:77-86`); exit retains `m_lifecycle->error()` as the final error.
+2. `Application::initialize()` → clock reset (`App.Application.cpp:141`) BEFORE platform init (`:151`) → `PPR_DEFER`-on-failure `shutdown()` rollback
+   (`success` flag; service registrations torn down explicitly via `shutdown()`, not the defer pair) →
+   `content/install` = executable parent (`install` aliases `content`), `working` = `current_path`
    (`config` untouched), `withCancelClause(background())` →
    if `m_domain.m_needs_rendering`: `IShaderService::get()->initialize()` + insert, `IRhiService::get()->initialize(
    DeviceType::Default, shader)` + insert, `make_unique<Renderer>()->initialize(rhi)`. `update()` =
-   `TimerManager::mainTimer().tick()` + `m_platform->update(dt)`; `render()` = no-op default.
+   `not_connected` guard + `m_platform->update(dt)` (`App.Application.cpp:243-250`); `render()` = no-op default.
    `shutdown()` (latch set first, idempotent-success): `m_renderer->shutdown()` + reset → shutdown RHI then erase
    on success → shutdown shader then erase on success → `m_platform->shutdown(*this)` last;
    `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
@@ -98,14 +98,14 @@ application.
    throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
-   `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("<name> - CPU = <ms> ms")` →
+   `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("{} - Frame = {:.2f} ms")` (`App.Application.Editor.cpp:448`) →
     `triangle_pass->update(dt, camera->getSnapshot())` + `grid_pass->update(dt, camera->getSnapshot())` (snapshot-only;
     passes never consult the mutable `Camera` while drawing) + `submitSceneInstances_()` when a scene is loaded →
    `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` → two explicit surface passes:
     GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
     renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
     then ImGui selects no depth and loads the existing color
-   attachment; both render before one present. `shutdown()` detaches the
+   attachment; both render before one present. `shutdown()` starts with `unloadScene()` (`App.Application.Editor.cpp:338-340`) + `destroyWindowSurface` (`:399`), then detaches the
    device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
     erases + shuts down UI, grid pass, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
    resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then
@@ -116,7 +116,8 @@ application.
 
 - **Consumers**: `game/main.cpp` (concrete application subclass), `engine.tests.app` (platform tests).
 - **Depends on**: `engine.core` (services, context, delegates), `engine.math`, `engine.rhi`, `engine.shader`
-  (via renderer/UI pass), external `glfw`/`mango`/`imgui`.
+  (via renderer/UI pass), `engine.image` + `engine.mesh` (public, `CMakeLists.txt:86`; cache upload types), external `glfw`/`mango`/`imgui`.
+- **Asset consumer**: pass caches upload `engine.image`/`engine.mesh` CPU types (no sim types at the boundary).
 - **Provides**: every `engine.app:*` namespace; `Application` lifecycle + service-store accessors
   (`getServices()`, `getPlatform()`, `getRenderer()`, `getDomain()`, `getTimerManager()`); `ApplicationEditor` client
   ownership via `IClientService`.

@@ -51,12 +51,10 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   one sampler; buffers cover bag/material/payload storage. `Feature::Bindless`
   stays out of `requiredFeatures` (weak hardware must still create a device);
   pass caches check `hasFeature(Bindless)` at init instead.
-- `IRhiService : IService` (`pP::`, `safe_ptr` singleton via `get()`): `initialize(DeviceType, IShaderService&)`,
-  `shutdown()`, `getInstance()` (`*slang_rhi::getRHI()`), `getDevice()` (`*m_device`), `createRenderPipeline(desc,
+- `IRhiService : IService` (`pP::`, `safe_ptr` singleton via `get()`): 9 methods — `initialize(DeviceType, IShaderService&)`, `setCoreValidation`/`isCoreValidationEnabled`, `setGpuAssistedValidation`/`isGpuAssistedValidationEnabled`, `shutdown()`, `getInstance()` (`*slang_rhi::getRHI()`), `getDevice()` (`*m_device`), `createRenderPipeline(desc,
   out)` (forwards to `m_device->createRenderPipeline`). `SlangRhiService` (`RHI.cpp`, `ComPtr<IDevice> m_device`):
-  idempotence guard (`m_device` → warning + `errc::ok`); null `getRHI()` → `no_interface`; `#if PPR_ENABLE_DEBUG`
-  debug layers (`setDebugLayerOptions{required, coreValidation, GPUAssistedValidation}` + `enableDebugLayers()`,
-  `enableValidation = true`); required `Feature::{Surface, Rasterization}` with `safe_narrowing(size)` count;
+  idempotence guard (`m_device` → warning + `errc::ok`); null `getRHI()` → `no_interface`; `#if PPR_ENABLE_LOGGING`
+  + `isDebugLayersEnabled()` debug layers (`setDebugLayerOptions{m_debug_options}` with `coreValidation`/`GPUAssistedValidation` fields, no `.required` field; required `Feature::{Surface, Rasterization}` with `safe_narrowing(size)` count;
   `DeviceDesc{deviceType, slang.slangGlobalSession = shader_service.getGlobalSession(), requiredFeatures,
   debugCallback}` (`#if PPR_ENABLE_LOGGING` wires `SlangRhiDebugCallback::get()` singleton mapping
   `Layer/Driver/Slang` source names and `Info/Warning/Error` → `Log::ELevel` via `logRaw` with `source` attr);
@@ -90,7 +88,7 @@ shader global session → `createDevice` → `setTargetFormat(toSlangCompileTarg
   `Result`/`ComPtr`/`DeviceType` vocabulary). Mango SIMD codegen flags (`-m(avx512|avx|sse|bmi|fma|…)` filtered
   from mango `INTERFACE_COMPILE_OPTIONS` alongside `/arch:AVX*`) never leak into the `engine.math` BMI this
   module imports, so all RHI translation units share one AVX-baseline BMI.
-- Consumed by: `engine.app` (renderer, surfaces, pipeline creation), `game` (via `engine.app`).
+- Consumed by: `engine.app` (renderer, surfaces, pipeline creation), `game` (links `engine.rhi` directly, `game/CMakeLists.txt:33`, via `engine.app`).
 - Build: `RHI.cppm` in `FILE_SET CXX_MODULES`, `RHI.cpp` private;
   `setup_ppr_project(engine.rhi INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader
   EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang)`.

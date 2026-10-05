@@ -16,7 +16,7 @@ What PPR is not: not a game, not an editor, not a framework with shipped titles 
 
 | Platform | Compiler presets | CI |
 |---|---|---|
-| Windows | `msvc-dev`, `msvc-live`, `msvc-rel`, `clang-cl-dev`, `clang-cl-rel` | `windows-msvc-dev` |
+| Windows | `msvc-dev`, `msvc-live`, `msvc-rel`, `msvc-profile`, `clang-cl-dev`, `clang-cl-rel` | `windows-msvc-dev` |
 | Linux | `clang-dev`, `clang-rel` | `linux-clang-dev` (Xvfb + Mesa) |
 | macOS | `clang-dev`, `clang-rel` | — |
 
@@ -61,11 +61,11 @@ A shell that skips the Insiders `vcvars64.bat` now fails fast in the MSVC pre-pr
 
 For MSVC-only presets, first configure pins `cl`, `link`, and `lib`, but vcvars alone cannot undo LLVM-MinGW `ld`/`ar` selected by an inherited `PATH` or cached CMake values. Check `CMAKE_CXX_COMPILER`, `CMAKE_LINKER`, and `CMAKE_AR` in `out/build/msvc-dev/CMakeCache.txt` and the generated archive rule for MSVC tools. Vcpkg detects its compiler separately and can pick installed VS 2022 even when CMake uses VS 18; MSVC-only presets set `VCPKG_VISUAL_STUDIO_PATH` from the active `VSINSTALLDIR` for initial configure. Ninja auto-regeneration during a separate `cmake --build` omits preset environment; vcvars supplies `VSINSTALLDIR` but not `VCPKG_VISUAL_STUDIO_PATH`, so the helper restores its normalized value from `VSINSTALLDIR` when the override is absent. Vcpkg rejected `.../18/Insiders/` despite detecting `.../18/Insiders`. On the first fresh configure, check vcpkg's `Compiler found:` output points to VS 18. If an existing `msvc-dev` tree is contaminated, run `cmake --fresh --preset msvc-dev` once in that same VS 18 Insiders vcvars shell and recheck. Otherwise use normal `cmake --preset msvc-dev`; source-refactor compilation errors are a separate issue.
 
-`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). The `*-dev` presets configure with developer mode (warnings as errors and sanitizers). There are no build or test presets — build and test paths are passed explicitly.
+`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). `msvc-profile` inherits `msvc-rel` (same `/O2`/`/Ob2`/`/GL`/`/Gw`, LTCG, NDEBUG, PDBSTRIPPED) plus `PPR_ENABLE_PROFILING=ON` (`/DUSE_PIX`, `cmake/compiler/MSVC.cmake:89-94`) and `PPR_LOGGING_LEVEL=EMPHASIS` (`CMakePresets.json:117-127`). The `*-dev` presets configure with developer mode (warnings as errors and sanitizers). There are no build or test presets — build and test paths are passed explicitly.
 
 ## Demo
 
-`game/main.cpp` defines the demo application. On startup it loads 16 glTF models, decodes their textures to RGBA8, and uploads them to the GPU; if nothing loads, startup fails with a filesystem error rather than an empty window. Every frame it re-submits a static 53-piece cutaway habitat (~20 units wide, five zones) through the renderer and presents it in a 1280×720 vsync'd window with a free camera. The window title shows per-frame CPU time (`"<name> - CPU = <ms> ms"`); one submission summary is logged once, not per frame. Shutdown releases GPU resources in reverse order.
+`game/main.cpp` defines the demo application. `demo::TurboLarbin : ApplicationEditor` owns a seeded generated-colony simulation and submits resident chunks to the editor-owned `GridPass`, presenting camera-visible counts in a Colony panel; `--smoke` instead runs a separate headless, rendering-enabled `Application` for offscreen GPU readback. The editor keeps its `TrianglePass` initialized and actively fed — a generated unit-quad bag plus packed debug materials with per-frame agent/path/grid/edit instances — but loads no committed-asset fixture scene (see `codemap.md:19-23`). Kenney `kenney_colony` assets remain on disk and staged (`game/CMakeLists.txt:57-63`). Shutdown releases GPU resources in reverse order.
 
 ```bash
 cmake --build out/build/msvc-dev --parallel

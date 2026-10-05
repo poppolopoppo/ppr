@@ -211,7 +211,7 @@ If CLion is unavailable, a human may fall back to CMake presets directly
 (human-fallback only — agents stay on the `build-system` path above):
 
 ```powershell
-cmake --build --preset msvc-dev --target engine.tests.core
+cmake --build out/build/msvc-dev --target engine.tests.core
 ctest --test-dir out/build/msvc-dev --output-on-failure
 ```
 

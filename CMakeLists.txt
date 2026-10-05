@@ -66,7 +66,7 @@ option(PPR_ENABLE_CLANG_TIDY "Enable clang-tidy" FALSE)
 option(PPR_ENABLE_CPPCHECK "Enable cppcheck" FALSE)
 option(PPR_WARNINGS_AS_ERRORS "Treat warnings as errors" FALSE)
 option(PPR_EDIT_AND_CONTINUE "Enable Edit & Continue (Debug, /ZI). VS generator cannot be used with import std." FALSE)
-option(PPR_ENABLE_PROFILING "Enable profiling markers (PIX events on Windows via USE_PIX)" FALSE)
+option(PPR_ENABLE_PROFILING "Enable profiling markers (PIX events on Windows via USE_PIX; Release-genexed only, inert in Debug — cmake/compiler/MSVC.cmake:93-95)" FALSE)
 set(PPR_LOGGING_LEVEL "WARNING" CACHE STRING "Minimum log severity compiled in (OFF, DEBUG, VERBOSE, INFO, EMPHASIS, WARNING, ERROR, FATAL)")
 set_property(CACHE PPR_LOGGING_LEVEL PROPERTY STRINGS OFF DEBUG VERBOSE INFO EMPHASIS WARNING ERROR FATAL)
 

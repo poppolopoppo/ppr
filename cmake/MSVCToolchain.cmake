@@ -3,7 +3,7 @@
 function(_ppr_msvc_toolchain_error reason)
     message(FATAL_ERROR "${reason}\n"
             "Activate VS 18 Insiders with its x64 vcvars64.bat, then run "
-            "cmake --preset <preset> (msvc-dev, msvc-rel, or msvc-live). "
+            "cmake --preset <preset> (msvc-dev, msvc-rel, msvc-profile, or msvc-live). "
             "Only if an existing build tree was previously configured with a different toolset, "
             "run cmake --fresh --preset <preset> once.")
 endfunction()

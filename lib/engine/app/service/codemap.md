@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-App-level service interfaces plugged into the engine's service-locator pattern (`IService` → `typeUid<T>()` →
+App-level service interfaces plugged into the engine's service-locator pattern (`IService` →
 `ServicesStore` with parent-chain fallback, consumed via `safe_ptr<T>`). This directory declares the five contracts
 `Application`/`ApplicationEditor` and the GLFW platform backend coordinate: client scene access, input, player,
 window, and UI overlay.

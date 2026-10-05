@@ -73,9 +73,10 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
 - **Builds are cmake-direct in the persistent shell** — the strategy of
   record. Inside the one long-lived Insiders `vcvars64` shell from §0:
   configure with `cmake --preset <preset>`, build with
-  `cmake --build out/build/<preset> --target <target>` (or
-  `cmake --build --preset <preset> --target <target>`), test with
-  `ctest --test-dir out/build/<preset> --output-on-failure`. CLion is reserved
+  `cmake --build out/build/<preset> --target <target>`, test with
+  `ctest --test-dir out/build/<preset> --output-on-failure` (no build/test
+  presets exist in `CMakePresets.json` — it defines `configurePresets` only,
+  ending at `:240`). CLion is reserved
   for debugging and code search; it is not the build runner.
 - Probe 2026-09-28: `clion_execute_tool(command="__probe_unknown_tool__")`
   returned the authoritative 47-tool registry (identical to the earlier list,
@@ -106,7 +107,7 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
 
 | Kind | Targets | Run eligibility |
 |---|---|---|
-| Libraries | `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.sim`, `engine.app`, `engine.image`, `engine.mesh`, `engine.tests` | never run |
+| Libraries | `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.sim`, `engine.app`, `engine.image`, `engine.mesh`, `engine.physics`, `engine.tests` | never run |
 | Executables | `engine.tests.core`, `engine.tests.sim`, `engine.tests.app`, `engine.tests.asset`, `app.game` | may run |
 
 No kind is selectable as an IDE build target: this server exposes no build
@@ -128,11 +129,12 @@ build target, not a test executable.
 - The default generator is single-config Ninja. This avoids the documented
   CMake 4.4 multi-config synthetic-target generator-expression issue.
 - Supported working presets are `msvc-dev`, `msvc-live`, `msvc-rel`,
-  `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, and `clang-rel`. GCC may meet a
+  `msvc-profile`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, and `clang-rel`. GCC may meet a
   C++23 language prerequisite, but the hidden `gcc-dev` and `gcc-rel` presets
   do not support this project's module builds and are not validation candidates.
 - On Windows, the normal validation set is `msvc-dev`, `msvc-live`, and
-  `msvc-rel`; on Linux/Darwin it is `clang-dev` and `clang-rel` unless the
+  `msvc-rel` (`msvc-profile` is the instrumented Release profiling preset,
+  not part of normal validation); on Linux/Darwin it is `clang-dev` and `clang-rel` unless the
   requested scope specifies otherwise.
 
 ## Target setup
@@ -153,7 +155,8 @@ are `INTERNAL_PUBLIC_DEPS`, `EXTERNAL_SYSTEM_PRIVATE_DEPS`, and
 `EXTERNAL_SYSTEM_PUBLIC_DEPS`.
 
 Internal module targets are `engine.core`, `engine.math`, `engine.shader`,
-`engine.rhi`, `engine.sim`, `engine.app`, `engine.tests`, `engine.tests.core`,
+`engine.rhi`, `engine.sim`, `engine.app`, `engine.image`, `engine.mesh`,
+`engine.physics`, `engine.tests`, `engine.tests.core`,
 `engine.tests.sim`, `engine.tests.app`, and `engine.tests.asset`. The
 module-less game executable is `app.game`.
 
@@ -191,7 +194,9 @@ configure/build evidence to the validation owner.
 
 - Developer mode enables warnings-as-errors and the configured sanitizer/static
   analysis options. `msvc-live` is the `/ZI` Edit-and-Continue Debug preset and
-  intentionally disables ASan, optimization, and compiler cache.
+  intentionally disables ASan and the compiler cache; unoptimized Debug code
+  comes from `CMAKE_BUILD_TYPE=Debug`, and `PPR_RELEASE_PERF_FLAGS=OFF` there
+  only gates Release-genexed flags (`cmake/compiler/MSVC.cmake:70-79`).
 - Do not enable a compiler cache for module targets; retain the project helper
   that disables it.
 - On MSVC ASan builds, retain the STL annotation-disable workaround to avoid

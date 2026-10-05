@@ -100,8 +100,8 @@ export namespace pP {
         // First-occurrence gate for repetitive lifecycle logging (decode
         // rejects, dedup hits, empty-scene skips, device-lost busy): one
         // process-wide claim set keyed by call site (file + line) or an
-        // explicit key. Testable via resetForTests; PPR_LOG_ONCE(_KEY)
-        // macros wrap claim + log so call sites stay one-liners.
+        // explicit key. Testable via resetForTests; PPR_LOG_ONCE +
+        // PPR_LOG_ONCE_KEY macros wrap claim + log so call sites stay one-liners.
         struct Once {
             [[nodiscard]] static bool claim(const char *file, unsigned line) noexcept;
 
