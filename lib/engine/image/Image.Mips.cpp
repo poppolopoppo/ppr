@@ -222,7 +222,7 @@ namespace pP::image {
         }
         const u32 count = mipCountFor(asset.m_width, asset.m_height);
         if (count <= 1u) {
-            return default_value_v;
+            return std::error_code{};
         }
         // Chain bytes count against the decode cap: a max-size single level has
         // no headroom left and fails closed here.
@@ -352,6 +352,6 @@ namespace pP::image {
         if (not checkChainInvariants_(asset)) [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
-        return default_value_v;
+        return std::error_code{};
     }
 }

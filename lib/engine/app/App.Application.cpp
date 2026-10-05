@@ -75,7 +75,10 @@ namespace pP {
             std::error_code shutdown_err{};
             PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, shutdown());
 
-            PPR_FLUSH_LOG(true);
+            // Synchronous exit-time drain: the logger worker is async and
+            // immediate categories self-flush, so only shutdown waits.
+            // Retain a drain failure instead of silently ignoring it.
+            PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, Log::flush(true));
 
             if (shutdown_err) [[unlikely]] {
                 m_request_exit(shutdown_err);
@@ -122,8 +125,6 @@ namespace pP {
             if (first_err) [[unlikely]] {
                 m_request_exit(first_err);
             }
-
-            PPR_FLUSH_LOG(false);
         }
 
         PPR_LOG(App, emphasis, "stop application loop, bye 👋");

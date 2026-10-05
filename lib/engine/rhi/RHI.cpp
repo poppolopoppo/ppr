@@ -52,7 +52,7 @@ namespace pP {
                         return "could not complete because some underlying feature (hardware or software) was not available";
                     case SLANG_E_TIME_OUT: return "could not complete because the operation times out";
 
-                    default: return std::format("unknown slang-rhi result ({})", ev);
+                    default: return std::string("unknown slang-rhi result (") + std::to_string(ev) + ")";
                 }
             }
 

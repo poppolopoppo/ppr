@@ -260,7 +260,7 @@ namespace pP::image {
         [[nodiscard]] std::error_code flipRows_(
             const mem::MutableBufferView pixels, const u64 row_pitch, const u32 height) {
             if (height <= 1u) {
-                return default_value_v;
+                return std::error_code{};
             }
             const auto stride = static_cast<std::size_t>(row_pitch);
             mem::UniqueBuffer row = mem::UniqueBuffer::scratch(stride);
@@ -275,7 +275,7 @@ namespace pP::image {
                 std::ranges::copy(std::span<const std::byte>{bottom, stride}, top);
                 std::ranges::copy(*tmp, bottom);
             }
-            return default_value_v;
+            return std::error_code{};
         }
     } // namespace
 

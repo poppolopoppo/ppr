@@ -81,6 +81,12 @@ export namespace pP {
 
         static ELevel setMinimumVerboseLevel(ELevel verbosity) noexcept;
 
+        // Pure runtime visibility gate (emitter verbosity vs category
+        // verbosity and the global minimum). No breakpoint, no locks, no
+        // allocation: a single atomic load. Used by PPR_LOG so dynamically
+        // filtered levels skip message/dict evaluation at the call site.
+        [[nodiscard]] static bool isVisible(const Emitter &emitter) noexcept;
+
         using Policy = std23::function_ref<void(const Entry &)>;
 
         static Policy setWriterPolicy(Policy writer_policy) noexcept;

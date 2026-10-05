@@ -105,12 +105,12 @@ export namespace pP::mesh {
     };
 
     struct MaterialImageSlot {
-        ImageAssetId m_image{none_v};
-        UvSetId m_texcoord{none_v};
+        ImageAssetId m_image{std::numeric_limits<u32>::max()};
+        UvSetId m_texcoord{std::numeric_limits<u32>::max()};
         UvTransformAsset m_transform;
 
         [[nodiscard]] constexpr bool enabled() const noexcept {
-            return m_image != none_v;
+            return m_image != ImageAssetId{std::numeric_limits<u32>::max()};
         }
     };
 
@@ -161,13 +161,13 @@ export namespace pP::mesh {
     struct SceneNodeAsset {
         math::Transform m_local{};
         math::Transform m_world{};
-        NodeId m_parent{none_v};
+        NodeId m_parent{std::numeric_limits<u32>::max()};
     };
 
     struct SceneInstance {
         MeshAssetId m_mesh{};
         NodeId m_node{};
-        MaterialAssetId m_material_override{none_v};
+        MaterialAssetId m_material_override{std::numeric_limits<u32>::max()};
     };
 
     // SceneAsset owns meshes + materials + image refs + nodes; instances

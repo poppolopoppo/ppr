@@ -216,10 +216,10 @@ extern "C" void _ReadWriteBarrier();
 // CMake option (OFF, DEBUG, VERBOSE, INFO, EMPHASIS, WARNING, ERROR, FATAL)
 // via the numeric PPR_LOG_LEVEL_THRESHOLD compile definition. Severity order
 // matches pP::Log::ELevel: debug=0, verbose=1, info=2, emphasis=3, warning=4,
-// error=5, fatal=6. OFF (7) compiles out every PPR_LOG. Phase 1 only wires
-// the threshold; Phase 2 gates PPR_LOG call sites against it (no arg
-// evaluation below threshold). PPR_ENABLE_LOGGING stays as the coarse
-// backward-compatible switch derived from the threshold.
+// error=5, fatal=6. OFF (7) compiles out every PPR_LOG. The caller-side gate
+// below erases sub-threshold PPR_LOG/PPR_LOG_RAW calls with their argument
+// expressions (no evaluation below threshold). PPR_ENABLE_LOGGING stays as
+// the coarse backward-compatible switch derived from the threshold.
 #define PPR_LOG_LEVEL_DEBUG 0
 #define PPR_LOG_LEVEL_VERBOSE 1
 #define PPR_LOG_LEVEL_INFO 2
@@ -263,23 +263,271 @@ extern "C" void _ReadWriteBarrier();
     }
 // ReSharper restore CppUseInternalLinkage
 
+// Caller-side compile-out gate. Call sites always pass a bare lowercase
+// severity, so each level gets a lowercase-to-numeric alias and a
+// preprocessor-selected body: levels below PPR_LOG_LEVEL_THRESHOLD expand
+// to (void) 0, and their argument expressions (Dicts, typeid, opaqueValue,
+// ...) vanish entirely instead of reaching the async sink.
+#define PPR_LOG_LEVEL_debug PPR_LOG_LEVEL_DEBUG
+#define PPR_LOG_LEVEL_verbose PPR_LOG_LEVEL_VERBOSE
+#define PPR_LOG_LEVEL_info PPR_LOG_LEVEL_INFO
+#define PPR_LOG_LEVEL_emphasis PPR_LOG_LEVEL_EMPHASIS
+#define PPR_LOG_LEVEL_warning PPR_LOG_LEVEL_WARNING
+#define PPR_LOG_LEVEL_error PPR_LOG_LEVEL_ERROR
+#define PPR_LOG_LEVEL_fatal PPR_LOG_LEVEL_FATAL
+
+#if PPR_LOG_LEVEL_debug >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_debug(_CATEGORY, _MESSAGE, ...)                                                                \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::debug};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_debug(_CATEGORY, _MESSAGE, ...)                                                            \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::debug};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_debug(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_debug(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_verbose >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_verbose(_CATEGORY, _MESSAGE, ...)                                                              \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::verbose};                  \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_verbose(_CATEGORY, _MESSAGE, ...)                                                          \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::verbose};                  \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_verbose(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_verbose(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_info >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_info(_CATEGORY, _MESSAGE, ...)                                                                 \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::info};                     \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_info(_CATEGORY, _MESSAGE, ...)                                                             \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::info};                     \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_info(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_info(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_emphasis >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_emphasis(_CATEGORY, _MESSAGE, ...)                                                             \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::emphasis};                 \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_emphasis(_CATEGORY, _MESSAGE, ...)                                                         \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::emphasis};                 \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_emphasis(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_emphasis(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_warning >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_warning(_CATEGORY, _MESSAGE, ...)                                                              \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::warning};                  \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_warning(_CATEGORY, _MESSAGE, ...)                                                          \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::warning};                  \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_warning(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_warning(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_error >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_error(_CATEGORY, _MESSAGE, ...)                                                                \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::error};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_error(_CATEGORY, _MESSAGE, ...)                                                            \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::error};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_error(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_error(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_fatal >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_fatal(_CATEGORY, _MESSAGE, ...)                                                                \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::fatal};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::log(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_RAW_fatal(_CATEGORY, _MESSAGE, ...)                                                            \
+    do {                                                                                                               \
+        const ::pP::Log::Emitter _ppr_emitter{details::log::_CATEGORY(), ::pP::Log::ELevel::fatal};                    \
+        if (::pP::Log::isVisible(_ppr_emitter) || _ppr_emitter.shouldBreakDebugger())                                  \
+            ::pP::Log::logRaw(_ppr_emitter, (_MESSAGE), ##__VA_ARGS__);                                                \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_fatal(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_RAW_fatal(_CATEGORY, _MESSAGE, ...) (void) 0
+#endif
+
 #define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...)                                                                      \
-    pP::Log::log(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), ##__VA_ARGS__)
+    PPR_CONCAT(PPR_DETAILS_LOG_, _LEVEL)(_CATEGORY, (_MESSAGE), ##__VA_ARGS__)
 
 #define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...)                                                                  \
-    pP::Log::logRaw(pP::Log::Emitter(details::log::_CATEGORY(), pP::Log::ELevel::_LEVEL), (_MESSAGE), ##__VA_ARGS__)
+    PPR_CONCAT(PPR_DETAILS_LOG_RAW_, _LEVEL)(_CATEGORY, (_MESSAGE), ##__VA_ARGS__)
 
-#define PPR_LOG_ONCE(_CATEGORY, _LEVEL, _MESSAGE, ...)                                                                 \
+#if PPR_LOG_LEVEL_debug >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_debug(_CATEGORY, _MESSAGE, ...)                                                           \
     do {                                                                                                               \
         if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
-            PPR_LOG(_CATEGORY, _LEVEL, (_MESSAGE), ##__VA_ARGS__);                                                     \
+            PPR_LOG(_CATEGORY, debug, (_MESSAGE), ##__VA_ARGS__);                                                      \
     } while (0)
-
-#define PPR_LOG_ONCE_KEY(_CATEGORY, _LEVEL, _KEY, _MESSAGE, ...)                                                       \
+#define PPR_DETAILS_LOG_ONCE_KEY_debug(_CATEGORY, _KEY, _MESSAGE, ...)                                                 \
     do {                                                                                                               \
         if (::pP::Log::Once::claim(_KEY))                                                                              \
-            PPR_LOG(_CATEGORY, _LEVEL, (_MESSAGE), ##__VA_ARGS__);                                                     \
+            PPR_LOG(_CATEGORY, debug, (_MESSAGE), ##__VA_ARGS__);                                                      \
     } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_debug(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_debug(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_verbose >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_verbose(_CATEGORY, _MESSAGE, ...)                                                         \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, verbose, (_MESSAGE), ##__VA_ARGS__);                                                    \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_verbose(_CATEGORY, _KEY, _MESSAGE, ...)                                               \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, verbose, (_MESSAGE), ##__VA_ARGS__);                                                    \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_verbose(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_verbose(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_info >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_info(_CATEGORY, _MESSAGE, ...)                                                            \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, info, (_MESSAGE), ##__VA_ARGS__);                                                       \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_info(_CATEGORY, _KEY, _MESSAGE, ...)                                                  \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, info, (_MESSAGE), ##__VA_ARGS__);                                                       \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_info(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_info(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_emphasis >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_emphasis(_CATEGORY, _MESSAGE, ...)                                                        \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, emphasis, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_emphasis(_CATEGORY, _KEY, _MESSAGE, ...)                                              \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, emphasis, (_MESSAGE), ##__VA_ARGS__);                                                   \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_emphasis(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_emphasis(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_warning >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_warning(_CATEGORY, _MESSAGE, ...)                                                         \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, warning, (_MESSAGE), ##__VA_ARGS__);                                                    \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_warning(_CATEGORY, _KEY, _MESSAGE, ...)                                               \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, warning, (_MESSAGE), ##__VA_ARGS__);                                                    \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_warning(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_warning(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_error >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_error(_CATEGORY, _MESSAGE, ...)                                                           \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, error, (_MESSAGE), ##__VA_ARGS__);                                                      \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_error(_CATEGORY, _KEY, _MESSAGE, ...)                                                 \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, error, (_MESSAGE), ##__VA_ARGS__);                                                      \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_error(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_error(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+#if PPR_LOG_LEVEL_fatal >= PPR_LOG_LEVEL_THRESHOLD
+#define PPR_DETAILS_LOG_ONCE_fatal(_CATEGORY, _MESSAGE, ...)                                                           \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(__FILE__, static_cast<unsigned>(__LINE__)))                                         \
+            PPR_LOG(_CATEGORY, fatal, (_MESSAGE), ##__VA_ARGS__);                                                      \
+    } while (0)
+#define PPR_DETAILS_LOG_ONCE_KEY_fatal(_CATEGORY, _KEY, _MESSAGE, ...)                                                 \
+    do {                                                                                                               \
+        if (::pP::Log::Once::claim(_KEY))                                                                              \
+            PPR_LOG(_CATEGORY, fatal, (_MESSAGE), ##__VA_ARGS__);                                                      \
+    } while (0)
+#else
+#define PPR_DETAILS_LOG_ONCE_fatal(_CATEGORY, _MESSAGE, ...) (void) 0
+#define PPR_DETAILS_LOG_ONCE_KEY_fatal(_CATEGORY, _KEY, _MESSAGE, ...) (void) 0
+#endif
+
+// First-occurrence gate. Compiled-in severities keep the existing
+// claim-before-runtime-filter ordering; compiled-out severities erase the
+// claim (mutex, set lookup) together with the log and its arguments.
+#define PPR_LOG_ONCE(_CATEGORY, _LEVEL, _MESSAGE, ...)                                                                 \
+    PPR_CONCAT(PPR_DETAILS_LOG_ONCE_, _LEVEL)(_CATEGORY, (_MESSAGE), ##__VA_ARGS__)
+
+#define PPR_LOG_ONCE_KEY(_CATEGORY, _LEVEL, _KEY, _MESSAGE, ...)                                                       \
+    PPR_CONCAT(PPR_DETAILS_LOG_ONCE_KEY_, _LEVEL)(_CATEGORY, (_KEY), (_MESSAGE), ##__VA_ARGS__)
 
 #define PPR_FLUSH_LOG(...) std::ignore = pP::Log::flush(__VA_ARGS__)
 
@@ -287,9 +535,10 @@ extern "C" void _ReadWriteBarrier();
 #define PPR_DECLARE_LOG_CATEGORY(_NAME)
 #define PPR_DEFINE_LOG_CATEGORY(_NAME, _VERBOSITY, _FLAGS)
 #define PPR_LOG(_CATEGORY, _LEVEL, _MESSAGE, ...) (void) 0
+#define PPR_LOG_RAW(_CATEGORY, _LEVEL, _MESSAGE, ...) (void) 0
 #define PPR_LOG_ONCE(_CATEGORY, _LEVEL, _MESSAGE, ...) (void) 0
 #define PPR_LOG_ONCE_KEY(_CATEGORY, _LEVEL, _KEY, _MESSAGE, ...) (void) 0
-#define PPR_FLUSH_LOG() (void) 0
+#define PPR_FLUSH_LOG(...) (void) 0
 #endif
 
 // ------------------------------------------------------------------

@@ -6,7 +6,14 @@ import :logger;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(Internal, error, immediate)
+    // Always defined, independent of the PPR_LOG compile-out gate: the
+    // flush barrier emitter references it even at OFF.
+    namespace details::log {
+        [[nodiscard]] Log::Category &Internal() noexcept {
+            static Log::Category g_instance{"Internal", Log::ELevel::error, Log::Category::immediate};
+            return g_instance;
+        }
+    }
 
     // ------------------------------------------------------------------
     // logger level formatting
@@ -109,9 +116,12 @@ namespace pP {
 
         constexpr std::size_t entry_size_bytes = sizeof(Entry);
 
-        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
+        // A synchronous drain must observe an empty ring: wait for barrier
+        // room instead of skipping it. Async flush stays lossy.
+        const auto hdr = m_messages.producerReserve(
+            entry_size_bytes, wait ? RawChannel::wait_if_full : RawChannel::drop_if_full);
         if (not hdr.has_value()) [[unlikely]] {
-            return make_error_code(std::errc::device_or_resource_busy);
+            return make_error_code(hdr.error());
         }
 
         auto *const slot = static_cast<std::byte *>(const_cast<void *>(hdr->data()));
@@ -126,7 +136,7 @@ namespace pP {
         m_messages.producerSubmit(*hdr);
 
         if (wait) {
-            std::ignore = m_messages.flush();
+            return m_messages.flush();
         }
 
         return default_value_v;
@@ -138,8 +148,18 @@ namespace pP {
         const std::size_t block_size_bytes = opaque::Block::sizeOf(params);
         const std::size_t entry_size_bytes = sizeof(Entry) + block_size_bytes;
 
-        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
-        if (not PPR_ENSURE(hdr.has_value())) [[unlikely]] {
+        // Never silently drop operational errors; shed load below error so a
+        // full ring never stalls the producing thread.
+        const auto back_pressure = emitter.m_verbosity >= ELevel::error ? RawChannel::wait_if_full
+                                                                        : RawChannel::drop_if_full;
+        const auto hdr = m_messages.producerReserve(entry_size_bytes, back_pressure);
+        if (not hdr.has_value()) [[unlikely]] {
+            // Saturation under shed-load is expected: drop the entry. Any
+            // other reservation failure violates a programmer invariant.
+            if (back_pressure == RawChannel::drop_if_full && hdr.error() == RawChannel::error_full) {
+                return;
+            }
+            PPR_ASSERT(false && "unexpected log reservation failure");
             return;
         }
 
@@ -167,8 +187,18 @@ namespace pP {
             (copy_message.size() + 1u /* '\0' */) * sizeof(copy_message[0]), max_align_v);
         const std::size_t entry_size_bytes = sizeof(Entry) + message_size_bytes + block_size_bytes;
 
-        const auto hdr = m_messages.producerReserve(entry_size_bytes, RawChannel::wait_if_full);
-        if (not PPR_ENSURE(hdr.has_value())) [[unlikely]] {
+        // Never silently drop operational errors; shed load below error so a
+        // full ring never stalls the producing thread.
+        const auto back_pressure = emitter.m_verbosity >= ELevel::error ? RawChannel::wait_if_full
+                                                                        : RawChannel::drop_if_full;
+        const auto hdr = m_messages.producerReserve(entry_size_bytes, back_pressure);
+        if (not hdr.has_value()) [[unlikely]] {
+            // Saturation under shed-load is expected: drop the entry. Any
+            // other reservation failure violates a programmer invariant.
+            if (back_pressure == RawChannel::drop_if_full && hdr.error() == RawChannel::error_full) {
+                return;
+            }
+            PPR_ASSERT(false && "unexpected logRaw reservation failure");
             return;
         }
 
@@ -263,18 +293,22 @@ namespace pP {
         return false;
     }
 
-    [[nodiscard]] static bool isLogEmitterVisible_(const Log::Emitter &emitter) noexcept {
-        if (emitter.shouldBreakDebugger()) [[unlikely]] {
-            hal::breakpointIfDebugging();
-        }
+    bool Log::isVisible(const Emitter &emitter) noexcept {
         if (emitter.m_verbosity < emitter.m_category.m_verbosity) {
             return false;
         }
-        if (const Log::ELevel minimum_verbose_level{g_log_minimum_verbose_level.load()};
+        if (const ELevel minimum_verbose_level{g_log_minimum_verbose_level.load()};
             emitter.m_verbosity < minimum_verbose_level) {
             return false;
         }
         return true;
+    }
+
+    [[nodiscard]] static bool isLogEmitterVisible_(const Log::Emitter &emitter) noexcept {
+        if (emitter.shouldBreakDebugger()) [[unlikely]] {
+            hal::breakpointIfDebugging();
+        }
+        return Log::isVisible(emitter);
     }
 
     Log::ELevel Log::setMinimumVerboseLevel(const ELevel verbosity) noexcept {
