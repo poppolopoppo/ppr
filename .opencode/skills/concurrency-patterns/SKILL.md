@@ -3,9 +3,10 @@ name: concurrency-patterns
 description: >
   Use this skill whenever you need to implement or reason about concurrent
   message passing, cancellation, event multiplexing, or async I/O in the PPR
-  game engine. It covers the three core concurrency abstractions — RawChannel
+  game engine. It covers the core concurrency abstractions — RawChannel
   (lock-free MPSC ring buffer), IEvent/ISignal/Signal (compile-time event
-  multiplexing), and IContext/SharedContext (cancellation tree) — along with
+  multiplexing), IContext/SharedContext (cancellation tree),
+  ParallelScheduler admission, and the Application exit latch — along with
   their thread-safety model, HAL I/O integration, testing strategies, and
   performance-critical design decisions.
 ---
@@ -14,30 +15,38 @@ description: >
 
 ## Contract
 
-This skill is a reference guide for the three core PPR concurrency
-abstractions — RawChannel (lock-free MPSC ring buffer), IEvent/ISignal/Signal
-(compile-time event multiplexing), and IContext/SharedContext (cancellation
-tree) — along with their thread-safety model, HAL I/O integration, testing
-strategies, and performance-critical design decisions. It **does not** edit
-concurrency code or modify engine state. Its output is a structured guide for
-choosing and composing the right primitive for a given scenario. The
-orchestrator consults it to determine which concurrency primitive is
-appropriate, then delegates usage-search to `@explorer`, implementation to
-`@fixer`, and thread-safety review to `@oracle`. It never directly edits source
-files.
+This skill is a reference guide for the PPR concurrency abstractions —
+RawChannel (lock-free MPSC ring buffer), IEvent/ISignal/Signal (compile-time
+event multiplexing), IContext/SharedContext (cancellation tree),
+ParallelScheduler admission, and the Application graceful-exit latch — along
+with their thread-safety model, HAL I/O integration, testing strategies, and
+performance-critical design decisions. It **does not** edit concurrency code
+or modify engine state. Its output is a structured guide for choosing and
+composing the right primitive for a given scenario.
 
 ## Mandatory pre-implementation / review checklist
 
-- Assign ownership and lifetime for every channel, event, context, request, worker, and callback capture; stable-address in-flight objects outlive completion or cancellation acknowledgement.
-- Specify boundary outcomes (`full`, `empty`, `closed`, cancellation, timeout, and OS error) and the caller's drain/retry/propagation rule.
-- Inject a clock, deadline source, or tick input into time-dependent logic and tests; do not make a worker, timeout policy, or test depend on an implicit wall clock.
+- Assign ownership and lifetime for every channel, event, context, request,
+  worker, and callback capture using the vocabulary in §1; stable-address
+  in-flight objects outlive completion or cancellation acknowledgement.
+- Specify boundary outcomes (`full`, `empty`, `closed`, cancellation, timeout,
+  and OS error) and the caller's drain/retry/propagation rule.
+- Inject a clock, deadline source, or tick input into time-dependent logic and
+  tests; do not make a worker, timeout policy, or test depend on an implicit
+  wall clock.
 - Write the shutdown sequence: first detach or disable callbacks,
   subscriptions, and submissions and prevent new work; then cancel, wake,
   drain, or join in-flight channels, I/O, and workers; then release storage and
   other resources, preserving the first cleanup error.
-- Document each cross-thread publication with its release/acquire (or stronger) pairing; preserve the established ordering unless a proof and tests justify a change.
-- Never invoke an externally controlled callback while holding an internal lock. Define unsubscribe/detach ownership and test cancellation-versus-notify, close-versus-send, and destruction races.
-- Add behavior-contract tests and register new module/test sources in CMake. Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
+- Document each cross-thread publication with its release/acquire (or stronger)
+  pairing; preserve the established ordering unless a proof and tests justify
+  a change.
+- Never invoke an externally controlled callback while holding an internal
+  lock. Define unsubscribe/detach ownership and test cancellation-versus-notify,
+  close-versus-send, and destruction races.
+- Add behavior-contract tests for the outcomes above. For test file layout —
+  private group `.cpp` files, `detail::` leaves, TU-local groups + accessors —
+  see `unit-test-updater`.
 
 ## Execution handoff
 
@@ -48,43 +57,101 @@ configuration; this document grants or routes none of them.
 
 ---
 
-## Quick Reference — Choosing a Concurrency Primitive
+## 1. Ownership and lifetime vocabulary
 
-| Pattern | When to Use | Key Classes | Header/Partition |
-|---------|------------|-------------|------------------|
-| **RawChannel** | Async MPSC message passing between threads. Fixed-capacity, lock-free producer path. | `RawChannel`, `Channel<T>`, `ChannelWriter<T>`, `ChannelReader<T>` | `Core.Concurrency.cppm` |
-| **IEvent / Signal** | Wait on one or more event sources (I/O, timers, channels). Compile-time multiplexing with `select()`. | `IEvent`, `PulseEvent`, `BroadcastEvent`, `NeverEvent`, `Signal<EventsT...>` | `Core.Concurrency.Event.cppm` |
-| **IContext** | Go-style cancellation tree with deadlines. Propagate cancellation to goroutines/workers. | `IContext`, `SharedContext`, `Background`, `WithCancel`, `WithDeadline`, `WithTimeout` | `Core.Concurrency.Context.cppm` |
+Use these terms the same way in every design note, review, and test. They
+match the `memory-allocator` skill exactly.
 
-### Quick API Patterns
-
-```
-RawChannel:  producerReserve(size, policy) → producerSubmit(record) / producerDiscard(record)
-             consumerAcquire() → consumerRelease(record)
-Signal:      Signal<Event1, Event2> sig{event1, event2}; for (auto& e : select(sig)) { ... }
-Context:     auto ctx = IContext::WithCancel(IContext::Background());
-             ctx->cancel();  // propagates to all derived contexts
-```
-
-Return to the full guide below for detailed construction, lifecycle, thread-safety, and integration patterns.
+- **Own**: `SharedContext` / `shared_ptr` (context tree, channel handles via
+  `SharedRawChannelPtr`), `unique_ptr` workers and services, and any object
+  whose destructor releases the resource. The owner outlives every observer.
+- **Observe only — never own**: `safe_ptr` (debug-checked observer, raw
+  pointer in release), event subscriptions (`TagPtr<ISignal>` handed to
+  `subscribeEvent`), spans and views over channel records, allocator
+  references held by `Allocator<>` wrappers, and raw-pointer callback
+  captures. None of these extend a lifetime.
+- A subscription does not keep its event alive, and an event does not keep
+  its subscribers alive: order teardown explicitly (detach subscribers, then
+  quiesce emitters, then destroy). **Quiesce** means drain in-flight work to
+  idle before releasing storage. A **latch** is sticky state that never clears
+  (a recorded cancel error, the exit flag). A **cause** is the `error_code`
+  carried by a latch.
 
 ---
 
-## 1. RawChannel — Lock-Free MPSC Ring Buffer
+## 2. Thread-local storage and cross-thread handles
 
-RawChannel is a multi-producer, single-consumer (MPSC) lock-free circular buffer
-designed for fast message passing between threads. It is inspired by the BPF
-ring buffer (`kernel.org/doc/html/latest/bpf/ringbuf.html`).
+Scratch arenas, page-cache TLS caches, and pooling index hints are
+**per-thread**: a handle or cached block obtained on one thread must never be
+used or released on another.
 
-### 1.1 When To Use
+- `ScratchPad` is a per-thread `Arena<SmallPage>`; an
+  `Allocation<T, ScratchPad>` destroyed on another thread deallocates through
+  *that* thread's TLS arena, so keep allocations on their originating thread.
+- Channels must not carry pointers into producer scratch whose scope restores
+  before the consumer reads them — copy the bytes into the record or extend
+  the scope past consumption.
+- Async I/O buffers must outlive scratch scopes until OS quiescence: the HAL
+  owns the in-flight bytes until completion or cancel acknowledgement, so the
+  backing scope may not restore while a request is pending.
+- `HugePage` / `SmallPage` route through a TLS `LocalCache`; `Pooling` hints
+  (`TPoolingHint::value`) are `thread_local`. These are safe to call from any
+  thread precisely because each thread uses its own cache — never share the
+  cached result across threads.
+
+---
+
+## 3. Quick Reference — Choosing a Concurrency Primitive
+
+| Pattern | When to Use | Key Classes | Partition |
+|---------|------------|-------------|-----------|
+| **RawChannel** | Async MPSC message passing between threads. Fixed-capacity, lock-free consumer path. | `RawChannel`, `Channel<T>`, `ChannelWriter<T>`, `ChannelReader<T>` | `engine.core:concurrency.channel` (`Core.Concurrency.Channel.cppm`) |
+| **IEvent / Signal** | Wait on one or more event sources (I/O, timers, channels). Compile-time multiplexing with `select()`. | `IEvent`, `PulseEvent`, `BroadcastEvent`, `NeverEvent`, `Signal<EventsT...>` | `engine.core:concurrency.event` (`Core.Concurrency.Event.cppm`) |
+| **IContext** | Cancellation tree with deadlines. Propagate a cause to workers. | `IContext`, `SharedContext`, `context::background/withCancel/withCancelClause/...` | `engine.core:concurrency.context` (`Core.Concurrency.Context.cppm`) |
+| **ParallelScheduler** | Fixed worker pool with admission control and draining join. | `ParallelScheduler`, `WaitGroup` | `engine.core:concurrency.scheduler`, `:concurrency.thread` |
+| **Application exit** | Graceful process shutdown, distinct from cancellation. | `Application::requestExit/isExitRequested/run` | `engine.app:application` (`App.Application.cppm/.cpp`) |
+
+### Quick API Patterns
+
+```cpp
+RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+auto reserved = chan.producerReserve(sizeof(MyData), RawChannel::wait_if_full);
+if (reserved.has_value()) {
+    new (reserved->data()) MyData{...};
+    chan.producerSubmit(*reserved);   // takes RecordHeader&
+}
+
+auto signal = select(channel, *ctx);  // Signal over event references
+for (auto &event : signal) {          // iterator auto-resets on ++ (§5)
+    std::visit(pP::overloaded{
+        [&](RawChannel *c) { /* drain */ },
+        [&](IContext *) { /* cancelled */ },
+    }, event);
+}
+
+auto [ctx, cancel] = context::withCancel(context::background());
+cancel();                             // latches operation_canceled, emits
+```
+
+Return to the full guide below for detailed construction, lifecycle,
+thread-safety, and integration patterns.
+
+---
+
+## 4. RawChannel — Lock-Free MPSC Ring Buffer
+
+RawChannel is a multi-producer, single-consumer (MPSC) lock-free circular
+buffer for fast message passing between threads, inspired by the BPF ring
+buffer.
+
+### 4.1 When To Use
 
 Use RawChannel (or its typed wrapper `Channel<T>`) when you need:
 
-- **Async producer-consumer** — one thread (or multiple threads) produces data,
-  a single dedicated consumer thread processes it.
+- **Async producer-consumer** — one thread (or several) produces data, a
+  single dedicated consumer thread processes it.
 - **Low-latency** — the hot path (producer submit / consumer acquire) uses
-  lock-free atomics; the producer mutex only protects the reserve/commit
-  serialization and is typically uncontested.
+  lock-free atomics; the producer mutex only serializes reserve/commit.
 - **Fixed-capacity backpressure** — the caller chooses the buffer size at
   construction and selects the backpressure policy on each reserve.
 
@@ -92,53 +159,52 @@ Do NOT use RawChannel for:
 
 - Multiple consumers on the same channel — it is strictly single-consumer.
   Use multiple channels (one per consumer) with a fan-out strategy instead.
-- Heap-allocated variable-length messages without a pool — every record is
-  a fixed-size slot aligned to `RecordHeader + payload`, allocated inline in
-  the ring buffer.
+- Heap-allocated variable-length messages without a pool — every record is a
+  fixed-size slot (`RecordHeader` + payload) stored inline in the ring.
 
-### 1.2 Construction and Capacity
+### 4.2 Construction and Capacity
 
 ```cpp
-// From raw buffer size (must be power of 2, aligned to page granularity)
+// From raw buffer size (rounded up to a power of two, at least one HAL page)
 RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
 
 // Default: one page (hal::page_granularity)
 RawChannel chan{};
 
-// Convenience: N elements of element_size each (auto-rounded to power-of-2 page)
+// Convenience: N elements of element_size each (auto-rounded as above)
 RawChannel chan{num_elements, element_size};
 ```
 
-- The buffer size **must** be a power of two (enforced by `PPR_ASSERT`).
+- Capacity is rounded up with `std::bit_ceil` after page alignment; the
+  `(num_elements, element_size)` form accounts per-record overhead via
+  `RawChannel::alignSize` (8-byte header + 8-byte-aligned payload).
 - Memory is allocated via `hal::ringBufferAlloc`, which maps the same physical
-  pages twice (virtual-memory trick) so the ring buffer never needs to copy
-  wrapped data — offsets are computed with `offset & (capacity - 1)`.
-- The typed wrapper `Channel<T>` accepts `std::in_place_t` plus capacity in
-  elements:
+  pages twice (virtual-memory trick) so the ring never copies wrapped data.
+- The typed wrapper takes `std::in_place_t` plus capacity **in elements**:
   ```cpp
   auto chan = Channel<int>(std::in_place_t{}, 64u);
   ```
-- `SharedRawChannelPtr` (`std::shared_ptr<RawChannel>`) can be shared between
-  `ChannelWriter<T>` and `ChannelReader<T>` for explicit role separation.
+- `SharedRawChannelPtr` (`std::shared_ptr<RawChannel>`) is the owning handle
+  shared between `ChannelWriter<T>` and `ChannelReader<T>` for explicit role
+  separation. The `shared_ptr` owns; writers, readers, and record spans
+  observe.
 
-### 1.3 Producer API — Reserve, Submit, Discard
+### 4.3 Producer API — Reserve, Submit, Discard
 
-The producer follows a **reserve / submit** two-phase protocol:
+The producer follows a **reserve / submit** two-phase protocol. `Record` is a
+thin handle over `RecordHeader`; submit/discard take the header:
 
 ```cpp
-// Reserve space — returns std::expected<Record, EError>
+// Reserve space — returns std::expected<Record, errc>, default wait_if_full
 auto record = chan.producerReserve(sizeof(MyData), RawChannel::wait_if_full);
 
 if (record.has_value()) {
-    // Write data into the reserved slot
-    new (record->data()) MyData{...};
-
-    // Commit — makes data visible to consumer
-    chan.producerSubmit(*record);
+    new (record->data()) MyData{...};  // Record::data() forwards to header
+    chan.producerSubmit(*record);      // Record converts to RecordHeader&
 }
 ```
 
-**Backpressure policies** (third argument to `producerReserve`):
+**Backpressure policies** (`EBackPressure`, second argument):
 
 | Policy | Behavior |
 |---|---|
@@ -150,36 +216,27 @@ if (record.has_value()) {
 ```cpp
 chan.producerDiscard(*record);
 ```
-The consumer will skip discarded records (they are marked `flag_discard`).
+The consumer skips discarded records (marked `flag_discard`).
 
-**Batch operations** — because the producer mutex serializes all producer
-threads, you can reserve, write, and submit multiple records in a single
-critical section for higher throughput.
-
-### 1.4 Consumer API — Acquire, Release
-
-The consumer follows an **acquire / release** two-phase protocol:
+### 4.4 Consumer API — Acquire, Release
 
 ```cpp
-// Block until data is available:
+// Block until data is available (default policy):
 auto record = chan.consumerAcquire(RawChannel::block_until_available);
 
 // Non-blocking peek:
 auto record = chan.consumerAcquire(RawChannel::peek_without_blocking);
 
 if (record.has_value()) {
-    // Read data
-    auto *data = static_cast<const MyData *>(record->data());
-    process(*data);
-
-    // Release — makes space available for producers
+    process(record->data());
     chan.consumerRelease(*record);
 }
 ```
 
-**Errors** returned from `consumerAcquire`:
+**Errors** from `consumerAcquire` (`errc`, convertible to `error_code` via
+`make_error_code` + `is_error_code_enum`):
 - `error_empty` — no data available (only with `peek_without_blocking`)
-- `error_closed` — channel has been closed (all remaining data has been consumed)
+- `error_closed` — channel closed and all preceding records drained
 
 **Drain pattern** — consume all available messages without blocking:
 ```cpp
@@ -189,91 +246,82 @@ while (auto record = chan.consumerAcquire(RawChannel::peek_without_blocking)) {
 }
 ```
 
-### 1.5 Typed Channel (<code>Channel&lt;T&gt;</code>)
-
-`Channel<T>` is a type-safe wrapper around `SharedRawChannelPtr`:
+### 4.5 Typed Channel (`Channel<T>`)
 
 ```cpp
 auto chan = Channel<int>(std::in_place_t{}, 64u);
 
-// Send
-chan.send(42);                          // returns expected<void, EError>
-chan.emplace(42);                       // perfect-forwarding constructor
-chan << 1 << 2 << 3;                    // stream-style (SendResult chains)
+chan.send(42);                          // error_code; default drop_if_full
+chan.emplace(42);                       // default wait_if_full
+chan.send(42, RawChannel::wait_if_full);
+auto val = chan.receive();              // expected<T, errc> (blocks)
+auto peeked = chan.peek();              // optional<T> (non-blocking)
+int dst;  chan >> dst;                  // error_code (blocking)
 
-// Receive
-auto val = chan.receive();              // expected<T, EError> (blocks)
-auto val = chan.peek();                 // optional<T> (non-blocking)
-int dst;  chan >> dst;                  // expected<void, EError> (blocking)
-
-// Range-for (blocking: stops when channel closes)
-for (const auto &msg : chan) { process(msg); }
-
-// Non-blocking iteration
+for (const auto &msg : chan) { process(msg); }  // blocking; ends on close+drain
 for (auto it = chan.begin(RawChannel::peek_without_blocking);
      it != chan.end(); ++it) { process(*it); }
+
+ChannelWriter<T> writer = chan.writer();  // send-only view (observes)
+ChannelReader<T> reader = chan.reader();  // receive-only view (observes)
 ```
 
-**Requirements on `T`**:
-- Must be `std::is_nothrow_destructible_v<T>`.
-- For `send(LikeT&&)`: `is_nothrow_constructible<T, LikeT&&>` and `is_nothrow_move_constructible<T>`.
-- For `emplace(ArgsT&&...)`: `is_nothrow_constructible<T, ArgsT&&...>`.
-- For `receive()` and `peek()`: `is_nothrow_move_constructible<T>`.
-- The destructor asserts no unread non-trivially-destructible messages remain.
+**Requirements on `T`** (enforced by `requires` clauses):
+- Always: `std::is_nothrow_destructible_v<T>`.
+- `send`: `is_nothrow_constructible<T, LikeT&&>` and
+  `is_nothrow_move_constructible<T>`.
+- `emplace`: `is_nothrow_constructible<T, ArgsT&&...>`.
+- `receive` / `peek`: `is_nothrow_move_constructible<T>`.
+- The destructor closes the channel, then asserts no unread
+  non-trivially-destructible messages remain (assertions builds only).
 
-**Role-separated views**:
+### 4.6 Channel Lifecycle and Close
+
+- **`close()`** — transitions `opened → closing → closed` and injects a
+  `flag_close` record. The consumer sees `error_closed` after draining all
+  preceding records. Idempotent-ish: closing twice reports `error_closed`.
+- **`flush()`** — injects a `flag_flush` record and blocks the caller until
+  the consumer processes it, proving all previously submitted records were
+  seen.
+- **Destructor** — `virtual` (safe teardown through the `IEvent` base);
+  closes the channel and frees the ring via `hal::ringBufferFree`.
+
+**Close is terminal — provision the shutdown order around it.** Once a
+producer observes `error_closed` from `producerReserve`, it must stop
+admitting; once `consumerAcquire` returns `error_closed`, the backlog is
+empty, so no further *blocking* acquire may follow (it would block
+indefinitely — the close record was already consumed). Either use
+`peek_without_blocking` after close or track closed state explicitly, and run
+exactly one consumer per `RawChannel` unless an additional close barrier is
+added.
 
 ```cpp
-ChannelWriter<T> writer = chan.writer();  // send-only
-ChannelReader<T> reader = chan.reader();  // receive-only
+chan.flush();  // prove the consumer has seen everything
+chan.close();  // consumer drains, then sees error_closed
 ```
 
-Both are lightweight wrappers around the same `SharedRawChannelPtr`.
+### 4.7 IEvent Interface (Event Multiplexing)
 
-### 1.6 Channel Lifecycle
-
-- **`close()`** — atomically transitions the channel from `opened` → `closing`
-  → `closed`. Injects a `flag_close` record into the ring buffer. The consumer
-  sees `error_closed` after draining all preceding records.
-- **`flush()`** — injects a `flag_flush` record with an atomic flag and blocks
-  the caller until the consumer has processed it. Guarantees all previously
-  submitted records are visible to the consumer.
-- **Destructor** — automatically closes the channel and frees the ring buffer
-  via `hal::ringBufferFree`.
-
-```cpp
-// Close gracefully: consumer drains then sees error_closed
-chan.close();
-
-// Flush before close to ensure consumer has seen everything
-chan.flush();
-chan.close();
-```
-
-### 1.7 IEvent Interface (Event Multiplexing)
-
-RawChannel implements `IEvent`, allowing it to be used with `select()` and
-`Signal` for event-driven dispatch:
+RawChannel implements `IEvent`, so it composes with `select()`/`Signal`.
+`pollEvent()` is level-aware: the commit pulse OR `read != commit`, so a
+committed message stays visible even after the pending bit is consumed.
+`resetEvent()` clears the pulse and re-emits when backlog remains, so a
+multi-source `Signal` never loses a committed message behind a consumed bit:
 
 ```cpp
 auto signal = select(channel);
-auto event = signal.poll();  // optional<RawChannel*>
-if (event.has_value()) {
-    // Channel has data or is closed
+if (auto event = signal.poll()) {
     auto record = (*event)->consumerAcquire(RawChannel::peek_without_blocking);
     // ...
+    signal.reset();  // single-source Signal: nullary reset consumes the pending bit
 }
 ```
 
-The internal `PulseEvent m_on_produced` fires whenever the commit position
-advances (new data available) or the channel closes.
+### 4.8 Thread Roles
 
-### 1.8 Producer Role Clarity
-
-The MPSC design assumes **one logical consumer** (the thread calling
-`consumerAcquire`). Multiple producers are serialized by the internal
-`m_producer_mutex`. The consumer is single-threaded and lock-free on the
-read path.
+The MPSC design assumes **one logical consumer**. Multiple producers are
+serialized by the internal `m_producer_mutex`; the consumer read path is
+lock-free.
 
 | Thread role | Callable methods | Thread-safe? |
 |---|---|---|
@@ -281,12 +329,9 @@ read path.
 | Consumer (single) | `consumerAcquire`, `consumerRelease` | Yes (single-threaded by design) |
 | Any | `isOpened`, `isClosed`, `isClosedOrClosing`, `capacity` | Yes (atomic reads) |
 
-## 2. IEvent / ISignal / Signal — Event Multiplexing
+## 5. IEvent / ISignal / Signal — Event Multiplexing
 
-The event infrastructure provides a compile-time-safe, composable system for
-waiting on multiple event sources.
-
-### 2.1 Core Interfaces
+### 5.1 Core Interfaces
 
 ```cpp
 class ISignal {
@@ -302,19 +347,29 @@ class IEvent {
 };
 ```
 
-- **`IEvent`** — an event source that can be polled, subscribed to, and reset.
-  All concurrency primitives (RawChannel, PulseEvent, BroadcastEvent,
-  IContext, IoRequest) implement IEvent.
-- **`ISignal`** — a subscriber that receives notifications from one or more
-  IEvent sources. `Signal<EventsT...>` is the concrete implementation.
+- **`IEvent`** — a level- or edge-triggered source. Implemented by
+  `RawChannel`, `PulseEvent`, `BroadcastEvent`, `IContext`, `IoRequest`.
+- **`ISignal`** — a subscriber. `Signal<EventsT...>` is the concrete
+  implementation; `select()` is its deduction-guide factory.
 
-### 2.2 Event Implementations
+### 5.2 Non-owning subscribe/unsubscribe — teardown order
+
+Subscriptions never own: never destroy a signal while another thread may be
+inside `emitEvent`, and never destroy an event while another thread may call
+`notify` on it. Join, close, or drain the emitters first, then unsubscribe,
+then destroy. Cross-event notification obeys the same rule:
+`CancelContext::notify` emits the child event while the parent emits, so tear
+down child-before-parent under the owner's join — the child's subscription to
+the parent must be released (child destroyed or unsubscribed) before the
+parent event can be destroyed.
+
+### 5.3 Event Implementations
 
 | Class | Behavior |
 |---|---|
-| `NeverEvent` | `pollEvent()` always returns `false`. `subscribeEvent` returns a null sentinel. Used as a stub / no-op event. |
-| `PulseEvent` | Edge-triggered: `emitEvent()` sets a flag; `pollEvent()` returns `true` once until `resetEvent()` is called. Supports **one subscriber** at a time (single-slot atomic exchange). |
-| `BroadcastEvent` | Level-triggered like PulseEvent, but supports **multiple subscribers** via a mutex-protected `StableVectorInplace`. Each subscriber's `notify()` is called when the event fires. |
+| `NeverEvent` | `pollEvent()` always `false`; subscribe/unsubscribe are no-ops. Stub event. |
+| `PulseEvent` | Edge-triggered: `emitEvent()` sets the bit and notifies at most once until `resetEvent()`. **One subscriber** (single-slot atomic exchange). |
+| `BroadcastEvent` | Same pulse semantics, **multiple subscribers** via a mutex-protected subscription list. `emitEvent()` notifies from a snapshot taken under the mutex, so unsubscribing inside `notify()` is safe. |
 
 ```cpp
 PulseEvent event;
@@ -324,827 +379,407 @@ event.resetEvent();
 bool fired2 = event.pollEvent();  // false
 ```
 
-**PulseEvent implementation detail**: `subscribeEvent` atomically exchanges
-the subscriber into `m_signal`, returning the previous value. If the event
-had already fired before subscription, the `signal_bit_v` flag is set and
-`emitEvent()` is called immediately. This ensures subscribers never miss
-events that fired before they subscribed.
+**Late subscription is level-checked, not replayed, for broadcast sources.**
+`BroadcastEvent::subscribeEvent` after `emitEvent` synthesizes NO `Signal`
+notification — the new subscriber simply missed the pulse. After subscribing,
+always check `pollEvent()`/`error()` for level state instead of assuming a
+notification will arrive. (`PulseEvent`, by contrast, re-fires into a
+subscriber that arrives while the bit is set.) `CancelContext` children
+created after the parent cancelled observe `error()` through parent
+delegation, not `pollEvent()` on their own (never-emitted) flag — and
+scheduler admission follows the same rule (§8).
 
-**BroadcastEvent implementation detail**: `emitEvent()` takes a snapshot of
-the subscription list under the mutex before iterating, allowing
-unsubscription from within a `notify()` callback.
-
-### 2.3 Signal — Multi-Event Composition
-
-`Signal<EventsT...>` subscribes to multiple `IEvent` sources and provides a
-unified interface for polling and waiting:
+### 5.4 Signal — Multi-Event Composition
 
 ```cpp
 PulseEvent timer;
 IoRequest io_done;
 
-// Compose events
-auto signal = select(timer, io_done);
+auto signal = select(timer, io_done);  // Signal<PulseEvent, IoRequest>
 
-// Poll (non-blocking)
-auto event = signal.poll();
-if (event.has_value()) {
-    // event is a std::variant<IoRequest*, PulseEvent*>
-    std::visit(overloaded{
+if (auto event = signal.poll()) {      // non-blocking; variant of pointers
+    std::visit(pP::overloaded{
         [](IoRequest *r) { process_io(r); },
         [](PulseEvent *t) { handle_timeout(t); },
     }, *event);
-    signal.reset(*event);  // reset the specific source
+    signal.reset(*event);              // reset the consumed source
 }
 
-// Wait (blocking)
-signal.wait();
-auto event = signal.poll();
-// ... handle and reset
+signal.wait();  // block until some source fires
+```
 
-// Range-for (blocking iterator)
-for (auto &event : signal) {
-    std::visit(overloaded{
-        [](IoRequest *r) { process_io(r); },
-        [](PulseEvent *t) { handle_timeout(t); },
-    }, event);
+**Constraints**: at least one event type, at most `bit_count_v<std::size_t>`
+(64) sources, every source derives from `IEvent`. `Signal<EventT>` is a
+specialized single-event form with a direct `pollEvent`/`reset` loop.
+
+**Range-for over `select()` auto-resets the previously yielded event on
+`++`.** The iterator resets the consumed source *before* fetching the next
+pending event, then blocks in `wait()` when nothing is pending. Never rearm
+between observing an event and incrementing the iterator — the increment owns
+the reset. Sources that need explicit control use the rearmable sequence
+`poll → handle → resetEvent → wait` directly on the event, never range-for:
+
+```cpp
+// Rearmable source handled explicitly (no range-for):
+for (;;) {
+    if (chan.pollEvent()) {
+        drain(chan);
+        chan.resetEvent();
+    }
+    if (ctx->error()) break;  // stable latch, not the consumable pulse (§6)
+    signal.wait();
 }
 ```
 
-**Constraints**:
-- At least one event type (`sizeof...(EventsT) > 0`).
-- At most `bit_count_v<std::size_t>` events (typically 64).
-- Every event type must derive from `IEvent`.
+## 6. IContext / SharedContext — Cancellation Tree
 
-**Specialization**: `Signal<EventT>` (single event) is optimized — it does
-not use a bitmask and directly delegates to the single event's poll/subscribe
-interface.
+`IContext : IEvent` adds `error()` and `value(user_key)`;
+`SharedContext = std::shared_ptr<IContext>` is the owning handle. Factories
+live in `context::` (`Core.Concurrency.Context.cppm`).
 
-**`select()` helper** — a deduction-guide factory:
-```cpp
-auto signal = select(event_a, event_b);  // Signal<decltype(event_a), decltype(event_b)>
-```
-
-### 2.4 Event Type Requirements
-
-For an event type to work with `Signal` and `select()`:
-
-1. Must publicly inherit from `IEvent`.
-2. Must implement all four `IEvent` virtual methods.
-3. `subscribeEvent` must return the previously subscribed signal (for chaining
-   / restore on unsubscribe).
-4. `pollEvent()` must be non-blocking and return `true` if the event has fired.
-5. `resetEvent()` must clear the fired state.
-
-## 3. IContext / SharedContext — Cancellation Tree
-
-The context system provides Go-inspired cancellation propagation through a
-hierarchy of contexts.
-
-### 3.1 Core Types
-
-```cpp
-class IContext : public IEvent {
-    virtual std::error_code error() const noexcept = 0;
-    virtual std::optional<const opaque::Block::Value*> value(string_literal user_key) const noexcept = 0;
-};
-
-using SharedContext = std::shared_ptr<IContext>;
-```
-
-`IContext` extends `IEvent` — cancellation is signaled through the event
-interface. `pollEvent()` returns `true` when the context is cancelled.
-
-### 3.2 Background Context (Root)
-
-`context::background()` creates a root context that is never cancelled and
-carries no values:
+### 6.1 Background Context (Root)
 
 ```cpp
 SharedContext bg = context::background();
-bg->pollEvent();                // always false (NeverEvent)
-bg->error();                    // std::error_code{} (no error)
-bg->value("key");               // nullopt
+bg->pollEvent();  // always false (NeverEvent)
+bg->error();      // std::error_code{} (no error)
+bg->value("key"); // std::nullopt
 ```
 
-Use `background()` as the parent for top-level application contexts.
-
-### 3.3 WithCancel — Manual Cancellation
+### 6.2 WithCancel / WithCancelClause — Manual Cancellation
 
 ```cpp
 auto [ctx, cancel] = context::withCancel(context::background());
-// ctx is a SharedContext, cancel is a callable
-
-cancel();                       // triggers ctx->pollEvent() == true
-ctx->error();                   // std::errc::operation_canceled
+cancel();                 // latches operation_canceled, emits the event
+ctx->pollEvent();         // true
+ctx->error();             // std::errc::operation_canceled
 ```
 
-**Cancellation propagates down** the tree:
+Cancellation propagates **down** (child of a cancelled parent fires) and
+never **up**. `cancel()` is idempotent — first cause wins via CAS. Both
+`CancelFunc` and `CancelClauseFunc` hold a *weak* handle with an `isValid()`
+liveness check; calling through an expired handle is a silent no-op.
+`WithCancelClause` accepts an explicit cause:
+
+```cpp
+auto [ctx, cancel_] = context::withCancelClause(parent);
+cancel_(std::error_code{42, std::generic_category()});
+ctx->error().value() == 42;  // true
+```
+
+**An empty clause is a no-op: no event, no error.** `cancelCause` returns
+before the CAS loop when the cause is empty, so `pollEvent()` stays false and
+`error()` stays empty (`Core.Concurrency.Context.Tests.cpp`,
+`CancelClause::empty_clause_is_noop`). This is what makes
+`Application::requestExit({})` (§9) and `join({})` drain quietly instead of
+firing cancellation for no cause.
+
+`CancelContext::error()` delegates to the parent when no local cause is
+latched, so a child observes parent cancellation through `error()` even if
+its own flag never fired — the same level-state rule as §5.3.
+
+### 6.3 WithoutCancel — Sever the Tree
 
 ```cpp
 auto [parent, cancel_parent] = context::withCancel(context::background());
-auto [child, cancel_child] = context::withCancel(parent);
-
-cancel_parent();                // child->pollEvent() == true
-```
-
-**Cancellation does NOT propagate up**:
-
-```cpp
-cancel_child();                 // parent->pollEvent() == false (unaffected)
-```
-
-**Idempotency**: Calling `cancel()` multiple times is safe — the error code
-is stored with a `compare_exchange_strong` and only the first call wins.
-
-**WithCancelClause** — same as `withCancel` but the cancel function accepts
-a custom `std::error_code`:
-
-```cpp
-auto [ctx, cancel_with_code] = context::withCancelClause(parent);
-cancel_with_code(std::error_code{42, std::generic_category()});
-ctx->error().value() == 42;    // true
-```
-
-### 3.4 WithoutCancel — Sever the Tree
-
-`context::withoutCancel()` creates a child context that **ignores** parent
-cancellation while still propagating parent values:
-
-```cpp
-auto [parent, cancel_parent] = context::withCancel(context::background());
-auto child = context::withoutCancel(parent);
-
+auto child = context::withoutCancel(parent);  // values flow, cancel severed
 cancel_parent();
-child->pollEvent();             // false — parent cancellation severed
-child->error();                 // std::error_code{} (no error)
+child->pollEvent();  // false — deliberately never subscribed to the parent
+child->error();      // std::error_code{}
 ```
 
-### 3.5 WithValue — Attach Data
+### 6.4 WithValue — Attach Data
 
 ```cpp
-auto ctx = context::withValue(parent, "user_id", opaque::Value{42});
-auto val = ctx->value("user_id");
-// val->as<int>() == 42
+const SharedContext parent = context::background();
+const SharedContext ctx = context::withValue(parent, "test_key", opaque::Value{42});
+ctx->value("test_key");    // has_value()
+ctx->value("other_key");   // std::nullopt
 ```
 
-- Values are looked up by `string_literal` key.
-- Child contexts fall back to parent values (chain of `shared_ptr`s).
-- `context::withValues(parent, dict)` attaches multiple values at once.
+Children fall back to parent values (`withValues` attaches a whole
+`opaque::Dict`). Values are immutable after construction.
 
-### 3.6 WithDeadline and WithTimeout
+### 6.5 WithDeadline and WithTimeout — Injected Timer
+
+Pass an explicit `TimerManager &timer` — there is no default and no
+singleton. `TimerManager timer{ITimerClock::steady()}` is the production
+spelling from the tests:
 
 ```cpp
-// Inject the timer used for scheduling and clock reads.
-TimerExplicitClock clock{};
-TimerManager timer{clock};
+TimerManager timer{ITimerClock::steady()};
+const TimePoint dl = timer.now() + std::chrono::seconds(60);
+const SharedContext ctx = context::withDeadline(parent, dl, timer);
+ctx->pollEvent() == false;  // nothing due yet
 
-// Cancel at a specific time.
-auto deadline = timer.now() + std::chrono::seconds(30);
-auto ctx = context::withDeadline(parent, deadline, timer);
-// ctx->pollEvent() == true when deadline passes
-
-// Cancel after a duration
-auto ctx = context::withTimeout(parent, std::chrono::milliseconds(150), timer);
-
-// Custom error code on deadline
-auto ctx = context::withDeadlineCause(parent, deadline, my_error_code, timer);
-
-// Custom error code on timeout
-auto ctx = context::withTimeoutCause(parent, delay, my_error_code, timer);
+const SharedContext tctx = context::withTimeout(
+    context::background(), std::chrono::milliseconds(150), timer);
+// Cause variants: withDeadlineCause(parent, dl, cause, timer),
+// withTimeoutCause(parent, delay, cause, timer); default cause is timed_out.
 ```
 
-- Pass an injected `TimerManager &timer` to `withDeadline` and `withTimeout`.
-  The default `TimerManager::mainTimer()` overload is legacy convenience only,
-  not the preferred contract for new code or tests.
-- `withDeadline` and `withTimeout` both derive from `CancelContext`.
-- They schedule a timer callback via `TimerManager::schedule()`.
-- The timer uses a `weak_ptr` to the deadline context, so it is safe if the
-  context is destroyed before the deadline fires.
-- Parent cancellation overrides the deadline (immediate propagation).
+`withDeadline`/`withTimeout` derive from `CancelContext` and schedule through
+`TimerManager::schedule`; the timer holds a `weak_ptr`, so destroying the
+context before the deadline is safe. Parent cancellation overrides the
+deadline, and `cancelDeadline` is `PPR_ENSURE`-guarded to fire only at/after
+the date. For deterministic tests, assert setup state (as above) rather than
+sleeping for a real deadline.
 
-### 3.7 WithAfterFunc — Cleanup Callback
+### 6.6 WithAfterFunc — Destruction Callback
 
 ```cpp
-auto ctx = context::withAfterFunc(parent, [](const IContext &c) noexcept {
-    cleanup_resources();
-});
-```
-
-The callback is invoked when the context is **destroyed** (in the destructor),
-which happens after cancellation propagation. Use this for RAII-style cleanup
-that must run when a scope ends.
-
-### 3.8 Error Code Semantics
-
-- Default cancel: `std::errc::operation_canceled`
-- Default timeout: `std::errc::timed_out`
-- Custom errors must use `std::generic_category()` (enforced by
-  `PPR_ASSERT(err.category() == std::generic_category())` in `CancelContext::cancelCause`).
-
-### 3.9 Checking Cancellation
-
-```cpp
-// Poll-based (non-blocking)
-if (ctx->pollEvent()) {
-    auto err = ctx->error();
-    // handle cancellation
+bool called = false;
+{
+    const SharedContext ctx = context::withAfterFunc(
+        parent, [&called](const IContext &) noexcept { called = true; });
 }
+called == true;  // callback ran in the destructor
+```
 
-// Subscriber-based (event-driven)
-auto signal = select(*ctx, other_events);
-for (auto &event : signal) {
-    if (std::addressof(event) == ctx.get()) {
-        // context cancelled
-    }
+`AfterFunc = std23::move_only_function<void(const IContext &)>`; it runs on
+cancel/destroy with the context that is going away.
+
+### 6.7 Checking Cancellation
+
+Prefer the stable latch over the consumable pulse: `error()` persists while
+`pollEvent()` can be consumed and reset by a competing waiter (§5.4, §8).
+
+```cpp
+if (const std::error_code err = ctx->error()) {
+    // handle cancellation with its cause
 }
 ```
 
-## 4. Thread Safety Model
-
-### 4.1 RawChannel
+## 7. Thread Safety Model
 
 | Operation | Thread Safety | Mechanism |
 |---|---|---|
-| `producerReserve` / `producerSubmit` / `producerDiscard` | **Thread-safe** (multiple producers) | `m_producer_mutex` (std::mutex) |
-| `consumerAcquire` / `consumerRelease` | **Single-threaded only** | No locking — assumes one consumer |
-| `close` / `flush` | **Thread-safe** (call from producer side) | Uses `compare_exchange_strong` on `m_status` + producer mutex |
-| `isOpened` / `isClosed` / `isClosedOrClosing` / `capacity` | **Thread-safe** | Atomic loads with `memory_order_acquire` |
-| `subscribeEvent` / `unsubscribeEvent` / `pollEvent` / `resetEvent` | **Thread-safe** (delegates to PulseEvent) | Atomic operations on `PulseEvent` |
+| Channel producer ops / `close` / `flush` | Yes (multi-producer) | `m_producer_mutex` + CAS on status |
+| Channel consumer ops | Single consumer only | Lock-free `m_commit`/`m_read`, no locking |
+| `isOpened` / `isClosed` / `capacity` | Yes | Acquire loads |
+| `PulseEvent` all ops | Yes | Atomics; single subscriber |
+| `BroadcastEvent` all ops | Yes | `test_and_set` + mutex-protected snapshot |
+| `Signal::poll/wait/begin` | Single consumer | `notify()` is cross-thread |
+| `cancel()` / `cancelCause()` | Yes | CAS on the error slot; first cause wins |
+| `error()` / `value()` | Yes for reads | Atomic load + immutable parent chain |
+| Context construction | Sequenced only | Parent must outlive children |
 
-The consumer side is intentionally single-threaded for performance — there is
-no contention on `m_read` and no mutex on the hot path. If you need multiple
-consumers, use multiple channels and a distribution strategy (e.g., round-robin
-or work-stealing via atomic counter).
+Allocator thread safety (`GPA`/`OS` global, page-cache TLS, `Pooling`
+lock-free, arenas single-threaded, `ScratchPad` per-thread) is specified in
+`memory-allocator` §Constraints and not restated here.
 
-### 4.2 IEvent / ISignal / Signal
+## 8. ParallelScheduler — Admission on Stable Error
 
-| Class | Thread Safety | Notes |
-|---|---|---|
-| `PulseEvent` | **Thread-safe** — `emitEvent`/`pollEvent`/`resetEvent`/`subscribeEvent` all use atomics | Single-subscriber only |
-| `BroadcastEvent` | **Thread-safe** — `emitEvent` uses `test_and_set` + mutex-protected snapshot | Multiple subscribers; snapshot avoids deadlock on re-entrant notify |
-| `Signal<EventsT...>` | **Consumer: single-threaded** — `poll()`/`wait()`/`begin()` are not re-entrant | `notify()` is called from producer threads (cross-thread) |
-| `NeverEvent` | **Thread-safe** — all methods are constexpr no-ops | |
+`ParallelScheduler(description, num_workers, queue_bytes_per_worker, parent,
+thread_priority)` parents its lifecycle to the given context (default
+`background()`). `schedule`/`broadcast` take an optional tracking `WaitGroup`
+and an `EProducerPolicy` (default `wait_if_full`); void tasks report admission
+as `error_code`, value tasks as `expected<future<R>, error_code>`.
+`join(cause = {})` drains admitted tasks — a nonzero cause cancels first, an
+empty cause drains quietly — and reports the lifecycle error. `error()` is
+null-safe; `getContext()` exposes the lifecycle for observation only (it
+returns `const IContext&`).
 
-### 4.3 IContext / SharedContext
-
-| Operation | Thread Safety | Mechanism |
-|---|---|---|
-| `cancel()` / `cancelCause()` | **Thread-safe** | `compare_exchange_strong` on `m_error` |
-| `error()` | **Thread-safe** | Atomic load of `m_error` + parent delegation |
-| `pollEvent()` / `subscribeEvent()` / etc. | **Thread-safe** | Delegates to `BroadcastEvent` (`m_done`) |
-| `value(key)` | **Thread-safe** for reads | Immutable `opaque::Unique` per context; parent chain is const |
-| Context construction | **Not thread-safe** | Must be sequenced (parent must outlive children) |
-
-### 4.4 What Is NOT Thread-Safe
-
-- **Arena / Slab allocators** — not thread-safe; use thread-local arenas or
-  external synchronization.
-- **ScopedArena** — RAII watermark allocator, not thread-safe.
-- **ScratchPad** — TLS arena, implicitly thread-safe per-thread but not
-  cross-thread.
-- **Channel::InputIterator / Signal::iterator** — not re-entrant; single
-  consumer only.
-
-## 5. Integration with HAL I/O
-
-### 5.1 IoPort and IoRequest
-
-The HAL provides an asynchronous I/O driver (`IoPort`) that uses `IoRequest`
-(which implements `IEvent`) for per-operation completion signaling:
+**Admission gates on the persistent `error()`, never on the consumable
+`pollEvent()`.** Worker select-iterators consume-and-reset the lifecycle
+pulse while draining, but the recorded cause never clears — so a pulse check
+would admit work after cancellation was already acknowledged. `shouldCancel_`
+checks `m_lifecycle->error()` first and keeps `pollEvent()` only as an
+`operation_canceled` fallback for lifecycles that pulse without an error:
 
 ```cpp
-auto port = io::createPort();
-auto file = port.open(path);
-
-IoRequest req;
-std::array<std::byte, 64> buf{};
-
-port.read(req, file, buf, 0u);
-// req is now "in-flight" (isPending() == true)
-
-// Poll completions (non-blocking)
-port.pollCompletions();
-
-// Wait for completions (blocking)
-port.waitForCompletions();
-
-// After completion, req.pollEvent() == true
-auto signal = select(req);
+ParallelScheduler sched{"workers", 2u, queueBytes(), parent};
+cancel();  // parent cancelled with operation_canceled
+sched.schedule([](const IContext &) {}, std::nullopt,
+               ParallelScheduler::drop_if_full);  // == operation_canceled
+sched.join();                                     // == operation_canceled
 ```
 
-**Completion flow**:
-1. `IoPort::read/write` sets `m_state` to `1` (pending), resets the internal
-   `PulseEvent`, and submits to the HAL via `hal::io::submit()`.
-2. The HAL calls back through `hal::io::poll()` or `hal::io::wait()`.
-3. `IoPort::pollCompletions()` / `waitForCompletions()` iterates completion
-   entries and calls `IoRequest::complete_()`, which atomically transitions
-   `m_state` to `2` (done) and calls `m_completed.emitEvent()`.
-4. The `IoRequest` (as IEvent) is now fired and visible to `Signal::poll()`.
+Admission failure touches neither the group counter nor its error slot;
+success registers exactly once and the worker envelope settles the group via
+`done(err)` exactly once (`WaitGroup::add/done/error/wait`, all `const`).
+`parallel::forRange/forEach` compose caller-lane, group, then scheduler
+error with queue-full fallback to the caller lane.
 
-### 5.2 IoRequest as IEvent
+Regression links: `Core.Concurrency.Scheduler.Tests.cpp`
+`cancel_ack_still_rejects_admission` (post-ack admission stays rejected),
+`cancel_parent_drains_accepted_rejects_later` (accepted work still drains),
+`empty_clause_cancellation_normalized` (empty clause admits and joins clean).
 
-`IoRequest` implements `IEvent` via an internal `PulseEvent`:
+## 9. Application Graceful Exit — Latch, Not Cancellation
+
+`Application::requestExit(clause = {})` separates exit from cancellation.
+`m_exit_requested` is a dedicated latch: an empty clause raises only the
+latch (no cause recorded, no event fired), so `run()` terminates the loop and
+still returns success `{}`. A nonzero clause latches the cause on the
+lifecycle and emits, exactly as cancellation always has.
+`isExitRequested()` is latch OR latched error; the run loop terminates on
+that stable state — never on the consumable pulse alone — and `run()` reports
+the same stable error. `initialize()` re-arms the latch for repeated `run()`.
 
 ```cpp
-IoRequest req;
-auto signal = select(req);      // subscribe to completion
-
-// The req can also be used with select() alongside other events:
-auto signal = select(req, timer);
+app.requestExit();  // graceful: loop exits, run() returns {}
 ```
 
-**Lifecycle**:
-- Default-constructed: `m_state == 0`, `pollEvent() == false`.
-- After `port.read()`: `m_state == 1` (pending), `pollEvent() == false`.
-- After completion: `m_state == 2`, `pollEvent() == true`.
-- After `resetEvent()`: `m_state == 0`, ready for reuse.
+Callers (`game/main.cpp` auto-exit and `--profile-csv` paths,
+`ColonySmoke` pixel/load100 paths, GLFW main-window close) all pass empty
+and observe unchanged clean-exit behavior; `run()` consumers
+(`game/main.cpp`, smoke harnesses) see `{}` on clean exit and the cause on
+error exit. Regression links: `App.WindowInput.Tests.cpp`
+`app_empty_request_exit_signals_exit_without_error` (signal without error),
+`app_error_request_exit_latches_cause`,
+`app_empty_request_exit_run_returns_success` (frame-3 `ExitAfterFramesApp`
+harness), `app_error_request_exit_run_reports_cause`.
 
-**Cancellation**:
+## 10. Integration with HAL I/O
+
+`IoRequest` (final, move-disallowed, stable address while in-flight)
+implements `IEvent` over an internal pulse with states 0 idle / 1 pending /
+2 complete. `IoPort::open` returns `expected<IoFile, error_code>`;
+`read`/`write(req, file, span<byte>, offset)` assert idle, bind, mark pending,
+reset the pulse, and submit; `pollCompletions()`/`waitForCompletions()`
+drain up to 64 completions per call into `complete_()` (CAS 1→2, then emit).
+`resetEvent()` returns to idle for reuse; `cancel()` aborts via
+`hal::io::cancelIo` and reports whether the request was in flight; the
+destructor cancels pending work and verifies quiescence. `hal::io::wake(handle)`
+unblocks a thread parked in `hal::io::wait()` so channel messages can be
+drained alongside completions:
+
 ```cpp
-bool was_inflight = req.cancel();
-if (was_inflight) {
-    // HAL cancel submitted; req will not complete
-}
-```
-
-### 5.3 Wake Mechanism
-
-`hal::io::wake()` is a cross-platform mechanism to unblock a thread blocked in
-`hal::io::wait()`. This is how the I/O event loop integrates with RawChannel:
-
-```cpp
-// In the I/O thread:
 while (running) {
-    port.waitForCompletions();   // blocks until I/O completes OR wake() is called
-
-    // Process completed I/O
-    process_completions();
-
-    // Process channel messages (non-blocking)
+    port.waitForCompletions();  // or pollCompletions() for non-blocking
     while (auto msg = channel.consumerAcquire(RawChannel::peek_without_blocking)) {
         process_channel_message(msg);
         channel.consumerRelease(*msg);
     }
-
-    // Check context cancellation
-    if (ctx->pollEvent()) {
-        break;
-    }
-}
-
-// In a producer thread:
-channel.producerSubmit(record);
-hal::io::wake(port_handle);      // unblock the I/O thread
-```
-
-### 5.4 Event-Driven I/O with select()
-
-The `select()` helper enables multiplexing I/O completions with other event
-sources:
-
-```cpp
-IoRequest req;
-PulseEvent shutdown_event;
-
-port.read(req, file, buf, 0u);
-
-for (auto &event : select(req, shutdown_event)) {
-    std::visit(overloaded{
-        [&](IoRequest *r) {
-            process_data(r->bytesTransferred());
-            // Re-arm for next read
-            r->resetEvent();
-            port.read(*r, file, buf, 0u);
-        },
-        [&](PulseEvent *) {
-            cleanup_and_exit();
-            return;
-        },
-    }, event);
+    if (ctx->error()) break;  // stable latch, not the pulse
 }
 ```
 
-## 6. Test Patterns
+`port.read(req, file, buf, 0u)` takes `std::span<std::byte>`; after
+completion `req.bytesTransferred()`/`req.error()` assert completed state.
+Multiplex completions with other sources via `select(req, timer)` and the
+explicit `poll → handle → resetEvent → wait` sequence from §5.4 — never
+range-for over a source that must be rearmed manually.
 
-### 6.1 Unit Test Structure
+## 11. Test Patterns
 
-Tests use `PPR_UNIT_TEST(name)` macros and are organized in nested namespaces
-with `_.recurse({...})` for hierarchical test registration (for test file
-layout — private group `.cpp` files, `detail::` leaves, TU-local groups +
-accessors — see `unit-test-updater`):
+Tests use `PPR_UNIT_TEST(name)` in nested namespaces with `_.recurse({...})`
+registration (layout details: `unit-test-updater`). Worker bodies never
+assert (`PPR_TEST_ASSERT` throws) — they record into atomics and the parent
+thread asserts; gates are deterministic (`std::latch`, atomic wait/notify)
+with scope-guard release so a throwing assert never strands a worker.
+
+**Channel round-trip** (from `single_threaded_send_receive`):
 
 ```cpp
-namespace pP::tests::detail {
-    namespace MyFeature {
-        PPR_UNIT_TEST(test_name) {
-            // test body
-            PPR_TEST_ASSERT(condition);
-        };
-    }
-}
+RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
 
-namespace pP::tests {
-    const UnitTest my_feature = UnitTest::Named("my_feature") / [](UnitTest::IRun &_) -> void {
-        _.recurse({
-            detail::MyFeature::test_name,
-        });
-    };
+auto hdr = chan.producerReserve(sizeof(int));
+PPR_TEST_ASSERT(hdr.has_value());
+*static_cast<int *>(hdr->data()) = 42;
+chan.producerSubmit(*hdr);
 
-    const UnitTest &my_featureTests() noexcept { return my_feature; }
-}
+auto read = chan.consumerAcquire(RawChannel::peek_without_blocking);
+PPR_TEST_ASSERT(read.has_value());
+PPR_TEST_ASSERT(*static_cast<int *>(read->data()) == 42);
+chan.consumerRelease(*read);
 ```
 
-### 6.2 Testing RawChannel
+**Backpressure**: fill with `drop_if_full` until `error_full`; prove
+`wait_if_full` blocks with a drainer thread (never assert between spawn and
+join); close is covered by `close_idempotent`, `close_record_consumed`,
+`select_close_wakes_waiting_thread`. **Select**: `select_one`,
+`select_multiple`, `select_reset_rearms_pending_commit` (level-aware re-arm),
+`select_concurrent_wakeup_and_drain` (drain everything per wakeup),
+`select_notify_before_subscribe` (late-subscriber level check).
 
-**Single-threaded round-trip**:
-```cpp
-PPR_UNIT_TEST(single_threaded_send_receive) {
-    RawChannel chan{static_cast<std::size_t>(hal::page_granularity)};
+**Context**: `deadline_is_set` (far-future date, no waiting),
+`parent_cancel_overrides_deadline`, `value_is_retrievable`,
+`callback_called_on_destruction`, `clause_fires_done_with_error`,
+`empty_clause_is_noop`. **Scheduler**: §8 links. **App exit**: §9 links.
 
-    auto hdr = chan.producerReserve(sizeof(int));
-    PPR_TEST_ASSERT(hdr.has_value());
-    *static_cast<int *>(hdr->data()) = 42;
-    chan.producerSubmit(*hdr);
+## 12. Performance Considerations
 
-    auto read = chan.consumerAcquire(RawChannel::peek_without_blocking);
-    PPR_TEST_ASSERT(read.has_value());
-    PPR_TEST_ASSERT(*static_cast<int *>(read->data()) == 42);
-    chan.consumerRelease(*read);
-};
-```
+- `RawChannel` is cache-line aligned; `m_commit` and `m_read` sit on separate
+  lines (producer-written vs consumer-written). `Signal<EventsT...>` is
+  cache-line aligned. `RecordHeader` is 8-byte aligned (`alignas(u64)`).
+- Drain everything per wakeup: on each select wakeup, loop
+  `consumerAcquire(peek_without_blocking)` until empty before waiting again.
+  I/O completion drains process up to 64 per call — finish the batch before
+  re-waiting.
+- `Signal::poll()` is one atomic RMW per poll in the uncontended case;
+  `wait()` parks on a counting semaphore. For long-lived loops, build the
+  `Signal` once and reuse it; construction subscribes and destruction
+  unsubscribes each source.
+- `m_producer_mutex` serializes all producers: batch reserves per lock
+  acquisition, or shard across channels (one consumer each, atomic-counter
+  fan-out) when contended. `wait_if_full` under a slow consumer holds
+  producers — use `drop_if_full` for latency-sensitive paths.
+- Per-message cost is `sizeof(RecordHeader)` + 8-byte-aligned payload;
+  uniform message sizes minimize waste. The ring pre-allocates once — no
+  allocation on the send/receive hot path.
 
-**Ring buffer wrap-around** — fill the buffer, drain the front, then write
-more (the second batch wraps in the virtual-memory ring):
-```cpp
-// Write batch_size records, consume them all, write again — the second
-// batch's offset wraps around in the ring buffer.
-```
+## 13. Common Patterns and Idioms
 
-**Concurrent SPSC** — one producer thread, consumer on main thread:
-```cpp
-std::jthread producer([&chan] {
-    for (int i = 0; i < num_messages; ++i) {
-        auto hdr = chan.producerReserve(sizeof(int), RawChannel::wait_if_full);
-        PPR_TEST_ASSERT(hdr.has_value());
-        *static_cast<int *>(hdr->data()) = i;
-        chan.producerSubmit(*hdr);
-    }
-});
-
-for (int i = 0; i < num_messages; ++i) {
-    auto hdr = chan.consumerAcquire();
-    PPR_TEST_ASSERT(hdr.has_value());
-    PPR_TEST_ASSERT(*static_cast<int *>(hdr->data()) == i);
-    chan.consumerRelease(*hdr);
-}
-```
-
-**Concurrent MPSC** — multiple producer threads, one consumer:
-- Use `std::barrier` with a completion function that calls `chan.close()`.
-- Accumulate checksums (`seed_send` vs `seed_recv`) to verify data integrity.
-- Consumer drains until `error_closed`.
-
-**Concurrent MPMC (fan-out)** — multiple producers distributing across
-multiple single-consumer channels via atomic counter:
-```cpp
-std::array<RawChannel, num_consumers> channels;
-std::atomic<int> channels_fan_out{0};
-
-// Producer: channels[channels_fan_out.fetch_add(1) % num_consumers]
-// Each consumer: drains one channel until error_closed
-// After all producers join: flush + close each channel
-```
-
-**Backpressure testing**:
-- `drop_if_full`: fill until it fails, count how many fit.
-- `wait_if_full`: spawn a consumer thread that drains, then producer resumes.
-- `yield_if_full`: same pattern but producer yields instead of blocking.
-
-**Flush round-trip** — verify that `flush()` blocks until consumer catches up,
-then consumer sees `error_closed`:
-```cpp
-// Producer submits data, consumer reads it, then consumer blocks.
-// Producer calls flush() — returns when consumer has seen all data.
-// Producer calls close() — consumer wakes and sees error_closed.
-```
-
-### 6.3 Testing Events
-
-**PulseEvent**:
-```cpp
-PulseEvent event;
-    PPR_TEST_ASSERT(not event.pollEvent());
-event.emitEvent();
-    PPR_TEST_ASSERT(event.pollEvent());
-event.resetEvent();
-    PPR_TEST_ASSERT(not event.pollEvent());
-```
-
-**Subscribe-then-emit** — the `subscribeEvent` path that detects already-fired
-events (the `signal_bit_v` mechanism):
-```cpp
-PulseEvent event;
-event.emitEvent();
-// Subscribe after emit — subscriber is notified immediately
-auto signal = select(event);
-auto result = signal.poll();
-    PPR_TEST_ASSERT(result.has_value());
-```
-
-**Signal multi-event** — verify correct `variant` index:
-```cpp
-PulseEvent a, b;
-auto signal = select(a, b);
-a.emitEvent();
-auto result = signal.poll();
-    PPR_TEST_ASSERT(result->index() == 0u);   // a is index 0
-signal.reset(*result);
-```
-
-### 6.4 Testing Context
-
-**Cancellation propagation**:
-```cpp
-auto [parent, cancel_parent] = context::withCancel(context::background());
-auto [child, cancel_child] = context::withCancel(parent);
-
-cancel_parent();
-    PPR_TEST_ASSERT(child->pollEvent());                      // propagates down
-    PPR_TEST_ASSERT(not parent->pollEvent());                // child cancel does not affect parent
-```
-
-**WithoutCancel**:
-```cpp
-auto [parent, cancel_parent] = context::withCancel(context::background());
-auto child = context::withoutCancel(parent);
-cancel_parent();
-    PPR_TEST_ASSERT(not child->pollEvent());                 // severed
-    PPR_TEST_ASSERT(not child->error());
-```
-
-**Timeout** — tick an injected timer deterministically:
-```cpp
-TimerExplicitClock clock{};
-clock.reset(TimePoint{});
-TimerManager timer{clock};
-timer.tick();
-
-auto ctx = context::withTimeout(
-    context::background(), std::chrono::milliseconds(150), timer);
-clock.tick(TimePoint{} + std::chrono::milliseconds(150));
-timer.tick();
-PPR_TEST_ASSERT(ctx->pollEvent());
-```
-
-### 6.5 Testing I/O Integration
-
-**Async read completion**:
-```cpp
-auto port = io::createPort();
-auto file = port.open(path);
-
-IoRequest req;
-std::array<std::byte, 64> buf{};
-port.read(req, file, buf, 0u);
-port.pollCompletions();
-
-auto signal = select(req);
-auto result = signal.poll();
-    PPR_TEST_ASSERT(result.has_value());
-    PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
-```
-
-**select() with timer**:
-```cpp
-PulseEvent timer;
-auto signal = select(req, timer);
-auto result = signal.poll();
-    PPR_TEST_ASSERT(result->index() == 0u);   // I/O completed, not timer
-```
-
-**Cancel in-flight**:
-```cpp
-port.read(req, file, buf, 0u);
-bool was = req.cancel();
-port.pollCompletions();
-if (was) {
-        PPR_TEST_ASSERT(not req.pollEvent());    // cancelled, no completion
-}
-```
-
-## 7. Performance Considerations
-
-### 7.1 Cache Line Alignment
-
-- `RawChannel` itself is `alignas(hal::cacheline_size_v)` (typically 64 bytes).
-- The hot atomic variables are padded to separate cache lines:
-  - `m_commit` — written by producer, read by consumer.
-  - `m_read` — written by consumer, read by producer.
-  - The producer mutex `m_producer_mutex` and `m_write` are in the first cache
-    line (producer-hot data).
-- `Signal<EventsT...>` is `alignas(hal::cacheline_size_v)`.
-- `RecordHeader` is `alignas(u64)` — 8-byte aligned for atomic-friendly access.
-- The `flush_signal` atomic flag in `RawChannel::flush()` is also
-  `alignas(hal::cacheline_size_v)` to avoid false sharing with adjacent data.
-
-**Rule of thumb**: Any atomic variable accessed from different threads should
-be on its own cache line to prevent false sharing. The codebase uses
-`alignas(hal::cacheline_size_v)` between `m_commit` and `m_read`, and between
-the producer-hot block and `m_commit`.
-
-### 7.2 Batch Operations for Throughput
-
-- **Producer batch**: Reserve multiple records inside a single lock scope
-  (the producer mutex is held for the duration of `producerSubmit`, but
-  `advanceCommit_()` processes all ready records at once). For maximum
-  throughput, pack multiple messages into a single larger record.
-- **Consumer batch**: On each wakeup from `m_commit.wait()`, drain ALL
-  available records using a `while (consumerAcquire(peek_without_blocking))`
-  loop before returning to wait. This is the pattern used in all select-based
-  tests (`select_concurrent_wakeup_and_drain`, `select_multiple_channels_concurrent`).
-- **I/O completion batch**: `IoPort::pollCompletions()` and
-  `waitForCompletions()` process up to `kMaxCompletionBatch` (64) completions
-  per call. In a hot loop, process all pending completions before re-waiting.
+### 13.1 Select-Based Worker (canonical drain loop)
 
 ```cpp
-// Efficient consumer loop — drain before blocking again
-for (auto &event : select(channel)) {
-    // Drain ALL messages in the channel on each wakeup
-    while (true) {
-        auto recv = event.consumerAcquire(RawChannel::peek_without_blocking);
-        if (not recv.has_value()) break;
-        process(recv);
-        event.consumerRelease(*recv);
-    }
-}
-```
-
-### 7.3 Memory Ordering
-
-The channel uses these memory orderings:
-
-| Operation | Ordering | Rationale |
-|---|---|---|
-| `m_status` store (close) | `memory_order_release` | Ensures all prior producer writes are visible before close is visible |
-| `m_status` load (isOpened) | `memory_order_acquire` | Paired with release store above |
-| `m_status` CAS (close) | `memory_order_acq_rel` | Atomic state transition |
-| `m_write` (reserve) | Under mutex | Serialized by lock |
-| `m_commit` store (advanceCommit_) | `memory_order_release` | Ensures record writes are visible to consumer |
-| `m_commit` load (consumerAcquire) | `memory_order_acquire` | Paired with release store above |
-| `m_read` load (producerReserve) | `memory_order_acquire` | Sees consumer's release of space |
-| `m_read` fetch_add (consumerRelease) | `memory_order_release` | Makes freed space visible to producer |
-| `m_read.wait()` | `memory_order_acquire` | Blocks until producer notifies |
-| `m_commit.wait()` | `memory_order_acquire` | Blocks until consumer sees new commit |
-| `m_read.notify_all()` | — | Wakes producer waiting on `m_read.wait()` |
-| `m_commit.notify_one()` | — | Wakes consumer waiting on `m_commit.wait()` |
-| `PulseEvent::m_signal` | `memory_order_acq_rel` | Atomic exchange on subscribe/emit |
-| `CancelContext::m_error` | `memory_order_acq_rel` | CAS for cancellation |
-
-### 7.4 Record Size and Fragmentation
-
-- Every record includes a `RecordHeader` (16 bytes: `EFlags` + `u32` size).
-- `alignSize(size_bytes)` rounds up payload to `alignof(RecordHeader)` (8 bytes).
-- The total space consumed per message is `sizeof(RecordHeader) + aligned_payload`.
-- To minimize fragmentation, prefer uniform message sizes. If you need
-  variable sizes, batch small messages or pad to a common size.
-- The ring buffer is pre-allocated once; there is no dynamic allocation on the
-  send/receive hot path (except the producer mutex if contended).
-
-### 7.5 Signal / select() Overhead
-
-- `Signal::poll()` uses a `compare_exchange_weak` loop on the pending bitmask
-  (single atomic RMW per poll). This is fast in the uncontended case.
-- `Signal::wait()` blocks on a `std::counting_semaphore`; each producer
-  `notify()`-to-consumer `wait()` handoff is a single semaphore release/acquire.
-- `select()` creates a `Signal` that subscribes to each event at construction
-  and unsubscribes at destruction. For long-lived event loops, create the
-  `Signal` once and reuse it.
-- `Signal::reset(Event)` and `Signal::reset()` clear the pending state after
-  consumption. Always reset after handling to avoid spinning on the same event.
-
-### 7.6 Producer Mutex Contention
-
-The `m_producer_mutex` serializes all producer operations (reserve, submit,
-discard, advanceCommit_). In high-throughput multi-producer scenarios:
-
-- Consider batching: each thread reserves and submits multiple records per
-  lock acquisition.
-- Consider sharding: use multiple channels and route producers by thread ID
-  or data key to reduce contention.
-- If the consumer cannot keep up, backpressure (`wait_if_full`) causes
-  producers to block, which holds the mutex longer — use `drop_if_full` for
-  latency-sensitive producers.
-
-## 8. Common Patterns and Idioms
-
-### 8.1 Worker Thread with Channel and Context
-
-```cpp
-void worker_thread(SharedRawChannelPtr channel, SharedContext ctx) {
-    while (not ctx->pollEvent()) {
-        auto record = channel->consumerAcquire();
-        if (not record.has_value()) {
-            if (record.error() == RawChannel::error_closed) break;
-            continue;
-        }
-        process(record);
-        channel->consumerRelease(*record);
-    }
-}
-```
-
-### 8.2 Event Loop with select()
-
-```cpp
-void event_loop(IoPort &port, RawChannel &channel, SharedContext ctx) {
-    PulseEvent wakeup;
-    for (auto &event : select(channel, *ctx, wakeup)) {
-        std::visit(overloaded{
-            [&](RawChannel *c) {
-                while (auto recv = c->consumerAcquire(RawChannel::peek_without_blocking)) {
-                    dispatch(*static_cast<const Message*>(recv->data()));
-                    c->consumerRelease(*recv);
+void worker(SharedRawChannelPtr channel, SharedContext ctx) {
+    bool should_drain = false;
+    for (auto event : select(*channel, *ctx)) {
+        std::visit(pP::overloaded{
+            [&](RawChannel *) {
+                while (auto recv = channel->consumerAcquire(
+                           RawChannel::peek_without_blocking)) {
+                    dispatch(recv->data());
+                    channel->consumerRelease(*recv);
                 }
             },
-            [&](IContext *) {
-                cleanup();
-                return;
-            },
-            [&](PulseEvent *) {
-                // Timer tick or external wakeup
-            },
+            [&](IContext *) { should_drain = true; },
         }, event);
+        if (should_drain && channel->isClosedOrClosing()) break;
     }
 }
-
-// In producer thread:
-channel.producerSubmit(record);
-hal::io::wake(port_handle);  // wake the I/O thread
 ```
 
-### 8.3 Context-Bounded Operation with Timeout
+The `for` increment owns the event reset — never reset the observed source
+inside the body. Check the stable `error()` latch for shutdown decisions,
+not the pulse that just fired.
+
+### 13.2 Fan-Out with Multiple Channels
+
+One `RawChannel` per consumer, atomic-counter distribution; each consumer
+drains its channel until `error_closed`, then producers `flush` + `close`.
+
+### 13.3 Context-Bounded Operation with Timeout
 
 ```cpp
 auto [ctx, cancel] = context::withCancel(context::background());
-TimerExplicitClock clock{};
-TimerManager timer{clock};
+TimerManager timer{ITimerClock::steady()};
 auto deadline = context::withTimeout(ctx, std::chrono::seconds(5), timer);
-
 auto result = do_work_with_timeout(deadline);
-if (deadline->pollEvent()) {
-    // operation timed out or was cancelled
-    auto err = deadline->error();  // timed_out or operation_canceled
-}
-cancel();  // clean up
+if (deadline->error()) { /* timed_out or operation_canceled */ }
+cancel();  // quiesce: release the tree explicitly
 ```
 
-### 8.4 Fan-Out with Multiple Channels
+## 14. Constraints and Pitfalls
 
-When you need MPMC semantics, create one RawChannel per consumer and
-distribute work with an atomic counter:
-
-```cpp
-std::array<RawChannel, num_consumers> channels;
-std::atomic<unsigned> distributor{0};
-
-// Producer routes to a channel
-auto &chan = channels[distributor.fetch_add(1) % num_consumers];
-auto record = chan.producerReserve(sizeof(Task));
-// ...
-
-// Each consumer drains its dedicated channel
-void consumer(size_t index) {
-    auto &chan = channels[index];
-    while (auto record = chan.consumerAcquire()) {
-        process(record);
-        chan.consumerRelease(*record);
-    }
-}
-```
-
-## 9. Constraints and Pitfalls
-
-- **Call `producerSubmit` exactly once per reserved record.** Leaking a
-  reserved record causes `advanceCommit_()` to stall on the `flag_busy` header,
-  eventually blocking the channel.
-- **Always call `consumerRelease` after `consumerAcquire`.** Failure to release
-  leaks space; the producer will eventually be unable to reserve.
-- **Do not use `select()` on a `RawChannel` that has multiple producers and
-  a single consumer where both sides are on the same thread.** The
-  `PulseEvent::emitEvent()` call from `advanceCommit_()` triggers `notify()`
-  synchronously, which could re-enter the consumer.
-- **IoRequest is move-disallowed and non-copyable.** It must stay at a stable
-  address while in-flight. Use `std::unique_ptr<IoRequest>` if you need to
-  move it.
-- **Context values are immutable after construction.** Attach all needed values
-  when creating a context scope. Use `withAfterFunc` for dynamic side effects.
-- **`PulseEvent` supports exactly one subscriber.** If you need multiple
-  subscribers, use `BroadcastEvent` (which trades a mutex for multi-subscriber
-  support).
-- **`Signal::iterator` is input-only.** It does not support decrement or
-  random access. It blocks on `wait()` when no events are pending.
-- **Do not reset an event source while a `Signal` is subscribed.** Always
-  unsubscribe or destroy the `Signal` first.
-- **`std::error_code` values in context cancellation must use
-  `std::generic_category()`.** The `CancelContext` asserts this in debug builds.
+- Call `producerSubmit` (or `producerDiscard`) exactly once per reserved
+  record. Leaking a reservation stalls `advanceCommit_()` on the busy header
+  and eventually blocks the channel.
+- Always `consumerRelease` after a successful `consumerAcquire`; otherwise
+  producers eventually cannot reserve.
+- `IoRequest` is move-disallowed and non-copyable — keep it at a stable
+  address while in-flight (`unique_ptr` if it must move).
+- Context values are immutable after construction; attach everything the scope
+  needs up front.
+- `PulseEvent` has exactly one subscriber; `BroadcastEvent` trades a mutex
+  for many. Late broadcast subscribers get no replay (§5.3).
+- `Signal::iterator` is input-only, non-reentrant, single-consumer; it blocks
+  in `wait()` when nothing is pending.
+- Custom cancel causes must be `error_code`-compatible; an empty clause is a
+  no-op by contract (§6.2), never a silent cancel.
+- Implementation: `Core.Concurrency.Channel/Event/Context/Scheduler/Thread`
+  partitions; tests `Core.Concurrency.{Channel,Event,Context,Scheduler}.Tests.cpp`
+  and `App.WindowInput.Tests.cpp` (exit path).

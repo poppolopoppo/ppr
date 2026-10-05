@@ -84,7 +84,7 @@ application.
    if `m_domain.m_needs_rendering`: `IShaderService::get()->initialize()` + insert, `IRhiService::get()->initialize(
    DeviceType::Default, shader)` + insert, `make_unique<Renderer>()->initialize(rhi)`. `update()` =
    `not_connected` guard + `m_platform->update(dt)` (`App.Application.cpp:243-250`); `render()` = no-op default.
-   `shutdown()` (latch set first, idempotent-success): `m_renderer->shutdown()` + reset → shutdown RHI then erase
+   `shutdown()` (idempotent-success): `m_renderer->shutdown()` + reset → shutdown RHI then erase
    on success → shutdown shader then erase on success → `m_platform->shutdown(*this)` last;
    `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
 3. `ApplicationEditor::initialize()` → `Application::initialize()` → `Player(PlayerIdentity{})` +

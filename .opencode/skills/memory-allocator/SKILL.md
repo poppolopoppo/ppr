@@ -14,189 +14,114 @@ description: >
 
 ## Contract
 
-This skill is a reference guide for PPR memory allocation. It **does not** edit
-allocator code, apply poison annotations, or modify engine state. Its output is
-a structured guide for allocator selection, composition, and usage patterns.
-The orchestrator consults it to determine which allocator tier is appropriate
-for a given scenario, then delegates implementation to `@fixer` and design
-review to `@oracle`. It never directly edits source files.
+This skill is a reference guide for PPR memory allocation. It **does not**
+edit allocator code, apply poison annotations, or modify engine state. Its
+output is a structured guide for allocator selection, composition, and usage
+patterns.
 
 ## Mandatory pre-implementation / review checklist
 
-- Name the allocation owner, every non-owning observer, and the exact teardown point; an arena reset/restore never destroys objects.
-- State boundary failure semantics: `{nullptr, 0}` for fallible `noexcept` allocation, the documented `Slab` exception, and no-throw deallocation.
-- Prove shutdown order: stop users, destroy live objects, release observers, then reset/free backing storage; no callback may retain storage past this point.
-- For `safe_ptr`, retain a real owner (`unique_ptr`, value member, service, or allocation handle); it is only an observer and becomes raw-pointer-equivalent in release, so debug assertions are not a lifetime mechanism.
-- Add behavior-contract tests for success, OOM/overflow where exposed, LIFO/watermark boundaries, and teardown. Register any new module/test source in its CMake target. Defer global style and review policy to `AGENTS.md`, `module-architect`, and `code-reviewer`.
+- Name the allocation owner, every non-owning observer, and the exact teardown
+  point using the vocabulary in §1; an arena reset/restore never destroys
+  objects.
+- State boundary failure semantics from the table in §3: `{nullptr, 0}` for
+  fallible `noexcept` allocation, the documented `Slab` exception, and
+  no-throw deallocation.
+- Prove shutdown order: stop users, destroy live objects, release observers,
+  then reset/free backing storage; no callback may retain storage past this
+  point.
+- For `safe_ptr`, retain a real owner (`unique_ptr`, value member, service, or
+  allocation handle); it is only an observer and becomes raw-pointer-equivalent
+  in release, so debug assertions are not a lifetime mechanism.
+- Add behavior-contract tests for success, OOM/overflow where exposed,
+  LIFO/watermark boundaries, and teardown. For test file layout — private
+  group `.cpp` files, `detail::` leaves, TU-local groups + accessors — see
+  `unit-test-updater`.
 
 ## Execution handoff
 
-This skill defines allocator-selection and lifecycle procedure only. The active
-OMO preset is the sole authority for actor selection, permissions, tool access,
-parallel work, and session reuse. Apply the procedure only through the active
-configuration; this document grants or routes none of them.
+This skill defines allocator-selection and lifecycle procedure only. The
+active OMO preset is the sole authority for actor selection, permissions,
+tool access, parallel work, and session reuse. Apply the procedure only
+through the active configuration; this document grants or routes none of them.
 
 ---
 
-## Quick Reference — Choosing an Allocator
+## 1. Ownership and lifetime vocabulary
+
+Use these terms the same way in every design note, review, and test. They
+match the `concurrency-patterns` skill exactly.
+
+- **Own**: `SharedContext` / `shared_ptr` handles, `Allocation` RAII handles
+  (own raw storage until `deallocate`/`destroy`/`discard`), `unique_ptr`
+  owners, arenas and slabs (own their backing slabs once pushed), and pool
+  objects (own provisioned pools until destruction). The owner outlives every
+  observer, and only the owner releases.
+- **Observe only — never own**: `safe_ptr` (debug-checked observer, raw
+  pointer in release), event subscriptions, spans and views over allocations,
+  allocator references held inside `Allocator<>` wrappers, and raw-pointer
+  callback captures. None of these extend a lifetime.
+- Inline allocator storage is **owned state**, never "stateless": an object
+  that embeds bytes (`InSitu` status + buffer, `LocalCache` MRU ring,
+  `Pooling` bitmask arrays, `Arena` slab chain) owns that state and must be
+  destroyed before its storage is reused. Only truly empty allocators
+  (`GPA`, `OS`, page caches, `ScratchPad`, `PMR`) are stateless.
+- **Quiesce** means drain in-flight work to idle before releasing storage.
+  A **latch** is sticky state that never clears. A **cause** is the
+  `error_code` carried by a latch. **Provisioned capacity** is pre-sized at
+  construction (pools, slabs, rings) and never grows elastically — size it
+  for the worst case and prove it in tests.
+
+---
+
+## 2. Thread-local storage and cross-thread handles
+
+Page-cache TLS arenas, `ScratchPad`, and pooling index hints are
+**per-thread**: a handle or cached block obtained on one thread must never be
+used or released on another.
+
+- `ScratchPad` is a per-thread `Arena<SmallPage>`; an
+  `Allocation<T, ScratchPad>` destroyed on another thread deallocates through
+  *that* thread's TLS arena, so keep allocations on their originating thread.
+- Channels must not carry pointers into producer scratch whose scope restores
+  before the consumer reads them — copy the bytes into the record or extend
+  the scope past consumption.
+- Async I/O buffers must outlive scratch scopes until OS quiescence: the HAL
+  owns the in-flight bytes until completion or cancel acknowledgement, so the
+  backing scope may not restore while a request is pending.
+- `HugePage` / `SmallPage` route through a TLS `LocalCache`; `Pooling` hints
+  (`TPoolingHint::value`) are `thread_local`. These entry points are safe to
+  call from any thread precisely because each thread uses its own cache —
+  never share the cached result across threads.
+
+---
+
+## 3. Quick Reference — Choosing an Allocator
+
+All allocators live in `namespace pP::mem`; concepts in `mem::details`.
 
 | Scenario | Recommended Allocator | Key API |
 |----------|----------------------|---------|
 | Single object, small array, temp buffer | `GPA` | `GPA::allocateRaw(bytes, alignment)` |
 | Multi-MB buffer, file I/O scratch | `OS` | `OS::allocateRaw(bytes, alignment)` |
 | Backend for arenas/pools | `HugePage` (2 MiB blocks) | `HugePage::allocateRaw(bytes, alignment)` |
-| Transient scratch in hot code | `SmallPage` (32/64 KiB blocks) | `SmallPage::allocateRaw(bytes, alignment)` |
+| Transient scratch in hot code | `SmallPage` (32 KiB on 64-bit, 64 KiB on 32-bit) | `SmallPage::allocateRaw(bytes, alignment)` |
 | Persistent batch LIFO (frame data) | `Arena<>` (defaults to `HugePage`) | `arena.allocateRaw(bytes, alignment)` |
 | Short-lived TLS temp work | `ScratchPad` | `ScratchPad::allocateRaw(bytes, alignment)` |
 | Fixed buffer arena (stack/mmap) | `Slab` / `InSituSlab<Cap>` | `slab.allocateRaw(bytes, alignment)` |
-| Composable: try A then B | `Fallback<A, B>` | `allocator.allocateRaw(bytes, alignment)` |
-| Composable: small → A, large → B | `Threshold<N, A, B>` | `allocator.allocateRaw(bytes, alignment)` |
-| Pool + TLS cache | `Pooling` / `LocalCache` | `allocator.allocateRaw(bytes, alignment)` |
-| std:: container adapter | `STL<A>` | `STL<A>{allocator}` wraps any `TAllocator` |
+| Composable: try A then B | `Fallback<A, B>` | see §6 |
+| Composable: small → A, large → B | `Threshold<Under, N, Above>` | see §6 |
+| Pool + TLS cache | `Pooling` / `LocalCache` | see §6 |
+| std:: container adapter | `STL<T, A>` | `STL<T, A>{allocator}` wraps any `TAllocator` |
 
-Return to the full guide below for detailed semantics, composition patterns, and poison/ASAN usage.
-
----
-
-## 1. Allocator Hierarchy Overview
-
-All allocators live in `namespace pP::mem` and are modeled as standalone classes
-satisfying C++20 concepts. The hierarchy has five tiers:
-
-| Tier | Allocator | Source Module | Key Characteristics |
-|------|-----------|---------------|---------------------|
-| **General** | `GPA` | `Core.Memory.cppm` | Stateless, thin wrapper over `operator new`/`delete`. |
-| **OS** | `OS` | `Core.Memory.cppm` | Stateless, backed by `hal::pageAlloc`/`hal::pageFree`. |
-| **Polymorphic** | `PMR` | `Core.Memory.cppm` | Type-erased vtable dispatch over any `TAllocator`. |
-| **Page Pool** | `HugePage`, `SmallPage` | `Core.Memory.cppm` | 2 MiB / 32-64 KiB fixed-block pools backed by `PagePool` + `BitmapTree`. |
-| **Arena** | `Slab`, `InSituSlab`, `Arena<>`, `ScopedArena`, `ScratchPad` | `Core.Memory.Arena.cppm` | LIFO bump allocators; watermark/restore pattern. |
-| **Composite** | `Fallback`, `Threshold`, `InSitu`, `InSituFallback`, `InSituThreshold`, `LocalCache`, `Pooling`, `HintedPooling`, `Static`, `Allocator<>` | `Core.Memory.Allocator.cppm` | Building blocks for combining allocators. |
-| **Adapter** | `AllocatorTraits`, `Allocation`, `STL<>`, `PMR` | `Core.Memory.Allocator.cppm` | Typed wrappers, RAII handles, std:: container adapters. |
+Return to the full guide below for detailed semantics, composition patterns,
+and poison/ASAN usage.
 
 ---
 
-## 2. Allocator Selection Guide
+## 4. Allocator Concept Requirements
 
-Choose the right base allocator according to these scenarios:
-
-### GPA — small, general-purpose allocations
-
-- **When**: Single objects, small arrays, temporary buffers, anything that would
-  use `malloc`/`new` in regular C++.
-- **Characteristics**: Stateless; delegates to global `operator new`/`delete`.
-  Supports over-aligned allocations (> `max_align_v`) via the aligned overload.
-- **Cost**: General-purpose heap — moderate speed, fragmentation possible.
-- **Code**: `mem::GPA::allocateRaw(bytes, alignment)`.
-
-### OS — large virtual memory allocations
-
-- **When**: Multi-megabyte buffers, scratch space for file I/O, large transient
-  data where page-level granularity (typically 4 KiB) is acceptable.
-- **Characteristics**: Stateless; calls `hal::pageAlloc`/`hal::pageFree`.
-  Returns whole pages from the OS.
-- **Cost**: Expensive — syscall on every allocation. Only for large/rare use.
-- **Code**: `mem::OS::allocateRaw(bytes, alignment)`.
-
-### HugePage — pooled 2 MiB pages for backend use
-
-- **When**: Backend for arenas, pools, and large transient slabs. 2 MiB blocks
-  reserved from OS in a 16 GiB virtual reservation.
-- **Characteristics**: Each thread has a TLS `LocalCache` (MRU-2) backed by a
-  global `PagePool` + `BitmapTree` for O(1) allocation tracking. Stateless.
-- **Cost**: Very fast after warm-up; TLS cache avoids atomic ops on hot path.
-- **Code**: `mem::HugePage::allocateRaw(bytes, alignment)`.
-
-### SmallPage — pooled small pages for transient work
-
-- **When**: Temporary scratch buffers and transient allocations in hot code.
-  32 KiB (64-bit) or 64 KiB (32-bit) blocks.
-- **Characteristics**: TLS `LocalCache` (MRU-2) backed by `HintedPooling<SmallPage, HugePage, ...>`.
-  Uses a thread-local `LocalHint::value` for pool index hints. Stateless.
-- **Cost**: Very fast hot path; pool-level lock only on rare expansion/release.
-- **Code**: `mem::SmallPage::allocateRaw(bytes, alignment)`.
-
-### Arena<> — persistent batch allocations (LIFO)
-
-- **When**: Long-lived data with infrequent resets; frame allocators; systems
-  that allocate many objects then free them all at once (e.g., frame rendering,
-  serialization, scene loading).
-- **Template parameter**: `Arena<AllocatorT = HugePage>` — defaults to `HugePage`.
-- **Characteristics**: Growable linked list of fixed-size slabs. LIFO only.
-  `watermark()`/`restore()` for O(1) rollback — no destructors called.
-  Supports `resizeRaw`/`deallocateRaw` only for the **most recent** allocation.
-- **Cost**: Near-zero per allocation (bump pointer). Slab overhead: one pointer
-  + two `u32` per slab.
-- **Code**: `mem::Arena arena{initial_capacity};`
-
-### ScratchPad — thread-local transient arena
-
-- **When**: Short-lived temporary work (string formatting, serialization,
-  temporary transformations) within a single function or scope.
-- **Characteristics**: TLS `Arena<SmallPage>` (auto-created on first access).
-  Use `ScratchPad::open()` to get a `ScopedArena` that auto-restores.
-  All `ScratchPad` methods are static and forward to the TLS arena.
-- **Cost**: Bump-pointer speed; no contention.
-- **Code**: `mem::ScratchPad::allocateRaw(bytes, alignment)`.
-
-### Slab / InSituSlab — fixed-buffer LIFO
-
-- **When**: You already have a fixed buffer (stack array, memory-mapped region,
-  static storage) and want an arena-style allocator on top of it.
-- **Characteristics**: `Slab` wraps an existing buffer; `InSituSlab<CapacityV>`
-  embeds the buffer directly as `alignas(std::max_align_t) std::byte[CapacityV]`.
-  Neither owns the memory. Throws `std::bad_alloc` on OOM (Slab) or returns
-  null (InSitu — caller decides).
-- **Cost**: Trivial bump pointer.
-- **Code**: `mem::InSituSlab<1024u> slab;`
-
-### InSitu — single-fixed-buffer one-shot
-
-- **When**: You need at most one allocation from a tiny stack-fixed buffer,
-  typically as the first choice in a Fallback/Threshold composite.
-- **Characteristics**: 7A/7F status byte guards against double-use. Only one
-  allocation possible before deallocate. Poisoned on construction/destruction.
-- **Cost**: Essentially free.
-- **Code**: `mem::InSitu<64u> insitu;`
-
-### Pooling — lock-free fixed-size block pool
-
-- **When**: Many threads repeatedly allocate and free identical fixed-size
-  blocks (e.g., network packets, message objects, small nodes).
-- **Template params**: `Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV>`.
-  `MaxNumBlocksV` must be a power of two (enforced via bitmask requirement).
-- **Characteristics**: Divides the heap into pools of `Bitmask<size_t>::bit_count`
-  blocks each. Lock-free operations via `compare_exchange_strong` on atomic
-  bitmasks. On overflow, a mutex-protected slow path allocates new pools.
-  Fully unused pools are released back to `BlockAllocatorT`.
-- **Cost**: Near-zero on hot path (single CAS). Slow path rare.
-- **Code**: `mem::Pooling<64u, mem::GPA, 256u> pool;`
-
-### LocalCache — MRU block cache
-
-- **When**: A single thread repeatedly allocates and frees the same fixed-size
-  block and wants to avoid hitting the backing allocator.
-- **Template params**: `LocalCache<BlockSizeV, AllocatorT, MaxNumBlocks = 2, AlignmentV>`.
-- **Characteristics**: Ring buffer of recently freed blocks. On `allocateRaw`,
-  pops MRU block; on `deallocateRaw`, pushes to MRU; evicts oldest if full.
-  Calls `shrinkToFit()` on destruction.
-- **Cost**: Ring buffer push/pop — essentially free.
-- **Code**: `mem::LocalCache<64u, mem::GPA, 2u> cache;`
-
-### Composite shorthand aliases
-
-| Alias | Expansion | Use Case |
-|-------|-----------|----------|
-| `InSituFallback<Size, FallbackT>` | `Inplace<Fallback<InSitu<Size>, FallbackT>>` | First try a fixed stack buffer, then heap. |
-| `InSituThreshold<Size, FallbackT>` | `Inplace<Threshold<InSitu<Size>, Size, FallbackT>>` | Small allocs use stack buffer; large go to heap. |
-| `Static<&GetAllocatorF>` | `Accessor<AllocatorT, GetAllocatorF>` | Adapter wrapping a singleton allocator accessor function. |
-
----
-
-## 3. Allocator Concept Requirements
-
-### `TAllocator` (5 lines)
-
-The fundamental concept. Every allocator must provide:
+### `TAllocator`
 
 ```cpp
 // Returns {ptr, count} — aligned block of at least `bytes`.
@@ -204,76 +129,58 @@ The fundamental concept. Every allocator must provide:
 [[nodiscard]] std::allocation_result<void *>
 allocateRaw(std::size_t bytes, std::align_val_t alignment) noexcept;
 
-// Returns the block to the allocator. `ptr` must come from
-// a previous `allocateRaw` call; `bytes` and `alignment`
-// must match the values passed to that call.
+// Returns the block. `ptr` must come from a previous `allocateRaw`;
+// `bytes` and `alignment` must match that call.
 void deallocateRaw(void *ptr, std::size_t bytes, std::align_val_t alignment) noexcept;
 ```
 
-### `TOwningAllocator` (extends TAllocator)
-
-Adds ownership query, enabling `Fallback` to route deallocation correctly:
+### `TOwningAllocator` (extends `TAllocator`)
 
 ```cpp
-// Returns true if `ptr` + `size` falls within memory owned by this allocator.
+// True when `ptr` + `size` falls within memory owned by this allocator.
+// Used for deallocation routing (Fallback) — not a safety net for
+// foreign pointers.
 [[nodiscard]] bool owns(const void *ptr, std::size_t size) const noexcept;
 ```
 
-### `TResizableAllocator` (extends TAllocator)
-
-Adds in-place resizing for arena-style allocators:
+### `TResizableAllocator` (extends `TAllocator`)
 
 ```cpp
-// Attempts to grow or shrink the block at `ptr` from `old_size` to `new_size`.
-// Returns true if successful (ptr remains valid). On false, caller must
-// allocate+copy+deallocate.
+// Attempts to grow or shrink `ptr` from `old_size`; `new_size` is in/out and
+// may be adjusted. True keeps `ptr` valid; false means allocate+copy+free.
 [[nodiscard]] bool resizeRaw(void *ptr, std::size_t old_size, std::size_t &new_size) noexcept;
 ```
 
-Note: For `Slab`/`Arena`, resize only works when `ptr` is the **most recent**
-allocation (LIFO top). Otherwise returns false.
+For `Slab`/`Arena`, resize only succeeds on the **most recent** allocation
+(LIFO top). Some composites take the size by value; always pass a named
+variable so in/out adjustment can apply.
 
-### `TBlockAllocator` (extends TAllocator)
-
-Statically advertises a fixed block size for pool backends:
+### `TBlockAllocator` (extends `TAllocator`)
 
 ```cpp
 static constexpr std::size_t block_size_v = ...;
 ```
 
-Satisfied by `HugePage` (2 MiB), `SmallPage` (32/64 KiB), and `LocalCache`/`Pooling`
-(their own `BlockSizeV`).
+Satisfied by `HugePage` (2 MiB), `SmallPage` (32/64 KiB), and
+`LocalCache`/`Pooling` (their own `BlockSizeV`).
 
-### `TArenaAllocator` (extends TOwningAllocator + TResizableAllocator)
-
-Arena-style watermark-based allocator:
+### `TArenaAllocator` (extends `TOwningAllocator` + `TResizableAllocator`)
 
 ```cpp
-// Returns the current allocation pointer — a checkpoint for restore.
-[[nodiscard]] const void *watermark() const noexcept;
-
-// Rewinds to a previous watermark. No destructors called. O(1) for
-// the current slab; O(slabs) if the mark is in an older slab.
-void restore(const void *mark) noexcept;
-
-// Resets to empty state (rewinds all slabs to their initial position,
-// keeping the first slab's allocation).
-void reset() noexcept;
+[[nodiscard]] const void *watermark() const noexcept;  // checkpoint
+void restore(const void *mark) noexcept;  // rewind; no destructors; O(1) in-slab
+void reset() noexcept;                    // rewind everything, keep storage
 ```
 
-### `TSlabAllocator` (extends TArenaAllocator)
-
-Adds direct data access for slab-style allocators, enabling zero-copy iteration
-over allocated blocks:
+### `TSlabAllocator` (extends `TArenaAllocator`)
 
 ```cpp
-// Returns {ptr, count} — the raw allocation backing the current slab.
+// The raw backing of the current slab (zero-copy iteration).
 [[nodiscard]] std::allocation_result<void *> data() noexcept;
 ```
 
-Satisfied by `Slab`, `InSituSlab`, and `Arena<T>`.
-
-### Concept usage examples from tests
+Satisfied by `Slab`, `InSituSlab`, and `Arena<T>`. `mem::overlap()`
+helpers test pointer/range containment for ownership checks.
 
 ```cpp
 static_assert(mem::details::TAllocator<mem::GPA>);
@@ -285,451 +192,444 @@ static_assert(mem::details::TArenaAllocator<mem::Arena<mem::GPA>>);
 
 ---
 
-## 4. Arena Patterns
+## 5. Per-API Failure Table
+
+Terminate-by-design until callers are null-safe: provision for the worst
+case and assert it in tests rather than relying on `{nullptr, 0}` where the
+API cannot produce it.
+
+| Allocator | OOM / overflow behavior |
+|---|---|
+| Fallible `noexcept allocateRaw` (`GPA`, `OS`, page caches, `InSitu`, `LocalCache` cold path) | Returns `{nullptr, 0}` — the caller decides (fallback, error, retry). |
+| `Slab::allocateRaw` (`noexcept(false)`) | Throws `std::bad_alloc` when the fixed buffer is exhausted. |
+| `Pooling::allocateRaw` (marked `noexcept`) | Exhaustion calls `throwBadAlloc()` through `noexcept` — terminates. Never rely on `{nullptr, 0}` here: size `MaxNumBlocksV` for worst-case live blocks and assert it in tests. |
+| `Arena` backing failure | `pushSlab_` asserts the backing allocation succeeded (`PPR_ASSERT(al.ptr)`). |
+| All `deallocateRaw` | `noexcept`, no failure mode. |
+| `resizeRaw` off-LIFO-top | Returns `false` — allocate + copy + deallocate. |
+
+`Pooling` further asserts `bytes == block_size_v` and
+`alignForward(alignment, block_size_v) == block_size_v` on both paths, and
+its destructor asserts every block was returned
+("Destroying a Pooling allocator with live allocations"). Concurrent
+`allocate`/`deallocate` is supported; concurrent use with destruction or
+shrink equivalents is not. `owns()` is deallocation routing, not a safety
+net — a foreign pointer that happens to overlap still terminates in
+`deallocateRaw` (`PPR_ASSERT(false)` + `unreachable`).
+
+---
+
+## 6. Arena Patterns
 
 ### Slab — Fixed-buffer LIFO
 
+`Slab` wraps an existing buffer (pointer + capacity, `span`, or
+`allocation_result`); it owns nothing — the caller owns the bytes.
+
 ```cpp
-// From an existing buffer
 std::byte storage[1024];
 mem::Slab slab(storage);
-void *p = slab.allocateRaw(64u, max_align_v).ptr;
+void *p = slab.allocateRaw(64u, max_align_v).ptr;  // throws bad_alloc when full
 
-// As an InSituSlab with embedded storage
-mem::InSituSlab<256u> slab;
-void *p = slab.allocateRaw(32u, max_align_v).ptr;
-
-// Restore to checkpoint
 const void *mark = slab.watermark();
 void *p2 = slab.allocateRaw(16u, max_align_v).ptr;
-slab.restore(mark); // p2 is now "freed"
-
-// Reset entirely
+slab.restore(mark);  // p2 is now "freed"; no destructors called
 slab.reset();
 ```
 
-Constraints:
-- Only the **most recent** allocation can be resized or deallocated (LIFO).
-- `allocateRaw` on a full `Slab` throws `std::bad_alloc`.
-- `InSituSlab` does **not** own its storage; it's embedded in the object.
-- `resizeRaw(p, old, new)` returns `false` if `p` is not the top allocation.
-- `deallocateRaw(p, bytes, alignment)` returns `false` if `p` is not the top.
+Constraints: only the most recent allocation resizes/deallocates (both
+return `false` off the top); `allocateRaw` on a full `Slab` throws
+`std::bad_alloc`.
+
+### InSituSlab — Embedded Fixed Buffer
+
+```cpp
+mem::InSituSlab<256u> slab;  // alignas(max_align_t) bytes owned by the object
+void *p = slab.allocateRaw(32u, max_align_v).ptr;
+```
+
+`InSituSlab<CapacityV>` inherits `Slab` over its own embedded storage, so
+the slab object itself owns the bytes (owned state, not stateless). Same
+LIFO rules and throwing OOM as `Slab`.
 
 ### Arena — Growable Slab Chain
 
 ```cpp
-// Default: 2 MiB slabs backed by HugePage
-mem::Arena arena;
-
-// Explicit initial capacity and backing allocator
+mem::Arena arena;  // default: block-sized slabs backed by HugePage
 mem::Arena<mem::GPA> arena(4096u, mem::GPA{});
 
-// Allocate — grows automatically by pushing new slabs
-void *p = arena.allocateRaw(128u, max_align_v).ptr;
+void *p = arena.allocateRaw(128u, max_align_v).ptr;  // pushes slabs on demand
 
-// Watermark / Restore
 const void *mark = arena.watermark();
 void *tmp = arena.allocateRaw(64u, max_align_v).ptr;
 // ... work ...
-arena.restore(mark); // O(1) if mark is in current slab
-
-// Reset to initial state
+arena.restore(mark);  // pops intermediate slabs back to the backing allocator
 arena.reset();
 ```
 
-Constraints:
-- Same LIFO restrictions as Slab.
-- On `restore` across a slab boundary, intermediate slabs are popped and
-  freed back to the backing allocator.
-- Destructor calls `reset()` then `popSlab_()` — any allocations not freed
-  by the caller will leak memory (no per-object destructor calls).
+`Arena` inherits `AllocatorTraits<Arena>` and its backing allocator; it is
+move-only (moves transfer the chain, source goes null). The destructor calls
+`reset()` then releases every slab — live allocations leak by design (no
+per-object destructor calls), so destroy objects before reset. Restoring to
+a mark outside the arena terminates (`unreachable`).
 
 ### ScopedArena — RAII Watermark Guard
 
 ```cpp
 void process_frame(mem::Arena<> &frame_arena) {
-    // Snapshot current position
-    mem::ScopedArena scope(frame_arena);
-    // Allocations inside this scope are automatically rolled back
-    // when `scope` goes out of scope (RAII).
+    mem::ScopedArena scope(frame_arena);  // CTAD from ArenaT&
     void *p = frame_arena.allocateRaw(256u, max_align_v).ptr;
     // ... use p ...
-    // ~ScopedArena calls frame_arena.restore(scope.m_scope_offset)
-}
+}  // ~ScopedArena restores the watermark; moves transfer the boundary
 ```
 
-Supports move semantics — moving a `ScopedArena` transfers ownership of the
-scope boundary. The moved-from instance becomes inert.
+Moves transfer the restore boundary; the moved-from guard goes inert. In
+debug builds `ScopedArenaWithDebug` tracks nesting depth and asserts on
+mismatched restore ordering at destruction.
 
 ### ScratchPad — TLS Transient Arena
 
 ```cpp
-// Allocate directly (static methods)
 void *p = mem::ScratchPad::allocateRaw(64u, max_align_v).ptr;
 
-// Scoped RAII — auto-restores on scope exit
 {
-    auto scope = mem::ScratchPad::open(); // returns scoped_arena_t
+    auto scope = mem::ScratchPad::open();  // Allocator<scoped_arena_t>
     void *tmp = mem::ScratchPad::allocateRaw(32u, max_align_v).ptr;
     // ...
-} // scope destructor restores the TLS arena to the watermark
+}  // scope destructor restores the TLS arena to the watermark
 
-// Manual watermark/restore
 const void *mark = mem::ScratchPad::watermark();
 void *buf = mem::ScratchPad::allocateRaw(128u, max_align_v).ptr;
 mem::ScratchPad::restore(mark);
 ```
 
-In debug builds `ScopedArenaWithDebug` tracks nesting depth to catch
-mismatched restore ordering (asserts on destruction).
+`ScratchPad` is an empty static facade over a per-thread
+`Arena<SmallPage>` (debug: `ScopedArenaWithDebug`-guarded). `deallocateRaw`
+and `resizeRaw` return `bool` and apply LIFO-top-only. See §2 for the
+cross-thread rules: never let these handles or their pointers escape the
+thread.
 
 ---
 
-## 5. Composite Allocator Patterns
+## 7. Composite Allocator Patterns
 
 ### Fallback — Primary then Secondary
 
-Routes all allocations to `PrimaryT` first. If `PrimaryT::allocateRaw` returns
-nullptr (OOM), tries `SecondaryT`. Deallocation uses `PrimaryT::owns` to
-determine which allocator to return to.
+Routes to `PrimaryT` first, to `SecondaryT` on `{nullptr, 0}`; deallocation
+and resize route via `PrimaryT::owns`, so both sides must be owning
+allocators. From `fallback_prefers_primary_then_secondary`
+(`ResizeOnlyAllocator` is that file's owning resizable test double — any
+owning resizable allocator works the same way):
 
 ```cpp
-mem::Fallback<mem::InSitu<64u>, mem::GPA> alloc;
-void *p = alloc.allocateRaw(32u, max_align_v).ptr; // from InSitu
-void *q = alloc.allocateRaw(128u, max_align_v).ptr; // from GPA (InSitu exhausted)
-alloc.deallocateRaw(q, 128u, max_align_v);          // routed to GPA
-alloc.deallocateRaw(p, 32u, max_align_v);           // routed back to InSitu
+mem::Fallback<mem::InSitu<32u>, ResizeOnlyAllocator> alloc{};
+
+const auto primary = alloc.allocateRaw(16u, max_align_v);    // from InSitu
+const auto secondary = alloc.allocateRaw(16u, max_align_v);  // InSitu spent
+
+std::size_t primary_size = 24u;
+alloc.resizeRaw(primary.ptr, 16u, primary_size);   // true, same owner
+primary_size = 48u;
+alloc.resizeRaw(primary.ptr, 24u, primary_size);    // false, InSitu is one-shot
+
+alloc.deallocateRaw(secondary.ptr, 8u, max_align_v);  // routed by owns()
+alloc.deallocateRaw(primary.ptr, 24u, max_align_v);
 ```
 
 ### Threshold — Under/Above Size Split
 
-Routes allocations ≤ `SizeThresholdV` to `UnderT`, larger to `AboveT`.
-`resizeRaw` will only succeed if the old and new sizes stay within the same bucket.
+`Threshold<UnderT, SizeThresholdV, AboveT>`: sizes at or under the threshold
+go to `UnderT`, larger to `AboveT`. Resize stays within its bucket (same
+test double as above):
 
 ```cpp
-mem::Threshold<mem::InSitu<64u>, 64u, mem::GPA> alloc;
-void *small = alloc.allocateRaw(64u, max_align_v).ptr;   // from InSitu
-void *large = alloc.allocateRaw(80u, max_align_v).ptr;   // from GPA
-// resize from 64 to 32 works (same bucket)
-alloc.resizeRaw(small, 64u, 32u);
-// resize from 64 to 96 fails (crosses threshold)
-alloc.resizeRaw(small, 32u, 96u); // returns false
+mem::Threshold<mem::InSitu<64u>, 64u, ResizeOnlyAllocator> alloc{};
+
+const auto under = alloc.allocateRaw(64u, max_align_v);  // from InSitu
+const auto above = alloc.allocateRaw(80u, max_align_v);  // from fallback
+
+std::size_t under_size = 32u;
+alloc.resizeRaw(under.ptr, 64u, under_size);   // true, same bucket
+under_size = 96u;
+alloc.resizeRaw(under.ptr, 32u, under_size);   // false, crosses threshold
 ```
 
-### InSituFallback / InSituThreshold
+### InSitu — Single One-Shot Buffer
 
-Convenience aliases that wrap `Fallback<InSitu<N>, FallbackT>` or
-`Threshold<InSitu<N>, N, FallbackT>` in `Inplace<>` for direct embedding
-(no reference wrapper, no copy allowed).
+`InSitu<SizeV>` embeds `SizeV` bytes plus a `0x7F`-free / `0x7A`-used status
+byte: at most one live allocation, then `{nullptr, 0}` until deallocated
+(the caller decides). Poisoned on construction, re-poisoned on deallocate,
+unpoisoned on destruction so enclosing stack reuse stays addressable. The
+buffer is owned state — `InSitu` is stored by reference unless wrapped (see
+`Inplace` below). Typical use is as the primary of a composite:
 
 ```cpp
 using MyAlloc = mem::InSituFallback<256u, mem::GPA>;
-// Equivalent to:
-// mem::Inplace<mem::Fallback<mem::InSitu<256u>, mem::GPA>>
+// == mem::Inplace<mem::Fallback<mem::InSitu<256u>, mem::GPA>>
+using MySplit = mem::InSituThreshold<256u, mem::GPA>;
+// == mem::Inplace<mem::Threshold<mem::InSitu<256u>, 256u, mem::GPA>>
 ```
 
 ### LocalCache — MRU Block Cache
 
-Caches recently freed blocks in a ring buffer. On `allocateRaw`, returns the
-most recently freed block (hot cache hit). On `deallocateRaw`, pushes to the
-ring; if full, evicts the oldest block back to the backing allocator.
+Single-threaded ring of recently freed fixed-size blocks; destruction runs
+`shrinkToFit()`, returning cached blocks to the backing allocator.
+`MaxNumBlocks` defaults to 2. `bytes` must equal `BlockSizeV` (asserted);
+`owns()` forwards to the backing allocator when it is an owning allocator.
 
 ```cpp
 mem::LocalCache<64u, mem::GPA, 4u> cache;
 
-void *a = cache.allocateRaw(64u, max_align_v).ptr; // from GPA
-cache.deallocateRaw(a, 64u, max_align_v);          // cached in MRU ring
-void *b = cache.allocateRaw(64u, max_align_v).ptr; // returns a — fast path
-    // In a test, use PPR_TEST_ASSERT(a == b); production code must not rely on an assertion for correctness.
+void *a = cache.allocateRaw(64u, max_align_v).ptr;  // from GPA
+cache.deallocateRaw(a, 64u, max_align_v);           // parked in the MRU ring
+void *b = cache.allocateRaw(64u, max_align_v).ptr;  // hot reuse of the block
 ```
 
-Constraints:
-- `bytes` must equal `BlockSizeV` (asserted).
-- Not thread-safe (single-threaded MRU cache).
+`HugePage`/`SmallPage` are `LocalCache<block_size_v, Static<&getGlobalPool>[, 2u]>`
+over their global pools — the same MRU shape, per thread (§2).
 
 ### Pooling — Lock-free Fixed-Size Pool
 
-Concurrent lock-free pool. Divides blocks into "pools" of
-`Bitmask<size_t>::bit_count` blocks each. Each pool is tracked by an atomic
-bitmask. Hot path uses lock-free CAS. The slow path (new pool needed / pool
-release) uses a mutex.
+`Pooling<BlockSizeV, BlockAllocatorT, MaxNumBlocksV, AlignmentV>` provisions
+`num_pools_v` pools of 64 blocks (the pool quantum) from the block
+allocator. Hot-path allocate/deallocate are lock-free CAS on per-pool atomic
+bitmasks; growing a pool and releasing a fully-unused pool take the pool
+mutex. Fully unused pools return to the block allocator when more than one
+pool is alive.
+
+**Provision, don't scale.** `num_pools_v = ceil(MaxNumBlocksV / 64)`;
+provisioned capacity is `num_pools_v * 64` usable blocks — non-multiples of
+64 round *up* to that usable count. The `requires` expression on the class is
+advisory: always provision a multiple of 64, size `MaxNumBlocksV` for
+worst-case simultaneously-live blocks, and assert the bound in tests.
+Exhaustion terminates (`throwBadAlloc` through `noexcept`) — never rely on
+`{nullptr, 0}`. Concurrent allocate/deallocate only; never concurrent with
+destruction or shrink equivalents. `owns()` accepts an optional pool-index
+hint out-param; `HintedPooling<..., PoolingHintT>` threads a
+`thread_local u32` hint (`TPoolingHint::value`) through automatically:
 
 ```cpp
-mem::Pooling<64u, mem::GPA, 256u> pool;
+mem::Pooling<64u, mem::GPA, 256u> pool;  // 4 pools x 64 blocks provisioned
 
-// Thread 1
-void *a = pool.allocateRaw(64u, max_align_v).ptr;
-
-// Thread 2
-void *b = pool.allocateRaw(64u, max_align_v).ptr;
-
+void *a = pool.allocateRaw(64u, max_align_v).ptr;  // CAS hot path
 pool.deallocateRaw(a, 64u, max_align_v);
-pool.deallocateRaw(b, 64u, max_align_v);
-```
 
-Constraints:
-- `MaxNumBlocksV` must be a power of two (bitmask alignment).
-- `BlockSizeV` must be > 0.
-- Blocks are always the same size; `bytes` must equal `BlockSizeV` (asserted).
-- Destructor asserts all blocks have been returned.
-
-### HintedPooling — Pooling with TLS Index Hint
-
-Extends `Pooling` with a thread-local `PoolingHintT` that caches the last-used
-pool index per thread, reducing pool search on hot path.
-
-```cpp
-// Hint type must have a `static thread_local u32 value` member
-struct MyHint {
-    static thread_local u32 value;
-};
+struct MyHint { static thread_local u32 value; };
 thread_local u32 MyHint::value{};
-
-mem::HintedPooling<64u, mem::GPA, 256u, MyHint> pool;
-void *p = pool.allocateRaw(64u, max_align_v).ptr;
-// Next allocation on the same thread will try MyHint::value first
-void *q = pool.allocateRaw(64u, max_align_v).ptr;
+mem::HintedPooling<64u, mem::GPA, 256u, MyHint> hpool;
 ```
 
-### Static — Accessor via Callback
+### Static — Singleton Accessor
 
-Wraps a free function `GetAllocatorF()` returning a reference to a singleton
-allocator. Used internally by `HugePage`/`SmallPage` to route through TLS.
-
-```cpp
-// Used internally for HugePage's TLS LocalCache:
-// static LocalCache<block_size_v, Static<&getGlobalPool>> g_instance_tls{};
-```
+`Static<&GetAllocatorF> = Accessor<...>` forwards every call to a nullary
+function returning an allocator reference (typically a global pool or TLS
+singleton) — the glue behind `HugePage`/`SmallPage` routing.
 
 ---
 
-## 6. AllocatorTraits Usage
+## 8. AllocatorTraits Usage
 
-`AllocatorTraits<AllocatorT>` is mixed into `Allocator<AllocatorT>` and also
-into `Slab`, `Arena`, and other allocators via public inheritance. It provides
-typed convenience methods accessible with `al.template method<T>(...)`.
+`AllocatorTraits<AllocatorT>` uses explicit-`this` methods mixed into
+`Allocator<AllocatorT>`, `Slab`, `Arena`, and other allocators, so
+`al.template method<T>(...)` works on any of them. From
+`allocator_traits_operations`:
 
 ```cpp
-mem::Allocator<mem::GPA> alloc;
+mem::Allocator wrapped{backend};  // deduction guide; reference semantics
 
-// Typed allocation
-int *arr = alloc.allocate<int>(4u);
-arr[0] = 1; arr[1] = 2; arr[2] = 3; arr[3] = 4;
+int *ints = wrapped.allocate<int>(2u);
+ints[0] = 7; ints[1] = 11;
+wrapped.deallocate<int>(ints, 2u);
 
-// allocate_at_least — may return more than requested
-auto [ptr, count] = alloc.allocate_at_least<int>(3u);
-// count >= 3
+const auto at_least = wrapped.allocate_at_least<int>(3u);  // count >= 3
+wrapped.deallocate<int>(at_least.ptr, 3u);
 
-// Typed deallocation
-alloc.deallocate<int>(arr, 4u);
+const auto span = wrapped.span<int>(4u);  // relocatable T only
+wrapped.deallocate<int>(span.data(), 4u);
 
-// Object construction
-struct Widget { int x; };
-Widget *w = alloc.create<Widget>(42);
-// Equivalent to: allocate<Widget>() + construct_at
+Widget *widget = wrapped.create<Widget>(42);  // allocate + construct_at
+wrapped.destroy(widget);                      // destroy_at + deallocate
 
-// Object destruction
-alloc.destroy(w);
-// Equivalent to: destroy_at + deallocate<Widget>
-
-// Relocation (requires relocatable type)
-auto [new_ptr, new_count] = alloc.relocate<int>(arr, 4u, 8u);
-// May resize in-place if the allocator supports it, otherwise
-// allocates new + memcpy + deallocate old
-
-// Span allocation (returns std::span<T>)
-std::span<int> sp = alloc.span<int>(10u);
-
-// Duplicate a contiguous range
-std::vector<int> src = {1, 2, 3};
-std::span<int> dup = alloc.dup(src);
-// dup now owns a copy of src's data
+const auto fresh = wrapped.relocate<int>(nullptr, 0u, 3u);   // fresh 3-block
+const auto shrunk = wrapped.relocate<int>(fresh.ptr, 3u, 2u);  // in place
 ```
 
-**`pP::details::relocatable<T>`**: Types marked as relocatable support
-`memcpy`-based relocation. The built-in trait defaults to true for trivially
-copyable types. Specialize `pP::details::is_relocatable_v<T>` for your own
-types to enable `relocate` and `span`/`dup`.
+`create(al, copy)` / `create(al, move)` return owning `Allocation<T, ...>`
+handles; `dup(range)` memcpys a contiguous range into a new span. Relocation
+is `memcpy`-based only for relocatable types — mark yours by specializing
+the trait struct (not the variable):
 
 ```cpp
 template<>
-inline constexpr bool pP::details::is_relocatable_v<MyType> = true;
+struct pP::details::relocatable<MyType> : std::true_type {};
 ```
+
+(`RecordingAllocator`/`Widget` below are the doubles in
+`Core.Allocator.Tests.cpp`, test `allocator_traits_operations`):
 
 ---
 
-## 7. Allocation<T> RAII Handle
+## 9. Allocation<T> RAII Handle
 
-`Allocation<T, AllocatorT, AlignmentV, SizeT>` is a RAII wrapper that owns
-a typed allocation and automatically deallocates on destruction (for stateless
-allocators; stateful allocators require explicit deallocation).
+`Allocation<T, AllocatorT, AlignmentV, SizeT>` owns raw storage (not
+constructed objects) until explicitly released. The destructor deallocates
+**without `destroy_at`** for stateless allocators, and asserts prior release
+for stateful ones — always pair `create` with `destroy`, or `allocate` with
+`deallocate`, before destruction:
 
 ```cpp
-// Stateless allocator (GPA) — auto-deallocates
 {
-    mem::Allocation<int, mem::GPA> alloc(10u);
-    alloc[0] = 42;
-    alloc[1] = 99;
+    mem::Allocation<int, mem::GPA> alloc(10u);  // stateless: no allocator arg
+    alloc[0] = 42;                              // bounds-asserted operator[]
     // ... use alloc.view() ...
-} // ~Allocation calls GPA::deallocateRaw
+}  // ~Allocation deallocates the raw storage (no destroy_at)
 
-// Stateful allocator — must deallocate explicitly
-mem::Allocation<int, RecordingAllocator> alloc(4u, backend);
-alloc.resize(backend, 8u); // resize if possible
-alloc.deallocateAssumeNotEmpty(backend);
-// Destructor asserts that deallocation already happened
-
-// Create/destroy non-trivial objects
-mem::Allocation<Widget, mem::GPA> walloc;
-walloc.create(42); // allocate + construct_at
-walloc.destroy();  // destroy_at + deallocate
-
-// Relocate
-auto result = alloc.relocate(16u); // may resize or allocate+copy+free
-
-// Discard ownership (leak memory intentionally)
-std::span<int> leaked = alloc.discard();
-// alloc is now empty; memory NOT freed
+// RecordingAllocator is the stateful test double in Core.Allocator.Tests.cpp:
+mem::Allocation<int, RecordingAllocator> alloc(4u, backend);  // pass it
+alloc.resize(backend, 8u);
+alloc.deallocateAssumeNotEmpty(backend);  // dtor then asserts empty
 ```
 
-Key methods:
-- `isValid()` — whether the handle owns an allocation.
-- `data()` / `count()` / `size_bytes()` — access the allocation.
-- `operator[]` — indexed access with bounds assertion.
-- `view()` — returns `std::span<T>`.
-- `owns(ptr, size)` — overlap test.
-- `allocate(n)` / `deallocate()` / `resize(n)` / `relocate(n)`.
-- `create(args...)` / `destroy()` — for non-trivial `T`.
-- `discard()` — releases ownership without deallocation, returns a span.
+Key methods: `isValid()`, `data()` / `count()` / `size_bytes()`,
+`operator[]`, `view()` (span, asserts valid), `owns(ptr, size)` (overlap
+test), `allocate(al, n)` / `allocate(n)` (stateless only),
+`resize(al, n)` / `relocate(al, n)`, `deallocate(al)` /
+`deallocateAssumeNotEmpty(al)`, `create(al, args...)` + `destroy(al)` for
+non-trivial `T`. **`discard()` returns `std::allocation_result<T*>`** and
+empties the handle — the memory is intentionally leaked, never freed:
+
+```cpp
+mem::Allocation<Widget, mem::GPA> walloc;
+walloc.create(42);   // allocate + construct_at
+walloc.destroy();    // destroy_at + deallocate
+```
 
 Stateless allocators (`GPA`, `OS`, `HugePage`, `SmallPage`, `ScratchPad`)
-allow methods without an allocator argument. Stateful allocators require
-passing the allocator reference to every method.
+allow the no-allocator-argument forms; stateful ones require the allocator
+reference on every call.
 
 ---
 
-## 8. STL Adapter
+## 10. Inplace — Embedding Allocators by Value
 
-`STL<T, AllocatorT>` satisfies the C++23 `std::allocator` requirements,
-letting you pass PPR allocators to `std::vector`, `std::basic_string`, etc.
+`Inplace<AllocatorT>` inherits the allocator and deletes copies, forcing
+by-value embedding. `use_inplace_v<T>` is `is_empty<T>` (plus an explicit
+opt-in for `Inplace<>`, `PMR`, `ScopedArena`): empty allocators are stored
+inline in `Allocator<>`, everything with owned state is stored by
+`reference_wrapper` unless wrapped:
 
 ```cpp
-// Vector using GPA
+mem::Arena arena(4096u);
+mem::Allocator al(arena);  // Arena has state -> stored by reference
+
+mem::Allocator<mem::GPA> gpa_al;  // GPA is empty -> stored inline
+
+auto ref = al.forceRef();  // AllocatorForceRef: reference even for inline types
+```
+
+`materialize()` reaches the underlying allocator in both modes. `Arena` is
+move-only and transfers its chain (source goes null); `Inplace` deletes
+copies entirely. `Allocator` itself is copyable and converts implicitly to
+`AllocatorT&`.
+
+---
+
+## 11. PMR — Runtime Polymorphic Allocator
+
+`PMR` type-erases any `TAllocator` over a `void*` context plus a static
+vtable (`allocateRaw` / `deallocateRaw` / `resizeRaw`). Empty allocators need
+no context; stateful ones are referenced (never owned — the PMR must not
+outlive them). From `pmr_erasure_and_equality`:
+
+```cpp
+const mem::PMR stateful{backend};
+const mem::PMR erased{mem::Allocator{backend}};
+PPR_TEST_ASSERT(stateful == erased);  // same type erasure compares equal
+
+const mem::PMR stateless{mem::GPA{}};
+const auto overaligned = stateless.allocateRaw(32u, std::align_val_t{64u});
+stateless.deallocateRaw(overaligned.ptr, overaligned.count, std::align_val_t{64u});
+```
+
+---
+
+## 12. Custom Placement new/delete for Arena
+
+Global `operator new` / `operator delete` overloads exist for any
+`TArenaAllocator` (defined in the global namespace):
+
+```cpp
+mem::Arena<mem::GPA> arena(4096u);
+
+auto *widget = new (arena) Widget(42);  // allocateRaw(size, max_align_v)
+// Constructor throw -> matching placement delete releases the block.
+// Manual end: widget->~Widget(); then arena.restore(mark).
+```
+
+---
+
+## 13. STL Adapter
+
+`STL<T, AllocatorT>` satisfies the C++23 `std::allocator` requirements over
+an `Allocator<AllocatorT>` base. `propagate_on_container_move_assignment`
+is `true_type` only when the allocator is *stateful*
+(`not is_stateless_v`) — stateless adapters never propagate because there is
+nothing to transfer:
+
+```cpp
 using GpaVec = std::vector<int, mem::STL<int, mem::GPA>>;
 GpaVec vec;
 vec.push_back(42);
 
-// Vector using an arena
 mem::Arena arena(4096u);
 mem::STL<int, mem::Arena<mem::GPA>> stl_alloc(arena);
 std::vector<int, decltype(stl_alloc)> arena_vec(stl_alloc);
 arena_vec.push_back(1);
-arena_vec.push_back(2);
 
-// String using ScratchPad
-mem::STL<char, mem::ScratchPad> sp_alloc;
-std::basic_string<char, std::char_traits<char>, decltype(sp_alloc)> scratch_str(sp_alloc);
-scratch_str = "temporary";
+mem::STL<char, mem::ScratchPad> sp_alloc;  // TLS arena; same-thread use (§2)
+std::basic_string<char, std::char_traits<char>, decltype(sp_alloc)> s(sp_alloc);
 ```
 
-`STL<T, AllocatorT>` inherits from `Allocator<AllocatorT>` and forwards
-`allocate(n)` to `allocate<T>(n)` and `deallocate(ptr, n)` to `deallocate<T>(ptr, n)`.
-It sets `propagate_on_container_move_assignment = std::true_type`.
+`allocate(n)` forwards to `allocate<T>(n)`; `deallocate(ptr, n)` to
+`deallocate<T>(ptr, n)`; `allocate_at_least` is also provided.
 
 ---
 
-## 9. Poison API
+## 14. Poison API
 
-The poison subsystem detects use-after-free, use-before-initialization, and
-buffer overruns. Controlled by the `PPR_ENABLE_MEMORY_POISONING` macro
-(automatically enabled in debug builds or when ASAN is active).
+Poisoning is **debug-gated**: `PPR_ENABLE_MEMORY_POISONING` equals
+`PPR_ENABLE_DEBUG`; outside it the calls compile to no-op `constexpr`s, and
+under `PPR_ENABLE_SANITIZER_ADDRESS` they drive the ASAN runtime instead of
+flooding. Never route genuine OS page mappings (`pageAlloc` / `pageDecommit`
+/ `pageFree` / `pageOfferToOS`) through poisoning — those pages may be
+decommitted or read-only; heap-backed page-aligned blocks (arenas, slabs,
+pools) are always safe. Callers skip OS mappings themselves.
 
-When ASAN is enabled (`PPR_ENABLE_SANITIZER_ADDRESS`), the poison functions
-call the ASAN runtime directly. In debug-only mode, they flood memory with
-distinct byte patterns:
+| Function | Debug pattern | Canonical call site |
+|---|---|---|
+| `poisonReserved(ptr, size)` | `0xAA…` | Reserving not-yet-usable memory (InSitu ctor, container reserve/reset). |
+| `unpoisonUninitialized(ptr, size)` | `0xCC…` | Allocated memory the caller will write, before returning it. |
+| `poisonDestroyed(ptr, size)` | `0xDD…` | Freed/destructed memory, before returning it. |
+| `annotateContiguousContainer(beg, end, old_mid, new_mid)` | mixed | Live-prefix boundary moves (vector-like growth/shrink). |
 
-| Function | Pattern | When to Call |
-|----------|---------|--------------|
-| `poisonReserved(ptr, size)` | `0xAA` | After reserving memory that is not yet usable (constructor of InSitu, reset/clear of containers). |
-| `unpoisonUninitialized(ptr, size)` | `0xCC` | After allocating memory that the caller will write to (before returning from allocateRaw). |
-| `poisonDestroyed(ptr, size)` | `0xDD` | After freeing/destructing memory (before returning from deallocateRaw, after destroy_at). |
-| `annotateContiguousContainer(storage, capacity, old_live, new_live)` | mixed | When a vector-like container's live count changes — poisons the newly-unused or newly-reserved region. |
-
-Type-safe overloads accept typed pointers and a count:
-
-```cpp
-int *arr = ...;
-mem::poisonReserved(arr, 10);    // treats as sizeof(int) * 10 bytes
-mem::unpoisonUninitialized(arr, 10);
-mem::poisonDestroyed(arr, 10);
-
-// Contiguous container annotation — typed
-mem::annotateContiguousContainer(storage_ptr, capacity, old_size, new_size);
-```
-
-Range overloads accept contiguous ranges:
-
-```cpp
-std::span<int> span = ...;
-mem::poisonReserved(span);
-mem::unpoisonUninitialized(span);
-mem::poisonDestroyed(span);
-```
-
-**`UnpoisonUninitializedIterator`** wraps an input iterator to automatically
-unpoison memory as elements are constructed:
-
-```cpp
-auto it = mem::UnpoisonUninitializedIterator(raw_it);
-std::uninitialized_copy(src.begin(), src.end(), it);
-```
-
-Double-ended container annotations (`annotateDoubleEndedContiguousContainer`) support
-containers like `std::deque` or ring buffers that grow from both ends.
-
-Empty container helpers (`annotateEmptyContiguousContainer`, `annotateEmptyDoubleEndedContiguousContainer`)
-conveniently annotate a fully-empty container in two passes.
-
-### When to call each function (canonical pattern)
-
-```
-1. Reserve / allocate storage block:
-   → poisonReserved(block, size)
-
-2. Carve out a sub-allocation from the block:
-   → unpoisonUninitialized(sub_block, sub_size)
-
-3. User constructs objects into the sub-block:
-   → (construct_at / uninitialized_* — already unpoisoned)
-
-4. User destructs objects:
-   → destroy_at(ptr)
-
-5. Return sub-block to the pool:
-   → poisonDestroyed(sub_block, sub_size)
-
-6. Return whole block / reset:
-   → poisonReserved(block, size)   (or just leave ASAN-poisoned)
-```
-
-### Implementation notes
-
-- ASAN mode: `poisonDestroyed` skips the first byte (leaves a redzone gap
-  before the poisoned region) to catch underflow reads.
-- Debug mode: Patterns are XOR-seeded with a per-process salt and the pointer
-  address to make pattern detection harder to accidentally match real data.
-- The high nibble of every byte is the pattern constant; the low nibble is
-  seeded-randomized (`0xAx` for reserved, `0xCx` for uninitialized, `0xDx`
-  for destroyed).
+Rounding is an **8-byte granule**: debug flooding aligns inward to `u64`
+(high nibble holds the pattern, low nibble is salted); ASAN rounds
+reserve/unpoison *outward* to 8 and `poisonDestroyed` *inward*, leaving the
+edges addressable. Typed overloads take `(T*, n)`; range overloads take
+spans; `annotateDoubleEndedContiguousContainer` and the
+`annotateEmpty…` helpers cover deque-style and fully-empty containers;
+`UnpoisonUninitializedIterator` unpoisons through iterator-based
+construction. The built-in allocators already poison every path — custom
+allocators must follow the reserve → unpoison-on-alloc →
+poison-on-free sequence.
 
 ---
 
-## 10. safe_ptr Usage
+## 15. safe_ptr Usage
 
-`safe_ptr<T>` provides debug-mode lifetime checking for objects that inherit
-from `safe_object`. It is non-owning: a separately owned object must outlive all
-observers. In debug builds, it maintains a reference count on the pointee and
-asserts on destruction/move/copy that no dangling references exist.
+`safe_ptr<T>` observes an object owned elsewhere (it requires a real owner:
+`unique_ptr`, value member, service, or allocation handle). Debug builds
+track referencers and assert liveness; release builds are raw pointers at
+zero overhead — identical API in both, so never branch call sites per config:
 
 ```cpp
 class MyNode : public pP::safe_object {
@@ -740,243 +640,71 @@ public:
 };
 
 void example() {
-    auto owner = std::make_unique<MyNode>(42);
-    pP::safe_ptr<MyNode> ptr(owner.get());
-    pP::safe_ptr<MyNode> copy = ptr; // increments ref count
+    auto owner = std::make_unique<MyNode>(42);  // the owner
+    pP::safe_ptr<MyNode> ptr(owner.get());      // observer only
+    pP::safe_ptr<MyNode> copy = ptr;
 
-    // Access
     int v = ptr->get();
-    int v2 = (*ptr).get();
-
-    // Comparisons
     if (ptr == copy) { /* same object */ }
 
-    // Upcast
     pP::safe_ptr<safe_object> base = std::move(ptr).upcast<safe_object>();
-    // ptr is now null after the move+upcast
+    // Debug moves clear their source for diagnosability; release moves are
+    // bit-copies — never rely on moved-from state portably.
     copy = nullptr;
-    base = nullptr; // observers detach before `owner` destroys MyNode
+    base = nullptr;  // observers detach before `owner` destroys MyNode
 }
 ```
 
-In release builds (`not PPR_ENABLE_DEBUG`), `safe_ptr<T>` has raw-pointer
-semantics and `safe_object` is an empty base — zero overhead. Lifetime must
-therefore be guaranteed by the owner in every build configuration.
-
-Key operations:
-- Construction from raw pointer (`safe_ptr<T>(ptr)`) increments ref count.
-- Copy: increments ref count.
-- Move: transfers ownership without ref count change.
-- `operator->`, `operator*`: assert non-null, return raw pointer/reference.
-- `get()`: return raw pointer without assertion.
-- `isValid()`: check for non-null.
-- `upcast<BaseT>() &&`: move-convert to base safe_ptr (rvalue only).
-- `checked_cast<DerivedT>(safe)`: downcast with runtime check (dynamic_cast in
-  debug, static_cast in release).
-
-**Important**: `safe_object` asserts on destruction if `m_safe_ref_count != 0`,
-and asserts on move/copy if the source is still observed. This catches dangling
-pointer bugs at the source of invalidation rather than at use.
+Key operations: implicit construction (incl. `unique_ptr`-observing),
+`operator->` / `operator*`, `get()` (no assert), explicit `operator bool`,
+`isValid()`, `upcast<BaseT>() &&` (rvalue only), and
+`checked_cast<DerivedT>(safe)` downcasts. `safe_object` destruction asserts
+zero referencers in debug; moves/copies require the source to be unobserved.
+`details::relocatable<safe_ptr<T>>` is `false_type` in debug (never
+mem-copied) and `true_type` in release.
 
 ---
 
-## 11. Inplace — Embedding Allocators Without Reference Wrapping
+## 16. Constraints and Best Practices
 
-`Inplace<AllocatorT>` is a thin wrapper that inherits from the allocator and
-deletes copy operations. It is used when an allocator should be stored
-**by value** (embedded) rather than by reference. The `use_inplace_v` trait
-controls whether `Allocator<AllocatorT>` stores the allocator inline or as a
-`std::reference_wrapper`.
-
-All stateless allocators (`GPA`, `OS`, `HugePage`, `SmallPage`, `ScratchPad`,
-`InSitu`, `Pooling`, `LocalCache`) are `use_inplace_v = true` — they are
-always stored by value and are cheaply default-constructible.
-
-Stateful allocators (e.g., a `RecordingAllocator` from tests, `Arena<>`) are
-stored by reference inside `Allocator<>`. Use `Inplace<Arena<GPA>>` if you
-want to embed the arena directly (but note: no copy allowed).
-
-`AllocatorForceRef<AllocatorT>` unwraps any `Inplace<>` wrapper to force
-reference semantics, useful when you need to share a single allocator instance.
-
-```cpp
-// Arena is stateful — Allocator stores a reference
-mem::Arena arena(4096u);
-mem::Allocator al(arena); // references `arena`
-
-// InSitu is stateless — Allocator stores it inline (empty)
-mem::Allocator<mem::InSitu<64u>> al; // InSitu constructed in-place
-
-// Force reference even for inplace types
-auto ref = al.forceRef(); // AllocatorForceRef<InSitu<64u>>
-```
-
----
-
-## 12. PMR — Runtime Polymorphic Allocator
-
-`PMR` provides type-erased runtime dispatch for `TAllocator`. It stores a
-`void* context` and a static `VTable` with function pointers for allocateRaw,
-deallocateRaw, and resizeRaw.
-
-```cpp
-// Wrap a stateless allocator (no context needed)
-mem::PMR pmr(mem::GPA{});
-void *p = pmr.allocateRaw(64u, max_align_v).ptr;
-
-// Wrap a stateful allocator (stores reference as context)
-mem::Arena arena(4096u);
-mem::PMR pmr(arena); // references arena via context pointer
-
-// Wrap an Allocator<> wrapper
-mem::Allocator<mem::GPA> alloc;
-mem::PMR pmr(alloc); // unwraps to materialize()
-
-// PMR objects wrapping the same allocator type compare equal
-mem::PMR a(mem::GPA{}), b(mem::GPA{});
-// In a unit test, verify equality with PPR_TEST_ASSERT(a == b).
-```
-
----
-
-## 13. Custom Placement new/delete for Arena
-
-The allocator module exports global placement `operator new` and `operator delete`
-overloads for any `TArenaAllocator`:
-
-```cpp
-mem::Arena<mem::GPA> arena(4096u);
-
-// Allocates from arena via placement new
-auto *widget = new (arena) Widget(42);
-
-// If Widget's constructor throws, operator delete is called automatically
-// to release the arena allocation.
-
-// Manual destruction (does NOT release arena memory — use restore/reset):
-widget->~Widget();
-arena.restore(mark); // releases both widget and its allocation
-```
-
----
-
-## 14. Allocator<AllocatorT> — The Universal Wrapper
-
-`Allocator<AllocatorT>` is the primary way to pass allocators to generic code.
-It inherits from `AllocatorTraits<Allocator<AllocatorT>>` and conditionally
-stores the allocator:
-
-- If `use_inplace_v<AllocatorT>` is true (stateless or Inplace), the allocator
-  is stored directly (empty base optimization).
-- Otherwise, it stores a `std::reference_wrapper<AllocatorT>`.
-
-It provides the full public API:
-
-```cpp
-// Construction
-mem::Allocator<mem::GPA> stateless;              // default ctor
-mem::Allocator wrapped(arena);                    // deduction guide
-mem::Allocator<mem::Arena<mem::GPA>> stateful(arena);
-
-// AllocatorTraits methods
-int *arr = wrapped.allocate<int>(4u);
-wrapped.deallocate(arr, 4u);
-auto *w = wrapped.create<Widget>(42);
-wrapped.destroy(w);
-
-// Materialize the underlying allocator
-auto &raw = wrapped.materialize();
-const auto &craw = std::as_const(wrapped).materialize();
-
-// Force reference semantics
-auto forced = wrapped.forceRef(); // AllocatorForceRef<AllocatorT>
-```
-
----
-
-## 15. Static<F> — Singleton Accessor
-
-`Static<&GetAllocatorF>` is a utility that wraps a nullary function returning
-a reference to an allocator (typically a global or TLS singleton). It satisfies
-`TAllocator` by forwarding all calls to `GetAllocatorF()`.
-
-```cpp
-// Used internally for HugePage's TLS LocalCache:
-// static LocalCache<block_size_v, Static<&getGlobalPool>> g_instance_tls{};
-```
-
----
-
-## 16. MSVC ASAN Note
-
-When using the `msvc-dev` CMake preset, ASAN (Address Sanitizer) is
-automatically enabled via the `PPR_ENABLE_DEVELOPER_MODE` option. This
-activates the ASAN code paths in the poison subsystem:
-
-- `poisonReserved` calls `ASAN_POISON_MEMORY_REGION` (8-byte-aligned).
-- `unpoisonUninitialized` calls `ASAN_UNPOISON_MEMORY_REGION`.
-- `poisonDestroyed` calls `ASAN_POISON_MEMORY_REGION` with a 1-byte gap at
-  the start to catch underflow.
-- `annotateContiguousContainer` calls `__sanitizer_annotate_contiguous_container`.
-- `annotateDoubleEndedContiguousContainer` calls
-  `__sanitizer_annotate_double_ended_contiguous_container`.
-
-The `__asan_default_options` function sets `abort_on_error=1` and `print_stats=1`
-for immediate failure with diagnostics.
-
-Many unit tests in `Core.Poisoning.Tests.cpp` (poisoning group) are gated on
-`if constexpr (mem::is_asan_enabled_v)` and use `UnitTest::expect_crash` to
-verify that accessing poisoned memory correctly triggers ASAN.
-
-In non-ASAN debug builds, the same functions flood memory with debug patterns
-but do not trap access — use the ASAN preset for active detection.
-
----
-
-## 17. Constraints and Best Practices
-
-1. **RAII over manual**: Prefer `Allocation<T, AllocatorT>` or
-   `ScopedArena` over manual allocate/deallocate pairs.
-
-2. **LIFO discipline**: Arena allocators (`Slab`, `Arena`, `ScratchPad`) are
-   LIFO only. resize/deallocate only works for the most recent allocation.
-   Use `watermark()`/`restore()` for batch free; do not rely on per-object
-   deallocation.
-
+1. **RAII over manual**: prefer `Allocation<T, AllocatorT>` or `ScopedArena`
+   over manual allocate/deallocate pairs.
+2. **LIFO discipline**: `Slab`, `Arena`, `ScratchPad` resize/deallocate only
+   the most recent allocation. Use `watermark()`/`restore()` for batch free;
+   never rely on per-object deallocation, and never expect `restore` to run
+   destructors.
 3. **Thread safety**:
-   - `GPA`, `OS`: Thread-safe (delegate to global heap/OS).
-   - `HugePage`, `SmallPage`: Thread-safe (TLS + global pool with locks).
-   - `Arena`, `Slab`, `InSituSlab`: **Not thread-safe** — single-threaded use only.
-   - `Pooling`, `HintedPooling`: Thread-safe (lock-free hot path).
-   - `LocalCache`: **Not thread-safe** — thread-local use only.
-   - `ScratchPad`: Thread-safe (each thread has its own TLS arena).
-
-4. **Poison all paths**: Every `allocateRaw` should `unpoisonUninitialized`
-   the returned block. Every `deallocateRaw` should `poisonDestroyed` it.
-   Every reserve/reset should `poisonReserved` the freed region. The built-in
-   allocators already follow this; follow the same pattern in custom allocators.
-
+   - `GPA`, `OS`: thread-safe (global heap / OS pages).
+   - `HugePage`, `SmallPage`: thread-safe via TLS cache + locked global pool.
+   - `Pooling`, `HintedPooling`: thread-safe for concurrent
+     allocate/deallocate (lock-free hot path, mutex growth); never concurrent
+     with destruction.
+   - `Arena`, `Slab`, `InSituSlab`, `InSitu`, `LocalCache`: **not
+     thread-safe** — single-threaded (or TLS-confined) use only.
+   - `ScratchPad`: per-thread — safe to call anywhere, bound to the thread
+     (§2).
+4. **Poison all paths**: every `allocateRaw` unpoisons what it returns; every
+   `deallocateRaw` poisons what it takes back; every reserve/reset poisons the
+   freed region.
 5. **Stateless vs stateful**:
-   - Stateless allocators (`GPA`, `OS`, `HugePage`, `SmallPage`, `ScratchPad`,
-     `InSitu`, `LocalCache`, `Pooling`) are empty and can be default-constructed
-     anywhere. They are `use_inplace_v = true`.
-   - Stateful allocators (`Arena<>`, custom allocators with data) must be
-     constructed explicitly and passed by reference. Wrap in `Allocator<>` to
-     get reference semantics.
+   - Stateless (empty, `use_inplace_v`, default-construct anywhere): `GPA`,
+     `OS`, `HugePage`, `SmallPage`, `ScratchPad`, `PMR`.
+   - Stateful (owned inline storage, stored by reference unless wrapped in
+     `Inplace<>`): `Arena<>`, `Slab`, `InSituSlab`, `InSitu`, `LocalCache`,
+     `Pooling`, `HintedPooling`.
+6. **Block size alignment**: for `Pooling`/`LocalCache`,
+   `alignForward(alignment, block_size_v) == block_size_v` is asserted —
+   alignment must fit inside the block.
+7. **No exceptions in deallocate**: every `deallocateRaw` is `noexcept`;
+   fallible `allocateRaw` returns `{nullptr, 0}` — except `Slab` (throws)
+   and `Pooling` (terminates), per §5.
+8. **`checked_cast` / `safe_narrowing`** for `size_t` → `u32` conversions in
+   arena offsets and block counts; round-trip fidelity is asserted.
+9. **Contiguous container annotation** is required for any container managing
+   a live prefix in a larger buffer: call
+   `annotateContiguousContainer(beg, end, old_mid, new_mid)` every time the
+   boundary moves.
 
-6. **Block size alignment**: When using `Pooling` or `LocalCache`, the
-   alignment must not exceed block size. The assertion `alignForward(alignment, block_size_v) == block_size_v`
-   is enforced.
-
-7. **No exceptions in deallocate**: All `deallocateRaw` implementations are
-   `noexcept`. `allocateRaw` should be `noexcept` and signal failure by
-   returning `{nullptr, 0}` — except for `Slab` which throws `std::bad_alloc`.
-
-8. **`checked_cast` can be used for `std::size_t` → `u32` conversions** in
-   arena offsets and block counts. The `safe_narrowing` tag type asserts
-   round-trip fidelity.
-
-9. **Contiguous container annotation** is required for any container that
-    manages a live prefix within a larger buffer (like `std::vector` or
-    `Arena`'s slab). Call `annotateContiguousContainer(storage, capacity, old_live, new_live)`
-    every time the live region boundary moves.
+Implementation: `Core.Memory / .Arena / .Allocator / .Poison / .Pointer`
+partitions; tests `Core.Allocator / .Memory.Slab / .Memory.Arena /
+.Memory.PagePool / .Poisoning / .SafePtr / .Buffer.Tests.cpp`.
