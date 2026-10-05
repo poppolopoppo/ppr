@@ -173,8 +173,9 @@ export namespace pP {
         /// Opt-in GPU-assisted validation for the next initialize() call.
         /// Default off; meaningful only where the debug block compiles
         /// (PPR_ENABLE_DEBUG) — accepted and ignored in Release.
+        virtual void setCoreValidation(bool enabled) noexcept = 0;
+        [[nodiscard]] virtual bool isCoreValidationEnabled() const noexcept = 0;
         virtual void setGpuAssistedValidation(bool enabled) noexcept = 0;
-
         [[nodiscard]] virtual bool isGpuAssistedValidationEnabled() const noexcept = 0;
 
         [[nodiscard]] virtual std::error_code shutdown() = 0;
