@@ -233,10 +233,13 @@ namespace pP {
     }
 
     std::error_code ParallelScheduler::shouldCancel_(const std::optional<WaitGroup> &wg) const noexcept {
-        // Cancel if the scheduler was joined or caught an error or an exception
+        // Workers consume-and-reset the lifecycle event flag while draining,
+        // so gate admission on the stable recorded error, not on pollEvent().
+        if (const std::error_code err = m_lifecycle->error()) [[unlikely]] {
+            return err;
+        }
         if (m_lifecycle->pollEvent()) [[unlikely]] {
-            const std::error_code err = m_lifecycle->error();
-            return err ? err : std::make_error_code(std::errc::operation_canceled);
+            return std::make_error_code(std::errc::operation_canceled);
         }
 
         // Cancel if provided WaitGroup has already caught an error or an exception

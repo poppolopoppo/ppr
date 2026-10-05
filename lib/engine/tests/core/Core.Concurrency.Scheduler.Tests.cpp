@@ -1428,6 +1428,43 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sched.join() == std::errc::operation_canceled);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
         };
+
+        PPR_UNIT_TEST (cancel_ack_still_rejects_admission) {
+            // Post-ack admission regression: the worker select-iterator
+            // consumes-and-resets the lifecycle event flag while draining,
+            // but the recorded error is stable. Admission must stay rejected
+            // after the ack, so it gates on error(), not pollEvent().
+            // Single worker, no tasks, no timing: the ack is simulated
+            // synchronously via resetEvent (the exact iterator-advance
+            // equivalent) and every observation is on stable state. join is
+            // unconditional and the scheduler is destroyed before the final
+            // asserts, so the zero-outstanding dtor check always runs.
+            const std::error_code expected = std::make_error_code(std::errc::operation_canceled);
+            auto [parent, cancel] = context::withCancelClause(context::background());
+            std::error_code admit_err{};
+            std::error_code join_err{};
+            {
+                ParallelScheduler sched{"scheduler-test", 1u, queueBytes(), parent};
+                IContext &lifecycle = const_cast<IContext &>(sched.getContext());
+
+                cancel(expected);
+                PPR_TEST_ASSERT(parent->pollEvent());
+                PPR_TEST_ASSERT(parent->error() == expected);
+                PPR_TEST_ASSERT(lifecycle.pollEvent());
+                PPR_TEST_ASSERT(lifecycle.error() == expected);
+
+                // Simulate the worker ack: the pulse clears, the error stays.
+                lifecycle.resetEvent();
+                PPR_TEST_ASSERT(not lifecycle.pollEvent());
+                PPR_TEST_ASSERT(lifecycle.error() == expected);
+
+                admit_err = sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full);
+                join_err = sched.join();
+                PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+            }
+            PPR_TEST_ASSERT(admit_err == expected);
+            PPR_TEST_ASSERT(join_err == expected);
+        };
     }
 } // namespace pP::tests::detail
 
@@ -1485,6 +1522,7 @@ namespace pP::tests {
             detail::Scheduler::forrange_success_returns_empty,
             detail::Scheduler::foreach_borrowed_mutable_span,
             detail::Scheduler::empty_clause_cancellation_normalized,
+            detail::Scheduler::cancel_ack_still_rejects_admission,
         });
     };
 
