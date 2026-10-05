@@ -31,12 +31,23 @@ GPU readback; the editor keeps its `TrianglePass` initialized and actively fed �
   `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; live-only `/MDd`; LNK4075 validators fail
   at configure time), `msvc-rel` (shipping: pinned `/O2` + `/Ob2`, `/GL` + `/LTCG`, `/OPT:REF,ICF`,
   `/INCREMENTAL:NO`, `/DEBUG` + stripped `app.game.stripped.pdb` beside full `app.game.pdb`; Release `/Zi`,
-  dev `/Z7`; `BUILD_TESTING OFF`), `clang-cl-*`, and `clang-*`;
+  dev `/Z7`; `BUILD_TESTING OFF`), `msvc-profile` (inherits `msvc-rel`: same `/O2`/`/Ob2`/`/GL`/`/Gw`,
+  LTCG, NDEBUG, PDBSTRIPPED + `PPR_ENABLE_PROFILING=ON` (`/DUSE_PIX`, `cmake/compiler/MSVC.cmake:89-94`) +
+  `PPR_LOGGING_LEVEL=EMPHASIS`, `CMakePresets.json:118-127`); options `PPR_ENABLE_PROFILING` + `PPR_LOGGING_LEVEL`
+  (OFF/DEBUG/VERBOSE/INFO/EMPHASIS/WARNING/ERROR/FATAL → numeric `PPR_LOG_LEVEL_THRESHOLD`, `CMakeLists.txt:69-101`);
+  per-preset levels dev/live `DEBUG`, rel `WARNING` (default), profile `EMPHASIS`, `OFF` available; full-`OFF`
+  `app.game` unvalidated (suspected Insiders-MSVC IFC-import ICE, repro via git-ignored `CMakeUserPresets.json`
+  `msvc-off`, `.gitignore:64`); `OFF` green for core/shader/image/rhi; shipping `WARNING` + profiling `EMPHASIS`
+  validated separately. `clang-cl-*`, and `clang-*`;
   `gcc-*` presets are hidden and do not support modules.
 - `include/pP/Macros.h` — The single public non-module header (included via `module; #include` in the global
   fragment); engine-wide preprocessor vocabulary: build-mode + memory-poisoning detection, pointer-size
-  selection, compiler-attribute portability, wide-char literals, assertions, logging, error-propagation returns,
-  RAII helpers.
+  selection, compiler-attribute portability, wide-char literals, assertions, logging (compile-time
+  `PPR_LOG_LEVEL_THRESHOLD`, `OFF`=7 above fatal=6, `:215-244`; caller-side static erasure + `Log::isVisible`
+  runtime guard inside `PPR_LOG` (`:266-409`; `Core.Logger.cppm:88`, `Core.Logger.cpp:296-311`; fail-macros inherit
+  via `PPR_LOG`/`PPR_ENABLE_LOGGING`, `:549-627`), per-severity ring backpressure (wait at error+, drop below,
+  `Core.Logger.cpp:145-203`), no per-frame flush with shutdown drain retained (`App.Application.cpp:78-81`),
+  error-propagation returns, RAII helpers.
 - `vcpkg.json` — Dependency manifest (vcpkg or CPM fallback).
 
 ## Architecture Overview
