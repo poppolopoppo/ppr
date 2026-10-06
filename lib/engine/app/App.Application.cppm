@@ -125,9 +125,25 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code shutdown();
 
+        // P0 serial-explicit stages (same thread, one frame credit):
+        // advanceClock_ paces via FramePacer then ticks with zero target;
+        // update()/render() remain the advance-client / execute stages.
+        [[nodiscard]] std::error_code advanceClock_(TimeSpan *out_delta_time);
+
+        // Fused lifecycle completion: retain the first error through
+        // shutdown + logger drain BEFORE choosing run()'s return value.
+        // Reads no lifecycle state that shutdown() resets.
+        [[nodiscard]] std::error_code finishRun_(std::error_code prior);
+
+        [[nodiscard]] u64 getFrameIndex() const noexcept {
+            return m_frame_index;
+        }
+
     private:
         std::unique_ptr<Renderer> m_renderer{};
         TimerManager m_application_clock{};
+        FramePacer m_pacer{};
+        u64 m_frame_index{0u};
         std::optional<TimeSpan> m_target_frame_time{};
 
         // m_platform precedes m_services so reverse-destruction releases the

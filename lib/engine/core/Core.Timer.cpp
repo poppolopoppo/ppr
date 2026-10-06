@@ -128,4 +128,54 @@ namespace pP {
 
         return first_err;
     }
+
+    FramePacer::FramePacer(const ITimerClock &clock) noexcept : m_clock(std::addressof(clock)) {
+    }
+
+    bool FramePacer::shouldWait(const TimePoint deadline) const noexcept {
+        return m_clock->now() < deadline;
+    }
+
+    void FramePacer::waitForTarget(
+        const TimeSpan target_period, const TimePoint previous_tick, WakePredicate should_wake) noexcept {
+        if (target_period <= TimeSpan{}) {
+            return;
+        }
+        const TimePoint deadline = deadlineFor(previous_tick, target_period);
+        if (m_clock->now() >= deadline) {
+            return;
+        }
+        if (should_wake and should_wake()) {
+            return;
+        }
+
+        // Genuinely bounded slices throughout: every sleep is capped at the
+        // wake quantum, so a latched exit/error or a target-eligibility
+        // change observed via the predicate wakes within ~2ms — never a full
+        // (background: 200ms) period uninterrupted. The predicate and the
+        // deadline are rechecked after every slice; the caller re-evaluates
+        // the current target before admission.
+        while (m_clock->now() < deadline) {
+            if (should_wake and should_wake()) {
+                return;
+            }
+            const TimeSpan left = deadline - m_clock->now();
+            sleepFor_(left < kWakeQuantum ? left : kWakeQuantum);
+        }
+    }
+
+    void FramePacer::setSleepFunction(SleepFunction &&sleep) noexcept {
+        m_sleep = std::move(sleep);
+    }
+
+    void FramePacer::sleepFor_(const TimeSpan duration) noexcept {
+        if (duration <= TimeSpan{}) {
+            return;
+        }
+        if (m_sleep) {
+            m_sleep(duration);
+            return;
+        }
+        std::this_thread::sleep_for(duration);
+    }
 }

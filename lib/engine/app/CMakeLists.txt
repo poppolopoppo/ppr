@@ -8,7 +8,10 @@ target_sources(engine.app
         App.Application.cppm
         App.Application.Editor.cppm
 
+        frame/App.Frame.Packet.cppm
+
         input/App.Input.Action.cppm
+        input/App.Input.Batch.cppm
         input/App.Input.Device.cppm
         input/App.Input.FilteredAnalog.cppm
         input/App.Input.Key.cppm
@@ -51,7 +54,10 @@ target_sources(engine.app
         App.Application.Editor.cpp
         App.TemplateInstantiations.cpp
 
+        frame/App.Frame.Packet.cpp
+
         input/App.Input.Action.cpp
+        input/App.Input.Batch.cpp
         input/App.Input.Device.cpp
         input/App.Input.FilteredAnalog.cpp
         input/App.Input.Key.cpp

@@ -2,6 +2,7 @@ module;
 #include "pP/Macros.h"
 export module engine.app:platform.glfw.input;
 
+import :input.batch;
 import :input.device;
 import :input.listener;
 
@@ -31,6 +32,12 @@ export namespace pP {
 
         TimePoint m_timestamp{};
         TimeSpan m_delta_time{};
+
+        // Owned completed-batch boundary (P0): native pumps collect here
+        // without client dispatch; update() dispatches exactly once after
+        // pumping. Off by default, so direct posts keep immediate behavior.
+        PendingInputBatch m_native_batch{};
+        bool m_collecting_native_batch{false};
 
         bool m_gamepads_ever_connected: 1 {false};
 
@@ -98,5 +105,13 @@ export namespace pP {
         [[nodiscard]] DeviceCallback::Handle whenDeviceConnected(DeviceCallback::Event on_connected) override;
 
         [[nodiscard]] DeviceCallback::Handle whenDeviceDisconnected(DeviceCallback::Event on_disconnected) override;
+
+        // P0 completed batches: redirect pump-time posts into the owned
+        // batch (no client dispatch) and replay them exactly once at the
+        // defined advancement point. Concrete-type API (not IInputService):
+        // the platform holds the concrete GlfwInput, so no interface change.
+        [[nodiscard]] std::error_code dispatchCollectedBatches();
+
+        void setNativeBatchCollection(bool collecting) noexcept;
     };
 }

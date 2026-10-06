@@ -13,6 +13,7 @@ import std;
 
 import game.colony.buildings;
 import game.colony.driver;
+import game.colony.sim_packet;
 import game.colony.translator;
 import game.colony.panel;
 import game.colony.pathfinding;
@@ -221,6 +222,13 @@ namespace demo {
         // applied estimates pending; the driver FIFO sheds under overflow,
         // so the estimate is an upper bound. View state only.
         u64 m_dig_issued{0u};
+        // P0 serial-explicit owned sim packet (same-thread build/consume;
+        // engine.app must not link sim, so the sim-carrying packet lives
+        // here). Single-use per frame; cleared after the overlay phase.
+        std::optional<colony::SimFramePacket> m_sim_packet{};
+        // A present failure (or translator reset) empties the pass cache, so
+        // the next frame's packet must carry every resident chunk's cells.
+        bool m_present_full_refresh{false};
         // Grid overlay flag (V, off by default), mirroring the H highlight
         // path: this member holds the state only, and submitDebugInstances_
         // draws the chunk-boundary bands while it stands.
@@ -242,6 +250,9 @@ namespace demo {
                     });
                 const std::error_code error = m_driver.regenerate(seed);
                 m_translator.reset(getGridPass());
+                // The reset emptied the pass cache: the next present must
+                // re-upload the whole world from a full-refresh packet.
+                m_present_full_refresh = true;
                 return error;
             } catch (const std::system_error &error) {
                 return error.code();
@@ -1476,7 +1487,14 @@ namespace demo {
             // Slice 1 uses exactly one tile per chunk, so these counts coincide.
             const u32 visible = safe_narrowing(plan->m_tiles.size());
             const colony::PathCounts paths = m_driver.pathCounts();
-            const std::span<const sim::ChunkPos> edits = m_driver.lastEditChunks();
+            // Owned render payload: overlay/panel chunk reads consume the
+            // sim packet's copies (fail closed when absent), never live
+            // driver state, so post-capture mutation cannot alter reporting.
+            if (not m_sim_packet) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+            const std::span<const sim::ChunkPos> edits{
+                m_sim_packet->m_present_chunks.data(), m_sim_packet->m_present_chunks.size()};
 
             // Slice 4 read-outs gathered for the panel: live needs keyed by
             // stable agent key, and the follow flag taken from the one
@@ -1544,7 +1562,11 @@ namespace demo {
                         .m_sim_ms = sim_ms,
                         .m_paused = m_driver.paused(),
                         .m_speed = m_driver.speed(),
-                        .m_submitted_chunks = m_translator.submittedChunks(),
+                        // Present preparation stages from the owned packet (not
+                        // translator.submit), so the translator's submit
+                        // counter no longer advances: report the pass's
+                        // staged tile count, which is the same staged set.
+                        .m_submitted_chunks = getGridPass().stagedTileCount(),
                         .m_total_chunks = colony::ColonyTranslator::totalChunks(),
                         .m_staged_tiles = getGridPass().stagedTileCount(),
                         .m_cached_tiles = getGridPass().cachedTileCount(),
@@ -2295,9 +2317,14 @@ namespace demo {
             // Overlay phase: last-edit chunk outlines plus the wake extent. The
             // quad bag and both materials are reused (no new GPU handles); the
             // world-space instances encode with the same camera snapshot as the
-            // agent/path instances above in render().
+            // agent/path instances above in render(). Chunks come from the
+            // owned sim packet (fail closed when absent), never the live
+            // driver, so post-capture edits cannot alter this frame's overlay.
             if (m_show_highlight) {
-                for (const sim::ChunkPos chunk: m_driver.lastEditChunks()) {
+                if (not m_sim_packet) {
+                    return std::make_error_code(std::errc::state_not_recoverable);
+                }
+                for (const sim::ChunkPos chunk: m_sim_packet->m_present_chunks) {
                     if (const std::error_code error = submitChunkBorder_(pass, chunk, 0u, m_path_material)) {
                         return error;
                     }
@@ -2479,6 +2506,7 @@ namespace demo {
             // still digs exactly once; errors stay sticky and abort.
             // digTotal moves only in applyDig, so the post-tick delta below
             // attributes exactly this frame's tool activity.
+            const u32 dug_before = m_driver.digTotal();
             const bool tool_active = m_tool.m_accepted_click.has_value() or not m_tool.m_drag_queue.empty();
             if (m_tool.m_accepted_click.has_value()) {
                 const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
@@ -2532,20 +2560,44 @@ namespace demo {
             // next tick.
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.update(dt));
 
+            // P0 serial-explicit sim packet: owned copy of tick/epoch/
+            // counters/chunks/chunk-cells captured after the tick, consumed
+            // by the present + overlay phases below on this same thread. A
+            // translator reset (regeneration, or a previous present failure
+            // that emptied the pass cache) makes this a full-refresh packet
+            // carrying every resident chunk's cells.
+            m_sim_packet = colony::makeSimFramePacket(getFrameIndex(), m_driver, m_present_full_refresh);
+
             // Phase: tool progress. Silent when idle; a zero delta with
             // activity means the cells were already vacuum (silent no-op).
             if (tool_active) {
                 PPR_LOG(
                     Demo, info, "tool progress",
                     {
-                        {"dug_delta", m_driver.digTotal() - dug_before},
+                        {"dug_delta", m_sim_packet->m_dig_total - dug_before},
                     });
             }
 
-            // Phase: present. Drain edit chunks into presentation every frame,
-            // including paused and zero-tick frames, then stage the uploads.
-            PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver.presentEdits(m_translator));
-            PPR_RETURN_ERROR_ON_FAIL(Demo, m_translator.submit(m_driver.grid(), getGridPass()));
+            // Phase: present. Consume the owned packet on this same thread:
+            // selectively ack exactly the captured present set (post-capture
+            // dirt stays pending for the next frame), stage exactly the
+            // capture-time residency, and upload the captured chunk cells — never the
+            // live grid, so post-capture driver mutation cannot alter what
+            // the frame presents or reports. Fail closed when the owned
+            // packet is missing or incoherent (tick advanced or world
+            // regenerated after capture): never present from unowned or
+            // stale state. A present failure resets the translator/pass
+            // pair, so the next frame re-uploads via a full-refresh packet.
+            if (not m_sim_packet or
+                not colony::isSimPacketCoherent(*m_sim_packet, m_driver.tickCount(), m_driver.seed())) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+            if (const std::error_code error = colony::presentSimPacket(
+                    *m_sim_packet, m_driver, m_translator, getGridPass())) {
+                m_present_full_refresh = true;
+                return error;
+            }
+            m_present_full_refresh = false;
 
             // Phase: overlay + panel. Hover resolves first so the preview
             // outline, status line, and Inspector all describe the cell a
@@ -2555,6 +2607,8 @@ namespace demo {
             refreshHover_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitDebugInstances_());
             PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
+            // Single-use packet retired on this thread; next frame rebuilds.
+            m_sim_packet.reset();
 
             // Phase: live CSV profile. Inactive unless `--profile-csv N` set it;
             // after N frames the driver+translator CSVs print and the process

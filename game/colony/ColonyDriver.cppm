@@ -250,11 +250,23 @@ export namespace pP::colony {
         /// Chunks touched by the most recent edit, for the overlay (panel-safe).
         [[nodiscard]] std::span<const sim::ChunkPos> lastEditChunks() const noexcept;
 
+        /// Complete pending presentation-dirty set, accumulated across every
+        /// edit since the last acknowledgement (panel-safe). Capture reads
+        /// this — not lastEditChunks, which reports only the most recent
+        /// edit — so a multi-edit frame snapshots every touched chunk.
+        [[nodiscard]] std::span<const sim::ChunkPos> presentDirtyChunks() const noexcept;
+
         /// Pushes edit-touched chunks into presentation (`markChunkChanged`).
         /// Call after `update`/`stepOne` and before the translator submit.
         /// Drains the presentation set only; collider sets drain in
         /// stepPhysics, never here.
         [[nodiscard]] std::error_code presentEdits(ColonyTranslator &translator) noexcept;
+
+        /// Removes exactly the listed chunks from the pending
+        /// presentation-dirty set. Consumption acknowledges only what it
+        /// presented; dirt that arrived after capture stays pending for the
+        /// next frame.
+        void ackPresentChunks(std::span<const sim::ChunkPos> acked) noexcept;
 
         /// Cached per-agent rows from the last committed tick (panel-safe).
         [[nodiscard]] std::span<const AgentSummary> agentSummaries() const noexcept;

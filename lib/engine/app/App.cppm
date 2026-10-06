@@ -5,7 +5,10 @@ export module engine.app;
 export import :application;
 export import :application_editor;
 
+export import :frame.packet;
+
 export import :input.action;
+export import :input.batch;
 export import :input.device;
 export import :input.filtered_analog;
 export import :input.key;

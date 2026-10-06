@@ -588,6 +588,10 @@ namespace pP::colony {
         return std::span<const sim::ChunkPos>{m_dig_stats.m_last_chunks.data(), m_dig_stats.m_last_chunks.size()};
     }
 
+    std::span<const sim::ChunkPos> ColonyDriver::presentDirtyChunks() const noexcept {
+        return std::span<const sim::ChunkPos>{m_present_dirty.data(), m_present_dirty.size()};
+    }
+
     Expected<sim::Entity> ColonyDriver::requestPath(
         const sim::GlobalCellPos from, const sim::GlobalCellPos to, const u32 caps) {
         if (not m_timestep) {
@@ -619,6 +623,27 @@ namespace pP::colony {
         }
         m_present_dirty = Array<sim::ChunkPos>{};
         return first_error;
+    }
+
+    void ColonyDriver::ackPresentChunks(const std::span<const sim::ChunkPos> acked) noexcept {
+        if (acked.empty() or m_present_dirty.empty()) {
+            return;
+        }
+        Array<sim::ChunkPos> kept{};
+        kept.reserve(m_present_dirty.size());
+        for (const sim::ChunkPos pos: m_present_dirty) {
+            bool acknowledged = false;
+            for (const sim::ChunkPos done: acked) {
+                if (done == pos) {
+                    acknowledged = true;
+                    break;
+                }
+            }
+            if (not acknowledged) {
+                kept.push_back(pos);
+            }
+        }
+        m_present_dirty = std::move(kept);
     }
 
     void ColonyDriver::applyToolEdits() noexcept {

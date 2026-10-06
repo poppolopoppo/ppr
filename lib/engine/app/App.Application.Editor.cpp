@@ -10,6 +10,7 @@ import :input.device;
 import :input.key;
 import :input.listener;
 import :input.routing;
+import :platform.glfw.input;
 import :renderer.grid_pass;
 import :renderer.triangle_pass;
 import :scene.camera.controller;
@@ -379,6 +380,18 @@ namespace pP {
 
         safe_ptr<Window> main_window{};
         if (m_main_input_context) {
+            // Discard pump-collected input records BEFORE destroying the input
+            // context they observe. A throwing dispatch already releases its
+            // own records via the batch guard, but never-dispatched records
+            // would otherwise strand safe_ptr observers across this
+            // context's destruction (GlfwInput::shutdown clears the batch
+            // only later, via Application::shutdown below).
+            if (const safe_ptr<IInputService> input_service = getPlatform().getInputService()) {
+                if (GlfwInput *const glfw_inputs = dynamic_cast<GlfwInput *>(input_service.get())) {
+                    glfw_inputs->m_native_batch.clear();
+                }
+            }
+
             main_window = m_main_input_context->m_window;
 
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_main_input_context->shutdown());
@@ -445,8 +458,17 @@ namespace pP {
 
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());
 
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_camera->getSnapshot()));
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_camera->getSnapshot()));
+        // P0 serial-explicit build-packet stage (same thread): copy the
+        // camera snapshot, viewport (+ revision), and window metadata into
+        // owned packet storage BEFORE pass staging. Pass updates below
+        // consume the packet-owned snapshot — never the live camera — so a
+        // post-capture producer mutation cannot alter render preparation.
+        m_frame_packet = makeFramePacket(
+            getFrameIndex(), dt, getTimerManager().getTotalElapsed(), m_camera->getSnapshot(),
+            m_main_viewport->getViewport(), m_main_viewport->getViewportRevision(), m_main_viewport->getWindow());
+
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_frame_packet->m_camera));
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_frame_packet->m_camera));
 
         if (m_scene.has_value()) {
             PPR_RETURN_ERROR_ON_FAIL(Editor, submitSceneInstances_());
@@ -456,6 +478,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->update(dt, *m_main_viewport));
         }
 
+        PPR_ASSERT(m_frame_packet.has_value());
         return default_value_v;
     }
 
@@ -463,6 +486,17 @@ namespace pP {
         const hal::ProfileScope scope{"App.Editor.Render"};
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::render());
 
+        // P0 serial-explicit consume: single-use packet owned by this frame.
+        // A missing packet means update() never staged one (fail closed).
+        if (not m_frame_packet) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+        const FramePacket packet = *m_frame_packet;
+        m_frame_packet.reset();
+        return renderPacket_(packet);
+    }
+
+    std::error_code ApplicationEditor::renderPacket_(const FramePacket &packet) {
         Renderer &renderer = getRenderer();
 
         // Cell uploads write a mapped atlas shared with earlier GPU frames.
@@ -472,6 +506,17 @@ namespace pP {
         if (not rhi_service) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }
+
+        // Explicit non-rendering outcome for zero-size/minimized surfaces:
+        // skip uploads and present, report success. This is also the
+        // empty-packet fail-closed: a packet with no render target performs
+        // zero backend work. The packet carries the captured viewport
+        // revision, so P1 surface generations can key off it instead of
+        // re-querying the live window.
+        if (not hasRenderTarget(packet)) {
+            return default_value_v;
+        }
+
         const auto wait_for_gpu_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
         {
             const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};

@@ -57,6 +57,10 @@ namespace pP::tests {
 
     const UnitTest &cameraTests() noexcept;
 
+    const UnitTest &frame_stagesTests() noexcept;
+
+    const UnitTest &sim_packetTests() noexcept;
+
     const UnitTest &quaternionTests() noexcept;
 
     const UnitTest &input_listenerTests() noexcept;
@@ -102,6 +106,8 @@ namespace pP::tests {
             app_headless_lifecycle_is_idempotentTests(),
             app_run_shutdowns_after_nonstandard_hook_exceptionTests(),
             cameraTests(),
+            frame_stagesTests(),
+            sim_packetTests(),
             quaternionTests(),
             input_listenerTests(),
             filtered_analogTests(),

@@ -12,7 +12,8 @@ application.
 
 ## Design
 
-- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:input.*` (6),
+- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:frame.packet`,
+  `:input.*` (7, incl. `:input.batch` owned pump batches),
   `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
   `:renderer` + `:renderer.gpu_caches` + `:renderer.grid_pass` + `:renderer.triangle_pass` + `:renderer.types`,
@@ -59,7 +60,7 @@ application.
   (`input`, `scene`, `ui`, `window`); `[[fallthrough]]` + index-loop `Listener` fixes (`input`); `checked_cast` +
   `static_cast<double/u32/u64>` conversions (`input`, `platform/glfw`, `ui`); `.indexBuffer = {}` (`renderer`);
   `[[maybe_unused]]` debug helpers (`ui`).
-- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (6, incl. new `:input.routing`), platform (5),
+- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (7, incl. `:input.batch` owned pump batches + `:input.routing`), frame (1, `:frame.packet`), platform (5),
   player (2), renderer (5, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2 — `App.Scene.World.cppm` exists on
   disk but is unregistered, see `scene/codemap.md`), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
   (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
@@ -72,11 +73,15 @@ application.
 
 ## Flow
 
-1. `Application::run()` → `initialize()` (re-arms the `m_exit_requested` latch) → `PPR_DEFER shutdown()` →
-   loop `while (not isExitRequested())` — exit latch OR latched cancel error, never the consumable event pulse alone: single `m_application_clock.tick(&dt, target)` (`App.Application.cpp:100-105`),
-   `update(m_application_clock.m_elapsed)` + `render()` with first-error-wins `PPR_RETAIN_ERROR_ON_FAIL`; exceptions map
-   to exit clauses (`system_error→e.code()`, `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`)
-   via `m_request_exit`; no per-frame flush — shutdown drain only (`Log::flush(true)`, `App.Application.cpp:77-86`); exit retains `m_lifecycle->error()` as the final error.
+1. `Application::run()` → `initialize()` (re-arms the `m_exit_requested` latch) → fused `finishRun_()` on every
+   path (first error retained across `shutdown()` + `Log::flush(true)`; loop error read BEFORE `shutdown()` resets the
+   lifecycle; exception-only safety-net defer otherwise) → loop `while (not isExitRequested())` — exit latch OR latched
+   cancel error, never the consumable event pulse alone: `advanceClock_()` (wakeable `FramePacer` wait on the
+   exit/error latch with 2ms quantum, then zero-target `m_application_clock.tick()` — `now()` stays latched) →
+   post-wait admission recheck (`break` retires the frame without client work) → `update(dt)` + `render()` with
+   first-error-wins `PPR_RETAIN_ERROR_ON_FAIL`; exceptions map to exit clauses (`system_error→e.code()`,
+   `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`) via `m_request_exit`; no per-frame
+   flush — shutdown drain only.
 2. `Application::initialize()` → clock reset (`App.Application.cpp:141`) BEFORE platform init (`:151`) → `PPR_DEFER`-on-failure `shutdown()` rollback
    (`success` flag; service registrations torn down explicitly via `shutdown()`, not the defer pair) →
    `content/install` = executable parent (`install` aliases `content`), `working` = `current_path`
@@ -98,10 +103,12 @@ application.
    throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
-   `camera->updateModel(dt, controller, viewport->getViewport())` → `renameWindow("{} - Frame = {:.2f} ms")` (`App.Application.Editor.cpp:448`) →
-    `triangle_pass->update(dt, camera->getSnapshot())` + `grid_pass->update(dt, camera->getSnapshot())` (snapshot-only;
+   `camera->updateModel(dt, controller, viewport->getViewport())` →
+   `triangle_pass->update(dt, packet.m_camera)` + `grid_pass->update(dt, packet.m_camera)` (packet-owned snapshot;
     passes never consult the mutable `Camera` while drawing) + `submitSceneInstances_()` when a scene is loaded →
-   `ui_service->update(dt, *viewport)`; `render()` = `Application::render()` → two explicit surface passes:
+   `ui_service->update(dt, *viewport)`; the owned `FramePacket` (P0: camera/viewport/window copies) is built right
+   after the camera update and before pass staging (same-thread consume); `render()` = `Application::render()` → consume the staged packet (fail closed when absent;
+   zero-size/minimized is an explicit non-rendering success) → two explicit surface passes:
     GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
     renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
     then ImGui selects no depth and loads the existing color
@@ -110,7 +117,10 @@ application.
     erases + shuts down UI, grid pass, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
    resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then
    `Application::shutdown()`.
-5. No runtime logic in `App.cppm` itself — compile-time re-export only.
+5. Titles (P0 no-op record): ZERO live title producers — `renameWindow` has no callers, so no
+   coalescing/rate-limiting exists. `WindowModel::m_title` is copied render metadata only
+   (see `FramePacket::m_window_title`).
+6. No runtime logic in `App.cppm` itself — compile-time re-export only.
 
 ## Integration
 
@@ -127,5 +137,7 @@ application.
 - `App.cppm` — umbrella re-export list incl. `:application_editor` + `:service.client` (no runtime code).
 - `App.Application.cppm/.cpp` — slim `Application` base: domain/run-loop/platform/services/shader-RHI-renderer bootstrap.
 - `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/grid/triangle/UI ownership.
+- `frame/App.Frame.Packet.cppm/.cpp` — `engine.app:frame.packet`: owned `FramePacket` (camera/viewport/window copies),
+  `makeFramePacket` capture, `hasRenderTarget` derived-from-size guard (see `frame/codemap.md`).
 - `App.TemplateInstantiations.cpp` — explicit `Delegate`/`BroadcastCallback` instantiations.
 - `CMakeLists.txt` — module + source registration, `setup_ppr_project` deps.

@@ -3,6 +3,7 @@ module;
 export module engine.app:application_editor;
 
 import :application;
+import :frame.packet;
 import :scene.camera;
 import :renderer.triangle_pass;
 import :service.client;
@@ -89,6 +90,13 @@ export namespace pP {
         void onMainWindowFocused_(const Window &window, bool focused);
 
         [[nodiscard]] std::error_code submitSceneInstances_();
+
+        // P0 serial-explicit render consumption: the render() stage takes
+        // the owned packet built by update() (single-use, same thread).
+        [[nodiscard]] std::error_code renderPacket_(const FramePacket &packet);
+
+        // Owned packet staged by update() for render(); cleared on consume.
+        std::optional<FramePacket> m_frame_packet{};
 
         std::optional<mesh::SceneAsset> m_scene{};
         Array<image::ImageAsset> m_images{};

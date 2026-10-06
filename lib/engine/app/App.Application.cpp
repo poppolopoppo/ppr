@@ -89,21 +89,22 @@ namespace pP {
     }
 
     std::error_code Application::run() {
+        // Exception safety net only: the fused finishRun_() below owns
+        // normal-path cleanup, so this fires solely when an exception
+        // escapes the loop body itself (best effort; the exception still
+        // propagates after shutdown + drain are attempted).
+        bool completed = false;
         PPR_DEFER {
-            std::error_code shutdown_err{};
-            PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, shutdown());
-
-            // Synchronous exit-time drain: the logger worker is async and
-            // immediate categories self-flush, so only shutdown waits.
-            // Retain a drain failure instead of silently ignoring it.
-            PPR_RETAIN_ERROR_ON_FAIL(App, shutdown_err, Log::flush(true));
-
-            if (shutdown_err) [[unlikely]] {
-                m_request_exit(shutdown_err);
+            if (not completed) [[unlikely]] {
+                std::ignore = shutdown();
+                std::ignore = Log::flush(true);
             }
         };
 
-        PPR_RETURN_ERROR_ON_FAIL(App, initialize());
+        if (const std::error_code init_err = initialize()) {
+            completed = true;
+            return finishRun_(init_err);
+        }
 
         PPR_LOG(App, emphasis, "🏁 run application loop");
 
@@ -114,12 +115,24 @@ namespace pP {
             const hal::ProfileScope scope{"App.Frame"};
             std::error_code first_err{};
 
-            // throttle if necessary to target desired frame rate, if any provided
+            // Stage: advance clock (wakeable pacer wait, then zero-target
+            // tick). An exit latched during the wait stops admission here:
+            // the frame retires without client work and the loop observes
+            // termination at the top.
             TimeSpan dt{};
             {
                 const hal::ProfileScope scope_clock{"App.Frame.Clock"};
-                PPR_RETAIN_ERROR_ON_FAIL(
-                    App, first_err, m_application_clock.tick(&dt, getTargetFrameTime().value_or({})));
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, advanceClock_(&dt));
+            }
+
+            if (isExitRequested()) {
+                // Clock-error + exit coincidence: retain the clock error for
+                // run()'s return value, and retire the frame without client
+                // or render work on this path.
+                if (first_err) {
+                    m_request_exit(first_err);
+                }
+                break;
             }
 
             try {
@@ -146,11 +159,74 @@ namespace pP {
             if (first_err) [[unlikely]] {
                 m_request_exit(first_err);
             }
+
+            ++m_frame_index;
         }
 
         PPR_LOG(App, emphasis, "stop application loop, bye 👋");
 
-        return m_lifecycle->error();
+        // Read the stable loop error BEFORE shutdown() resets the
+        // lifecycle object that carries it; finishRun_() then retains the
+        // first error across shutdown + logger drain.
+        std::error_code loop_err{};
+        if (m_lifecycle) {
+            loop_err = m_lifecycle->error();
+        }
+        completed = true;
+        return finishRun_(loop_err);
+    }
+
+    std::error_code Application::advanceClock_(TimeSpan *out_delta_time) {
+        // P0 serial-explicit pacing: wakeable external waits against the
+        // previous-tick-anchored deadline (min-period policy, no catch-up),
+        // then the manager ticks with a zero target so now() stays latched
+        // and only callback dispatch + dt accounting run. Focus/background/
+        // uncapped transitions re-evaluate here every frame via
+        // getTargetFrameTime(). Each wait slices at the wake quantum and the
+        // predicate covers the persistent exit/error latch plus a sampled
+        // target change, so a long background wait wakes within one quantum
+        // on exit or retarget; a retarget loops to recompute the deadline
+        // from the same previous tick before admission.
+        for (;;) {
+            const std::optional<TimeSpan> target = getTargetFrameTime();
+            const TimeSpan period = target.value_or(TimeSpan{});
+            const TimePoint previous_tick = m_application_clock.now();
+            if (period <= TimeSpan{}) {
+                break;
+            }
+            if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
+                break;
+            }
+            m_pacer.waitForTarget(period, previous_tick, [this, target]() noexcept -> bool {
+                if (isExitRequested()) {
+                    return true;
+                }
+                return getTargetFrameTime() != target;
+            });
+            if (isExitRequested()) {
+                break;
+            }
+            if (getTargetFrameTime() != target) {
+                continue;
+            }
+            break;
+        }
+        return m_application_clock.tick(out_delta_time, TimeSpan{});
+    }
+
+    std::error_code Application::finishRun_(const std::error_code prior) {
+        std::error_code result = prior;
+        PPR_RETAIN_ERROR_ON_FAIL(App, result, shutdown());
+
+        // Synchronous exit-time drain: the logger worker is async and
+        // immediate categories self-flush, so only shutdown waits.
+        // Retain a drain failure instead of silently ignoring it.
+        PPR_RETAIN_ERROR_ON_FAIL(App, result, Log::flush(true));
+
+        if (result) [[unlikely]] {
+            m_request_exit(result);
+        }
+        return result;
     }
 
     std::error_code Application::initialize() {

@@ -135,6 +135,8 @@ The editor module ships unconditionally, independent of `BUILD_TESTING`.
 - `main.cpp` — editor-facing generated colony, controls, panel, `--smoke`/`--time-trials`/`--load100` dispatch.
 - `colony/Colony.Elements.h`, `colony/Colony.cppm/.cpp`, `colony/WorldGen.cppm/.cpp` — element IDs, grid ownership, seeded generation.
 - `colony/ColonyDriver.cppm/.cpp` — deterministic fixed-step simulation host.
+- `colony/SimFramePacket.cppm/.cpp` (`game.colony.sim_packet`) — owned sim packet (tick/seed/counters/chunk copies),
+  `makeSimFramePacket` capture, `isSimPacketCoherent` tick+epoch gate for the present phase.
 - `colony/ColonyTranslator.cppm/.cpp` — GridPass submissions and cache invalidation.
 - `colony/ColonyPanel.cppm/.cpp` — game-owned colony panel (tools, tabs, intents, chrome frame).
 - `colony/ColonySmoke.cppm/.cpp` — one-frame headless GPU readback smoke host, plus `--load100`.

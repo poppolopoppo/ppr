@@ -190,8 +190,35 @@ namespace pP {
         return default_value_v;
     }
 
+    std::error_code GlfwPlatform::pumpNativeEvents() {
+        // Collection only: window-event callbacks stage owned records into
+        // the input batch; no client callback runs until update() dispatches
+        // the completed batches below. Repeatable within a frame.
+        GlfwInput *const p_inputs = m_input_service.get();
+        if (p_inputs != nullptr) [[likely]] {
+            p_inputs->setNativeBatchCollection(true);
+        }
+        PPR_DEFER {
+            if (p_inputs != nullptr) {
+                p_inputs->setNativeBatchCollection(false);
+            }
+        };
+
+        if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+        }
+
+        return default_value_v;
+    }
+
     std::error_code GlfwPlatform::update(const TimeSpan dt) {
         const hal::ProfileScope scope{"App.Platform.Update"};
+        // Single client advancement per frame, in order: device-poll first
+        // (device time, transient clears, once-per-frame gamepad sampling),
+        // then native collection into owned batches, then exactly-once batch
+        // dispatch at this defined update point. Extra native pumps within
+        // the frame reuse pumpNativeEvents(), never this path, so
+        // press/release pairs and posted text survive.
         // Clear transient input state BEFORE window-event dispatch appends this
         // frame's characters. Safe to run first: device polling is event-pump
         // independent (gamepads poll via glfwGetGamepadState, keyboard/mouse polls
@@ -201,8 +228,10 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_inputs->pollInputDevices(dt));
         }
 
-        if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
-            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, pumpNativeEvents());
+
+        if (GlfwInput *const p_inputs = m_input_service.get()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_inputs->dispatchCollectedBatches());
         }
 
         return default_value_v;

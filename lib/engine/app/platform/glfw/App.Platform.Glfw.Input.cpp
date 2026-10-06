@@ -49,6 +49,8 @@ namespace pP {
 
             m_keyboard.resetInputState();
             m_mouse.resetInputState();
+            m_native_batch.clear();
+            m_collecting_native_batch = false;
 
             for (GamepadDevice &gamepad: m_gamepads) {
                 gamepad.resetInputState();
@@ -195,23 +197,58 @@ namespace pP {
     }
 
     void GlfwInput::postKeyboardCharacterInput(const InputContext &context, const hal::native::char_t codepoint) {
+        // Collection mode (native pump): stage into the owned completed
+        // batch without invoking client callbacks; the defined advancement
+        // point dispatches below. Immediate otherwise (unchanged behavior).
+        if (m_collecting_native_batch) {
+            m_native_batch.postChar(safe_ptr<const InputContext>{&context}, codepoint);
+            return;
+        }
         m_keyboard.postKeyboardCharacterInput(context, codepoint);
     }
 
     void GlfwInput::postKeyboardKeyPressed(const InputContext &context, const EKeyboardKey key, const bool pressed) {
+        if (m_collecting_native_batch) {
+            m_native_batch.postKey(safe_ptr<const InputContext>{&context}, key, pressed);
+            return;
+        }
         m_keyboard.postKeyboardKeyPressed(m_delta_time, context, key, pressed);
     }
 
     void GlfwInput::postMouseButtonPressed(const InputContext &context, const EMouseButton button, const bool pressed) {
+        if (m_collecting_native_batch) {
+            m_native_batch.postMouseButton(safe_ptr<const InputContext>{&context}, button, pressed);
+            return;
+        }
         m_mouse.postMouseButtonPressed(m_delta_time, context, button, pressed);
     }
 
     void GlfwInput::postMouseCursorPosition(const InputContext &context, const float2 &absolute_pos) {
+        if (m_collecting_native_batch) {
+            m_native_batch.postMouseCursor(safe_ptr<const InputContext>{&context}, absolute_pos);
+            return;
+        }
         m_mouse.postMouseCursorPosition(m_delta_time, context, absolute_pos);
     }
 
     void GlfwInput::postMouseScrollWheel(const InputContext &context, const float2 &delta) {
+        if (m_collecting_native_batch) {
+            m_native_batch.postMouseScroll(safe_ptr<const InputContext>{&context}, delta);
+            return;
+        }
         m_mouse.postMouseScrollWheel(m_delta_time, context, delta);
+    }
+
+    std::error_code GlfwInput::dispatchCollectedBatches() {
+        // Exactly-once consumption at the defined advancement point: replay
+        // in collection order through the real devices, then clear. Poll-time
+        // gamepad sampling bypasses the batch (it already runs once per
+        // frame inside pollInputDevices).
+        return m_native_batch.dispatch(m_keyboard, m_mouse, m_delta_time);
+    }
+
+    void GlfwInput::setNativeBatchCollection(const bool collecting) noexcept {
+        m_collecting_native_batch = collecting;
     }
 
     // ------------------------------------------------------------------

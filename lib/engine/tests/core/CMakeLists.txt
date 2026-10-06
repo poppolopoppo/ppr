@@ -9,6 +9,7 @@ target_sources(engine.tests.core
 target_sources(engine.tests.core
         PRIVATE
         Core.Tests.cpp
+        Core.Timer.Pacer.Tests.cpp
         Core.Memory.PagePool.Tests.cpp
         Core.Memory.Arena.Tests.cpp
         Core.Memory.Slab.Tests.cpp

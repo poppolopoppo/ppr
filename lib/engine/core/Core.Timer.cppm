@@ -85,6 +85,67 @@ export namespace pP {
 
         std::error_code tick(TimeSpan *out_delta_time, TimeSpan target_period = {}) noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // P0 serial-explicit frame pacer: owns admission timing OUTSIDE
+    // TimerManager::tick. The application waits on the pacer, then ticks
+    // with a zero target (latch + callbacks only). Waiting never depends
+    // on a deadline callback from the same manager (which cannot tick
+    // until the wait ends) — the wait here is external to the manager.
+    // Min-period policy preserved: the deadline anchors to the previous
+    // tick, with no catch-up bursts and no phase-locked scheduling.
+    // ------------------------------------------------------------------
+
+    class FramePacer final {
+    public:
+        // Sleep primitive seam: the fake-clock harness advances its manual
+        // clock instead of sleeping. Slicing, deadline, and wake-predicate
+        // logic stay in production code so tests exercise the real path.
+        using SleepFunction = std23::move_only_function<void(TimeSpan)>;
+
+        // Wake predicate: persistent exit/error state polled between sleep
+        // slices (never a same-manager deadline callback). A graceful exit
+        // is observed here, never converted into cancellation. Owning
+        // move_only_function (not a function_ref view): empty by default,
+        // same callable pattern as Callback/SleepFunction above.
+        using WakePredicate = std23::move_only_function<bool()>;
+
+        // Long sleeps are sliced throughout at this quantum, so a wake
+        // predicate signal (exit, error, or target-eligibility change)
+        // wakes within one quantum instead of a full background period.
+        static constexpr TimeSpan kWakeQuantum = std::chrono::milliseconds{2};
+
+        explicit FramePacer(const ITimerClock &clock = ITimerClock::steady()) noexcept;
+
+        // Pure deadline computation, anchored to the previous tick.
+        [[nodiscard]] static TimePoint deadlineFor(TimePoint previous_tick, TimeSpan target_period) noexcept {
+            return previous_tick + target_period;
+        }
+
+        // True while the clock is still before the deadline.
+        [[nodiscard]] bool shouldWait(TimePoint deadline) const noexcept;
+
+        // External wakeable wait until the previous-tick-anchored deadline.
+        // No-op for an empty (uncapped) target or when already late/overrun.
+        // Every sleep slice is bounded by kWakeQuantum and the wake
+        // predicate is rechecked between slices: a latched exit, an error,
+        // or a target-eligibility change observed via the predicate stops
+        // the wait within one quantum, without touching callback dispatch.
+        // The caller re-samples its target after a predicate wake and
+        // rechecks eligibility before admission. Non-const: invoking the stored sleep callable is an observable
+        // call-state mutation, while deadline computation stays pure (see
+        // shouldWait/deadlineFor).
+        void waitForTarget(TimeSpan target_period, TimePoint previous_tick, WakePredicate should_wake = {}) noexcept;
+
+        // Test seam: replaces only the sleep primitive (see SleepFunction).
+        void setSleepFunction(SleepFunction &&sleep) noexcept;
+
+    private:
+        void sleepFor_(TimeSpan duration) noexcept;
+
+        safe_ptr<const ITimerClock> m_clock{};
+        SleepFunction m_sleep{};
+    };
 }
 
 export namespace std {

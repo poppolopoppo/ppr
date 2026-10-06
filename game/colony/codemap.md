@@ -158,6 +158,8 @@ S2 wall-building (scripted `buildWall` rects, 600x `stepOne` with
 - `Colony.cppm` / `Colony.cpp` — `ColonyDesc`, `Colony`.
 - `WorldGen.cppm` / `WorldGen.cpp` — `generateWorld` wrapper.
 - `ColonyDriver.cppm` / `ColonyDriver.cpp` — fixed-step driver, pause/step/speed.
+- `SimFramePacket.cppm` / `SimFramePacket.cpp` — owned sim render payload (`game.colony.sim_packet`): post-tick
+  copies of tick/seed/counters/chunks plus the present-phase coherence gate.
 - `ColonyTranslator.cppm` / `ColonyTranslator.cpp` — grid→GridPass presentation.
 - `ColonyPanel.cppm` / `ColonyPanel.cpp` — game-owned colony panel: tools, tabs, intents, chrome frame.
 - `Agents.cppm` / `Agents.cpp` — GOAP-lite agents (spawn/plan/intent).
