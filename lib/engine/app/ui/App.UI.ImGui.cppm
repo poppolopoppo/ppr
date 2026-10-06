@@ -4,6 +4,8 @@ module;
 
 export module engine.app:ui.imgui;
 
+import :renderer.frame_fence;
+
 import std;
 import engine.math;
 import imgui;
@@ -14,6 +16,19 @@ export namespace pP {
     namespace ui {
         [[nodiscard]] std::unique_ptr<IUIService> createImGuiService();
     }
+
+    // Fence-awareness seam for UI backends behind IUIService: the frame
+    // owner reports the SUBMIT's fence value after a successful submit so
+    // the backend can key its upload-slot reuse off submission completion.
+    // Queried via dynamic_cast (same shape as the GlfwInput seam in the
+    // Editor); a backend that does not implement it simply keeps its own
+    // rule. Render-thread confined like every other UI call.
+    class IFenceAwareUiService {
+    public:
+        virtual ~IFenceAwareUiService() = default;
+
+        virtual void notifyFrameSubmitted(FenceCompletionValue submit_value) noexcept = 0;
+    };
 
     [[nodiscard]] ImVec2 imVec(const float2 &v) noexcept {
         return ImVec2{v.x, v.y};

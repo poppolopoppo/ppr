@@ -141,6 +141,12 @@ export namespace pP::rhi {
     // alphabetical above).
     using slang_rhi::FenceDesc;
     using slang_rhi::SubmitDesc;
+    // kTimeoutInfinite cannot be re-exported with a using-declaration:
+    // slang-rhi declares it as a constexpr global (internal linkage), so
+    // name it here instead. Same type and value as the pinned slang-rhi
+    // (out/cpm_cache/slang-rhi/3bae/include/slang-rhi.h) — infinite host
+    // wait for waitForFences.
+    inline constexpr u64 kTimeoutInfinite{0xFFFFFFFFFFFFFFFFu};
     using slang_rhi::IndirectDispatchArguments;
     using slang_rhi::IndirectDrawArguments;
     using slang_rhi::IndirectDrawIndexedArguments;

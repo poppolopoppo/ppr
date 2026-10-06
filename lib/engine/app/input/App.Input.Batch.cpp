@@ -34,7 +34,17 @@ namespace pP {
         m_events.push_back(PendingMouseScrollInput{context, delta});
     }
 
-    std::error_code PendingInputBatch::dispatch(KeyboardDevice &keyboard, MouseDevice &mouse, const TimeSpan dt) {
+    void PendingInputBatch::postFocus(const safe_ptr<Window> window, const bool focused) {
+        m_events.push_back(PendingFocusInput{window, focused});
+    }
+
+    void PendingInputBatch::postDeviceConnection(const safe_ptr<const IInputDevice> device, const bool connected) {
+        m_events.push_back(PendingDeviceInput{device, connected});
+    }
+
+    std::error_code PendingInputBatch::dispatch(
+        KeyboardDevice &keyboard, MouseDevice &mouse, const TimeSpan dt, PendingFocusApplier &&focus_applier,
+        PendingDeviceApplier &&device_applier) {
         // Own the collected records on the stack first: every exit path below
         // — normal return, first-error break, or an exception escaping a
         // listener/device post (e.g. a throwing character-input callback) —
@@ -47,22 +57,43 @@ namespace pP {
         for (const PendingInputEvent &event: owned) {
             std::visit(
                 [&](const auto &pending) {
-                    if (not pending.m_context.isValid()) [[unlikely]] {
-                        PPR_RETAIN_ERROR_ON_FAIL(InputBatch, first_err, make_error_code(std::errc::invalid_argument));
-                        return;
-                    }
-                    const InputContext &context = *pending.m_context;
                     using PendingT = std::decay_t<decltype(pending)>;
-                    if constexpr (std::is_same_v<PendingT, PendingCharInput>) {
-                        keyboard.postKeyboardCharacterInput(context, pending.m_codepoint);
-                    } else if constexpr (std::is_same_v<PendingT, PendingKeyInput>) {
-                        keyboard.postKeyboardKeyPressed(dt, context, pending.m_key, pending.m_pressed);
-                    } else if constexpr (std::is_same_v<PendingT, PendingMouseButtonInput>) {
-                        mouse.postMouseButtonPressed(dt, context, pending.m_button, pending.m_pressed);
-                    } else if constexpr (std::is_same_v<PendingT, PendingMouseCursorInput>) {
-                        mouse.postMouseCursorPosition(dt, context, pending.m_absolute_pos);
-                    } else if constexpr (std::is_same_v<PendingT, PendingMouseScrollInput>) {
-                        mouse.postMouseScrollWheel(dt, context, pending.m_delta);
+                    if constexpr (std::is_same_v<PendingT, PendingFocusInput>) {
+                        // Deferred focus half through the platform applier.
+                        if (not focus_applier) [[unlikely]] {
+                            PPR_RETAIN_ERROR_ON_FAIL(
+                                InputBatch, first_err, make_error_code(std::errc::invalid_argument));
+                            return;
+                        }
+                        PPR_RETAIN_ERROR_ON_FAIL(
+                            InputBatch, first_err, focus_applier(pending.m_window, pending.m_focused));
+                    } else if constexpr (std::is_same_v<PendingT, PendingDeviceInput>) {
+                        // Deferred hotplug half through the platform applier.
+                        if (not device_applier) [[unlikely]] {
+                            PPR_RETAIN_ERROR_ON_FAIL(
+                                InputBatch, first_err, make_error_code(std::errc::invalid_argument));
+                            return;
+                        }
+                        PPR_RETAIN_ERROR_ON_FAIL(
+                            InputBatch, first_err, device_applier(pending.m_device, pending.m_connected));
+                    } else {
+                        if (not pending.m_context.isValid()) [[unlikely]] {
+                            PPR_RETAIN_ERROR_ON_FAIL(
+                                InputBatch, first_err, make_error_code(std::errc::invalid_argument));
+                            return;
+                        }
+                        const InputContext &context = *pending.m_context;
+                        if constexpr (std::is_same_v<PendingT, PendingCharInput>) {
+                            keyboard.postKeyboardCharacterInput(context, pending.m_codepoint);
+                        } else if constexpr (std::is_same_v<PendingT, PendingKeyInput>) {
+                            keyboard.postKeyboardKeyPressed(dt, context, pending.m_key, pending.m_pressed);
+                        } else if constexpr (std::is_same_v<PendingT, PendingMouseButtonInput>) {
+                            mouse.postMouseButtonPressed(dt, context, pending.m_button, pending.m_pressed);
+                        } else if constexpr (std::is_same_v<PendingT, PendingMouseCursorInput>) {
+                            mouse.postMouseCursorPosition(dt, context, pending.m_absolute_pos);
+                        } else if constexpr (std::is_same_v<PendingT, PendingMouseScrollInput>) {
+                            mouse.postMouseScrollWheel(dt, context, pending.m_delta);
+                        }
                     }
                 },
                 event);

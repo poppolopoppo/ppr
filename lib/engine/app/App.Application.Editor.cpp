@@ -12,9 +12,11 @@ import :input.listener;
 import :input.routing;
 import :platform.glfw.input;
 import :renderer.grid_pass;
+import :renderer.frame_fence;
 import :renderer.triangle_pass;
 import :scene.camera.controller;
 import :service.input;
+import :ui.imgui;
 import :window.viewport;
 
 import engine.core;
@@ -27,6 +29,12 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
 
     ApplicationEditor::ApplicationEditor(const std::string_view name, const std::span<const char *const> argv)
+        : ApplicationEditor(name, argv, nullptr) {
+    }
+
+    ApplicationEditor::ApplicationEditor(
+        const std::string_view name, const std::span<const char *const> argv,
+        const GpuTeardownFailureHandler on_gpu_teardown_failure)
         : Application(
               ApplicationDomain{
                   .m_is_headless = false,
@@ -35,7 +43,21 @@ namespace pP {
                   .m_needs_rendering = true,
                   .m_needs_user_interface = true,
               },
-              name, argv) {
+              name, argv, on_gpu_teardown_failure) {
+    }
+
+    ApplicationEditor::ApplicationEditor(
+        const std::string_view name, const std::span<const char *const> argv, std::unique_ptr<IPlatform> platform,
+        const ITimerClock &clock, const GpuTeardownFailureHandler on_gpu_teardown_failure)
+        : Application(
+              ApplicationDomain{
+                  .m_is_headless = false,
+                  .m_is_interactive = true,
+                  .m_needs_presence = false,
+                  .m_needs_rendering = true,
+                  .m_needs_user_interface = true,
+              },
+              name, argv, std::move(platform), clock, on_gpu_teardown_failure) {
     }
 
     ApplicationEditor::~ApplicationEditor() noexcept = default;
@@ -336,11 +358,44 @@ namespace pP {
     std::error_code ApplicationEditor::shutdown() {
         std::error_code first_err{};
 
+        // Teardown is the inverse of setup. B1' fail-stop first: admission
+        // is already stopped and GPU quiescence established (or re-reported)
+        // idempotently here — no new frames enter shutdown on this lane.
+        // UNKNOWN completion fail-stops BEFORE anything a pending frame may
+        // still read is released; the OS reclaims retained objects. Only
+        // proven idle or positively-confirmed removal takes the release path
+        // below (removal = no_such_device_or_address or a latched-terminal
+        // fence). abandon()/notifyDeviceLost() prove nothing by themselves
+        // and are never used as proof on the UNKNOWN path. The boundary is
+        // log-free (see Application::shutdown): the quiescence error is
+        // retained silently so a throw during message formatting cannot
+        // escape before the fail-stop below.
+        if (const std::error_code teardown_err = prepareGpuTeardown_()) {
+            if (not first_err) {
+                first_err = teardown_err;
+            }
+        }
+        if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
+            failStopOnUnknownGpuTeardown_(first_err);
+        }
+        const bool device_loss_confirmed = gpuTeardownDisposition() == GpuQuiescence::kRemovalConfirmed;
+        if (device_loss_confirmed) {
+            PPR_LOG(Editor, warning, "shutdown idle wait failed, confirming device loss", {});
+            getRenderer().notifyDeviceLost();
+            if (m_grid_pass) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->notifyDeviceLost());
+            }
+            if (m_triangle_pass) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->notifyDeviceLost());
+            }
+        }
+
         // Release scene GPU handles while the pass caches are still alive,
         // before the §2.4 pass shutdown below.
         if (m_scene.has_value()) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, unloadScene());
         }
+        noteTeardownStage_("scene");
 
         // Detach detector first so no callback fires during teardown.
         m_device_disconnected_handle.reset();
@@ -367,6 +422,7 @@ namespace pP {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_ui_service->shutdown());
             m_ui_service.reset();
         }
+        noteTeardownStage_("ui");
 
         if (m_grid_pass) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->shutdown());
@@ -410,8 +466,12 @@ namespace pP {
             main_window->m_when_focused.reset();
 
             // Release the surface while the renderer still owns the queue;
-            // the window handle dies in destroyWindow below.
-            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, getRenderer().destroyWindowSurface(*main_window));
+            // the window handle dies in destroyWindow below. Skipped after
+            // confirmed loss: notifyDeviceLost above already released every
+            // surface without touching the device.
+            if (not device_loss_confirmed) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, getRenderer().destroyWindowSurface(*main_window));
+            }
 
             IWindowService &window_service = *getPlatform().getWindowService();
             std::ignore = window_service.setMainWindow(nullptr);
@@ -458,6 +518,13 @@ namespace pP {
 
         m_camera->updateModel(dt, *m_camera_controller, m_main_viewport->getViewport());
 
+        // B2' single admission gate: run() already probed BEFORE this whole
+        // virtual stage (busy frames never reach update), so the packet is
+        // always built here. The Renderer re-checks admission at submit time
+        // as the defensive enforcement backstop (quarantine/terminal
+        // included); capacity-busy there retires as a dropped frame in
+        // renderPacket_, never an app failure.
+
         // P0 serial-explicit build-packet stage (same thread): copy the
         // camera snapshot, viewport (+ revision), and window metadata into
         // owned packet storage BEFORE pass staging. Pass updates below
@@ -466,6 +533,11 @@ namespace pP {
         m_frame_packet = makeFramePacket(
             getFrameIndex(), dt, getTimerManager().getTotalElapsed(), m_camera->getSnapshot(),
             m_main_viewport->getViewport(), m_main_viewport->getViewportRevision(), m_main_viewport->getWindow());
+        // Generational surface claim at capture: the consume path rejects
+        // a stale packet before acquisition. First frame observes
+        // kSurfaceGenerationNone (no record yet) and always accepts.
+        m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
+            m_main_viewport->getWindow().m_handle);
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_frame_packet->m_camera));
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_frame_packet->m_camera));
@@ -496,6 +568,26 @@ namespace pP {
         return renderPacket_(packet);
     }
 
+    void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) {
+        // Submission acceptance is independent of present: the Renderer
+        // commits the SUBMIT's value before presenting, so an accepted
+        // submit advances lastSubmitted even when the present below it
+        // fails. Stamp ALL participants off the advancement — never off
+        // the present verdict — so ring-slot bookkeeping agrees with the
+        // fence even on present failure. A rejected or quarantined frame
+        // advances nothing and stamps nothing.
+        Renderer &renderer = getRenderer();
+        const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
+        if (accepted == previously_submitted or accepted == kFenceValueNone) {
+            return;
+        }
+        m_grid_pass->notifyFrameSubmitted(accepted);
+        m_triangle_pass->notifyFrameSubmitted(accepted);
+        if (auto *fence_aware = dynamic_cast<IFenceAwareUiService *>(m_ui_service.get())) {
+            fence_aware->notifyFrameSubmitted(accepted);
+        }
+    }
+
     std::error_code ApplicationEditor::renderPacket_(const FramePacket &packet) {
         Renderer &renderer = getRenderer();
 
@@ -514,6 +606,26 @@ namespace pP {
         // revision, so P1 surface generations can key off it instead of
         // re-querying the live window.
         if (not hasRenderTarget(packet)) {
+            return default_value_v;
+        }
+
+        // Generational rejection before ANY backend work (uploads fence the
+        // queue, so they must not run for a stale packet): a packet built
+        // for an older surface shape retires here as an explicit
+        // non-rendering outcome. Presentation-only state is dropped; reliable
+        // world edits were already applied to pass-owned caches during
+        // update(), so nothing acknowledged is lost.
+        const SurfaceIdentity packet_surface{
+            .m_handle = packet.m_surface_identity,
+            .m_generation = packet.m_surface_generation,
+        };
+        if (renderer.isSurfaceWorkObsolete(packet_surface)) {
+            PPR_LOG(
+                Editor, info, "dropping packet for obsolete surface generation",
+                {
+                    {"frame", packet.m_frame_id},
+                    {"packet_generation", packet.m_surface_generation},
+                });
             return default_value_v;
         }
 
@@ -538,8 +650,31 @@ namespace pP {
             },
         };
 
-        PPR_RETURN_ERROR_ON_FAIL(Editor, renderer.renderAndPresent(m_main_viewport->getWindow(), surface_passes));
-
+        // Submission acceptance is independent of present: capture the
+        // fence frontier first so every participant is stamped off an
+        // accepted SUBMIT even when the present below it fails (G1-5).
+        // An obsolete packet (resized since capture without a same-frame
+        // reconfigure) or a capacity-busy ledger retires here as an
+        // explicit non-rendering outcome — dropped, never fatal: the next
+        // frame recaptures a fresh packet against the current surface.
+        // Quarantine/terminal failures keep their distinct codes and
+        // propagate to teardown/recovery — never suppressed as dropped
+        // frames.
+        const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
+        const std::error_code frame_err = renderer.renderAndPresent(
+            m_main_viewport->getWindow(), surface_passes, packet_surface);
+        stampSubmittedPasses_(previously_submitted);
+        if (frame_err == std::make_error_code(std::errc::resource_unavailable_try_again) or
+            frame_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+            PPR_LOG(
+                Editor, info, "dropping non-rendering frame",
+                {
+                    {"frame", packet.m_frame_id},
+                    {"error", frame_err.message()},
+                });
+            return default_value_v;
+        }
+        PPR_RETURN_ERROR_ON_FAIL(Editor, frame_err);
         return default_value_v;
     }
 }

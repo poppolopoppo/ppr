@@ -19,8 +19,23 @@ namespace pP {
 
     Application::Application(
         ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv)
-        : m_application_clock(ITimerClock::steady()), m_platform(IPlatform::create()),
-          m_arguments(argv.begin(), argv.end()), m_name(name), m_domain(std::move(domain)) {
+        : Application(std::move(domain), name, argv, IPlatform::create(), ITimerClock::steady(), nullptr) {
+    }
+
+    Application::Application(
+        ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv,
+        const GpuTeardownFailureHandler on_gpu_teardown_failure)
+        : Application(
+              std::move(domain), name, argv, IPlatform::create(), ITimerClock::steady(), on_gpu_teardown_failure) {
+    }
+
+    Application::Application(
+        ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv,
+        std::unique_ptr<IPlatform> platform, const ITimerClock &clock,
+        const GpuTeardownFailureHandler on_gpu_teardown_failure)
+        : m_application_clock(clock), m_pacer(clock), m_platform(std::move(platform)),
+          m_arguments(argv.begin(), argv.end()), m_name(name), m_domain(std::move(domain)),
+          m_on_gpu_teardown_failure(on_gpu_teardown_failure) {
         PPR_ASSERT(m_platform != nullptr);
 
         hal::disableSystemErrorReporting();
@@ -101,9 +116,21 @@ namespace pP {
             }
         };
 
+        // B1'a epoch scope: a previous run() on this object leaves a
+        // recorded (prepared) disposition behind. Clear it BEFORE
+        // initialization can acquire new GPU resources so the coming
+        // teardown independently re-establishes quiescence for this epoch's
+        // submissions. Idempotence holds within the epoch only.
+        resetGpuTeardownEpoch_();
+
         if (const std::error_code init_err = initialize()) {
+            // B1'b: publish completion only after finishRun_ returns — an
+            // exception inside finishRun_ (before proof) must reach the
+            // nonthrowing termination path via the defer above, never skip
+            // it as "already completed".
+            const std::error_code result = finishRun_(init_err);
             completed = true;
-            return finishRun_(init_err);
+            return result;
         }
 
         PPR_LOG(App, emphasis, "🏁 run application loop");
@@ -116,44 +143,88 @@ namespace pP {
             std::error_code first_err{};
 
             // Stage: advance clock (wakeable pacer wait, then zero-target
-            // tick). An exit latched during the wait stops admission here:
-            // the frame retires without client work and the loop observes
-            // termination at the top.
+            // tick). A clock error OR a latched exit retires the frame here:
+            // the error is latched for run()'s return value and the loop
+            // leaves WITHOUT client or render work on this path.
             TimeSpan dt{};
             {
                 const hal::ProfileScope scope_clock{"App.Frame.Clock"};
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, advanceClock_(&dt));
             }
 
-            if (isExitRequested()) {
-                // Clock-error + exit coincidence: retain the clock error for
-                // run()'s return value, and retire the frame without client
-                // or render work on this path.
+            if (first_err or isExitRequested()) {
                 if (first_err) {
                     m_request_exit(first_err);
                 }
                 break;
             }
 
+            // Admission + client stages share one exception boundary; every
+            // handler retains the FIRST error, never overwriting it.
             try {
-                {
-                    const hal::ProfileScope scope_update{"App.Frame.Update"};
-                    PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(dt));
+                // B2' admission gate BEFORE the whole virtual update stage
+                // (derived pre-work included): retire + probe, then branch.
+                // Terminal (quarantine included) retains first_err, latches
+                // it, and leaves BEFORE carry/update/render. Capacity-busy
+                // accumulates dt into the single Application-owned carry,
+                // runs PLATFORM COLLECTION ONLY (never update(dt): device
+                // time must not advance on a skipped frame), latches a
+                // collection failure, and finishes the iteration.
+                bool admitted_skip = false;
+                if (const std::error_code probe_err = probeFrameAdmissionPreUpdate_(admitted_skip)) {
+                    if (not first_err) {
+                        first_err = probe_err;
+                    }
+                    m_request_exit(first_err);
+                    break;
+                }
+                if (admitted_skip) {
+                    noteSkippedFrameDt(dt);
+                    if (m_platform) {
+                        PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_platform->pumpNativeEvents());
+                    }
+                    if (first_err) [[unlikely]] {
+                        m_request_exit(first_err);
+                    }
+                    ++m_frame_index;
+                    continue;
                 }
 
+                // Admitted: prepend carried skipped-frame time exactly once
+                // (exchange semantics inside claimSkippedFrameDt) so the
+                // fixed-step sim observes preserved elapsed time.
+                const TimeSpan carry = claimSkippedFrameDt();
+                const TimeSpan effective_dt = dt + carry;
+                std::error_code update_err{};
                 {
+                    const hal::ProfileScope scope_update{"App.Frame.Update"};
+                    PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(effective_dt));
+                    update_err = first_err;
+                }
+
+                // Render only when update succeeded: a failed update already
+                // latched its error and the loop retires below.
+                if (not update_err) {
                     const hal::ProfileScope scope_render{"App.Frame.Render"};
                     PPR_RETAIN_ERROR_ON_FAIL(App, first_err, render());
                 }
 
             } catch (const std::system_error &e) {
-                m_request_exit(e.code());
+                if (not first_err) {
+                    first_err = e.code();
+                }
             } catch (const std::invalid_argument &) {
-                m_request_exit(std::make_error_code(std::errc::invalid_argument));
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::invalid_argument);
+                }
             } catch (const std::bad_alloc &) {
-                m_request_exit(std::make_error_code(std::errc::not_enough_memory));
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::not_enough_memory);
+                }
             } catch (...) {
-                m_request_exit(std::make_error_code(std::errc::state_not_recoverable));
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::state_not_recoverable);
+                }
             }
 
             if (first_err) [[unlikely]] {
@@ -164,7 +235,6 @@ namespace pP {
         }
 
         PPR_LOG(App, emphasis, "stop application loop, bye 👋");
-
         // Read the stable loop error BEFORE shutdown() resets the
         // lifecycle object that carries it; finishRun_() then retains the
         // first error across shutdown + logger drain.
@@ -172,12 +242,55 @@ namespace pP {
         if (m_lifecycle) {
             loop_err = m_lifecycle->error();
         }
+        // B1'b: same ordering as the init-failure path above — the defer
+        // stays armed until finishRun_ (proof + release) returns.
+        const std::error_code result = finishRun_(loop_err);
         completed = true;
-        return finishRun_(loop_err);
+        return result;
     }
 
-    std::error_code Application::advanceClock_(TimeSpan *out_delta_time) {
-        // P0 serial-explicit pacing: wakeable external waits against the
+    void Application::noteSkippedFrameDt(const TimeSpan dt) noexcept {
+        if (dt > TimeSpan{}) {
+            m_pending_skipped_dt += dt;
+        }
+    }
+
+    TimeSpan Application::claimSkippedFrameDt() noexcept {
+        const TimeSpan carry = m_pending_skipped_dt;
+        m_pending_skipped_dt = TimeSpan{};
+        return carry;
+    }
+
+    std::error_code Application::probeFrameAdmissionPreUpdate_(bool &out_skip) {
+        out_skip = false;
+        if (not m_domain.m_needs_rendering or not m_renderer) {
+            return default_value_v;
+        }
+        if (const std::error_code retire_err = m_renderer->retireCompletedFrames()) {
+            // Terminal precedence: an abandoned/lost fence reports its poll
+            // failure here, but the pipeline fate is device loss — report
+            // the terminal code so producers route to teardown/recovery,
+            // never mistaking it for a transient failure. Any other poll
+            // error propagates as-is (never invented completion, never
+            // capacity-busy).
+            if (const std::error_code probe_err = m_renderer->checkFrameAdmission();
+                probe_err == std::make_error_code(std::errc::no_such_device_or_address)) {
+                return probe_err;
+            }
+            return retire_err;
+        }
+        if (const std::error_code probe_err = m_renderer->checkFrameAdmission()) {
+            if (probe_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+                out_skip = true;
+                return default_value_v;
+            }
+            return probe_err;
+        }
+        return default_value_v;
+    }
+
+    std::error_code Application::advanceClock_(
+        TimeSpan *out_delta_time) { // P0 serial-explicit pacing: wakeable external waits against the
         // previous-tick-anchored deadline (min-period policy, no catch-up),
         // then the manager ticks with a zero target so now() stays latched
         // and only callback dispatch + dt accounting run. Focus/background/
@@ -216,6 +329,18 @@ namespace pP {
 
     std::error_code Application::finishRun_(const std::error_code prior) {
         std::error_code result = prior;
+        // B1': establish GPU quiescence BEFORE the virtual shutdown() below
+        // so every release path runs under a recorded disposition. Retain:
+        // an UNKNOWN here never overwrites the caller's original error —
+        // both are preserved (original in `result` first, shutdown errors
+        // retained after), and the fail-stop inside shutdown() still fires.
+        // Log-free like the shutdown entries: formatting the quiescence
+        // error here could throw before the boundary below settles.
+        if (const std::error_code teardown_err = prepareGpuTeardown_()) {
+            if (not result) {
+                result = teardown_err;
+            }
+        }
         PPR_RETAIN_ERROR_ON_FAIL(App, result, shutdown());
 
         // Synchronous exit-time drain: the logger worker is async and
@@ -231,6 +356,10 @@ namespace pP {
 
     std::error_code Application::initialize() {
         const hal::ProfileScope scope{"App.Initialize"};
+        // B1'a: fresh epoch BEFORE any resource-creation entry below
+        // (platform, shader, RHI, renderer). Covers direct initialize() /
+        // partial-init rollback paths; run() re-arms per epoch as well.
+        resetGpuTeardownEpoch_();
         m_application_clock.reset();
 
         PPR_LOG(
@@ -293,8 +422,6 @@ namespace pP {
     }
 
     std::error_code Application::shutdown() {
-        PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
-
         PPR_DEFER {
             context::setApplication(SharedContext{});
 
@@ -304,8 +431,27 @@ namespace pP {
 
         std::error_code first_err{};
 
+        // B1' fail-stop boundary: preparation + the UNKNOWN check run with
+        // NO logging macros. PPR_RETAIN_ERROR_ON_FAIL formats via allocating
+        // error_code::message(), and a throw there would escape shutdown
+        // without _Exit(0xB1). Retain silently; diagnostics wait until the
+        // disposition below authorizes release.
+        if (const std::error_code teardown_err = prepareGpuTeardown_()) {
+            if (not first_err) {
+                first_err = teardown_err;
+            }
+        }
+        if (m_gpu_teardown_disposition == GpuQuiescence::kUnknown) {
+            failStopOnUnknownGpuTeardown_(m_gpu_teardown_error);
+        }
+
+        // Safe paths only from here: quiescence is proven idle or removal
+        // is confirmed, so entry/release diagnostics may log again.
+        PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
+
         if (m_renderer) {
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_renderer->shutdown());
+            m_gpu_teardown_stages.push_back("renderer");
             m_renderer.reset();
         }
 
@@ -318,6 +464,7 @@ namespace pP {
                     PPR_VERIFY(m_services.erase(*rhi_service));
                 }
             }
+            m_gpu_teardown_stages.push_back("rhi");
 
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
             if (m_services.tryGet<IShaderService>() == shader_service) {
@@ -331,9 +478,111 @@ namespace pP {
 
         if (m_platform) {
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_platform->shutdown(*this));
+            m_gpu_teardown_stages.push_back("platform");
         }
 
         return first_err;
+    }
+
+    void Application::resetGpuTeardownEpoch_() noexcept {
+        // Allocation-free by construction: Array::clear releases without
+        // allocating; error_code/disposition/flag assignment cannot throw.
+        m_gpu_teardown_prepared = false;
+        m_gpu_teardown_disposition = GpuQuiescence::kUnknown;
+        m_gpu_teardown_error = default_value_v;
+        m_gpu_teardown_stages.clear();
+    }
+
+    void Application::noteGpuTeardownStageBestEffort_(const char *stage) noexcept {
+        try {
+            m_gpu_teardown_stages.push_back(std::string{stage});
+        } catch (...) {
+            // Diagnostics are best-effort: an allocation failure here must
+            // neither mask the recorded disposition nor escape toward
+            // ordinary destruction on the UNKNOWN path.
+        }
+    }
+
+    std::error_code Application::prepareGpuTeardown_() {
+        // B1'b fail-closed: no exception escapes this function before the
+        // caller fail-stops on UNKNOWN. Every allocating/best-effort step
+        // below is guarded; completion flags publish only after
+        // classification; the prepared flag sets last.
+        if (m_gpu_teardown_prepared) {
+            return m_gpu_teardown_error;
+        }
+
+        // Stop admission permanently FIRST: no new frame may be built while
+        // GPU state of unknown completion is being classified. noexcept.
+        if (m_renderer) {
+            m_renderer->quarantineAdmission();
+        }
+
+        // B3' entry hook (tests only): owners alive, nothing released yet.
+        // Best-effort instrumentation — a throwing hook must not bypass
+        // proof: fall through to classification below.
+        try {
+            if (m_gpu_teardown_entry_hook) {
+                std::move(m_gpu_teardown_entry_hook)();
+            }
+        } catch (...) {
+        }
+
+        if (not m_renderer) {
+            // Trivially idle: no GPU resources exist in this epoch.
+            m_gpu_teardown_disposition = GpuQuiescence::kIdleProven;
+            m_gpu_teardown_error = default_value_v;
+            m_gpu_teardown_prepared = true;
+            noteGpuTeardownStageBestEffort_("quiescence");
+            noteGpuTeardownStageBestEffort_("idle-proven");
+            return default_value_v;
+        }
+
+        // Quiescence is established WITHOUT releasing anything; release
+        // happens in the shutdown entries above/below, only after a safe
+        // disposition. Never signal the app fence here.
+        GpuQuiescenceResult quiescence{};
+        try {
+            quiescence = m_renderer->establishGpuQuiescence();
+        } catch (const std::bad_alloc &) {
+            quiescence = GpuQuiescenceResult{
+                .m_disposition = GpuQuiescence::kUnknown,
+                .m_error = std::make_error_code(std::errc::not_enough_memory),
+            };
+        } catch (...) {
+            quiescence = GpuQuiescenceResult{
+                .m_disposition = GpuQuiescence::kUnknown,
+                .m_error = std::make_error_code(std::errc::state_not_recoverable),
+            };
+        }
+        // Publish completion flags ONLY after classification above.
+        m_gpu_teardown_disposition = quiescence.m_disposition;
+        m_gpu_teardown_error = quiescence.m_error;
+        m_gpu_teardown_prepared = true;
+        // Diagnostics last and best-effort: on UNKNOWN an allocation
+        // failure here can no longer gate the caller's fail-stop.
+        noteGpuTeardownStageBestEffort_("quiescence");
+        switch (quiescence.m_disposition) {
+            case GpuQuiescence::kIdleProven: noteGpuTeardownStageBestEffort_("idle-proven"); break;
+            case GpuQuiescence::kRemovalConfirmed: noteGpuTeardownStageBestEffort_("removal-confirmed"); break;
+            case GpuQuiescence::kUnknown: noteGpuTeardownStageBestEffort_("unknown"); break;
+        }
+        return m_gpu_teardown_error;
+    }
+
+    void Application::failStopOnUnknownGpuTeardown_(const std::error_code quiescence_error) noexcept {
+        // Best-effort diagnostics first: no logger-drain dependency — the
+        // process is exiting and the OS reclaims retained GPU objects.
+        try {
+            if (m_on_gpu_teardown_failure != nullptr) {
+                m_on_gpu_teardown_failure(quiescence_error);
+            }
+        } catch (...) {
+            // A throwing handler must not unwind through teardown: fall
+            // through to the unconditional termination below.
+        }
+        std::fflush(nullptr);
+        std::_Exit(kUnknownGpuCompletionFatalExit);
     }
 
     std::error_code Application::update(TimeSpan dt) {

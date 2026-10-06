@@ -3,6 +3,7 @@ module;
 export module engine.app:renderer.grid_pass;
 
 import :renderer.types;
+import :renderer.frame_fence;
 import :scene.camera;
 
 import engine.core;
@@ -210,6 +211,32 @@ export namespace pP {
         // chunk → invalid_argument.
         [[nodiscard]] Expected<GridTilePayload> resolveCached(u32 chunk_id) noexcept;
 
+        // P1 fence settlement: records the fence value signalled by the
+        // frame's SUBMIT for the ring slot this frame rotated onto. Called
+        // by the frame owner after a successful submit; never called when
+        // the submit failed (the slot keeps its older value, which is
+        // conservative and safe: unwritten-or-stale contents are always
+        // overwritten before any later use).
+        void notifyFrameSubmitted(FenceCompletionValue submit_value) noexcept;
+
+        // Telemetry for Gate 1: how often the atlas write took the
+        // global-idle serialization, how many atlas writes happened, and how
+        // often a ring growth waited for in-flight work.
+        [[nodiscard]] u64 atlasSerializationCount() const noexcept {
+            return m_atlas_serialization_count;
+        }
+        [[nodiscard]] u64 atlasWriteCount() const noexcept {
+            return m_atlas_write_count;
+        }
+        [[nodiscard]] u64 growthWaitCount() const noexcept {
+            return m_growth_wait_count;
+        }
+        // Last-use completion per ring slot (shared cursor: one array covers
+        // the payload ring and the indirect-args ring together).
+        [[nodiscard]] std::array<FenceCompletionValue, 3u> slotCompletionValues() const noexcept {
+            return m_tile_slot_values;
+        }
+
         [[nodiscard]] u64 uploadCount() const noexcept {
             return m_upload_count;
         }
@@ -234,25 +261,46 @@ export namespace pP {
         // resolve, upload, and encode
         // ------------------------------------------------------------------
 
+        // Payload-ring depth: 3 slots > 2 frame credits, so the selected
+        // slot is complete without waiting whenever submissions retired in
+        // order; the wait fallback covers the rest. Declared before the
+        // pipeline entry below, whose per-slot roots are sized by it.
+        static constexpr u32 kTileRingSize{3u};
+        static_assert(kTileRingSize == kFrameRingSlots);
+
         std::error_code createShaderProgram_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
-            rhi::ComPtr<rhi::IShaderObject> m_root_object{};
-            // g_grid_frame's dereferenced ConstantBuffer cursor, resolved once
-            // so the per-frame path skips the field lookup and sub-object walk.
-            rhi::ShaderCursor m_frame_cursor{};
+            // Per-slot ROOT shader objects (one per ring slot), each with
+            // its own resolved g_grid_frame cursor. The frame writes only
+            // its selected slot's cursor and binds only that slot's root,
+            // so no submission ever observes another frame's constants —
+            // the persistent-root mutation pattern is gone. A signature
+            // change defers the whole entry (pipeline + all roots) through
+            // m_deferred_releases instead of dropping it mid-flight.
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_slot_roots{};
+            std::array<rhi::ShaderCursor, kTileRingSize> m_slot_frame_cursors{};
         };
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature);
 
+        // Reclaims deferred pipelines/roots at or below `completed`.
+        void reclaimCompleted_(FenceCompletionValue completed) noexcept;
+
+        // Rotates onto a completion-selected slot and waits it out when
+        // stale. Records m_last_used_slot for notifyFrameSubmitted.
+        [[nodiscard]] std::error_code selectSlot_(FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
+
         [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
 
-        [[nodiscard]] std::error_code ensureTilePayloads_(rhi::IDevice &device, u32 tile_count);
+        [[nodiscard]] std::error_code ensureTilePayloads_(
+            rhi::IDevice &device, u32 tile_count, FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
 
-        [[nodiscard]] std::error_code ensureIndirectArgs_(rhi::IDevice &device, u32 arg_count);
+        [[nodiscard]] std::error_code ensureIndirectArgs_(
+            rhi::IDevice &device, u32 arg_count, FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
 
         [[nodiscard]] std::error_code ensureCellBuffer_(rhi::IDevice &device, bool atlas_required);
 
@@ -283,21 +331,40 @@ export namespace pP {
 
         // The payload ring: kTileRingSize upload buffers at GridTilePayload
         // (32 B) stride, each created and mapped ONCE and kept mapped for its
-        // whole life — render only advances the cursor, so a frame's writes
-        // land in a buffer no in-flight frame is still reading. Sized like
-        // the swapchain image count so one submit per frame never revisits a
-        // slot still on the GPU. Pass-owned, released in shutdown before
-        // waitOnHost.
-        static constexpr u32 kTileRingSize{3u};
+        // whole life. The frame selects its slot by per-slot completion
+        // values (m_tile_slot_values), never by blind cursor parity: with 3
+        // slots and at most 2 outstanding submissions the selected slot is
+        // complete without waiting, and the wait fallback below covers the
+        // rest (including artificially delayed completion). Pass-owned,
+        // released in shutdown before waitOnHost.
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_tile_payloads{};
         std::array<void *, kTileRingSize> m_tile_payload_mapped{};
         u32 m_tile_ring_cursor{0u};
         u64 m_tile_payload_capacity = 0u;
+        // Shared-cursor coverage, once: the indirect-args ring rotates with
+        // the payload ring on the same cursor, so ONE completion array
+        // (m_tile_slot_values) governs both. A submission references both
+        // slots together; they retire together.
+        std::array<FenceCompletionValue, kTileRingSize> m_tile_slot_values{};
+        u32 m_last_used_slot{0u};
+
+        // Retired pipelines/roots that in-flight submissions may still
+        // reference, keyed by last-use fence value. Reclaimed at every
+        // render entry from the frame's completion value; drained
+        // unconditionally at shutdown/device-loss.
+        DeferredReleaseQueue m_deferred_releases{};
+        FenceCompletionValue m_last_submitted_value{kFenceValueNone};
+
+        // Gate 1 telemetry (see accessors above).
+        u64 m_atlas_serialization_count{0u};
+        u64 m_atlas_write_count{0u};
+        u64 m_growth_wait_count{0u};
 
         // The compacted MDI args ring: one IndirectDrawArguments per visible
-        // tile, written by the CPU each submit. Same 3-slot rotation (and the
-        // same shared cursor) as the payload ring, so a frame's write never
-        // lands in a buffer an in-flight frame is still reading.
+        // tile, written by the CPU each submit. Same 3-slot rotation on the
+        // shared cursor as the payload ring (governed by the same
+        // m_tile_slot_values, covered once), so a frame's write never lands
+        // in a buffer an in-flight frame is still reading.
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_indirect_args{};
         std::array<void *, kTileRingSize> m_indirect_args_mapped{};
         u64 m_indirect_args_capacity = 0u;

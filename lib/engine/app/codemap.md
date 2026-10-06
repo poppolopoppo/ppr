@@ -16,7 +16,7 @@ application.
   `:input.*` (7, incl. `:input.batch` owned pump batches),
   `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
-  `:renderer` + `:renderer.gpu_caches` + `:renderer.grid_pass` + `:renderer.triangle_pass` + `:renderer.types`,
+  `:renderer` + `:renderer.frame_fence` + `:renderer.gpu_caches` + `:renderer.grid_pass` + `:renderer.triangle_pass` + `:renderer.types`,
   `:ui.imgui`.
 - `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
   `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerManager`
@@ -61,7 +61,7 @@ application.
   `static_cast<double/u32/u64>` conversions (`input`, `platform/glfw`, `ui`); `.indexBuffer = {}` (`renderer`);
   `[[maybe_unused]]` debug helpers (`ui`).
 - CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (7, incl. `:input.batch` owned pump batches + `:input.routing`), frame (1, `:frame.packet`), platform (5),
-  player (2), renderer (5, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2 — `App.Scene.World.cppm` exists on
+  player (2), renderer (6, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2 — `App.Scene.World.cppm` exists on
   disk but is unregistered, see `scene/codemap.md`), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
   (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
   privately. Links `engine.core/math/shader/rhi/image/mesh` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
@@ -74,14 +74,19 @@ application.
 ## Flow
 
 1. `Application::run()` → `initialize()` (re-arms the `m_exit_requested` latch) → fused `finishRun_()` on every
-   path (first error retained across `shutdown()` + `Log::flush(true)`; loop error read BEFORE `shutdown()` resets the
+   path (first error retained across `prepareGpuTeardown_()` + `shutdown()` + `Log::flush(true)`; loop error read BEFORE `shutdown()` resets the
    lifecycle; exception-only safety-net defer otherwise) → loop `while (not isExitRequested())` — exit latch OR latched
    cancel error, never the consumable event pulse alone: `advanceClock_()` (wakeable `FramePacer` wait on the
    exit/error latch with 2ms quantum, then zero-target `m_application_clock.tick()` — `now()` stays latched) →
-   post-wait admission recheck (`break` retires the frame without client work) → `update(dt)` + `render()` with
-   first-error-wins `PPR_RETAIN_ERROR_ON_FAIL`; exceptions map to exit clauses (`system_error→e.code()`,
-   `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`) via `m_request_exit`; no per-frame
-   flush — shutdown drain only.
+   clock-error OR exit latches + leaves the loop with no client/render work → admission gate BEFORE the whole
+   virtual update stage (`probeFrameAdmissionPreUpdate_`: retire + probe with terminal precedence over poll errors;
+   terminal retains first-error, latches, and leaves BEFORE carry/update/render; capacity-busy accumulates dt into
+   the single Application-owned `m_pending_skipped_dt`, runs `IPlatform::pumpNativeEvents()` collection ONLY
+   (never `update(dt)`), latches a collection failure, and finishes the iteration; admitted frames run
+   `update(dt + carry)` and `render()` only when update succeeded) inside one exception boundary whose handlers
+   retain the first error, never overwriting it; exceptions map to exit clauses (`system_error→e.code()`,
+   `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`) via first-error retention;
+   no per-frame flush — shutdown drain only.
 2. `Application::initialize()` → clock reset (`App.Application.cpp:141`) BEFORE platform init (`:151`) → `PPR_DEFER`-on-failure `shutdown()` rollback
    (`success` flag; service registrations torn down explicitly via `shutdown()`, not the defer pair) →
    `content/install` = executable parent (`install` aliases `content`), `working` = `current_path`
@@ -89,7 +94,10 @@ application.
    if `m_domain.m_needs_rendering`: `IShaderService::get()->initialize()` + insert, `IRhiService::get()->initialize(
    DeviceType::Default, shader)` + insert, `make_unique<Renderer>()->initialize(rhi)`. `update()` =
    `not_connected` guard + `m_platform->update(dt)` (`App.Application.cpp:243-250`); `render()` = no-op default.
-   `shutdown()` (idempotent-success): `m_renderer->shutdown()` + reset → shutdown RHI then erase
+   `shutdown()` (B1' fail-stop: `prepareGpuTeardown_()` stops admission permanently, establishes
+   idle-proven vs removal-confirmed vs UNKNOWN, and records the disposition + stage log; UNKNOWN fail-stops the
+   process via the constructor-injected noexcept handler + unconditional `_Exit(0xB1)` BEFORE any release; only
+   proven idle or confirmed removal releases): `m_renderer->shutdown()` + reset → shutdown RHI then erase
    on success → shutdown shader then erase on success → `m_platform->shutdown(*this)` last;
    `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
 3. `ApplicationEditor::initialize()` → `Application::initialize()` → `Player(PlayerIdentity{})` +
@@ -103,7 +111,9 @@ application.
    throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
-   `camera->updateModel(dt, controller, viewport->getViewport())` →
+   `camera->updateModel(dt, controller, viewport->getViewport())` → packet construction (the run-level gate
+   already admitted this frame, so the packet is always built; busy frames never reach `update()`; the
+   Renderer re-checks admission at submit time as the defensive backstop) →
    `triangle_pass->update(dt, packet.m_camera)` + `grid_pass->update(dt, packet.m_camera)` (packet-owned snapshot;
     passes never consult the mutable `Camera` while drawing) + `submitSceneInstances_()` when a scene is loaded →
    `ui_service->update(dt, *viewport)`; the owned `FramePacket` (P0: camera/viewport/window copies) is built right
@@ -112,7 +122,13 @@ application.
     GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
     renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
     then ImGui selects no depth and loads the existing color
-   attachment; both render before one present. `shutdown()` starts with `unloadScene()` (`App.Application.Editor.cpp:338-340`) + `destroyWindowSurface` (`:399`), then detaches the
+   attachment; both render before one present. Submission acceptance is independent of present: the fence
+   frontier is captured before `renderAndPresent` and ALL participants (grid, triangle, fence-aware UI) are
+   stamped off an accepted SUBMIT even when present fails; obsolete/capacity-busy frames drop as
+   non-rendering success (next frame recaptures), while quarantine/terminal failures keep their distinct
+   codes into teardown/recovery. `shutdown()` fail-stops first (`prepareGpuTeardown_()` + UNKNOWN check —
+   no release on UNKNOWN), then on proven idle or confirmed removal (renderer `notifyDeviceLost` + pass
+   `notifyDeviceLost`, surface destroy skipped) runs `unloadScene()` (`App.Application.Editor.cpp:338-340`) + `destroyWindowSurface` (`:399`), then detaches the
    device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
     erases + shuts down UI, grid pass, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
    resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then

@@ -148,5 +148,10 @@ export namespace pP {
 
         [[nodiscard]] WindowScaledCallback::Handle whenWindowScaled(
             WindowScaledCallback::Event on_scaled) noexcept override;
+
+        // Deferred client half of a focus change: fires the service-level
+        // broadcast for flags the collection-time platform half already set.
+        // (The window-level broadcast fires through the batch applier first.)
+        [[nodiscard]] std::error_code notifyWindowFocused(const Window &window, bool focused);
     };
 }

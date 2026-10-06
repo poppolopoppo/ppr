@@ -41,14 +41,13 @@ export namespace pP {
 
         [[nodiscard]] std::error_code update(TimeSpan dt) override;
 
-        // P0 completed-pump boundary: native-only event collection WITHOUT
-        // any once-per-client-frame input advancement. Repeatable within a
-        // frame: window callbacks stage owned records into the input batch
-        // (no client dispatch), device time never advances, transient
-        // character input is never cleared, gamepads are never re-sampled.
-        // Client dispatch happens exactly once per frame in update(dt) via
-        // the concrete dispatchCollectedBatches() below.
-        [[nodiscard]] std::error_code pumpNativeEvents();
+        // Collection-only native pump (B2' IPlatform::pumpNativeEvents
+        // override): window-event callbacks stage owned records into the
+        // input batch; no client callback runs until update() dispatches the
+        // completed batches below. Repeatable within a frame: device time
+        // never advances, transient character input is never cleared,
+        // gamepads are never re-sampled or dispatched here.
+        [[nodiscard]] std::error_code pumpNativeEvents() override;
 
     private:
         safe_ptr<Application> m_application{};

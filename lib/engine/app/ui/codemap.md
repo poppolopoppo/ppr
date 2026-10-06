@@ -36,13 +36,24 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   left/right Ctrl/Shift/Alt/Super into `ImGuiMod_*`. Cursor forwards absolute client pos to `AddMousePosEvent`;
   wheel forwards relative 2D delta to `AddMouseWheelEvent`; sticks fan out per left/right trigger to
   `AddKeyAnalogEvent` L/R-stick directionals; triggers drive `AddKeyAnalogEvent` L2/R2.
-- Frame resources: 2-slot vertex/index buffer ring (`FrameResources`, indexed by `m_frame_revision % 2`),
-  reallocated on growth (`alignForward` 8192 vtx / 16384 idx, `Upload` `VertexBuffer|CopySource` /
+- Frame resources (P1 fence-governed): 2-slot vertex/index buffer ring (`FrameResources`) selected by
+  per-slot completion values (`m_slot_values`, never CPU parity — ZERO slack for 2 credits, so a doubly-pending
+  frame waits its slot out), reallocated on growth only after waiting for the youngest tracked use via the
+  frame's fence hook (`alignForward` 8192 vtx / 16384 idx, `Upload` `VertexBuffer|CopySource` /
   `IndexBuffer|CopySource`), uploaded per-frame in `uploadDrawData_()` via map/`memcpy`/unmap (no-op when
-  `TotalVtx/IdxCount == 0`); font texture built once from `GetTexDataAsRGBA32` (`DeviceLocal` RGBA8 `Texture2D` with
-  `ShaderResource|CopyDestination`, `Upload` staging buffer, `copyBufferToTexture` + `setTextureState(ShaderResource)`
-  + `submit`/`waitOnHost`, `getDefaultView`, `SetTexID` to the view; null pixels or non-positive atlas dims log and
-  return `invalid_argument` instead of faulting the staging row-pitch division).
+  `TotalVtx/IdxCount == 0`); the submitted value is recorded by `notifyFrameSubmitted` (via the exported
+  `IFenceAwareUiService` seam, frame owner post-submit only). Per-slot ROOT objects (`m_slot_roots`, font
+  bindings fixed at creation, scale/offset written per frame into the selected slot only) replace the
+  transient 1-arg `bindPipeline` object; replaced pipelines/roots defer through `m_deferred_releases`
+  (reclaimed each render entry, drained at shutdown). Font texture built once from `GetTexDataAsRGBA32`
+  (`DeviceLocal` RGBA8 `Texture2D` with `ShaderResource|CopyDestination`, `Upload` staging buffer,
+  `copyBufferToTexture` + `setTextureState(ShaderResource)` + `submit`/`waitOnHost`, `getDefaultView`,
+  `SetTexID` to the view; null pixels or non-positive atlas dims log and
+  return `invalid_argument` instead of faulting the staging row-pitch division); display-scale changes rebuild
+  it via `refreshFontTextureIfNeeded_` (upload's own global-idle wait first, then install + rebind every slot
+  root + drop the old atlas, counted in `m_font_rebuild_count`). Draw-list `UserCallback` policy: only
+  `GetPlatformIO().DrawCallback_ResetRenderState` is honored (reapplies render state; the legacy macro spelling does not cross the imgui module boundary); any other callback is rejected and
+  counted (`m_rejected_callback_count`), never invoked on the render path.
 - `initialize(WindowInputContext&, IRhiService&, IShaderService&, priority)` creates the context (`not_supported` when
   null), installs `ErrorCallback` → `PPR_LOG_RAW` with `ConfigErrorRecovery=true`, `EnableAssert=false`,
   `EnableDebugLog=true`, `EnableTooltip=PPR_ENABLE_DEBUG`, sets backend names (`pP_IUIService` / `pP_SlangRHI`,
@@ -97,7 +108,7 @@ events into ImGui IO and renders ImGui draw data as a second viewport entry on t
   (actions, mappings, contexts), `:window.handle/viewport` (window + viewport inputs), `engine.rhi` (pipeline/buffers/
   textures), `engine.shader` (from-source compile), `engine.core` (logging, `safe_ptr`, `safe_narrowing`, time),
   `engine.math` (`float2/float4`, `int2`, `uint4`), `imgui` + `imgui_internal` (context, IO, draw data).
-- **Provides**: `:ui.imgui` factory + `imVec` conversions only; the class itself is intentionally not exported.
+- **Provides**: `:ui.imgui` factory + `IFenceAwareUiService` submit-notification seam + `imVec` conversions only; the class itself is intentionally not exported.
 
 ## Key Files
 

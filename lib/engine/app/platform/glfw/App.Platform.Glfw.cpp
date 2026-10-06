@@ -231,7 +231,35 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, pumpNativeEvents());
 
         if (GlfwInput *const p_inputs = m_input_service.get()) [[likely]] {
-            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_inputs->dispatchCollectedBatches());
+            // Deferred client halves for focus + hotplug run inside this
+            // exactly-once dispatch, in collection order with the input
+            // replay: the platform halves (flags, registries) already ran at
+            // collection time above.
+            auto focus_applier = [this](const safe_ptr<Window> window, const bool focused) -> std::error_code {
+                if (not window.isValid()) [[unlikely]] {
+                    return std::make_error_code(std::errc::invalid_argument);
+                }
+                // B2'c: deliver the CAPTURED value to BOTH subscribers —
+                // never re-read the live flag, which may already reflect a
+                // later collected arrival queued behind this record.
+                window->m_when_focused(*window, focused);
+                if (GlfwWindow *const p_windows = m_window_service.get()) {
+                    PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->notifyWindowFocused(*window, focused));
+                }
+                return default_value_v;
+            };
+            auto device_applier =
+                [p_inputs](const safe_ptr<const IInputDevice> device, const bool connected) -> std::error_code {
+                if (not device.isValid()) [[unlikely]] {
+                    return std::make_error_code(std::errc::invalid_argument);
+                }
+                if (connected) {
+                    return p_inputs->notifyDeviceConnected(*device);
+                }
+                return p_inputs->notifyDeviceDisconnected(*device);
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                GlfwPlatform, p_inputs->dispatchCollectedBatches(std::move(focus_applier), std::move(device_applier)));
         }
 
         return default_value_v;

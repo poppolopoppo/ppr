@@ -5,6 +5,7 @@ module;
 
 module engine.app;
 
+import :platform.glfw.input;
 import :platform.glfw.window;
 import :window.handle;
 import :window.monitor;
@@ -287,17 +288,32 @@ namespace pP {
     static void glfwWindowFocusCallback_(::GLFWwindow *p_glfw_window, const int focused) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
         const bool is_focused = focused == GLFW_TRUE;
+
+        // Immediate platform half: flags + focused-window tracking run
+        // synchronously so later routing in this same pump observes them.
         window.m_focused = is_focused;
-        window.m_when_focused(window, is_focused);
 
         GlfwWindow &service = *g_glfw_window;
-        PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_focused(window, window.m_focused));
-
         if (window.m_focused) {
             service.m_focused_window = safe_ptr(&window);
         } else if (service.m_focused_window == &window) {
             service.m_focused_window.reset();
         }
+
+        // Deferred client half: the window + service broadcasts replay at
+        // the next admitted dispatch, in collection order. Outside a native
+        // collection (no batch to stage into), fire immediately to preserve
+        // the legacy behavior.
+        if (const safe_ptr<GlfwInput> collecting = GlfwInput::collectingNativeBatchTarget()) {
+            collecting->m_native_batch.postFocus(safe_ptr<Window>{&window}, is_focused);
+        } else {
+            window.m_when_focused(window, is_focused);
+            PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_focused(window, window.m_focused));
+        }
+    }
+
+    std::error_code GlfwWindow::notifyWindowFocused(const Window &window, const bool focused) {
+        return m_when_window_focused(window, focused);
     }
 
     static void glfwWindowIconifyCallback_(::GLFWwindow *p_glfw_window, const int iconified) {

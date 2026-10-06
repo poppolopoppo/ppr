@@ -239,16 +239,34 @@ namespace pP {
         m_mouse.postMouseScrollWheel(m_delta_time, context, delta);
     }
 
-    std::error_code GlfwInput::dispatchCollectedBatches() {
+    std::error_code GlfwInput::dispatchCollectedBatches(
+        PendingFocusApplier &&focus_applier, PendingDeviceApplier &&device_applier) {
         // Exactly-once consumption at the defined advancement point: replay
         // in collection order through the real devices, then clear. Poll-time
         // gamepad sampling bypasses the batch (it already runs once per
-        // frame inside pollInputDevices).
-        return m_native_batch.dispatch(m_keyboard, m_mouse, m_delta_time);
+        // frame inside pollInputDevices). Control records run their deferred
+        // client halves through the platform appliers, in order.
+        return m_native_batch.dispatch(
+            m_keyboard, m_mouse, m_delta_time, std::move(focus_applier), std::move(device_applier));
+    }
+
+    std::error_code GlfwInput::notifyDeviceConnected(const IInputDevice &device) {
+        return m_when_device_connected(device);
+    }
+
+    std::error_code GlfwInput::notifyDeviceDisconnected(const IInputDevice &device) {
+        return m_when_device_disconnected(device);
     }
 
     void GlfwInput::setNativeBatchCollection(const bool collecting) noexcept {
         m_collecting_native_batch = collecting;
+    }
+
+    safe_ptr<GlfwInput> GlfwInput::collectingNativeBatchTarget() noexcept {
+        if (g_glfw_input.isValid() and g_glfw_input->m_collecting_native_batch) {
+            return g_glfw_input;
+        }
+        return {};
     }
 
     // ------------------------------------------------------------------
@@ -265,21 +283,34 @@ namespace pP {
 
         switch (event) {
             case GLFW_CONNECTED:
+                // Immediate platform half: registry + id/name bookkeeping
+                // run synchronously; the connected broadcast is the deferred
+                // client half and replays at the next admitted dispatch.
                 gamepad.m_controller_id = GamepadControllerID(safe_narrowing(jid));
                 gamepad.m_friendly_name = ::glfwGetGamepadName(jid);
 
                 glfw_input.m_devices_by_id[gamepad.m_device_id].reset(&gamepad);
 
-                PPR_LOG_WARNING_ON_FAIL(GlfwInput, glfw_input.m_when_device_connected(gamepad));
+                if (glfw_input.m_collecting_native_batch) {
+                    glfw_input.m_native_batch.postDeviceConnection(safe_ptr<const IInputDevice>{&gamepad}, true);
+                } else {
+                    PPR_LOG_WARNING_ON_FAIL(GlfwInput, glfw_input.m_when_device_connected(gamepad));
+                }
                 break;
 
             case GLFW_DISCONNECTED:
-                PPR_LOG_WARNING_ON_FAIL(GlfwInput, glfw_input.m_when_device_disconnected(gamepad));
-
+                // Immediate platform half first (registry + bookkeeping),
+                // then the deferred broadcast — same ordering as connect.
                 glfw_input.m_devices_by_id.erase(gamepad.m_device_id);
 
                 gamepad.m_controller_id = none_v;
                 gamepad.m_friendly_name.clear();
+
+                if (glfw_input.m_collecting_native_batch) {
+                    glfw_input.m_native_batch.postDeviceConnection(safe_ptr<const IInputDevice>{&gamepad}, false);
+                } else {
+                    PPR_LOG_WARNING_ON_FAIL(GlfwInput, glfw_input.m_when_device_disconnected(gamepad));
+                }
                 break;
 
             default: PPR_ASSERT(false && "unhandled GLFW joystick callback event"); break;

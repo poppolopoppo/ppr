@@ -12,15 +12,51 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): config `m_preferred_surface_format` (default Undefined → backend
-  preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}`; state `FlatMap<WindowHandle, SurfaceRecord>` +
+  preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}` (vsync policy unchanged by P1); state `FlatMap<WindowHandle, SurfaceRecord>` +
   `m_graphics_queue` + `safe_ptr<IRhiService>` + `m_owner` thread id. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
-  depth texture/view, last `m_extent`, and `m_configured`. The depth pair is shared only by passes that explicitly
+  depth texture/view, last `m_extent`, `m_configured`, and a generational `m_generation` minted from
+  `m_surface_epoch` on every create/resize/unconfigure (zero-size included). The depth pair is shared only by passes that explicitly
   select `ESurfaceDepthPolicy::renderer_owned`; it is not globally attached to presentation. The renderer is
   render-thread confined like the pass caches: `initialize` captures the owner thread, surface and presentation
   paths fail closed (`operation_not_permitted`) off-thread, and `shutdown` clears the owner.
-- `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only and captures the owner thread;
+- P1 fence governance (`App.Renderer.FrameFence.cppm/.cpp`, exported as `engine.app:renderer.frame_fence`):
+  the ONE app-owned monotonic `FrameFence` (created at `initialize`, one signalled value per frame SUBMIT via
+  `SubmitDesc` signalFences after-execute placement; the value commits ONLY on success — a failed submit
+  consumes nothing), a `FrameCreditLedger`
+  bounding submitted-but-uncompleted frames to `kMaxOutstandingFrames{2}` (busy admission fails the frame closed),
+  a `DeferredReleaseQueue` for last-use-keyed object retirement, and pure-CPU helpers `selectRingSlot` /
+  `maxSlotValue` / `slotFenceComplete` / `isSurfaceWorkObsolete`. Every `render*` path admits nonblocking via
+  `admitFrame_` BEFORE construction (probe-then-acquire through the non-acquiring `checkFrameAdmission`:
+  quarantine → `state_not_recoverable`, terminal → `no_such_device_or_address`, only capacity-busy stays
+  `device_or_resource_busy`; terminal rechecked AFTER the sweep so a mid-sweep sentinel still stops admission)
+  and settles exactly once via `retireFrame_` on a scope guard: `kSubmitted` values ride the unretired set until
+  the fence passes them, `kRejected` (definitely unsubmitted) releases immediately, and `kSubmitFailed`
+  (possibly executed) quarantines — admission stops and the credit is held until proven idle or confirmed loss,
+  the ambiguous value never committed or reused. `sweepCompleted_` reclaims deferred
+  releases plus completed credits at every boundary (suppressed only by the tests-only hold seam).
+  Completion is read three ways only — proven-idle
+  (successful wait / observed poll), positively-confirmed removal (UINT64_MAX sentinel observed or
+  `no_such_device_or_address` failure latching terminal, surfacing `no_such_device_or_address`), or UNKNOWN (any
+  other failed wait/query: previous completion stands,
+  everything retained, admission parked, error propagates; UNKNOWN at teardown RETAINS every GPU object —
+  fence alive, deferred held, surfaces/queue untouched — and returns the error for process exit, where the OS
+  reclaims; only proven idle or positively-confirmed removal releases early). `abandon()` and
+  `notifyDeviceLost()` are confirmed-removal-only (never proof on the UNKNOWN path).
+  `waitFor` propagates its post-wait poll failure instead of success, and
+  `retireCompletedFrames` propagates poll errors to the caller. `shutdown()` proves idle via `waitOnHost`
+  (UNKNOWN → quarantine + retain + return error; confirmed removal → `abandon()` + release-without-touching-
+  device), then sweeps, drains, resets credits/quarantine, and
+  tears down the fence; `notifyDeviceLost()` (confirmed removal only) abandons wait-free (never `shutdown()`),
+  discards pending retirements/credits, and releases surfaces/queue for restart. Tests-only seams:
+  `setInjectedSubmitFailure` (possibly-executed submit) + `setTestHoldSweep` (suppress sweep so real submits
+  stay pending for the two-truly-pending proof).
+  Observability for Gate 1: `lastSubmittedFenceValue` / `completedFenceValue` / `outstandingFrameCount` /
+  `surfaceGenerationFor` / `isSurfaceWorkObsolete` / `retireCompletedFrames` / `waitForFenceValue`, plus the
+  tests-only `setInjectedSubmitFailure` seam (simulates a possibly-executed submit failure).
+- `initialize(rhi_service)` grabs the Graphics `ICommandQueue` only and captures the owner thread, then creates
+  the frame fence and reserves the bounded unretired set (allocation-free steady-state retirement);
   `shutdown()` retain-first-error teardown: off-thread call fails closed (`operation_not_permitted`), else
-  `waitOnHost`, unconfigure every configured surface, clear map/queue/service refs and the owner.
+  `waitOnHost`, sweep + drain + credit reset + fence shutdown, unconfigure every configured surface, clear map/queue/service refs and the owner.
   `waitOnHost()` forwards when a queue exists, else success. RHI-service validity is always checked as
   `m_rhi_service.isValid()`.
 - `render(description, render_pass, draws)`: rejects uninitialized queue/service (`not_connected`) and empty/null
@@ -34,8 +70,26 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   pipeline_key, viewport, scissor, target_extent})`; finishes and submits one command buffer.
 - `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
   `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
-  Offscreen callers must `waitOnHost()` before readback.
-- `renderAndPresent(window, passes)` is the single-pass convenience API: it acquires one surface image and renders
+  Offscreen callers must `waitOnHost()` before readback. The submit is fenced like every other path
+  (value observable via `lastSubmittedFenceValue`); readback callers use `waitForFenceValue` or the legacy
+  `waitOnHost` — completion is GPU-only either way, never a display signal.
+- `renderAndPresent(window, passes)` is the single-pass convenience API, plus a generational overload
+  `(window, passes, SurfaceIdentity)` carrying the packet's surface claim. Surface control reconciles BEFORE
+  acquisition: a drifted extent resizes (minting a fresh generation, revalidating signatures) and the current
+  packet proceeds against the surface it just shaped — the same packet is never reconfigured and then rejected
+  for the reconfigure. Only a mismatch that predates the frame retires BEFORE acquisition as an explicit
+  non-rendering outcome (`resource_unavailable_try_again`, mapped by the Editor to a dropped frame, never an
+  app failure); a missing record (first frame) accepts and assigns. Identity-handle mismatch fails closed
+  (`invalid_argument`). After acquisition the backend obligation is unconditional — an `AcquiredImageGuard`
+  armed immediately post-acquire settles the image exactly once on every path (explicit `settlePresent()` on
+  the normal path, best-effort present in the destructor on errors and unwinding, never masking the original
+  failure). Post-acquire failures (including acquired/depth
+  extent mismatch, which used to return early) record `first_err` and skip encode/submit, but `present()`
+  still runs (debug-layer acquire→present pairing; both backends deadlock the next acquire otherwise).
+  Submission acceptance is independent of present: the SUBMIT commits its value before presenting, so the
+  caller stamps ALL participants off the fence advancement even when present fails. A present failure after a
+  successful submit leaves the submission GPU-pending under its fence value until
+  completion (or the device-loss teardown path) — never recycled early. It acquires one surface image and renders
   the draws carried by each `SurfaceRenderPass` in order before one present. `SurfaceRenderPass` holds its own
   `m_draws` (`std::initializer_list<const DrawSubmission>`) plus its color/additional-color attachments and depth
   policy, so each pass independently selects no depth, the renderer's resize-matched shared depth view
@@ -43,13 +97,14 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   to use depth while a following ImGui pass loads color without any depth attachment, or a later compatible pass to
   select a different external view/format without pretending the backend supports different depth views inside one
   native pass. Policy/descriptor mismatches and empty pass lists fail before image acquisition; an acquired
-  backbuffer whose extent no longer matches the resize-matched depth view fails (`invalid_argument`) before
-  pass building. There is no
+  backbuffer whose extent no longer matches the resize-matched depth view records (`invalid_argument`) and
+  becomes present-only. There is no
   `renderAndPresentPasses` and no `SurfaceDrawPass` type. Recording is **two-phase over one shared ScratchPad
   scope**: phase 1 builds every `BuiltSurfacePass` (color attachments, depth attachment, `RenderPassDesc`, then
   `surfaceSignature_` → signature + reference extent) into a reserved `Array`, and the first failure stops the
-  build; phase 2 runs only on success, creating one encoder, encoding the already-built passes, then one
-  finish + submit — every failure is retained so the acquired image still presents, and a failed pass abandons the
+  build; phase 2 runs only on success, creating one encoder, encoding the already-built passes with the frame's
+  polled completion value plus a value-scoped fence-wait hook on every `DrawContext`, then one
+  finish + fenced submit — every failure is retained so the acquired image still presents, and a failed pass abandons the
   encoder without finish/submit while `present()` still runs.
 - `surfaceSignature_(record, pass, desc, out_signature, out_extent)` is the surface-hoisted signature build. The
   depth policy picks one of two `SurfaceRecord::m_signatures` slots (`none` = 0, `renderer_owned` = 1); external
@@ -96,10 +151,16 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   D3D12, SPIR-V, and Metal alike. Failure is fail-closed but not all-or-nothing: resolve and payload upload are
   all-or-nothing, while encoding stops at the first group that cannot be encoded and prior groups stand.
   There is no indirect or compute-publish lane.
-  **Payload ring**: `kPayloadRingSize{3}` (mirrors `m_desired_image_count`) upload buffers at `InstancePayload`
-  stride, each created and mapped once in `ensureDirectPayloads_` and kept mapped for its whole life;
-  `uploadPayloads_` rotates `m_payload_ring_cursor` once per submit and writes through the persistent mapping
-  (no per-frame map/unmap), and `encodeGroup_` binds the current slot. `resolveInstances_` scratch is
+  **Payload ring**: `kPayloadRingSize{3} == kFrameRingSlots` upload buffers at `InstancePayload`
+  stride, each created and mapped once in `ensureDirectPayloads_` and kept mapped for its whole life.
+  `uploadPayloads_` selects its slot by per-slot completion values (`m_payload_slot_values`,
+  `selectSlot_` — stale slots wait instead of overwriting; growth waits for the youngest tracked use via the
+  frame's fence hook, R6) and writes through the persistent mapping (no per-frame map/unmap); the submitted
+  value is recorded by `notifyFrameSubmitted` (frame owner, post-submit only). Per-variant pipelines carry
+  per-slot ROOT objects (`m_slot_roots` + resolved `m_slot_frame_cursors`, bindings fixed at creation);
+  a signature change defers every variant through `m_deferred_releases` (reclaimed at each render entry)
+  instead of dropping it mid-flight. `encodeGroup_` binds the frame's slot root and resolved cursor.
+  `resolveInstances_` scratch is
   GPA-backed by design, never `mem::ScratchPad`: the array grows with submitted instance count while
   ScratchPad has a 32752 B usable-slab ceiling; lifetime is unchanged per-`render()` scope.
   `releaseDirectPayloads_(device)` drops the
@@ -108,7 +169,7 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `pipelineFor_` validates the signature shape (one color format — the sample count is a `SampleCount`, so every
   value is accepted by construction) BEFORE the cache clear,
   so an unsupported signature can never drop the pipelines built for the last good one.
-- **GridPass** (`App.Renderer.GridPass.cppm/.cpp`): content-specific pass beside `TrianglePass` (NOT under `scene/`: it consumes `DrawContext`/`RenderPipelineSignature` from `:renderer.types`, and a `:scene.grid_pass` would invert the established renderer→scene edge). Chunk-sized tiles (1 tile = 1 chunk over the 32×32-chunk × 128²-cell world, never a second tiling system) drawn as flat tinted quads or optional cell materials (no lighting/texturing/GI) from `grid_tiles.slang` (`vertexGridMain` + `fragmentGridMain`, per-draw `uniform uint g_tile_base`, `ConstantBuffer<GridFrame>` 64 B + `StructuredBuffer<GridTilePayload>` 32 B stride with CPU `sizeof/alignof/offsetof` asserts). Plain-data boundary (`GridTileSubmission{chunkId,tileRange,dirtyMask,materialId}`, `GridUploadRequest{chunkId,tileDataView,cellMaterials}` — no sim types; `game/colony` translates grid → submissions). Pure-CPU `planTiles(snapshot, submissions)` culls via epsilon-expanded (`0.5` cell) tile boxes against `snapshot.m_frustum` (edge-touching visible, off-screen/quiescent skipped, submission order kept); staging + dirty-upload lane + cache probe are pure CPU (device-free, render-thread confined), while pre-render cell publication and both render lanes touch the GPU. `render` retains plan → resolve cache-hit-else-stage-cold → 3-slot payload ring → one instanced draw, 6 verts/quad, `startInstanceLocation` 0. Upload cache clamps at 1024 entries (one per world chunk, `no_buffer_space` overflow). Teardown mirrors `TrianglePass` (stop submissions → drop pipeline root → clear CPU cache → program/ring release, retain-first-error; device loss retains CPU records but invalidates GPU cell residency).
+- **GridPass** (`App.Renderer.GridPass.cppm/.cpp`): content-specific pass beside `TrianglePass` (NOT under `scene/`: it consumes `DrawContext`/`RenderPipelineSignature` from `:renderer.types`, and a `:scene.grid_pass` would invert the established renderer→scene edge). Chunk-sized tiles (1 tile = 1 chunk over the 32×32-chunk × 128²-cell world, never a second tiling system) drawn as flat tinted quads or optional cell materials (no lighting/texturing/GI) from `grid_tiles.slang` (`vertexGridMain` + `fragmentGridMain`, per-draw `uniform uint g_tile_base`, `ConstantBuffer<GridFrame>` 64 B + `StructuredBuffer<GridTilePayload>` 32 B stride with CPU `sizeof/alignof/offsetof` asserts). Plain-data boundary (`GridTileSubmission{chunkId,tileRange,dirtyMask,materialId}`, `GridUploadRequest{chunkId,tileDataView,cellMaterials}` — no sim types; `game/colony` translates grid → submissions). Pure-CPU `planTiles(snapshot, submissions)` culls via epsilon-expanded (`0.5` cell) tile boxes against `snapshot.m_frustum` (edge-touching visible, off-screen/quiescent skipped, submission order kept); staging + dirty-upload lane + cache probe are pure CPU (device-free, render-thread confined), while pre-render cell publication and both render lanes touch the GPU. `render` retains plan → resolve cache-hit-else-stage-cold → completion-selected payload-ring slot (shared cursor covers the indirect-args ring once) → one instanced draw, 6 verts/quad, `startInstanceLocation` 0. Per-slot pipeline roots replace the persistent-root mutation; signature changes defer through the pass-owned release queue (reclaimed each render entry, drained at shutdown/device-loss). Ring growth waits for the youngest tracked use (R6, counted); the cell atlas keeps the existing global-idle wait as first implementation (dirty frames serialize — counted, no overlap claimed). Upload cache clamps at 1024 entries (one per world chunk, `no_buffer_space` overflow). Teardown mirrors `TrianglePass` (stop submissions → drop pipeline root → clear CPU cache → program/ring release, retain-first-error; device loss retains CPU records but invalidates GPU cell residency).
   An additive MDI lane (`compactIndirect` + `renderIndirect`) compacts the same plan to one `IndirectDrawArguments` per visible tile (`{6, 1, 0, plan_index}` in plan order, clamped at the tile-cache budget with `no_buffer_space` overflow, empty plan → zero args and the encode returns before any pass call) and issues one `drawIndirect` over a 3-slot args ring (`Upload`/`IndirectArgument`, same shared cursor as the payload ring) with `g_tile_base` 0; the CPU-staged `drawInstanced` path is retained, the RHI call surface is the existing `IRenderPassEncoder::drawIndirect` (no new RHI entry point).
 - **GridPass per-cell extension:** `GridUploadRequest::m_cell_materials` is an optional borrowed span of exactly
   16384 row-major u16 entries (0xffff transparent); empty retains flat tiles. Cell requests require a valid
@@ -162,7 +223,10 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
    render pass → present); `TrianglePass::update(snapshot)` then `TrianglePass::render` inside the 3D callback.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
-5. Shutdown → `triangle.shutdown()` → `destroyWindowSurface(*main_window)` → window destroyed via the window
+5. Shutdown → Editor proves GPU idle first (`waitOnHost`; UNKNOWN → quarantine + retain + return error for
+   process exit where the OS reclaims; confirmed loss → `notifyDeviceLost` everywhere,
+   surface destroy skipped) → `triangle.shutdown()` + `grid.shutdown()` (safe: nothing pending) →
+   `destroyWindowSurface(*main_window)` → window destroyed via the window
    service → `renderer.shutdown()` (wait, unconfigure any survivor, release)
 
 ## Integration
@@ -172,13 +236,14 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
   `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
 
-- `App.Renderer.cppm` — generic `Renderer` declaration (config, surface registry, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface)
-- `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, encode/submit, surface create/resize/destroy, retain-first-error shutdown)
+- `App.Renderer.cppm` — generic `Renderer` declaration (config, surface registry incl. generations, render/renderToTexture/renderAndPresent/waitOnHost/destroyWindowSurface, fence/credit/retirement API, device-loss hook)
+- `App.Renderer.cpp` — Renderer implementations (attachment inspection/validation, fenced encode/submit, surface create/resize/destroy, generational rejection, unconditional-present path, retain-first-error shutdown)
+- `App.Renderer.FrameFence.cppm/.cpp` — NEW P1 fence-governance partition (`FrameFence`, `FrameCreditLedger`, `DeferredReleaseQueue`, `selectRingSlot`/`maxSlotValue`/`slotFenceComplete`/`isSurfaceWorkObsolete`, 2-credit bound)
 - `App.Renderer.TrianglePass.cppm` — `TrianglePass` declaration (FrameConstants layout, snapshot cache, caches, pipeline helpers)
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)
 - `App.Renderer.GridPass.cppm` — `GridPass` declaration (boundary structs, tile payload mirror, snapshot cache, CPU tile cache, pipeline helper)

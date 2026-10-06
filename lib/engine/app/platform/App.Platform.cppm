@@ -62,6 +62,16 @@ export namespace pP {
         [[nodiscard]] virtual safe_ptr<IPlayerService> getPlayerService() const noexcept = 0;
 
         [[nodiscard]] virtual std::error_code update(TimeSpan dt) = 0;
+
+        // B2' collection-only native pump: collects native events/control
+        // metadata and services close/exit requests. MUST NOT advance device
+        // time, clear transient input, sample or dispatch gamepads, replay
+        // input batches, or open a UI frame. Repeatable within a frame;
+        // collected records dispatch exactly once at the next admitted
+        // update(dt). The default is a headless no-op success.
+        [[nodiscard]] virtual std::error_code pumpNativeEvents() {
+            return default_value_v;
+        }
     };
 }
 

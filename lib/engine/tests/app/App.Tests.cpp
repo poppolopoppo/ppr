@@ -59,6 +59,10 @@ namespace pP::tests {
 
     const UnitTest &frame_stagesTests() noexcept;
 
+    const UnitTest &frame_fenceTests() noexcept;
+
+    const UnitTest &run_gateTests() noexcept;
+
     const UnitTest &sim_packetTests() noexcept;
 
     const UnitTest &quaternionTests() noexcept;
@@ -107,6 +111,8 @@ namespace pP::tests {
             app_run_shutdowns_after_nonstandard_hook_exceptionTests(),
             cameraTests(),
             frame_stagesTests(),
+            frame_fenceTests(),
+            run_gateTests(),
             sim_packetTests(),
             quaternionTests(),
             input_listenerTests(),

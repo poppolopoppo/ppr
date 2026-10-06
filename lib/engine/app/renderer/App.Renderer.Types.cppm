@@ -1,6 +1,8 @@
 module;
 export module engine.app:renderer.types;
 
+import :renderer.frame_fence;
+
 import engine.core;
 import engine.math;
 import engine.rhi;
@@ -85,6 +87,14 @@ export namespace pP {
     // draw submissions
     // ------------------------------------------------------------------
 
+    // P1 fence-wait hook: value-scoped host wait for ring-slot and growth
+    // gates. The ONE callable type for the member below and every
+    // downstream parameter. Owning (move_only_function, same class as the
+    // WakePredicate fix) so it default-constructs empty and bool-tests
+    // before invocation; bound by the Renderer to the frame fence for the
+    // duration of the synchronous encode, never stored, never transported.
+    using FenceWaitHook = std23::move_only_function<std::error_code(FenceCompletionValue)>;
+
     struct DrawContext final {
         rhi::IDevice &m_device;
         rhi::IRenderPassEncoder &m_pass;
@@ -92,6 +102,16 @@ export namespace pP {
         rhi::Viewport m_viewport{};
         rhi::ScissorRect m_scissor{};
         int2 m_target_extent{};
+        // P1 fence governance, set by the Renderer for every encode:
+        // GPU completion known at frame start. Passes key ring-slot reuse
+        // off this value (never CPU frame modulo or swapchain image count).
+        // kFenceValueNone when nothing was ever submitted through the fence.
+        FenceCompletionValue m_completed_fence_value{kFenceValueNone};
+        // Mutable so invocation works through the const DrawContext
+        // reference every render path consumes (MSVC's move_only_function
+        // call operator is non-const); the hook itself is still bound once
+        // per encode and never reseated afterwards.
+        mutable FenceWaitHook m_wait_for_fence{};
     };
 
     using DrawCallback = std23::function_ref<std::error_code(const DrawContext &)>;

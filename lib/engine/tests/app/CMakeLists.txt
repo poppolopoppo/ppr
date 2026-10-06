@@ -40,6 +40,8 @@ target_sources(engine.tests.app
         App.Camera.Tests.cpp
         App.GridPass.Tests.cpp
         App.Frame.Tests.cpp
+        App.FrameFence.Tests.cpp
+        App.RunGate.Tests.cpp
         App.Quaternion.Tests.cpp
         App.ImGuiRouting.Tests.cpp
         App.ImguiDpi.Tests.cpp

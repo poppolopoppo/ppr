@@ -9,6 +9,8 @@ import :input.device;
 import :input.key;
 import :input.listener;
 import :input.routing;
+import :renderer.frame_fence;
+import :renderer.types;
 import :service.input;
 import :service.ui;
 import :service.window;
@@ -77,7 +79,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             return scale;
         }
 
-        class ImGuiService final : public IUIService {
+        class ImGuiService final : public IUIService, public IFenceAwareUiService {
             ImGuiContext *m_imgui_context{nullptr};
 
             /// input handling:
@@ -109,8 +111,37 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 rhi::ComPtr<rhi::IBuffer> m_vertex_buffer{};
             };
 
-            std::array<FrameResources, 2u> m_frame_resources{};
+            // Two upload slots for two frame credits: ZERO slack by
+            // construction. Slots are selected by per-slot completion
+            // values, never by CPU parity — when both submissions are still
+            // GPU-pending the frame waits its slot out instead of
+            // overwriting early. Growth of either buffer waits for the
+            // youngest tracked use (R6).
+            static constexpr u32 kUiFrameSlots{2u};
+            std::array<FrameResources, kUiFrameSlots> m_frame_resources{};
+            std::array<FenceCompletionValue, kUiFrameSlots> m_slot_values{};
+            u32 m_resource_cursor{0u};
+            u32 m_last_used_slot{0u};
             std::size_t m_frame_revision{};
+
+            // Per-slot ROOT shader objects carrying the font texture/sampler
+            // bindings plus the resolved g_scale/g_offset cursor. A frame
+            // binds and writes only its selected slot's root — no
+            // persistent-root mutation across frames. Replaced
+            // pipeline/roots retire through m_deferred_releases.
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kUiFrameSlots> m_slot_roots{};
+            DeferredReleaseQueue m_deferred_releases{};
+            FenceCompletionValue m_last_submitted_value{kFenceValueNone};
+
+            // Font atlas generation: rebuilt when the display framebuffer
+            // scale changes (DPI), installed after the upload's own
+            // global-idle wait, then rebound into every slot root. The
+            // previous atlas drops only after that wait, so no submission
+            // ever samples a destroyed texture.
+            float2 m_font_scale{0.0f, 0.0f};
+            u64 m_font_rebuild_count{0u};
+            u64 m_growth_wait_count{0u};
+            u64 m_rejected_callback_count{0u};
 
             rhi::ComPtr<rhi::IRenderPipeline> m_render_pipeline{};
             std::optional<RenderPipelineKey> m_render_pipeline_key{};
@@ -124,7 +155,32 @@ float4 fragmentMain(PsInput input) : SV_Target {
             std::error_code createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature);
 
             std::error_code uploadDrawData_(
-                rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources);
+                rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources,
+                FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
+
+            // Rebuilds the font atlas when the display scale moved, after
+            // the upload's own queue wait. Old atlas drops only post-wait.
+            std::error_code refreshFontTextureIfNeeded_(rhi::IDevice &device, const float2 &display_scale);
+
+            // Builds one font atlas (upload + queue wait) without installing
+            // it; shared by creation and DPI rebuilds.
+            std::error_code uploadFontAtlas_(
+                rhi::IDevice &device, rhi::ICommandQueue &device_queue, rhi::ComPtr<rhi::ITexture> &out_texture,
+                rhi::ComPtr<rhi::ITextureView> &out_view);
+
+            void notifyFrameSubmitted_(FenceCompletionValue submit_value) noexcept {
+                m_last_submitted_value = submit_value;
+                m_slot_values[m_last_used_slot] = submit_value;
+            }
+
+            // IFenceAwareUiService: fence value of the frame's accepted
+            // SUBMIT, reported by the frame owner. Never called on submit
+            // failure (the slot keeps its older, conservative value).
+            void notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept override {
+                notifyFrameSubmitted_(submit_value);
+            }
+
+            void reclaimCompleted_(FenceCompletionValue completed) noexcept;
 
             void drainPendingDeselect_();
 
@@ -308,6 +364,20 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
                 m_render_pipeline.setNull();
                 m_render_pipeline_key.reset();
+                // Precondition (established by the Editor): GPU completion
+                // was already proven idle, so no pending frame can read the
+                // pipelines, roots, or buffers released here. Deferred
+                // pipeline/roots drain unconditionally — after confirmed
+                // loss the objects are dead either way. Slot values reset
+                // with the fence epoch they named.
+                std::ignore = m_deferred_releases.drainAll();
+                m_last_submitted_value = kFenceValueNone;
+                m_slot_values.fill(kFenceValueNone);
+                m_resource_cursor = 0u;
+                m_last_used_slot = 0u;
+                for (rhi::ComPtr<rhi::IShaderObject> &root: m_slot_roots) {
+                    root.setNull();
+                }
 
                 m_font_texture_view.setNull();
                 m_font_texture.setNull();
@@ -387,6 +457,15 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     return default_value_v;
                 }
 
+                // Retire replaced pipelines/roots even on frames that encode
+                // nothing below: deferred objects must not outlive completion.
+                reclaimCompleted_(draw_context.m_completed_fence_value);
+
+                const ImGuiIO &io = ImGui::GetIO();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, refreshFontTextureIfNeeded_(
+                            draw_context.m_device, float2{io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y}));
+
                 if (not m_render_pipeline_key.has_value() or
                     *m_render_pipeline_key != draw_context.m_render_pipeline_key) {
                     PPR_RETURN_ERROR_ON_FAIL(
@@ -394,24 +473,45 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     m_render_pipeline_key = draw_context.m_render_pipeline_key;
                 }
 
-                rhi::ShaderCursor shader_cursor{};
-                if (rhi::IShaderObject *const shader_object = draw_context.m_pass.bindPipeline(m_render_pipeline.get());
-                    PPR_ENSURE(shader_object)) {
-                    shader_cursor = rhi::ShaderCursor(shader_object);
-                } else {
-                    return make_error_code(std::errc::broken_pipe);
+                // Completion-selected upload slot (zero slack: 2 slots for 2
+                // credits). A stale slot waits instead of overwriting early.
+                {
+                    const std::span<const FenceCompletionValue> values{m_slot_values.data(), m_slot_values.size()};
+                    const u32 slot = selectRingSlot(draw_context.m_completed_fence_value, values, m_resource_cursor);
+                    if (not slotFenceComplete(draw_context.m_completed_fence_value, m_slot_values[slot])) [[unlikely]] {
+                        // An unbound hook here is a Renderer contract
+                        // violation: fail closed rather than overwrite early
+                        // or invoke an empty callable.
+                        if (not draw_context.m_wait_for_fence) [[unlikely]] {
+                            return make_error_code(std::errc::invalid_argument);
+                        }
+                        PPR_RETURN_ERROR_ON_FAIL(UI, draw_context.m_wait_for_fence(m_slot_values[slot]));
+                    }
+                    m_resource_cursor = slot;
+                    m_last_used_slot = slot;
                 }
 
-                const ImGuiIO &io = ImGui::GetIO();
+                rhi::IShaderObject *const slot_root = m_slot_roots[m_resource_cursor].get();
+                if (slot_root == nullptr) [[unlikely]] {
+                    return make_error_code(std::errc::invalid_argument);
+                }
+                draw_context.m_pass.bindPipeline(m_render_pipeline.get(), slot_root);
+                rhi::ShaderCursor shader_cursor{slot_root};
+
                 const float2 imgui_scale{2.0f / io.DisplaySize.x, -2.0f / io.DisplaySize.y};
                 const float2 imgui_offset{-1.0f, 1.0f};
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_scale"].setData(&imgui_scale, sizeof(float2)));
                 PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_offset"].setData(&imgui_offset, sizeof(float2)));
-                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_fontSampler"].setBinding(m_font_sampler));
-                PPR_RETURN_ERROR_ON_FAIL(UI, shader_cursor["g_fontTexture"].setBinding(m_font_texture_view));
+                // Font bindings ride the per-slot root (fixed at pipeline
+                // creation / font rebuild); only the scale/offset above vary
+                // per frame, written into a slot no in-flight submission
+                // still reads.
 
-                FrameResources &resources = m_frame_resources[m_frame_revision % 2u];
-                PPR_RETURN_ON_FAIL(UI, uploadDrawData_(draw_context.m_device, *draw_data, resources));
+                FrameResources &resources = m_frame_resources[m_resource_cursor];
+                PPR_RETURN_ON_FAIL(
+                    UI, uploadDrawData_(
+                            draw_context.m_device, *draw_data, resources, draw_context.m_completed_fence_value,
+                            draw_context.m_wait_for_fence));
 
                 rhi::RenderState render_state{};
                 render_state.viewports[0] = draw_context.m_viewport;
@@ -435,8 +535,27 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     for (int i = 0; i < cmdList->CmdBuffer.Size; i++) {
                         const auto *cmd = &cmdList->CmdBuffer[i];
 
+                        // Callback policy (P1 part of the detached-UI
+                        // contract): only the known render-only reset command
+                        // is honored, by reapplying the current render state.
+                        // Any other client-context callback is REJECTED and
+                        // counted — never invoked on the render path, where
+                        // it could touch client-owned state. (P1 still runs
+                        // inline, but the rule is enforced now so P2 inherits
+                        // it instead of rediscovering it.)
+                        // NOTE: the legacy ImDrawCallback_ResetRenderState
+                        // macro does not cross the `import imgui;` module
+                        // boundary (macros never do), so the sanctioned
+                        // 1.92.8+ spelling is used: the reset sentinel lives
+                        // on the platform IO struct (pinned imgui
+                        // 1.92.9b-docking).
                         if (cmd->UserCallback) {
-                            cmd->UserCallback(cmdList, cmd);
+                            if (cmd->UserCallback == ImGui::GetPlatformIO().DrawCallback_ResetRenderState) {
+                                draw_context.m_pass.setRenderState(render_state);
+                            } else {
+                                ++m_rejected_callback_count;
+                                PPR_LOG(UI, warning, "rejected unsupported draw-list user callback");
+                            }
                             continue;
                         }
 
@@ -529,6 +648,67 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         std::error_code ImGuiService::createFontTexture_(rhi::IDevice &device, rhi::ICommandQueue &device_queue) {
+            rhi::ComPtr<rhi::ITexture> texture{};
+            rhi::ComPtr<rhi::ITextureView> view{};
+            PPR_RETURN_ERROR_ON_FAIL(UI, uploadFontAtlas_(device, device_queue, texture, view));
+
+            m_font_texture = std::move(texture);
+            m_font_texture_view = std::move(view);
+            m_font_scale = float2{ImGui::GetIO().DisplayFramebufferScale.x, ImGui::GetIO().DisplayFramebufferScale.y};
+
+            ImGui::GetIO().Fonts->SetTexID(m_font_texture_view.get());
+
+            PPR_LOG(
+                UI, info, "font texture created",
+                {
+                    {"width", m_font_texture->getDesc().size.width},
+                    {"height", m_font_texture->getDesc().size.height},
+                });
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::refreshFontTextureIfNeeded_(rhi::IDevice &device, const float2 &display_scale) {
+            if (not m_font_texture or not m_font_texture_view) {
+                return default_value_v;
+            }
+            if (m_font_scale.x == display_scale.x and m_font_scale.y == display_scale.y) {
+                return default_value_v;
+            }
+
+            // DPI/scale moved: rebuild the atlas (R7 hole closed). The
+            // upload ends in the queue's global-idle wait, so every prior
+            // submission is complete when the new atlas installs: slot roots
+            // rebind immediately and the old atlas drops without deferral.
+            rhi::ComPtr<rhi::ICommandQueue> device_queue{};
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.getQueue(rhi::QueueType::Graphics, device_queue.writeRef()));
+            rhi::ComPtr<rhi::ITexture> texture{};
+            rhi::ComPtr<rhi::ITextureView> view{};
+            PPR_RETURN_ERROR_ON_FAIL(UI, uploadFontAtlas_(device, *device_queue, texture, view));
+
+            m_font_texture = std::move(texture);
+            m_font_texture_view = std::move(view);
+            for (rhi::ComPtr<rhi::IShaderObject> &root: m_slot_roots) {
+                if (root) {
+                    rhi::ShaderCursor root_cursor{root.get()};
+                    PPR_RETURN_ERROR_ON_FAIL(UI, root_cursor["g_fontTexture"].setBinding(m_font_texture_view));
+                }
+            }
+            ImGui::GetIO().Fonts->SetTexID(m_font_texture_view.get());
+            m_font_scale = display_scale;
+            ++m_font_rebuild_count;
+
+            PPR_LOG(
+                UI, info, "font texture rebuilt on display-scale change",
+                {
+                    {"scale_x", display_scale.x},
+                    {"scale_y", display_scale.y},
+                });
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::uploadFontAtlas_(
+            rhi::IDevice &device, rhi::ICommandQueue &device_queue, rhi::ComPtr<rhi::ITexture> &out_texture,
+            rhi::ComPtr<rhi::ITextureView> &out_view) {
             ImGuiIO &io = ImGui::GetIO();
 
             u8 *pixels = nullptr;
@@ -595,17 +775,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
             rhi::ComPtr<rhi::ITextureView> view;
             PPR_RETURN_ERROR_ON_FAIL(UI, texture->getDefaultView(view.writeRef()));
 
-            m_font_texture = std::move(texture);
-            m_font_texture_view = std::move(view);
-
-            io.Fonts->SetTexID(m_font_texture_view.get());
-
-            PPR_LOG(
-                UI, info, "font texture created",
-                {
-                    {"width", width},
-                    {"height", height},
-                });
+            // The upload's own queue wait above already drained prior
+            // submissions, so the atlas is safe to sample on return; the
+            // caller installs it (and drops the previous one) directly.
+            out_texture = std::move(texture);
+            out_view = std::move(view);
             return default_value_v;
         }
 
@@ -649,12 +823,51 @@ float4 fragmentMain(PsInput input) : SV_Target {
             pipeline_desc.label = "render_imgui";
             pipeline_desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
 
-            PPR_RETURN_ERROR_ON_FAIL(UI, device.createRenderPipeline(pipeline_desc, m_render_pipeline.writeRef()));
+            rhi::ComPtr<rhi::IRenderPipeline> pipeline{};
+            PPR_RETURN_ERROR_ON_FAIL(UI, device.createRenderPipeline(pipeline_desc, pipeline.writeRef()));
+
+            // Per-slot roots, each carrying the font bindings plus its own
+            // scale/offset cursor. Creation-time bindings are safe: no
+            // submission can reference objects that did not exist a moment
+            // ago. The previous pipeline/roots (if any) defer with the
+            // latest submission that could reference them.
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kUiFrameSlots> slot_roots{};
+            for (u32 slot = 0u; slot < kUiFrameSlots; ++slot) {
+                rhi::ComPtr<rhi::IShaderObject> root{};
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, make_error_code(device.createRootShaderObject(pipeline->getProgram(), root.writeRef())));
+                rhi::ShaderCursor cursor{root.get()};
+                PPR_RETURN_ERROR_ON_FAIL(UI, cursor["g_fontSampler"].setBinding(m_font_sampler));
+                PPR_RETURN_ERROR_ON_FAIL(UI, cursor["g_fontTexture"].setBinding(m_font_texture_view));
+                slot_roots[slot] = std::move(root);
+            }
+
+            if (m_render_pipeline) {
+                rhi::ComPtr<rhi::IRenderPipeline> retired_pipeline = std::move(m_render_pipeline);
+                std::array<rhi::ComPtr<rhi::IShaderObject>, kUiFrameSlots> retired_roots = std::move(m_slot_roots);
+                const FenceCompletionValue last_use = m_last_submitted_value;
+                m_deferred_releases.defer(
+                    last_use,
+                    [held_pipeline = std::move(retired_pipeline), held_roots = std::move(retired_roots)]() mutable {
+                        held_pipeline.setNull();
+                        for (rhi::ComPtr<rhi::IShaderObject> &root: held_roots) {
+                            root.setNull();
+                        }
+                    });
+            }
+
+            m_render_pipeline = std::move(pipeline);
+            m_slot_roots = std::move(slot_roots);
             return default_value_v;
         }
 
+        void ImGuiService::reclaimCompleted_(const FenceCompletionValue completed) noexcept {
+            std::ignore = m_deferred_releases.reclaim(completed);
+        }
+
         std::error_code ImGuiService::uploadDrawData_(
-            rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources) {
+            rhi::IDevice &device, const ImDrawData &draw_data, FrameResources &resources,
+            const FenceCompletionValue completed, FenceWaitHook &wait_for_fence) {
             const hal::ProfileScope scope{"App.UI.Upload"};
             const u32 total_vtx_count = checked_cast<u32>(draw_data.TotalVtxCount);
             const u32 total_idx_count = checked_cast<u32>(draw_data.TotalIdxCount);
@@ -662,8 +875,25 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 return default_value_v;
             }
 
+            // Growth replaces the whole buffer, so the youngest submission
+            // that may still read it must complete first (R6: UI growth
+            // previously replaced buffers unfenced). The slot was selected
+            // by completion above; growth additionally gates on the YOUNGEST
+            // tracked use across both slots, since either slot's contents
+            // may belong to a still-pending submission.
+            auto wait_for_youngest = [&]() -> std::error_code {
+                const std::span<const FenceCompletionValue> values{m_slot_values.data(), m_slot_values.size()};
+                const FenceCompletionValue youngest = maxSlotValue(values);
+                if (youngest != kFenceValueNone and youngest > completed) {
+                    ++m_growth_wait_count;
+                    PPR_RETURN_ERROR_ON_FAIL(UI, wait_for_fence(youngest));
+                }
+                return default_value_v;
+            };
+
             if (not resources.m_vertex_buffer or
                 resources.m_vertex_buffer->getDesc().size < static_cast<u64>(total_vtx_count) * sizeof(ImDrawVert)) {
+                PPR_RETURN_ERROR_ON_FAIL(UI, wait_for_youngest());
                 const u32 new_capacity = alignForward(total_vtx_count, 8192_u32);
                 const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawVert);
 
@@ -680,6 +910,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             if (not resources.m_index_buffer or
                 resources.m_index_buffer->getDesc().size < static_cast<u64>(total_idx_count) * sizeof(ImDrawIdx)) {
+                PPR_RETURN_ERROR_ON_FAIL(UI, wait_for_youngest());
                 const u32 new_capacity = alignForward(total_idx_count, 16384_u32);
                 const u64 size_bytes = static_cast<u64>(new_capacity) * sizeof(ImDrawIdx);
 

@@ -3,6 +3,7 @@ module;
 export module engine.app:renderer.triangle_pass;
 
 import :renderer.types;
+import :renderer.frame_fence;
 import :renderer.gpu_caches;
 import :scene.camera;
 
@@ -183,6 +184,21 @@ export namespace pP {
         // records. Restart is an explicit shutdown + initialize pair.
         [[nodiscard]] std::error_code notifyDeviceLost() noexcept;
 
+        // P1 fence settlement: records the frame SUBMIT's fence value for
+        // the payload-ring slot this frame rotated onto (shared with every
+        // variant's per-slot roots: one submission, one slot, one value).
+        // Called after a successful submit only; a failed submit keeps the
+        // older value, which is conservative and safe.
+        void notifyFrameSubmitted(FenceCompletionValue submit_value) noexcept;
+
+        // Gate 1 telemetry: ring-growth waits and per-slot last-use values.
+        [[nodiscard]] u64 growthWaitCount() const noexcept {
+            return m_growth_wait_count;
+        }
+        [[nodiscard]] std::array<FenceCompletionValue, 3u> slotCompletionValues() const noexcept {
+            return m_payload_slot_values;
+        }
+
         // ------------------------------------------------------------------
         // asset residency and instance submission
         // ------------------------------------------------------------------
@@ -237,6 +253,12 @@ export namespace pP {
         // resolve, plan, and encode
         // ------------------------------------------------------------------
 
+        // Payload-ring depth: 3 slots > 2 frame credits, so the selected
+        // slot is complete without waiting whenever submissions retired in
+        // order; the wait fallback covers the rest.
+        static constexpr u32 kPayloadRingSize{3u};
+        static_assert(kPayloadRingSize == kFrameRingSlots);
+
         std::error_code createInvariantRenderState_(rhi::IDevice &device);
 
         std::error_code createShaderProgram_(
@@ -244,18 +266,21 @@ export namespace pP {
 
         // Pipeline-variant cache: target signature + twosided cull +
         // opaque/mask alpha. Blend is REJECTED with function_not_supported.
-        // Each entry pairs the pipeline with its persistent ROOT shader object
-        // (bound through the 2-arg bindPipeline overload) carrying the
-        // cache-lifetime bindings — materials, textures, sampler — plus the
-        // resolved g_frame cursor, all fixed at creation. encodeGroup_ writes
-        // only what varies: geometry, the payload ring slot, g_payload_base,
-        // and FrameConstants.
+        // Each entry pairs the pipeline with per-slot persistent ROOT shader
+        // objects (bound through the 2-arg bindPipeline overload) carrying
+        // the cache-lifetime bindings — materials, textures, sampler — plus
+        // the resolved g_frame cursor per slot, all fixed at creation. A
+        // frame binds and writes only its selected slot's root, so per-frame
+        // constants never mutate an object an in-flight submission still
+        // references. encodeGroup_ writes only what varies: geometry, the
+        // payload ring slot, g_payload_base, and FrameConstants.
         struct CachedVariantPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
-            rhi::ComPtr<rhi::IShaderObject> m_root_object{};
-            // g_frame's dereferenced ConstantBuffer cursor, resolved once so
-            // the per-frame path skips the field lookup and sub-object walk.
-            rhi::ShaderCursor m_frame_cursor{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kPayloadRingSize> m_slot_roots{};
+            // g_frame's dereferenced ConstantBuffer cursors, one per slot,
+            // resolved once so the per-frame path skips the field lookup and
+            // sub-object walk.
+            std::array<rhi::ShaderCursor, kPayloadRingSize> m_slot_frame_cursors{};
         };
 
         [[nodiscard]] Expected<CachedVariantPipeline *> pipelineFor_(
@@ -289,12 +314,21 @@ export namespace pP {
 
         // All-or-nothing payload upload: the whole compacted interval or fail.
         [[nodiscard]] std::error_code uploadPayloads_(
-            rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan);
+            rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan,
+            FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
 
         [[nodiscard]] std::error_code encodeGroup_(
             const DrawContext &draw_context, const Array<ResolvedInstance> &resolved_instances, const DrawGroup &group);
 
-        [[nodiscard]] std::error_code ensureDirectPayloads_(rhi::IDevice &device, u32 payload_count);
+        [[nodiscard]] std::error_code ensureDirectPayloads_(
+            rhi::IDevice &device, u32 payload_count, FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
+
+        // Reclaims deferred variant pipelines/roots at or below `completed`.
+        void reclaimCompleted_(FenceCompletionValue completed) noexcept;
+
+        // Rotates onto a completion-selected slot and waits it out when
+        // stale. Records m_last_used_slot for notifyFrameSubmitted.
+        [[nodiscard]] std::error_code selectSlot_(FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
 
         // Drops the whole payload ring without touching a device: unmap only
         // runs when one is supplied (the growth/replacement path), while
@@ -315,20 +349,32 @@ export namespace pP {
 
         // The payload ring: kPayloadRingSize upload buffers at InstancePayload
         // (96 B) stride, each created and mapped ONCE and kept mapped for its
-        // whole life — uploadPayloads_ only advances the cursor, so a frame's
-        // writes land in a buffer no in-flight frame is still reading. Sized
-        // like the swapchain image count (m_desired_image_count) so one submit
-        // per frame never revisits a slot still on the GPU. Rotation is per
-        // render() submit and assumes a SINGLE render per frame (backpressured
-        // by acquireNextImage); a second per-frame render (e.g. a future TSR
-        // velocity/depth prepass) must revisit this — move rotation to the
-        // frame boundary or grow the ring. Pass-owned, so it
-        // outlives the encoded draws; released in shutdown before waitOnHost.
-        static constexpr u32 kPayloadRingSize{3u};
+        // whole life. The frame selects its slot by per-slot completion
+        // values, never by blind cursor parity (see selectSlot_):
+        // uploadPayloads_ only advances onto a slot no in-flight frame is
+        // still reading. Rotation is per render() submit and assumes a SINGLE
+        // render per frame (backpressured by acquireNextImage); a second
+        // per-frame render (e.g. a future TSR velocity/depth prepass) must
+        // revisit this — move rotation to the frame boundary or grow the
+        // ring. Pass-owned, so it outlives the encoded draws; released in
+        // shutdown before waitOnHost.
         std::array<rhi::ComPtr<rhi::IBuffer>, kPayloadRingSize> m_direct_payloads{};
         std::array<void *, kPayloadRingSize> m_direct_payload_mapped{};
         u32 m_payload_ring_cursor{0u};
         u64 m_direct_payload_capacity = 0u;
+        // Per-slot last-use completion values, one array for the single
+        // payload ring. Set by notifyFrameSubmitted for the slot the frame
+        // rotated onto; the slot is reusable once the fence passes it.
+        std::array<FenceCompletionValue, kPayloadRingSize> m_payload_slot_values{};
+        u32 m_last_used_slot{0u};
+
+        // Retired variant pipelines/roots referenced by in-flight
+        // submissions, keyed by last-use fence value. Reclaimed at every
+        // render entry; drained unconditionally at shutdown/device-loss.
+        DeferredReleaseQueue m_deferred_releases{};
+        FenceCompletionValue m_last_submitted_value{kFenceValueNone};
+
+        u64 m_growth_wait_count{0u};
 
         // Pass-owned GPU caches + the ONE shared sampler. m_shared_sampler is a
         // raw non-owning view lent to BindlessMaterialCache, so the teardown

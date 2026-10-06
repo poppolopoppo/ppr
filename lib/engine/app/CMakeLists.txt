@@ -28,6 +28,7 @@ target_sources(engine.app
         player/App.Player.Graph.cppm
 
         renderer/App.Renderer.cppm
+        renderer/App.Renderer.FrameFence.cppm
         renderer/App.Renderer.GpuCaches.cppm
         renderer/App.Renderer.GridPass.cppm
         renderer/App.Renderer.TrianglePass.cppm
@@ -74,6 +75,7 @@ target_sources(engine.app
         player/App.Player.Graph.cpp
 
         renderer/App.Renderer.cpp
+        renderer/App.Renderer.FrameFence.cpp
         renderer/App.Renderer.GpuCaches.cpp
         renderer/App.Renderer.GridPass.cpp
         renderer/App.Renderer.TrianglePass.cpp

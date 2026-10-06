@@ -110,8 +110,23 @@ export namespace pP {
         // batch (no client dispatch) and replay them exactly once at the
         // defined advancement point. Concrete-type API (not IInputService):
         // the platform holds the concrete GlfwInput, so no interface change.
-        [[nodiscard]] std::error_code dispatchCollectedBatches();
+        // The appliers run the deferred client halves of focus + hotplug
+        // control records, in collection order with the input replay.
+        [[nodiscard]] std::error_code dispatchCollectedBatches(
+            PendingFocusApplier &&focus_applier = {}, PendingDeviceApplier &&device_applier = {});
 
         void setNativeBatchCollection(bool collecting) noexcept;
+
+        // Collection routing for window-callback control records (focus):
+        // the live input service while a native collection is open, else
+        // null — callers fire immediately on the null path.
+        [[nodiscard]] static safe_ptr<GlfwInput> collectingNativeBatchTarget() noexcept;
+
+        // Deferred-half entry points for hotplug control records: fire the
+        // connected/disconnected broadcast for a registry change the
+        // platform half already applied at collection time.
+        [[nodiscard]] std::error_code notifyDeviceConnected(const IInputDevice &device);
+
+        [[nodiscard]] std::error_code notifyDeviceDisconnected(const IInputDevice &device);
     };
 }

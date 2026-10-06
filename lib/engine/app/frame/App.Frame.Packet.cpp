@@ -24,6 +24,10 @@ namespace pP {
         packet.m_viewport_revision = viewport_revision;
         packet.m_window_title = window.m_title;
         packet.m_framebuffer_size = window.m_framebuffer_size;
+        // Surface identity is authoritative at capture; the generation is
+        // filled by the producer (Editor::update queries the Renderer),
+        // defaulting to "no claim" for producers without a surface yet.
+        packet.m_surface_identity = window.m_handle;
         return packet;
     }
 }

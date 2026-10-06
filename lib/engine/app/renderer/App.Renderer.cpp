@@ -3,6 +3,7 @@ module;
 module engine.app;
 
 import :renderer;
+import :renderer.frame_fence;
 import :renderer.types;
 import :service.window;
 import :window.handle;
@@ -220,7 +221,9 @@ namespace pP {
         [[nodiscard]] std::error_code encodeRenderPass_(
             rhi::ICommandEncoder &encoder, string_literal description, const rhi::RenderPassDesc &render_pass,
             const RenderPipelineSignature &pipeline_signature, const int2 &target_extent,
-            const std::span<const DrawSubmission> draws, rhi::IDevice &device) {
+            const std::span<const DrawSubmission> draws, rhi::IDevice &device,
+            const FenceCompletionValue completed_fence_value,
+            const std23::function_ref<std::error_code(FenceCompletionValue)> wait_for_fence) {
             rhi::IRenderPassEncoder *const pass = encoder.beginRenderPass(render_pass);
             if (pass == nullptr) [[unlikely]] {
                 PPR_LOG(
@@ -277,6 +280,8 @@ namespace pP {
                                           .m_viewport = viewport,
                                           .m_scissor = scissor,
                                           .m_target_extent = target_extent,
+                                          .m_completed_fence_value = completed_fence_value,
+                                          .m_wait_for_fence = wait_for_fence,
                                       }));
                 }
             }
@@ -302,6 +307,20 @@ namespace pP {
         m_graphics_queue = std::move(queue);
         m_owner = std::this_thread::get_id();
 
+        // The one app-owned monotonic fence: every frame SUBMIT signals the
+        // next value through SubmitDesc signalFences. Created here so the
+        // first submit already carries a value; never an internal queue ID.
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, m_frame_fence.initialize(device));
+
+        m_submit_quarantine = false;
+        m_injected_submit_failure = false;
+
+        // Bounded by the credit ledger: the unretired set never exceeds
+        // kMaxOutstandingFrames, so this reserve keeps every steady-state
+        // retireFrame_ below it allocation-free (retirement runs on scope
+        // guards, including unwind paths).
+        m_unretired_submits.reserve(kMaxOutstandingFrames);
+
         PPR_LOG(Renderer, info, "Renderer initialized");
         return default_value_v;
     }
@@ -318,8 +337,48 @@ namespace pP {
                 {"surfaces", m_surfaces.size()},
             });
 
-        std::error_code first_err{};
-        PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, waitOnHost());
+        // Release only after a safe disposition: quiescence is established
+        // WITHOUT releasing, and an UNKNOWN outcome retains every GPU object
+        // (fence alive, deferred entries held, surfaces and queue untouched)
+        // for process exit — the OS reclaims retained objects. Only proven
+        // idle or positively-confirmed removal proceeds below.
+        const GpuQuiescenceResult quiescence = establishGpuQuiescence();
+        std::error_code first_err = quiescence.m_error;
+        if (quiescence.m_disposition == GpuQuiescence::kUnknown) {
+            m_submit_quarantine = true;
+            return first_err;
+        }
+
+        // Shutdown under load: retirement is the inverse of submission.
+        // Proven idle retires through the fence shutdown (which waits the
+        // last submission only when one is outstanding — harmless after the
+        // idle above). Positively-confirmed removal abandons wait-free and
+        // releases without touching the device below. abandon() and
+        // notifyDeviceLost() prove nothing by themselves and are never used
+        // as proof on the UNKNOWN path (which returned above).
+        if (quiescence.m_disposition == GpuQuiescence::kRemovalConfirmed) {
+            m_submit_quarantine = true;
+            m_frame_fence.abandon();
+        } else {
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_frame_fence.shutdown());
+            if (first_err) {
+                const bool confirmed_removal = first_err ==
+                                                   std::make_error_code(std::errc::no_such_device_or_address) or
+                                               m_frame_fence.isTerminal();
+                m_submit_quarantine = true;
+                if (not confirmed_removal) {
+                    return first_err;
+                }
+            }
+        }
+        sweepCompleted_();
+        std::ignore = m_deferred.drainAll();
+        m_unretired_submits.clear();
+        m_credits.reset();
+        m_submit_quarantine = false;
+        m_injected_submit_failure = false;
+        m_injected_quiescence_failure = std::error_code{};
+        m_test_hold_sweep = false;
 
         // The FlatMap iterator yields a proxy/prvalue pair, so take entries by
         // value: binding to `auto&` fails. unconfigure() acts on the shared
@@ -344,6 +403,217 @@ namespace pP {
         return std::this_thread::get_id() == m_owner;
     }
 
+    void Renderer::notifyDeviceLost() noexcept {
+        // GPU objects are gone (positively-confirmed removal ONLY — never a
+        // generic UNKNOWN wait failure, which must retain instead): nothing in flight is worth waiting for.
+        // Discard pending retirements outright (mirroring the pass-owned
+        // cache contract), drop credits without completing them, and abandon
+        // the fence — abandon(), never shutdown(), because shutdown() is
+        // allowed to wait and this hook must stay wait-free. Surfaces and
+        // the queue release below without touching the device; restart is
+        // an explicit shutdown + initialize pair. Cancellation wakes waits,
+        // it does not interrupt a driver present, so this hook never blocks
+        // on the GPU.
+        std::ignore = m_deferred.drainAll();
+        m_unretired_submits.clear();
+        m_credits.reset();
+        m_submit_quarantine = false;
+        m_injected_submit_failure = false;
+        m_injected_quiescence_failure = std::error_code{};
+        m_test_hold_sweep = false;
+        m_frame_fence.abandon();
+        for (auto entry: m_surfaces) {
+            SurfaceRecord &record = entry.second;
+            record.m_configured = false;
+            record.m_depth_view.setNull();
+            record.m_depth_texture.setNull();
+            record.m_surface.setNull();
+        }
+        m_surfaces.clear();
+        m_graphics_queue.setNull();
+    }
+
+    void Renderer::quarantineAdmission() noexcept {
+        m_submit_quarantine = true;
+    }
+
+    void Renderer::setTestHoldSweep(const bool hold) noexcept {
+        m_test_hold_sweep = hold;
+    }
+
+    void Renderer::sweepCompleted_() noexcept {
+        // Tests-only delayed-completion seam: while held, real submits stay
+        // outstanding (no reclaim, no credit return) so the test can assert
+        // two TRULY PENDING submissions via real fence values.
+        if (m_test_hold_sweep) {
+            return;
+        }
+        const Expected<FenceCompletionValue> completed = m_frame_fence.pollCompleted();
+        const FenceCompletionValue known = completed.has_value() ? *completed : m_frame_fence.completed();
+        std::ignore = m_deferred.reclaim(known);
+        std::size_t kept = 0u;
+        for (std::size_t index = 0u; index < m_unretired_submits.size(); ++index) {
+            if (m_unretired_submits[index] <= known) {
+                // Exactly one credit return per submitted value: the value
+                // leaves the set here, so it can never return twice. A
+                // failed poll keeps every value (no invented completion).
+                std::ignore = m_credits.release();
+            } else {
+                if (kept != index) {
+                    m_unretired_submits[kept] = m_unretired_submits[index];
+                }
+                ++kept;
+            }
+        }
+        m_unretired_submits.resize(kept);
+    }
+
+    void Renderer::retireFrame_(const FenceCompletionValue submitted_value, const FrameSettlement settlement) noexcept {
+        switch (settlement) {
+            case FrameSettlement::kSubmitted:
+                // The credit travels with the submission: it returns in a
+                // later sweep once the fence passes this value (often the
+                // very next sweep below, since present already throttled the
+                // frame). The reserve in initialize() keeps this push
+                // allocation-free within the credit bound.
+                m_unretired_submits.push_back(submitted_value);
+                break;
+            case FrameSettlement::kSubmitFailed:
+                // Possibly executed: stop admission and HOLD the credit
+                // (never returned early, never reused) until shutdown
+                // proves idle or notifyDeviceLost confirms the loss. The
+                // signal value was never committed, so no ambiguous value
+                // can ever be waited on or recycled.
+                m_submit_quarantine = true;
+                break;
+            case FrameSettlement::kRejected:
+                // Definitely unsubmitted: nothing references this frame's
+                // writes, so the credit returns immediately — still exactly
+                // once per admitted frame.
+                std::ignore = m_credits.release();
+                break;
+        }
+        sweepCompleted_();
+    }
+
+    std::error_code Renderer::admitFrame_() {
+        // Nonblocking admission: probe (quarantine/terminal/sweep/capacity
+        // with distinct codes) without taking anything, then take one
+        // credit. Single lane, so nothing interleaves between probe and
+        // acquire: a successful probe always has a credit below.
+        if (const std::error_code probe_err = checkFrameAdmission()) [[unlikely]] {
+            return probe_err;
+        }
+        return m_credits.acquire();
+    }
+
+    std::error_code Renderer::checkFrameAdmission() {
+        // A quarantined submit failure parks the pipeline until teardown
+        // settles it (proven idle or confirmed loss): parked admission is a
+        // teardown/recovery signal, never capacity backpressure.
+        if (m_submit_quarantine) [[unlikely]] {
+            return std::make_error_code(std::errc::state_not_recoverable);
+        }
+        if (m_frame_fence.isTerminal()) [[unlikely]] {
+            return std::make_error_code(std::errc::no_such_device_or_address);
+        }
+        // Sweep completions first so a finished frame never squats a credit.
+        sweepCompleted_();
+        // Recheck AFTER sweeping: the sweep's poll may have observed the
+        // removal sentinel and latched terminal mid-sweep — never admit
+        // past it. Only capacity-busy survives as the skippable outcome.
+        if (m_frame_fence.isTerminal()) [[unlikely]] {
+            return std::make_error_code(std::errc::no_such_device_or_address);
+        }
+        if (m_credits.outstanding() >= kMaxOutstandingFrames) [[unlikely]] {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
+        return default_value_v;
+    }
+
+    void Renderer::setInjectedSubmitFailure(const bool fail) noexcept {
+        m_injected_submit_failure = fail;
+    }
+
+    Expected<FenceCompletionValue> Renderer::submitAndSignal_(rhi::ICommandBuffer *const command_buffer) {
+        if (not m_frame_fence.isInitialized() or not m_graphics_queue or command_buffer == nullptr) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::not_connected)};
+        }
+        // After-execute placement on the single graphics queue: the value is
+        // signalled once this submission's work completes. The value is
+        // committed ONLY on success — a failed submit burns the internal
+        // queue ID at most, never the app-owned monotonic sequence. A
+        // failed submit may still have executed, so the caller must
+        // quarantine the frame (never a normal release).
+        const FenceCompletionValue value = m_frame_fence.nextValue();
+        if (m_injected_submit_failure) [[unlikely]] {
+            // Gate 1 determinism seam (tests only): simulates the
+            // device-removed class where the signal may have failed AFTER
+            // execute. No backend work runs and no value is committed.
+            return std::unexpected{std::make_error_code(std::errc::io_error)};
+        }
+        rhi::ICommandBuffer *command_buffers[] = {command_buffer};
+        rhi::IFence *signal_fences[] = {m_frame_fence.fence()};
+        const u64 signal_values[] = {value};
+        rhi::SubmitDesc submit_desc{};
+        submit_desc.commandBuffers = command_buffers;
+        submit_desc.commandBufferCount = 1u;
+        submit_desc.signalFences = signal_fences;
+        submit_desc.signalFenceValues = signal_values;
+        submit_desc.signalFenceCount = 1u;
+        if (const std::error_code err = make_error_code(m_graphics_queue->submit(submit_desc))) [[unlikely]] {
+            return std::unexpected{err};
+        }
+        m_frame_fence.commitSubmitted(value);
+        return value;
+    }
+
+    std::error_code Renderer::waitForFenceValue(const FenceCompletionValue value) {
+        if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        return m_frame_fence.waitFor(value);
+    }
+
+    std::error_code Renderer::retireCompletedFrames() {
+        if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        sweepCompleted_();
+        if (const Expected<FenceCompletionValue> completed = m_frame_fence.pollCompleted(); not completed) {
+            return completed.error();
+        }
+        return default_value_v;
+    }
+
+    FenceCompletionValue Renderer::lastSubmittedFenceValue() const noexcept {
+        return m_frame_fence.lastSubmitted();
+    }
+
+    FenceCompletionValue Renderer::completedFenceValue() const noexcept {
+        return m_frame_fence.completed();
+    }
+
+    u32 Renderer::outstandingFrameCount() const noexcept {
+        return m_credits.outstanding();
+    }
+
+    SurfaceGeneration Renderer::surfaceGenerationFor(const WindowHandle window_handle) const noexcept {
+        const auto it = m_surfaces.find(window_handle);
+        if (it == m_surfaces.end()) {
+            return kSurfaceGenerationNone;
+        }
+        return it->second.m_generation;
+    }
+
+    bool Renderer::isSurfaceWorkObsolete(const SurfaceIdentity identity) const noexcept {
+        const auto it = m_surfaces.find(identity.m_handle);
+        if (it == m_surfaces.end()) {
+            return false;
+        }
+        return ::pP::isSurfaceWorkObsolete(true, identity.m_generation, it->second.m_generation);
+    }
+
     std::error_code Renderer::waitOnHost() {
         const hal::ProfileScope scope{"App.Renderer.WaitOnHost", hal::profile_blocking_category};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
@@ -354,6 +624,42 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->waitOnHost());
         }
         return default_value_v;
+    }
+
+    GpuQuiescenceResult Renderer::establishGpuQuiescence() {
+        // Tests-only injected outcome: classified exactly like a backend
+        // wait with the same error (a healthy fence + generic failure is
+        // UNKNOWN without removal marking). Never touches the backend.
+        if (m_injected_quiescence_failure) {
+            const std::error_code injected = m_injected_quiescence_failure;
+            const bool confirmed_removal = injected == std::make_error_code(std::errc::no_such_device_or_address) or
+                                           m_frame_fence.isTerminal();
+            return GpuQuiescenceResult{
+                .m_disposition = confirmed_removal ? GpuQuiescence::kRemovalConfirmed : GpuQuiescence::kUnknown,
+                .m_error = injected,
+            };
+        }
+        if (const std::error_code wait_err = waitOnHost()) {
+            // A failed host wait is UNKNOWN completion, never confirmed
+            // loss — except a positively-confirmed removal code (or a fence
+            // that already latched terminal, e.g. via the removal sentinel
+            // observed mid-frame). Nothing is released or reused here.
+            const bool confirmed_removal = wait_err == std::make_error_code(std::errc::no_such_device_or_address) or
+                                           m_frame_fence.isTerminal();
+            return GpuQuiescenceResult{
+                .m_disposition = confirmed_removal ? GpuQuiescence::kRemovalConfirmed : GpuQuiescence::kUnknown,
+                .m_error = wait_err,
+            };
+        }
+        return GpuQuiescenceResult{.m_disposition = GpuQuiescence::kIdleProven, .m_error = default_value_v};
+    }
+
+    void Renderer::setInjectedQuiescenceFailureForTest(const std::error_code error) noexcept {
+        m_injected_quiescence_failure = error;
+    }
+
+    rhi::ICommandQueue *Renderer::graphicsQueueForTest() const noexcept {
+        return m_graphics_queue.get();
     }
 
     std::error_code Renderer::render(
@@ -375,6 +681,23 @@ namespace pP {
             return std::make_error_code(std::errc::not_connected);
         }
 
+        // Nonblocking admission BEFORE construction: sweep completions
+        // first so a finished frame never squats a credit, then take one.
+        // Capacity-busy fails the frame closed WITHOUT building anything
+        // (single lane: the caller retries with a fresh frame; the Editor
+        // maps only capacity-busy to a dropped frame, never an app
+        // failure). Quarantine/terminal failures carry their distinct codes
+        // to teardown/recovery — never suppressed as dropped frames.
+        // Exactly one settlement per admitted frame rides the defer below.
+        if (const std::error_code err = admitFrame_()) [[unlikely]] {
+            return err;
+        }
+        FenceCompletionValue submitted_value{kFenceValueNone};
+        FrameSettlement settlement{FrameSettlement::kRejected};
+        PPR_DEFER {
+            retireFrame_(submitted_value, settlement);
+        };
+
         const auto scope = mem::ScratchPad::open();
 
         RenderPipelineSignature pipeline_signature{};
@@ -387,15 +710,28 @@ namespace pP {
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
+        const FenceCompletionValue completed = m_frame_fence.completed();
+        const auto wait_for_fence = [this](const FenceCompletionValue value) -> std::error_code {
+            return m_frame_fence.waitFor(value);
+        };
         if (const std::error_code encode_err = encodeRenderPass_(
                 *encoder, description, render_pass, pipeline_signature, target_extent, draws,
-                m_rhi_service->getDevice())) [[unlikely]] {
+                m_rhi_service->getDevice(), completed, wait_for_fence)) [[unlikely]] {
             return encode_err;
         }
 
         rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(command_buffer.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->submit(command_buffer.get()));
+        const Expected<FenceCompletionValue> submitted = submitAndSignal_(command_buffer.get());
+        if (not submitted) [[unlikely]] {
+            // Possibly executed: quarantine (admission stops, credit held)
+            // rather than a normal release. The value was never committed,
+            // so no ambiguous value can be reused.
+            settlement = FrameSettlement::kSubmitFailed;
+            return submitted.error();
+        }
+        submitted_value = *submitted;
+        settlement = FrameSettlement::kSubmitted;
         return default_value_v;
     }
 
@@ -482,6 +818,19 @@ namespace pP {
 
     std::error_code Renderer::renderAndPresent(
         const Window &window, const std::initializer_list<SurfaceRenderPass> passes) {
+        return renderAndPresentImpl_(
+            window, std::span<const SurfaceRenderPass>{passes.begin(), passes.size()},
+            SurfaceIdentity{.m_handle = window.m_handle, .m_generation = kSurfaceGenerationNone});
+    }
+
+    std::error_code Renderer::renderAndPresent(
+        const Window &window, const std::initializer_list<SurfaceRenderPass> passes, const SurfaceIdentity identity) {
+        return renderAndPresentImpl_(
+            window, std::span<const SurfaceRenderPass>{passes.begin(), passes.size()}, identity);
+    }
+
+    std::error_code Renderer::renderAndPresentImpl_(
+        const Window &window, const std::span<const SurfaceRenderPass> passes, const SurfaceIdentity identity) {
         const hal::ProfileScope scope{"App.Renderer.Present"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
@@ -492,7 +841,52 @@ namespace pP {
         if (not window.m_handle) [[unlikely]] {
             return std::make_error_code(std::errc::no_such_device_or_address);
         }
+        if (identity.m_handle and identity.m_handle != window.m_handle) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
 
+        // Nonblocking admission BEFORE any backend work: capacity-busy
+        // fails the frame closed with no packet consumed and no surface
+        // touched, while quarantine/terminal failures propagate under their
+        // distinct codes. Exactly one settlement per admitted frame rides
+        // the defer below, including every rejection and failure path.
+        if (const std::error_code err = admitFrame_()) [[unlikely]] {
+            return err;
+        }
+        FenceCompletionValue submitted_value{kFenceValueNone};
+        FrameSettlement settlement{FrameSettlement::kRejected};
+        PPR_DEFER {
+            retireFrame_(submitted_value, settlement);
+        };
+
+        // Generational gate against the EXISTING record, BEFORE surface
+        // control: the incoming claim is checked before any reconfiguration.
+        // A mismatch that predates this frame retires as obsolete with no
+        // backend work and no reconfigure. Only a claim that matched the
+        // pre-frame generation (or no claim, or no record yet) proceeds; a
+        // resize below then mints G+1 for this same frame, which proceeds by
+        // construction — a packet is never reconfigured and then rejected
+        // for that same reconfigure.
+        {
+            const auto existing = m_surfaces.find(window.m_handle);
+            if (existing != m_surfaces.end() and
+                identity.m_generation != kSurfaceGenerationNone and
+                ::pP::isSurfaceWorkObsolete(true, identity.m_generation, existing->second.m_generation)) [[unlikely]] {
+                PPR_LOG(
+                    Renderer, info, "rejecting obsolete surface work before reconfiguration",
+                    {
+                        {"packet_generation", identity.m_generation},
+                        {"record_generation", existing->second.m_generation},
+                    });
+                return std::make_error_code(std::errc::resource_unavailable_try_again);
+            }
+        }
+
+        // Surface control is reconciled BEFORE acquisition (never after):
+        // create/resize mints a fresh generation and revalidates every
+        // signature against the new shape, so the current packet proceeds
+        // against the surface it just shaped. The gate above already retired
+        // every pre-existing mismatch, so no second check is needed below.
         SurfaceRecord *record = nullptr;
         if (const auto it = m_surfaces.find(window.m_handle); it == m_surfaces.end()) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Renderer, createWindowSurface_(window, &record));
@@ -530,33 +924,77 @@ namespace pP {
             const hal::ProfileScope scope_acquire{"App.Renderer.Acquire"};
             PPR_RETURN_ERROR_ON_FAIL(Renderer, record->m_surface->acquireNextImage(image.writeRef()));
         }
+
+        // Acquired-image settlement guard, armed IMMEDIATELY post-acquire:
+        // every failure below (error code or exception from allocations
+        // and draw callbacks) still settles the acquired image exactly
+        // once. The normal path settles explicitly through settlePresent();
+        // any unwind settles best-effort in the destructor (which never
+        // throws and never masks the original failure). The guard borrows
+        // the surface — the record outlives this call, and no map mutation
+        // below can reseat it.
+        struct AcquiredImageGuard {
+            rhi::ISurface *m_surface{nullptr};
+            bool m_settled{false};
+
+            [[nodiscard]] std::error_code settlePresent() noexcept {
+                if (m_settled or m_surface == nullptr) [[unlikely]] {
+                    return std::make_error_code(std::errc::invalid_argument);
+                }
+                m_settled = true;
+                return make_error_code(m_surface->present());
+            }
+
+            ~AcquiredImageGuard() noexcept {
+                if (not m_settled and m_surface != nullptr) {
+                    try {
+                        std::ignore = m_surface->present();
+                    } catch (...) {
+                    }
+                }
+            }
+        };
+        AcquiredImageGuard acquired_guard{record->m_surface.get()};
+
+        // From here the acquired image owns a backend obligation:
+        // acquire ⇒ present unconditionally. Every failure below records
+        // first_err and skips forward work, but the present at the end
+        // still runs (the debug layer enforces acquire→present pairing;
+        // both backends deadlock the next acquire otherwise).
+        std::error_code first_err{};
         const rhi::ComPtr<rhi::ITextureView> image_view = image->getDefaultView();
 
         // Fail early when the acquired backbuffer no longer matches the
         // resize-matched depth view instead of tripping per-frame validation.
         // Only passes selecting renderer-owned depth need the pair to match.
-        bool wants_owned_depth = false;
-        for (const SurfaceRenderPass &surface_pass: passes) {
-            if (surface_pass.m_depth_policy == ESurfaceDepthPolicy::renderer_owned) {
-                wants_owned_depth = true;
-                break;
+        // An extent mismatch no longer returns early: it records the error
+        // (which skips encode/submit below) and flows into the
+        // release/present path — acquire ⇒ present unconditionally.
+        {
+            bool wants_owned_depth = false;
+            for (const SurfaceRenderPass &surface_pass: passes) {
+                if (surface_pass.m_depth_policy == ESurfaceDepthPolicy::renderer_owned) {
+                    wants_owned_depth = true;
+                    break;
+                }
             }
-        }
 
-        if (wants_owned_depth) {
-            AttachmentInfo acquired_info{};
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, inspectAttachment_(image_view.get(), &acquired_info));
-            if (record->m_depth_view) {
-                AttachmentInfo depth_info{};
-                PPR_RETURN_ERROR_ON_FAIL(Renderer, inspectAttachment_(record->m_depth_view.get(), &depth_info));
-                if (acquired_info.m_extent.x != depth_info.m_extent.x or
-                    acquired_info.m_extent.y != depth_info.m_extent.y) [[unlikely]] {
-                    return std::make_error_code(std::errc::invalid_argument);
+            if (wants_owned_depth and not first_err) {
+                AttachmentInfo acquired_info{};
+                if (const std::error_code err = inspectAttachment_(image_view.get(), &acquired_info)) {
+                    first_err = err;
+                } else if (record->m_depth_view) {
+                    AttachmentInfo depth_info{};
+                    if (const std::error_code depth_err = inspectAttachment_(record->m_depth_view.get(), &depth_info)) {
+                        first_err = depth_err;
+                    } else if (acquired_info.m_extent.x != depth_info.m_extent.x or
+                               acquired_info.m_extent.y != depth_info.m_extent.y) [[unlikely]] {
+                        first_err = std::make_error_code(std::errc::invalid_argument);
+                    }
                 }
             }
         }
 
-        std::error_code first_err{};
         const string_literal description{std::in_place, window.m_title.data()};
 
         // One arena scope for both phases: every descriptor built below points
@@ -615,8 +1053,17 @@ namespace pP {
         // pass skips every remaining pass and abandons the encoder without
         // finish/submit: the encoded-but-unsubmitted work is discarded when
         // the encoder is destroyed, while the present below still runs.
+        // Completion for ring-slot reuse is polled once at frame start and
+        // handed to every pass; growth/slot gates wait through the fence.
         {
             const hal::ProfileScope scope_submit{"App.Renderer.Submit"};
+            const FenceCompletionValue completed = m_frame_fence.completed();
+            const auto wait_for_fence = [this](const FenceCompletionValue value) -> std::error_code {
+                return m_frame_fence.waitFor(value);
+            };
+            // An extent mismatch recorded first_err above, so this block is
+            // skipped and the frame becomes present-only: no encode, no
+            // submit, but the acquired image still meets its obligation.
             if (not first_err) {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_RETAIN_ERROR_ON_FAIL(
@@ -628,22 +1075,42 @@ namespace pP {
                     }
                     first_err = encodeRenderPass_(
                         *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
-                        m_rhi_service->getDevice());
+                        m_rhi_service->getDevice(), completed, wait_for_fence);
                 }
 
                 if (not first_err) {
                     rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
                     PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, encoder->finish(command_buffer.writeRef()));
                     if (not first_err) {
-                        PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_graphics_queue->submit(command_buffer.get()));
+                        // One monotonic value per frame SUBMIT, signalled
+                        // after execute. A failed submit commits no value
+                        // but may still have executed: the frame quarantines
+                        // (admission stops, credit held) instead of
+                        // releasing normally. A present failure below leaves
+                        // the accepted submission GPU-pending until
+                        // completion (or the device-loss teardown path) —
+                        // never recycled early.
+                        const Expected<FenceCompletionValue> submitted = submitAndSignal_(command_buffer.get());
+                        if (submitted) {
+                            submitted_value = *submitted;
+                            settlement = FrameSettlement::kSubmitted;
+                        } else {
+                            first_err = submitted.error();
+                            settlement = FrameSettlement::kSubmitFailed;
+                        }
                     }
                 }
             }
         }
 
+        // Submission acceptance is independent of present: the submit above
+        // already committed its value (stamped by the caller even when the
+        // present below fails), and the acquired image meets its
+        // acquire ⇒ present obligation exactly once through the guard —
+        // including the present-only path above.
         {
             const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
-            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, record->m_surface->present());
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, acquired_guard.settlePresent());
         }
         return first_err;
     }
@@ -722,6 +1189,10 @@ namespace pP {
             record.m_depth_view.setNull();
             record.m_depth_texture.setNull();
             record.m_extent = new_extent;
+            // Zero-size is an explicit shape change: mint a fresh generation
+            // so packets built for the old shape are rejected before
+            // acquisition instead of encoding against a dead surface.
+            record.m_generation = ++m_surface_epoch;
             return default_value_v;
         }
 
@@ -745,6 +1216,10 @@ namespace pP {
         record.m_depth_view = std::move(depth_view);
         record.m_extent = new_extent;
         record.m_configured = true;
+        // A successful reconfigure is a new surface shape: mint a fresh
+        // generation (existing waitOnHost ordering above is preserved — the
+        // GPU is fenced before the surface is touched).
+        record.m_generation = ++m_surface_epoch;
 
         // The surface shape is fixed by this configure and this depth texture,
         // so the cacheable signature entries are reseeded here — the only place

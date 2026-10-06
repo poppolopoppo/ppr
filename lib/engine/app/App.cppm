@@ -20,6 +20,7 @@ export import :platform;
 export import :player.graph;
 export import :player;
 
+export import :renderer.frame_fence;
 export import :renderer.gpu_caches;
 export import :renderer.grid_pass;
 export import :renderer.triangle_pass;

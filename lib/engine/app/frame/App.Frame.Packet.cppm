@@ -2,6 +2,7 @@ module;
 
 export module engine.app:frame.packet;
 
+import :renderer.frame_fence;
 import :scene.camera;
 import :window.handle;
 import :window.viewport;
@@ -39,6 +40,14 @@ export namespace pP {
         // (see hasRenderTarget): no stored flag can desync from it.
         std::string m_window_title{};
         int2 m_framebuffer_size{};
+
+        // Generational surface claim: the surface identity this packet was
+        // built for, plus the Renderer surface generation observed at
+        // capture time. The consume path rejects a packet whose generation
+        // no longer matches the live record BEFORE acquisition; the first
+        // frame (kSurfaceGenerationNone, no record yet) always accepts.
+        WindowHandle m_surface_identity{};
+        SurfaceGeneration m_surface_generation{kSurfaceGenerationNone};
     };
 
     [[nodiscard]] bool hasRenderTarget(const FramePacket &packet) noexcept;

@@ -1,6 +1,7 @@
 module;
 export module engine.app:renderer;
 
+import :renderer.frame_fence;
 import :renderer.types;
 
 import engine.core;
@@ -16,6 +17,30 @@ export namespace pP {
     // generic renderer: surfaces + queue + submission only
     // ------------------------------------------------------------------
 
+    // Generational surface identity for a frame's worth of work. A packet
+    // names the surface generation it was built for; the Renderer rejects
+    // obsolete generations BEFORE acquisition. After acquisition the
+    // backend-required release/present path runs unconditionally.
+    struct SurfaceIdentity {
+        WindowHandle m_handle{};
+        SurfaceGeneration m_generation{kSurfaceGenerationNone};
+    };
+
+    // Frame settlement outcomes for the exactly-once retirement below.
+    // kRejected: definitely unsubmitted (validation, obsolescence, busy
+    // admission) — nothing references this frame's writes, the credit
+    // returns immediately. kSubmitted: the submit was accepted and
+    // signalled a value — the credit travels with it until fence
+    // completion. kSubmitFailed: the submit call failed AFTER the work may
+    // already have executed, so the frame is quarantined (admission stops,
+    // the credit is held, the value is never committed or reused) until
+    // proven idle or confirmed loss.
+    enum class FrameSettlement : u8 {
+        kRejected,
+        kSubmitted,
+        kSubmitFailed,
+    };
+
     class Renderer final {
     public:
         rhi::Format m_preferred_surface_format{rhi::Format::Undefined};
@@ -25,6 +50,22 @@ export namespace pP {
         [[nodiscard]] std::error_code initialize(IRhiService &rhi_service);
 
         [[nodiscard]] std::error_code shutdown();
+
+        // Device-loss hook: GPU objects are gone, so nothing in flight is
+        // worth waiting for. Drops pending retirements and credits without
+        // polling, releases surfaces/queue, and parks the fence for a later
+        // shutdown + initialize restart. Never blocks on the GPU. Call ONLY
+        // after removal is positively confirmed (sentinel, device-loss code,
+        // or platform-confirmed loss) — never as proof on a generic UNKNOWN
+        // wait failure, which must retain instead (see shutdown()).
+        void notifyDeviceLost() noexcept;
+
+        // Retention hook for an UNKNOWN idle-wait failure at teardown: parks
+        // admission immediately so no new frame is built while GPU state of
+        // unknown completion is retained. The caller must then retain every
+        // GPU object (no destroy) and return the wait error for process
+        // exit. Never used on the steady-state path.
+        void quarantineAdmission() noexcept;
 
         [[nodiscard]] std::error_code render(
             string_literal description, const rhi::RenderPassDesc &render_pass,
@@ -37,9 +78,95 @@ export namespace pP {
         [[nodiscard]] std::error_code renderAndPresent(
             const Window &window, std::initializer_list<SurfaceRenderPass> passes);
 
+        // Generational overload: `identity` carries the packet's surface
+        // claim. A generation mismatch against the live record retires the
+        // frame before acquisition (no backend work, no credit held); a
+        // missing record (first frame) accepts and assigns. A "no claim"
+        // identity (kSurfaceGenerationNone) skips the check — the legacy
+        // overload below stays safe for callers without a packet.
+        [[nodiscard]] std::error_code renderAndPresent(
+            const Window &window, std::initializer_list<SurfaceRenderPass> passes, SurfaceIdentity identity);
+
         [[nodiscard]] std::error_code waitOnHost();
 
+        // B1' quiescence probe, separated from state release: classifies GPU
+        // completion WITHOUT releasing anything (no fence drop, no drain, no
+        // surface/queue touch, never an app-fence signal). Success authorizes
+        // release; positively-confirmed removal authorizes release without
+        // touching the device; any other failure is UNKNOWN (callers retain
+        // everything and fail-stop at final teardown). Never blocks
+        // admission by itself — the caller quarantines first.
+        [[nodiscard]] GpuQuiescenceResult establishGpuQuiescence();
+
+        // B1' determinism seam, TESTS ONLY: when set, quiescence reports
+        // this error instead of touching the backend (a healthy fence with
+        // an io_error here is UNKNOWN without removal marking).
+        // Production code never sets this.
+        void setInjectedQuiescenceFailureForTest(std::error_code error) noexcept;
+
+        // B3' queue-gate access, TESTS ONLY: the production graphics queue
+        // the Renderer submits through, so a wait-only gate submit blocks the
+        // SAME queue (no second worker). Production code never calls this.
+        [[nodiscard]] rhi::ICommandQueue *graphicsQueueForTest() const noexcept;
+
+        // Host wait for one app-owned fence value (growth gates, tests,
+        // readback callers). Completion-only: display/vsync behavior is
+        // unchanged by this call.
+        [[nodiscard]] std::error_code waitForFenceValue(FenceCompletionValue value);
+
+        // Retirement sweep: poll completion, reclaim deferred releases, and
+        // return credits for submissions the fence has passed. Best effort:
+        // a failed poll keeps every credit and every deferred entry (no
+        // completion is ever invented). A latched-terminal poll surfaces the
+        // device-loss code (never capacity-busy); callers that must stop
+        // admission recheck isTerminal() after sweeping. Called at every
+        // frame boundary and by tests; shutdown drains unconditionally
+        // instead.
+        [[nodiscard]] std::error_code retireCompletedFrames();
+
+        // Non-acquiring admission probe shared by producers: sweeps
+        // completions, then reports the frame's fate WITHOUT taking a
+        // credit. Success means the producer may build; capacity-busy
+        // (device_or_resource_busy) means skip the frame without building
+        // anything (busy never fails the app); quarantine
+        // (state_not_recoverable) or terminal device loss
+        // (no_such_device_or_address) means the pipeline is parked — the
+        // producer must propagate, never suppress as a dropped frame. The
+        // terminal check runs again AFTER the sweep, so a removal sentinel
+        // observed mid-sweep still stops admission.
+        [[nodiscard]] std::error_code checkFrameAdmission();
+
+        // Observability for Gate 1 (four clocks stay separate: queue depth
+        // via outstandingFrameCount, host present via profiling scopes, GPU
+        // completion via completedFenceValue, displayed cadence externally).
+        [[nodiscard]] FenceCompletionValue lastSubmittedFenceValue() const noexcept;
+        [[nodiscard]] FenceCompletionValue completedFenceValue() const noexcept;
+        [[nodiscard]] u32 outstandingFrameCount() const noexcept;
+
+        // Current surface generation for a window handle, or
+        // kSurfaceGenerationNone when no record exists (first frame).
+        [[nodiscard]] SurfaceGeneration surfaceGenerationFor(WindowHandle window_handle) const noexcept;
+
+        // Pre-acquisition obsolescence probe for producers: true when a
+        // record exists and the packet's generation no longer matches it.
+        [[nodiscard]] bool isSurfaceWorkObsolete(SurfaceIdentity identity) const noexcept;
+
         [[nodiscard]] std::error_code destroyWindowSurface(const Window &window);
+
+        // Gate 1 determinism seam, TESTS ONLY: when set, the next submit
+        // behaves as a submit that may already have executed (device-
+        // removed class) — no value is committed and the frame quarantines.
+        // Production code never sets this. Public solely so the
+        // frame-fence tests can drive the quarantine path; behavior is
+        // unchanged.
+        void setInjectedSubmitFailure(bool fail) noexcept;
+
+        // Gate 1 delayed-completion seam, TESTS ONLY: when held, the
+        // frame-boundary sweep is suppressed so real submits stay
+        // outstanding (credits held, deferred entries retained) until the
+        // test releases the hold — proving two TRULY PENDING submissions via
+        // real fence values. Production code never sets this.
+        void setTestHoldSweep(bool hold) noexcept;
 
     private:
         // Per-surface cache of a pass-shape signature, one slot per cacheable
@@ -73,6 +200,10 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_depth_view{};
             int2 m_extent{zero_v};
             std::array<SurfaceSignatureCache, 2u> m_signatures{};
+            // Generational lifetime: bumped on create/resize/unconfigure so
+            // a packet built for an older shape is rejected before
+            // acquisition instead of encoding against a stale surface.
+            SurfaceGeneration m_generation{kSurfaceGenerationNone};
             bool m_configured: 1 {false};
         };
 
@@ -101,14 +232,86 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> &out_view) const;
 
         [[nodiscard]] std::error_code renderDraws_(
-            string_literal description, const rhi::RenderPassDesc &render_pass, std::span<const DrawSubmission> draws);
+            string_literal description, const rhi::RenderPassDesc &render_pass,
+            const std::span<const DrawSubmission> draws);
+
+        // One SUBMIT through the app-owned fence: signals nextValue() after
+        // execute on the graphics queue and commits only on success. A failed
+        // submit consumes no value and leaves no pending completion behind
+        // (failed submits stall only the internal retirement, never the
+        // app-owned monotonic sequence).
+        [[nodiscard]] Expected<FenceCompletionValue> submitAndSignal_(rhi::ICommandBuffer *command_buffer);
+
+        // Nonblocking admission shared by every submission path: a
+        // quarantined submit failure or a terminal fence fails closed
+        // before any construction; otherwise sweep completions first so a
+        // finished frame never squats a credit, then take one. Quarantine
+        // reports state_not_recoverable and terminal reports
+        // no_such_device_or_address — both stay distinct from the
+        // capacity-busy code all the way to teardown/recovery.
+        [[nodiscard]] std::error_code admitFrame_();
+
+        // Frame-boundary completion sweep shared by every submission path:
+        // poll the fence (keeping prior completion on query failure),
+        // reclaim deferred releases at or below completion, and return
+        // credits for unretired submissions the fence has passed. Exactly one
+        // credit return per submitted value; values never submitted never
+        // enter the unretired set.
+        void sweepCompleted_() noexcept;
+
+        // Exactly-once per-frame settlement: a submitted value joins the
+        // unretired set (credit returns when the fence passes it); a
+        // rejected frame returns its credit immediately (definitely
+        // unsubmitted); a failed submit quarantines the frame — admission
+        // stops and the credit is held until proven idle (shutdown wait)
+        // or confirmed loss (abandon). Every admission path calls this
+        // exactly once, including rejections and failures.
+        void retireFrame_(FenceCompletionValue submitted_value, FrameSettlement settlement) noexcept;
+
+        [[nodiscard]] std::error_code renderAndPresentImpl_(
+            const Window &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 
         [[nodiscard]] bool onRenderThread_() const noexcept;
 
         FlatMap<WindowHandle, SurfaceRecord> m_surfaces{};
+        // Surface-generation epoch: every create/resize/unconfigure mints a
+        // fresh nonzero generation from this counter. Never reused, never
+        // reset except by process restart.
+        SurfaceGeneration m_surface_epoch{kSurfaceGenerationNone};
         rhi::ComPtr<rhi::ICommandQueue> m_graphics_queue{};
+        // The one app-owned monotonic fence: one signalled value per frame
+        // SUBMIT, never an internal queue ID.
+        FrameFence m_frame_fence{};
+        // Two frame credits bounding submitted-but-uncompleted frames.
+        // Single CPU lane, so admission never blocks the platform pump:
+        // the Editor probes eligibility BEFORE building its packet (a full
+        // ledger skips the frame without constructing anything) and maps a
+        // busy/quarantined admission inside the Renderer to a dropped
+        // frame — busy never fails the app.
+        FrameCreditLedger m_credits{};
+        // Submitted values awaiting fence completion; each leaves exactly
+        // once, carrying its credit back with it.
+        Array<FenceCompletionValue> m_unretired_submits{};
+        // Submit-failure quarantine: a failed submit may have executed, so
+        // admission stops and the failed frame's credit is held (never
+        // reused, never returned early) until shutdown proves idle or
+        // notifyDeviceLost confirms the loss. Cleared by both.
+        bool m_submit_quarantine{false};
+        // B1' quiescence determinism seam (tests only): a set error is
+        // reported by establishGpuQuiescence instead of the backend wait.
+        std::error_code m_injected_quiescence_failure{};
+        // Gate 1 determinism seam: injected possibly-executed submit
+        // failure (tests only; production never sets it).
+        bool m_injected_submit_failure{false};
+        // Gate 1 delayed-completion seam (tests only): when held,
+        // sweepCompleted_ is suppressed so real submits stay outstanding.
+        // Production never sets it.
+        bool m_test_hold_sweep{false};
+        // Renderer-owned deferred releases (surface-adjacent; pass-owned
+        // objects retire through the passes' own queues).
+        DeferredReleaseQueue m_deferred{};
         safe_ptr<IRhiService> m_rhi_service{};
         std::thread::id m_owner{};
     };

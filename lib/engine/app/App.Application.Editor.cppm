@@ -28,6 +28,11 @@ export namespace pP {
     public:
         ApplicationEditor(std::string_view name, std::span<const char *const> argv);
 
+        // B1' fail-stop injection passthrough (see Application).
+        explicit ApplicationEditor(
+            std::string_view name, std::span<const char *const> argv,
+            GpuTeardownFailureHandler on_gpu_teardown_failure);
+
         ~ApplicationEditor() noexcept override;
 
         // IClientService
@@ -77,6 +82,13 @@ export namespace pP {
             return this;
         }
 
+        // Test-seam construction: scripted platform + injected clock (see
+        // Application). The Editor domain is fixed; windowed stages stay
+        // null unless the derived fixture builds them.
+        ApplicationEditor(
+            std::string_view name, std::span<const char *const> argv, std::unique_ptr<IPlatform> platform,
+            const ITimerClock &clock, GpuTeardownFailureHandler on_gpu_teardown_failure = nullptr);
+
         // Application:
         [[nodiscard]] std::error_code initialize() override;
 
@@ -94,6 +106,11 @@ export namespace pP {
         // P0 serial-explicit render consumption: the render() stage takes
         // the owned packet built by update() (single-use, same thread).
         [[nodiscard]] std::error_code renderPacket_(const FramePacket &packet);
+
+        // Submission acceptance is independent of present: every participant
+        // stamps off the accepted SUBMIT value (lastSubmitted advancement),
+        // never off the present verdict.
+        void stampSubmittedPasses_(FenceCompletionValue accepted_value);
 
         // Owned packet staged by update() for render(); cleared on consume.
         std::optional<FramePacket> m_frame_packet{};

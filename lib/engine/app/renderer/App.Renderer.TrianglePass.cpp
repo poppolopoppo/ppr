@@ -5,6 +5,7 @@ module;
 module engine.app;
 
 import :renderer.triangle_pass;
+import :renderer.frame_fence;
 import :renderer.types;
 import :scene.camera;
 import std;
@@ -639,7 +640,17 @@ namespace pP {
         if (not m_render_pipeline_key.has_value() or
             static_cast<const RenderPipelineSignature &>(m_render_pipeline_key.value()) != signature) {
             PPR_LOG(TrianglePass, debug, "pipeline cache cleared on signature change");
-            m_variant_pipelines.clear();
+            // Deferred release, not an immediate drop: in-flight submissions
+            // may still reference every variant pipeline and root below.
+            // Each entry retires once the fence passes the latest submission
+            // that could reference it; reclaim runs at every render entry.
+            if (not m_variant_pipelines.empty()) {
+                FlatMap<TrianglePipelineVariant, CachedVariantPipeline> retired{};
+                retired = std::move(m_variant_pipelines);
+                m_variant_pipelines.clear();
+                const FenceCompletionValue last_use = m_last_submitted_value;
+                m_deferred_releases.defer(last_use, [held = std::move(retired)]() mutable { held.clear(); });
+            }
             m_render_pipeline_key.reset();
         }
 
@@ -670,61 +681,70 @@ namespace pP {
         rhi::ComPtr<rhi::IRenderPipeline> pipeline{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, device.createRenderPipeline(pipeline_desc, pipeline.writeRef()));
 
-        // ONE persistent ROOT shader object per variant, built from the same
-        // program as the pipeline: the 2-arg bindPipeline overload downcasts
-        // its argument to a RootShaderObject, so createShaderObject(type,
-        // container) — which returns a plain ShaderObject — cannot back it.
-        // Rebinding this object per encode replaces the per-draw object the
-        // 1-arg overload used to build.
-        rhi::ComPtr<rhi::IShaderObject> root_object{};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            TrianglePass, device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
-
-        // Cache-lifetime state, written ONCE per variant: the material and
-        // texture containers are created once per cache lifetime (never
-        // re-created, their slots rewritten in place), the sampler handle is
-        // stable after initialize, and g_frame's ConstantBuffer sub-object is
-        // fixed at creation. Everything that varies — g_vertices/g_indices per
-        // group, g_payloads per ring slot, g_payload_base per draw — stays in
-        // encodeGroup_.
+        // ONE persistent ROOT shader object PER RING SLOT, built from the
+        // same program as the pipeline: the 2-arg bindPipeline overload
+        // downcasts its argument to a RootShaderObject, so
+        // createShaderObject(type, container) — which returns a plain
+        // ShaderObject — cannot back it. Rebinding a slot's object per
+        // encode replaces the per-draw object the 1-arg overload used to
+        // build; a frame touches only its selected slot's root.
+        std::array<rhi::ComPtr<rhi::IShaderObject>, kPayloadRingSize> slot_roots{};
+        std::array<rhi::ShaderCursor, kPayloadRingSize> slot_frame_cursors{};
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
         rhi::IBuffer *const texture_buffer = m_texture_cache.descriptorBuffer();
         if (material_buffer == nullptr or texture_buffer == nullptr) [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
+        for (u32 slot = 0u; slot < kPayloadRingSize; ++slot) {
+            // Cache-lifetime state, written ONCE per variant per slot: the
+            // material and texture containers are created once per cache
+            // lifetime (never re-created, their slots rewritten in place),
+            // the sampler handle is stable after initialize, and each slot's
+            // g_frame ConstantBuffer sub-object is fixed at creation.
+            // Everything that varies — g_vertices/g_indices per group,
+            // g_payloads per ring slot, g_payload_base per draw — stays in
+            // encodeGroup_.
+            rhi::ComPtr<rhi::IShaderObject> root_object{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                TrianglePass, device.createRootShaderObject(pipeline->getProgram(), root_object.writeRef()));
 
-        const rhi::ShaderCursor invariant_cursor{root_object.get()};
-        const rhi::ShaderCursor material_cursor = invariant_cursor["g_materials"];
-        const rhi::ShaderCursor texture_cursor = invariant_cursor["g_textures"];
-        const rhi::ShaderCursor sampler_cursor = invariant_cursor["g_sampler"];
-        const rhi::ShaderCursor frame_field = invariant_cursor["g_frame"];
-        if (not material_cursor.isValid() or
-            not texture_cursor.isValid() or
-            not sampler_cursor.isValid() or
-            not frame_field.isValid()) [[unlikely]] {
-            // A missing field means the pass and the shader disagree; fail
-            // closed rather than write through a null cursor.
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            const rhi::ShaderCursor invariant_cursor{root_object.get()};
+            const rhi::ShaderCursor material_cursor = invariant_cursor["g_materials"];
+            const rhi::ShaderCursor texture_cursor = invariant_cursor["g_textures"];
+            const rhi::ShaderCursor sampler_cursor = invariant_cursor["g_sampler"];
+            const rhi::ShaderCursor frame_field = invariant_cursor["g_frame"];
+            if (not material_cursor.isValid() or
+                not texture_cursor.isValid() or
+                not sampler_cursor.isValid() or
+                not frame_field.isValid()) [[unlikely]] {
+                // A missing field means the pass and the shader disagree; fail
+                // closed rather than write through a null cursor.
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                TrianglePass,
+                material_cursor.setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                TrianglePass, texture_cursor.setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, sampler_cursor.setDescriptorHandle(m_sampler_handle));
+
+            // Dereferenced ONCE here: the per-frame path then only writes
+            // FrameConstants through the cached cursor.
+            rhi::ShaderCursor frame_cursor{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, frame_field.getDereferenced(frame_cursor));
+
+            slot_frame_cursors[slot] = frame_cursor;
+            slot_roots[slot] = std::move(root_object);
         }
-
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            TrianglePass, material_cursor.setBinding(rhi::Binding(material_buffer, makeFullRange(material_buffer))));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            TrianglePass, texture_cursor.setBinding(rhi::Binding(texture_buffer, makeFullRange(texture_buffer))));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, sampler_cursor.setDescriptorHandle(m_sampler_handle));
-
-        // Dereferenced ONCE here: the per-frame path then only writes
-        // FrameConstants through the cached cursor.
-        rhi::ShaderCursor frame_cursor{};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, frame_field.getDereferenced(frame_cursor));
 
         m_render_pipeline_key.emplace(signature);
 
         const auto [cached_variant_it, _] = m_variant_pipelines.emplace(
             variant, CachedVariantPipeline{
                          .m_pipeline = std::move(pipeline),
-                         .m_root_object = std::move(root_object),
-                         .m_frame_cursor = frame_cursor,
+                         .m_slot_roots = std::move(slot_roots),
+                         .m_slot_frame_cursors = std::move(slot_frame_cursors),
                      });
 
         return &cached_variant_it->second;
@@ -751,6 +771,9 @@ namespace pP {
         if (not m_caches_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
+        // Retire replaced variant pipelines/roots even on frames that encode
+        // nothing: deferred objects must not outlive their completion.
+        reclaimCompleted_(draw_context.m_completed_fence_value);
         Expected<Array<ResolvedInstance>> resolved_instances = resolveInstances_();
         if (not resolved_instances.has_value()) [[unlikely]] {
             return resolved_instances.error();
@@ -775,7 +798,9 @@ namespace pP {
             active_plan = &m_cached_plan;
         }
         PPR_RETURN_ERROR_ON_FAIL(
-            TrianglePass, uploadPayloads_(draw_context.m_device, *resolved_instances, *active_plan));
+            TrianglePass, uploadPayloads_(
+                              draw_context.m_device, *resolved_instances, *active_plan,
+                              draw_context.m_completed_fence_value, draw_context.m_wait_for_fence));
 
         // Per-frame state, identical for every group: uploaded and applied
         // once, not re-done per draw.
@@ -888,20 +913,44 @@ namespace pP {
         m_plan_cache_valid = false;
     }
 
-    std::error_code TrianglePass::uploadPayloads_(
-        rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan) {
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, ensureDirectPayloads_(device, plan.m_payload_count));
+    void TrianglePass::notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept {
+        m_last_submitted_value = submit_value;
+        m_payload_slot_values[m_last_used_slot] = submit_value;
+    }
 
-        // One rotation per submit: every group encoded after this point reads
-        // the slot just advanced onto, which the previous submit did not
-        // write. The slot stays mapped for its whole life, so there is no
-        // per-frame map/unmap pair and no per-frame write-combined flush.
-        // The rotation is per render() submit and the 3-slot parity assumes a
-        // SINGLE TrianglePass::render per frame (backpressured by
-        // acquireNextImage); a second per-frame render (e.g. a future TSR
-        // velocity/depth prepass) must revisit this — move rotation to the
-        // frame boundary or grow the ring.
-        m_payload_ring_cursor = (m_payload_ring_cursor + 1u) % kPayloadRingSize;
+    void TrianglePass::reclaimCompleted_(const FenceCompletionValue completed) noexcept {
+        std::ignore = m_deferred_releases.reclaim(completed);
+    }
+
+    std::error_code TrianglePass::selectSlot_(const FenceCompletionValue completed, FenceWaitHook &wait_for_fence) {
+        const std::span<const FenceCompletionValue> values{m_payload_slot_values.data(), m_payload_slot_values.size()};
+        const u32 slot = selectRingSlot(completed, values, m_payload_ring_cursor);
+        if (not slotFenceComplete(completed, m_payload_slot_values[slot])) [[unlikely]] {
+            // Backstop only: 3 slots vs at most 2 outstanding submissions.
+            // Never overwrite early.
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, wait_for_fence(m_payload_slot_values[slot]));
+        }
+        m_payload_ring_cursor = slot;
+        m_last_used_slot = slot;
+        return default_value_v;
+    }
+
+    std::error_code TrianglePass::uploadPayloads_(
+        rhi::IDevice &device, const Array<ResolvedInstance> &resolved_instances, const DrawPlan &plan,
+        const FenceCompletionValue completed, FenceWaitHook &wait_for_fence) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, ensureDirectPayloads_(device, plan.m_payload_count, completed, wait_for_fence));
+
+        // One rotation per submit onto a completion-selected slot: every
+        // group encoded after this point reads the selected slot, whose last
+        // use the fence has passed (or was waited out). The slot stays mapped
+        // for its whole life, so there is no per-frame map/unmap pair and no
+        // per-frame write-combined flush. The rotation is per render()
+        // submit and assumes a SINGLE TrianglePass::render per frame
+        // (backpressured by acquireNextImage); a second per-frame render
+        // (e.g. a future TSR velocity/depth prepass) must revisit this —
+        // move rotation to the frame boundary or grow the ring.
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, selectSlot_(completed, wait_for_fence));
         void *const mapped_payloads = m_direct_payload_mapped[m_payload_ring_cursor];
         if (mapped_payloads == nullptr) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
@@ -927,7 +976,9 @@ namespace pP {
         return default_value_v;
     }
 
-    std::error_code TrianglePass::ensureDirectPayloads_(rhi::IDevice &device, const u32 payload_count) {
+    std::error_code TrianglePass::ensureDirectPayloads_(
+        rhi::IDevice &device, const u32 payload_count, const FenceCompletionValue completed,
+        FenceWaitHook &wait_for_fence) {
         if (payload_count == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -936,9 +987,26 @@ namespace pP {
             return default_value_v;
         }
 
-        // Growth or first use: drop the whole ring (and unmap it, since a
-        // device is still available here) before rebuilding it at the new size.
+        // Growth or first use: the whole ring is replaced, so the youngest
+        // tracked submission must complete first (R6: growth MUST wait).
+        // The wait is skipped when nothing was ever submitted, or when the
+        // frame's polled completion already passes every tracked use.
+        {
+            const std::span<const FenceCompletionValue> values{
+                m_payload_slot_values.data(), m_payload_slot_values.size()};
+            const FenceCompletionValue youngest = maxSlotValue(values);
+            if (youngest != kFenceValueNone and youngest > completed) {
+                ++m_growth_wait_count;
+                PPR_RETURN_ERROR_ON_FAIL(TrianglePass, wait_for_fence(youngest));
+            }
+        }
+
+        // Drop the whole ring (and unmap it, since a device is still
+        // available here) before rebuilding it at the new size. The wait
+        // above drained every tracked submission, so the completion array
+        // restarts empty alongside the fresh buffers.
         releaseDirectPayloads_(std::addressof(device));
+        m_payload_slot_values.fill(kFenceValueNone);
 
         rhi::BufferDesc payload_desc{};
         payload_desc.size = payload_bytes;
@@ -1037,20 +1105,22 @@ namespace pP {
             return cached.error();
         }
         rhi::IRenderPipeline *const pipeline = (*cached)->m_pipeline.get();
-        rhi::IShaderObject *const root_object = (*cached)->m_root_object.get();
-        if (pipeline == nullptr or root_object == nullptr or not (*cached)->m_frame_cursor.isValid()) [[unlikely]] {
+        rhi::IShaderObject *const root_object = (*cached)->m_slot_roots[m_payload_ring_cursor].get();
+        rhi::ShaderCursor &frame_cursor = (*cached)->m_slot_frame_cursors[m_payload_ring_cursor];
+        if (pipeline == nullptr or root_object == nullptr or not frame_cursor.isValid()) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 
-        // Persistent root object: rebound as-is; the cache-lifetime bindings
-        // (g_materials/g_textures/g_sampler) and the g_frame cursor were fixed
-        // at creation, so only the data below is written per group.
+        // Per-slot root object: rebound as-is; the cache-lifetime bindings
+        // (g_materials/g_textures/g_sampler) and this slot's g_frame cursor
+        // were fixed at creation, so only the data below is written per
+        // group — and only into a slot no in-flight submission reads.
         draw_context.m_pass.bindPipeline(pipeline, root_object);
         rhi::ShaderCursor shader_cursor{root_object};
 
         // Writes land in the g_frame sub-object's data buffer — what a draw
         // uploads — not in the root object's own buffer.
-        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, uploadFrameConstants_((*cached)->m_frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, uploadFrameConstants_(frame_cursor));
 
         // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
         // startInstanceLocation never reaches the shader. The group's payload
@@ -1174,12 +1244,24 @@ namespace pP {
         // bindings reference cache buffers and the shared sampler), then the
         // three caches, then the shared sampler they borrow
         // (m_material_cache must release its non-owning view first), then the
-        // pass's own programs and buffers. Retain-first-error,
-        // best-effort, and all of it BEFORE the renderer's waitOnHost.
+        // pass's own programs and buffers. Precondition (established by the
+        // Editor): GPU completion was already proven idle, so no pending
+        // frame can read what is released here. Deferred variant pipelines
+        // drain unconditionally — after confirmed loss the objects are dead
+        // either way. Slot values reset alongside the fence epoch they
+        // named. Retain-first-error, best-effort.
         std::error_code first_err{};
         m_submitted_instances.clear();
         invalidatePlanCache_();
         m_live_scenes.clear();
+        // Deferred variant pipelines drain unconditionally — the fence is
+        // gone with the renderer, so nothing is worth waiting for. Slot
+        // values reset alongside the fence epoch they named.
+        std::ignore = m_deferred_releases.drainAll();
+        m_last_submitted_value = kFenceValueNone;
+        m_payload_slot_values.fill(kFenceValueNone);
+        m_last_used_slot = 0u;
+        m_growth_wait_count = 0u;
         m_variant_pipelines.clear();
         m_render_pipeline_key.reset();
         PPR_RETAIN_ERROR_ON_FAIL(TrianglePass, first_err, m_material_cache.shutdown());
@@ -1204,6 +1286,13 @@ namespace pP {
         std::error_code first_err{};
         m_submitted_instances.clear();
         invalidatePlanCache_();
+        // Discarded outright like the Renderer and GridPass: the GPU objects
+        // are gone, so nothing is in flight worth waiting for. Slot values
+        // reset with the fence epoch.
+        std::ignore = m_deferred_releases.drainAll();
+        m_last_submitted_value = kFenceValueNone;
+        m_payload_slot_values.fill(kFenceValueNone);
+        m_last_used_slot = 0u;
         m_variant_pipelines.clear();
         m_render_pipeline_key.reset();
         releaseDirectPayloads_(nullptr);

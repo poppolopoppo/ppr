@@ -2500,6 +2500,17 @@ namespace demo {
                 return m_input_error;
             }
 
+            // Non-admitted frames never reach update(): the run-level gate
+            // leaves busy frames before the whole virtual stage, and
+            // platform/control was already serviced there. Queued tool intent
+            // and undriven sim state wait for the next admitted frame. Busy
+            // never fails. Sim-time preservation (B2a): skipped dt
+            // accumulated into Application::m_pending_skipped_dt by the
+            // run-level busy branch, so the next admitted frame's update()
+            // receives dt + carry and ColonyDriver::update bounds catch-up
+            // to its existing 5-slice clamp (FixedTimestep defer backlog
+            // carries any remainder).
+
             // Phase: input/edit. Accepted commands drain in accept order
             // (click first, then drag cells); pop-then-issue so a failing
             // command cannot wedge the queue. A same-poll press/release
@@ -2630,6 +2641,12 @@ namespace demo {
 
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
+            // B1': establish GPU quiescence BEFORE translator.reset below:
+            // the translator owns pass-readable GPU handles, so dropping it
+            // is a release and must come after quiescence, never before. An
+            // UNKNOWN disposition fail-stops in super_t::shutdown() below
+            // before any further release.
+            std::ignore = prepareGpuTeardown_();
             // Detach the tool gesture first: cancel ownership so the camera
             // mapping below never observes a half-torn suppressor, drop the
             // focus subscription, then drop the higher-priority tool mapping
