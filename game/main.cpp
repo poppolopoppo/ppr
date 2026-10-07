@@ -53,6 +53,12 @@ namespace demo {
     };
 
     class TurboLarbin final : public ApplicationEditor {
+        // P2 posture (deliberate): windowed Editor host — inherits the
+        // dedicated render lane and the build (client) / execute (lane)
+        // split. The colony translator still submits on main inside
+        // update(); moving game-owned translation onto the lane is a
+        // game-side follow-up (its cache stays render-confined either way,
+        // and snapshots stay in game/).
         colony::ColonyDriver m_driver{};
         colony::ColonyTranslator m_translator{};
         TriangleBagHandle m_quad_bag{};
@@ -226,9 +232,14 @@ namespace demo {
         // engine.app must not link sim, so the sim-carrying packet lives
         // here). Single-use per frame; cleared after the overlay phase.
         std::optional<colony::SimFramePacket> m_sim_packet{};
-        // A present failure (or translator reset) empties the pass cache, so
+        // A present failure (or translator reset) invalidates the pass cache, so
         // the next frame's packet must carry every resident chunk's cells.
         bool m_present_full_refresh{false};
+        // A pass cache drop requested on main rides the next staged
+        // payload's m_reset_caches onto the lane; the returned settlement
+        // re-arms this on any non-applied outcome. No side-array ack book:
+        // the per-slot RenderFrameResult carries the ack manifest.
+        bool m_grid_reset_pending{false};
         // Grid overlay flag (V, off by default), mirroring the H highlight
         // path: this member holds the state only, and submitDebugInstances_
         // draws the chunk-boundary bands while it stands.
@@ -249,9 +260,12 @@ namespace demo {
                         {"seed", seed},
                     });
                 const std::error_code error = m_driver.regenerate(seed);
-                m_translator.reset(getGridPass());
-                // The reset emptied the pass cache: the next present must
-                // re-upload the whole world from a full-refresh packet.
+                // Translator state is main-side metadata only (its cached
+                // revisions live for panel/CSV reads); the pass cache drop
+                // rides the next staged payload's m_reset_caches onto the
+                // owner lane, and its full world seed flags into the same
+                // settlement envelope consumed above.
+                m_grid_reset_pending = true;
                 m_present_full_refresh = true;
                 return error;
             } catch (const std::system_error &error) {
@@ -1564,12 +1578,13 @@ namespace demo {
                         .m_speed = m_driver.speed(),
                         // Present preparation stages from the owned packet (not
                         // translator.submit), so the translator's submit
-                        // counter no longer advances: report the pass's
-                        // staged tile count, which is the same staged set.
-                        .m_submitted_chunks = getGridPass().stagedTileCount(),
+                        // counter no longer advances: report the lane-published
+                        // staged tile count (the editor's settlement mirror),
+                        // which is the same staged set.
+                        .m_submitted_chunks = renderDiagnostics().m_grid_staged_tiles,
                         .m_total_chunks = colony::ColonyTranslator::totalChunks(),
-                        .m_staged_tiles = getGridPass().stagedTileCount(),
-                        .m_cached_tiles = getGridPass().cachedTileCount(),
+                        .m_staged_tiles = renderDiagnostics().m_grid_staged_tiles,
+                        .m_cached_tiles = renderDiagnostics().m_grid_cached_tiles,
                         .m_last_edit_chunks = safe_narrowing(edits.size()),
                         .m_dirty_chunks = grid.dirtyChunkCount(),
                         .m_collider_pending = static_cast<u64>(m_driver.colliderPending()),
@@ -1839,6 +1854,11 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code uploadDebugDraw_() {
+            // Explicit affinity-and-quiescence contract: this direct
+            // upload (and the Editor's direct scene release) is legal
+            // ONLY at startup before the lane owns the pass, or after
+            // lane quiescence during shutdown. Mid-run it must go
+            // through the staged payload transported to the owner lane.
             // Clockwise unit quad in XY facing +Z (this pipeline culls the
             // other winding); shared by capsules and path polylines.
             const mesh::StaticMeshVertex quad[4] = {
@@ -1899,7 +1919,8 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code submitChunkBorder_(
-            TrianglePass &pass, const sim::ChunkPos chunk, const u32 expand, const MaterialHandle material) {
+            TrianglePass::TriangleStagedFrame &stage, const sim::ChunkPos chunk, const u32 expand,
+            const MaterialHandle material) {
             const float origin_x = static_cast<float>(chunk.m_x * sim::kChunkEdge);
             const float origin_y = static_cast<float>(chunk.m_y * sim::kChunkEdge);
             const float expand_f = static_cast<float>(expand);
@@ -1907,7 +1928,9 @@ namespace demo {
             const float min_y = origin_y - expand_f;
             const float edge = static_cast<float>(sim::kChunkEdge) + expand_f * 2.0f;
 
-            // Four one-cell borders; submitInstance snapshots the model.
+            // Four one-cell borders; staged snapshots are replayed by the
+            // lane onto the pass (m_instances replaces any editor
+            // scene-staged entries, like the old pass.clearInstances).
             const float4x4 edges[4] = {
                 debugModel_(min_x + edge * 0.5f, min_y + 0.5f, 0.0f, edge, 1.0f),
                 debugModel_(min_x + edge * 0.5f, min_y + edge - 0.5f, 0.0f, edge, 1.0f),
@@ -1915,9 +1938,8 @@ namespace demo {
                 debugModel_(min_x + edge - 0.5f, min_y + edge * 0.5f, 0.0f, 1.0f, edge),
             };
             for (const float4x4 &model: edges) {
-                if (const std::error_code error = pass.submitInstance(m_quad_bag, material, model)) {
-                    return error;
-                }
+                stage.m_instances.push_back(
+                    TrianglePass::SubmittedInstance{.m_bag = m_quad_bag, .m_material = material, .m_model = model});
             }
             return {};
         }
@@ -1926,9 +1948,12 @@ namespace demo {
         /// material. Serves the grid overlay and the edit/wake chunk
         /// outlines that remain in the pass (no new GPU handles).
         [[nodiscard]] std::error_code submitBand_(
-            TrianglePass &pass, const float cx, const float cy, const float sx, const float sy,
+            TrianglePass::TriangleStagedFrame &stage, const float cx, const float cy, const float sx, const float sy,
             const MaterialHandle material) {
-            return pass.submitInstance(m_quad_bag, material, debugModel_(cx, cy, 0.0f, sx, sy));
+            stage.m_instances.push_back(
+                TrianglePass::SubmittedInstance{
+                    .m_bag = m_quad_bag, .m_material = material, .m_model = debugModel_(cx, cy, 0.0f, sx, sy)});
+            return {};
         }
 
         /// Screen-space feedback palette: the same cyan/orange the debug-draw
@@ -2228,9 +2253,14 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code submitDebugInstances_() {
-            TrianglePass &pass = getTrianglePass();
-            pass.clearInstances();
+            // P2 pass-affinity: build the staged payload (owned snapshot of
+            // {bag, material, model}); the lane's triangle-pass replay
+            // CLEARS and re-submits all instances from it. This replaces the
+            // old pass.clearInstances()/submitInstance() loop that ran on
+            // main and raced the render lane's reads of the same pass state.
+            TrianglePass::TriangleStagedFrame stage{};
             if (not m_debug_draw_ready) {
+                submitTriangleStage(std::move(stage));
                 return {};
             }
 
@@ -2260,21 +2290,22 @@ namespace demo {
                     // Horizontal (y = at) and vertical (x = at) lines, each
                     // centred on the boundary and spanning the whole world.
                     if (const std::error_code error = submitBand_(
-                            pass, world_half, at, world_half, stroke, m_path_material)) {
+                            stage, world_half, at, world_half, stroke, m_path_material)) {
                         return error;
                     }
                     if (const std::error_code error = submitBand_(
-                            pass, at, world_half, stroke, world_half, m_path_material)) {
+                            stage, at, world_half, stroke, world_half, m_path_material)) {
                         return error;
                     }
                 }
             }
 
             for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
-                if (const std::error_code error = pass.submitInstance(
-                        m_quad_bag, m_agent_material, debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f))) {
-                    return error;
-                }
+                stage.m_instances.push_back(
+                    TrianglePass::SubmittedInstance{
+                        .m_bag = m_quad_bag,
+                        .m_material = m_agent_material,
+                        .m_model = debugModel_(agent.m_x, agent.m_y, 0.0f, 0.8f, 1.8f)});
             }
 
             // Agent rings, hover/selection outlines, and the pointer
@@ -2303,11 +2334,12 @@ namespace demo {
                     const float dy = qy - py;
                     const float length = std::sqrt(dx * dx + dy * dy);
                     if (length > 0.01f) {
-                        if (const std::error_code error = pass.submitInstance(
-                                m_quad_bag, m_path_material,
-                                debugModel_((px + qx) * 0.5f, (py + qy) * 0.5f, std::atan2(dy, dx), length, 0.3f))) {
-                            return error;
-                        }
+                        stage.m_instances.push_back(
+                            TrianglePass::SubmittedInstance{
+                                .m_bag = m_quad_bag,
+                                .m_material = m_path_material,
+                                .m_model = debugModel_(
+                                    (px + qx) * 0.5f, (py + qy) * 0.5f, std::atan2(dy, dx), length, 0.3f)});
                     }
                     px = qx;
                     py = qy;
@@ -2325,11 +2357,11 @@ namespace demo {
                     return std::make_error_code(std::errc::state_not_recoverable);
                 }
                 for (const sim::ChunkPos chunk: m_sim_packet->m_present_chunks) {
-                    if (const std::error_code error = submitChunkBorder_(pass, chunk, 0u, m_path_material)) {
+                    if (const std::error_code error = submitChunkBorder_(stage, chunk, 0u, m_path_material)) {
                         return error;
                     }
                     if (const std::error_code error = submitChunkBorder_(
-                            pass, chunk, colony::kDigWakeCells, m_agent_material)) {
+                            stage, chunk, colony::kDigWakeCells, m_agent_material)) {
                         return error;
                     }
                 }
@@ -2338,6 +2370,7 @@ namespace demo {
             // Pointer preview (dig/pinned outlines, footprint preview) now
             // draws in the screen-space feedback overlay; the pass keeps the
             // edit/wake outlines above.
+            submitTriangleStage(std::move(stage));
             return {};
         }
 
@@ -2385,14 +2418,71 @@ namespace demo {
             return {};
         }
 
+        // P2 consumption-deferred ack: fired once per frame result (lane
+        // pump or inline execute). Only an applied grid frame acks the
+        // driver's dirty set; a dropped or failed frame leaves its chunks
+        // pending so the next buildable packet re-stages them. Full-refresh
+        // + cache-reset armed flags consumed here; re-armed for replay on
+        // drop/rail so recovery never goes through the wrong thread.
+        // Durable slot settlement: applies to every recorded grid slot —
+        // applied success acks the driver's captured dirty set (only when
+        // the seed + per-chunk revisions still match the live dirty set,
+        // matched clearing in ColonyDriver), and clears armed full-refresh;
+        // any non-applied outcome re-arms the same armed flags for the
+        // retry without touching the ack. GPU retirement stay distinct:
+        // it lives in the fence/ledger; this hook owns only CPU-consumption.
+        void onLaneFrameConsumed_(const RenderFrameResult &result) override {
+            ApplicationEditor::onLaneFrameConsumed_(result);
+            // Same identity gate as the base hook: a settling result whose
+            // packet matches the driver's seed but belongs to a previous run
+            // would otherwise ack world edits the driver never re-staged.
+            if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
+                return;
+            }
+            const bool generations_match = result.m_grid_ack_seed == m_driver.worldGeneration();
+            if (result.m_grid_stage_applied and not result.m_dropped and not result.m_error) {
+                // Ack + full-refresh clear ride ONLY the genuine world
+                // generation: a stale result (previous world) can never
+                // clear or ack current state.
+                if (generations_match) {
+                    Array<colony::ColonyDriver::DirtyChunk> ack{};
+                    ack.reserve(result.m_grid_ack_chunk_ids.size());
+                    for (u64 i = 0u; i < result.m_grid_ack_chunk_ids.size(); ++i) {
+                        const u32 id = result.m_grid_ack_chunk_ids[i];
+                        ack.push_back(
+                            colony::ColonyDriver::DirtyChunk{
+                                .m_pos = sim::ChunkPos{id % sim::kChunksPerEdge, id / sim::kChunksPerEdge},
+                                .m_revision = result.m_grid_ack_revisions[i],
+                            });
+                    }
+                    m_driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{ack});
+                    if (result.m_grid_full_refresh) {
+                        m_present_full_refresh = false;
+                    }
+                }
+                return;
+            }
+            if (generations_match) {
+                // Non-applied outcome re-arms this world's flags for the
+                // retry; a stale (foreign-generation) result must never
+                // resurrect flags the current world never had armed.
+                if (result.m_grid_reset_caches) {
+                    m_grid_reset_pending = true;
+                }
+                if (result.m_grid_full_refresh) {
+                    m_present_full_refresh = true;
+                }
+            }
+        }
+
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
             // Phase: regenerate. A confirmed regeneration runs at the very
             // head, ahead of every other phase: regen ends any held gesture
             // (accepted commands stay queued per policy and dig into the
-            // fresh world), drops the pin, then translator.reset clears the
-            // grid pass so this frame's submit re-uploads the new world -
-            // the same phase order the old R key had. A failure returns
-            // here, exactly where the old path aborted the frame.
+            // fresh world), drops the pin, then translator.invalidate clears
+            // the presentation state so this frame's payload re-uploads the
+            // new world. A failure returns here, exactly where the old path
+            // aborted the frame.
             if (m_regen_pending) {
                 m_regen_pending = false;
                 cancelToolGesture_();
@@ -2600,15 +2690,22 @@ namespace demo {
             // stale state. A present failure resets the translator/pass
             // pair, so the next frame re-uploads via a full-refresh packet.
             if (not m_sim_packet or
-                not colony::isSimPacketCoherent(*m_sim_packet, m_driver.tickCount(), m_driver.seed())) {
+                not colony::isSimPacketCoherent(*m_sim_packet, m_driver.tickCount(), m_driver.worldGeneration())) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
-            if (const std::error_code error = colony::presentSimPacket(
-                    *m_sim_packet, m_driver, m_translator, getGridPass())) {
+            GridPass::GridStagedFrame frame_stage{};
+            // Reset intent rides the stage; BuildStagedFrame derives the
+            // full-refresh flag and the consumption-ack manifest from the
+            // owned packet (seed, chunk ids, edit revisions).
+            frame_stage.m_reset_caches = std::exchange(m_grid_reset_pending, false);
+            if (const std::error_code error = colony::buildGridStagedFrame(*m_sim_packet, frame_stage)) {
+                // Fail-closed: restore the armed reset intent and force a
+                // full-refresh retry; the stage is discarded, never applied.
+                m_grid_reset_pending = frame_stage.m_reset_caches;
                 m_present_full_refresh = true;
                 return error;
             }
-            m_present_full_refresh = false;
+            submitGridStage(std::move(frame_stage));
 
             // Phase: overlay + panel. Hover resolves first so the preview
             // outline, status line, and Inspector all describe the cell a
@@ -2641,11 +2738,9 @@ namespace demo {
 
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
-            // B1': establish GPU quiescence BEFORE translator.reset below:
-            // the translator owns pass-readable GPU handles, so dropping it
-            // is a release and must come after quiescence, never before. An
-            // UNKNOWN disposition fail-stops in super_t::shutdown() below
-            // before any further release.
+            // B1': establish GPU quiescence BEFORE translator invalidate/driver shutdown below:
+            // an UNKNOWN disposition fail-stops in super_t::shutdown() before
+            // any further release.
             std::ignore = prepareGpuTeardown_();
             // Detach the tool gesture first: cancel ownership so the camera
             // mapping below never observes a half-torn suppressor, drop the
@@ -2671,7 +2766,9 @@ namespace demo {
                 action.reset();
             }
             if (m_driver_ready) {
-                m_translator.reset(getGridPass());
+                // Translator-state invalidate on main; the pass teardown
+                // itself releases on the lane during Application::shutdown.
+                m_translator.invalidate();
                 PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_driver.shutdown());
                 m_driver_ready = false;
             }

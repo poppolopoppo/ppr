@@ -445,10 +445,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(target);
 
             const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
-            DrawSubmission failing{
-                string_literal{std::in_place, "failing draw"}, DrawCallback{[](const DrawContext &) -> std::error_code {
-                    return std::make_error_code(std::errc::io_error);
-                }}};
+            const auto encode_failing = [](const DrawContext &) -> std::error_code {
+                return std::make_error_code(std::errc::io_error);
+            };
+            DrawSubmission failing{string_literal{std::in_place, "failing draw"}, DrawCallback{encode_failing}};
             PPR_TEST_ASSERT(renderer.renderToTexture(*target, {failing}) != std::error_code{});
             PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == before);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 0u);
@@ -533,11 +533,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(target);
 
             const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
-            DrawSubmission throwing{
-                string_literal{std::in_place, "throwing draw"},
-                DrawCallback{[](const DrawContext &) -> std::error_code {
-                    throw std::runtime_error("injected post-admission unwind");
-                }}};
+            const auto encode_throwing = [](const DrawContext &) -> std::error_code {
+                throw std::runtime_error("injected post-admission unwind");
+            };
+            DrawSubmission throwing{string_literal{std::in_place, "throwing draw"}, DrawCallback{encode_throwing}};
             bool threw = false;
             try {
                 std::ignore = renderer.renderToTexture(*target, {throwing});
@@ -1319,6 +1318,12 @@ namespace pP::tests::detail {
             using ApplicationEditor::ApplicationEditor;
 
             [[nodiscard]] std::error_code bootBase() {
+                // Inline renderer posture: this fixture drives Renderer /
+                // GridPass / TrianglePass from the test thread (scripted
+                // platform, offscreen target), so the default render lane
+                // would make every direct renderToTexture fail closed with
+                // operation_not_permitted.
+                setRenderLaneEnabled(false);
                 return Application::initialize();
             }
             [[nodiscard]] std::error_code teardown() {

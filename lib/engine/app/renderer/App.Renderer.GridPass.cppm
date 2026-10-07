@@ -197,6 +197,48 @@ export namespace pP {
         // every other mutator.
         [[nodiscard]] Expected<u32> requestUpload(const GridUploadRequest &request);
 
+        // Owned per-frame staging payload, built on the CLIENT lane and
+        // applied on the pass's owner lane (encoded pass-affinity: the
+        // client never touches pass CPU state directly anymore). Plain
+        // values + owned storage only — never a live grid or pass view.
+        struct GridStagedUpload {
+            u32 m_chunk_id = 0u;
+            GridTilePayload m_payload{};
+            Array<u16> m_cell_materials{};
+        };
+
+        struct GridStagedFrame {
+            Array<GridTileSubmission> m_tiles{};
+            Array<GridStagedUpload> m_uploads{};
+            // Dropped before staging: translator reset / regeneration /
+            // fail-closed recovery. The client sets this; the lane applies
+            // the clear so regeneration recovery never edits pass state
+            // from main.
+            bool m_reset_caches = false;
+            // The client's single armed full-refresh flag at capture: if this
+            // stage exits on the non-applied path (rejected, minimized,
+            // cancelled, absorb-and-drop, worker error), the derived host
+            // must re-arm its full-refresh flag so the retry re-stages the
+            // world. The true value clears it at settlement.
+            bool m_full_refresh{false};
+            // Consumption-ack manifest for the driver dirty-set covered by
+            // this frame's staging payload: (seed, chunk ids, revisions)
+            // captured at the capture point. The lane round-trips it
+            // into RenderFrameResult; the derived owner consumes it there
+            // so the ack rides the reliable per-slot settlement path
+            // (applied, not dropped, not errored) rather than staging.
+            u64 m_ack_seed{};
+            Array<u32> m_ack_chunk_ids{};
+            Array<u64> m_ack_revisions{};
+        };
+
+        // Applies one owned staging payload on the pass's owner lane:
+        // optional cache drop, then staged tiles, then dirty uploads (the
+        // same validation the translator's synchronous path used). On an
+        // upload failure the pass clears its staged tiles + cache and
+        // returns the error; the client must full-refresh on recovery.
+        [[nodiscard]] std::error_code applyStagedFrame(const GridStagedFrame &stage);
+
         // Call on the render thread BEFORE either render lane (never within a
         // render-pass callback). Only dirty visible cell chunks are published.
         // The callback is the renderer-owned graphics-queue idle fence, called

@@ -200,6 +200,14 @@ namespace pP::hal {
         // Genuine OS page mapping: the region may contain already-decommitted
         // pages, so writing poison patterns here would fault. Unmapping itself
         // makes the memory inaccessible, catching use-after-free at the OS level.
+#if PPR_ENABLE_SANITIZER_ADDRESS
+        // VirtualFree(MEM_RELEASE) leaves ASan shadow behind: a prior
+        // poisonDestroyed would otherwise survive and fault a later occupant
+        // remapped at this address range. Clear shadow-only state while the
+        // reservation is still exclusively owned. Never flood real bytes here:
+        // the range may contain decommitted pages.
+        mem::unpoisonUninitialized(ptr, size);
+#endif
         if (!::VirtualFree(ptr, 0u, MEM_RELEASE)) {
             PPR_THROW(Hal, std::bad_alloc());
         }

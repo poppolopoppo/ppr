@@ -26,6 +26,13 @@ export namespace pP::colony {
         /// this translator for subsequent edits; sim dirty flags are not used.
         [[nodiscard]] std::error_code markChunkChanged(sim::ChunkPos pos) noexcept;
 
+        // Main-side state only: drops the per-chunk presentation
+        // revisions and the submitted-chunk count. Does NOT touch any
+        // GridPass state — the pass clearing that used to ride along in
+        // reset(pass) now rides the staged payload's m_reset_caches onto
+        // the lane at the next staged apply (see GridStagedFrame).
+        void invalidate() noexcept;
+
         /// Stage every resident chunk each frame; upload only unseen/changed
         /// chunks. An error clears pass staging/cache and invalidates all
         /// presentation revisions so the next call retries the entire world.

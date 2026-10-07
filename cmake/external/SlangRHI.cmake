@@ -2,6 +2,11 @@
 # Provides a unified graphics API abstraction layer with support for multiple graphics backends
 # NOTE: This package includes Slang transitively via SLANG_RHI_FETCH_SLANG option
 
+# Verified pin: GIT_TAG ad1b92f is the prefix of ad1b92f161a116716fab2eff34090de6a4b9ff5d
+# (2026-09-17, #864); derived from the implementation-verified working-copy HEAD
+# in both out/cpm_cache/slang-rhi/{3bae,76ff} directories. The short tag is
+# kept for readability; provenance is recorded here rather than inferred.
+
 set(SLANG_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(SLANG_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 

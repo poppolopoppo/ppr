@@ -764,6 +764,12 @@ namespace pP::tests::detail {
                 : HarnessClock{}, ApplicationEditor(
                                       name, std::span<const char *const>{}, std::make_unique<ScriptedPlatform>(),
                                       HarnessClock::m_clock, handler) {
+                // SaturatingHarness drives GridPass/TrianglePass/Renderer
+                // from the test thread (scripted platform, offscreen
+                // target): the default render lane would make every direct
+                // renderToTexture fail closed with operation_not_permitted
+                // (same failure mode as EditorShutdownHarness).
+                setRenderLaneEnabled(false);
                 // The platform is owned by the base; keep a view for the script.
                 m_scripted = static_cast<ScriptedPlatform *>(const_cast<IPlatform *>(&getPlatform()));
             }
@@ -950,9 +956,15 @@ namespace pP::tests::detail {
                 // Explicit offscreen-target release post-quiescence (owners
                 // alive, idle proven) pre-RHI-shutdown: the texture holds a
                 // strong device ref and RHI::destroy aborts on live children.
+                // Mirror production: retain the first error but continue
+                // teardown so owned GPU state is always released.
+                std::error_code first_err{};
                 if (const std::error_code ec = prepareGpuTeardown_()) {
                     // A failed prepare still releases what it can below only
                     // on a safe disposition; UNKNOWN fail-stops instead.
+                    if (not first_err) {
+                        first_err = ec;
+                    }
                     if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
                         failStopOnUnknownGpuTeardown_(ec);
                     }
@@ -960,19 +972,1158 @@ namespace pP::tests::detail {
                 m_target.setNull();
                 if (m_passes_live) {
                     m_passes_live = false;
+                    // First-error retain, never an early return: a pass
+                    // failure must not skip the remaining passes or the
+                    // Editor/RHI shutdown below while m_shutdown_done latches.
                     if (const std::error_code ec = m_grid.shutdown()) {
-                        return ec;
+                        if (not first_err) {
+                            first_err = ec;
+                        }
                     }
                     if (const std::error_code ec = m_triangles.shutdown()) {
-                        return ec;
+                        if (not first_err) {
+                            first_err = ec;
+                        }
                     }
                 }
-                return ApplicationEditor::shutdown();
+                if (const std::error_code ec = ApplicationEditor::shutdown()) {
+                    if (not first_err) {
+                        first_err = ec;
+                    }
+                }
+                return first_err;
             }
 
             [[nodiscard]] std::error_code teardown() {
                 return shutdown();
             }
+        };
+
+        // --- Lane-gate offscreen harness ------------------------------------
+        // Item-4 evidence (Gate-2 item 4): real Application::run() admission
+        // against a LANE-OWNED renderer with real offscreen submissions held
+        // GPU-pending. Unlike SaturatingHarness (main-thread inline submits),
+        // every GPU touch here runs ON the lane: Grid/Triangle pass
+        // initialize, per-frame update/apply/encode, the 64x64 offscreen
+        // target create/release, and the retirement-gate hold/open all ride
+        // runOnLaneSync or the installed lane executor. Main only builds the
+        // owned packet plus plain-value staged payloads and moves them
+        // across the lane transports.
+        //
+        // Base-only Application::initialize (same pin as SaturatingHarness:
+        // the Editor window/viewport/UI stages stay null), but the lane is
+        // left ENABLED — headless=false comes from the injected Editor ctor
+        // (App.Application.Editor.cpp:69-80), so Application::initialize
+        // starts the RenderLane and the Renderer initializes on it.
+        //
+        // Construction accounting: update() counts the admitted-frame
+        // construction at its START (before Application::update), stages only
+        // values (camera snapshot, tile values, instance values); render()
+        // tags the request with the live reservation identity
+        // (reservationEpoch_ + frame id), submits via the lane transports,
+        // and notes the queued half via noteReservationQueued_. Settlement
+        // rides the production hook: the override counts and chains
+        // ApplicationEditor::onLaneFrameConsumed_, so a submitted credit
+        // releases only when the lane-published retirement frontier covers
+        // its fence value. A transport-busy submit (never expected: the
+        // admission gate holds construction at two) still settles as a
+        // dropped slot so the ledger can never strand a charge.
+        //
+        // Retirement gate: boot() holds the renderer sweep lane-side, so the
+        // first two submissions settle CPU-side yet stay GPU-pending; the
+        // test opens the gate lane-side via openRetirementGate(). The
+        // paused-worker rig parks the second frame inside the lane executor
+        // on a binary semaphore with a 10s try bound (fail-loud, never an
+        // unbounded park); shutdown() releases it best-effort so teardown
+        // can never hang behind a stuck worker.
+        struct LaneOffscreenHarness : HarnessClock, ApplicationEditor {
+            ScriptedPlatform *m_scripted{nullptr};
+
+            Camera m_camera{};
+            GridPass m_grid{};
+            TrianglePass m_triangles{};
+            TriangleBagHandle m_tri_bag{};
+            MaterialHandle m_tri_material{};
+            rhi::ComPtr<rhi::ITexture> m_target{};
+            bool m_booted{false};
+            bool m_shutdown_done{false};
+            std::error_code m_shutdown_result{};
+
+            // Admitted-frame construction count (update() entry, before any
+            // super work), successful lane submits, lane settlements seen.
+            u32 m_constructions{0u};
+            u32 m_renders{0u};
+            u32 m_queued{0u};
+            u32 m_consumed{0u};
+            // Fix-19 bounded-lane refusals: update() refuses a fourth
+            // construction (the 2-credit ledger legitimately admits one
+            // while the third is still in flight; the settlement-hook exit
+            // only fires when the third result drains). The paired render
+            // skips without queuing when the flag is set. Workload bound
+            // only: refusal counts are diagnostic (logged per run below),
+            // never admission proof — admission is proven by the
+            // constructions/consumed/updates counts plus the observed
+            // blocked state, never by these counts.
+            u32 m_construction_refusals{0u};
+            bool m_refused_update_pending{false};
+
+            // Owned per-frame payload staged by update(), moved into the
+            // lane request by render(). Main-side only; the lane never
+            // touches these members (it owns copies via the transport).
+            FramePacket m_pending_packet{};
+            GridPass::GridStagedFrame m_pending_grid{};
+            TrianglePass::TriangleStagedFrame m_pending_tri{};
+            bool m_pending_valid{false};
+
+            // Paused-worker rig (lane reads, main arms/releases).
+            std::atomic<bool> m_pause_second{false};
+            std::atomic<bool> m_pause_entered{false};
+            std::atomic<bool> m_pause_timed_out{false};
+            std::binary_semaphore m_pause_gate{0};
+            // Lane-confined execution count (second execution == frame two).
+            // Written only by the lane executor, never read on main.
+            u64 m_lane_executions{0u};
+
+            explicit LaneOffscreenHarness(const std::string_view name, GpuTeardownFailureHandler handler = nullptr)
+                : HarnessClock{}, ApplicationEditor(
+                                      name, std::span<const char *const>{}, std::make_unique<ScriptedPlatform>(),
+                                      HarnessClock::m_clock, handler) {
+                m_scripted = static_cast<ScriptedPlatform *>(const_cast<IPlatform *>(&getPlatform()));
+            }
+
+            ~LaneOffscreenHarness() noexcept override = default;
+
+            // Same base-only pin as SaturatingHarness::initialize: run()'s
+            // virtual initialize() must not reach the Editor window stages.
+            // The lane stays enabled (no setRenderLaneEnabled(false)), so
+            // the Renderer below is lane-owned from boot on.
+            [[nodiscard]] std::error_code initialize() override {
+                if (m_booted) {
+                    return default_value_v;
+                }
+                return Application::initialize();
+            }
+
+            [[nodiscard]] std::error_code boot() {
+                if (const std::error_code ec = Application::initialize()) {
+                    return ec;
+                }
+                const safe_ptr<IRhiService> rhi = getServices().get<IRhiService>();
+                const safe_ptr<IShaderService> shaders = getServices().get<IShaderService>();
+                PPR_ASSERT(rhi.isValid());
+                PPR_ASSERT(shaders.isValid());
+                const std::filesystem::path content = getContentDir().path();
+                if (renderLane() == nullptr) {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                // Pass + target bring-up ON the lane (affinity from birth),
+                // with the retirement gate held so the first two submits
+                // stay GPU-pending until the test opens it lane-side.
+                bool ran = false;
+                const std::error_code lane_ec = renderLane()->runOnLaneSync(
+                    [this, rhi, shaders, content]() -> std::error_code {
+                        if (const std::error_code ec = m_grid.initialize(*rhi, *shaders, content)) {
+                            return ec;
+                        }
+                        if (const std::error_code ec = m_triangles.initialize(*rhi, *shaders, content)) {
+                            return ec;
+                        }
+                        const mesh::StaticMeshVertex verts[] = {
+                            {.m_position = {0.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                            {.m_position = {1.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                            {.m_position = {0.0f, 1.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                        };
+                        const u32 indices[] = {0u, 1u, 2u};
+                        const Expected<TriangleBagHandle> bag = m_triangles.uploadMesh(
+                            std::span<const mesh::StaticMeshVertex>{verts}, std::span<const u32>{indices});
+                        if (not bag.has_value()) {
+                            return bag.error();
+                        }
+                        m_tri_bag = *bag;
+                        const TextureHandle no_textures[] = {
+                            TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
+                        const Expected<MaterialHandle> material = m_triangles.packMaterial(
+                            mesh::MaterialAsset{}, std::span<const TextureHandle>{no_textures});
+                        if (not material.has_value()) {
+                            return material.error();
+                        }
+                        m_tri_material = *material;
+
+                        rhi::TextureDesc target_desc{};
+                        target_desc.type = rhi::TextureType::Texture2D;
+                        target_desc.size = {64u, 64u, 1u};
+                        target_desc.arrayLength = 1u;
+                        target_desc.mipCount = 1u;
+                        target_desc.format = rhi::Format::RGBA8Unorm;
+                        target_desc.sampleCount = 1u;
+                        target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+                        target_desc.usage = rhi::TextureUsage::RenderTarget;
+                        target_desc.defaultState = rhi::ResourceState::RenderTarget;
+                        target_desc.label = "lane-gate target";
+                        if (const std::error_code ec = make_error_code(
+                                rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()))) {
+                            return ec;
+                        }
+                        getRenderer().setTestHoldSweep(true);
+                        return default_value_v;
+                    },
+                    &ran);
+                if (not ran) {
+                    return lane_ec ? lane_ec : std::make_error_code(std::errc::not_connected);
+                }
+                if (lane_ec) {
+                    return lane_ec;
+                }
+                // Per-frame offscreen executor ON the lane: staged-payload
+                // apply, encode to the offscreen target, submit-value
+                // capture with pass stamping. Services were captured at the
+                // startup boundary above; nothing is resolved here.
+                renderLane()->setExecutor(
+                    [this](const RenderFrameRequest &request, RenderFrameResult &result) -> std::error_code {
+                        ++m_lane_executions;
+                        if (m_pause_second.load(std::memory_order_acquire) and m_lane_executions == 2u) {
+                            // Paused-worker state: the second frame has been
+                            // admitted and picked up, but stalls here before
+                            // any submit — still charged, never settled.
+                            // Bounded park: a missed release fails the test
+                            // loudly instead of hanging the worker forever.
+                            m_pause_entered.store(true, std::memory_order_release);
+                            if (not m_pause_gate.try_acquire_for(std::chrono::seconds{10})) {
+                                m_pause_timed_out.store(true, std::memory_order_release);
+                                return std::make_error_code(std::errc::timed_out);
+                            }
+                        }
+                        if (not request.m_packet) [[unlikely]] {
+                            result.m_dropped = true;
+                            return std::make_error_code(std::errc::invalid_argument);
+                        }
+                        const FramePacket &packet = *request.m_packet;
+                        if (const std::error_code ec = m_triangles.update(packet.m_delta_time, packet.m_camera)) {
+                            return ec;
+                        }
+                        if (const std::error_code ec = m_grid.update(packet.m_delta_time, packet.m_camera)) {
+                            return ec;
+                        }
+                        if (const std::error_code ec = m_grid.applyStagedFrame(request.m_grid_stage)) {
+                            return ec;
+                        }
+                        if (const std::error_code ec = m_triangles.applyStagedFrame(request.m_triangle_stage)) {
+                            return ec;
+                        }
+                        Renderer &renderer = getRenderer();
+                        DrawSubmission grid_draws{m_grid};
+                        grid_draws.m_viewport = rhi::Viewport{.extentX = 64.0f, .extentY = 64.0f};
+                        grid_draws.m_scissor = rhi::ScissorRect{.maxX = 64u, .maxY = 64u};
+                        DrawSubmission tri_draws{m_triangles};
+                        tri_draws.m_viewport = rhi::Viewport{.extentX = 64.0f, .extentY = 64.0f};
+                        tri_draws.m_scissor = rhi::ScissorRect{.maxX = 64u, .maxY = 64u};
+                        const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
+                        if (const std::error_code ec = renderer.renderToTexture(*m_target, {grid_draws, tri_draws})) {
+                            return ec;
+                        }
+                        const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
+                        if (accepted != previously_submitted and accepted != kFenceValueNone) {
+                            result.m_submit_value = accepted;
+                            m_grid.notifyFrameSubmitted(accepted);
+                            m_triangles.notifyFrameSubmitted(accepted);
+                        }
+                        return default_value_v;
+                    });
+                m_booted = true;
+                return default_value_v;
+            }
+
+            // Opens the retirement gate ON the lane (affinity-safe: the
+            // hold flag lives on the lane-owned renderer). Main-side only;
+            // never call from inside the lane executor, and never from
+            // inside the platform pump callback (the handoff wait slices
+            // re-enter the pump — open the gate from the test body between
+            // pumps instead, while the run loop owns the pump on its own
+            // thread).
+            [[nodiscard]] std::error_code openRetirementGate(bool *out_ran = nullptr) {
+                if (renderLane() == nullptr) {
+                    if (out_ran != nullptr) {
+                        *out_ran = false;
+                    }
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                // Park the wait-pump slice for this handoff: the run loop
+                // owns the platform pump on its worker, so a handoff wait
+                // slice must never pump concurrently with it (shared drain
+                // scratch, platform counters, and settlement hooks are all
+                // single-threaded). The parked lane still acks promptly, and
+                // the later shutdown join stays bounded without the slice —
+                // the scripted platform needs no servicing.
+                renderLane()->setWaitPump({});
+                return renderLane()->runOnLaneSync(
+                    [this]() -> std::error_code {
+                        // Release the hold only: retirement plus frontier
+                        // publication ride the ordinary production sweep
+                        // (the handoff's own kWake trips the lane's
+                        // post-control sweep in this same iteration), so
+                        // admission reopens through the real queue-gate
+                        // held-retirement path — never a fixture-driven
+                        // direct retire outside the sweep.
+                        getRenderer().setTestHoldSweep(false);
+                        // Bounded completion kick (Gate-2 item 4 stall):
+                        // the backend parks submitted work until a wait (or
+                        // a further submit) observes completion, and
+                        // admission holds at two so no further submit can
+                        // drive the submit-time poll — poll-alone never
+                        // advances the frontier. Wait the youngest
+                        // submitted value lane-side (affinity-safe); the
+                        // post-control sweep in this same iteration then
+                        // retires + publishes via production code. Scoped
+                        // to the gate path only; steady-state sweeps stay
+                        // poll-only.
+                        std::ignore = getRenderer().waitForFenceValue(getRenderer().lastSubmittedFenceValue());
+                        return default_value_v;
+                    },
+                    out_ran);
+            }
+
+            [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+                // Derived pre-super construction marker: counted at the
+                // START, so a blocked third frame never reaches the count.
+                // Fix-19 bound: refuse a fourth construction (see the member
+                // note); the paired render() skips, counts stay at three,
+                // and the latch ends the run.
+                if (m_constructions >= 3u or m_consumed >= 3u) {
+                    ++m_construction_refusals;
+                    m_pending_valid = false;
+                    m_refused_update_pending = true;
+                    requestExit();
+                    return default_value_v;
+                }
+                ++m_constructions;
+                if (const std::error_code ec = Application::update(dt)) {
+                    return ec;
+                }
+                // Camera + staging are plain values only: no pass is touched
+                // on main (pass affinity is the lane). The packet carries
+                // the snapshot the lane executes against.
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                m_camera.updateModel(dt, model, Viewport{PixelRect{int2{0, 0}, int2{64, 64}}, ViewportLayout{}});
+                m_pending_packet = FramePacket{};
+                m_pending_packet.m_frame_id = getFrameIndex();
+                m_pending_packet.m_delta_time = dt;
+                m_pending_packet.m_total_elapsed = getTimerManager().getTotalElapsed();
+                m_pending_packet.m_camera = m_camera.getSnapshot();
+                m_pending_packet.m_viewport = Viewport{PixelRect{int2{0, 0}, int2{64, 64}}, ViewportLayout{}};
+                m_pending_packet.m_framebuffer_size = int2{64, 64};
+                m_pending_grid = GridPass::GridStagedFrame{};
+                m_pending_grid.m_tiles.push_back(
+                    GridTileSubmission{
+                        .m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u});
+                m_pending_tri = TrianglePass::TriangleStagedFrame{};
+                m_pending_tri.m_instances.push_back(
+                    TrianglePass::SubmittedInstance{
+                        .m_bag = m_tri_bag, .m_material = m_tri_material, .m_model = identity_v});
+                m_pending_valid = true;
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::error_code render() override {
+                // Fix-19 paired skip: the refused update above staged
+                // nothing — return without counting or queuing (never an app
+                // failure; the reservation settles structurally at teardown).
+                if (m_refused_update_pending) {
+                    m_refused_update_pending = false;
+                    return default_value_v;
+                }
+                ++m_renders;
+                if (const std::error_code ec = Application::render()) {
+                    return ec;
+                }
+                if (not m_pending_valid) [[unlikely]] {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                if (renderLane() == nullptr) [[unlikely]] {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+                const u64 frame_id = m_pending_packet.m_frame_id;
+                RenderFrameRequest request{};
+                try {
+                    request.m_packet = std::make_shared<const FramePacket>(m_pending_packet);
+                    request.m_grid_stage = std::move(m_pending_grid);
+                    request.m_triangle_stage = std::move(m_pending_tri);
+                } catch (const std::bad_alloc &) {
+                    return std::make_error_code(std::errc::not_enough_memory);
+                } catch (...) {
+                    return std::make_error_code(std::errc::state_not_recoverable);
+                }
+                m_pending_valid = false;
+                // Tag the frame with its construction reservation identity
+                // so the lane result settles exactly this record.
+                request.m_reservation_epoch = reservationEpoch_();
+                request.m_reservation_frame_id = frame_id;
+                RenderFrameResult dropped{};
+                dropped.m_frame_id = frame_id;
+                dropped.m_reservation_epoch = reservationEpoch_();
+                dropped.m_reservation_frame_id = frame_id;
+                if (const std::error_code submit_err = renderLane()->submitFrame(std::move(request))) {
+                    // Bounded fallback, never an app failure on capacity:
+                    // the slot still settles (never-applied) so the credit
+                    // is never stranded.
+                    dropped.m_dropped = true;
+                    if (submit_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+                        onLaneFrameConsumed_(dropped);
+                        return default_value_v;
+                    }
+                    dropped.m_error = submit_err;
+                    onLaneFrameConsumed_(dropped);
+                    return submit_err;
+                }
+                // Successful transport handoff: the queued half owns the
+                // frame until its lane settlement arrives.
+                noteReservationQueued_(frame_id);
+                ++m_queued;
+                return default_value_v;
+            }
+
+            void onLaneFrameConsumed_(const RenderFrameResult &result) override {
+                ++m_consumed;
+                ApplicationEditor::onLaneFrameConsumed_(result);
+                // Exit from the settlement hook itself: when the third
+                // result is consumed the run ends before another admission
+                // probe can construct a fourth frame (never from a later
+                // pump observing m_consumed).
+                if (m_consumed >= 3u) {
+                    requestExit();
+                }
+            }
+
+            [[nodiscard]] std::error_code shutdown() override {
+                if (m_shutdown_done) {
+                    return m_shutdown_result;
+                }
+                m_shutdown_result = shutdownOnce_();
+                m_shutdown_done = true;
+                return m_shutdown_result;
+            }
+
+            [[nodiscard]] std::error_code shutdownOnce_() {
+                // Best-effort unpark: a test that failed before releasing
+                // the paused worker must not hang the lane stop below.
+                m_pause_second.store(false, std::memory_order_release);
+                m_pause_gate.release();
+                // Mirror production: retain the first error but continue
+                // teardown so owned GPU state is always released.
+                std::error_code first_err{};
+                if (const std::error_code ec = prepareGpuTeardown_()) {
+                    if (not first_err) {
+                        first_err = ec;
+                    }
+                    if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
+                        failStopOnUnknownGpuTeardown_(ec);
+                    }
+                }
+                // Target + pass release ON the lane (affinity-safe), before
+                // the Editor shutdown below stops the worker and releases
+                // the renderer. Skipped only when the lane never started.
+                if (renderLaneOwnsRenderer_()) {
+                    bool acknowledged = false;
+                    std::error_code lane_err{};
+                    try {
+                        lane_err = renderLane()->runOnLaneSync(
+                            [this]() -> std::error_code {
+                                // First-error retain inside the handoff: a
+                                // grid failure must not skip the triangles
+                                // shutdown (target → grid → triangles order).
+                                std::error_code lane_first_err{};
+                                m_target.setNull();
+                                if (const std::error_code ec = m_grid.shutdown()) {
+                                    if (not lane_first_err) {
+                                        lane_first_err = ec;
+                                    }
+                                }
+                                if (const std::error_code ec = m_triangles.shutdown()) {
+                                    if (not lane_first_err) {
+                                        lane_first_err = ec;
+                                    }
+                                }
+                                return lane_first_err;
+                            },
+                            &acknowledged);
+                    } catch (...) {
+                        lane_err = std::make_error_code(std::errc::state_not_recoverable);
+                    }
+                    if (not acknowledged) {
+                        failStopOnUnknownGpuTeardown_(lane_err);
+                    }
+                    // A lane-release failure is retained but teardown
+                    // continues into Editor shutdown (renderer → RHI below).
+                    if (lane_err and not first_err) {
+                        first_err = lane_err;
+                    }
+                } else {
+                    m_target.setNull();
+                    if (const std::error_code ec = m_grid.shutdown()) {
+                        if (not first_err) {
+                            first_err = ec;
+                        }
+                    }
+                    if (const std::error_code ec = m_triangles.shutdown()) {
+                        if (not first_err) {
+                            first_err = ec;
+                        }
+                    }
+                }
+                if (const std::error_code ec = ApplicationEditor::shutdown()) {
+                    if (not first_err) {
+                        first_err = ec;
+                    }
+                }
+                return first_err;
+            }
+
+            [[nodiscard]] std::error_code teardown() {
+                return shutdown();
+            }
+        };
+
+        // --- Shared lane-gate phase protocol ------------------------------
+        // ONE fixture phase protocol for the lane-gate tests below
+        // (Finding 2: the two duplicated per-test latch replicas — parked /
+        // timed-out atoms plus a binary semaphore plus a hand-rolled worker
+        // plus a manual join each — are removed; this struct is the only
+        // park/release/join machinery). The run worker parks (bounded,
+        // fail-loud) once it observes the blocked state; the test thread
+        // takes gate ownership and opens the retirement gate only on an
+        // acknowledged park, then releases and joins. A timeout on either
+        // side cancels the handoff (the gate is never opened behind a
+        // resumed worker; granted ownership excludes worker resumption on
+        // every path including timeouts — an owned expiry parks until the
+        // explicit release below), releases the park, and joins before
+        // teardown — run_done stays purely informational and is never a
+        // lifetime barrier.
+        //
+        // Bespoke-latch note: the engine Signal/IEvent primitives expose
+        // only an unbounded wait() (Core.Concurrency.Event.cppm), which
+        // cannot fail loud on a stuck worker — a fixture rig must bound
+        // every park. Hence atomics plus a timed binary_semaphore here; no
+        // new production primitive, fixture-local only.
+        struct LaneGatePhase {
+            // Worker-observed blocked state, reported exactly once.
+            std::atomic<bool> m_parked{false};
+            // Bounded park expired before the test thread released.
+            std::atomic<bool> m_timed_out{false};
+            // Test thread authorized resume (exactly once).
+            std::atomic<bool> m_released{false};
+            // Worker consumed the release (woke via acquire, not timeout).
+            std::atomic<bool> m_release_acked{false};
+            // Test thread abandoned the handoff (no gate open past this).
+            std::atomic<bool> m_cancelled{false};
+            // run() returned on the worker. Informational only — never a
+            // lifetime barrier: teardown is ordered strictly after join().
+            std::atomic<bool> m_run_done{false};
+            std::binary_semaphore m_gate{0};
+            // Gate-operation ownership (F2): the test thread holds this
+            // across openRetirementGate() so a worker timeout can never
+            // resume application access concurrently with the gate. The
+            // flag and the timeout/cancel latches are always decided under
+            // m_serial_mutex — never check-then-act across it.
+            mutable std::mutex m_serial_mutex{};
+            bool m_gate_owned{false};
+            // Bounded park, configurable for the deterministic
+            // timeout-overlap test below (production default 30s).
+            std::chrono::milliseconds m_park_bound{std::chrono::seconds{30}};
+            std::thread m_worker{};
+            std::error_code m_run_ec{std::make_error_code(std::errc::state_not_recoverable)};
+            bool m_run_threw{false};
+
+            // Fail-loud bounds: the worker park covers the worst-case gate
+            // handoff (Finding 2 cites ~30s); the test-side wait only
+            // watches the parked flag, which lands in milliseconds when
+            // healthy. Both expire loudly, never silently.
+            static constexpr std::chrono::seconds kWaitBound{30};
+
+            LaneGatePhase() = default;
+            LaneGatePhase(const LaneGatePhase &) = delete;
+            LaneGatePhase &operator=(const LaneGatePhase &) = delete;
+
+            // Scope-bound join (Finding 2): the destructor cancels any
+            // outstanding park, releases the worker, and joins — the phase
+            // is declared AFTER the PPR_DEFER teardown guard, so teardown
+            // can only run once the worker is gone, never behind an
+            // in-flight lane access. Never detaches, even when an assertion
+            // below throws past the explicit join.
+            ~LaneGatePhase() {
+                cancel();
+                join();
+            }
+
+            void startRun(LaneOffscreenHarness &harness) {
+                m_worker = std::thread{[this, &harness] {
+                    try {
+                        m_run_ec = harness.run();
+                    } catch (...) {
+                        m_run_threw = true;
+                    }
+                    m_run_done.store(true, std::memory_order_release);
+                }};
+            }
+
+            // Run-thread side: park once the blocked state is observed.
+            // Exactly-once (the first observer parks; later pumps proceed).
+            // Returns true when woken by the test thread's release.
+            // Invariant (F2): granted gate ownership excludes worker
+            // resumption on EVERY path including timeouts. A bounded wait
+            // may record a deadline failure, but it can never revoke
+            // exclusion: while the test thread owns the gate the worker
+            // parks until ownership is explicitly relinquished (release) or
+            // abandoned (cancel wakes via release) — never resumes
+            // concurrently with openRetirementGate(). A genuinely stuck gate
+            // is a fail-stop watchdog abort, never a resumption.
+            bool parkWorker() {
+                bool expected = false;
+                if (not m_parked.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    return true;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(m_serial_mutex);
+                    if (m_cancelled.load(std::memory_order_acquire)) {
+                        return false;
+                    }
+                }
+                // Single bounded wait: the only timed layer. Ownership
+                // decides the expiry below; there is no second timed layer.
+                const bool released = m_gate.try_acquire_for(m_park_bound);
+                if (released) {
+                    const bool ack = not m_cancelled.load(std::memory_order_acquire) and
+                                     m_released.load(std::memory_order_acquire);
+                    m_release_acked.store(ack, std::memory_order_release);
+                    return ack;
+                }
+                // Bounded-wait expiry serialization (F2): an unowned (or
+                // abandoned) expiry latches timed_out and returns; an owned
+                // expiry keeps parking until the owner relinquishes (release)
+                // or abandons (cancel wakes via release) — without latching
+                // timed_out and without resuming into the owned window.
+                {
+                    std::lock_guard<std::mutex> lock(m_serial_mutex);
+                    if (m_cancelled.load(std::memory_order_acquire)) {
+                        return false;
+                    }
+                    if (not m_gate_owned) {
+                        m_timed_out.store(true, std::memory_order_release);
+                        return false;
+                    }
+                }
+                m_gate.acquire();
+                const bool ack = not m_cancelled.load(std::memory_order_acquire) and
+                                 m_released.load(std::memory_order_acquire);
+                m_release_acked.store(ack, std::memory_order_release);
+                return ack;
+            }
+
+            // Test-thread gate ownership (F2): take before
+            // openRetirementGate(), release after. The take checks the
+            // timeout/cancel latches and the ownership flag under the same
+            // mutex the worker's timeout path decides under, so the gate
+            // never opens behind a resumed worker. The test thread holds
+            // ownership across the whole gate call; the worker parks until
+            // the release below instead of resuming inside this window.
+            [[nodiscard]] bool tryTakeGateOwnership() {
+                std::lock_guard<std::mutex> lock(m_serial_mutex);
+                if (m_gate_owned or
+                    m_cancelled.load(std::memory_order_acquire) or
+                    m_timed_out.load(std::memory_order_acquire)) {
+                    return false;
+                }
+                m_gate_owned = true;
+                return true;
+            }
+
+            void releaseGateOwnership() {
+                std::lock_guard<std::mutex> lock(m_serial_mutex);
+                m_gate_owned = false;
+            }
+
+            void setParkBoundForTest(const std::chrono::milliseconds bound) noexcept {
+                m_park_bound = bound;
+            }
+
+            // Test-thread side: bounded wait for the worker's park.
+            [[nodiscard]] bool waitForPark() {
+                const auto deadline = std::chrono::steady_clock::now() + kWaitBound;
+                while (not m_parked.load(std::memory_order_acquire) and
+                       not m_run_done.load(std::memory_order_acquire) and
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                }
+                return m_parked.load(std::memory_order_acquire);
+            }
+
+            [[nodiscard]] bool timedOut() const {
+                return m_timed_out.load(std::memory_order_acquire);
+            }
+
+            [[nodiscard]] bool releaseAcked() const {
+                return m_release_acked.load(std::memory_order_acquire);
+            }
+
+            [[nodiscard]] bool runDone() const {
+                return m_run_done.load(std::memory_order_acquire);
+            }
+
+            // Test-thread abandon: never open the gate past this point;
+            // wake a possibly-parked worker so join() cannot hang.
+            void cancel() {
+                m_cancelled.store(true, std::memory_order_release);
+                release();
+            }
+
+            // Test-thread authorize resume (exactly once; the semaphore
+            // count from a second call wakes nobody, never an extra park).
+            void release() {
+                bool expected = false;
+                if (m_released.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    m_gate.release();
+                }
+            }
+
+            void join() {
+                if (m_worker.joinable()) {
+                    // A parked worker must never hang the join: ensure the
+                    // gate is open before waiting. Harmless post-release.
+                    release();
+                    m_worker.join();
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (lane_gate_blocks_third_until_retirement) {
+            // Item-4 run-gate evidence: two real offscreen submissions that
+            // are CPU-settled but GPU-pending (held sweep) keep the third
+            // admitted frame from ever being constructed across >=20 busy
+            // pumps; opening the retirement gate lane-side retires them and
+            // the third frame constructs, submits, and settles exactly once.
+            // The run loop owns the platform pump on its worker; once the
+            // blocked state is observed the worker parks on the shared
+            // LaneGatePhase above, the gate opens from the test thread, the
+            // phase releases, and the worker is joined before teardown.
+            LaneOffscreenHarness harness{"RunGateLaneBlock"};
+            PPR_TEST_ASSERT(not harness.boot());
+            PPR_DEFER {
+                std::ignore = harness.teardown();
+            };
+            // Declared after the teardown guard: LaneGatePhase joins the
+            // worker in its destructor, so teardown strictly follows the
+            // join even when an assertion below throws past it.
+            LaneGatePhase phase{};
+            ScriptedPlatform &platform = *harness.m_scripted;
+            // Failure-only backstop for the worker spin: the acknowledged
+            // phase protocol below answers within milliseconds, so the
+            // watchdog only fires on a genuine stall (and fails the test).
+            platform.m_watchdog_pumps = 100000u;
+
+            u32 first_third_pump = 0u;
+            platform.m_on_pump = [&](ScriptedPlatform &self, const u32 pump) {
+                if (harness.m_constructions >= 3u and first_third_pump == 0u) {
+                    first_third_pump = pump;
+                }
+                // Acknowledged phase protocol (see LaneGatePhase): on the
+                // first observation of the blocked state — two CPU-settled
+                // still-charged submissions (third never constructed) across
+                // >=20 busy pumps — park the worker until the test thread
+                // opens the retirement gate and releases the phase below.
+                // The park is bounded: a missed release trips the phase
+                // timeout (an explicit failure below), never a silent
+                // successful endRun(). Exit rides the settlement hook
+                // (third result consumed), never a later pump observing
+                // m_consumed.
+                if (harness.m_constructions == 2u and
+                    harness.m_consumed >= 2u and
+                    self.m_pumps - self.m_updates >= 20u) {
+                    phase.parkWorker();
+                }
+            };
+
+            phase.startRun(harness);
+            // Bounded wait for the worker's park, then open the gate from
+            // this (test) thread: the lane's post-control sweep retires and
+            // publishes in that same handoff iteration, so the worker's very
+            // next probe after the phase release admits the third frame.
+            // The handoff runs ONLY on an acknowledged park: a timeout (or
+            // a run that ended without parking) cancels it — the gate stays
+            // closed, the worker is released and joined, and teardown runs
+            // only after the join. run_done stays informational (it only
+            // feeds the wait and the exit reason below), never a barrier;
+            // the watchdog above stays the only other exit, and it fails.
+            const bool parked = phase.waitForPark();
+            bool gate_opened = false;
+            std::error_code gate_ec{};
+            bool gate_ran = false;
+            // Gate ownership serializes against the worker's timeout resume
+            // (F2): the ownership flag and the timeout latch are decided
+            // under the same mutex, so the gate never opens behind a
+            // resumed worker and a timed-out worker never resumes inside
+            // this owned window — it re-parks until the release below.
+            if (parked and not phase.runDone() and phase.tryTakeGateOwnership()) {
+                try {
+                    gate_ec = harness.openRetirementGate(&gate_ran);
+                } catch (...) {
+                    gate_ec = std::make_error_code(std::errc::state_not_recoverable);
+                }
+                gate_opened = true;
+                phase.releaseGateOwnership();
+            }
+            if (gate_opened) {
+                phase.release();
+            } else {
+                phase.cancel();
+            }
+            phase.join();
+
+            // Permanent one-line evidence summary (always on, pass or fail):
+            // future flakes carry their counts instead of a bare assert.
+            // Refusals stay what Fix-19 made them — a workload bound logged
+            // here, never admission proof (see the member note).
+            std::string exit_reason{"pass"};
+            if (phase.m_run_threw) {
+                exit_reason = "run-threw";
+            } else if (phase.m_run_ec) {
+                exit_reason = "run-ec";
+            } else if (platform.m_watchdog_fired) {
+                exit_reason = "watchdog";
+            } else if (phase.timedOut()) {
+                exit_reason = "phase-timeout";
+            } else if (not parked) {
+                exit_reason = "gate-wait-timeout";
+            } else if (not phase.releaseAcked()) {
+                exit_reason = "release-unacked";
+            } else if (not gate_opened or gate_ec or not gate_ran) {
+                exit_reason = "gate-not-opened";
+            } else if (harness.m_constructions != 3u or harness.m_consumed != 3u) {
+                exit_reason = "count-mismatch";
+            }
+            std::fprintf(
+                stderr,
+                "[lane-gate:block] constructions=%u consumed=%u queued=%u renders=%u refusals=%u"
+                " pumps=%u updates=%u gate=%d ran=%d watchdog=%d reason=%s\n",
+                harness.m_constructions, harness.m_consumed, harness.m_queued, harness.m_renders,
+                harness.m_construction_refusals, platform.m_pumps, platform.m_updates, gate_opened ? 1 : 0,
+                gate_ran ? 1 : 0, platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str());
+
+            PPR_TEST_ASSERT(not phase.m_run_threw);
+            PPR_TEST_ASSERT(not phase.m_run_ec);
+            PPR_TEST_ASSERT(not platform.m_watchdog_fired);
+            PPR_TEST_ASSERT(not phase.timedOut());
+            PPR_TEST_ASSERT(parked);
+            PPR_TEST_ASSERT(phase.releaseAcked());
+            // Exactly three constructions, submits, and settlements: the
+            // third waited for the lane retirement, then ran exactly once.
+            // Refusals stay informational (logged above): a clean
+            // three-frame run needs no fourth construction, so zero is a
+            // valid outcome.
+            PPR_TEST_ASSERT(harness.m_constructions == 3u);
+            PPR_TEST_ASSERT(harness.m_renders == 3u);
+            PPR_TEST_ASSERT(harness.m_queued == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed == 3u);
+            PPR_TEST_ASSERT(platform.m_updates == 3u);
+            // The gate opened once, lane-side, after the observed blocked
+            // state — and the third construction came only after it (busy
+            // pumps held the count at two).
+            PPR_TEST_ASSERT(gate_opened);
+            PPR_TEST_ASSERT(not gate_ec);
+            PPR_TEST_ASSERT(gate_ran);
+            PPR_TEST_ASSERT(first_third_pump != 0u);
+            // Blocking spanned >=20 busy pumps (admitted frames excluded).
+            PPR_TEST_ASSERT(platform.m_pumps - platform.m_updates >= 20u);
+            // Real submissions rode the lane (fence value observed through
+            // the production diagnostics mirror) and teardown proved idle.
+            PPR_TEST_ASSERT(harness.renderDiagnostics().m_last_submit_value != kFenceValueNone);
+            PPR_TEST_ASSERT(harness.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+        };
+
+        PPR_UNIT_TEST (lane_gate_paused_worker_blocks_third) {
+            // Paused-worker variant: the second frame is admitted and picked
+            // up by the lane but stalls inside the executor before any
+            // submit (charged, never settled) while the first stays
+            // GPU-pending — the third construction is blocked across >=20
+            // busy pumps. Releasing the worker settles frame two; opening
+            // the retirement gate retires both; the third then runs once.
+            // Like its sibling, the run loop owns the pump on its worker;
+            // once the blocked state is observed the worker parks on the
+            // shared LaneGatePhase above, the gate opens from the test
+            // thread, the phase releases, and the worker is joined before
+            // teardown.
+            LaneOffscreenHarness harness{"RunGateLanePaused"};
+            PPR_TEST_ASSERT(not harness.boot());
+            PPR_DEFER {
+                std::ignore = harness.teardown();
+            };
+            // Declared after the teardown guard: LaneGatePhase joins the
+            // worker in its destructor, so teardown strictly follows the
+            // join even when an assertion below throws past it.
+            LaneGatePhase phase{};
+            harness.m_pause_second.store(true, std::memory_order_release);
+            ScriptedPlatform &platform = *harness.m_scripted;
+            // Failure-only backstop for the worker spin (see sibling):
+            // answered in milliseconds when healthy, fail-loud on a
+            // genuine stall.
+            platform.m_watchdog_pumps = 100000u;
+
+            u32 block_start_pump = 0u;
+            u32 release_pump = 0u;
+            bool pause_released = false;
+            platform.m_on_pump = [&](ScriptedPlatform &self, const u32 pump) {
+                if (not pause_released and
+                    harness.m_pause_entered.load(std::memory_order_acquire) and
+                    harness.m_constructions >= 2u) {
+                    if (block_start_pump == 0u) {
+                        block_start_pump = pump;
+                    } else if (pump - block_start_pump >= 20u) {
+                        harness.m_pause_gate.release();
+                        pause_released = true;
+                        release_pump = pump;
+                    }
+                }
+                // Acknowledged phase protocol (see sibling and
+                // LaneGatePhase): on the first observation of the blocked
+                // state — pause released, two CPU-settled still-charged
+                // submissions (third never constructed) across >=20 busy
+                // pumps — park the worker until the test thread opens the
+                // retirement gate and releases the phase. Bounded park,
+                // never a silent successful endRun(); exit rides the
+                // settlement hook.
+                if (pause_released and
+                    harness.m_constructions == 2u and
+                    harness.m_consumed >= 2u and
+                    self.m_pumps - self.m_updates >= 20u) {
+                    phase.parkWorker();
+                }
+            };
+
+            phase.startRun(harness);
+            // Bounded wait for the worker's park, then open the gate from
+            // this (test) thread: the lane's post-control sweep retires and
+            // publishes in that same handoff iteration, so the worker's very
+            // next probe after the phase release admits the third frame.
+            // The handoff runs ONLY on an acknowledged park: a timeout (or
+            // a run that ended without parking) cancels it — the gate stays
+            // closed, the worker is released and joined, and teardown runs
+            // only after the join. run_done stays informational (it only
+            // feeds the wait and the exit reason below), never a barrier;
+            // the watchdog above stays the only other exit, and it fails.
+            const bool parked = phase.waitForPark();
+            bool gate_opened = false;
+            std::error_code gate_ec{};
+            bool gate_ran = false;
+            // Gate ownership serializes against the worker's timeout resume
+            // (F2): the ownership flag and the timeout latch are decided
+            // under the same mutex, so the gate never opens behind a
+            // resumed worker and a timed-out worker never resumes inside
+            // this owned window — it re-parks until the release below.
+            if (parked and not phase.runDone() and phase.tryTakeGateOwnership()) {
+                try {
+                    gate_ec = harness.openRetirementGate(&gate_ran);
+                } catch (...) {
+                    gate_ec = std::make_error_code(std::errc::state_not_recoverable);
+                }
+                gate_opened = true;
+                phase.releaseGateOwnership();
+            }
+            if (gate_opened) {
+                phase.release();
+            } else {
+                phase.cancel();
+            }
+            phase.join();
+
+            // Permanent one-line evidence summary (always on, pass or fail):
+            // future flakes carry their counts instead of a bare assert.
+            // Refusals stay what Fix-19 made them — a workload bound logged
+            // here, never admission proof (see the member note).
+            std::string exit_reason{"pass"};
+            if (phase.m_run_threw) {
+                exit_reason = "run-threw";
+            } else if (phase.m_run_ec) {
+                exit_reason = "run-ec";
+            } else if (platform.m_watchdog_fired) {
+                exit_reason = "watchdog";
+            } else if (harness.m_pause_timed_out.load(std::memory_order_acquire)) {
+                exit_reason = "pause-timeout";
+            } else if (phase.timedOut()) {
+                exit_reason = "phase-timeout";
+            } else if (not parked) {
+                exit_reason = "gate-wait-timeout";
+            } else if (not phase.releaseAcked()) {
+                exit_reason = "release-unacked";
+            } else if (not pause_released) {
+                exit_reason = "pause-never-released";
+            } else if (not gate_opened or gate_ec or not gate_ran) {
+                exit_reason = "gate-not-opened";
+            } else if (harness.m_constructions != 3u or harness.m_consumed != 3u) {
+                exit_reason = "count-mismatch";
+            }
+            std::fprintf(
+                stderr,
+                "[lane-gate:paused] constructions=%u consumed=%u queued=%u renders=%u refusals=%u"
+                " pumps=%u updates=%u paused=%d span=%u gate=%d ran=%d watchdog=%d reason=%s\n",
+                harness.m_constructions, harness.m_consumed, harness.m_queued, harness.m_renders,
+                harness.m_construction_refusals, platform.m_pumps, platform.m_updates, pause_released ? 1 : 0,
+                release_pump - block_start_pump, gate_opened ? 1 : 0, gate_ran ? 1 : 0,
+                platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str());
+
+            PPR_TEST_ASSERT(not phase.m_run_threw);
+            PPR_TEST_ASSERT(not phase.m_run_ec);
+            PPR_TEST_ASSERT(not platform.m_watchdog_fired);
+            PPR_TEST_ASSERT(not harness.m_pause_timed_out.load(std::memory_order_acquire));
+            PPR_TEST_ASSERT(not phase.timedOut());
+            PPR_TEST_ASSERT(parked);
+            PPR_TEST_ASSERT(phase.releaseAcked());
+            PPR_TEST_ASSERT(pause_released);
+            PPR_TEST_ASSERT(pause_released);
+            PPR_TEST_ASSERT(harness.m_constructions == 3u);
+            PPR_TEST_ASSERT(harness.m_renders == 3u);
+            PPR_TEST_ASSERT(harness.m_queued == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed == 3u);
+            PPR_TEST_ASSERT(platform.m_updates == 3u);
+            // The worker stalled (never timed out), the block spanned >=20
+            // busy pumps, and the gate opened lane-side before the third.
+            PPR_TEST_ASSERT(harness.m_pause_entered.load(std::memory_order_acquire));
+            PPR_TEST_ASSERT(release_pump - block_start_pump >= 20u);
+            PPR_TEST_ASSERT(gate_opened);
+            PPR_TEST_ASSERT(not gate_ec);
+            PPR_TEST_ASSERT(gate_ran);
+            PPR_TEST_ASSERT(platform.m_pumps - platform.m_updates >= 20u);
+            PPR_TEST_ASSERT(harness.renderDiagnostics().m_last_submit_value != kFenceValueNone);
+            PPR_TEST_ASSERT(harness.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+        };
+
+        PPR_UNIT_TEST (rejected_frame_does_not_inherit_previous_submit_fate) {
+            // F1 stale-fate regression: a successful SUBMIT followed by a
+            // pre-admission rejection in the same fence epoch. The rejected
+            // frame must NOT be charged against the earlier frame's fence
+            // value, and each settlement pairs exactly one record (two
+            // distinct accepted values, one explicit unsubmitted).
+            SaturatingHarness harness{"RunGateStaleFate"};
+            PPR_TEST_ASSERT(not harness.boot());
+            PPR_DEFER {
+                std::ignore = harness.teardown();
+            };
+            Renderer &renderer = harness.getRenderer();
+            rhi::ITexture &target = *harness.m_target;
+            // Hold the sweep so both submits stay outstanding: the third
+            // admission then fails pre-admission (capacity-busy) on the
+            // same epoch, with no fence movement past it.
+            renderer.setTestHoldSweep(true);
+            const FenceCompletionValue before_a = renderer.lastSubmittedFenceValue();
+            PPR_TEST_ASSERT(not renderer.renderToTexture(target, {}));
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kSubmitted);
+            const FenceCompletionValue value_a = renderer.lastSubmittedFenceValue();
+            PPR_TEST_ASSERT(value_a != kFenceValueNone and value_a > before_a);
+            const FenceCompletionValue before_b = value_a;
+            PPR_TEST_ASSERT(not renderer.renderToTexture(target, {}));
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kSubmitted);
+            const FenceCompletionValue value_b = renderer.lastSubmittedFenceValue();
+            PPR_TEST_ASSERT(value_b != kFenceValueNone and value_b > before_b);
+            const FenceCompletionValue before_c = value_b;
+            const std::error_code busy_err = renderer.renderToTexture(target, {});
+            PPR_TEST_ASSERT(busy_err == std::make_error_code(std::errc::device_or_resource_busy));
+            // THIS invocation reports definitely-unsubmitted: the fence did
+            // not move and the settlement is kRejected — never the previous
+            // frame's kSubmitted.
+            PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == before_c);
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kRejected);
+            // Production classification (mirrors the Editor fate guard):
+            // only strictly-greater advancement reports an accepted
+            // submission, so the rejected frame charges nothing.
+            FenceCompletionValue charged_c{kFenceValueNone};
+            bool quarantined_c = false;
+            const FenceCompletionValue after_c = renderer.lastSubmittedFenceValue();
+            const FrameSettlement fate_c = renderer.lastSubmitSettlement();
+            if (fate_c == FrameSettlement::kSubmitted and after_c != kFenceValueNone and after_c > before_c) {
+                charged_c = after_c;
+            } else if (fate_c == FrameSettlement::kSubmitFailed) {
+                quarantined_c = true;
+            }
+            PPR_TEST_ASSERT(charged_c == kFenceValueNone);
+            PPR_TEST_ASSERT(not quarantined_c);
+            // Each settlement pairs exactly one record: two distinct
+            // accepted values for the two submits, and no aliasing of the
+            // rejected frame onto either.
+            PPR_TEST_ASSERT(value_a != value_b);
+            PPR_TEST_ASSERT(charged_c != value_a);
+            PPR_TEST_ASSERT(charged_c != value_b);
+            // Drain through production calls so teardown meets idle proof.
+            renderer.setTestHoldSweep(false);
+            std::ignore = renderer.waitForFenceValue(value_b);
+            std::ignore = renderer.retireCompletedFrames();
+        };
+
+        PPR_UNIT_TEST (lane_gate_timeout_overlapping_gate_entry_serialized) {
+            // F2 timeout-race regression (deterministic): force the
+            // worker's single bounded-park timeout to fire strictly inside
+            // the test thread's owned gate window — and hold ownership past
+            // BOTH stacked bounds of the old two-layer wait (150ms bound vs
+            // ~360ms hold with wide margins). Lane-access epochs on both
+            // sides must be disjoint — the owned timeout parks until the
+            // explicit release below instead of resuming concurrently with
+            // the gate — and the post-gate release wakes it with an
+            // acknowledgement, never a latched timeout.
+            LaneGatePhase phase{};
+            phase.setParkBoundForTest(std::chrono::milliseconds{150});
+            using SteadyClock = std::chrono::steady_clock;
+            const SteadyClock::time_point epoch = SteadyClock::now();
+            const auto millis_since = [&](const SteadyClock::time_point point) {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(point - epoch).count();
+            };
+            std::atomic<bool> worker_returned{false};
+            std::atomic<long long> worker_resumed_ms{-1};
+            std::atomic<long long> gate_enter_ms{-1};
+            std::atomic<long long> gate_exit_ms{-1};
+            bool worker_ack = false;
+            std::thread worker{[&] {
+                worker_ack = phase.parkWorker();
+                worker_resumed_ms.store(millis_since(SteadyClock::now()), std::memory_order_release);
+                worker_returned.store(true, std::memory_order_release);
+            }};
+            // Unconditional release-and-join cleanup BEFORE any throwing
+            // assert below: a scheduling delay past the worker timeout can
+            // throw out of tryTakeGateOwnership while this thread stays
+            // joinable (terminate without this guard).
+            PPR_DEFER {
+                phase.cancel();
+                if (worker.joinable()) {
+                    worker.join();
+                }
+            };
+            // Explicit park-entry coordination (no sleep-inferred entry):
+            // the worker signals m_parked at parkWorker entry; observe it
+            // (bounded, fail-loud) before owning the gate.
+            PPR_TEST_ASSERT(phase.waitForPark());
+            // Own the gate across BOTH configured wait bounds (150ms bound,
+            // hold ~360ms with wide margins): the single bounded wait expires
+            // strictly inside this owned window, and the worker must still
+            // park until the release below — never resume inside it.
+            PPR_TEST_ASSERT(phase.tryTakeGateOwnership());
+            gate_enter_ms.store(millis_since(SteadyClock::now()), std::memory_order_release);
+            std::this_thread::sleep_for(std::chrono::milliseconds{350});
+            gate_exit_ms.store(millis_since(SteadyClock::now()), std::memory_order_release);
+            phase.releaseGateOwnership();
+            phase.release();
+            const SteadyClock::time_point deadline = SteadyClock::now() + std::chrono::seconds{10};
+            while (not worker_returned.load(std::memory_order_acquire) and SteadyClock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            worker.join();
+            PPR_TEST_ASSERT(worker_returned.load(std::memory_order_acquire));
+            // No concurrent access: the worker resumed at or after the
+            // gate exit, never inside the owned window — and the wake was
+            // the post-gate release (acknowledged), not an independent
+            // timeout resume (which would also have latched timedOut).
+            const long long resumed = worker_resumed_ms.load(std::memory_order_acquire);
+            const long long entered = gate_enter_ms.load(std::memory_order_acquire);
+            const long long exited = gate_exit_ms.load(std::memory_order_acquire);
+            PPR_TEST_ASSERT(entered >= 0 and exited > entered and resumed >= 0);
+            PPR_TEST_ASSERT(not (resumed >= entered and resumed < exited));
+            PPR_TEST_ASSERT(worker_ack);
+            PPR_TEST_ASSERT(phase.releaseAcked());
+            PPR_TEST_ASSERT(not phase.timedOut());
         };
 
         PPR_UNIT_TEST (saturated_run_preserves_time_and_input) {
@@ -1089,7 +2240,26 @@ namespace pP::tests::detail {
 
             harness.m_on_rendered = [](SaturatingHarness &self) noexcept {
                 if (self.m_renders == 1u) {
-                    // Confirmed removal AFTER the first admitted frame.
+                    // Confirmed removal AFTER the first admitted frame:
+                    // retire backend work on the owner thread BEFORE
+                    // injecting synthetic loss. slang-rhi parks submitted
+                    // command buffers until a submit-time poll observes
+                    // completion, and the removal-confirmed shutdown path
+                    // performs zero backend waits (production must not
+                    // submit after removal), so unretired parked refs
+                    // would survive to destroyRHI and trip
+                    // m_liveDeviceCount. Wait the accepted value, sweep,
+                    // then drive the queue poll — all proven completion,
+                    // never new device work after the loss below.
+                    // Best-effort (never fails the zero-client-work
+                    // assertion): a drive failure still injects the loss.
+                    try {
+                        Renderer &renderer = self.getRenderer();
+                        std::ignore = renderer.waitForFenceValue(self.m_last_accepted);
+                        std::ignore = renderer.retireCompletedFrames();
+                        renderer.driveQueueRetirementForTest();
+                    } catch (...) {
+                    }
                     self.getRenderer().notifyDeviceLost();
                 }
             };
@@ -1443,6 +2613,11 @@ namespace pP::tests::detail {
             }
 
             [[nodiscard]] std::error_code bootBase() {
+                // Inline death regression: the child drives Grid/Triangle
+                // passes plus Renderer::renderToTexture from this (test)
+                // thread, so the lane stays off — lane-owned init would
+                // fail closed with operation_not_permitted before UNKNOWN.
+                setRenderLaneEnabled(false);
                 return Application::initialize();
             }
 
@@ -1563,6 +2738,12 @@ namespace pP::tests::detail {
             } else {
                 renderer.setInjectedQuiescenceFailureForTest(std::make_error_code(std::errc::io_error));
             }
+            // Deterministic diagnostic throw (armed by the parent via
+            // PPR_GATE1_B1_DIAG_THROW): the hook genuinely throws INSIDE
+            // the production-protected prepareGpuTeardown_ hook boundary
+            // (which swallows hook exceptions and falls through to
+            // classification), so diagnostic-exception resilience is
+            // actually exercised on the UNKNOWN path below.
             editor.setGpuTeardownEntryHookForTest([&] {
                 writeDeathMarker("quiescence-entry");
                 // Owners alive, nothing released yet: passes still hold
@@ -1571,19 +2752,41 @@ namespace pP::tests::detail {
                                    maxSlotValue(triangles.slotCompletionValues()) == second and
                                    renderer.completedFenceValue() < first;
                 writeDeathMarker(alive ? "owners-alive" : "owners-dead");
-                // Deterministic diagnostic failure (armed by the parent via
-                // PPR_GATE1_B1_DIAG_THROW): best-effort instrumentation must
-                // not gate the UNKNOWN fail-stop below.
                 if (diagThrowArmed()) {
                     writeDeathMarker("diag-throw-armed");
-                    throw std::runtime_error{"b1 diagnostic failure"};
+                    throw std::runtime_error{"ppr-gate1-b1-diag-throw"};
                 }
             });
 
             // Real shutdown WITHOUT pre-drain → UNKNOWN → fail-stop.
             // Unreachable past this call: no normal return, no destruction.
-            std::ignore = editor.teardown();
+            // An escaping product exception must NEVER manufacture the
+            // expected fatal status nor release the UNKNOWN resources:
+            // die with a distinct marker/status so the parent fails
+            // loudly instead of mistaking it for the proven fail-stop.
+            try {
+                std::ignore = editor.teardown();
+            } catch (...) {
+                writeDeathMarker("exception-escaped");
+                std::_Exit(kUnknownGpuCompletionFatalExit + 1);
+            }
             writeDeathMarker("normal-return");
+            // Release the child-owned GPU refs BEFORE any RHI destroy path
+            // on this (misconfigured, non-fail-stop) return: the target
+            // holds a strong device ref and RHI::destroy aborts on live
+            // children.
+            try {
+                target.setNull();
+            } catch (...) {
+            }
+            try {
+                std::ignore = grid.shutdown();
+            } catch (...) {
+            }
+            try {
+                std::ignore = triangles.shutdown();
+            } catch (...) {
+            }
             writeDeathMarker("release-begun");
         }
 
@@ -1723,11 +2926,12 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (unknown_completion_diag_fail_still_fail_stops) {
-            // B1'b deterministic diagnostic failure on UNKNOWN: the child's
-            // quiescence-entry hook throws AND the failure is recorded via
-            // markers — the child must still die with the explicit
-            // fail-stop status (asserted result, not merely exit), with NO
-            // release, normal-return, or destruction markers.
+            // B1'b deterministic diagnostic throw on UNKNOWN: the child's
+            // quiescence-entry hook genuinely throws INSIDE the
+            // production-protected hook boundary (proven via markers) and
+            // the child must still die with the explicit fail-stop status
+            // (asserted result, not merely exit), with NO release,
+            // normal-return, or destruction markers.
             std::error_code fs_ec{};
             std::filesystem::remove(deathMarkerPath(), fs_ec);
 
@@ -1779,6 +2983,10 @@ namespace pP::tests {
             detail::RunGate::focus_loss_gain_ordered_across_busy,
             detail::RunGate::two_runs_reestablish_quiescence_independently,
             detail::RunGate::healthy_teardown_survives_diagnostic_failure,
+            detail::RunGate::lane_gate_blocks_third_until_retirement,
+            detail::RunGate::lane_gate_paused_worker_blocks_third,
+            detail::RunGate::rejected_frame_does_not_inherit_previous_submit_fate,
+            detail::RunGate::lane_gate_timeout_overlapping_gate_entry_serialized,
             detail::RunGate::unknown_completion_child_fatal,
             detail::RunGate::unknown_completion_fail_stops_process,
             detail::RunGate::unknown_completion_diag_fail_still_fail_stops,

@@ -49,6 +49,16 @@ export namespace pP {
         // gamepads are never re-sampled or dispatched here.
         [[nodiscard]] std::error_code pumpNativeEvents() override;
 
+        // Wakeable native wait: parks in the window service's timed wait
+        // (servicing arrivals on wake), so the pacer sleeps event-driven
+        // instead of spinning. May run with or without windows (headless =
+        // paced slice); never advances device state by itself.
+        [[nodiscard]] std::error_code waitNativeEvents(TimeSpan timeout) override;
+
+        // Any-thread wakeup for the wait above (the render lane's only
+        // legal platform call, relayed to the window service).
+        void postEmptyEvent() noexcept override;
+
     private:
         safe_ptr<Application> m_application{};
 

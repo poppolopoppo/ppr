@@ -48,6 +48,11 @@ export namespace pP {
         // frame (kSurfaceGenerationNone, no record yet) always accepts.
         WindowHandle m_surface_identity{};
         SurfaceGeneration m_surface_generation{kSurfaceGenerationNone};
+        // Owned native handle snapshot for surface creation on the consume
+        // lane: the platform window outlives every in-flight packet by the
+        // P2 teardown order (windows die on main after the lane joins), so
+        // the consume lane never touches the live Window for this.
+        NativeWindowHandle m_surface_native{};
     };
 
     [[nodiscard]] bool hasRenderTarget(const FramePacket &packet) noexcept;

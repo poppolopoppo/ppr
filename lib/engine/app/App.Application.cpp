@@ -5,6 +5,7 @@ module;
 module engine.app;
 
 import :application;
+import :frame.render_lane;
 import :platform;
 import :renderer;
 
@@ -66,9 +67,26 @@ namespace pP {
                 // the run loop terminates, but record no error — run() still
                 // returns success.
                 m_exit_requested.store(true, std::memory_order_release);
+                // Wake any pacer/hint wait so the exit lands within one
+                // slice instead of a full background period.
+                requestFrameAdmissionWake();
                 return;
             }
             m_request_exit(clause);
+            requestFrameAdmissionWake();
+        }
+    }
+
+    void Application::requestFrameAdmissionWake() const noexcept {
+        // Pure hint: coalesce the pulse, then wake the native wait (if
+        // any). Both halves are any-thread safe; waiters recheck persistent
+        // state and never admit on the hint alone.
+        try {
+            m_admission_wake.emitEvent();
+            if (m_platform) {
+                m_platform->postEmptyEvent();
+            }
+        } catch (...) {
         }
     }
 
@@ -142,14 +160,17 @@ namespace pP {
             const hal::ProfileScope scope{"App.Frame"};
             std::error_code first_err{};
 
-            // Stage: advance clock (wakeable pacer wait, then zero-target
-            // tick). A clock error OR a latched exit retires the frame here:
-            // the error is latched for run()'s return value and the loop
-            // leaves WITHOUT client or render work on this path.
+            // Stage: combined admission (deadline AND credit in one helper:
+            // wakeable pacer wait, then a zero-target tick for dt, then the
+            // credit probe before any client work). A clock error OR a
+            // latched exit retires the frame here: the error is latched for
+            // run()'s return value and the loop leaves WITHOUT client or
+            // render work on this path.
             TimeSpan dt{};
+            bool admitted_skip = false;
             {
                 const hal::ProfileScope scope_clock{"App.Frame.Clock"};
-                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, advanceClock_(&dt));
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, admitClientFrame_(&dt, admitted_skip));
             }
 
             if (first_err or isExitRequested()) {
@@ -161,28 +182,70 @@ namespace pP {
 
             // Admission + client stages share one exception boundary; every
             // handler retains the FIRST error, never overwriting it.
+            // Per-frame submit record for the inline closure below: the
+            // before-values prove whether THIS frame submitted, never a
+            // sticky previous frame. Captured after admission, before any
+            // client work; the closure compares after-values to these.
+            // Untouched when a lane owns the renderer (main never reads
+            // lane-owned state there).
+            FenceCompletionValue submit_before{kFenceValueNone};
+            FrameSettlement settlement_before{FrameSettlement::kRejected};
+            bool inline_submit_observed = false;
+            if (not renderLaneOwnsRenderer_() and m_renderer) {
+                submit_before = m_renderer->lastSubmittedFenceValue();
+                settlement_before = m_renderer->lastSubmitSettlement();
+                inline_submit_observed = true;
+            }
             try {
-                // B2' admission gate BEFORE the whole virtual update stage
-                // (derived pre-work included): retire + probe, then branch.
-                // Terminal (quarantine included) retains first_err, latches
-                // it, and leaves BEFORE carry/update/render. Capacity-busy
-                // accumulates dt into the single Application-owned carry,
-                // runs PLATFORM COLLECTION ONLY (never update(dt): device
-                // time must not advance on a skipped frame), latches a
-                // collection failure, and finishes the iteration.
-                bool admitted_skip = false;
-                if (const std::error_code probe_err = probeFrameAdmissionPreUpdate_(admitted_skip)) {
-                    if (not first_err) {
-                        first_err = probe_err;
-                    }
-                    m_request_exit(first_err);
-                    break;
-                }
+                // B2' admission outcome from admitClientFrame_ above (deadline
+                // AND credit, before the whole virtual update stage including
+                // derived pre-work). Terminal (quarantine included) already
+                // retained first_err, latched it, and left the loop above.
+                // Capacity-busy accumulates dt into the single
+                // Application-owned carry, runs PLATFORM COLLECTION ONLY
+                // (never update(dt): device time must not advance on a
+                // skipped frame), latches a collection failure, and finishes
+                // the iteration.
                 if (admitted_skip) {
                     noteSkippedFrameDt(dt);
                     if (m_platform) {
-                        PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_platform->pumpNativeEvents());
+                        // Single collection per busy frame through the
+                        // wakeable wait: it stages arrivals itself (the
+                        // default/scripted wait pumps once after the
+                        // quantum; GLFW waits then collects), so a separate
+                        // pump before it would collect twice per frame and
+                        // shift pump-indexed accounting (B2' busy carry and
+                        // the total-elapsed identity). Saturation otherwise
+                        // loops while the 2-credit reservation bound holds.
+                        // Elapsed time stays carried via noteSkippedFrameDt
+                        // above; native collection/wait failures are
+                        // retained, never ignored.
+                        PPR_RETAIN_ERROR_ON_FAIL(
+                            App, first_err, m_platform->waitNativeEvents(FramePacer::kWakeQuantum));
                     }
+                    // Recheck completions so a credit freed during the wait
+                    // is observed before the next probe: lane drain plus
+                    // the inline retire/mirror when no lane owns the
+                    // renderer, then reconcile. Errors retained with the
+                    // same first-error rule; canceled stays neutral.
+                    if (m_render_lane) {
+                        if (const std::error_code busy_drain_err = pumpRenderCompletions_();
+                            busy_drain_err and
+                            not first_err and
+                            busy_drain_err != std::make_error_code(std::errc::operation_canceled)) {
+                            first_err = busy_drain_err;
+                        }
+                    }
+                    if (not renderLaneOwnsRenderer_() and m_renderer) {
+                        if (const std::error_code busy_retire_err = m_renderer->retireCompletedFrames();
+                            busy_retire_err and
+                            not first_err and
+                            busy_retire_err != std::make_error_code(std::errc::operation_canceled)) {
+                            first_err = busy_retire_err;
+                        }
+                        m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
+                    }
+                    reconcileSubmittedReservations_();
                     if (first_err) [[unlikely]] {
                         m_request_exit(first_err);
                     }
@@ -227,12 +290,85 @@ namespace pP {
                 }
             }
 
+            // Inline settlement loop-closure: when no lane owns the
+            // renderer, the frame's CPU settlement normally arrives via
+            // the derived render path posting onLaneFrameConsumed_
+            // (ApplicationEditor::submitRenderWork_'s inline branch). A
+            // base-level render that never posts it would otherwise park
+            // this frame's keyed reservation in kLocal forever —
+            // occupancy never releases, admission stalls, and every busy
+            // frame skips on a charge nobody can retire. Close it from a
+            // per-frame before/after submit record, only where the client
+            // left the record unsettled. A lane/editor settlement has
+            // already moved the record out of kLocal and always wins.
+            // An error never proves nothing submitted: an accepted submit
+            // followed by a failed present advances the fence AND latches
+            // first_err, so the submit fields are derived from fence
+            // advancement (and a fresh kSubmitFailed flip) independently
+            // of first_err; the error rides alongside, never instead.
+            if (inline_submit_observed and m_renderer) {
+                for (FrameReservation &record: m_reservations) {
+                    if (not record.m_active or
+                        record.m_state != FrameReservation::State::kLocal or
+                        record.m_epoch != m_reservation_epoch or
+                        record.m_frame_id != getFrameIndex()) {
+                        continue;
+                    }
+                    RenderFrameResult synth{};
+                    synth.m_frame_id = getFrameIndex();
+                    synth.m_reservation_epoch = m_reservation_epoch;
+                    synth.m_reservation_frame_id = getFrameIndex();
+                    const FenceCompletionValue submit_after = m_renderer->lastSubmittedFenceValue();
+                    const FrameSettlement fate_after = m_renderer->lastSubmitSettlement();
+                    if (submit_after != kFenceValueNone and submit_after > submit_before) {
+                        // This frame's submit was accepted (fence advanced),
+                        // even when the present below it failed: the charge
+                        // survives to GPU retirement via the settlement hook.
+                        synth.m_submit_value = submit_after;
+                        if (first_err) {
+                            synth.m_error = first_err;
+                        }
+                    } else if (fate_after == FrameSettlement::kSubmitFailed and
+                               settlement_before != FrameSettlement::kSubmitFailed) {
+                        // This frame's submit possibly executed (no value
+                        // committed, quarantine path): never a normal
+                        // release, even with an error alongside.
+                        synth.m_submit_possibly_executed = true;
+                        if (first_err) {
+                            synth.m_error = first_err;
+                        }
+                    } else {
+                        // Definitely unsubmitted this frame: no fence
+                        // advancement and no fresh submit failure. A sticky
+                        // previous frame's fate is never consulted. A
+                        // latched error here is a definite pre-submission
+                        // failure and releases; clean success settles
+                        // unsubmitted with no value and no error.
+                        if (first_err) {
+                            synth.m_error = first_err;
+                        }
+                    }
+                    onLaneFrameConsumed_(synth);
+                    break;
+                }
+            }
+
             if (first_err) [[unlikely]] {
+                // Reservation accounting settles structurally at teardown:
+                // definitely-unsubmitted local/queued records lose their
+                // charge here; a submitted frame's charge survives to either
+                // its GPU retirement or the teardown settle — never a
+                // blanket counter reset that could duplicate or bury a credit.
                 m_request_exit(first_err);
             }
 
             ++m_frame_index;
         }
+
+        // Normal (non-error) run end: in-flight lane frames settle through
+        // the same hook on their late results; the credit economy is rebuilt
+        // by shutdown()'s settle phase. Scratch is cleared for reuse.
+        m_render_result_scratch.clear();
 
         PPR_LOG(App, emphasis, "stop application loop, bye 👋");
         // Read the stable loop error BEFORE shutdown() resets the
@@ -261,9 +397,487 @@ namespace pP {
         return carry;
     }
 
+    std::error_code Application::admitClientFrame_(TimeSpan *out_delta_time, bool &out_skip) {
+        // Single admission helper (deadline AND credit): the pacer deadline
+        // half first, then the credit probe before any client work. The
+        // ledger is the source of truth; pacer/lane signals are hints
+        // rechecked here. Fail-closed like the loop boundary it replaces:
+        // unexpected exceptions convert to error codes, never escape.
+        out_skip = false;
+        if (const std::error_code clock_err = advanceClock_(out_delta_time)) {
+            return clock_err;
+        }
+        try {
+            return probeFrameAdmissionPreUpdate_(out_skip);
+        } catch (const std::system_error &e) {
+            return e.code();
+        } catch (const std::invalid_argument &) {
+            return std::make_error_code(std::errc::invalid_argument);
+        } catch (const std::bad_alloc &) {
+            return std::make_error_code(std::errc::not_enough_memory);
+        } catch (...) {
+            return std::make_error_code(std::errc::state_not_recoverable);
+        }
+    }
+
+    void Application::waitForAdmissionHint_() {
+        // Bounded backpressure wait after a transport drop: each slice
+        // services platform events FIRST (admission never blocks the pump),
+        // then parks natively. Hints only — every wake rechecks persistent
+        // exit/terminal/credit state, and the budget caps the stall even if
+        // no hint ever arrives. Native collection/wait failures and the
+        // completion drain are retained durably into m_wait_pump_error
+        // (first error wins, canceled neutral) instead of discarded, so
+        // they travel with the shutdown result.
+        constexpr int kMaxHintSlices{4};
+        m_admission_wake.resetEvent();
+        for (int slice = 0; slice < kMaxHintSlices; ++slice) {
+            if (isExitRequested()) {
+                return;
+            }
+            if (m_render_lane and m_render_lane->terminalError()) {
+                return;
+            }
+            if (const std::error_code hint_drain_err = pumpRenderCompletions_();
+                hint_drain_err and
+                not m_wait_pump_error and
+                hint_drain_err != std::make_error_code(std::errc::operation_canceled)) {
+                m_wait_pump_error = hint_drain_err;
+            }
+            // Credit release for accepted submissions is the AND of CPU
+            // settlement and the published retirement frontier — recheck by
+            // reconciling, not by guessing. Hold-sweep windows are never
+            // reported as retirement, so they keep this hint armed. On the
+            // inline path there is no lane sweep callback, so mirror the
+            // frontier from the owner-thread renderer first — otherwise
+            // the reconcile below can never retire an inline record.
+            if (not renderLaneOwnsRenderer_() and m_renderer) {
+                if (const std::error_code hint_retire_err = m_renderer->retireCompletedFrames();
+                    hint_retire_err and
+                    not m_wait_pump_error and
+                    hint_retire_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = hint_retire_err;
+                }
+                m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
+            }
+            reconcileSubmittedReservations_();
+            if (m_frame_reservations.outstanding() < kMaxOutstandingFrames) {
+                return;
+            }
+            if (m_admission_wake.pollEvent()) {
+                return;
+            }
+            if (m_platform) {
+                if (const std::error_code hint_pump_err = m_platform->pumpNativeEvents();
+                    hint_pump_err and
+                    not m_wait_pump_error and
+                    hint_pump_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = hint_pump_err;
+                }
+                if (const std::error_code hint_wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
+                    hint_wait_err and
+                    not m_wait_pump_error and
+                    hint_wait_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = hint_wait_err;
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    std::error_code Application::pumpRenderCompletions_() {
+        if (not m_render_lane) {
+            return default_value_v;
+        }
+        m_render_result_scratch.clear();
+        // Nonblocking drain. The error is retained, never discarded: it
+        // duplicates the first failed result's m_error when stash/transport
+        // loss occurred, and stands alone otherwise. Every completable
+        // outcome and every accounting side effect below runs regardless.
+        const std::error_code drain_error = m_render_lane->drainResults(m_render_result_scratch);
+        std::error_code first_err{};
+        for (const RenderFrameResult &result: m_render_result_scratch) {
+            // Surface-generation mirror (hint): the lane re-verifies every
+            // capture claim against the live record at submit.
+            if (result.m_surface_handle) {
+                m_lane_surface_handle = result.m_surface_handle;
+                m_lane_surface_generation = result.m_surface_generation;
+            }
+            // Every known outcome fires the settlement contract, including
+            // dropped/cancelled slots; both milestones (this hook + the
+            // ledger's fence retirement) are durable and independent.
+            onLaneFrameConsumed_(result);
+            // operation_canceled is a neutral teardown artifact for the
+            // transport (dropped at stop/drain), not an app-level failure:
+            // the settlement hook already re-armed the owner's flags. A
+            // frame error outranks its own sweep error: per-slot first-error
+            // precedence keeps the originating failure authoritative while
+            // the retirement failure is never silently dropped.
+            if (result.m_error and
+                not first_err and
+                result.m_error != std::make_error_code(std::errc::operation_canceled)) {
+                first_err = result.m_error;
+            } else if (result.m_sweep_error and
+                       not first_err and
+                       result.m_sweep_error != std::make_error_code(std::errc::operation_canceled)) {
+                first_err = result.m_sweep_error;
+            }
+        }
+        m_render_result_scratch.clear();
+        // Retained drain/transport failure joins with the same precedence
+        // (result errors seen above win; canceled is neutral).
+        if (not first_err and drain_error and drain_error != std::make_error_code(std::errc::operation_canceled)) {
+            first_err = drain_error;
+        }
+        // Final-sweep outcome is the authoritative completion of the
+        // lane's retirement flood: retain it even when the steady
+        // per-frame sweeps already failed (first error preserved), and
+        // never skip it — a sticky lane-report surfaces through the same
+        // single completion transport, never a forked mechanism.
+        if (not first_err) {
+            if (const std::error_code final_err = m_render_lane->finalSweepError();
+                final_err and final_err != std::make_error_code(std::errc::operation_canceled)) {
+                first_err = final_err;
+            }
+        }
+        return first_err;
+    }
+
+    void Application::onLaneFrameConsumed_(const RenderFrameResult &result) {
+        // Durable settlement reconciliation: match the posted result to
+        // exactly one live reservation record by (epoch, frame id). A
+        // stale/foreign-epoch result never releases a current-run credit,
+        // and neither does one with no recorded seat.
+        if (result.m_reservation_epoch != m_reservation_epoch) {
+            return;
+        }
+        const auto matches = [&result](const FrameReservation &record) noexcept {
+            return record.m_active and
+                   record.m_epoch == result.m_reservation_epoch and
+                   record.m_frame_id == result.m_frame_id;
+        };
+        auto it = std::find_if(m_reservations.begin(), m_reservations.end(), matches);
+        if (it == m_reservations.end()) {
+            // No matching live record: the outcome is for a frame whose
+            // admission was abandoned (error paths that abandon with
+            // first_err — see run loop), or a frame the ledger already
+            // accounted for. Nothing to reconcile.
+            return;
+        }
+        FrameReservation &record = *it;
+        if (result.m_submit_possibly_executed) {
+            // FrameSettlement::kSubmitFailed: admission is stopped and the
+            // credit is never reused — quarantined, stays charged.
+            record.m_state = FrameReservation::State::kQuarantined;
+            record.m_cpu_settled = true;
+            return;
+        }
+        if (result.m_submit_value != kFenceValueNone) {
+            // An accepted submission was made — the charge holds until the
+            // retirement frontier covers this value. Even a later present
+            // error riding on this result does NOT reclaim the slot: the
+            // submission was really accepted, so the CPU-side reservation
+            // must follow GPU retirement rather than present status.
+            const FenceCompletionValue frontier = m_lane_retirement_frontier.load(std::memory_order_acquire);
+            record.m_state = FrameReservation::State::kSubmitted;
+            record.m_submit_value = result.m_submit_value;
+            record.m_cpu_settled = true;
+            if (frontier >= result.m_submit_value) {
+                // Accepted AND already covered by the retirement frontier
+                // (inline success on a frame retired within the same sweep,
+                // or a same-value must-publish match): retire once now.
+                releaseReservation_(record);
+            }
+            return;
+        }
+        if (result.m_dropped) {
+            // Never-applied slot (lane drop, transport rejection, obsolete
+            // generation sizing, minimized surface): the runtime never has
+            // to retire a GPU value for it — release the credit now.
+            releaseReservation_(record);
+            return;
+        }
+        if (result.m_error) {
+            // Definitely unsubmitted failure (transport rejection, definite
+            // pre-submission rejection): release now.
+            releaseReservation_(record);
+            return;
+        }
+        // No accepted submission, no error: settled-but-unsubmitted frame.
+        releaseReservation_(record);
+    }
+
+    void Application::publishLaneRetirementFrontier_() {
+        // Null-guarded one-line mirror: a torn-down renderer publishes
+        // nothing, never a manufactured value. Release pairs with main's
+        // acquire in reconcileSubmittedReservations_() and
+        // onLaneFrameConsumed_().
+        if (m_renderer) {
+            m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
+        }
+    }
+
+    void Application::reconcileSubmittedReservations_() {
+        const FenceCompletionValue frontier = m_lane_retirement_frontier.load(std::memory_order_acquire);
+        for (FrameReservation &record: m_reservations) {
+            if (not record.m_active or record.m_state != FrameReservation::State::kSubmitted) {
+                continue;
+            }
+            if (record.m_cpu_settled and
+                record.m_submit_value != kFenceValueNone and
+                frontier >= record.m_submit_value) {
+                releaseReservation_(record);
+            }
+        }
+        std::erase_if(m_reservations, [](const FrameReservation &record) { return not record.m_active; });
+    }
+
+    void Application::noteReservationQueued_(const u64 frame_id) {
+        for (FrameReservation &record: m_reservations) {
+            if (record.m_active and record.m_epoch == m_reservation_epoch and record.m_frame_id == frame_id) {
+                record.m_state = FrameReservation::State::kQueued;
+                return;
+            }
+        }
+    }
+
+    void Application::releaseReservation_(FrameReservation &record) {
+        // Release the credit exactly once; a record that was never
+        // charged (std::error inside acquire paths) never reaches here.
+        // An empty-ledger release here is a bug — keep it loud, never
+        // silently dropped (ADR Ora-6 item 3).
+        record.m_active = false;
+        if (const std::error_code release_err = m_frame_reservations.release()) {
+            PPR_ASSERT(not release_err && "reservation release hit an empty ledger");
+        }
+    }
+
+    void Application::installPacerSleepOnce_() {
+        // Installed once: every pacer sleep slice pumps native events, then
+        // waits natively for the slice remainder — waits stay event-driven
+        // (exit/credit/config wakes cut them short) without spinning.
+        if (m_pacer_sleep_installed) {
+            return;
+        }
+        m_pacer_sleep_installed = true;
+        m_pacer.setSleepFunction([this](const TimeSpan slice) noexcept { pacerSleepSlice_(slice); });
+    }
+
+    void Application::pacerSleepSlice_(const TimeSpan slice) noexcept {
+        // Every pacer sleep slice pumps then waits natively so waits stay
+        // event-driven. Platform errors are retained durably into
+        // m_wait_pump_error (first error wins, canceled neutral) instead
+        // of discarded; they travel with the shutdown result via
+        // stopRenderLane_(). Noexcept: retention is assignment-only, never
+        // throwing.
+        try {
+            if (m_platform) {
+                if (const std::error_code pump_err = m_platform->pumpNativeEvents();
+                    pump_err and
+                    not m_wait_pump_error and
+                    pump_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = pump_err;
+                }
+                if (const std::error_code wait_err = m_platform->waitNativeEvents(slice);
+                    wait_err and
+                    not m_wait_pump_error and
+                    wait_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = wait_err;
+                }
+            } else if (slice > TimeSpan{}) {
+                std::this_thread::sleep_for(slice);
+            }
+        } catch (...) {
+        }
+    }
+
+    bool Application::renderLaneOwnsRenderer_() const noexcept {
+        // Ownership, not liveness: the lane owns Renderer affinity from
+        // startRenderLane_ until the lane object is destroyed, independent
+        // of the transient isRunning() pulse. Affinity decisions (which
+        // lane may touch Renderer/pass-GPU state) consult ONLY this
+        // stable ownership; isRunning() is a liveness hint for handoff
+        // willingness, never permission to migrate execution to main. A
+        // stopped-but-owned lane still owns affinity — its handoffs fail
+        // closed (unacknowledged) and route to UNKNOWN, never to an inline
+        // fallback that would touch owned state off-lane.
+        return m_render_lane != nullptr and m_renderer != nullptr;
+    }
+
+    std::error_code Application::startRenderLane_() {
+        // The lane owns Renderer affinity from here on: init runs ON the
+        // lane (owner id never migrates), sweeps run per frame on it, and
+        // the wake callback relays hints to main. The frame executor is
+        // bound later by the derived host (passes exist only after its
+        // initialize); unbound frames fail closed until then.
+        PPR_ASSERT(m_renderer != nullptr);
+        PPR_ASSERT(not renderLaneOwnsRenderer_());
+        auto lane = std::make_unique<RenderLane>();
+        RenderLane *const lane_view = lane.get();
+        RenderLaneSweep sweep{[this](u32 &out_outstanding) -> std::error_code {
+            // Fail-closed, never teardown-abort: the lane can still issue a
+            // settle sweep during stop+join ordering gaps; a null renderer
+            // must degrade to an error code, not an assert.
+            if (not m_renderer) [[unlikely]] {
+                out_outstanding = 0u;
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+            const std::error_code sweep_err = m_renderer->retireCompletedFrames();
+            out_outstanding = m_renderer->outstandingFrameCount();
+            // Publish the retirement frontier with release so main can
+            // reconcile (acquire) its submitted-reservation records against
+            // actually-retired fence values, advanced only on successful
+            // sweep — never from a failed poll or removal.
+            publishLaneRetirementFrontier_();
+            return sweep_err;
+        }};
+        RenderLaneWake wake{[this]() noexcept { requestFrameAdmissionWake(); }};
+        safe_ptr<IRhiService> rhi_service{getServices().get<IRhiService>()};
+        if (const std::error_code start_err = lane_view->start(
+                [this, rhi_service]() -> std::error_code {
+                    PPR_ASSERT(m_renderer != nullptr);
+                    if (not rhi_service.isValid()) [[unlikely]] {
+                        return std::make_error_code(std::errc::not_connected);
+                    }
+                    return m_renderer->initialize(*rhi_service);
+                },
+                RenderFrameExecutor{}, std::move(sweep), std::move(wake))) {
+            return start_err;
+        }
+        m_render_lane = std::move(lane);
+        // P2 teardown protocol: while the caller waits on a sync
+        // handoff or a lane join, main keeps the platform service
+        // alive. Mirror waitForAdmissionHint_: completions first, then
+        // collection-only native pump, then a bounded native wait
+        // slice. Never blocks the lane; failures are retained by the
+        // pump completion contract, never thrown across the slice.
+        // Pump-compatible join: the wait pump installed at
+        // startRenderLane_ services platform events while the
+        // lane quiesces. A timeout escalates to the UNKNOWN
+        // process policy: no live resource is freed (the lane,
+        // its transports, and the renderer stay owned), the
+        // pump stops, and the latched first/terminal error is
+        // handed to the fail-stop boundary.
+        m_render_lane->setWaitPump([this]() noexcept {
+            try {
+                // Pump errors are retained durably, never silently shed:
+                // the first one wins and travels with the shutdown result.
+                if (const std::error_code pump_err = pumpRenderCompletions_();
+                    pump_err and
+                    not m_wait_pump_error and
+                    pump_err != std::make_error_code(std::errc::operation_canceled)) {
+                    m_wait_pump_error = pump_err;
+                }
+                if (m_platform) {
+                    if (const std::error_code native_err = m_platform->pumpNativeEvents();
+                        native_err and
+                        not m_wait_pump_error and
+                        native_err != std::make_error_code(std::errc::operation_canceled)) {
+                        m_wait_pump_error = native_err;
+                    }
+                    if (const std::error_code wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
+                        wait_err and
+                        not m_wait_pump_error and
+                        wait_err != std::make_error_code(std::errc::operation_canceled)) {
+                        m_wait_pump_error = wait_err;
+                    }
+                }
+            } catch (...) {
+            }
+        });
+        return default_value_v;
+    }
+
+    std::error_code Application::stopRenderLane_() noexcept {
+        // Teardown protocol tail: admission already stopped (quarantine in
+        // prepareGpuTeardown_) and exit already signalled; settle + join
+        // here while the platform still pumps, then destroy the transports
+        // after the last emitter is gone.
+        std::error_code lane_err{};
+        try {
+            if (m_render_lane) {
+                m_render_lane->requestStop();
+                if (const std::error_code join_err = m_render_lane->join(); join_err) {
+                    failStopOnUnknownGpuTeardown_(join_err);
+                }
+                // Unconditional final settle BEFORE the transports die and
+                // accounting resets: drain every remaining settlement and
+                // surface the lane's final sweep status even when the join
+                // already latched a timeout. Raw channels run no element
+                // dtors, so this drain is also what retires the last live
+                // RenderFrameResult/shared_ptr bytes.
+                if (const std::error_code drain_err = pumpRenderCompletions_(); drain_err) {
+                    lane_err = drain_err;
+                }
+                m_render_lane.reset();
+            }
+        } catch (...) {
+        }
+        if (m_wait_pump_error) {
+            lane_err = lane_err ? lane_err : m_wait_pump_error;
+        }
+        return lane_err;
+    }
+
     std::error_code Application::probeFrameAdmissionPreUpdate_(bool &out_skip) {
         out_skip = false;
         if (not m_domain.m_needs_rendering or not m_renderer) {
+            return default_value_v;
+        }
+        if (renderLaneOwnsRenderer_()) {
+            // Lane branch: drain completions (a failed frame's error fails
+            // the app — it already retired lane-side), honor the latched
+            // terminal, and apply the reservation bound before any client
+            // construction. Busy never fails the app: skip the frame with
+            // its dt carried. Capacity-busy stays the single skippable
+            // outcome; the acquired credit is held from BEFORE frame
+            // construction through the settlement hook, so a third frame
+            // can never be constructed while two are outstanding.
+            if (const std::error_code completion_err = pumpRenderCompletions_()) {
+                return completion_err;
+            }
+            if (const std::error_code terminal_err = m_render_lane->terminalError()) {
+                return terminal_err;
+            }
+            // Fix-19 stop-admission-on-exit (P0): the drain above runs the
+            // settlement hook, which may have requested exit (the lane-gate
+            // settlement ends the run); a same-iteration acquire after that
+            // would construct a new frame on an exit-requested run. Refuse
+            // the credit here so exit requested during drain/settlement
+            // stops the next admission in the same iteration. First-error
+            // preserved: drain/terminal errors already returned above.
+            if (isExitRequested()) {
+                out_skip = true;
+                return default_value_v;
+            }
+            // Reconcile FIRST: a CPU-settled/GPU-pending record only leaves
+            // the ledger here, so the capacity gate must run after the drain,
+            // never before it (otherwise it can never release on the threaded
+            // path, which emits no other reconcile trigger per frame).
+            reconcileSubmittedReservations_();
+            if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
+                // The frontier mirror may have retired a still-charged record
+                // above. Only the settled/retired half leaves — a merely
+                // CPU-consumed record NEVER reopens capacity.
+                out_skip = true;
+                return default_value_v;
+            }
+            if (const std::error_code acquire_err = m_frame_reservations.acquire();
+                acquire_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+                out_skip = true;
+                return default_value_v;
+            } else if (acquire_err) [[unlikely]] {
+                return acquire_err;
+            }
+            // Keyed record replaces the lane pending counter: the credit
+            // stays charged from BEFORE construction through CPU settlement
+            // AND (for accepted submissions) GPU retirement.
+            FrameReservation &reservation = m_reservations.emplace_back();
+            reservation.m_active = true;
+            reservation.m_epoch = m_reservation_epoch;
+            reservation.m_frame_id = getFrameIndex();
+            reservation.m_state = FrameReservation::State::kLocal;
             return default_value_v;
         }
         if (const std::error_code retire_err = m_renderer->retireCompletedFrames()) {
@@ -286,6 +900,33 @@ namespace pP {
             }
             return probe_err;
         }
+        // Inline branch: the renderer's own ledger is the GPU-side truth,
+        // but construction is gated by the same main-side reservation so a
+        // third frame is never built while two are outstanding.
+        // Mirror the retirement frontier from the sweep just above, then let
+        // the settled/retired half leave before checking the bound. The
+        // frontier never manufactures values (hold seam/failed poll/removal
+        // all keep it where it last proved a real one).
+        m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
+        reconcileSubmittedReservations_();
+        if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
+            out_skip = true;
+            return default_value_v;
+        }
+        if (const std::error_code acquire_err = m_frame_reservations.acquire();
+            acquire_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+            out_skip = true;
+            return default_value_v;
+        } else if (acquire_err) [[unlikely]] {
+            return acquire_err;
+        }
+        // Same keyed record as the lane branch: the credit releases only
+        // after CPU settlement AND the matching GPU retirement.
+        FrameReservation &reservation = m_reservations.emplace_back();
+        reservation.m_active = true;
+        reservation.m_epoch = m_reservation_epoch;
+        reservation.m_frame_id = getFrameIndex();
+        reservation.m_state = FrameReservation::State::kLocal;
         return default_value_v;
     }
 
@@ -361,6 +1002,8 @@ namespace pP {
         // partial-init rollback paths; run() re-arms per epoch as well.
         resetGpuTeardownEpoch_();
         m_application_clock.reset();
+        // P2 pacer seam (once): waits stay event-driven from here on.
+        installPacerSleepOnce_();
 
         PPR_LOG(
             App, info, "starting application",
@@ -410,11 +1053,27 @@ namespace pP {
             m_services.insert_or_assign(rhi_service);
 
             auto renderer = std::make_unique<Renderer>();
-            {
-                const hal::ProfileScope scope_renderer{"App.Initialize.Renderer"};
-                PPR_RETURN_ERROR_ON_FAIL(App, renderer->initialize(*rhi_service));
+            if (m_render_lane_enabled and not m_domain.m_is_headless) {
+                // P2: the Renderer initializes ON the dedicated lane, so
+                // its owner id is the lane from birth and never migrates.
+                // All later Renderer/pass-GPU calls run there; main
+                // coordinates via the lane transports only. The init-failure
+                // defer below rolls back through shutdown(), which stops a
+                // half-started lane before services die.
+                m_renderer = std::move(renderer);
+                {
+                    const hal::ProfileScope scope_renderer{"App.Initialize.Renderer"};
+                    PPR_RETURN_ERROR_ON_FAIL(App, startRenderLane_());
+                }
+            } else {
+                // Inline reference (headless/offscreen/scripted): identical
+                // stages, same thread, no transport.
+                {
+                    const hal::ProfileScope scope_renderer{"App.Initialize.Renderer"};
+                    PPR_RETURN_ERROR_ON_FAIL(App, renderer->initialize(*rhi_service));
+                }
+                m_renderer = std::move(renderer);
             }
-            m_renderer = std::move(renderer);
         }
 
         success = true;
@@ -435,25 +1094,84 @@ namespace pP {
         // NO logging macros. PPR_RETAIN_ERROR_ON_FAIL formats via allocating
         // error_code::message(), and a throw there would escape shutdown
         // without _Exit(0xB1). Retain silently; diagnostics wait until the
-        // disposition below authorizes release.
-        if (const std::error_code teardown_err = prepareGpuTeardown_()) {
-            if (not first_err) {
-                first_err = teardown_err;
+        // disposition below authorizes release. The catch-all hardens the
+        // UNKNOWN boundary itself: no exception between classification and
+        // the fail-stop may skip _Exit.
+        try {
+            if (const std::error_code teardown_err = prepareGpuTeardown_()) {
+                if (not first_err) {
+                    first_err = teardown_err;
+                }
             }
-        }
-        if (m_gpu_teardown_disposition == GpuQuiescence::kUnknown) {
+            if (m_gpu_teardown_disposition == GpuQuiescence::kUnknown) {
+                failStopOnUnknownGpuTeardown_(m_gpu_teardown_error);
+            }
+        } catch (...) {
             failStopOnUnknownGpuTeardown_(m_gpu_teardown_error);
         }
 
         // Safe paths only from here: quiescence is proven idle or removal
-        // is confirmed, so entry/release diagnostics may log again.
-        PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
+        // is confirmed, so entry/release diagnostics may log again. The
+        // log below is best-effort: a throwing diagnostic must never skip
+        // the lane stop/join and renderer release that follow.
+        try {
+            PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
+        } catch (...) {
+        }
 
         if (m_renderer) {
-            PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_renderer->shutdown());
-            m_gpu_teardown_stages.push_back("renderer");
+            // P2 teardown order: the Renderer shuts down ON its owner lane
+            // (quiescence was established without releasing; release runs
+            // only under a safe disposition), then the lane stops and joins
+            // while the platform still pumps, before RHI/services die below.
+            if (renderLaneOwnsRenderer_()) {
+                std::error_code renderer_err{};
+                bool renderer_acknowledged = false;
+                try {
+                    renderer_err = m_render_lane->runOnLaneSync(
+                        [this]() -> std::error_code {
+                            PPR_ASSERT(m_renderer != nullptr);
+                            return m_renderer->shutdown();
+                        },
+                        &renderer_acknowledged);
+                } catch (...) {
+                    renderer_err = std::make_error_code(std::errc::state_not_recoverable);
+                }
+                // Unacknowledged completion releases nothing: the lane may
+                // still run the shutdown concurrently, so fail-stop before
+                // the release below. Silent retain — diagnostics wait until
+                // the disposition authorizes release.
+                if (not renderer_acknowledged) {
+                    failStopOnUnknownGpuTeardown_(renderer_err);
+                }
+                if (renderer_err and not first_err) {
+                    first_err = renderer_err;
+                }
+            } else {
+                PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_renderer->shutdown());
+            }
+            // Best-effort stage record (noexcept, never allocates past the
+            // helper's own guard): a throwing append here must not skip the
+            // stopRenderLane_() join and renderer release below.
+            noteGpuTeardownStageBestEffort_("renderer");
+        }
+        // The worker is gone BEFORE the renderer it references is released:
+        // the sweep/executor lambdas capture `this` and dereference
+        // m_renderer, so any lane iteration running between release and
+        // stop would assert-fire / touch freed GPU state. Stop+join first,
+        // then release the renderer, then RHI/shader/platform teardown.
+        PPR_RETAIN_ERROR_ON_FAIL(App, first_err, stopRenderLane_());
+        if (m_renderer) {
             m_renderer.reset();
         }
+        // Reservation-economy teardown: clear records, reset the main
+        // ledger and the frontier mirror only NOW — after admission stopped,
+        // every GPU-pending submission has been retired (or its loss
+        // confirmed), and the lane's results have all drained. Epoch bumps
+        // on the next run()/initialize() iff everything has settled.
+        m_reservations.clear();
+        m_frame_reservations.reset();
+        m_lane_retirement_frontier.store(kFenceValueNone, std::memory_order_release);
 
         if (m_domain.m_needs_rendering) {
             const safe_ptr<IRhiService> rhi_service = IRhiService::get();
@@ -464,7 +1182,7 @@ namespace pP {
                     PPR_VERIFY(m_services.erase(*rhi_service));
                 }
             }
-            m_gpu_teardown_stages.push_back("rhi");
+            noteGpuTeardownStageBestEffort_("rhi");
 
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
             if (m_services.tryGet<IShaderService>() == shader_service) {
@@ -478,7 +1196,7 @@ namespace pP {
 
         if (m_platform) {
             PPR_RETAIN_ERROR_ON_FAIL(App, first_err, m_platform->shutdown(*this));
-            m_gpu_teardown_stages.push_back("platform");
+            noteGpuTeardownStageBestEffort_("platform");
         }
 
         return first_err;
@@ -491,6 +1209,12 @@ namespace pP {
         m_gpu_teardown_disposition = GpuQuiescence::kUnknown;
         m_gpu_teardown_error = default_value_v;
         m_gpu_teardown_stages.clear();
+        m_wait_pump_error = default_value_v;
+        // Fresh settlement epoch: stale lane results from a finished run
+        // can never match (and so never release) a record again. Any
+        // unsettled reservation records from the previous epoch are gone —
+        // the teardown settle discarded them under a proven disposition.
+        ++m_reservation_epoch;
     }
 
     void Application::noteGpuTeardownStageBestEffort_(const char *stage) noexcept {
@@ -514,7 +1238,9 @@ namespace pP {
 
         // Stop admission permanently FIRST: no new frame may be built while
         // GPU state of unknown completion is being classified. noexcept.
-        if (m_renderer) {
+        // On the lane this runs there (no cross-thread ledger race); inline
+        // it runs here directly.
+        if (m_renderer and not renderLaneOwnsRenderer_()) {
             m_renderer->quarantineAdmission();
         }
 
@@ -540,20 +1266,75 @@ namespace pP {
 
         // Quiescence is established WITHOUT releasing anything; release
         // happens in the shutdown entries above/below, only after a safe
-        // disposition. Never signal the app fence here.
+        // disposition. Never signal the app fence here. On the lane the
+        // whole classification (quarantine + wait) runs there, so the
+        // ledger/fence are never touched from two threads at once.
         GpuQuiescenceResult quiescence{};
-        try {
-            quiescence = m_renderer->establishGpuQuiescence();
-        } catch (const std::bad_alloc &) {
-            quiescence = GpuQuiescenceResult{
-                .m_disposition = GpuQuiescence::kUnknown,
-                .m_error = std::make_error_code(std::errc::not_enough_memory),
+        if (renderLaneOwnsRenderer_()) {
+            // Fail-closed: a throwing sync primitive proves nothing either.
+            std::error_code sync_err{};
+            // Acknowledged completion is the ONLY permission to read the
+            // operation-published outcome: on timeout the lane may still
+            // execute the posted operation, so the outcome must never be
+            // read (and never lived on a panicking stack) — it travels in
+            // heap-owned storage the posted operation itself retains.
+            bool acknowledged = false;
+            struct QuiescenceHandoffState final {
+                GpuQuiescenceResult m_quiescence{};
             };
-        } catch (...) {
-            quiescence = GpuQuiescenceResult{
-                .m_disposition = GpuQuiescence::kUnknown,
-                .m_error = std::make_error_code(std::errc::state_not_recoverable),
-            };
+            // Exception boundary: the allocation lives INSIDE the try so a
+            // make_shared failure fail-stops through the same UNKNOWN path
+            // as any other handoff failure (never past it with no proof).
+            std::shared_ptr<QuiescenceHandoffState> handoff_state{};
+            try {
+                handoff_state = std::make_shared<QuiescenceHandoffState>();
+                sync_err = m_render_lane->runOnLaneSync(
+                    [this, handoff_state]() -> std::error_code {
+                        PPR_ASSERT(m_renderer != nullptr);
+                        m_renderer->quarantineAdmission();
+                        handoff_state->m_quiescence = m_renderer->establishGpuQuiescence();
+                        return handoff_state->m_quiescence.m_error;
+                    },
+                    &acknowledged);
+            } catch (...) {
+                sync_err = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            if (acknowledged) {
+                // The lane finished the operation and published the result
+                // before the handoff acknowledged: the outcome is stable.
+                // A classified outcome (e.g. kRemovalConfirmed with its own
+                // error) is preserved, never downgraded to UNKNOWN; the
+                // sync-level error is retained separately on the result.
+                quiescence = handoff_state->m_quiescence;
+                quiescence.m_error = quiescence.m_error ? quiescence.m_error : sync_err;
+            } else if (sync_err == std::make_error_code(std::errc::timed_out)) {
+                // Fail-stop BEFORE borrowed storage could expire: the
+                // timed-out operation may still run concurrently, and an
+                // atomic flag (the old lane_ran) cannot prove it didn't.
+                // The heap-owned handoff state outlives this frame.
+                failStopOnUnknownGpuTeardown_(sync_err);
+            } else {
+                // The lane never took the operation: nothing further can
+                // be proven; the disposition is UNKNOWN.
+                quiescence = GpuQuiescenceResult{
+                    .m_disposition = GpuQuiescence::kUnknown,
+                    .m_error = sync_err,
+                };
+            }
+        } else {
+            try {
+                quiescence = m_renderer->establishGpuQuiescence();
+            } catch (const std::bad_alloc &) {
+                quiescence = GpuQuiescenceResult{
+                    .m_disposition = GpuQuiescence::kUnknown,
+                    .m_error = std::make_error_code(std::errc::not_enough_memory),
+                };
+            } catch (...) {
+                quiescence = GpuQuiescenceResult{
+                    .m_disposition = GpuQuiescence::kUnknown,
+                    .m_error = std::make_error_code(std::errc::state_not_recoverable),
+                };
+            }
         }
         // Publish completion flags ONLY after classification above.
         m_gpu_teardown_disposition = quiescence.m_disposition;

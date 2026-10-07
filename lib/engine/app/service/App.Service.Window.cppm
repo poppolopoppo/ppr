@@ -30,6 +30,26 @@ export namespace pP {
 
         [[nodiscard]] virtual std::error_code waitEvents() = 0;
 
+        // P2 timed native wait: services native events until `timeout`
+        // elapses or an event arrives (whichever comes first), then
+        // returns. The default serves headless/scripted hosts with a
+        // paced no-op slice; the wakeable platform wait below builds on
+        // this. A non-positive timeout degrades to a single poll.
+        [[nodiscard]] virtual std::error_code waitEventsTimeout(TimeSpan timeout) {
+            if (timeout <= TimeSpan{}) {
+                return pollEvents();
+            }
+            std::this_thread::sleep_for(timeout);
+            return pollEvents();
+        }
+
+        // Wakes a thread parked in waitEvents/waitEventsTimeout. Safe to
+        // call from ANY thread (notably the render lane, whose only legal
+        // cross-thread signal is this function). The default is a no-op
+        // success for hosts without a native event queue.
+        virtual void postEmptyEvent() noexcept {
+        }
+
         // monitors:
         [[nodiscard]] virtual std::error_code enumerateMonitors(
             Collector<SharedMonitor> each_monitor) const noexcept = 0;

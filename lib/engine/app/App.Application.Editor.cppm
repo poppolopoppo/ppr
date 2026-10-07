@@ -4,14 +4,18 @@ export module engine.app:application_editor;
 
 import :application;
 import :frame.packet;
+import :frame.render_lane;
 import :scene.camera;
+import :renderer.grid_pass;
 import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
+import :ui.imgui;
 
 import engine.core;
 import engine.image;
 import engine.mesh;
+import engine.rhi;
 import std;
 
 export namespace pP {
@@ -20,6 +24,7 @@ export namespace pP {
     class IInputDevice;
     class InputBackgroundLatch;
     class InputMapping;
+    class IUIService;
     class TrianglePass;
     class Window;
     class WindowInputContext;
@@ -98,14 +103,80 @@ export namespace pP {
 
         [[nodiscard]] std::error_code shutdown() override;
 
+        // Durable slot outcome settlement: the diagnostics mirror that
+        // clients (Game HUD) read is stamped here and shared by both
+        // inline and threaded execution. Derived classes that override
+        // must chain this override inline (e.g. super_t::...) to keep the
+        // mirror consistent.
+        void onLaneFrameConsumed_(const RenderFrameResult &result) override;
+
     private:
         void onMainWindowFocused_(const Window &window, bool focused);
 
         [[nodiscard]] std::error_code submitSceneInstances_();
 
-        // P0 serial-explicit render consumption: the render() stage takes
-        // the owned packet built by update() (single-use, same thread).
-        [[nodiscard]] std::error_code renderPacket_(const FramePacket &packet);
+        // P2 client/lane split (explicit hooks, no wholesale virtual move):
+        // submitRenderWork_ runs on the CLIENT lane (main): it detaches the
+        // UI frame and either enqueues the owned packet (worker) or runs it
+        // inline (reference). executeRenderWork_ runs on ANY lane (worker
+        // or inline): render preparation, translator-adjacent pass GPU
+        // work, encode/submit/present. Derived hosts (TurboLarbin) extend
+        // executeRenderWork_ for lane-side work instead of moving virtuals.
+        [[nodiscard]] std::error_code submitRenderWork_(const FramePacket &packet);
+
+        // Owned per-frame pass staging payloads, built on main (scene
+        // instances by the editor, world tiles by the game's present
+        // phase, debug instances by the game). Transported to the lane
+        // inside RenderFrameRequest and applied there — the client never
+        // touches pass state directly.
+        TrianglePass::TriangleStagedFrame m_triangle_stage{};
+        GridPass::GridStagedFrame m_grid_stage{};
+
+    public:
+        // Pass staging diagnostics published by the shared inline/threaded
+        // settlement handler: every result (honouring applied, drop,
+        // obsolescence, and human-surface settling) can be distinguished.
+        // The derived client reads this mirror — never the live pass
+        // counters once the lane owns them.
+        struct RenderDiagnostics {
+            u32 m_grid_staged_tiles{0u};
+            u32 m_grid_cached_tiles{0u};
+            // Frame's retirement sweep outcome (CPU-side retirement
+            // milestone; distinct from the fence's GPU completion).
+            std::error_code m_last_sweep_error{};
+            // Font atlas version this frame's encode applied (ownership
+            // acknowledgement for the client-published atlas).
+            u64 m_ui_font_version_applied{0u};
+            // Submit fence value this frame rode (submission acceptance,
+            // independent of present verdict).
+            FenceCompletionValue m_last_submit_value{kFenceValueNone};
+        };
+        [[nodiscard]] RenderDiagnostics renderDiagnostics() const noexcept {
+            return m_diagnostics;
+        }
+
+        // Single handoff point for derived hosts: replaces the pending
+        // staged payloads for this frame. The game's present/submit phases
+        // must run between super_t::update()/render() to structurally
+        // minimize the lifetime of the editor's private staging buffer.
+        void submitGridStage(GridPass::GridStagedFrame stage) noexcept {
+            m_grid_stage = std::move(stage);
+        }
+        void submitTriangleStage(TrianglePass::TriangleStagedFrame stage) noexcept {
+            m_triangle_stage = std::move(stage);
+        }
+
+    private:
+        RenderDiagnostics m_diagnostics{};
+
+    private:
+        // Lane-side execution. Never touches the live Window, camera,
+        // input, services (resolved at install), or the live ImGui
+        // frontend — only the owned packet, the detached UI data, and
+        // lane-confined GPU state. Ownership never transfers: passes stay
+        // editor-owned, the scene stays client-owned, snapshots stay game-owned.
+        [[nodiscard]] virtual std::error_code executeRenderWork_(
+            const RenderFrameRequest &request, RenderFrameResult &out_result);
 
         // Submission acceptance is independent of present: every participant
         // stamps off the accepted SUBMIT value (lastSubmitted advancement),
@@ -114,6 +185,11 @@ export namespace pP {
 
         // Owned packet staged by update() for render(); cleared on consume.
         std::optional<FramePacket> m_frame_packet{};
+
+        // Startup-boundary service captures for the lane executor (resolved
+        // once at initialize, never mid-frame on the worker).
+        safe_ptr<IRhiService> m_lane_rhi_service{};
+        u64 m_lane_dropped_frames{0u};
 
         std::optional<mesh::SceneAsset> m_scene{};
         Array<image::ImageAsset> m_images{};

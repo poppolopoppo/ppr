@@ -186,6 +186,14 @@ namespace pP {
         class SlangRhiService final : public IRhiService {
         public:
             rhi::ComPtr<rhi::IDevice> m_device{};
+            // Ownership of the slang-rhi singleton. getRHI() hands us a
+            // process-lifetime instance; destroyRHI() frees it. We may
+            // destroy it exactly once — that single successful-initialise
+            // owns it. A secondary shutdown()/getRHI() cycle (unit tests boot
+            // and tear down GPU subsystems repeatedly) must NOT destroy it
+            // again: the freed instance is poison and the next getRHI()/init
+            // would hand the poisoned object back for member access.
+            bool m_instance_owned{false};
             // Default off; set explicitly at the application boundary before initialize().
             rhi::DebugLayerOptions m_debug_options{
                 .coreValidation = PPR_ENABLE_DEBUG,
@@ -246,6 +254,7 @@ namespace pP {
                                 RHI, error, "RHI initialization cleanup failed",
                                 {{"category", cleanup_error.category().name()}, {"cause", cleanup_error.message()}});
                         }
+                        m_instance_owned = false;
                     }
                 };
 
@@ -305,6 +314,7 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(RHI, shader_service.setTargetFormat(compile_target));
 
                 m_device = std::move(device);
+                m_instance_owned = true;
                 initialized = true;
                 PPR_LOG(
                     RHI, info, "RHI device created successfully",
@@ -323,10 +333,12 @@ namespace pP {
                 if (m_device) {
                     m_device.setNull();
                 }
-
-                const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
-                PPR_LOG(RHI, info, "RHI instance teardown", {{"result", static_cast<int>(result)}});
-                PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
+                if (m_instance_owned) {
+                    const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
+                    m_instance_owned = false;
+                    PPR_LOG(RHI, info, "RHI instance teardown", {{"result", static_cast<int>(result)}});
+                    PPR_RETURN_ERROR_ON_FAIL(RHI, make_error_code(result));
+                }
 
                 PPR_LOG(RHI, info, "RHI service shut down");
                 return default_value_v;

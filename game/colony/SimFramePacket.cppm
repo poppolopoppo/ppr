@@ -30,8 +30,11 @@ export namespace pP::colony {
     struct SimFramePacket {
         u64 m_frame_id{};
 
-        // World epoch + committed tick at capture time.
+        // World epoch + committed tick at capture time. m_seed identifies
+        // the user seed; m_world_generation is the true world identity
+        // (bumped per init/regenerate — a same-seed regeneration differs).
         u64 m_seed{};
+        u64 m_world_generation{};
         u64 m_tick{};
 
         // Panel-safe cached counters (owned copies, not live reads).
@@ -45,6 +48,12 @@ export namespace pP::colony {
         // Consumption acknowledges exactly this set; dirt that arrived
         // after capture stays pending for the next frame.
         Array<sim::ChunkPos> m_present_chunks{};
+
+        // Parallel capture for ack: the router's edit generation captured
+        // per chunk. ackPresentChunks ties a clear to the same generation,
+        // so the lane ack of a stale payload cannot accidentally clear a
+        // newer ad-hoc dirtied row sharing the same chunk.
+        Array<u64> m_present_revisions{};
 
         // Owned copy of every resident chunk coordinate at capture time.
         // Present preparation stages exactly this set: a post-capture
@@ -73,15 +82,11 @@ export namespace pP::colony {
     // (seed change) or a tick advance after capture invalidates the payload.
     [[nodiscard]] bool isSimPacketCoherent(const SimFramePacket &packet, u64 live_tick, u64 live_seed) noexcept;
 
-    // Same-thread present preparation consuming ONLY the owned packet (never
-    // the live grid): marks and acknowledges exactly the packet's present
-    // set at this defined consumption point, stages every packet-resident
-    // tile, and uploads the packet-captured cells for dirty chunks. Dirt
-    // that arrived after capture stays pending (unmarked, unacknowledged),
-    // so a post-capture producer mutation cannot alter the output.
-    // Error semantics mirror ColonyTranslator::submit: any staging/upload
-    // failure resets the translator/pass pair and returns the error, so the
-    // caller must full-refresh the NEXT frame to re-upload the world.
-    [[nodiscard]] std::error_code presentSimPacket(
-        const SimFramePacket &packet, ColonyDriver &driver, ColonyTranslator &translator, GridPass &pass);
+    // Builds the owned GridStagedFrame from the owned packet only (never the
+    // live grid); the lane replays it via GridPass::applyStagedFrame on the
+    // owner lane. The driver/dev-side present set is acknowledged at lane
+    // consumption (see onLaneFrameConsumed_), not here. On an invalid
+    // payload the stage is cleared and the error returned fail-closed; the
+    // client sets up a full-refresh + reset-caches retry.
+    [[nodiscard]] std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage);
 }

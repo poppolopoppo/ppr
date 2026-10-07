@@ -282,6 +282,7 @@ namespace pP::colony {
             return error;
         }
         m_seed = desc.m_seed;
+        ++m_world_generation;
         return {};
     }
 
@@ -460,6 +461,7 @@ namespace pP::colony {
             return error;
         }
         m_seed = seed;
+        ++m_world_generation;
         return {};
     }
 
@@ -481,6 +483,10 @@ namespace pP::colony {
 
     u64 ColonyDriver::seed() const noexcept {
         return m_seed;
+    }
+
+    u64 ColonyDriver::worldGeneration() const noexcept {
+        return m_world_generation;
     }
 
     u64 ColonyDriver::tickCount() const noexcept {
@@ -588,8 +594,8 @@ namespace pP::colony {
         return std::span<const sim::ChunkPos>{m_dig_stats.m_last_chunks.data(), m_dig_stats.m_last_chunks.size()};
     }
 
-    std::span<const sim::ChunkPos> ColonyDriver::presentDirtyChunks() const noexcept {
-        return std::span<const sim::ChunkPos>{m_present_dirty.data(), m_present_dirty.size()};
+    std::span<const ColonyDriver::DirtyChunk> ColonyDriver::presentEditsCapture() const noexcept {
+        return std::span<const ColonyDriver::DirtyChunk>{m_present_dirty.data(), m_present_dirty.size()};
     }
 
     Expected<sim::Entity> ColonyDriver::requestPath(
@@ -614,33 +620,33 @@ namespace pP::colony {
         // Presentation owns m_present_dirty only; the collider sets drain in
         // stepPhysics so cleared collider entries always reach a rebuild.
         std::error_code first_error{};
-        for (const sim::ChunkPos pos: m_present_dirty) {
-            if (const std::error_code error = translator.markChunkChanged(pos)) {
+        for (const DirtyChunk &row: m_present_dirty) {
+            if (const std::error_code error = translator.markChunkChanged(row.m_pos)) {
                 if (not first_error) {
                     first_error = error;
                 }
             }
         }
-        m_present_dirty = Array<sim::ChunkPos>{};
+        m_present_dirty = Array<DirtyChunk>{};
         return first_error;
     }
 
-    void ColonyDriver::ackPresentChunks(const std::span<const sim::ChunkPos> acked) noexcept {
+    void ColonyDriver::ackPresentChunks(const std::span<const DirtyChunk> acked) noexcept {
         if (acked.empty() or m_present_dirty.empty()) {
             return;
         }
-        Array<sim::ChunkPos> kept{};
+        Array<DirtyChunk> kept{};
         kept.reserve(m_present_dirty.size());
-        for (const sim::ChunkPos pos: m_present_dirty) {
+        for (const DirtyChunk &pending: m_present_dirty) {
             bool acknowledged = false;
-            for (const sim::ChunkPos done: acked) {
-                if (done == pos) {
+            for (const DirtyChunk &done: acked) {
+                if (done.m_pos == pending.m_pos and done.m_revision == pending.m_revision) {
                     acknowledged = true;
                     break;
                 }
             }
             if (not acknowledged) {
-                kept.push_back(pos);
+                kept.push_back(pending);
             }
         }
         m_present_dirty = std::move(kept);
@@ -720,8 +726,34 @@ namespace pP::colony {
 
     void ColonyDriver::fanOutEditChunks(const std::span<const sim::ChunkPos> touched) {
         for (const sim::ChunkPos pos: touched) {
-            if (not chunkListedU32(m_present_dirty, pos)) {
-                m_present_dirty.push_back(pos);
+            DirtyChunk *existing = nullptr;
+            for (DirtyChunk &row: m_present_dirty) {
+                if (row.m_pos == pos) {
+                    existing = &row;
+                    break;
+                }
+            }
+            DirtyChunk *history = nullptr;
+            for (DirtyChunk &row: m_present_revision_history) {
+                if (row.m_pos == pos) {
+                    history = &row;
+                    break;
+                }
+            }
+            if (existing != nullptr) {
+                existing->m_revision += 1u;
+            } else {
+                // A row that was acked away restarts from its LAST revision
+                // (never 1): revision is chunk identity across removals, so
+                // a stale ack for revision N can never match the new N.
+                const u64 base = history != nullptr ? history->m_revision : 0u;
+                m_present_dirty.push_back(DirtyChunk{.m_pos = pos, .m_revision = base + 1u});
+                existing = &m_present_dirty.back();
+            }
+            if (history != nullptr) {
+                history->m_revision = existing->m_revision;
+            } else {
+                m_present_revision_history.push_back(DirtyChunk{.m_pos = pos, .m_revision = existing->m_revision});
             }
             if (not chunkListedU32(m_collider_dirty, pos)) {
                 m_collider_dirty.push_back(pos);
@@ -740,7 +772,8 @@ namespace pP::colony {
     }
 
     void ColonyDriver::clearToolState() noexcept {
-        m_present_dirty = Array<sim::ChunkPos>{};
+        m_present_dirty = Array<DirtyChunk>{};
+        m_present_revision_history = Array<DirtyChunk>{};
         m_collider_dirty = Array<sim::ChunkPos>{};
         m_pending_digs.clear();
         m_dig_stats.m_dug_total = 0u;

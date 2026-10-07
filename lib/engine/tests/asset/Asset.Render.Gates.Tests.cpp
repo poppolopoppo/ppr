@@ -32,6 +32,10 @@ namespace pP::tests::detail {
         struct GateEditorApp : ApplicationEditor {
             explicit GateEditorApp(const std::string_view name, const std::span<const char *const> argv)
                 : ApplicationEditor(name, argv) {
+                // Inline renderer posture: the editor flow drives
+                // Renderer::renderToTexture / waitOnHost from the test
+                // thread, not the render lane.
+                setRenderLaneEnabled(false);
             }
 
             [[nodiscard]] std::error_code boot() {
@@ -1085,7 +1089,10 @@ namespace pP::tests::detail {
             GateEditorApp test_app{"AssetEditorFlow", std::span<const char *const>{}};
             PPR_TEST_ASSERT(not test_app.boot());
             PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
+                // Best-effort: never throw during unwind (an assert here
+                // while unwinding from a body failure terminates the process
+                // and hides both messages). Happy path asserts below.
+                std::ignore = test_app.teardown();
             };
 
             PPR_TEST_ASSERT(not test_app.loadScene(gateMeshDir(), "textured_box.gltf"));
@@ -1110,7 +1117,7 @@ namespace pP::tests::detail {
             const auto rhi = test_app.getServices().get<IRhiService>();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
-            const Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 256u);
+            Expected<rhi::ComPtr<rhi::ITexture>> target = makeRenderTarget_(device, 256u);
             PPR_TEST_ASSERT(target.has_value());
             Renderer &renderer = test_app.getRenderer();
             PPR_TEST_ASSERT(not renderer.renderToTexture(
@@ -1121,14 +1128,24 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pixels.has_value());
             PPR_TEST_ASSERT(spread_(gateTexel_(*pixels, 128u, 128u)) > 12u);
 
-            const auto ui = test_app.getServices().get<IUIService>();
-            PPR_TEST_ASSERT(ui.isValid());
-            ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui->getContext()));
-            static bool show_demo_window{true};
-            ImGui::ShowDemoWindow(&show_demo_window);
-            PPR_TEST_ASSERT(not test_app.draw());
+            {
+                // Scope the UI service safe_ptr: teardown destroys the service,
+                // so no observers may outlive the in-frame draw below.
+                const auto ui = test_app.getServices().get<IUIService>();
+                PPR_TEST_ASSERT(ui.isValid());
+                ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui->getContext()));
+                static bool show_demo_window{true};
+                ImGui::ShowDemoWindow(&show_demo_window);
+                PPR_TEST_ASSERT(not test_app.draw());
+                ImGui::SetCurrentContext(nullptr);
+            }
 
             PPR_TEST_ASSERT(not test_app.unloadScene());
+            // Release the device ref BEFORE teardown: the render target holds a
+            // DeviceChild ref and RHI destroy asserts on live children (same
+            // contract as the frame-fence EditorShutdownHarness).
+            target = Expected<rhi::ComPtr<rhi::ITexture>>{};
+            PPR_TEST_ASSERT(not test_app.teardown());
         };
     } // namespace Gate
 } // namespace pP::tests::detail

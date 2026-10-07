@@ -53,14 +53,16 @@ namespace pP::colony {
         SimFramePacket packet{};
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
+        packet.m_world_generation = driver.worldGeneration();
         packet.m_tick = driver.tickCount();
         packet.m_dig_total = driver.digTotal();
         packet.m_agent_count = static_cast<u32>(driver.agentSummaries().size());
         packet.m_path_counts = driver.pathCounts();
         packet.m_errands = driver.errandCount();
         packet.m_full_refresh = full_refresh;
-        for (const sim::ChunkPos chunk: driver.presentDirtyChunks()) {
-            packet.m_present_chunks.push_back(chunk);
+        for (const ColonyDriver::DirtyChunk &row: driver.presentEditsCapture()) {
+            packet.m_present_chunks.push_back(row.m_pos);
+            packet.m_present_revisions.push_back(row.m_revision);
         }
         const sim::ChunkGrid &grid = driver.grid();
         for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
@@ -86,34 +88,43 @@ namespace pP::colony {
         return packet;
     }
 
-    bool isSimPacketCoherent(const SimFramePacket &packet, const u64 live_tick, const u64 live_seed) noexcept {
-        return packet.m_tick == live_tick and packet.m_seed == live_seed;
+    bool isSimPacketCoherent(
+        const SimFramePacket &packet, const u64 live_tick, const u64 live_world_generation) noexcept {
+        return packet.m_tick == live_tick and packet.m_world_generation == live_world_generation;
     }
 
-    std::error_code presentSimPacket(
-        const SimFramePacket &packet, ColonyDriver &driver, ColonyTranslator &translator, GridPass &pass) {
-        // Selective acknowledgement at the defined consumption point: mark
-        // and ack ONLY the captured present set. Dirt that arrived after
-        // capture stays pending in the driver (unmarked here) for the next
-        // frame, so the upload set below — read from packet cells only —
-        // and the ack set always agree. A mark failure acks nothing, so the
-        // captured dirt is retained for retry instead of being dropped.
-        for (const sim::ChunkPos pos: packet.m_present_chunks) {
-            if (const std::error_code error = translator.markChunkChanged(pos)) {
-                return error;
-            }
+    std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage) {
+        // Owned payload only: no driver ack, no translator contact, and no
+        // pass mutation happen on the client. The pass-side contact runs
+        // on the pass's owner lane via GridPass::applyStagedFrame.
+        // The consumption-ack manifest rides inside the owned stage: the
+        // lane only round-trips it into the RenderFrameResult, and the
+        // derived owner consumes it at settlement. Derived from the owned
+        // packet only — never the live driver state.
+        stage.m_full_refresh = packet.m_full_refresh;
+        stage.m_ack_seed = packet.m_world_generation;
+        if (packet.m_present_chunks.size() != packet.m_present_revisions.size()) [[unlikely]] {
+            stage.m_ack_chunk_ids.clear();
+            stage.m_ack_revisions.clear();
+            return std::make_error_code(std::errc::invalid_argument);
         }
-        driver.ackPresentChunks(
-            std::span<const sim::ChunkPos>{packet.m_present_chunks.data(), packet.m_present_chunks.size()});
+        stage.m_ack_chunk_ids.clear();
+        stage.m_ack_chunk_ids.reserve(packet.m_present_chunks.size());
+        stage.m_ack_revisions.clear();
+        stage.m_ack_revisions.reserve(packet.m_present_revisions.size());
+        for (u64 i = 0u; i < packet.m_present_chunks.size(); ++i) {
+            stage.m_ack_chunk_ids.push_back(sim::chunkIndexOf(packet.m_present_chunks[i]));
+            stage.m_ack_revisions.push_back(packet.m_present_revisions[i]);
+        }
 
         // Stage exactly the capture-time residency. Dirty marks come from
         // the packet (or the full-refresh flag), never from translator or
         // live state, so post-capture mutation cannot alter the frame.
-        Array<GridTileSubmission> tiles{};
-        tiles.reserve(packet.m_resident_chunks.size());
+        stage.m_tiles.clear();
+        stage.m_tiles.reserve(packet.m_resident_chunks.size());
         for (const sim::ChunkPos pos: packet.m_resident_chunks) {
             const bool dirty = packet.m_full_refresh or containsChunk(packet.m_present_chunks, pos);
-            tiles.push_back(
+            stage.m_tiles.push_back(
                 GridTileSubmission{
                     .m_chunk_id = sim::chunkIndexOf(pos),
                     .m_tile_range = tileRange(pos),
@@ -121,50 +132,47 @@ namespace pP::colony {
                     .m_material_id = 0u,
                 });
         }
-        if (const std::error_code error = pass.submitTiles(
-                std::span<const GridTileSubmission>{tiles.data(), tiles.size()})) [[unlikely]] {
-            translator.reset(pass);
-            return error;
-        }
 
-        // Upload captured contents for dirty chunks only; clean chunks keep
-        // serving from the pass cache. A dirty chunk without captured cells
-        // (or with a corrupt payload) fails closed before touching the pass.
-        Array<u16> scratch{};
-        for (const GridTileSubmission &tile: tiles) {
+        // Validate + convert the captured contents now so a corrupt payload
+        // fails closed on the client (never as a half-applied pass). The
+        // converted u16 words and the one-element tile payload travel as
+        // owned copies, ready for applyStagedFrame's requestUpload call.
+        stage.m_uploads.clear();
+        stage.m_uploads.reserve(packet.m_present_chunks.size() + packet.m_chunk_cells.size());
+        for (const GridTileSubmission &tile: stage.m_tiles) {
             if (tile.m_dirty_mask == 0u) {
                 continue;
             }
             const sim::ChunkPos pos{tile.m_chunk_id % sim::kChunksPerEdge, tile.m_chunk_id / sim::kChunksPerEdge};
             const Array<sim::Cell> *const cells = findCells(packet.m_chunk_cells, pos);
             if (cells == nullptr or cells->size() != sim::kCellsPerChunk) [[unlikely]] {
-                translator.reset(pass);
+                stage.m_tiles.clear();
+                stage.m_uploads.clear();
+                stage.m_full_refresh = false;
+                stage.m_ack_seed = 0u;
+                stage.m_ack_chunk_ids.clear();
+                stage.m_ack_revisions.clear();
                 return std::make_error_code(std::errc::invalid_argument);
             }
-            if (const std::error_code error = convertCells(*cells, scratch)) [[unlikely]] {
-                translator.reset(pass);
+            Array<u16> converted{};
+            if (const std::error_code error = convertCells(*cells, converted)) [[unlikely]] {
+                stage.m_tiles.clear();
+                stage.m_uploads.clear();
+                stage.m_full_refresh = false;
+                stage.m_ack_seed = 0u;
+                stage.m_ack_chunk_ids.clear();
+                stage.m_ack_revisions.clear();
                 return error;
             }
-            GridTilePayload payload{};
-            payload.m_rect[0] = static_cast<float>(tile.m_tile_range.m_min_x);
-            payload.m_rect[1] = static_cast<float>(tile.m_tile_range.m_min_y);
-            payload.m_rect[2] = static_cast<float>(tile.m_tile_range.m_max_x);
-            payload.m_rect[3] = static_cast<float>(tile.m_tile_range.m_max_y);
-            payload.m_material = 0u;
-            const Expected<u32> uploaded = pass.requestUpload(
-                GridUploadRequest{
-                    .m_chunk_id = tile.m_chunk_id,
-                    .m_tile_data_view = std::span<const GridTilePayload>{&payload, 1u},
-                    .m_cell_materials = std::span<const u16>{scratch.data(), scratch.size()},
-                });
-            if (not uploaded) [[unlikely]] {
-                translator.reset(pass);
-                return uploaded.error();
-            }
-            if (*uploaded != 1u) [[unlikely]] {
-                translator.reset(pass);
-                return std::make_error_code(std::errc::state_not_recoverable);
-            }
+            GridPass::GridStagedUpload upload{};
+            upload.m_chunk_id = tile.m_chunk_id;
+            upload.m_payload.m_rect[0] = static_cast<float>(tile.m_tile_range.m_min_x);
+            upload.m_payload.m_rect[1] = static_cast<float>(tile.m_tile_range.m_min_y);
+            upload.m_payload.m_rect[2] = static_cast<float>(tile.m_tile_range.m_max_x);
+            upload.m_payload.m_rect[3] = static_cast<float>(tile.m_tile_range.m_max_y);
+            upload.m_payload.m_material = 0u;
+            upload.m_cell_materials = std::move(converted);
+            stage.m_uploads.push_back(std::move(upload));
         }
         return {};
     }

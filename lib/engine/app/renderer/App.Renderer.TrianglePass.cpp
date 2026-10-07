@@ -550,6 +550,15 @@ namespace pP {
         m_submitted_instances.clear();
     }
 
+    std::error_code TrianglePass::applyStagedFrame(const TriangleStagedFrame &stage) {
+        clearInstances();
+        for (const SubmittedInstance &instance: stage.m_instances) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                TrianglePass, submitInstance(instance.m_bag, instance.m_material, instance.m_model));
+        }
+        return default_value_v;
+    }
+
     // Pure, CPU-only, and unit-tested without a device: batches the
     // per-instance draws that share a pipeline variant, a resolved buffer pair,
     // and an identical geometry range, then assigns each group a contiguous

@@ -57,6 +57,16 @@ export namespace pP {
 
         [[nodiscard]] std::error_code waitEvents() override;
 
+        // Timed native wait: glfwWaitEventsTimeout with a clamped positive
+        // bound (GLFW averages sleeps, never overshoots the deadline by
+        // more than a scheduling quantum). Woken early by postEmptyEvent
+        // from any thread (credit return, exit, config change).
+        [[nodiscard]] std::error_code waitEventsTimeout(TimeSpan timeout) override;
+
+        // Any-thread wakeup for the timed wait above. The ONLY platform
+        // call the render lane may legally make.
+        void postEmptyEvent() noexcept override;
+
         // monitors:
         [[nodiscard]] std::error_code enumerateMonitors(Collector<SharedMonitor> each_monitor) const noexcept override;
 

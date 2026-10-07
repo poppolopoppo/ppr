@@ -2309,6 +2309,10 @@ namespace pP::colony {
                           .m_needs_user_interface = false,
                       },
                       "colony-smoke", argv) {
+                // P2 posture (deliberate): headless single-frame offscreen
+                // host — the render lane stays off by domain default and
+                // this host's own render() override runs inline on main
+                // with identical stages. No per-frame transport, no thread.
             }
 
             [[nodiscard]] u32 visibleTiles() const noexcept {

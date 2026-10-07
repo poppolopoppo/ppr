@@ -5,17 +5,21 @@ module;
 module engine.app;
 
 import :application_editor;
+import :frame.render_lane;
 import :input.action;
 import :input.device;
 import :input.key;
 import :input.listener;
 import :input.routing;
 import :platform.glfw.input;
+import :renderer;
 import :renderer.grid_pass;
 import :renderer.frame_fence;
 import :renderer.triangle_pass;
+import :renderer.types;
 import :scene.camera.controller;
 import :service.input;
+import :service.ui;
 import :ui.imgui;
 import :window.viewport;
 
@@ -25,6 +29,34 @@ import engine.mesh;
 import std;
 
 namespace pP {
+    namespace {
+        // Every settlement path — applied, minimized, obsolete, cancelled, drop
+        // in transition, or worker error — must carry the same grid-payload
+        // manifest the client staged, so the derived host never has to guess
+        // which slot a global flag went with. GPU retirement stays a distinct
+        // milestone (m_submit_value via the fence); this is the CPU-consumption
+        // sideband. Allocating (the ack arrays copy) and therefore NOT
+        // noexcept: allocation failure throws bad_alloc to the existing
+        // executor/teardown boundaries, which convert it to
+        // not_enough_memory — never terminate.
+        void stampGridEcho(const GridPass::GridStagedFrame &stage, RenderFrameResult &result) {
+            result.m_grid_reset_caches = stage.m_reset_caches;
+            result.m_grid_full_refresh = stage.m_full_refresh;
+            result.m_grid_ack_seed = stage.m_ack_seed;
+            result.m_grid_ack_chunk_ids = stage.m_ack_chunk_ids;
+            result.m_grid_ack_revisions = stage.m_ack_revisions;
+        }
+    } // namespace
+
+    // UI frontend/GPU split handoffs (defined in App.UI.ImGui.cpp with
+    // external linkage): the Editor runs Detached + Context halves on main
+    // and the GPU half on the owner lane. Forward-declared here so this
+    // implementation unit stays within its allowed scope (no service-header
+    // change); the concrete type never leaks across the boundary.
+    [[nodiscard]] std::error_code shutdownImGuiFrontendDetachedOnMain(class IUIService &ui);
+    [[nodiscard]] std::error_code releaseImGuiGpuResourcesOnOwnerLane(class IUIService &ui);
+    [[nodiscard]] std::error_code shutdownImGuiFrontendContextOnMain(class IUIService &ui);
+
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
 
@@ -139,6 +171,15 @@ namespace pP {
         const safe_ptr<IRhiService> rhi_service{app_services.inject()};
         const safe_ptr<IShaderService> shader_service{app_services.inject()};
 
+        // Quiescent-startup handoff (explicit): pass + UI GPU objects
+        // initialize here on main while the render lane owns no work yet —
+        // no frame is queued, no sweep runs, and the executor below is
+        // installed only afterwards. This quiescent start is the handoff
+        // permission for main-side creation; it does NOT mean all later
+        // lifecycle runs on one lane. Steady-state pass mutations run on
+        // the owner lane via staged payloads (executeRenderWork_), UI GPU
+        // work runs on the encode lane via detached data, and teardown
+        // releases split frontend (main) from GPU (owner lane) below.
         m_triangle_pass = std::make_unique<TrianglePass>();
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->initialize(*rhi_service, *shader_service, getContentDir()));
 
@@ -203,6 +244,27 @@ namespace pP {
         main_window->m_when_focused.subscribe<&ApplicationEditor::onMainWindowFocused_>(this);
 
         getServices().insert_or_assign(safe_ptr(m_ui_service));
+
+        // P2 lane executor install (startup boundary): the worker consumes
+        // owned packets + detached UI through this hook. Services resolve
+        // once here, never mid-frame on the worker. Passes stay
+        // editor-owned; the lane is only their execution affinity.
+        // Captured at the service boundary for executeRenderWork_: on the
+        // worker this is the only legal source (never read the store from
+        // the lane); on the inline path it is the same main-owned service,
+        // so the inline branch decodes it identically.
+        m_lane_rhi_service = getServices().tryGet<IRhiService>();
+        if (renderLaneOwnsRenderer_()) {
+            renderLane()->setExecutor(
+                [this](const RenderFrameRequest &request, RenderFrameResult &result) -> std::error_code {
+                    if (not request.m_packet) [[unlikely]] {
+                        result.m_dropped = true;
+                        return std::make_error_code(std::errc::invalid_argument);
+                    }
+                    stampGridEcho(request.m_grid_stage, result);
+                    return executeRenderWork_(request, result);
+                });
+        }
         return default_value_v;
     }
 
@@ -314,6 +376,12 @@ namespace pP {
 
     std::error_code ApplicationEditor::unloadScene() {
         std::error_code first_err{};
+        // Release on main: the GpuCaches that own these scene handles have
+        // main-thread affinity (pass caches are main-initialized). The
+        // per-frame instance list is a lane-side replay now: dropping the
+        // client stage below empties it next execute. Explicit
+        // affinity-and-quiescence contract: startup and quiesced/shutdown
+        // only — mid-run use rides the staged payload on the owner lane.
         if (m_scene.has_value() and m_triangle_pass) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->releaseScene(m_uploaded_scene));
         }
@@ -321,16 +389,15 @@ namespace pP {
         m_uploaded_scene = TrianglePass::UploadedScene{};
         m_images.clear();
         m_scene.reset();
-
-        if (m_triangle_pass) {
-            m_triangle_pass->clearInstances();
-        }
+        m_triangle_stage.m_instances.clear();
         return first_err;
     }
 
     std::error_code ApplicationEditor::submitSceneInstances_() {
         const hal::ProfileScope profile_scope{"App.Editor.Update.SubmitInstances", "Update"};
-        m_triangle_pass->clearInstances();
+        // Stage owned instances instead of mutating the pass: the lane
+        // replays this payload onto the pass inside executeRenderWork_.
+        m_triangle_stage.m_instances.clear();
 
         const mesh::SceneAsset &scene = *m_scene;
 
@@ -348,8 +415,9 @@ namespace pP {
                     return joined.error();
                 }
 
-                PPR_RETURN_ERROR_ON_FAIL(
-                    Editor, m_triangle_pass->submitInstance(joined->m_bag, joined->m_material, world));
+                m_triangle_stage.m_instances.push_back(
+                    TrianglePass::SubmittedInstance{
+                        .m_bag = joined->m_bag, .m_material = joined->m_material, .m_model = world});
             }
         }
         return default_value_v;
@@ -369,17 +437,120 @@ namespace pP {
         // and are never used as proof on the UNKNOWN path. The boundary is
         // log-free (see Application::shutdown): the quiescence error is
         // retained silently so a throw during message formatting cannot
-        // escape before the fail-stop below.
-        if (const std::error_code teardown_err = prepareGpuTeardown_()) {
-            if (not first_err) {
-                first_err = teardown_err;
+        // escape before the fail-stop below. The catch-all hardens the
+        // UNKNOWN boundary itself: no exception between classification and
+        // the fail-stop may skip _Exit.
+        try {
+            if (const std::error_code teardown_err = prepareGpuTeardown_()) {
+                if (not first_err) {
+                    first_err = teardown_err;
+                }
             }
-        }
-        if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
+            if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
+                failStopOnUnknownGpuTeardown_(first_err);
+            }
+        } catch (...) {
             failStopOnUnknownGpuTeardown_(first_err);
         }
         const bool device_loss_confirmed = gpuTeardownDisposition() == GpuQuiescence::kRemovalConfirmed;
-        if (device_loss_confirmed) {
+        // P2 teardown order: settle lane packets first (no new lane frame
+        // can start afterwards), then release pass GPU state + surfaces ON
+        // the lane in reverse order. The UI service shuts down on main
+        // below (ImGui context is client-owned); windows die on main after
+        // the base shutdown joins the lane.
+        bool lane_releases_done = false;
+        if (renderLaneOwnsRenderer_()) {
+            // Gated settle: the drain's handoff error is retained and an
+            // unacknowledged drain escalates (no release behind outstanding
+            // handoff), mirroring the acknowledged-handoff rule below.
+            bool drain_acknowledged = false;
+            const std::error_code drain_err = renderLane()->drainQueuedFrames(&drain_acknowledged);
+            if (drain_err and not first_err) {
+                first_err = drain_err;
+            }
+            if (not drain_acknowledged) {
+                failStopOnUnknownGpuTeardown_(
+                    drain_err ? drain_err : std::make_error_code(std::errc::operation_canceled));
+            }
+            std::error_code lane_sync_err{};
+            // Acknowledged completion (the lane ran the release) is the
+            // only permission to treat its result as an operation error;
+            // a handoff failure means the releases may still be pending.
+            bool lane_acknowledged = false;
+            try {
+                lane_sync_err = renderLane()->runOnLaneSync(
+                    [this, device_loss_confirmed]() -> std::error_code {
+                        std::error_code lane_err{};
+                        if (device_loss_confirmed) {
+                            PPR_LOG(Editor, warning, "shutdown idle wait failed, confirming device loss", {});
+                            getRenderer().notifyDeviceLost();
+                            if (m_grid_pass) {
+                                PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->notifyDeviceLost());
+                            }
+                            if (m_triangle_pass) {
+                                PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->notifyDeviceLost());
+                            }
+                        }
+                        // Release scene GPU handles while the pass caches are
+                        // still alive, before the pass shutdown below.
+                        if (m_scene.has_value() and m_triangle_pass) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->releaseScene(m_uploaded_scene));
+                        }
+                        if (m_grid_pass) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->shutdown());
+                        }
+                        if (m_triangle_pass) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->shutdown());
+                        }
+                        return lane_err;
+                    },
+                    &lane_acknowledged);
+            } catch (...) {
+                lane_sync_err = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            // UNKNOWN retain-and-fail-stop, log-free and BEFORE any
+            // PPR_RETAIN_ERROR_ON_FAIL(message()-allocating) diagnostic and
+            // BEFORE dependent destruction: an incomplete lane handoff (or
+            // a lane whose terminal error latched without a confirmed
+            // removal behind it) means the lane may still hold borrowed
+            // captures — never reset passes/scene/services behind live work.
+            // Process-level fail-stop, as in Application::shutdown's UNKNOWN
+            // route. Owners are retained (no reset runs) for the OS.
+            if (not lane_acknowledged) {
+                failStopOnUnknownGpuTeardown_(lane_sync_err);
+            }
+            // Completed handoff: the release operation's error follows
+            // normal propagation (retained silently — a throwing
+            // message() must never escape shutdown).
+            if (lane_sync_err and not first_err) {
+                first_err = lane_sync_err;
+            }
+            // A sticky lane terminal is missing proof ONLY when no
+            // acknowledged removal stands behind it. After a completed
+            // RemovalConfirmed handoff the same latch is the proof itself —
+            // preserve the confirmed removal, never reinterpret it as UNKNOWN.
+            if (const std::error_code terminal = renderLane()->terminalError()) {
+                if (not device_loss_confirmed) {
+                    failStopOnUnknownGpuTeardown_(terminal);
+                }
+            }
+            // CPU-side scene clear on main; the guarded blocks below observe
+            // the resets and skip (no double release).
+            m_uploaded_scene = TrianglePass::UploadedScene{};
+            m_images.clear();
+            m_scene.reset();
+            if (m_triangle_pass) {
+                m_triangle_pass->clearInstances();
+            }
+            m_grid_pass.reset();
+            m_triangle_pass.reset();
+            lane_releases_done = true;
+        }
+        // The captured lane/inline RHI service is detached on every path:
+        // the engine tears the service down below and the safe_ptr must not
+        // outlive it on the inline route either.
+        m_lane_rhi_service.reset();
+        if (device_loss_confirmed and not lane_releases_done and not renderLaneOwnsRenderer_()) {
             PPR_LOG(Editor, warning, "shutdown idle wait failed, confirming device loss", {});
             getRenderer().notifyDeviceLost();
             if (m_grid_pass) {
@@ -391,8 +562,9 @@ namespace pP {
         }
 
         // Release scene GPU handles while the pass caches are still alive,
-        // before the §2.4 pass shutdown below.
-        if (m_scene.has_value()) {
+        // before the §2.4 pass shutdown below. Skipped when the lane already
+        // released them above (resets make every guard below a no-op).
+        if (m_scene.has_value() and not lane_releases_done) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, unloadScene());
         }
         noteTeardownStage_("scene");
@@ -419,17 +591,50 @@ namespace pP {
                 PPR_LOG(Editor, warning, "ui service was not registered");
             }
 
-            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_ui_service->shutdown());
+            // Frontend/GPU split (client-owned frontend stays on main):
+            // detach the input listener + consume gating on main first, so
+            // no client callback fires while the worker releases GPU state;
+            // release GPU objects on the owner lane after quiescence (the
+            // acknowledged handoff is the only permission to treat the
+            // result as an operation error); destroy the live ImGui context
+            // on main last. Quiescence permits the GPU release — it never
+            // migrates frontend destruction to the worker.
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, shutdownImGuiFrontendDetachedOnMain(*m_ui_service));
+            if (renderLaneOwnsRenderer_()) {
+                std::error_code ui_err{};
+                bool ui_acknowledged = false;
+                try {
+                    ui_err = renderLane()->runOnLaneSync(
+                        [this]() -> std::error_code { return releaseImGuiGpuResourcesOnOwnerLane(*m_ui_service); },
+                        &ui_acknowledged);
+                } catch (...) {
+                    ui_err = std::make_error_code(std::errc::state_not_recoverable);
+                }
+                // Incomplete handoff → retain the owner (no reset below) and
+                // fail-stop; a completed release's error propagates.
+                // Dependent destruction (context destroy + reset below)
+                // runs only after this acknowledgement.
+                if (not ui_acknowledged) {
+                    failStopOnUnknownGpuTeardown_(ui_err);
+                }
+                if (ui_err and not first_err) {
+                    first_err = ui_err;
+                }
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, shutdownImGuiFrontendContextOnMain(*m_ui_service));
+            } else {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, releaseImGuiGpuResourcesOnOwnerLane(*m_ui_service));
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, shutdownImGuiFrontendContextOnMain(*m_ui_service));
+            }
             m_ui_service.reset();
         }
         noteTeardownStage_("ui");
 
-        if (m_grid_pass) {
+        if (m_grid_pass and not lane_releases_done) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->shutdown());
             m_grid_pass.reset();
         }
 
-        if (m_triangle_pass) {
+        if (m_triangle_pass and not lane_releases_done) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->shutdown());
             m_triangle_pass.reset();
         }
@@ -468,9 +673,36 @@ namespace pP {
             // Release the surface while the renderer still owns the queue;
             // the window handle dies in destroyWindow below. Skipped after
             // confirmed loss: notifyDeviceLost above already released every
-            // surface without touching the device.
+            // surface without touching the device. On the lane the release
+            // runs there (by handle — the live Window is never touched off
+            // main); inline it runs here directly.
             if (not device_loss_confirmed) {
-                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, getRenderer().destroyWindowSurface(*main_window));
+                if (renderLaneOwnsRenderer_()) {
+                    const WindowHandle doomed_handle = main_window->m_handle;
+                    std::error_code surface_err{};
+                    bool surface_acknowledged = false;
+                    try {
+                        surface_err = renderLane()->runOnLaneSync(
+                            [this, doomed_handle]() -> std::error_code {
+                                return getRenderer().destroyWindowSurface(doomed_handle);
+                            },
+                            &surface_acknowledged);
+                    } catch (...) {
+                        surface_err = std::make_error_code(std::errc::state_not_recoverable);
+                    }
+                    // Incomplete handoff → retain the window/renderer (no
+                    // destroyWindow/reset below) and fail-stop BEFORE the
+                    // window destruction; a completed release's error
+                    // propagates normally.
+                    if (not surface_acknowledged) {
+                        failStopOnUnknownGpuTeardown_(surface_err);
+                    }
+                    if (surface_err and not first_err) {
+                        first_err = surface_err;
+                    }
+                } else {
+                    PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, getRenderer().destroyWindowSurface(*main_window));
+                }
             }
 
             IWindowService &window_service = *getPlatform().getWindowService();
@@ -522,12 +754,12 @@ namespace pP {
         // virtual stage (busy frames never reach update), so the packet is
         // always built here. The Renderer re-checks admission at submit time
         // as the defensive enforcement backstop (quarantine/terminal
-        // included); capacity-busy there retires as a dropped frame in
-        // renderPacket_, never an app failure.
+        // included); capacity-busy there retires as a dropped frame in the
+        // execute step, never an app failure.
 
         // P0 serial-explicit build-packet stage (same thread): copy the
         // camera snapshot, viewport (+ revision), and window metadata into
-        // owned packet storage BEFORE pass staging. Pass updates below
+        // owned packet storage BEFORE pass staging. Owner-lane pass updates
         // consume the packet-owned snapshot — never the live camera — so a
         // post-capture producer mutation cannot alter render preparation.
         m_frame_packet = makeFramePacket(
@@ -535,15 +767,29 @@ namespace pP {
             m_main_viewport->getViewport(), m_main_viewport->getViewportRevision(), m_main_viewport->getWindow());
         // Generational surface claim at capture: the consume path rejects
         // a stale packet before acquisition. First frame observes
-        // kSurfaceGenerationNone (no record yet) and always accepts.
-        m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
-            m_main_viewport->getWindow().m_handle);
+        // kSurfaceGenerationNone (no record yet) and always accepts. On the
+        // lane the mirror (fed by lane results) is the hint; the lane
+        // re-verifies every claim against the live record at submit — main
+        // never touches Renderer state while the lane owns it.
+        if (renderLaneOwnsRenderer_()) {
+            m_frame_packet->m_surface_generation = laneSurfaceGeneration(m_main_viewport->getWindow().m_handle);
+        } else {
+            m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
+                m_main_viewport->getWindow().m_handle);
+        }
 
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(dt, m_frame_packet->m_camera));
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(dt, m_frame_packet->m_camera));
-
+        // P2 pass-affinity: pass mutations run ON the owner lane (worker
+        // or inline) inside executeRenderWork_ via the owned staged
+        // payloads — the client only builds the owned payload here and
+        // never touches pass state (m_camera_view / m_submitted_tiles /
+        // m_submitted_instances / tile caches).
         if (m_scene.has_value()) {
             PPR_RETURN_ERROR_ON_FAIL(Editor, submitSceneInstances_());
+        } else {
+            // No scene: the staging payload is empty so the lane replay
+            // clears the per-frame instance list, mirroring the old
+            // clearInstances-on-unload edge.
+            m_triangle_stage.m_instances.clear();
         }
 
         if (m_ui_service) [[likely]] {
@@ -565,7 +811,30 @@ namespace pP {
         }
         const FramePacket packet = *m_frame_packet;
         m_frame_packet.reset();
-        return renderPacket_(packet);
+        return submitRenderWork_(packet);
+    }
+
+    void ApplicationEditor::onLaneFrameConsumed_(const RenderFrameResult &result) {
+        // Chain the base settlement contract first: reconciles the
+        // construction-reservation credit against the lane's settlement.
+        // A stale result (foreign epoch) never reaches diagnostics or edit
+        // acks: the consumption slot that fell out of order was for ANOTHER
+        // run, so validating it against the current packet would cross-wire.
+        // GPU retirement stays the fence/ledger's milestone, never this hook:
+        // the consumption ack says the WORLD EDIT applied; it does NOT say
+        // the GPU finished, nor release a GPU-pending construction credit.
+        // A stale result (foreign epoch) neither releases a credit in the
+        // base hook nor acks world edits/mirrors here: the settlement
+        // belongs to another run, and nothing it posted is applies here.
+        if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
+            return;
+        }
+        Application::onLaneFrameConsumed_(result);
+        m_diagnostics.m_grid_staged_tiles = result.m_grid_staged_tiles;
+        m_diagnostics.m_grid_cached_tiles = result.m_grid_cached_tiles;
+        m_diagnostics.m_last_sweep_error = result.m_sweep_error;
+        m_diagnostics.m_ui_font_version_applied = result.m_ui_font_version_applied;
+        m_diagnostics.m_last_submit_value = result.m_submit_value;
     }
 
     void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) {
@@ -588,23 +857,210 @@ namespace pP {
         }
     }
 
-    std::error_code ApplicationEditor::renderPacket_(const FramePacket &packet) {
-        Renderer &renderer = getRenderer();
-
-        // Cell uploads write a mapped atlas shared with earlier GPU frames.
-        // Stage and snapshot updates happen in update(); fence and publish
-        // pending visible cells before opening the surface render pass.
-        const safe_ptr<IRhiService> rhi_service = getServices().tryGet<IRhiService>();
-        if (not rhi_service) [[unlikely]] {
+    std::error_code ApplicationEditor::submitRenderWork_(const FramePacket &packet) {
+        // CLIENT lane (main): detach the UI frame, then hand the owned
+        // packet to the worker — or run it inline when no lane owns the
+        // Renderer. Either way the same execute step runs exactly once.
+        if (not hasRenderTarget(packet)) {
+            // Durable slot outcome: no render target ⇒ dropped at admission,
+            // and the staged payload never applied. The consumption hook
+            // still fires so armed flags survive and no driver ack rides
+            // a non-applied slot.
+            RenderFrameResult transient{};
+            transient.m_frame_id = packet.m_frame_id;
+            transient.m_dropped = true;
+            transient.m_reservation_epoch = reservationEpoch_();
+            transient.m_reservation_frame_id = packet.m_frame_id;
+            try {
+                stampGridEcho(m_grid_stage, transient);
+            } catch (const std::bad_alloc &) {
+                // OOM while echoing the manifest: still settle the slot
+                // (never shed a credit) with the OOM error and no manifest,
+                // mirroring the lane drain fallback.
+                transient.m_error = std::make_error_code(std::errc::not_enough_memory);
+                onLaneFrameConsumed_(transient);
+                return transient.m_error;
+            } catch (...) {
+                transient.m_error = std::make_error_code(std::errc::state_not_recoverable);
+                onLaneFrameConsumed_(transient);
+                return transient.m_error;
+            }
+            onLaneFrameConsumed_(transient);
+            return default_value_v;
+        }
+        if (not m_ui_service) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }
 
-        // Explicit non-rendering outcome for zero-size/minimized surfaces:
+        // Client completes ImGui::Render() and publishes detached owned
+        // data; the worker never sees the live context/IO after this.
+        DetachedUiDrawData detached{};
+        detached.m_frame_id = packet.m_frame_id;
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->buildDetachedUiFrame(detached));
+
+        if (renderLaneOwnsRenderer_()) {
+            RenderFrameRequest request{};
+            try {
+                request.m_packet = std::make_shared<const FramePacket>(packet);
+                request.m_ui = std::move(detached);
+                request.m_grid_stage = std::move(m_grid_stage);
+                request.m_triangle_stage = std::move(m_triangle_stage);
+            } catch (const std::bad_alloc &) {
+                return std::make_error_code(std::errc::not_enough_memory);
+            } catch (...) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+            // Tag the frame with its construction epoch + id so the lane
+            // result posts back the same identity: the owner matches it
+            // against the main-side reservation record and never releases
+            // another run's credit on a floating/stale settlement.
+            request.m_reservation_epoch = reservationEpoch_();
+            request.m_reservation_frame_id = packet.m_frame_id;
+            // Capture the per-slot settlement manifest BEFORE the request
+            // (and its owned ack arrays) move across the transport or drop:
+            // every never-applied outcome for this slot must round-trip the
+            // same metadata so the owner re-arms armed flags and keeps the
+            // dirty set pending.
+            RenderFrameResult dropped_or_failed{};
+            dropped_or_failed.m_frame_id = packet.m_frame_id;
+            dropped_or_failed.m_reservation_epoch = reservationEpoch_();
+            dropped_or_failed.m_reservation_frame_id = packet.m_frame_id;
+            try {
+                stampGridEcho(request.m_grid_stage, dropped_or_failed);
+            } catch (const std::bad_alloc &) {
+                // Same OOM-settle rule as the no-target path above: the
+                // slot still settles (manifest-less) so the credit never
+                // sheds; the error travels with the settlement and the
+                // return value.
+                dropped_or_failed.m_dropped = true;
+                dropped_or_failed.m_error = std::make_error_code(std::errc::not_enough_memory);
+                onLaneFrameConsumed_(dropped_or_failed);
+                return dropped_or_failed.m_error;
+            } catch (...) {
+                dropped_or_failed.m_dropped = true;
+                dropped_or_failed.m_error = std::make_error_code(std::errc::state_not_recoverable);
+                onLaneFrameConsumed_(dropped_or_failed);
+                return dropped_or_failed.m_error;
+            }
+            if (const std::error_code submit_err = renderLane()->submitFrame(std::move(request))) {
+                // Bounded fallback, never an app failure: a full transport
+                // drops presentation for this frame. The slot still gets a
+                // durable settlement result (never-applied), so armed
+                // flags re-arm and the dirty set stays pending.
+                dropped_or_failed.m_dropped = true;
+                if (submit_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+                    if ((++m_lane_dropped_frames % 60u) == 1u) {
+                        PPR_LOG(
+                            Editor, info, "dropping frame on full render transport",
+                            {
+                                {"frame", packet.m_frame_id},
+                                {"dropped", m_lane_dropped_frames},
+                            });
+                    }
+                    onLaneFrameConsumed_(dropped_or_failed);
+                    waitForAdmissionHint_();
+                    return default_value_v;
+                }
+                // Non-busy transport failure (lane closed / cancelled): the
+                // slot never settles through the lane, so fire the same
+                // never-applied settlement here — no silent loss of the
+                // armed flags or the ack manifest — then surface the error.
+                dropped_or_failed.m_error = submit_err;
+                onLaneFrameConsumed_(dropped_or_failed);
+                return submit_err;
+            }
+            // Successful transport handoff: the record's queued half owns
+            // the frame until its GPU submission settles. Definitely
+            // unsubmitted transport outcomes never park here.
+            noteReservationQueued_(packet.m_frame_id);
+            return default_value_v;
+        }
+
+        // Inline reference: build the same request, then apply on main.
+        RenderFrameRequest inline_request{};
+        try {
+            inline_request.m_packet = std::make_shared<const FramePacket>(packet);
+            inline_request.m_ui = std::move(detached);
+            inline_request.m_grid_stage = std::move(m_grid_stage);
+            inline_request.m_triangle_stage = std::move(m_triangle_stage);
+        } catch (const std::bad_alloc &) {
+            return std::make_error_code(std::errc::not_enough_memory);
+        } catch (...) {
+            return std::make_error_code(std::errc::state_not_recoverable);
+        }
+        // Same reservation-identity tag as the lane request: the inline
+        // frame settles through the same hook and must match its record.
+        inline_request.m_reservation_epoch = reservationEpoch_();
+        inline_request.m_reservation_frame_id = packet.m_frame_id;
+
+        RenderFrameResult inline_result{};
+        inline_result.m_frame_id = packet.m_frame_id;
+        inline_result.m_reservation_epoch = reservationEpoch_();
+        inline_result.m_reservation_frame_id = packet.m_frame_id;
+        try {
+            stampGridEcho(inline_request.m_grid_stage, inline_result);
+        } catch (const std::bad_alloc &) {
+            inline_result.m_dropped = true;
+            inline_result.m_error = std::make_error_code(std::errc::not_enough_memory);
+            onLaneFrameConsumed_(inline_result);
+            return inline_result.m_error;
+        } catch (...) {
+            inline_result.m_dropped = true;
+            inline_result.m_error = std::make_error_code(std::errc::state_not_recoverable);
+            onLaneFrameConsumed_(inline_result);
+            return inline_result.m_error;
+        }
+        std::error_code inline_err{};
+        try {
+            inline_err = executeRenderWork_(inline_request, inline_result);
+        } catch (const std::bad_alloc &) {
+            inline_err = std::make_error_code(std::errc::not_enough_memory);
+        } catch (...) {
+            inline_err = std::make_error_code(std::errc::state_not_recoverable);
+        }
+        inline_result.m_error = inline_err;
+        m_diagnostics.m_grid_staged_tiles = inline_result.m_grid_staged_tiles;
+        m_diagnostics.m_grid_cached_tiles = inline_result.m_grid_cached_tiles;
+        m_diagnostics.m_last_sweep_error = inline_result.m_sweep_error;
+        m_diagnostics.m_ui_font_version_applied = inline_result.m_ui_font_version_applied;
+        m_diagnostics.m_last_submit_value = inline_result.m_submit_value;
+        onLaneFrameConsumed_(inline_result);
+        return inline_err;
+    }
+
+    std::error_code ApplicationEditor::executeRenderWork_(
+        const RenderFrameRequest &request, RenderFrameResult &out_result) {
+        Renderer &renderer = getRenderer();
+        const FramePacket &packet = *request.m_packet;
+        const DetachedUiDrawData &ui = request.m_ui;
+        const GridPass::GridStagedFrame &grid_stage = request.m_grid_stage;
+        const TrianglePass::TriangleStagedFrame &triangle_stage = request.m_triangle_stage;
+        out_result.m_frame_id = packet.m_frame_id;
+        out_result.m_reservation_epoch = request.m_reservation_epoch;
+        out_result.m_reservation_frame_id = request.m_reservation_frame_id;
+        stampGridEcho(grid_stage, out_result);
+
+        // Cell uploads write a mapped atlas shared with earlier GPU frames.
+        // Fence and publish pending visible cells before opening the
+        // surface render pass. On the worker this whole function runs on
+        // the fixed lane (atlas preparation is render-owned); inline it
+        // runs on main. Either way no live Window/camera/input/service or
+        // live ImGui state is touched — only the owned packet, the
+        // detached UI data, and lane-confined GPU state.
+        // The lane-confined rhi service captured at startup is the only
+        // legal source on this (possibly worker) thread: never read the
+        // service store here — that hidden-singleton lookup would race the
+        // main thread's teardown erase. Fail closed when it is invalid.
+        const safe_ptr<IRhiService> rhi_service = m_lane_rhi_service;
+        if (not rhi_service.isValid()) [[unlikely]] {
+            return make_error_code(std::errc::not_connected);
+        }
+
+        // Non-rendering outcome for zero-size/minimized surfaces:
         // skip uploads and present, report success. This is also the
         // empty-packet fail-closed: a packet with no render target performs
-        // zero backend work. The packet carries the captured viewport
-        // revision, so P1 surface generations can key off it instead of
-        // re-querying the live window.
+        // zero backend work. No stage application (no render happened), so
+        // no consumption ack: re-staged next buildable frame.
         if (not hasRenderTarget(packet)) {
             return default_value_v;
         }
@@ -612,9 +1068,10 @@ namespace pP {
         // Generational rejection before ANY backend work (uploads fence the
         // queue, so they must not run for a stale packet): a packet built
         // for an older surface shape retires here as an explicit
-        // non-rendering outcome. Presentation-only state is dropped; reliable
-        // world edits were already applied to pass-owned caches during
-        // update(), so nothing acknowledged is lost.
+        // non-rendering outcome. Presentation-only state is dropped; the
+        // world edits inside the staged payload stay in the driver's
+        // dirty set (no consumption ack rides a dropped frame), so the
+        // next buildable frame re-stages them.
         const SurfaceIdentity packet_surface{
             .m_handle = packet.m_surface_identity,
             .m_generation = packet.m_surface_generation,
@@ -629,12 +1086,44 @@ namespace pP {
             return default_value_v;
         }
 
+        // P2 pass-affinity: ALL pass CPU-state mutations run here, on the
+        // pass's owner lane (worker or main-inline), applied from the
+        // owned payload captured in update(). The camera snapshot +
+        // delta time come from the packet (immutable), the tile list and
+        // upload cells ride the per-frame staged payload built by the
+        // client — nothing live is read by either.
+        {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
+        }
+        out_result.m_grid_stage_applied = true;
+        out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
+        out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();
+
         const auto wait_for_gpu_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
         {
             const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
             PPR_RETURN_ERROR_ON_FAIL(
                 Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle));
         }
+
+        // Detached UI submission, bound synchronously on this lane: the
+        // callback captures the detached data by view for the duration of
+        // the encode below (never stored, never transported further).
+        const string_literal ui_description{std::in_place, "ui.detached"};
+        // Named local closure: DrawSubmission stores a function_ref to it, so
+        // a temporary closure would dangle the moment this full-expression
+        // ends (ASan stack-use-after-scope at encode time).
+        const auto ui_encode = [&](const DrawContext &draw_context) -> std::error_code {
+            PPR_ASSERT(m_ui_service != nullptr);
+            return m_ui_service->renderDetachedUiFrame(ui, draw_context);
+        };
+        const DrawSubmission ui_draws{
+            ui_description,
+            ui_encode,
+        };
 
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
@@ -646,7 +1135,10 @@ namespace pP {
                     ColorAttachmentOps{
                         .m_load_op = rhi::LoadOp::Load,
                     },
-                .m_draws = {DrawSubmission(*m_ui_service)},
+                // Detached UI draws, constructed synchronously on this lane
+                // (inline or worker): the encode reads ONLY the detached
+                // data, never the live ImGui frontend.
+                .m_draws = {ui_draws},
             },
         };
 
@@ -660,10 +1152,83 @@ namespace pP {
         // Quarantine/terminal failures keep their distinct codes and
         // propagate to teardown/recovery — never suppressed as dropped
         // frames.
+        //
+        // The window travels as a snapshot (owned copies only): the lane
+        // never touches the live Window. The title borrows packet storage,
+        // which outlives the call through the lane request.
+        const SurfaceWindowSnapshot window_snapshot{
+            .m_handle = packet.m_surface_identity,
+            .m_native = packet.m_surface_native,
+            .m_framebuffer_size = packet.m_framebuffer_size,
+            .m_title = packet.m_window_title,
+        };
         const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
-        const std::error_code frame_err = renderer.renderAndPresent(
-            m_main_viewport->getWindow(), surface_passes, packet_surface);
-        stampSubmittedPasses_(previously_submitted);
+        std::error_code frame_err{};
+        // Exception-safe submission-fate boundary (allocation-free, noexcept):
+        // an accepted SUBMIT followed by a throwing present diagnostic must
+        // still stamp participants + classify the fate exactly once. The
+        // guard captures this frame's before value and finalizes on every
+        // exit (normal + unwind) against the after value; the normal path
+        // below performs no separate stamp/classify.
+        struct SubmitFateFinalizer {
+            ApplicationEditor *m_self;
+            Renderer *m_renderer;
+            RenderFrameResult *m_out;
+            FenceCompletionValue m_before;
+            const std::error_code *m_frame_err;
+            ~SubmitFateFinalizer() noexcept {
+                try {
+                    m_self->stampSubmittedPasses_(m_before);
+                    // Off-thread (affinity) rejection is invocation-local:
+                    // the Renderer leaves owner-confined settlement untouched
+                    // on that path, so classify from the returned error and
+                    // never consult the member (which still holds the
+                    // previous owner-thread fate). Every other path classifies
+                    // THIS invocation only (F1 stale fate): an accepted SUBMIT
+                    // must advance the fence strictly past this frame's before
+                    // value. A rejection reports definitely-unsubmitted with
+                    // this frame's identity — never the previous frame's value
+                    // — and only a submit failure quarantines (possibly
+                    // executed, no value).
+                    if (m_frame_err != nullptr and
+                        *m_frame_err == std::make_error_code(std::errc::operation_not_permitted)) {
+                        m_out->m_submit_value = kFenceValueNone;
+                        m_out->m_submit_possibly_executed = false;
+                        return;
+                    }
+                    const FenceCompletionValue after = m_renderer->lastSubmittedFenceValue();
+                    const FrameSettlement fate = m_renderer->lastSubmitSettlement();
+                    if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > m_before) {
+                        m_out->m_submit_value = after;
+                        m_out->m_submit_possibly_executed = false;
+                    } else if (fate == FrameSettlement::kSubmitFailed) {
+                        m_out->m_submit_value = kFenceValueNone;
+                        m_out->m_submit_possibly_executed = true;
+                    } else {
+                        m_out->m_submit_value = kFenceValueNone;
+                        m_out->m_submit_possibly_executed = false;
+                    }
+                } catch (...) {
+                }
+            }
+        };
+        const SubmitFateFinalizer submit_fate_guard{this, &renderer, &out_result, previously_submitted, &frame_err};
+        frame_err = renderer.renderAndPresent(
+            window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface);
+
+        // Surface lane-observable outcome: the accepted SUBMIT value
+        // independent of present, and the possibly-executed discriminator
+        // for ambiguous throws (kSubmitFailed) were finalized by the guard
+        // above on all paths (normal + unwind). The value on the result is
+        // the same value the retirement frontier will later cover — the
+        // main-side settlement pairs them by equality, never by presence.
+        // Report lane-observable state back to main (surface generation
+        // mirror + font ack); the completion pump refreshes them.
+        out_result.m_surface_handle = packet.m_surface_identity;
+        out_result.m_surface_generation = renderer.surfaceGenerationFor(packet.m_surface_identity);
+        if (m_ui_service) {
+            out_result.m_ui_font_version_applied = m_ui_service->installedFontVersion();
+        }
         if (frame_err == std::make_error_code(std::errc::resource_unavailable_try_again) or
             frame_err == std::make_error_code(std::errc::device_or_resource_busy)) {
             PPR_LOG(

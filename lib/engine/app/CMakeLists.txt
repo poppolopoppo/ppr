@@ -9,6 +9,7 @@ target_sources(engine.app
         App.Application.Editor.cppm
 
         frame/App.Frame.Packet.cppm
+        frame/App.Frame.RenderLane.cppm
 
         input/App.Input.Action.cppm
         input/App.Input.Batch.cppm
@@ -56,6 +57,7 @@ target_sources(engine.app
         App.TemplateInstantiations.cpp
 
         frame/App.Frame.Packet.cpp
+        frame/App.Frame.RenderLane.cpp
 
         input/App.Input.Action.cpp
         input/App.Input.Batch.cpp

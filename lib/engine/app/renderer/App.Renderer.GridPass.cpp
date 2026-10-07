@@ -179,6 +179,33 @@ namespace pP {
         // only after prepareCellUploads fences the queue.
     }
 
+    std::error_code GridPass::applyStagedFrame(const GridStagedFrame &stage) {
+        if (stage.m_reset_caches) {
+            clearTiles();
+            clearCache();
+        }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
+        for (const GridStagedUpload &upload: stage.m_uploads) {
+            GridUploadRequest request{};
+            request.m_chunk_id = upload.m_chunk_id;
+            request.m_tile_data_view = std::span<const GridTilePayload>{&upload.m_payload, 1u};
+            request.m_cell_materials = std::span<const u16>{
+                upload.m_cell_materials.data(), upload.m_cell_materials.size()};
+            const Expected<u32> uploaded = requestUpload(request);
+            if (not uploaded) [[unlikely]] {
+                clearTiles();
+                clearCache();
+                return uploaded.error();
+            }
+            if (*uploaded != 1u) [[unlikely]] {
+                clearTiles();
+                clearCache();
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+        }
+        return default_value_v;
+    }
+
     Expected<u32> GridPass::requestUpload(const GridUploadRequest &request) {
         // Pure CPU like submitTiles: the tile cache is pass-owned CPU data,
         // so quiescent tiles keep serving through device loss while

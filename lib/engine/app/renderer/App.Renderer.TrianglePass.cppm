@@ -51,6 +51,16 @@ export namespace pP {
             float4x4 m_model = float4x4{float4{1, 0, 0, 0}, float4{0, 1, 0, 0}, float4{0, 0, 1, 0}, float4{0, 0, 0, 1}};
         };
 
+        // Owned per-frame staging payload, built on the CLIENT lane and
+        // applied on the pass's owner lane (encoded pass-affinity: the
+        // client never touches pass CPU state directly anymore). Plain
+        // values + owned storage only. clearInstances+submitInstance is
+        // exactly what the client staged, in order; applied on the owner
+        // lane, never from the client.
+        struct TriangleStagedFrame {
+            Array<SubmittedInstance> m_instances{};
+        };
+
         // Per-instance GPU payload: today's SubmittedInstance (model +
         // bag/material handles) with the handles resolved to draw scalars
         // (vb_offset/ib_start/index_count/base_vertex) + the resolved material
@@ -219,6 +229,12 @@ export namespace pP {
             TriangleBagHandle bag, MaterialHandle material, const float4x4 &model);
 
         void clearInstances() noexcept;
+
+        // Applies one owned staging payload on the pass's owner lane:
+        // clear then replay the staged instances in order (same validation
+        // as submitInstance). A rejected handle leaves the per-frame list
+        // cleared, mirroring the old synchronous stage-then-validate edge.
+        [[nodiscard]] std::error_code applyStagedFrame(const TriangleStagedFrame &stage);
 
         // §7 scene upload: bag per (mesh, prim) → texture per image (dedup) →
         // ORM composite per material (R=occlusion-or-1, G=rough, B=metal,

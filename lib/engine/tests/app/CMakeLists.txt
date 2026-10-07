@@ -41,6 +41,7 @@ target_sources(engine.tests.app
         App.GridPass.Tests.cpp
         App.Frame.Tests.cpp
         App.FrameFence.Tests.cpp
+        App.RenderLane.Tests.cpp
         App.RunGate.Tests.cpp
         App.Quaternion.Tests.cpp
         App.ImGuiRouting.Tests.cpp
@@ -90,8 +91,9 @@ add_test(NAME EngineAppUnitTests COMMAND engine.tests.app)
 
 set_tests_properties(EngineAppUnitTests
     PROPERTIES
-        # Runner executes 3 shuffle loops (~176s measured debug); keep margin.
-        TIMEOUT 600
+        # Runner executes 3 shuffle loops (~700s measured ASan dev with
+        # lane-gate/death-child coverage); keep margin.
+        TIMEOUT 1200
         LABELS "unit;engine;app"
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.app>"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.app>"

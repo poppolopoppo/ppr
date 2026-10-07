@@ -61,6 +61,8 @@ namespace pP::tests {
 
     const UnitTest &frame_fenceTests() noexcept;
 
+    const UnitTest &render_laneTests() noexcept;
+
     const UnitTest &run_gateTests() noexcept;
 
     const UnitTest &sim_packetTests() noexcept;
@@ -112,6 +114,7 @@ namespace pP::tests {
             cameraTests(),
             frame_stagesTests(),
             frame_fenceTests(),
+            render_laneTests(),
             run_gateTests(),
             sim_packetTests(),
             quaternionTests(),

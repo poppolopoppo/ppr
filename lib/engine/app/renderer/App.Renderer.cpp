@@ -314,6 +314,11 @@ namespace pP {
 
         m_submit_quarantine = false;
         m_injected_submit_failure = false;
+        m_shutdown_complete = false;
+        // Fresh retirement clock: never inherit a stale frontier from a
+        // previous cycle of this Renderer.
+        m_retirement_frontier = kFenceValueNone;
+        m_last_submit_settlement = FrameSettlement::kRejected;
 
         // Bounded by the credit ledger: the unretired set never exceeds
         // kMaxOutstandingFrames, so this reserve keeps every steady-state
@@ -358,6 +363,8 @@ namespace pP {
         // as proof on the UNKNOWN path (which returned above).
         if (quiescence.m_disposition == GpuQuiescence::kRemovalConfirmed) {
             m_submit_quarantine = true;
+            // Confirmed removal releases without new device work: production queue submission after removal is
+            // forbidden.
             m_frame_fence.abandon();
         } else {
             PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, m_frame_fence.shutdown());
@@ -374,11 +381,21 @@ namespace pP {
         sweepCompleted_();
         std::ignore = m_deferred.drainAll();
         m_unretired_submits.clear();
+        // The reset here happens AFTER GPU quiescence was proven or loss was
+        // confirmed, so the frontier resets to "no proven retirement" for a
+        // fresh start — never to an invented value.
+        m_retirement_frontier = kFenceValueNone;
+        m_last_submit_settlement = FrameSettlement::kRejected;
         m_credits.reset();
         m_submit_quarantine = false;
         m_injected_submit_failure = false;
         m_injected_quiescence_failure = std::error_code{};
         m_test_hold_sweep = false;
+        // Mark retirement closed only AFTER every fence/credit/surface
+        // resource was released above: post-shutdown sweeps (the lane's
+        // final drain runs after this via stopRenderLane_()) then observe
+        // a clean zero instead of the released fence's not_connected.
+        m_shutdown_complete = true;
 
         // The FlatMap iterator yields a proxy/prvalue pair, so take entries by
         // value: binding to `auto&` fails. unconfigure() acts on the shared
@@ -416,6 +433,8 @@ namespace pP {
         // on the GPU.
         std::ignore = m_deferred.drainAll();
         m_unretired_submits.clear();
+        m_retirement_frontier = kFenceValueNone;
+        m_last_submit_settlement = FrameSettlement::kRejected;
         m_credits.reset();
         m_submit_quarantine = false;
         m_injected_submit_failure = false;
@@ -441,6 +460,21 @@ namespace pP {
         m_test_hold_sweep = hold;
     }
 
+    void Renderer::driveQueueRetirementForTest() noexcept {
+        // Backend retirement workaround, relocated from the production
+        // notifyDeviceLost path (removed: reference speculation on a loss
+        // hook): slang-rhi keeps submitted command buffers parked in the
+        // queue's m_commandBuffersInFlight until a submit-time poll (or a
+        // waitOnHost()) observes completion. Tests that inject loss AFTER
+        // proven completion submit an empty submission purely to drive
+        // that poll, on the owner thread, with every real value already
+        // retired. Never called from a production path.
+        if (m_graphics_queue) {
+            rhi::SubmitDesc empty{};
+            std::ignore = make_error_code(m_graphics_queue->submit(empty));
+        }
+    }
+
     void Renderer::sweepCompleted_() noexcept {
         // Tests-only delayed-completion seam: while held, real submits stay
         // outstanding (no reclaim, no credit return) so the test can assert
@@ -452,12 +486,17 @@ namespace pP {
         const FenceCompletionValue known = completed.has_value() ? *completed : m_frame_fence.completed();
         std::ignore = m_deferred.reclaim(known);
         std::size_t kept = 0u;
+        // Frontier is the maximum of values whose entries actually left the
+        // set below — proven by completion, never invented by poll failure,
+        // a hold seam, or a removal.
+        FenceCompletionValue retired_max = m_retirement_frontier;
         for (std::size_t index = 0u; index < m_unretired_submits.size(); ++index) {
             if (m_unretired_submits[index] <= known) {
                 // Exactly one credit return per submitted value: the value
                 // leaves the set here, so it can never return twice. A
                 // failed poll keeps every value (no invented completion).
                 std::ignore = m_credits.release();
+                retired_max = std::max(retired_max, m_unretired_submits[index]);
             } else {
                 if (kept != index) {
                     m_unretired_submits[kept] = m_unretired_submits[index];
@@ -466,9 +505,11 @@ namespace pP {
             }
         }
         m_unretired_submits.resize(kept);
+        m_retirement_frontier = retired_max;
     }
 
     void Renderer::retireFrame_(const FenceCompletionValue submitted_value, const FrameSettlement settlement) noexcept {
+        m_last_submit_settlement = settlement;
         switch (settlement) {
             case FrameSettlement::kSubmitted:
                 // The credit travels with the submission: it returns in a
@@ -576,6 +617,13 @@ namespace pP {
     }
 
     std::error_code Renderer::retireCompletedFrames() {
+        // Post-shutdown: the fence/queue/service are released, so a poll
+        // would report not_connected. Retirement is DONE at that point —
+        // report the proven clean state, never an invented failure. Real
+        // poll failures still surface while the renderer is live.
+        if (m_shutdown_complete) [[unlikely]] {
+            return default_value_v;
+        }
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -666,6 +714,11 @@ namespace pP {
         string_literal description, const rhi::RenderPassDesc &render_pass,
         const std::initializer_list<DrawSubmission> draws) {
         const hal::ProfileScope scope{"App.Renderer.Render"};
+        // Off-thread (affinity) rejection: definitely unsubmitted, no credit
+        // taken — and owner-confined state untouched. The settlement member
+        // stays whatever the owner thread last stamped (this wrong-thread
+        // call must never race it); the caller classifies this invocation
+        // as definitely-rejected from the returned error alone.
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -677,7 +730,12 @@ namespace pP {
         string_literal description, const rhi::RenderPassDesc &render_pass,
         const std::span<const DrawSubmission> draws) {
         const hal::ProfileScope scope_profile{"App.Renderer.Draws"};
+        // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
+        // credit taken — stamp kRejected so this call never inherits the
+        // previous frame's settlement. Only admitted frames ride the
+        // retireFrame_ guard below.
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return std::make_error_code(std::errc::not_connected);
         }
 
@@ -690,6 +748,7 @@ namespace pP {
         // to teardown/recovery — never suppressed as dropped frames.
         // Exactly one settlement per admitted frame rides the defer below.
         if (const std::error_code err = admitFrame_()) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return err;
         }
         FenceCompletionValue submitted_value{kFenceValueNone};
@@ -819,29 +878,58 @@ namespace pP {
     std::error_code Renderer::renderAndPresent(
         const Window &window, const std::initializer_list<SurfaceRenderPass> passes) {
         return renderAndPresentImpl_(
-            window, std::span<const SurfaceRenderPass>{passes.begin(), passes.size()},
+            SurfaceWindowSnapshot{
+                .m_handle = window.m_handle,
+                .m_native = window.m_native,
+                .m_framebuffer_size = window.m_framebuffer_size,
+                .m_title = window.m_title,
+            },
+            std::span<const SurfaceRenderPass>{passes.begin(), passes.size()},
             SurfaceIdentity{.m_handle = window.m_handle, .m_generation = kSurfaceGenerationNone});
     }
 
     std::error_code Renderer::renderAndPresent(
         const Window &window, const std::initializer_list<SurfaceRenderPass> passes, const SurfaceIdentity identity) {
         return renderAndPresentImpl_(
-            window, std::span<const SurfaceRenderPass>{passes.begin(), passes.size()}, identity);
+            SurfaceWindowSnapshot{
+                .m_handle = window.m_handle,
+                .m_native = window.m_native,
+                .m_framebuffer_size = window.m_framebuffer_size,
+                .m_title = window.m_title,
+            },
+            std::span<const SurfaceRenderPass>{passes.begin(), passes.size()}, identity);
+    }
+
+    std::error_code Renderer::renderAndPresent(
+        const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
+        const SurfaceIdentity identity) {
+        return renderAndPresentImpl_(window, passes, identity);
     }
 
     std::error_code Renderer::renderAndPresentImpl_(
-        const Window &window, const std::span<const SurfaceRenderPass> passes, const SurfaceIdentity identity) {
+        const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
+        const SurfaceIdentity identity) {
         const hal::ProfileScope scope{"App.Renderer.Present"};
+        // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
+        // credit taken — stamp kRejected so THIS invocation never inherits
+        // the previous frame's settlement. Only admitted frames ride the
+        // retireFrame_ guard below. The off-thread (affinity) reject above
+        // is the exception: it leaves the owner-confined settlement
+        // untouched (never races an accepted fate the owner stamped) and the
+        // caller classifies it from the returned error alone.
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return std::make_error_code(std::errc::not_connected);
         }
         if (not window.m_handle) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return std::make_error_code(std::errc::no_such_device_or_address);
         }
         if (identity.m_handle and identity.m_handle != window.m_handle) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return std::make_error_code(std::errc::invalid_argument);
         }
 
@@ -851,6 +939,7 @@ namespace pP {
         // distinct codes. Exactly one settlement per admitted frame rides
         // the defer below, including every rejection and failure path.
         if (const std::error_code err = admitFrame_()) [[unlikely]] {
+            m_last_submit_settlement = FrameSettlement::kRejected;
             return err;
         }
         FenceCompletionValue submitted_value{kFenceValueNone};
@@ -1122,7 +1211,14 @@ namespace pP {
         return destroyWindowSurface_(window.m_handle);
     }
 
-    std::error_code Renderer::createWindowSurface_(const Window &window, SurfaceRecord **out_record) {
+    std::error_code Renderer::destroyWindowSurface(const WindowHandle window_handle) {
+        if (not window_handle) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        return destroyWindowSurface_(window_handle);
+    }
+
+    std::error_code Renderer::createWindowSurface_(const SurfaceWindowSnapshot &window, SurfaceRecord **out_record) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -1151,7 +1247,7 @@ namespace pP {
         PPR_LOG(
             Renderer, info, "window surface created",
             {
-                {"description", window.m_title},
+                {"description", window.m_title.data()},
                 {"width", it->second.m_extent.x},
                 {"height", it->second.m_extent.y},
             });

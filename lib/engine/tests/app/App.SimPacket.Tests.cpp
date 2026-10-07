@@ -17,11 +17,12 @@ namespace pP::tests::detail {
     namespace SimPacket {
         // F1 game payload: owned copies captured after the tick, consumed by
         // the present/overlay phases on the same thread. These tests run the
-        // production capture (makeSimFramePacket) and consume
-        // (presentSimPacket) path, the fail-closed coherence gate, and the
-        // translator input error paths — mostly without a live world
-        // (default-constructed driver/translator); the capture/consume
-        // tests initialize paused worlds for real present sets.
+        // production capture (makeSimFramePacket) and staged-build
+        // (buildGridStagedFrame + GridPass::applyStagedFrame) path, the
+        // fail-closed coherence gate, and the translator input error paths —
+        // mostly without a live world (default-constructed driver/translator);
+        // the capture/consume tests initialize paused worlds for real present
+        // sets.
 
         PPR_UNIT_TEST (default_driver_builds_empty_coherent_packet) {
             colony::ColonyDriver driver{};
@@ -35,8 +36,20 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(packet.m_resident_chunks.empty());
             PPR_TEST_ASSERT(packet.m_chunk_cells.empty());
             PPR_TEST_ASSERT(not packet.m_full_refresh);
-            PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.seed()));
+            PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
         };
+
+        // Consumption ack payload: the per-chunk edit revision captured
+        // with the packet (the lane echoes exactly this set back at
+        // settlement time, so only captured generations are cleared).
+        Array<colony::ColonyDriver::DirtyChunk> packetAckSet(const colony::SimFramePacket &packet) {
+            Array<colony::ColonyDriver::DirtyChunk> acked{};
+            acked.reserve(packet.m_present_chunks.size());
+            for (u64 i = 0u; i < packet.m_present_chunks.size(); ++i) {
+                acked.push_back({.m_pos = packet.m_present_chunks[i], .m_revision = packet.m_present_revisions[i]});
+            }
+            return acked;
+        }
 
         // F1 game payload, real capture→mutation→consumer path: the packet
         // carries the chunk-content render payload, and same-thread present
@@ -84,13 +97,17 @@ namespace pP::tests::detail {
             // the poisoned cells), stages exactly the capture-time residency,
             // and uploads only the packet-dirty chunk. Tick/seed never moved,
             // so the packet stays coherent across the mutation.
-            colony::ColonyTranslator translator{};
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
             GridPass pass{};
-            PPR_TEST_ASSERT(not colony::presentSimPacket(packet, driver, translator, pass));
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+            const Array<colony::ColonyDriver::DirtyChunk> acked = packetAckSet(packet);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{acked});
             PPR_TEST_ASSERT(pass.stagedTileCount() == driver.grid().residentChunkCount());
             PPR_TEST_ASSERT(pass.stagedTileCount() == packet.m_resident_chunks.size());
             PPR_TEST_ASSERT(pass.uploadCount() == 1u);
-            PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.seed()));
+            PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
         };
 
         // Gate 0 multi-edit accumulation: two digs applied by two paused
@@ -118,7 +135,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
             // Both edits still pending; the last-edit view reports only the second.
-            PPR_TEST_ASSERT(driver.presentDirtyChunks().size() == 2u);
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 2u);
             PPR_TEST_ASSERT(driver.lastEditChunks().size() == 1u);
             PPR_TEST_ASSERT(driver.lastEditChunks()[0u] == sim::ChunkPos{1u, 0u});
 
@@ -128,19 +145,25 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(packet.m_present_chunks[1u] == sim::ChunkPos{1u, 0u});
             PPR_TEST_ASSERT(packet.m_chunk_cells.size() == 2u);
 
-            colony::ColonyTranslator translator{};
+            GridPass::GridStagedFrame pre_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, pre_stage));
             GridPass pass{};
-            PPR_TEST_ASSERT(not colony::presentSimPacket(packet, driver, translator, pass));
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(pre_stage));
             PPR_TEST_ASSERT(pass.uploadCount() == 2u);
-            PPR_TEST_ASSERT(driver.presentDirtyChunks().empty());
+            // Laned ack delivery: at lane consumption, the driver dirty set
+            // for the captured frame is acknowledged. Nothing went stale.
+            const Array<colony::ColonyDriver::DirtyChunk> acked = packetAckSet(packet);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{acked});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
 
             // Next frame with no new edits uploads nothing: nothing went stale.
             colony::SimFramePacket follow = colony::makeSimFramePacket(12u, driver);
             PPR_TEST_ASSERT(follow.m_present_chunks.empty());
             PPR_TEST_ASSERT(follow.m_chunk_cells.empty());
-            colony::ColonyTranslator follow_translator{};
             GridPass follow_pass{};
-            PPR_TEST_ASSERT(not colony::presentSimPacket(follow, driver, follow_translator, follow_pass));
+            GridPass::GridStagedFrame follow_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(follow, follow_stage));
+            PPR_TEST_ASSERT(not follow_pass.applyStagedFrame(follow_stage));
             PPR_TEST_ASSERT(follow_pass.uploadCount() == 0u);
             PPR_TEST_ASSERT(follow_pass.stagedTileCount() == follow.m_resident_chunks.size());
         };
@@ -162,27 +185,28 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(packet.m_resident_chunks.size() == 2u);
             PPR_TEST_ASSERT(packet.m_chunk_cells.size() == 2u);
 
-            colony::ColonyTranslator translator{};
+            GridPass::GridStagedFrame full_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, full_stage));
             GridPass pass{};
-            PPR_TEST_ASSERT(not colony::presentSimPacket(packet, driver, translator, pass));
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(full_stage));
             PPR_TEST_ASSERT(pass.stagedTileCount() == 2u);
             PPR_TEST_ASSERT(pass.uploadCount() == 2u);
         };
 
         // Fail-closed consumption: a dirty chunk without captured cells (or
-        // with a corrupt payload) resets the translator/pass pair and
-        // reports invalid_argument — never a partial present.
+        // with a corrupt payload) clears the staged frame and reports
+        // invalid_argument — never a partial present.
         PPR_UNIT_TEST (consume_rejects_dirty_chunk_without_cells) {
             colony::ColonyDriver driver{};
             colony::SimFramePacket packet{};
             packet.m_resident_chunks.push_back(sim::ChunkPos{0u, 0u});
             packet.m_present_chunks.push_back(sim::ChunkPos{0u, 0u});
 
-            colony::ColonyTranslator translator{};
             GridPass pass{};
+            GridPass::GridStagedFrame empty_stage{};
             PPR_TEST_ASSERT(
-                colony::presentSimPacket(packet, driver, translator, pass) ==
-                std::make_error_code(std::errc::invalid_argument));
+                colony::buildGridStagedFrame(packet, empty_stage) == std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(pass.applyStagedFrame(empty_stage) == std::error_code{});
             PPR_TEST_ASSERT(pass.stagedTileCount() == 0u);
 
             Array<sim::Cell> corrupt{};
@@ -192,11 +216,11 @@ namespace pP::tests::detail {
             payload.m_cells = std::move(corrupt);
             packet.m_chunk_cells.push_back(std::move(payload));
 
-            colony::ColonyTranslator retry_translator{};
             GridPass retry_pass{};
+            GridPass::GridStagedFrame retry_stage{};
             PPR_TEST_ASSERT(
-                colony::presentSimPacket(packet, driver, retry_translator, retry_pass) ==
-                std::make_error_code(std::errc::invalid_argument));
+                colony::buildGridStagedFrame(packet, retry_stage) == std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(retry_pass.applyStagedFrame(retry_stage) == std::error_code{});
             PPR_TEST_ASSERT(retry_pass.stagedTileCount() == 0u);
         };
 
@@ -204,6 +228,7 @@ namespace pP::tests::detail {
             colony::SimFramePacket packet{};
             packet.m_tick = 5u;
             packet.m_seed = 11u;
+            packet.m_world_generation = 11u;
 
             PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, 5u, 11u));
             PPR_TEST_ASSERT(not colony::isSimPacketCoherent(packet, 6u, 11u));
@@ -225,6 +250,292 @@ namespace pP::tests::detail {
             colony::ColonyTranslator translator{};
             PPR_TEST_ASSERT(not driver.presentEdits(translator));
         };
+
+        // Same-chunk re-edit: the entry bumped after capture carries a
+        // NEW revision row. A lane ack for the stale capture must not
+        // clear the pending newer generation — only a matching revision
+        // clears.
+        PPR_UNIT_TEST (same_chunk_reedit_stale_ack_keeps_newer_revision) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 77u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            PPR_TEST_ASSERT(not driver.grid().setCell({20u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket first = colony::makeSimFramePacket(21u, driver);
+            PPR_TEST_ASSERT(first.m_present_chunks.size() == 1u);
+            const u64 first_revision = first.m_present_revisions[0u];
+
+            // Same chunk dirtied again before any consumption.
+            PPR_TEST_ASSERT(not driver.requestDig({20u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+            const u64 bumped_revision = driver.presentEditsCapture()[0u].m_revision;
+            PPR_TEST_ASSERT(bumped_revision > first_revision);
+
+            // A stale settlement (the dropped-then-late first frame's ack
+            // manifest) clears nothing: the newer generation stays pending.
+            const Array<colony::ColonyDriver::DirtyChunk> stale_ack = packetAckSet(first);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{stale_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+            PPR_TEST_ASSERT(driver.presentEditsCapture()[0u].m_revision == bumped_revision);
+
+            // A fresh capture + settlement acknowledges exactly its own
+            // generation and empties the set.
+            const colony::SimFramePacket second = colony::makeSimFramePacket(22u, driver);
+            const Array<colony::ColonyDriver::DirtyChunk> fresh_ack = packetAckSet(second);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+        };
+
+        // Revision ABA guard: after an ack removes a row, a re-edit to the
+        // same chunk must CONTINUE the revision (not restart at 1), so an
+        // overlapping in-flight packet carrying the old revision-1 ack can
+        // never clear the new edit.
+        PPR_UNIT_TEST (revision_continues_beyond_ack_row_removal) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 55u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket first = colony::makeSimFramePacket(41u, driver);
+            const u64 first_revision = first.m_present_revisions[0u];
+            const Array<colony::ColonyDriver::DirtyChunk> first_ack = packetAckSet(first);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{first_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+
+            // New edit to the SAME chunk: the replacement row starts at
+            // first_revision + 1 (never back at 1).
+            PPR_TEST_ASSERT(not driver.grid().setCell({12u, 12u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            PPR_TEST_ASSERT(not driver.requestDig({12u, 12u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+            const u64 second_revision = driver.presentEditsCapture()[0u].m_revision;
+            PPR_TEST_ASSERT(second_revision > first_revision);
+
+            // Duplicate-capture ack for the OLD revision clears nothing.
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{first_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+            PPR_TEST_ASSERT(driver.presentEditsCapture()[0u].m_revision == second_revision);
+
+            const colony::SimFramePacket second = colony::makeSimFramePacket(42u, driver);
+            const Array<colony::ColonyDriver::DirtyChunk> second_ack = packetAckSet(second);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{second_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+        };
+
+        // Seed-not-epoch guard: the ack manifest carries the genuine world
+        // generation, so a full-refresh clear and the ack itself both ride
+        // it — a stale late result cannot resurrect them, and the
+        // generation advances even when a regenerate reuses the same seed.
+        PPR_UNIT_TEST (ack_manifest_carries_world_generation) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 77u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+
+            const u64 generation_before = driver.worldGeneration();
+            colony::SimFramePacket packet = colony::makeSimFramePacket(43u, driver);
+            PPR_TEST_ASSERT(packet.m_world_generation == generation_before);
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
+            PPR_TEST_ASSERT(stage.m_ack_seed == generation_before);
+
+            // Same user seed, NEW generation: the stale manifest no longer
+            // matches, so neither the ack nor a full-refresh clear applies.
+            PPR_TEST_ASSERT(not driver.regenerate(77u));
+            PPR_TEST_ASSERT(driver.worldGeneration() > generation_before);
+            PPR_TEST_ASSERT(stage.m_ack_seed != driver.worldGeneration());
+            PPR_TEST_ASSERT(not colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
+        };
+
+        // Regeneration changes the world epoch; a captured packet is then
+        // incoherent, the driver dirty set drops with the old world, and a
+        // stale lane ack is a no-op against the cleared set. The replacement
+        // frame re-stages the whole world via the full-refresh capture.
+        PPR_UNIT_TEST (regeneration_invalidates_packet_and_drops_dirty_set) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 11u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket stale = colony::makeSimFramePacket(31u, driver);
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+
+            PPR_TEST_ASSERT(not driver.regenerate(99u));
+            PPR_TEST_ASSERT(not colony::isSimPacketCoherent(stale, driver.tickCount(), driver.worldGeneration()));
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+
+            const Array<colony::ColonyDriver::DirtyChunk> stale_ack = packetAckSet(stale);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{stale_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+
+            const colony::SimFramePacket fresh = colony::makeSimFramePacket(32u, driver, true);
+            PPR_TEST_ASSERT(fresh.m_full_refresh);
+            PPR_TEST_ASSERT(fresh.m_present_chunks.empty());
+            PPR_TEST_ASSERT(fresh.m_chunk_cells.size() == fresh.m_resident_chunks.size());
+            GridPass::GridStagedFrame fresh_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(fresh, fresh_stage));
+            GridPass fresh_pass{};
+            PPR_TEST_ASSERT(not fresh_pass.applyStagedFrame(fresh_stage));
+            PPR_TEST_ASSERT(fresh_pass.stagedTileCount() == fresh.m_resident_chunks.size());
+        };
+
+        // Rejection/reset replay: a corrupt packet fails closed on the
+        // client and fires NO consumption ack, so the dirty set stays
+        // pending for the retry. The intact retry builds, applies, and
+        // acknowledges normally.
+        PPR_UNIT_TEST (rejected_frame_replays_dirty_set) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 5u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket packet = colony::makeSimFramePacket(41u, driver);
+            PPR_TEST_ASSERT(packet.m_present_chunks.size() == 1u);
+
+            colony::SimFramePacket corrupt = packet;
+            corrupt.m_chunk_cells.clear();
+            GridPass::GridStagedFrame rejected_stage{};
+            PPR_TEST_ASSERT(
+                colony::buildGridStagedFrame(corrupt, rejected_stage) ==
+                std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(rejected_stage.m_tiles.empty());
+            // No ack rides the rejected frame: the dirty set survives.
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+
+            GridPass::GridStagedFrame retry_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, retry_stage));
+            GridPass retry_pass{};
+            PPR_TEST_ASSERT(not retry_pass.applyStagedFrame(retry_stage));
+            PPR_TEST_ASSERT(retry_pass.uploadCount() == 1u);
+            const Array<colony::ColonyDriver::DirtyChunk> fresh_ack = packetAckSet(packet);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+        };
+
+        // Dropped completion: a frame that never executed (transport
+        // drop, teardown cancellation, worker error) acknowledges
+        // NOTHING — presentation state stays pending, so the world edits
+        // inside it survive for the next buildable frame.
+        PPR_UNIT_TEST (dropped_frame_never_acks_dirty_set) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 21u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket packet = colony::makeSimFramePacket(51u, driver);
+            PPR_TEST_ASSERT(packet.m_present_chunks.size() == 1u);
+
+            // Settlement returns m_dropped/error without an applied stage:
+            // the owner re-arms presentation state and acks nothing here.
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+
+            const colony::SimFramePacket retry = colony::makeSimFramePacket(52u, driver);
+            GridPass::GridStagedFrame retry_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(retry, retry_stage));
+            GridPass retry_pass{};
+            PPR_TEST_ASSERT(not retry_pass.applyStagedFrame(retry_stage));
+            const Array<colony::ColonyDriver::DirtyChunk> fresh_ack = packetAckSet(retry);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+        };
+
+        // Exception case at the capture→build boundary: allocation or
+        // validation failure inside the staged build clears the stage and
+        // propagates an error — the driver dirty set is untouched until a
+        // successful consumption explicitly acknowledges it.
+        PPR_UNIT_TEST (staged_build_failure_preserves_dirty_set) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 33u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket packet = colony::makeSimFramePacket(61u, driver);
+            colony::SimFramePacket corrupt = packet;
+            corrupt.m_present_chunks.push_back(sim::ChunkPos{1u, 1u});
+            PPR_TEST_ASSERT(corrupt.m_chunk_cells.size() == 1u);
+
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(
+                colony::buildGridStagedFrame(corrupt, stage) == std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(stage.m_tiles.empty());
+            PPR_TEST_ASSERT(stage.m_uploads.empty());
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+        };
+
+        // Exception case at the settlement boundary: an exception escaping
+        // the build→apply→ack sequence (worker throw, allocation failure)
+        // must look like any other non-applied slot — the driver's pending
+        // ack set is untouched, the captured ack manifest still round-trips
+        // from the owned stage, and a retry consumes normally.
+        PPR_UNIT_TEST (exception_during_settlement_preserves_pending_set) {
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not driver.init(colony::ColonyDriverDesc{.m_seed = 41u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
+            };
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket packet = colony::makeSimFramePacket(71u, driver);
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
+            // The owned stage carries the ack manifest forward.
+            PPR_TEST_ASSERT(stage.m_ack_seed == driver.worldGeneration());
+            PPR_TEST_ASSERT(stage.m_ack_chunk_ids.size() == packet.m_present_chunks.size());
+
+            bool exception_caught = false;
+            try {
+                throw std::runtime_error{"simulated lane executor failure"};
+            } catch (...) {
+                exception_caught = true;
+            }
+            PPR_TEST_ASSERT(exception_caught);
+
+            // The failed slot acks NOTHING: the pending set is intact.
+            PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
+
+            // The retry consumes the same owned stage and clears its set.
+            GridPass retry_pass{};
+            PPR_TEST_ASSERT(not retry_pass.applyStagedFrame(stage));
+            const Array<colony::ColonyDriver::DirtyChunk> fresh_ack = packetAckSet(packet);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+        };
     }
 } // namespace pP::tests::detail
 
@@ -239,6 +550,14 @@ namespace pP::tests {
             detail::SimPacket::coherence_rejects_stale_tick_and_regenerated_world,
             detail::SimPacket::mark_chunk_validates_positions,
             detail::SimPacket::empty_present_drain_succeeds,
+            detail::SimPacket::same_chunk_reedit_stale_ack_keeps_newer_revision,
+            detail::SimPacket::revision_continues_beyond_ack_row_removal,
+            detail::SimPacket::ack_manifest_carries_world_generation,
+            detail::SimPacket::regeneration_invalidates_packet_and_drops_dirty_set,
+            detail::SimPacket::rejected_frame_replays_dirty_set,
+            detail::SimPacket::dropped_frame_never_acks_dirty_set,
+            detail::SimPacket::staged_build_failure_preserves_dirty_set,
+            detail::SimPacket::exception_during_settlement_preserves_pending_set,
         });
     };
 

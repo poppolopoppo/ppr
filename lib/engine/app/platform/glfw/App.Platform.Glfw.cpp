@@ -211,6 +211,47 @@ namespace pP {
         return default_value_v;
     }
 
+    std::error_code GlfwPlatform::waitNativeEvents(const TimeSpan timeout) {
+        // Event-driven sleep: the timed GLFW wait services arrivals on
+        // wake (or times out), then one collection pump stages them into
+        // the owned batch. Device advancement still happens only in
+        // update(); this path only collects, like pumpNativeEvents.
+        // Collection guard covers BOTH native calls below: glfwWaitEvents
+        // Timeout and poll both execute window/input callbacks, and the
+        // immediate path (GlfwInput::post*, focus hotplug) dispatches to
+        // clients unless collection mode stages them. Exception-safe via
+        // the defer so an early error return cannot leak the flag.
+        GlfwInput *const p_inputs = m_input_service.get();
+        if (p_inputs != nullptr) [[likely]] {
+            p_inputs->setNativeBatchCollection(true);
+        }
+        PPR_DEFER {
+            if (p_inputs != nullptr) {
+                p_inputs->setNativeBatchCollection(false);
+            }
+        };
+
+        if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->waitEventsTimeout(timeout));
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+        } else {
+            // Headless: paced slice with no native queue to service.
+            if (timeout > TimeSpan{}) {
+                std::this_thread::sleep_for(timeout);
+            }
+        }
+
+        return default_value_v;
+    }
+
+    void GlfwPlatform::postEmptyEvent() noexcept {
+        // Any-thread relay; safe before init and after shutdown (no window
+        // service yet/anymore means nobody is parked in the native wait).
+        if (GlfwWindow *const p_windows = m_window_service.get()) {
+            p_windows->postEmptyEvent();
+        }
+    }
+
     std::error_code GlfwPlatform::update(const TimeSpan dt) {
         const hal::ProfileScope scope{"App.Platform.Update"};
         // Single client advancement per frame, in order: device-poll first

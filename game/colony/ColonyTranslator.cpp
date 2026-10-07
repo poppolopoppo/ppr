@@ -72,6 +72,11 @@ namespace pP::colony {
         return {};
     }
 
+    void ColonyTranslator::invalidate() noexcept {
+        m_presented.fill(false);
+        m_submitted_chunks = 0u;
+    }
+
     std::error_code ColonyTranslator::submit(const sim::ChunkGrid &grid, GridPass &pass) {
         const hal::ProfileScope scope_submit{"Colony.Submit"};
         const StageTimer timer_submit{m_timings, Stage::Submit};

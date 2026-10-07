@@ -11,6 +11,7 @@ module engine.core;
 import :assert;
 import :hal;
 import :memory;
+import :memory.poison;
 
 import std;
 
@@ -131,6 +132,16 @@ namespace pP::hal {
         // Handler::get() static init.
         PPR_ASSERT(ring_buffer != nullptr);
         PPR_ASSERT(alignForward(buffer_size, page_granularity) == buffer_size);
+
+#if PPR_ENABLE_SANITIZER_ADDRESS
+        // ASan shadow is per virtual address, so both views carry independent
+        // shadow state. A prior poisonDestroyed (RawChannel teardown) would
+        // otherwise survive UnmapViewOfFile and fault a later occupant
+        // remapped at this address range. Clear shadow-only state while both
+        // mappings are still exclusively owned, before releasing either range.
+        // Never flood real bytes here.
+        mem::unpoisonUninitialized(const_cast<void *>(ring_buffer), 2u * buffer_size);
+#endif
 
         if (not ::UnmapViewOfFile(ring_buffer)) {
             throw Win32Exception();

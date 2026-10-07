@@ -72,6 +72,25 @@ export namespace pP {
         [[nodiscard]] virtual std::error_code pumpNativeEvents() {
             return default_value_v;
         }
+
+        // P2 wakeable native wait: like pumpNativeEvents, but parks until
+        // `timeout` elapses or postEmptyEvent wakes it, servicing whatever
+        // arrived. The default paces headless/scripted hosts with a timed
+        // sleep slice. The pacer installs pump + this wait per sleep slice,
+        // so overrun/exit/config changes stay responsive without spinning.
+        // A non-positive timeout degrades to a single collection pump.
+        [[nodiscard]] virtual std::error_code waitNativeEvents(TimeSpan timeout) {
+            if (timeout <= TimeSpan{}) {
+                return pumpNativeEvents();
+            }
+            std::this_thread::sleep_for(timeout);
+            return pumpNativeEvents();
+        }
+
+        // Wakes a thread parked in waitNativeEvents. Safe from ANY thread
+        // (the render lane's only legal platform call). Default no-op.
+        virtual void postEmptyEvent() noexcept {
+        }
     };
 }
 

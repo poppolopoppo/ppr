@@ -25,9 +25,13 @@ namespace pP {
         packet.m_window_title = window.m_title;
         packet.m_framebuffer_size = window.m_framebuffer_size;
         // Surface identity is authoritative at capture; the generation is
-        // filled by the producer (Editor::update queries the Renderer),
-        // defaulting to "no claim" for producers without a surface yet.
+        // filled by the producer (Editor::update queries the Renderer, or
+        // the lane generation mirror), defaulting to "no claim" for
+        // producers without a surface yet. The native handle is snapshotted
+        // so the consume lane can create the surface without touching the
+        // live Window.
         packet.m_surface_identity = window.m_handle;
+        packet.m_surface_native = window.m_native;
         return packet;
     }
 }

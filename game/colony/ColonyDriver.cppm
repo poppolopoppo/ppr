@@ -50,6 +50,13 @@ export namespace pP::colony {
     };
 
     class ColonyDriver {
+    public:
+        /// Revision-tagged dirty-set row used for capture and ack.
+        struct DirtyChunk {
+            sim::ChunkPos m_pos{};
+            u64 m_revision{};
+        };
+
     private:
         struct PendingDig {
             sim::GlobalCellPos m_min{};
@@ -60,6 +67,11 @@ export namespace pP::colony {
         Colony m_colony{};
         std::optional<sim::FixedTimestep> m_timestep{};
         u64 m_seed{};
+        // Genuine world generation: bumped on every successful init/
+        // regenerate. The ack manifest rides this (not the user seed), so
+        // a regenerated world — even one re-using the same seed value —
+        // can never match a stale result's ack tags.
+        u64 m_world_generation{0u};
         u64 m_tick_count{};
         u32 m_agent_count{kAgentCount};
         u32 m_speed{1u};
@@ -67,7 +79,12 @@ export namespace pP::colony {
         sim::Registry m_registry{};
         sim::StepRegistry m_steps{};
         Pathfinder m_finder{};
-        Array<sim::ChunkPos> m_present_dirty{};
+        Array<DirtyChunk> m_present_dirty{};
+        // Last revision issued per chunk position, surviving row removal:
+        // a chunk re-dirtied after its ack continues from this revision
+        // instead of restarting at 1, so a stale in-flight ack can never
+        // clear the new edit (revision ABA). Cleared only on worldgen.
+        Array<DirtyChunk> m_present_revision_history{};
         Array<sim::ChunkPos> m_collider_dirty{};
         DigStats m_dig_stats{};
         // Bounded FIFO of accepted dig rects (drop-oldest past
@@ -197,6 +214,10 @@ export namespace pP::colony {
 
         [[nodiscard]] u64 seed() const noexcept;
 
+        /// Monotonic world generation: every successful init/regenerate
+        /// advances it. Identity for ack matching — never the user seed.
+        [[nodiscard]] u64 worldGeneration() const noexcept;
+
         [[nodiscard]] u64 tickCount() const noexcept;
 
         [[nodiscard]] double simMs() const noexcept;
@@ -251,10 +272,15 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const sim::ChunkPos> lastEditChunks() const noexcept;
 
         /// Complete pending presentation-dirty set, accumulated across every
-        /// edit since the last acknowledgement (panel-safe). Capture reads
-        /// this — not lastEditChunks, which reports only the most recent
-        /// edit — so a multi-edit frame snapshots every touched chunk.
-        [[nodiscard]] std::span<const sim::ChunkPos> presentDirtyChunks() const noexcept;
+        /// edit since the last acknowledgement (panel-safe). Each awaited
+        /// row carries the edit revision at the time the entry was last
+        /// bumped — so revision-aware ackPresentChunks can clear only the
+        /// matching generation: a re-edit to the same chunk after capture
+        /// (same chunk, newer revision) is distinct and stays pending.
+        /// Capture reads this — not lastEditChunks, which reports only the
+        /// most recent edit — so a multi-edit frame snapshots every touched
+        /// chunk.
+        [[nodiscard]] std::span<const DirtyChunk> presentEditsCapture() const noexcept;
 
         /// Pushes edit-touched chunks into presentation (`markChunkChanged`).
         /// Call after `update`/`stepOne` and before the translator submit.
@@ -263,10 +289,13 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code presentEdits(ColonyTranslator &translator) noexcept;
 
         /// Removes exactly the listed chunks from the pending
-        /// presentation-dirty set. Consumption acknowledges only what it
-        /// presented; dirt that arrived after capture stays pending for the
-        /// next frame.
-        void ackPresentChunks(std::span<const sim::ChunkPos> acked) noexcept;
+        /// presentation-dirty set, matching the captured revision per
+        /// chunk: a re-edit to the same chunk after capture is a different
+        /// generation and keeps its current entry (never cleared by a
+        /// stale ack). Consumption acknowledges only what it presented;
+        /// dirt that arrived after capture stays pending for the next
+        /// frame.
+        void ackPresentChunks(std::span<const DirtyChunk> acked) noexcept;
 
         /// Cached per-agent rows from the last committed tick (panel-safe).
         [[nodiscard]] std::span<const AgentSummary> agentSummaries() const noexcept;

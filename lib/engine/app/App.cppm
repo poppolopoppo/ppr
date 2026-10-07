@@ -6,6 +6,7 @@ export import :application;
 export import :application_editor;
 
 export import :frame.packet;
+export import :frame.render_lane;
 
 export import :input.action;
 export import :input.batch;

@@ -129,7 +129,19 @@ namespace pP {
     }
 
     bool UnitTest::Context::filterMatches(const std::string_view path) const noexcept {
-        return path.starts_with(m_filter_path) || m_filter_path.starts_with(path);
+        std::string_view remaining = m_filter_path;
+        while (not remaining.empty()) {
+            const auto comma = remaining.find(',');
+            const std::string_view token = remaining.substr(0, comma);
+            if (not token.empty() and (path.starts_with(token) || token.starts_with(path))) {
+                return true;
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            remaining.remove_prefix(comma + 1);
+        }
+        return false;
     }
 
     void UnitTest::run(const Context &context, const UnitTest &test) noexcept {

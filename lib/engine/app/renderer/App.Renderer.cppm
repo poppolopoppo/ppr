@@ -12,6 +12,9 @@ import std;
 export namespace pP {
     class Window;
     using WindowHandle = Numeric<void *, Window>;
+    // Mirrors :window.handle (which this partition deliberately does not
+    // import: it redeclares the handle alias above). Same underlying type.
+    using NativeWindowHandle = Numeric<void *, WindowHandle>;
 
     // ------------------------------------------------------------------
     // generic renderer: surfaces + queue + submission only
@@ -39,6 +42,17 @@ export namespace pP {
         kRejected,
         kSubmitted,
         kSubmitFailed,
+    };
+
+    // P2 lane snapshot: owned copies only (the title borrows packet
+    // storage that outlives the call via the lane request). Lets the render
+    // lane drive presentation without touching the live Window; the legacy
+    // overloads snapshot the live Window on the calling lane instead.
+    struct SurfaceWindowSnapshot {
+        WindowHandle m_handle{};
+        NativeWindowHandle m_native{};
+        int2 m_framebuffer_size{zero_v};
+        std::string_view m_title{};
     };
 
     class Renderer final {
@@ -86,6 +100,12 @@ export namespace pP {
         // overload below stays safe for callers without a packet.
         [[nodiscard]] std::error_code renderAndPresent(
             const Window &window, std::initializer_list<SurfaceRenderPass> passes, SurfaceIdentity identity);
+
+        // Lane overload: identical semantics from a snapshot (no live
+        // Window read). Temporary pass descriptors stay synchronous to the
+        // encode, as on every other path.
+        [[nodiscard]] std::error_code renderAndPresent(
+            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
 
         [[nodiscard]] std::error_code waitOnHost();
 
@@ -136,6 +156,40 @@ export namespace pP {
         // observed mid-sweep still stops admission.
         [[nodiscard]] std::error_code checkFrameAdmission();
 
+        // Owner-thread retirement frontier: the highest accepted submission
+        // value whose entry has actually left m_unretired_submits via a
+        // successful sweep (completion observed by the fence poll — never
+        // manufactured from a failed poll, a hold seam, or a removal). Main
+        // uses the published mirror of this value to release construction
+        // reservations only after both the CPU settlement result and this
+        // retire marker cover the frame. Tracks kFenceValueNone before the
+        // first confirmed retirement; never invented.
+        [[nodiscard]] FenceCompletionValue retirementFrontier() const noexcept {
+            return m_retirement_frontier;
+        }
+
+        // Owner-thread settlement of the most recent submit call's fate
+        // (kSubmitted / kSubmitFailed / kRejected). The inline/lane submit
+        // path copies the discriminator into the posted RenderFrameResult so
+        // a construction reservation is charged (quarantined) on ambiguous
+        // failures and released on definite rejections. Off-thread
+        // (affinity) rejects never touch this member — they report through
+        // the returned operation_not_permitted alone, so an accepted fate
+        // the owner stamped is never corrupted before it is read; the caller
+        // classifies that error as definitely-rejected without consulting it.
+        [[nodiscard]] FrameSettlement lastSubmitSettlement() const noexcept {
+            return m_last_submit_settlement;
+        }
+
+        // Tests-only deterministic backend-retirement driver: waits for the
+        // fence value the lane has confirmed and submits an empty command
+        // buffer on the same queue so slang-rhi's retirement poll drops its
+        // completed command buffers. This is the backend workaround that
+        // replaces the production notifyDeviceLost kick; it must only run on
+        // the Renderer's owner thread, after proven completion of the real
+        // submissions, and must not touch the device semantics of a loss.
+        void driveQueueRetirementForTest() noexcept;
+
         // Observability for Gate 1 (four clocks stay separate: queue depth
         // via outstandingFrameCount, host present via profiling scopes, GPU
         // completion via completedFenceValue, displayed cadence externally).
@@ -152,6 +206,10 @@ export namespace pP {
         [[nodiscard]] bool isSurfaceWorkObsolete(SurfaceIdentity identity) const noexcept;
 
         [[nodiscard]] std::error_code destroyWindowSurface(const Window &window);
+
+        // Lane overload: destroys by handle without touching the live
+        // Window (same affinity rules as every other Renderer call).
+        [[nodiscard]] std::error_code destroyWindowSurface(WindowHandle window_handle);
 
         // Gate 1 determinism seam, TESTS ONLY: when set, the next submit
         // behaves as a submit that may already have executed (device-
@@ -223,7 +281,8 @@ export namespace pP {
         // resizeWindowSurface_ — the one place the surface shape changes.
         void recomputeSurfaceSignatures_(SurfaceRecord &record);
 
-        [[nodiscard]] std::error_code createWindowSurface_(const Window &window, SurfaceRecord **out_record);
+        [[nodiscard]] std::error_code createWindowSurface_(
+            const SurfaceWindowSnapshot &window, SurfaceRecord **out_record);
 
         [[nodiscard]] std::error_code resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent);
 
@@ -269,7 +328,7 @@ export namespace pP {
         void retireFrame_(FenceCompletionValue submitted_value, FrameSettlement settlement) noexcept;
 
         [[nodiscard]] std::error_code renderAndPresentImpl_(
-            const Window &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
+            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 
@@ -294,6 +353,13 @@ export namespace pP {
         // Submitted values awaiting fence completion; each leaves exactly
         // once, carrying its credit back with it.
         Array<FenceCompletionValue> m_unretired_submits{};
+        // Advanced ONLY when an entry above actually leaves the set (its
+        // submission completed, observed through a successful fence poll).
+        // Hold-sweep, failed polls, and removal leave it at its last
+        // proven value — retirement is never manufactured from absence.
+        FenceCompletionValue m_retirement_frontier{kFenceValueNone};
+        // Settlement of this submit call, for posting on the frame result.
+        FrameSettlement m_last_submit_settlement{FrameSettlement::kRejected};
         // Submit-failure quarantine: a failed submit may have executed, so
         // admission stops and the failed frame's credit is held (never
         // reused, never returned early) until shutdown proves idle or
@@ -309,6 +375,9 @@ export namespace pP {
         // sweepCompleted_ is suppressed so real submits stay outstanding.
         // Production never sets it.
         bool m_test_hold_sweep{false};
+        // Set once shutdown() released the fence/queue/service: late sweeps
+        // from the lane drain then report clean instead of not_connected.
+        bool m_shutdown_complete{false};
         // Renderer-owned deferred releases (surface-adjacent; pass-owned
         // objects retire through the passes' own queues).
         DeferredReleaseQueue m_deferred{};

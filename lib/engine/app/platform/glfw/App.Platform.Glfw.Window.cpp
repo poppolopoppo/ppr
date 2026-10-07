@@ -197,6 +197,31 @@ namespace pP {
         return default_value_v;
     }
 
+    std::error_code GlfwWindow::waitEventsTimeout(const TimeSpan timeout) {
+        if (timeout <= TimeSpan{}) {
+            ::glfwPollEvents();
+            return default_value_v;
+        }
+        // Clamp to a strictly positive bound: GLFW treats 0 as "return
+        // immediately", which would spin the pacer slices. Cap at one
+        // background period so a missed wakeup still re-polls promptly.
+        // Plain comparisons (no std::min/max: windows.h collides with them).
+        constexpr TimeDuration kMaxWait{1.0 / 5.0};
+        TimeDuration wait{timeout};
+        if (wait > kMaxWait) {
+            wait = kMaxWait;
+        }
+        const double wait_seconds = wait.count();
+        ::glfwWaitEventsTimeout(wait_seconds > 0.0 ? wait_seconds : 1e-6);
+        return default_value_v;
+    }
+
+    void GlfwWindow::postEmptyEvent() noexcept {
+        // Documented any-thread call; wakes glfwWaitEvents(Timeout) parked
+        // on main (credit return, exit, config change from the lane).
+        ::glfwPostEmptyEvent();
+    }
+
     // ------------------------------------------------------------------
     // GLFW monitors
     // ------------------------------------------------------------------
