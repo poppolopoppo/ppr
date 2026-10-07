@@ -32,7 +32,7 @@ GPU backends go through a single abstraction over Slang-RHI (D3D12 on Windows, V
 - Slang shaders compiled at startup; one GPU abstraction for devices, buffers, and command lists
 - Content-free renderer: it owns frame orchestration and presentation only; each render pass owns its own pipelines and GPU caches and draws from an immutable per-frame camera snapshot
 - Recoverable failures returned as `std::error_code` / `std::expected`, consistently; teardown releases in reverse and keeps the first error
-- Four test suites wired into CTest, running on CI
+- Eight CTest entries wired into CTest (five app shards plus core/sim/asset suites), running on CI
 
 ## Build
 
@@ -53,7 +53,7 @@ REM Configure (or choose clang-cl-dev instead on Windows)
 cmake --preset msvc-dev
 REM Build
 cmake --build out/build/msvc-dev --parallel
-REM Run the four test suites
+REM Run the test matrix (8 entries: 5 app shards + core/sim/asset)
 ctest --test-dir out/build/msvc-dev --output-on-failure
 ```
 
@@ -86,12 +86,39 @@ Startup, frame loop, and shutdown follow the same shape every run — initialize
 ctest --test-dir out/build/msvc-dev --output-on-failure
 ```
 
-| Suite | What it covers | Needs a window |
+The full matrix is sharded for parallel runs (8 entries: 5 app shards plus
+core/sim/asset):
+
+```bash
+ctest --test-dir out/build/msvc-dev -j4 --output-on-failure
+```
+
+| CTest entry | What it covers | Needs a window |
 |---|---|---|
 | `EngineCoreUnitTests` | Memory, containers, concurrency, I/O | No |
 | `EngineSimUnitTests` | Chunk grid, fixed-timestep tick, snapshots | No |
-| `EngineAppUnitTests` | Platform-dependent behavior | Yes (GLFW) |
+| `app_a1_death_lifecycle` | Run-gate death lifecycle + fast lifecycle leaves | Yes (GLFW) |
+| `app_a2_gates` | Slow run-gate leaves | Yes (GLFW) |
+| `app_b_sim` | Devices, player, dispatch, snapshot, render-view groups | Yes (GLFW) |
+| `app_c_fence` | Frame-fence group | Yes (GLFW) |
+| `app_d_io` | Player service, shader, renderer/flat `app/*` leaves, window input, routing | Yes (GLFW) |
 | `EngineAssetUnitTests` | Image decode, mesh import, GPU caches, render gate | Headless GPU tiers |
+
+The five `app_*` shards invoke the same exe with `--run-test` token lists
+(the shard map lives in `lib/engine/tests/app/CMakeLists.txt`; every leaf
+appears in exactly one shard). Focused runs select shards by regex, e.g.
+`ctest --test-dir out/build/msvc-live -R app_a2_gates`. Live wall-test
+standard is serial: `ctest --test-dir out/build/msvc-live -j1
+--output-on-failure` (parallel `-j4` is not blessed on live pending flake
+diagnostics); dev keeps the 8-entry sharded matrix with `ctest --test-dir
+out/build/msvc-dev -j4 --output-on-failure` (7/7 green measured 358s wall).
+Shards keep the ASan 3-loop default (no `--loop` override); per-shard
+`TIMEOUT`s are 600/600/600/600/300, and asset tests run with
+`WORKING_DIRECTORY` set to the exe dir. Keep concurrent independent
+full-matrix invocations exclusive (no concurrent independent matrix
+invocations): the death-child marker file is a fixed machine-temp path
+(`ppr-gate1-b1-markers.txt`) shared across processes, and GPU contention
+changes timing-sensitive outcomes.
 
 ![Build, test, and CI pipeline](docs/diagrams/readme/build-test-ci.svg)
 

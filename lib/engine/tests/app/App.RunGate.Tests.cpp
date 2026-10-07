@@ -1802,10 +1802,11 @@ namespace pP::tests::detail {
             std::fprintf(
                 stderr,
                 "[lane-gate:block] constructions=%u consumed=%u queued=%u renders=%u refusals=%u"
-                " pumps=%u updates=%u gate=%d ran=%d watchdog=%d reason=%s\n",
+                " pumps=%u updates=%u gate=%d ran=%d watchdog=%d reason=%s runec=%d(%s)\n",
                 harness.m_constructions, harness.m_consumed, harness.m_queued, harness.m_renders,
                 harness.m_construction_refusals, platform.m_pumps, platform.m_updates, gate_opened ? 1 : 0,
-                gate_ran ? 1 : 0, platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str());
+                gate_ran ? 1 : 0, platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str(), phase.m_run_ec.value(),
+                phase.m_run_ec.message().c_str());
 
             PPR_TEST_ASSERT(not phase.m_run_threw);
             PPR_TEST_ASSERT(not phase.m_run_ec);
@@ -2291,6 +2292,20 @@ namespace pP::tests::detail {
             harness.getTimerManager().schedule(harness.m_clock.now(), [](const TimePoint) -> std::error_code {
                 return std::make_error_code(std::errc::io_error);
             });
+            // Healthy-backend drain BEFORE injecting synthetic loss (mirror
+            // the terminal_probe fixture): boot uploads (TrianglePass
+            // fallback texture initial data) submit async and park in the
+            // backend queue until a submit-time poll observes completion, but
+            // notifyDeviceLost drops the queue ref without waiting — an
+            // undrained backend retains device refs to destroyRHI (which
+            // asserts m_liveDeviceCount == 0). Wait the submitted value,
+            // sweep, then drive the queue poll — proven completion only,
+            // never new device work. Test precondition: each step asserts
+            // success, so a drain failure fails loudly here and the loss
+            // below never injects on top of undrained uploads.
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(renderer.lastSubmittedFenceValue()));
+            PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+            renderer.driveQueueRetirementForTest();
             renderer.notifyDeviceLost();
             platform.m_on_pump = [&](ScriptedPlatform &self, const u32 pump) {
                 if (pump >= 10u) {
@@ -2398,6 +2413,22 @@ namespace pP::tests::detail {
             ScriptedPlatform &platform = *harness.m_scripted;
             Renderer &renderer = harness.getRenderer();
             harness.m_update_error = std::make_error_code(std::errc::io_error);
+            // Healthy-backend drain BEFORE injecting confirmed removal
+            // (mirror the terminal_probe fixture): boot uploads (TrianglePass
+            // fallback texture initial data) submit async and park in the
+            // backend queue until a submit-time poll observes completion, but
+            // removal-confirmed teardown abandons the fence without waiting
+            // (App.Renderer.cpp:364-368) — an undrained backend retains
+            // boot-upload/m_commandBuffersInFlight device refs to a later
+            // destroyRHI (which asserts m_liveDeviceCount == 0). Wait the
+            // submitted value, sweep, then drive the queue poll — proven
+            // completion only, never new device work. Test precondition:
+            // each step asserts success, so a drain failure fails loudly here
+            // and the removal below never injects on top of undrained
+            // uploads.
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(renderer.lastSubmittedFenceValue()));
+            PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+            renderer.driveQueueRetirementForTest();
             // No scope-exit injection reset (same lifetime rule as the hold
             // seam above): the renderer is destroyed by run()'s shutdown,
             // and Renderer::shutdown clears the injected failure

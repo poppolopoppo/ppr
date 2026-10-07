@@ -23,6 +23,13 @@ namespace pP::tests::detail {
                 : Application(kHeadlessDomain, name, std::span<const char *const>{}) {
             }
 
+            // Test-seam construction: scripted platform + injected clock
+            // (mirrors the production Application seam). The clock outlives
+            // the application (non-owning view).
+            HeadlessApp(const std::string_view name, std::unique_ptr<IPlatform> platform, const ITimerClock &clock)
+                : Application(kHeadlessDomain, name, std::span<const char *const>{}, std::move(platform), clock) {
+            }
+
             [[nodiscard]] std::error_code boot() {
                 return initialize();
             }
@@ -485,15 +492,119 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
         };
 
-        // F2 admission: an exit latched before the clock stage stops the
-        // wait immediately (no 200ms background sleep) and reports zero dt.
+        // F2 wait/pump spy (FakeFrameInput pattern): counts the platform
+        // wait/pump boundary the pacer sleep primitive drives
+        // (pacerSleepSlice_ pumps then waits natively per slice), so a zero
+        // count proves no sleep slice executed. The manual clock is
+        // controlled: the application holds a non-owning view of it, so the
+        // clock outlives the application.
+        struct PaceSpyClock final : ITimerClock {
+            TimePoint m_now{};
+
+            [[nodiscard]] TimePoint now() const noexcept override {
+                return m_now;
+            }
+        };
+
+        struct PaceSpyPlatform final : IPlatform {
+            u32 m_pumps{0u};
+            u32 m_waits{0u};
+            TimeSpan m_waited{};
+            safe_ptr<Application> m_application{};
+
+            [[nodiscard]] std::error_code initialize(Application &application) override {
+                m_application.reset(&application);
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::error_code shutdown(Application &) override {
+                m_application.reset();
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::string_view getPlatformName() const noexcept override {
+                return "PaceSpy";
+            }
+
+            [[nodiscard]] platform::Version getPlatformVersion() const noexcept override {
+                return {.m_major = 0, .m_minor = 0, .m_revision = 0};
+            }
+
+            [[nodiscard]] safe_ptr<Application> getApplication() const noexcept override {
+                return m_application;
+            }
+
+            [[nodiscard]] safe_ptr<IInputService> getInputService() const noexcept override {
+                return {};
+            }
+
+            [[nodiscard]] safe_ptr<IWindowService> getWindowService() const noexcept override {
+                return {};
+            }
+
+            [[nodiscard]] safe_ptr<IPlayerService> getPlayerService() const noexcept override {
+                return {};
+            }
+
+            [[nodiscard]] std::error_code update(const TimeSpan) override {
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::error_code pumpNativeEvents() override {
+                ++m_pumps;
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::error_code waitNativeEvents(const TimeSpan timeout) override {
+                ++m_waits;
+                m_waited += timeout;
+                return default_value_v;
+            }
+        };
+
+        // F2 admission (behavioral, load-independent): an exit latched
+        // before the clock stage stops the wait before any pacer sleep slice
+        // executes — no pump, no native wait, no admitted frame time. The
+        // controlled clock never advances, so dt is exactly zero; the spy
+        // above proves zero slices ran. Holds under any load — wall-clock
+        // latency is covered by preset_exit_latency_bounded_200ms, not here.
         PPR_UNIT_TEST (preset_exit_stops_clock_admission) {
+            PaceSpyClock clock{};
+            auto platform = std::make_unique<PaceSpyPlatform>();
+            PaceSpyPlatform *const spy = platform.get();
+
             struct ClockApp final : HeadlessApp {
                 using HeadlessApp::HeadlessApp;
                 using Application::advanceClock_;
             };
 
-            ClockApp test_app{"ClockStop"};
+            ClockApp test_app{"ClockStop", std::move(platform), clock};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            test_app.setBackgroundPriority(true);
+
+            test_app.requestExit();
+            TimeSpan dt{std::chrono::seconds{9}};
+            PPR_TEST_ASSERT(not test_app.advanceClock_(&dt));
+            PPR_TEST_ASSERT(spy->m_pumps == 0u);
+            PPR_TEST_ASSERT(spy->m_waits == 0u);
+            PPR_TEST_ASSERT(spy->m_waited == TimeSpan{});
+            PPR_TEST_ASSERT(dt == TimeSpan{});
+        };
+
+        // Timing gate (serial only): the preset-exit fast path retires the
+        // clock stage within the 200ms background period. Wall-clock bound —
+        // requires an uncontended machine; rides app_b_sim RUN_SERIAL
+        // (lib/engine/tests/app/CMakeLists.txt), never the parallel matrix.
+        PPR_UNIT_TEST (preset_exit_latency_bounded_200ms) {
+            struct WallClockApp final : HeadlessApp {
+                using HeadlessApp::HeadlessApp;
+                using Application::advanceClock_;
+            };
+
+            WallClockApp test_app{"ClockLatency"};
             PPR_TEST_ASSERT(not test_app.boot());
             PPR_DEFER {
                 PPR_TEST_ASSERT(not test_app.teardown());
@@ -574,6 +685,7 @@ namespace pP::tests {
             detail::FrameStages::render_preparation_consumes_packet_not_live_camera,
             detail::FrameStages::target_time_reflects_focus_and_rate,
             detail::FrameStages::preset_exit_stops_clock_admission,
+            detail::FrameStages::preset_exit_latency_bounded_200ms,
             detail::FrameStages::run_returns_shutdown_error_on_graceful_exit,
             detail::FrameStages::run_keeps_first_error_across_shutdown_failure,
         });

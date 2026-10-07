@@ -443,6 +443,13 @@ namespace pP {
                 not m_wait_pump_error and
                 hint_drain_err != std::make_error_code(std::errc::operation_canceled)) {
                 m_wait_pump_error = hint_drain_err;
+                try {
+                    PPR_LOG(
+                        App, debug, "waitForAdmissionHint_:hint_drain retains wait_pump_error",
+                        {{"category", hint_drain_err.category().name()}, {"value", hint_drain_err.value()},
+                            {"origin", "waitForAdmissionHint_:hint_drain"}});
+                } catch (...) {
+                }
             }
             // Credit release for accepted submissions is the AND of CPU
             // settlement and the published retirement frontier — recheck by
@@ -457,6 +464,13 @@ namespace pP {
                     not m_wait_pump_error and
                     hint_retire_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = hint_retire_err;
+                    try {
+                        PPR_LOG(
+                            App, debug, "waitForAdmissionHint_:hint_retire retains wait_pump_error",
+                            {{"category", hint_retire_err.category().name()}, {"value", hint_retire_err.value()},
+                                {"origin", "waitForAdmissionHint_:hint_retire"}});
+                    } catch (...) {
+                    }
                 }
                 m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
             }
@@ -473,12 +487,26 @@ namespace pP {
                     not m_wait_pump_error and
                     hint_pump_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = hint_pump_err;
+                    try {
+                        PPR_LOG(
+                            App, debug, "waitForAdmissionHint_:hint_pump retains wait_pump_error",
+                            {{"category", hint_pump_err.category().name()}, {"value", hint_pump_err.value()},
+                                {"origin", "waitForAdmissionHint_:hint_pump"}});
+                    } catch (...) {
+                    }
                 }
                 if (const std::error_code hint_wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
                     hint_wait_err and
                     not m_wait_pump_error and
                     hint_wait_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = hint_wait_err;
+                    try {
+                        PPR_LOG(
+                            App, debug, "waitForAdmissionHint_:hint_wait retains wait_pump_error",
+                            {{"category", hint_wait_err.category().name()}, {"value", hint_wait_err.value()},
+                                {"origin", "waitForAdmissionHint_:hint_wait"}});
+                    } catch (...) {
+                    }
                 }
             } else {
                 return;
@@ -539,6 +567,13 @@ namespace pP {
             if (const std::error_code final_err = m_render_lane->finalSweepError();
                 final_err and final_err != std::make_error_code(std::errc::operation_canceled)) {
                 first_err = final_err;
+                try {
+                    PPR_LOG(
+                        App, debug, "pumpRenderCompletions_:finalSweep retains final_err",
+                        {{"category", final_err.category().name()}, {"value", final_err.value()},
+                            {"origin", "pumpRenderCompletions_:finalSweep"}});
+                } catch (...) {
+                }
             }
         }
         return first_err;
@@ -678,12 +713,20 @@ namespace pP {
                     not m_wait_pump_error and
                     pump_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = pump_err;
+                    PPR_LOG(
+                        App, debug, "pacerSleepSlice_:pump retains wait_pump_error",
+                        {{"category", pump_err.category().name()}, {"value", pump_err.value()},
+                            {"origin", "pacerSleepSlice_:pump"}});
                 }
                 if (const std::error_code wait_err = m_platform->waitNativeEvents(slice);
                     wait_err and
                     not m_wait_pump_error and
                     wait_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = wait_err;
+                    PPR_LOG(
+                        App, debug, "pacerSleepSlice_:wait retains wait_pump_error",
+                        {{"category", wait_err.category().name()}, {"value", wait_err.value()},
+                            {"origin", "pacerSleepSlice_:wait"}});
                 }
             } else if (slice > TimeSpan{}) {
                 std::this_thread::sleep_for(slice);
@@ -768,6 +811,10 @@ namespace pP {
                     not m_wait_pump_error and
                     pump_err != std::make_error_code(std::errc::operation_canceled)) {
                     m_wait_pump_error = pump_err;
+                    PPR_LOG(
+                        App, debug, "startRenderLane_:waitPump:pump retains wait_pump_error",
+                        {{"category", pump_err.category().name()}, {"value", pump_err.value()},
+                            {"origin", "startRenderLane_:waitPump:pump"}});
                 }
                 if (m_platform) {
                     if (const std::error_code native_err = m_platform->pumpNativeEvents();
@@ -775,12 +822,20 @@ namespace pP {
                         not m_wait_pump_error and
                         native_err != std::make_error_code(std::errc::operation_canceled)) {
                         m_wait_pump_error = native_err;
+                        PPR_LOG(
+                            App, debug, "startRenderLane_:waitPump:native retains wait_pump_error",
+                            {{"category", native_err.category().name()}, {"value", native_err.value()},
+                                {"origin", "startRenderLane_:waitPump:native"}});
                     }
                     if (const std::error_code wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
                         wait_err and
                         not m_wait_pump_error and
                         wait_err != std::make_error_code(std::errc::operation_canceled)) {
                         m_wait_pump_error = wait_err;
+                        PPR_LOG(
+                            App, debug, "startRenderLane_:waitPump:wait retains wait_pump_error",
+                            {{"category", wait_err.category().name()}, {"value", wait_err.value()},
+                                {"origin", "startRenderLane_:waitPump:wait"}});
                     }
                 }
             } catch (...) {
@@ -808,6 +863,10 @@ namespace pP {
                 // dtors, so this drain is also what retires the last live
                 // RenderFrameResult/shared_ptr bytes.
                 if (const std::error_code drain_err = pumpRenderCompletions_(); drain_err) {
+                    PPR_LOG(
+                        App, info, "stopRenderLane_:drain retains drain_err",
+                        {{"category", drain_err.category().name()}, {"value", drain_err.value()},
+                            {"origin", "stopRenderLane_:drain"}});
                     lane_err = drain_err;
                 }
                 m_render_lane.reset();
@@ -815,6 +874,13 @@ namespace pP {
         } catch (...) {
         }
         if (m_wait_pump_error) {
+            try {
+                PPR_LOG(
+                    App, info, "stopRenderLane_:wait_pump_error joins lane_err",
+                    {{"category", m_wait_pump_error.category().name()}, {"value", m_wait_pump_error.value()},
+                        {"origin", "stopRenderLane_:wait_pump_error"}});
+            } catch (...) {
+            }
             lane_err = lane_err ? lane_err : m_wait_pump_error;
         }
         return lane_err;
@@ -1115,6 +1181,11 @@ namespace pP {
         // log below is best-effort: a throwing diagnostic must never skip
         // the lane stop/join and renderer release that follow.
         try {
+            PPR_LOG(
+                App, info, "shutdown:quiescence disposition entering teardown",
+                {{"disposition", static_cast<int>(m_gpu_teardown_disposition)},
+                    {"category", m_gpu_teardown_error.category().name()}, {"value", m_gpu_teardown_error.value()},
+                    {"origin", "shutdown:quiescence"}});
             PPR_LOG(App, info, "shut down application", {{"name", m_name}, {"platform", hal::platformName()}});
         } catch (...) {
         }

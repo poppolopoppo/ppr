@@ -156,6 +156,18 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
   (18 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
   `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
   `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
+  CTest sharding (Phase 2.5 A1): 5 parallel-safe entries (`app_a1_death_lifecycle`, `app_a2_gates`, `app_b_sim`,
+  `app_c_fence`, `app_d_io`; 8 entries total with core/sim/asset) invoke the same exe with `--run-test` token lists
+  at the ASan 3-loop default. Live wall-test standard is serial: `ctest --test-dir out/build/msvc-live -j1
+  --output-on-failure` (parallel `-j4` not blessed on live pending flake diagnostics); dev keeps the 8-entry
+  sharded matrix with `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure` (7/7 green measured 358s wall);
+  focused: `ctest --test-dir out/build/<preset> -R <shard>`. To add/move a leaf, edit the
+  token lists in `lib/engine/tests/app/CMakeLists.txt` keeping exact-once coverage; filter matching is
+  prefix-based both ways, so use full `app/<group>` paths — `app/player/` needs its trailing slash to avoid also
+  matching siblings `app/player_service` / `app/player_graph`, and `app/run_gate` splits by full leaf tokens.
+  Per-shard `TIMEOUT` 600/600/600/600/300 with `WORKING_DIRECTORY` at the exe dir; keep concurrent independent
+  full-matrix runs exclusive (no concurrent independent matrix invocations — the death-child marker is a fixed
+  machine-temp path shared across processes, and GPU contention changes timing-sensitive outcomes).
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
   TU-local `const UnitTest` + non-exported `const UnitTest &<node>Tests() noexcept` accessor per root-visible node;
   file-local sub-groups need no accessor; `memory`/`containers` assembled in `Core.Tests.cpp`.
