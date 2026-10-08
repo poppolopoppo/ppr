@@ -58,9 +58,20 @@ namespace pP {
     // page pool allocators
     // ------------------------------------------------------------------
 
+    // Global-pool ownership policy: both global pools below are explicit
+    // process-lifetime owners — intentionally leaked (a static pointer with
+    // trivial destruction, so the pool itself is never destroyed) and left for
+    // OS process reclamation. TLS LocalCaches may flush at any teardown order,
+    // including after main(), so destroying a global pool first would leave a
+    // late flush hitting a dead pool. Owned (non-global) pools are unaffected
+    // and keep normal destruction.
+
     auto mem::HugePage::getGlobalPool() noexcept -> PagePool & {
-        alignas(hal::cacheline_size_v) static PagePool g_instance{block_size_v, num_reserved_blocks_v};
-        return g_instance;
+        static PagePool *const g_instance = [] {
+            void *const storage = ::operator new(sizeof(PagePool), std::align_val_t{hal::cacheline_size_v});
+            return std::construct_at(static_cast<PagePool *>(storage), block_size_v, num_reserved_blocks_v);
+        }();
+        return *g_instance;
     }
 
     auto mem::HugePage::getThreadLocalCache() noexcept -> local_block_cache_t & {
@@ -70,8 +81,11 @@ namespace pP {
 
     auto mem::SmallPage::getGlobalPool() noexcept -> pooling_allocator_t & {
         [[maybe_unused]] static const auto &_{HugePage::getGlobalPool()};
-        alignas(hal::cacheline_size_v) static pooling_allocator_t g_instance{};
-        return g_instance;
+        static pooling_allocator_t *const g_instance = [] {
+            void *const storage = ::operator new(sizeof(pooling_allocator_t), std::align_val_t{hal::cacheline_size_v});
+            return std::construct_at(static_cast<pooling_allocator_t *>(storage));
+        }();
+        return *g_instance;
     }
 
     auto mem::SmallPage::getThreadLocalCache() noexcept -> local_block_cache_t & {
