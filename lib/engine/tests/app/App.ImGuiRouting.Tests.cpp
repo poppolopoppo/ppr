@@ -1218,6 +1218,82 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(not routed.shutdown());
         std::ignore = window.release();
     };
+
+    // Shared-module refcount guard: the imgui slang module is borrowed from
+    // the shader session, never owned — repeated UI initialize/shutdown
+    // cycles without resetting the session or the device must all succeed
+    // with stable device + global-session identities. Adopting the borrowed
+    // module as owned consumes a session reference per init and eventually
+    // crashes inside slang-compiler on stale module state.
+    PPR_UNIT_TEST (repeated_ui_init_shutdown_preserves_module_refs) {
+        const auto shader = IShaderService::get();
+        const auto rhi = IRhiService::get();
+        std::ignore = rhi->shutdown();
+        std::ignore = shader->shutdown();
+        PPR_DEFER {
+            std::ignore = rhi->shutdown();
+            std::ignore = shader->shutdown();
+        };
+        PPR_TEST_ASSERT(not shader->initialize());
+        PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
+
+        // Stable identities: no UI cycle may disturb the session or device.
+        auto *const stable_device = &rhi->getDevice();
+        auto *const stable_session = shader->getGlobalSession();
+        PPR_TEST_ASSERT(stable_device != nullptr);
+        PPR_TEST_ASSERT(stable_session != nullptr);
+
+        ImGuiRouting::StubInputService inputs{};
+        Window window{
+            WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
+            WindowModel{.m_window_position = int2{10, 20}, .m_window_size = int2{800, 600}}};
+        window.m_framebuffer_size = int2{800, 600};
+
+        WindowInputContext routed{safe_ptr<IInputService>{&inputs}};
+        PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
+        WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
+        std::ignore = viewport.updateFromWindow();
+        const TimeSpan frame{std::chrono::milliseconds{16}};
+
+        constexpr u32 kCycles = 16u;
+        for (u32 cycle = 0u; cycle < kCycles; ++cycle) {
+            auto ui = ui::createImGuiService();
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(&rhi->getDevice() == stable_device);
+            PPR_TEST_ASSERT(shader->getGlobalSession() == stable_session);
+
+            // Routing/reinit proof per cycle: the listener is registered and
+            // a live frame builds on the freshly linked program.
+            PPR_TEST_ASSERT(ui->getContext() != nullptr);
+            PPR_TEST_ASSERT(ui->getInputListener().isValid());
+            PPR_TEST_ASSERT(routed.m_context.hasInputListener(*ui->getInputListener()));
+            auto *imgui_context = static_cast<ImGuiContext *>(ui->getContext());
+            PPR_TEST_ASSERT(imgui_context != nullptr);
+            ImGui::SetCurrentContext(imgui_context);
+            PPR_TEST_ASSERT(not ui->update(frame, viewport));
+            ImGui::SetNextWindowPos(ImVec2{0.0f, 0.0f});
+            ImGui::SetNextWindowSize(ImVec2{400.0f, 300.0f});
+            PPR_TEST_ASSERT(ImGui::Begin("refcount_probe"));
+            ImGui::TextUnformatted("module refcount probe");
+            ImGui::End();
+            DetachedUiDrawData built{};
+            PPR_TEST_ASSERT(not ui->buildDetachedUiFrame(built));
+            PPR_TEST_ASSERT(built.m_has_content);
+            PPR_TEST_ASSERT(built.m_commands.size() != 0u);
+
+            PPR_TEST_ASSERT(not ui->shutdown());
+            PPR_TEST_ASSERT(not routed.m_context.hasInputListener(*ui->getInputListener()));
+            std::ignore = ui.release();
+            PPR_TEST_ASSERT(&rhi->getDevice() == stable_device);
+            PPR_TEST_ASSERT(shader->getGlobalSession() == stable_session);
+        }
+
+        // Final ordered teardown: context, window, then device, then session.
+        PPR_TEST_ASSERT(not routed.shutdown());
+        std::ignore = window.release();
+        PPR_TEST_ASSERT(not rhi->shutdown());
+        PPR_TEST_ASSERT(not shader->shutdown());
+    };
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -1240,6 +1316,7 @@ namespace pP::tests {
             detail::detached_snapshot_outlives_live_state,
             detail::detached_build_rejects_foreign_callbacks_and_flags_reset,
             detail::detached_font_publication_retransmits_same_generation_until_ack,
+            detail::repeated_ui_init_shutdown_preserves_module_refs,
         });
     };
 

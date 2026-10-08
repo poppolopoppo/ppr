@@ -1058,7 +1058,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
 
         std::error_code ImGuiService::createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device) {
-            shader::ComPtr<shader::IModule> shader_module{};
+            shader::SharedModule shader_module{};
             PPR_RETURN_ERROR_ON_FAIL(
                 UI,
                 shader_service.loadModuleFromSource("imgui", "imgui.slang", kImGuiShader, shader_module.writeRef()));
@@ -1073,7 +1073,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             rhi::ShaderProgramDesc program_desc{};
             program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-            program_desc.slangGlobalScope = shader_module;
+            program_desc.slangGlobalScope = shader_module.get();
             program_desc.slangEntryPoints = entryPoints;
             program_desc.slangEntryPointCount = std::size(entryPoints);
 

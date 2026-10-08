@@ -13,6 +13,102 @@ import imgui_internal;
 import std;
 
 namespace pP::tests::detail {
+    namespace SharedWindowInputGpu {
+        // Shared process device for the window_input GPU leaves.
+        //
+        // Shape mirrors Asset.GpuFixture SharedGpu (Holder + mutex + refcount
+        // + acquire/release + service accessors); adapted: no Application is
+        // booted — these leaves address the IRhiService/IShaderService process
+        // singletons directly, so the device is shared by construction and the
+        // Holder owns only the boot/teardown pairing. The window_input group
+        // acquires once around its GPU leaves (CPU-only leaves hold no refs,
+        // cf. the Asset render umbrella); per-leaf Renderer/Window/UI state
+        // stays leaf-local and tears down in inverse order before the group
+        // release, so every safe_ptr dies before the device it observes.
+        // initialize() on the live pair is a verified no-op (RHI.cpp:235,
+        // Shader.cpp:170), so the per-leaf initialize asserts kept below are
+        // known-state gates, not rebuilds.
+        //
+        // Sharing stops at the group boundary: renderer_triangle_reinit_ok,
+        // renderer_off_thread_fails_closed, imgui_live_shutdown_idempotent and
+        // imgui_live_same_object_reinit are standalone top-level registrations
+        // with no shared scope in this file, so they keep private devices. A
+        // sticky boot-once holder would share them, but that is a different
+        // protocol.
+        struct Holder {
+            std::mutex m_mutex{};
+            unsigned m_refs = 0u;
+        };
+
+        [[nodiscard]] Holder &holder() {
+            static Holder s_holder{};
+            return s_holder;
+        }
+
+        [[nodiscard]] std::error_code acquire() {
+            Holder &state = holder();
+            const std::lock_guard lock{state.m_mutex};
+            if (state.m_refs == 0u) {
+                const auto shader = IShaderService::get();
+                const auto rhi = IRhiService::get();
+                std::ignore = rhi->shutdown();
+                std::ignore = shader->shutdown();
+                if (const std::error_code err = shader->initialize()) {
+                    return err;
+                }
+                if (const std::error_code err = rhi->initialize(rhi::DeviceType::Default, *shader)) {
+                    std::ignore = shader->shutdown();
+                    return err;
+                }
+            }
+            ++state.m_refs;
+            return default_value_v;
+        }
+
+        [[nodiscard]] std::error_code release() {
+            Holder &state = holder();
+            const std::lock_guard lock{state.m_mutex};
+            if (state.m_refs == 0u) {
+                return default_value_v;
+            }
+            PPR_ASSERT(state.m_refs > 0u);
+            if (--state.m_refs == 0u) {
+                const auto shader = IShaderService::get();
+                const auto rhi = IRhiService::get();
+                const std::error_code rhi_err = rhi->shutdown();
+                const std::error_code shader_err = shader->shutdown();
+                if (rhi_err) {
+                    return rhi_err;
+                }
+                return shader_err;
+            }
+            return default_value_v;
+        }
+
+        [[nodiscard]] safe_ptr<IRhiService> rhi() {
+            return IRhiService::get();
+        }
+
+        [[nodiscard]] safe_ptr<IShaderService> shader() {
+            return IShaderService::get();
+        }
+
+        void resetBetweenLeaves() {
+            // Explicit state-reset between leaves (not a rebuild): the first
+            // GPU leaf in a fresh process observes a null ImGui current, so
+            // every leaf starts from that same known state instead of
+            // inheriting a dangling context from the previous leaf's
+            // released UI service. Each leaf sets its own context after its
+            // ui->initialize; the service-validity asserts gate the live
+            // device the group acquire owns.
+            const auto shader = IShaderService::get();
+            const auto rhi = IRhiService::get();
+            PPR_TEST_ASSERT(shader.isValid());
+            PPR_TEST_ASSERT(rhi.isValid());
+            ImGui::SetCurrentContext(nullptr);
+        }
+    } // namespace SharedWindowInputGpu
+
     namespace WindowInput {
         struct FakeInputService final : IInputService {
             KeyboardDevice m_keyboard{InputDeviceID{1u}};
@@ -358,14 +454,10 @@ namespace pP::tests::detail {
         // across focus states. Asserts only code-proven facts; the table below
         // is recorded to stderr and frozen into broadcast-input-routing.md.
         PPR_UNIT_TEST (imgui_nav_signal_evidence) {
-            const auto shader = IShaderService::get();
-            const auto rhi = IRhiService::get();
-            std::ignore = rhi->shutdown();
-            std::ignore = shader->shutdown();
-            PPR_DEFER {
-                std::ignore = rhi->shutdown();
-                std::ignore = shader->shutdown();
-            };
+            // Shared device (group acquire); the initialize pair is a no-op known-state gate, not a rebuild.
+            SharedWindowInputGpu::resetBetweenLeaves();
+            const auto shader = SharedWindowInputGpu::shader();
+            const auto rhi = SharedWindowInputGpu::rhi();
             PPR_TEST_ASSERT(not shader->initialize());
             PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
 
@@ -485,14 +577,10 @@ namespace pP::tests::detail {
         // consumes them; a background click clears focus (S4) and keys flow
         // again next frame. The LMB press itself is handled (BOTH vote).
         PPR_UNIT_TEST (imgui_background_click_returns_keys_to_player) {
-            const auto shader = IShaderService::get();
-            const auto rhi = IRhiService::get();
-            std::ignore = rhi->shutdown();
-            std::ignore = shader->shutdown();
-            PPR_DEFER {
-                std::ignore = rhi->shutdown();
-                std::ignore = shader->shutdown();
-            };
+            // Shared device (group acquire); the initialize pair is a no-op known-state gate, not a rebuild.
+            SharedWindowInputGpu::resetBetweenLeaves();
+            const auto shader = SharedWindowInputGpu::shader();
+            const auto rhi = SharedWindowInputGpu::rhi();
             PPR_TEST_ASSERT(not shader->initialize());
             PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
 
@@ -589,14 +677,10 @@ namespace pP::tests::detail {
         // player (S6 sink fixed); a focused window captures; clearing the
         // gamepad nav bit passes everything through (nav-off passthrough).
         PPR_UNIT_TEST (imgui_gamepad_follows_nav_active) {
-            const auto shader = IShaderService::get();
-            const auto rhi = IRhiService::get();
-            std::ignore = rhi->shutdown();
-            std::ignore = shader->shutdown();
-            PPR_DEFER {
-                std::ignore = rhi->shutdown();
-                std::ignore = shader->shutdown();
-            };
+            // Shared device (group acquire); the initialize pair is a no-op known-state gate, not a rebuild.
+            SharedWindowInputGpu::resetBetweenLeaves();
+            const auto shader = SharedWindowInputGpu::shader();
+            const auto rhi = SharedWindowInputGpu::rhi();
             PPR_TEST_ASSERT(not shader->initialize());
             PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
 
@@ -672,14 +756,10 @@ namespace pP::tests::detail {
         // Broadcast Phase 1 lock-in (intended behavior): wheel is hover-split
         // — background flows to the fov listener, a hovered widget consumes.
         PPR_UNIT_TEST (imgui_wheel_hover_split) {
-            const auto shader = IShaderService::get();
-            const auto rhi = IRhiService::get();
-            std::ignore = rhi->shutdown();
-            std::ignore = shader->shutdown();
-            PPR_DEFER {
-                std::ignore = rhi->shutdown();
-                std::ignore = shader->shutdown();
-            };
+            // Shared device (group acquire); the initialize pair is a no-op known-state gate, not a rebuild.
+            SharedWindowInputGpu::resetBetweenLeaves();
+            const auto shader = SharedWindowInputGpu::shader();
+            const auto rhi = SharedWindowInputGpu::rhi();
             PPR_TEST_ASSERT(not shader->initialize());
             PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
 
@@ -747,14 +827,10 @@ namespace pP::tests::detail {
         // non-consuming (defaults to player), so a re-initialized service
         // routes to the player before its first update.
         PPR_UNIT_TEST (imgui_consume_flags_reset_on_shutdown) {
-            const auto shader = IShaderService::get();
-            const auto rhi = IRhiService::get();
-            std::ignore = rhi->shutdown();
-            std::ignore = shader->shutdown();
-            PPR_DEFER {
-                std::ignore = rhi->shutdown();
-                std::ignore = shader->shutdown();
-            };
+            // Shared device (group acquire); the initialize pair is a no-op known-state gate, not a rebuild.
+            SharedWindowInputGpu::resetBetweenLeaves();
+            const auto shader = SharedWindowInputGpu::shader();
+            const auto rhi = SharedWindowInputGpu::rhi();
             PPR_TEST_ASSERT(not shader->initialize());
             PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
 
@@ -920,6 +996,7 @@ namespace pP::tests::detail {
     }
 
     PPR_UNIT_TEST (renderer_triangle_reinit_ok) {
+        // Private device: standalone registration outside the window_input shared scope; full rebuild kept.
         const auto shader = IShaderService::get();
         const auto rhi = IRhiService::get();
         std::ignore = rhi->shutdown();
@@ -945,6 +1022,7 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (renderer_off_thread_fails_closed) {
+        // Private device: standalone registration outside the window_input shared scope; full rebuild kept.
         const auto shader = IShaderService::get();
         const auto rhi = IRhiService::get();
         std::ignore = rhi->shutdown();
@@ -1012,6 +1090,7 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (imgui_live_shutdown_idempotent) {
+        // Private device: standalone registration outside the window_input shared scope; full rebuild kept.
         const auto shader = IShaderService::get();
         const auto rhi = IRhiService::get();
         std::ignore = rhi->shutdown();
@@ -1047,6 +1126,7 @@ namespace pP::tests::detail {
     };
 
     PPR_UNIT_TEST (imgui_live_same_object_reinit) {
+        // Private device: standalone registration outside the window_input shared scope; full rebuild kept.
         const auto shader = IShaderService::get();
         const auto rhi = IRhiService::get();
         std::ignore = rhi->shutdown();
@@ -1210,6 +1290,7 @@ namespace pP::tests::detail {
 
 namespace pP::tests {
     const UnitTest window_input = UnitTest::Named("window_input") / [](UnitTest::IRun &_) -> void {
+        // CPU-only leaves hold no SharedWindowInputGpu refs and never boot a device.
         _.recurse({
             detail::WindowInput::mouse_keeps_client_space_with_nonzero_window_origin,
             detail::WindowInput::char_posted_after_poll_clear_survives_to_consumer,
@@ -1224,12 +1305,20 @@ namespace pP::tests {
             detail::WindowInput::drag_latch_release_without_press_resets,
             detail::WindowInput::drag_latch_reset_restores_disengaged,
             detail::WindowInput::drag_latch_tap_state_reset_clears_stale_hold,
+        });
+        // Shared-device scope: one boot serves every GPU leaf below (each
+        // observes it through resetBetweenLeaves plus the initialize no-op
+        // gate); the release tears it down after the last leaf, so no
+        // leaf-local safe_ptr outlives the device.
+        PPR_TEST_ASSERT(not detail::SharedWindowInputGpu::acquire());
+        _.recurse({
             detail::WindowInput::imgui_nav_signal_evidence,
             detail::WindowInput::imgui_background_click_returns_keys_to_player,
             detail::WindowInput::imgui_gamepad_follows_nav_active,
             detail::WindowInput::imgui_wheel_hover_split,
             detail::WindowInput::imgui_consume_flags_reset_on_shutdown,
         });
+        PPR_TEST_ASSERT(not detail::SharedWindowInputGpu::release());
     };
 
     const UnitTest &window_inputTests() noexcept {
