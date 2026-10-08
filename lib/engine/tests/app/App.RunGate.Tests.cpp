@@ -1058,14 +1058,23 @@ namespace pP::tests::detail {
             // Fix-19 bounded-lane refusals: update() refuses a fourth
             // construction (the 2-credit ledger legitimately admits one
             // while the third is still in flight; the settlement-hook exit
-            // only fires when the third result drains). The paired render
-            // skips without queuing when the flag is set. Workload bound
-            // only: refusal counts are diagnostic (logged per run below),
-            // never admission proof — admission is proven by the
+            // only fires when the third result drains) and settles the
+            // refused, never-queued reservation through the base hook at
+            // refusal time — never the three-frame counter below. The
+            // paired render skips without queuing when the flag is set.
+            // Workload bound only: refusal counts are diagnostic (logged per
+            // run below), never admission proof — admission is proven by the
             // constructions/consumed/updates counts plus the observed
             // blocked state, never by these counts.
             u32 m_construction_refusals{0u};
             bool m_refused_update_pending{false};
+            // Refused slots settled through the base hook (never counted in
+            // m_consumed); the three intended settlements are captured for
+            // the per-frame error/drop/submit asserts below.
+            u32 m_refused_settled{0u};
+            Array<std::error_code> m_consumed_errors{};
+            Array<bool> m_consumed_dropped{};
+            Array<FenceCompletionValue> m_consumed_submit_values{};
 
             // Owned per-frame payload staged by update(), moved into the
             // lane request by render(). Main-side only; the lane never
@@ -1286,13 +1295,24 @@ namespace pP::tests::detail {
                 // Derived pre-super construction marker: counted at the
                 // START, so a blocked third frame never reaches the count.
                 // Fix-19 bound: refuse a fourth construction (see the member
-                // note); the paired render() skips, counts stay at three,
-                // and the latch ends the run.
+                // note); the paired render() skips and counts stay at three.
+                // No exit here: the run keeps pumping until the third-result
+                // settlement hook below ends it. The admission probe already
+                // charged this frame's reservation, so settle the refused,
+                // never-queued slot through the base contract now (dropped,
+                // unsubmitted) — never the three-frame counter — so no
+                // credit strands past teardown.
                 if (m_constructions >= 3u or m_consumed >= 3u) {
                     ++m_construction_refusals;
                     m_pending_valid = false;
                     m_refused_update_pending = true;
-                    requestExit();
+                    RenderFrameResult refused{};
+                    refused.m_frame_id = getFrameIndex();
+                    refused.m_dropped = true;
+                    refused.m_reservation_epoch = reservationEpoch_();
+                    refused.m_reservation_frame_id = getFrameIndex();
+                    ApplicationEditor::onLaneFrameConsumed_(refused);
+                    ++m_refused_settled;
                     return default_value_v;
                 }
                 ++m_constructions;
@@ -1326,8 +1346,9 @@ namespace pP::tests::detail {
 
             [[nodiscard]] std::error_code render() override {
                 // Fix-19 paired skip: the refused update above staged
-                // nothing — return without counting or queuing (never an app
-                // failure; the reservation settles structurally at teardown).
+                // nothing and already settled its reservation through the
+                // base hook — return without counting or queuing (never an
+                // app failure, never a second settle).
                 if (m_refused_update_pending) {
                     m_refused_update_pending = false;
                     return default_value_v;
@@ -1384,6 +1405,9 @@ namespace pP::tests::detail {
 
             void onLaneFrameConsumed_(const RenderFrameResult &result) override {
                 ++m_consumed;
+                m_consumed_errors.push_back(result.m_error);
+                m_consumed_dropped.push_back(result.m_dropped);
+                m_consumed_submit_values.push_back(result.m_submit_value);
                 ApplicationEditor::onLaneFrameConsumed_(result);
                 // Exit from the settlement hook itself: when the third
                 // result is consumed the run ends before another admission
@@ -1802,11 +1826,12 @@ namespace pP::tests::detail {
             std::fprintf(
                 stderr,
                 "[lane-gate:block] constructions=%u consumed=%u queued=%u renders=%u refusals=%u"
-                " pumps=%u updates=%u gate=%d ran=%d watchdog=%d reason=%s runec=%d(%s)\n",
+                " refused_settled=%u pumps=%u updates=%u gate=%d ran=%d watchdog=%d reason=%s"
+                " runec=%d(%s)\n",
                 harness.m_constructions, harness.m_consumed, harness.m_queued, harness.m_renders,
-                harness.m_construction_refusals, platform.m_pumps, platform.m_updates, gate_opened ? 1 : 0,
-                gate_ran ? 1 : 0, platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str(), phase.m_run_ec.value(),
-                phase.m_run_ec.message().c_str());
+                harness.m_construction_refusals, harness.m_refused_settled, platform.m_pumps, platform.m_updates,
+                gate_opened ? 1 : 0, gate_ran ? 1 : 0, platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str(),
+                phase.m_run_ec.value(), phase.m_run_ec.message().c_str());
 
             PPR_TEST_ASSERT(not phase.m_run_threw);
             PPR_TEST_ASSERT(not phase.m_run_ec);
@@ -1823,6 +1848,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(harness.m_renders == 3u);
             PPR_TEST_ASSERT(harness.m_queued == 3u);
             PPR_TEST_ASSERT(harness.m_consumed == 3u);
+            // Every intended frame settled error-free, non-dropped, with an
+            // accepted submit value (captured in the settlement hook above;
+            // refused slots settle through the base hook only and never land
+            // here).
+            PPR_TEST_ASSERT(harness.m_consumed_errors.size() == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed_dropped.size() == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed_submit_values.size() == 3u);
+            for (const std::error_code &ec: harness.m_consumed_errors) {
+                PPR_TEST_ASSERT(not ec);
+            }
+            for (const bool dropped: harness.m_consumed_dropped) {
+                PPR_TEST_ASSERT(not dropped);
+            }
+            for (const FenceCompletionValue value: harness.m_consumed_submit_values) {
+                PPR_TEST_ASSERT(value != kFenceValueNone);
+            }
             PPR_TEST_ASSERT(platform.m_updates == 3u);
             // The gate opened once, lane-side, after the observed blocked
             // state — and the third construction came only after it (busy
@@ -1963,10 +2004,10 @@ namespace pP::tests::detail {
             std::fprintf(
                 stderr,
                 "[lane-gate:paused] constructions=%u consumed=%u queued=%u renders=%u refusals=%u"
-                " pumps=%u updates=%u paused=%d span=%u gate=%d ran=%d watchdog=%d reason=%s\n",
+                " refused_settled=%u pumps=%u updates=%u paused=%d span=%u gate=%d ran=%d watchdog=%d reason=%s\n",
                 harness.m_constructions, harness.m_consumed, harness.m_queued, harness.m_renders,
-                harness.m_construction_refusals, platform.m_pumps, platform.m_updates, pause_released ? 1 : 0,
-                release_pump - block_start_pump, gate_opened ? 1 : 0, gate_ran ? 1 : 0,
+                harness.m_construction_refusals, harness.m_refused_settled, platform.m_pumps, platform.m_updates,
+                pause_released ? 1 : 0, release_pump - block_start_pump, gate_opened ? 1 : 0, gate_ran ? 1 : 0,
                 platform.m_watchdog_fired ? 1 : 0, exit_reason.c_str());
 
             PPR_TEST_ASSERT(not phase.m_run_threw);
@@ -1982,6 +2023,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(harness.m_renders == 3u);
             PPR_TEST_ASSERT(harness.m_queued == 3u);
             PPR_TEST_ASSERT(harness.m_consumed == 3u);
+            // Every intended frame settled error-free, non-dropped, with an
+            // accepted submit value (captured in the settlement hook above;
+            // refused slots settle through the base hook only and never land
+            // here).
+            PPR_TEST_ASSERT(harness.m_consumed_errors.size() == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed_dropped.size() == 3u);
+            PPR_TEST_ASSERT(harness.m_consumed_submit_values.size() == 3u);
+            for (const std::error_code &ec: harness.m_consumed_errors) {
+                PPR_TEST_ASSERT(not ec);
+            }
+            for (const bool dropped: harness.m_consumed_dropped) {
+                PPR_TEST_ASSERT(not dropped);
+            }
+            for (const FenceCompletionValue value: harness.m_consumed_submit_values) {
+                PPR_TEST_ASSERT(value != kFenceValueNone);
+            }
             PPR_TEST_ASSERT(platform.m_updates == 3u);
             // The worker stalled (never timed out), the block spanned >=20
             // busy pumps, and the gate opened lane-side before the third.

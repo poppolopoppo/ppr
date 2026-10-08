@@ -13,6 +13,12 @@ namespace pP::tests::detail {
         PlayerServiceTestApp()
             : Application(
                   ApplicationDomain{
+                      .m_is_headless = true,
+                      // NOTE: interactive stays on — GlfwPlatform builds the
+                      // player service from the input service
+                      // (GlfwPlayer::initialize(*m_input_service)), so
+                      // non-interactive + presence would dereference null.
+                      .m_is_interactive = true,
                       .m_needs_presence = true,
                       .m_needs_rendering = false,
                       .m_needs_user_interface = false,
@@ -29,8 +35,31 @@ namespace pP::tests::detail {
         }
     };
 
+    // Windowed-path guard: one leaf keeps the original windowed domain so the
+    // GlfwWindow + input + player boot path stays covered.
+    class PlayerServiceWindowedTestApp final : public Application {
+    public:
+        PlayerServiceWindowedTestApp()
+            : Application(
+                  ApplicationDomain{
+                      .m_needs_presence = true,
+                      .m_needs_rendering = false,
+                      .m_needs_user_interface = false,
+                  },
+                  "PlayerServiceWindowedTest", std::span<const char *const>{}) {
+        }
+
+        [[nodiscard]] std::error_code boot() {
+            return initialize();
+        }
+
+        [[nodiscard]] std::error_code teardown() {
+            return shutdown();
+        }
+    };
+
     PPR_UNIT_TEST (player_service_keyboard_and_gamepad) {
-        PlayerServiceTestApp test_app{};
+        PlayerServiceWindowedTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
         PPR_DEFER {
             PPR_TEST_ASSERT(test_app.teardown() == default_value_v);
