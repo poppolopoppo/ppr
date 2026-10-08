@@ -104,8 +104,17 @@ function Write-Summary {
     [void]$lines.Add("- Outcome: $Outcome")
     [void]$lines.Add('')
     if ($null -ne $Triage) {
+        # Unwrap the --envelope shape: payload lives at data.triage, not
+        # top level. Probe via PSObject (StrictMode turns direct missing
+        # reads into throws).
+        $payload = $Triage
+        if ($payload.PSObject.Properties['data'] -and ($null -ne $payload.data) -and
+            $payload.data.PSObject.Properties['triage'] -and ($null -ne $payload.data.triage)) {
+            $payload = $payload.data.triage
+        }
         foreach ($propName in @('exception', 'exceptionRecord', 'crash', 'error', 'errors', 'status', 'process', 'image')) {
-            $value = $Triage.$propName
+            $value = $null
+            if ($payload.PSObject.Properties[$propName]) { $value = $payload.$propName }
             if ($null -ne $value) {
                 $text = ($value | ConvertTo-Json -Depth 6 -Compress)
                 [void]$lines.Add("## $propName")
@@ -116,10 +125,19 @@ function Write-Summary {
                 [void]$lines.Add('')
             }
         }
-        $frames = $Triage.frames
+        $frames = $null
+        if ($payload.PSObject.Properties['current_stack'] -and ($null -ne $payload.current_stack) -and
+            $payload.current_stack.PSObject.Properties['frames']) {
+            $frames = $payload.current_stack.frames
+        }
         if ($null -eq $frames) {
-            foreach ($thread in @($Triage.threads)) {
-                if ($thread -and $thread.frames) { $frames = $thread.frames; break }
+            if ($payload.PSObject.Properties['frames']) { $frames = $payload.frames }
+            if (($null -eq $frames) -and $payload.PSObject.Properties['threads']) {
+                foreach ($thread in @($payload.threads)) {
+                    if ($thread -and $thread.PSObject.Properties['frames'] -and $thread.frames) {
+                        $frames = $thread.frames; break
+                    }
+                }
             }
         }
         if ($frames) {
@@ -127,14 +145,27 @@ function Write-Summary {
             [void]$lines.Add('')
             $index = 0
             foreach ($frame in @($frames)) {
-                $text = ($frame | ConvertTo-Json -Depth 4 -Compress)
-                [void]$lines.Add(("{0}: {1}" -f $index, $text))
+                $symbol = ''
+                if ($frame.PSObject.Properties['symbol'] -and ($null -ne $frame.symbol) -and
+                    $frame.symbol.PSObject.Properties['name']) {
+                    $symbol = "$($frame.symbol.name)"
+                }
+                $source = ''
+                if ($frame.PSObject.Properties['source'] -and ($null -ne $frame.source)) {
+                    $file = ''
+                    $line = ''
+                    if ($frame.source.PSObject.Properties['file']) { $file = "$($frame.source.file)" }
+                    if ($frame.source.PSObject.Properties['line']) { $line = "$($frame.source.line)" }
+                    if ($file -ne '') { $source = " [$file`:$line]" }
+                }
+                [void]$lines.Add(("{0}: {1}{2}" -f $index, $symbol, $source))
                 $index++
                 if ($index -ge 64) { break }
             }
             [void]$lines.Add('')
         }
-        $modules = @($Triage.modules)
+        $modules = @()
+        if ($payload.PSObject.Properties['modules']) { $modules = @($payload.modules) }
         if ($modules.Count -gt 0) {
             [void]$lines.Add('## Modules / symbols')
             [void]$lines.Add('')
@@ -152,7 +183,7 @@ function Write-Summary {
     $lines | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-$exitCode = 2
+$exitCode = 0
 try {
     if ((-not [string]::IsNullOrWhiteSpace($RunDir)) -and $Pending) {
         Write-Error 'Pass exactly one of -RunDir / -Pending.' -ErrorAction Continue
@@ -234,7 +265,13 @@ try {
                         if (-not (Test-Path -LiteralPath $SymbolCache)) {
                             New-Item -ItemType Directory -Force -Path $SymbolCache | Out-Null
                         }
-                        $env:_NT_SYMBOL_PATH = "srv*$SymbolCache*$Msdl;$images"
+                        # This windbg-tool build disables DbgEng symbol-server
+                        # paths: an srv* _NT_SYMBOL_PATH entry makes dump
+                        # triage fail outright. Leave the variable unset and
+                        # let the Rust-native symbol prefetcher (fed by
+                        # --image-path/--symbol-cache) do all resolution.
+                        Remove-Item Env:_NT_SYMBOL_PATH -ErrorAction SilentlyContinue
+                        Remove-Item Env:_NT_SOURCE_PATH -ErrorAction SilentlyContinue
                         $env:_NT_SOURCE_PATH = $sources
 
                         if (-not (Get-Command windbg-tool -ErrorAction SilentlyContinue)) {
@@ -285,12 +322,22 @@ try {
                                         $failure = 'Symbol failure reported (missing symbols or PDB mismatch); see triage output.'
                                     }
                                     if ($null -eq $failure) {
-                                        $status = "$($triage.status)"
+                                        # StrictMode turns missing-property reads into
+                                        # throws: probe via PSObject first. The success
+                                        # envelope carries ok:true with no status field.
+                                        $status = ''
+                                        if ($triage.PSObject.Properties['status']) {
+                                            $status = "$($triage.status)"
+                                        }
                                         if ($status -match '(?i)^(error|failed|failure)$') {
                                             $failure = "Triage reported status '$status'."
                                         }
-                                        elseif (($null -ne $triage.errors) -and (@($triage.errors).Count -gt 0)) {
-                                            $failure = 'Triage reported errors: ' + (($triage.errors | ConvertTo-Json -Depth 4 -Compress))
+                                        $errorList = @()
+                                        if ($triage.PSObject.Properties['errors'] -and ($null -ne $triage.errors)) {
+                                            $errorList = @($triage.errors)
+                                        }
+                                        if ($errorList.Count -gt 0) {
+                                            $failure = 'Triage reported errors: ' + (($errorList | ConvertTo-Json -Depth 4 -Compress))
                                         }
                                     }
                                 }

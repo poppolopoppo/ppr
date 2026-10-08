@@ -3012,7 +3012,11 @@ namespace {
 
     void __cdecl diagSigAbrt(const int sig) noexcept {
         diagDumpStack("SIGABRT", static_cast<unsigned long>(sig));
-        _exit(3);
+        // Route through the fail-fast endpoint (not _exit) so WER
+        // LocalDumps captures a dump for the crash-diagnostics pipeline.
+        // RaiseFailFastException is safe here: it terminates without
+        // returning into the signal context.
+        pP::hal::fatalExit("sigabrt");
     }
 
     long __stdcall diagVeh(void *pointers) noexcept {
@@ -3173,6 +3177,11 @@ int main(const int argc, char *argv[]) {
     // `--flag=value`) exits gracefully after S wall-clock seconds.
     // Profiling/bounded runs (--profile100, --profile-csv, --auto-exit)
     // disable the focus throttle; `--no-focus-throttle` forces it off.
+    // `--diag-crash=<abort|failfast>` is a TEST-ONLY armed crash for the
+    // crash-diagnostics smoke test (docs/debugging/crash-analysis.md): it
+    // fires after full CLI parsing through the normal binary startup path
+    // so WER captures a dump. Never used in production runs.
+    std::string diag_crash{};
     bool profiling{false};
     for (std::size_t index = 0u; index < args.size(); ++index) {
         const std::string_view arg{args[index]};
@@ -3243,10 +3252,26 @@ int main(const int argc, char *argv[]) {
             pP::IRhiService::get()->setCoreValidation(true);
         } else if (arg == "--gpu-validation") {
             pP::IRhiService::get()->setGpuAssistedValidation(true);
+        } else if (arg.starts_with("--diag-crash=")) {
+            diag_crash = std::string{arg.substr(std::string_view{"--diag-crash="}.size())};
         }
     }
     if (profiling) {
         app.setNoFocusThrottle(true);
+    }
+    if (not diag_crash.empty()) {
+        // TEST-ONLY armed crash (see declaration above): fire through the
+        // real fatal paths so WER LocalDumps captures a dump for the
+        // crash-diagnostics smoke test.
+        std::fprintf(stderr, "[diag-crash] armed mechanism '%s'\n", diag_crash.c_str());
+        if (diag_crash == "abort") {
+            std::abort();
+        }
+        if (diag_crash == "failfast") {
+            pP::hal::fatalExit("diag-crash");
+        }
+        std::fprintf(stderr, "[diag-crash] unknown mechanism '%s' (expected abort|failfast)\n", diag_crash.c_str());
+        return 2;
     }
     // Make run-loop failures visible: a bare .value() turns any loop error
     // into a silent terminate (exit 3). Catch, print, then propagate.

@@ -205,7 +205,7 @@ try {
         }
         else {
             $folder = $state.Values['DumpFolder']
-            if (($null -eq $folder) -or ("$($folder.Value)" -cne $ExpectedFolder)) {
+            if (($null -eq $folder) -or ("$($folder.Value)" -cne (Get-InboxDir))) {
                 $drift += "DumpFolder mismatch: expected '$ExpectedFolder', found '$(if ($folder) { $folder.Value } else { '<absent>' })'"
             }
             elseif ("$($folder.Kind)" -cne 'ExpandString') {

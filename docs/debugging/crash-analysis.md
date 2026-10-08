@@ -1,11 +1,14 @@
 # Game crash analysis runbook
 
-> Status: **UNTESTED end to end.** Dump capture through WER LocalDumps and
-> symbolized-stack recovery via `windbg-tool dump triage` have **NOT** been
-> validated on any machine. The three scripts below are syntax-checked only.
-> The validation gate (capture matrix across fatal paths, PDB matching, zero
-> dialogs) is pending. Do not treat the expected artifacts below as observed;
-> they are the contract the scripts implement, not a completed result.
+> Status: **TESTED end to end 2026-10-08** (rev 33a2d89 + smoke-test fixes):
+> armed `--diag-crash=abort` via Run-GameWithDiagnostics (msvc-live) →
+> WER full dump (338MB, exit 0xC0000602) → Invoke-CrashAnalysis SUCCESS
+> with symbolized stack (fatalExit ← diagSigAbrt ← abort ← main).
+> Symbol-cache warm-up downloads PDBs on first use; rerun is offline.
+> Remaining validation gate: capture matrix across the other fatal paths
+> (terminate, invalid-param, purecall, stack overflow, fail-fast directly),
+> PDB matching per preset, zero dialogs. The three scripts are tested on
+> the abort path; treat other paths' artifacts as contract, not observed.
 
 All commands run from the repo root (`E:\Code\ppr`). Stock `pwsh 5.1`
 compatible. No script prompts, pauses, builds, or configures. Never dot-source
