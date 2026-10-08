@@ -58,6 +58,43 @@ namespace pP::tests::detail {
 
         constexpr TimeSpan kFrameStep = std::chrono::milliseconds{16};
 
+        // ora-23 measurement-only boot-phase timing (PERMANENT, silent by
+        // default): PPR_RUNGATE_BOOT_TIMING=1 enables one stderr line per
+        // boot phase (phase name + elapsed ms). File idiom is std::fprintf
+        // to stderr (see the [lane-gate:*] evidence summaries); no
+        // PPR_LOG category exists in this file, so env-gated fprintf keeps
+        // it silent by default without new members or hot-path allocation
+        // (one env check per boot/first-submit, boot paths only).
+        [[nodiscard]] bool runGateBootTimingEnabled() noexcept {
+#ifdef _WIN32
+            char *stored = nullptr;
+            const bool enabled = ::_dupenv_s(&stored, nullptr, "PPR_RUNGATE_BOOT_TIMING") == 0 and
+                                 stored != nullptr and
+                                 stored[0] == '1' and
+                                 stored[1] == '\0';
+            std::free(stored);
+            return enabled;
+#else
+            const char *value = std::getenv("PPR_RUNGATE_BOOT_TIMING");
+            return value != nullptr and value[0] == '1' and value[1] == '\0';
+#endif
+        }
+
+        [[nodiscard]] long long runGateBootTimingMsSince(const std::chrono::steady_clock::time_point since) noexcept {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since)
+                .count();
+        }
+
+        void runGateBootTimingLogIf(const bool enabled, const char *phase, const long long ms) noexcept {
+            if (not enabled) {
+                return;
+            }
+            try {
+                std::fprintf(stderr, "[run-gate:boot-timing] %s %lld ms\n", phase, ms);
+            } catch (...) {
+            }
+        }
+
         struct FakeClock final : ITimerClock {
             mutable u64 m_calls{0u};
             TimePoint m_epoch{};
@@ -809,19 +846,33 @@ namespace pP::tests::detail {
             }
 
             [[nodiscard]] std::error_code boot() {
-                if (const std::error_code ec = Application::initialize()) {
-                    return ec;
+                const bool boot_timing = runGateBootTimingEnabled();
+                const auto boot_t0 = std::chrono::steady_clock::now();
+
+                const auto app_t0 = std::chrono::steady_clock::now();
+                const std::error_code app_ec = Application::initialize();
+                runGateBootTimingLogIf(boot_timing, "saturating.boot.app_initialize", runGateBootTimingMsSince(app_t0));
+                if (app_ec) {
+                    return app_ec;
                 }
 
                 const safe_ptr<IRhiService> rhi = getServices().get<IRhiService>();
                 const safe_ptr<IShaderService> shaders = getServices().get<IShaderService>();
                 PPR_ASSERT(rhi.isValid());
                 PPR_ASSERT(shaders.isValid());
-                if (const std::error_code ec = m_grid.initialize(*rhi, *shaders, getContentDir().path())) {
-                    return ec;
+                const auto grid_t0 = std::chrono::steady_clock::now();
+                const std::error_code grid_ec = m_grid.initialize(*rhi, *shaders, getContentDir().path());
+                runGateBootTimingLogIf(
+                    boot_timing, "saturating.boot.grid_initialize", runGateBootTimingMsSince(grid_t0));
+                if (grid_ec) {
+                    return grid_ec;
                 }
-                if (const std::error_code ec = m_triangles.initialize(*rhi, *shaders, getContentDir().path())) {
-                    return ec;
+                const auto tri_t0 = std::chrono::steady_clock::now();
+                const std::error_code tri_ec = m_triangles.initialize(*rhi, *shaders, getContentDir().path());
+                runGateBootTimingLogIf(
+                    boot_timing, "saturating.boot.triangles_initialize", runGateBootTimingMsSince(tri_t0));
+                if (tri_ec) {
+                    return tri_ec;
                 }
 
                 // Triangle content (mirrors the fence growth test): one mesh,
@@ -832,16 +883,20 @@ namespace pP::tests::detail {
                     {.m_position = {0.0f, 1.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
                 };
                 const u32 indices[] = {0u, 1u, 2u};
+                const auto upload_t0 = std::chrono::steady_clock::now();
                 const Expected<TriangleBagHandle> bag = m_triangles.uploadMesh(
                     std::span<const mesh::StaticMeshVertex>{verts}, std::span<const u32>{indices});
+                runGateBootTimingLogIf(boot_timing, "saturating.boot.upload_mesh", runGateBootTimingMsSince(upload_t0));
                 if (not bag.has_value()) {
                     return bag.error();
                 }
                 m_tri_bag = *bag;
                 const TextureHandle no_textures[] = {
                     TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
+                const auto pack_t0 = std::chrono::steady_clock::now();
                 const Expected<MaterialHandle> material = m_triangles.packMaterial(
                     mesh::MaterialAsset{}, std::span<const TextureHandle>{no_textures});
+                runGateBootTimingLogIf(boot_timing, "saturating.boot.pack_material", runGateBootTimingMsSince(pack_t0));
                 if (not material.has_value()) {
                     return material.error();
                 }
@@ -858,13 +913,18 @@ namespace pP::tests::detail {
                 target_desc.usage = rhi::TextureUsage::RenderTarget;
                 target_desc.defaultState = rhi::ResourceState::RenderTarget;
                 target_desc.label = "run-gate target";
-                if (const std::error_code ec = make_error_code(
-                        rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()))) {
-                    return ec;
+                const auto target_t0 = std::chrono::steady_clock::now();
+                const std::error_code target_ec = make_error_code(
+                    rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()));
+                runGateBootTimingLogIf(
+                    boot_timing, "saturating.boot.create_target", runGateBootTimingMsSince(target_t0));
+                if (target_ec) {
+                    return target_ec;
                 }
 
                 m_passes_live = true;
                 m_booted = true;
+                runGateBootTimingLogIf(boot_timing, "saturating.boot.total", runGateBootTimingMsSince(boot_t0));
                 return default_value_v;
             }
 
@@ -918,9 +978,21 @@ namespace pP::tests::detail {
                 DrawSubmission tri_draws{m_triangles};
                 tri_draws.m_viewport = rhi::Viewport{.extentX = 64.0f, .extentY = 64.0f};
                 tri_draws.m_scissor = rhi::ScissorRect{.maxX = 64u, .maxY = 64u};
+                const bool is_first_submit = (m_renders == 1u);
+                std::chrono::steady_clock::time_point submit_t0{};
+                if (is_first_submit) {
+                    submit_t0 = std::chrono::steady_clock::now();
+                }
                 const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
                 if (const std::error_code ec = renderer.renderToTexture(*m_target, {grid_draws, tri_draws})) {
                     return ec;
+                }
+                if (is_first_submit) {
+                    // Env check only on the first submit: steady frames pay a
+                    // single integer compare, never an env allocation.
+                    runGateBootTimingLogIf(
+                        runGateBootTimingEnabled(), "saturating.first_submit.render_to_texture",
+                        runGateBootTimingMsSince(submit_t0));
                 }
                 const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
                 if (accepted != previously_submitted and accepted != kFenceValueNone) {
@@ -1114,8 +1186,14 @@ namespace pP::tests::detail {
             }
 
             [[nodiscard]] std::error_code boot() {
-                if (const std::error_code ec = Application::initialize()) {
-                    return ec;
+                const bool boot_timing = runGateBootTimingEnabled();
+                const auto boot_t0 = std::chrono::steady_clock::now();
+
+                const auto app_t0 = std::chrono::steady_clock::now();
+                const std::error_code app_ec = Application::initialize();
+                runGateBootTimingLogIf(boot_timing, "lane.boot.app_initialize", runGateBootTimingMsSince(app_t0));
+                if (app_ec) {
+                    return app_ec;
                 }
                 const safe_ptr<IRhiService> rhi = getServices().get<IRhiService>();
                 const safe_ptr<IShaderService> shaders = getServices().get<IShaderService>();
@@ -1129,13 +1207,22 @@ namespace pP::tests::detail {
                 // with the retirement gate held so the first two submits
                 // stay GPU-pending until the test opens it lane-side.
                 bool ran = false;
+                const auto lane_bringup_t0 = std::chrono::steady_clock::now();
                 const std::error_code lane_ec = renderLane()->runOnLaneSync(
-                    [this, rhi, shaders, content]() -> std::error_code {
-                        if (const std::error_code ec = m_grid.initialize(*rhi, *shaders, content)) {
-                            return ec;
+                    [this, rhi, shaders, content, boot_timing]() -> std::error_code {
+                        const auto grid_t0 = std::chrono::steady_clock::now();
+                        const std::error_code grid_ec = m_grid.initialize(*rhi, *shaders, content);
+                        runGateBootTimingLogIf(
+                            boot_timing, "lane.boot.grid_initialize", runGateBootTimingMsSince(grid_t0));
+                        if (grid_ec) {
+                            return grid_ec;
                         }
-                        if (const std::error_code ec = m_triangles.initialize(*rhi, *shaders, content)) {
-                            return ec;
+                        const auto tri_t0 = std::chrono::steady_clock::now();
+                        const std::error_code tri_ec = m_triangles.initialize(*rhi, *shaders, content);
+                        runGateBootTimingLogIf(
+                            boot_timing, "lane.boot.triangles_initialize", runGateBootTimingMsSince(tri_t0));
+                        if (tri_ec) {
+                            return tri_ec;
                         }
                         const mesh::StaticMeshVertex verts[] = {
                             {.m_position = {0.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
@@ -1143,16 +1230,22 @@ namespace pP::tests::detail {
                             {.m_position = {0.0f, 1.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
                         };
                         const u32 indices[] = {0u, 1u, 2u};
+                        const auto upload_t0 = std::chrono::steady_clock::now();
                         const Expected<TriangleBagHandle> bag = m_triangles.uploadMesh(
                             std::span<const mesh::StaticMeshVertex>{verts}, std::span<const u32>{indices});
+                        runGateBootTimingLogIf(
+                            boot_timing, "lane.boot.upload_mesh", runGateBootTimingMsSince(upload_t0));
                         if (not bag.has_value()) {
                             return bag.error();
                         }
                         m_tri_bag = *bag;
                         const TextureHandle no_textures[] = {
                             TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
+                        const auto pack_t0 = std::chrono::steady_clock::now();
                         const Expected<MaterialHandle> material = m_triangles.packMaterial(
                             mesh::MaterialAsset{}, std::span<const TextureHandle>{no_textures});
+                        runGateBootTimingLogIf(
+                            boot_timing, "lane.boot.pack_material", runGateBootTimingMsSince(pack_t0));
                         if (not material.has_value()) {
                             return material.error();
                         }
@@ -1169,14 +1262,20 @@ namespace pP::tests::detail {
                         target_desc.usage = rhi::TextureUsage::RenderTarget;
                         target_desc.defaultState = rhi::ResourceState::RenderTarget;
                         target_desc.label = "lane-gate target";
-                        if (const std::error_code ec = make_error_code(
-                                rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()))) {
-                            return ec;
+                        const auto target_t0 = std::chrono::steady_clock::now();
+                        const std::error_code target_ec = make_error_code(
+                            rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()));
+                        runGateBootTimingLogIf(
+                            boot_timing, "lane.boot.create_target", runGateBootTimingMsSince(target_t0));
+                        if (target_ec) {
+                            return target_ec;
                         }
                         getRenderer().setTestHoldSweep(true);
                         return default_value_v;
                     },
                     &ran);
+                runGateBootTimingLogIf(
+                    boot_timing, "lane.boot.lane_bringup", runGateBootTimingMsSince(lane_bringup_t0));
                 if (not ran) {
                     return lane_ec ? lane_ec : std::make_error_code(std::errc::not_connected);
                 }
@@ -1226,9 +1325,22 @@ namespace pP::tests::detail {
                         DrawSubmission tri_draws{m_triangles};
                         tri_draws.m_viewport = rhi::Viewport{.extentX = 64.0f, .extentY = 64.0f};
                         tri_draws.m_scissor = rhi::ScissorRect{.maxX = 64u, .maxY = 64u};
+                        const bool is_first_submit = (m_lane_executions == 1u);
+                        std::chrono::steady_clock::time_point submit_t0{};
+                        if (is_first_submit) {
+                            submit_t0 = std::chrono::steady_clock::now();
+                        }
                         const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
                         if (const std::error_code ec = renderer.renderToTexture(*m_target, {grid_draws, tri_draws})) {
                             return ec;
+                        }
+                        if (is_first_submit) {
+                            // Env check only on the first lane submit: later
+                            // frames pay one integer compare, never an env
+                            // allocation on the lane.
+                            runGateBootTimingLogIf(
+                                runGateBootTimingEnabled(), "lane.first_submit.render_to_texture",
+                                runGateBootTimingMsSince(submit_t0));
                         }
                         const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
                         if (accepted != previously_submitted and accepted != kFenceValueNone) {
@@ -1239,6 +1351,7 @@ namespace pP::tests::detail {
                         return default_value_v;
                     });
                 m_booted = true;
+                runGateBootTimingLogIf(boot_timing, "lane.boot.total", runGateBootTimingMsSince(boot_t0));
                 return default_value_v;
             }
 
@@ -1285,7 +1398,11 @@ namespace pP::tests::detail {
                         // retires + publishes via production code. Scoped
                         // to the gate path only; steady-state sweeps stay
                         // poll-only.
+                        const auto retire_t0 = std::chrono::steady_clock::now();
                         std::ignore = getRenderer().waitForFenceValue(getRenderer().lastSubmittedFenceValue());
+                        runGateBootTimingLogIf(
+                            runGateBootTimingEnabled(), "lane.first_sweep.wait_for_fence",
+                            runGateBootTimingMsSince(retire_t0));
                         return default_value_v;
                     },
                     out_ran);
