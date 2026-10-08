@@ -6,12 +6,18 @@ import std;
 
 namespace pP {
     namespace {
-        // Lane/owner-thread side channel: preallocated bounded storage
-        // guarded by a lock-free spin flag (record/drain stay noexcept
-        // and allocation-free from any thread). Drained by main only
-        // after the lane worker is proven joined.
+        // Lane/owner-thread side channel: capture-only heap-backed storage
+        // (2,097,152 events x 64B = 128MiB) preallocated once before the
+        // first record, guarded by a lock-free spin flag (record/drain stay
+        // noexcept and allocation-free from any thread). Drained by main only
+        // after the lane worker is proven joined. Heap-backed by design: an
+        // inline array of this budget would bloat the binary's static storage
+        // and any stack instance; the pointer stays pointer-sized. Bounded:
+        // drops past capacity count toward overflow, reported at the single
+        // exit-time export.
         std::atomic_flag g_lane_telemetry_lock{};
-        std::array<FrameTelemetryEvent, kFrameTelemetryLaneCapacity> g_lane_telemetry_events{};
+        std::unique_ptr<FrameTelemetryEvent[]> g_lane_telemetry_events{
+            new (std::nothrow) FrameTelemetryEvent[kFrameTelemetryLaneCapacity]{}};
         u32 g_lane_telemetry_count{0u};
         u32 g_lane_telemetry_dropped{0u};
 
@@ -40,11 +46,11 @@ namespace pP {
 
     void frameTelemetryRecordLane(const FrameTelemetryEvent &event) noexcept {
         lockLaneTelemetry_();
-        if (g_lane_telemetry_count < kFrameTelemetryLaneCapacity) {
+        if (g_lane_telemetry_events == nullptr or g_lane_telemetry_count >= kFrameTelemetryLaneCapacity) {
+            ++g_lane_telemetry_dropped;
+        } else {
             g_lane_telemetry_events[g_lane_telemetry_count] = event;
             ++g_lane_telemetry_count;
-        } else {
-            ++g_lane_telemetry_dropped;
         }
         unlockLaneTelemetry_();
     }
@@ -67,11 +73,13 @@ namespace pP {
         FrameTelemetryBuffer &target = frameTelemetryMainBuffer();
         u32 merged = 0u;
         lockLaneTelemetry_();
-        for (u32 index = 0u; index < g_lane_telemetry_count; ++index) {
-            const u32 before = target.size();
-            target.record(g_lane_telemetry_events[index]);
-            if (target.size() != before) {
-                ++merged;
+        if (g_lane_telemetry_events != nullptr) {
+            for (u32 index = 0u; index < g_lane_telemetry_count; ++index) {
+                const u32 before = target.size();
+                target.record(g_lane_telemetry_events[index]);
+                if (target.size() != before) {
+                    ++merged;
+                }
             }
         }
         g_lane_telemetry_count = 0u;

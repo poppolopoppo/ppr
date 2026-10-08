@@ -126,19 +126,37 @@ export namespace pP {
         u8 m_thread_tag{0}; // 0 == main thread, 1 == lane/owner thread
     };
 
+    // Capture budgets (NOT sampling): capture-only heap-backed buffers
+    // preallocated once before the first record; record() never allocates.
+    // sizeof(FrameTelemetryEvent) == 64B (1B kind + 7B pad + 6x8B
+    // epoch/frame/cpu-tick/gpu-fence/detail-a/detail-b = 56B + 4B
+    // host-outcome + 1B thread-tag + 3B tail pad = 64B), so main/merged
+    // 4,194,304 events = 256MiB and lane 2,097,152 events = 128MiB
+    // (384MiB total + ~48MiB ASan shadow at 1/8). Heap-backed by design:
+    // a 256MiB inline/thread_local array would multiply across TLS users
+    // and a 256MiB stack instance would overflow — the thread_local/stack
+    // object stays pointer-sized while the events live on the heap.
+    // Bounded: drops past capacity count toward overflow and are reported
+    // at the single exit-time export.
+    inline constexpr u32 kFrameTelemetryMainCapacity{4194304u};
+    inline constexpr u32 kFrameTelemetryLaneCapacity{2097152u};
+
+    static_assert(
+        sizeof(FrameTelemetryEvent) == 64u, "FrameTelemetryEvent size changed: update capture budget comment");
+
     struct FrameTelemetryBuffer {
-        static constexpr u32 kCapacity{8192u};
-        std::array<FrameTelemetryEvent, kCapacity> m_events{};
+        static constexpr u32 kCapacity{kFrameTelemetryMainCapacity};
+        std::unique_ptr<FrameTelemetryEvent[]> m_events{new (std::nothrow) FrameTelemetryEvent[kCapacity]{}};
         u32 m_count{0u};
         u32 m_dropped{0u};
 
         void record(const FrameTelemetryEvent &event) noexcept {
-            if (m_count < kCapacity) {
-                m_events[m_count] = event;
-                ++m_count;
-            } else {
+            if (m_events == nullptr or m_count >= kCapacity) {
                 ++m_dropped;
+                return;
             }
+            m_events[m_count] = event;
+            ++m_count;
         }
 
         [[nodiscard]] u32 size() const noexcept {
@@ -154,9 +172,6 @@ export namespace pP {
             m_dropped = 0u;
         }
     };
-
-    // Lane buffer capacity: frames in flight plus completion bursts.
-    inline constexpr u32 kFrameTelemetryLaneCapacity{4096u};
 
     [[nodiscard]] inline i64 frameTelemetryCpuTickNs(const std::chrono::steady_clock::time_point tick) noexcept {
         return static_cast<i64>(std::chrono::duration_cast<std::chrono::nanoseconds>(tick.time_since_epoch()).count());

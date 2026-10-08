@@ -492,10 +492,12 @@ namespace pP {
         }
         const bool device_loss_confirmed = gpuTeardownDisposition() == GpuQuiescence::kRemovalConfirmed;
         // P2 teardown order: settle lane packets first (no new lane frame
-        // can start afterwards), then release pass GPU state + surfaces ON
-        // the lane in reverse order. The UI service shuts down on main
-        // below (ImGui context is client-owned); windows die on main after
-        // the base shutdown joins the lane.
+        // can start afterwards), then release renderer/lane-owned GPU state
+        // ON the lane while main-owned triangle GPU state releases on main
+        // below (its GpuCaches captured the initializing main thread and
+        // reject other threads). The UI service shuts down on main below
+        // (ImGui context is client-owned); windows die on main after the
+        // base shutdown joins the lane.
         bool lane_releases_done = false;
         if (renderLaneOwnsRenderer_()) {
             // Gated settle: the drain's handoff error is retained and an
@@ -525,21 +527,18 @@ namespace pP {
                             if (m_grid_pass) {
                                 PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->notifyDeviceLost());
                             }
-                            if (m_triangle_pass) {
-                                PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->notifyDeviceLost());
-                            }
+                            // Triangle device-loss notification runs on main
+                            // below: its GpuCaches captured the initializing
+                            // main thread and reject other threads.
                         }
-                        // Release scene GPU handles while the pass caches are
-                        // still alive, before the pass shutdown below.
-                        if (m_scene.has_value() and m_triangle_pass) {
-                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->releaseScene(m_uploaded_scene));
-                        }
+                        // Triangle scene release runs on main below (scene
+                        // handles before triangle caches, while they are
+                        // still alive).
                         if (m_grid_pass) {
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->shutdown());
                         }
-                        if (m_triangle_pass) {
-                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_triangle_pass->shutdown());
-                        }
+                        // Triangle shutdown runs on main below, before the
+                        // resets and the base shutdown's renderer/RHI release.
                         return lane_err;
                     },
                     &lane_acknowledged);
@@ -570,6 +569,57 @@ namespace pP {
             if (const std::error_code terminal = renderLane()->terminalError()) {
                 if (not device_loss_confirmed) {
                     failStopOnUnknownGpuTeardown_(terminal);
+                }
+            }
+            // Main-side triangle teardown (main-owned GpuCaches affinity:
+            // the pass caches captured the initializing main thread at
+            // Editor.cpp:221-222 and reject other threads, so quiescence
+            // above permits the release here — it never migrates ownership
+            // to the lane). Release scene handles before triangle caches;
+            // finish before the base shutdown releases renderer/RHI below.
+            // No further triangle work is admitted after. Each stage retains
+            // the first error and continues independent cleanup; no
+            // exception escapes past the resets and the base shutdown's
+            // stop/join. UNKNOWN/unacknowledged fail-stop above is preserved
+            // (failStopOnUnknownGpuTeardown_ never returns); ordinary
+            // operation errors propagate via retain only.
+            try {
+                if (device_loss_confirmed and m_triangle_pass) {
+                    PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->notifyDeviceLost());
+                }
+            } catch (const std::bad_alloc &) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::not_enough_memory);
+                }
+            } catch (...) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            }
+            try {
+                if (m_scene.has_value() and m_triangle_pass) {
+                    PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->releaseScene(m_uploaded_scene));
+                }
+            } catch (const std::bad_alloc &) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::not_enough_memory);
+                }
+            } catch (...) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            }
+            try {
+                if (m_triangle_pass) {
+                    PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->shutdown());
+                }
+            } catch (const std::bad_alloc &) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::not_enough_memory);
+                }
+            } catch (...) {
+                if (not first_err) {
+                    first_err = std::make_error_code(std::errc::state_not_recoverable);
                 }
             }
             // CPU-side scene clear on main; the guarded blocks below observe
