@@ -254,11 +254,21 @@ namespace pP {
         // wake (or times out), then one collection pump stages them into
         // the owned batch. Device advancement still happens only in
         // update(); this path only collects, like pumpNativeEvents.
+        // The timeout is a REQUESTED bound (best-effort OS wait: an event,
+        // postEmptyEvent, or exit/credit/config wake ends it early, and
+        // scheduling granularity may end it late — never an exact
+        // wall-clock guarantee). Callers pass the recomputed remainder of
+        // their absolute deadline, never a stale pre-service slice; a
+        // non-positive remainder degrades to a single collection pump and
+        // never blocks.
         // Collection guard covers BOTH native calls below: glfwWaitEvents
         // Timeout and poll both execute window/input callbacks, and the
         // immediate path (GlfwInput::post*, focus hotplug) dispatches to
         // clients unless collection mode stages them. Exception-safe via
         // the defer so an early error return cannot leak the flag.
+        if (timeout <= TimeSpan{}) {
+            return pumpNativeEvents();
+        }
         GlfwInput *const p_inputs = m_input_service.get();
         if (p_inputs != nullptr) [[likely]] {
             p_inputs->setNativeBatchCollection(true);

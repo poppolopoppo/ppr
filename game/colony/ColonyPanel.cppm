@@ -171,6 +171,13 @@ export namespace pP::colony {
         float m_avg_frame_ms{};
         float m_max_frame_ms{};
         u64 m_frames{};
+        /// Bounded game UI lane split (last values, ms): main-lane
+        /// update-body wall on main plus render-lane last completed lane
+        /// execution from RenderLane's display-only gauge. The inter-frame
+        /// total above stays the cadence reference; avg/max/ring below are
+        /// untouched.
+        float m_main_ms{};
+        float m_render_ms{};
         /// Slice 6 windowed frame stats: bounded 240-sample ring of
         /// inter-frame dt (ms, NOT GPU/present); percentiles are nearest-rank
         /// over the window, refreshed at most every 15 frames.

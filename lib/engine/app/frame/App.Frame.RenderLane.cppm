@@ -260,6 +260,19 @@ export namespace pP {
             return m_dropped_count.load(std::memory_order_acquire);
         }
 
+        // Last completed lane execution wall time in microseconds
+        // (monotonically-overwritten last-value gauge for display only).
+        // Written by the worker at the end of each executed frame beside
+        // the lane_execute_end stamp; read by any thread for the honest
+        // main/render split readouts. Relaxed ordering suffices (a stale
+        // read only ages a debug number by one frame). Never consulted
+        // for admission, retirement, park, or teardown decisions — the
+        // ledger/estimate path stays the only hint there. Allocation-free,
+        // noexcept.
+        [[nodiscard]] u64 lastExecuteUs() const noexcept {
+            return m_last_execute_us.load(std::memory_order_relaxed);
+        }
+
         // Teardown protocol step: stop admission + signal exit + wake, then
         // join. Never blocks on queue capacity. The lane settles admitted
         // packets on its way out (discards unsubmitted, posts dropped
@@ -374,6 +387,10 @@ export namespace pP {
         std::atomic<u64> m_executing_frames{0u};
         std::atomic<u64> m_submitted_count{0u};
         std::atomic<u64> m_dropped_count{0u};
+        // Display-only last-execute gauge (see lastExecuteUs): single
+        // worker writer, any-thread relaxed readers. Zero until the first
+        // executed frame completes.
+        std::atomic<u64> m_last_execute_us{0u};
         // First lane error + terminal class as generic errc values (0 =
         // none); reconstructed with the generic category on read.
         std::atomic<int> m_first_error{0};

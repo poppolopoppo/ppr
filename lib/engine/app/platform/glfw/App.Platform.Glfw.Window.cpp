@@ -202,6 +202,9 @@ namespace pP {
             ::glfwPollEvents();
             return default_value_v;
         }
+        // REQUESTED bound, best-effort: GLFW returns early on any event
+        // (including postEmptyEvent wakes) and the OS may overshoot; the
+        // caller owns the absolute deadline and never passes a stale slice.
         // Clamp to a strictly positive bound: GLFW treats 0 as "return
         // immediately", which would spin the pacer slices. Cap at one
         // background period so a missed wakeup still re-polls promptly.

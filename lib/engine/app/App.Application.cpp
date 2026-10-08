@@ -482,11 +482,18 @@ namespace pP {
         // services platform events FIRST (admission never blocks the pump),
         // then parks natively. Hints only — every wake rechecks persistent
         // exit/terminal/credit state, and the budget caps the stall even if
-        // no hint ever arrives. Native collection/wait failures and the
-        // completion drain are retained durably into m_wait_pump_error
-        // (first error wins, canceled neutral) instead of discarded, so
-        // they travel with the shutdown result.
+        // no hint ever arrives. The budget is an ABSOLUTE deadline captured
+        // once (kMaxHintSlices REQUESTED quanta of FramePacer::kWakeQuantum
+        // — best-effort OS waits, no wall-clock guarantee): servicing
+        // (drain/retire/reconcile/pump) runs first each slice, then only
+        // the recomputed remainder (capped at one quantum) is waited — an
+        // already-due budget returns immediately without waiting. Native
+        // collection/wait failures and the completion drain are retained
+        // durably into m_wait_pump_error (first error wins, canceled
+        // neutral) instead of discarded, so they travel with the shutdown
+        // result.
         constexpr int kMaxHintSlices{4};
+        const TimePoint budget_deadline = time::now() + kMaxHintSlices * FramePacer::kWakeQuantum;
         m_admission_wake.resetEvent();
         for (int slice = 0; slice < kMaxHintSlices; ++slice) {
             if (isExitRequested()) {
@@ -552,7 +559,14 @@ namespace pP {
                     } catch (...) {
                     }
                 }
-                if (const std::error_code hint_wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
+                // Servicing above consumed budget: recompute the remainder
+                // against the absolute deadline and never wait when due.
+                const TimeSpan remaining = budget_deadline - time::now();
+                if (remaining <= TimeSpan{}) {
+                    return;
+                }
+                const TimeSpan quantum = remaining < FramePacer::kWakeQuantum ? remaining : FramePacer::kWakeQuantum;
+                if (const std::error_code hint_wait_err = m_platform->waitNativeEvents(quantum);
                     hint_wait_err and
                     not m_wait_pump_error and
                     hint_wait_err != std::make_error_code(std::errc::operation_canceled)) {
@@ -749,7 +763,12 @@ namespace pP {
     void Application::installPacerSleepOnce_() {
         // Installed once: every pacer sleep slice pumps native events, then
         // waits natively for the slice remainder — waits stay event-driven
-        // (exit/credit/config wakes cut them short) without spinning.
+        // (exit/credit/config wakes cut them short) without spinning. Each
+        // slice duration is a REQUESTED quantum (FramePacer::kWakeQuantum):
+        // a best-effort OS/native wait that may return early on a wake or
+        // late on scheduling granularity — never an exact wall-clock
+        // guarantee. The absolute deadline is owned per sleep request in
+        // pacerSleepSlice_ below.
         if (m_pacer_sleep_installed) {
             return;
         }
@@ -759,12 +778,19 @@ namespace pP {
 
     void Application::pacerSleepSlice_(const TimeSpan slice) noexcept {
         // Every pacer sleep slice pumps then waits natively so waits stay
-        // event-driven. Platform errors are retained durably into
-        // m_wait_pump_error (first error wins, canceled neutral) instead
-        // of discarded; they travel with the shutdown result via
-        // stopRenderLane_(). Noexcept: retention is assignment-only, never
-        // throwing.
+        // event-driven. The incoming slice is a REQUESTED quantum
+        // (FramePacer::kWakeQuantum, 2ms): best-effort, no wall-clock
+        // guarantee. The ABSOLUTE deadline (entry now + slice) is captured
+        // once per sleep request and retained through servicing: the
+        // pump/collect runs first, then the remainder (deadline minus a
+        // fresh now) is recomputed — only the remainder is waited, and an
+        // already-due deadline returns immediately without waiting.
+        // Platform errors are retained durably into m_wait_pump_error
+        // (first error wins, canceled neutral) instead of discarded; they
+        // travel with the shutdown result via stopRenderLane_(). Noexcept:
+        // retention is assignment-only, never throwing.
         try {
+            const TimePoint deadline = time::now() + slice;
             if (m_platform) {
                 const hal::ProfileScope scope_frame_service{"PPR.Frame.ServicePlatform"};
                 if (const std::error_code pump_err = m_platform->pumpNativeEvents();
@@ -777,7 +803,11 @@ namespace pP {
                         {{"category", pump_err.category().name()}, {"value", pump_err.value()},
                             {"origin", "pacerSleepSlice_:pump"}});
                 }
-                if (const std::error_code wait_err = m_platform->waitNativeEvents(slice);
+                const TimeSpan remaining = deadline - time::now();
+                if (remaining <= TimeSpan{}) {
+                    return;
+                }
+                if (const std::error_code wait_err = m_platform->waitNativeEvents(remaining);
                     wait_err and
                     not m_wait_pump_error and
                     wait_err != std::make_error_code(std::errc::operation_canceled)) {
@@ -787,8 +817,12 @@ namespace pP {
                         {{"category", wait_err.category().name()}, {"value", wait_err.value()},
                             {"origin", "pacerSleepSlice_:wait"}});
                 }
-            } else if (slice > TimeSpan{}) {
-                std::this_thread::sleep_for(slice);
+            } else {
+                const TimeSpan remaining = deadline - time::now();
+                if (remaining <= TimeSpan{}) {
+                    return;
+                }
+                std::this_thread::sleep_for(remaining);
             }
         } catch (...) {
         }

@@ -844,6 +844,9 @@ namespace pP::colony {
             ImGui::Text("Last       %.2f ms", perf.m_frame_ms);
             ImGui::Text("Avg        %.2f ms  since launch", perf.m_avg_frame_ms);
             ImGui::Text("Max        %.2f ms  since launch", perf.m_max_frame_ms);
+            ImGui::Text(
+                "Split      total %.2f ms  main %.2f ms  render (lane) %.2f ms", perf.m_frame_ms, perf.m_main_ms,
+                perf.m_render_ms);
             ImGui::Text("Frames     %llu since launch", static_cast<unsigned long long>(perf.m_frames));
             ImGui::Text(
                 "Window     min %.2f  p50 %.2f  p95 %.2f  max %.2f ms", perf.m_min_ms, perf.m_p50_ms, perf.m_p95_ms,

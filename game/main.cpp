@@ -204,6 +204,32 @@ namespace demo {
         float m_frame_avg{0.0f};
         float m_frame_max{0.0f};
         u64 m_frame_count{0u};
+        // Bounded game UI lane split: main-lane (update-body wall time on
+        // the main thread) and render-lane (last completed lane execution
+        // on the worker, via RenderLane's display-only gauge) last values
+        // in ms. The inter-frame total above stays the cadence reference;
+        // avg/max/ring below are untouched. steady_clock reads only, no
+        // allocation. m_render_ms_last below remains the render-body wall
+        // time on main (handoff cost on the worker path, full execution
+        // through present on the inline path): it is never displayed as
+        // lane time — every readout sources render from laneExecuteMs_().
+        float m_main_ms_last{0.0f};
+        float m_render_ms_last{0.0f};
+
+        // Single source of truth for every render-lane readout (the
+        // overlay below and the Performance tab): the worker-published
+        // last-execute gauge, relaxed load, ms. Zero until the first lane
+        // frame completes (or when no lane owns the renderer). Non-const:
+        // renderLane() is the existing protected accessor, no new
+        // plumbing. noexcept, no allocation.
+        [[nodiscard]] float laneExecuteMs_() noexcept {
+            const RenderLane *lane = renderLane();
+            if (lane == nullptr) {
+                return 0.0f;
+            }
+            return static_cast<float>(lane->lastExecuteUs()) / 1000.0f;
+        }
+
         // Slice 6 frame sampler: bounded 240-sample ring of inter-frame dt
         // (ms). Boundary: update()'s dt (elapsed between update() calls) -
         // it is NOT GPU/present time and is never presented as such. Memory:
@@ -1568,6 +1594,10 @@ namespace demo {
                         .m_avg_frame_ms = m_frame_avg,
                         .m_max_frame_ms = m_frame_max,
                         .m_frames = m_frame_count,
+                        // Lane split: main update-body wall plus the shared
+                        // worker gauge (same atomic the overlay reads).
+                        .m_main_ms = m_main_ms_last,
+                        .m_render_ms = laneExecuteMs_(),
                         .m_p50_ms = m_frame_p50,
                         .m_p95_ms = m_frame_p95,
                         .m_min_ms = m_frame_min,
@@ -1635,6 +1665,10 @@ namespace demo {
             // non-consuming foreground list after chrome, clipped to the
             // world region; input routing is untouched.
             drawFeedbackOverlay_(frame);
+            // Bounded lane readout in the same overlay (total + main +
+            // render (lane)); the Performance tab Split line reads the same
+            // worker gauge.
+            drawLaneReadout_(frame.m_chrome_bottom);
             return {};
         }
 
@@ -2289,6 +2323,45 @@ namespace demo {
             }
         }
 
+        /// Bounded lane readout: one compact line in the same ImGui overlay
+        /// as the panel — total (inter-frame cadence) + main (update-body
+        /// wall) + render (lane) (last completed lane execution from the
+        /// worker-published gauge, the same atomic the Performance tab
+        /// reads). Never handoff cost: m_render_ms_last (see render())
+        /// stays a main-side wall number only. Values lag one frame
+        /// (render runs after this panel). Non-interactive (NoInputs)
+        /// so world picking is unaffected; skipped while the display is
+        /// degenerate.
+        void drawLaneReadout_(const float chrome_bottom) noexcept {
+            try {
+                const ImGuiIO &io = ImGui::GetIO();
+                if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
+                    return;
+                }
+                ImGui::SetNextWindowPos(
+                    ImVec2{8.0f, io.DisplaySize.y - chrome_bottom - 8.0f}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                                   ImGuiWindowFlags_NoInputs |
+                                                   ImGuiWindowFlags_NoSavedSettings |
+                                                   ImGuiWindowFlags_NoFocusOnAppearing |
+                                                   ImGuiWindowFlags_NoNav |
+                                                   ImGuiWindowFlags_NoMove;
+                if (not ImGui::Begin("##frame_lanes", nullptr, flags)) {
+                    ImGui::End();
+                    return;
+                }
+                // Honest render number: the display-only last-execute gauge
+                // (worker thread, relaxed). 0.00 until the first lane frame
+                // completes; never the main-side handoff cost.
+                ImGui::Text(
+                    "Frame total %.2f ms  main %.2f ms  render (lane) %.2f ms", m_frame_ms_last, m_main_ms_last,
+                    laneExecuteMs_());
+                ImGui::End();
+            } catch (...) {
+            }
+        }
+
         [[nodiscard]] std::error_code submitDebugInstances_() {
             // P2 pass-affinity: build the staged payload (owned snapshot of
             // {bag, material, model}); the lane's triangle-pass replay
@@ -2513,6 +2586,19 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+            // Lane split, main boundary: wall time of this whole update
+            // body on the main thread (client portion). RAII so every
+            // early return below still stamps; two steady_clock reads, no
+            // allocation.
+            struct MainLaneScope {
+                TurboLarbin *const m_owner;
+                std::chrono::steady_clock::time_point m_start;
+                ~MainLaneScope() noexcept {
+                    const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+                    m_owner->m_main_ms_last = std::chrono::duration<float, std::milli>(end - m_start).count();
+                }
+            };
+            const MainLaneScope main_lane{this, std::chrono::steady_clock::now()};
             // Phase: regenerate. A confirmed regeneration runs at the very
             // head, ahead of every other phase: regen ends any held gesture
             // (accepted commands stay queued per policy and dig into the
@@ -2778,6 +2864,21 @@ namespace demo {
             }
 
             return {};
+        }
+
+        /// Lane split, render boundary: wall time of the render body on
+        /// main. Worker path: UI detach plus lane handoff (enqueue), so
+        /// this is handoff cost, never lane execution — intentionally NOT
+        /// displayed as render; every readout uses laneExecuteMs_().
+        /// Inline path (no lane owns the renderer): executeRenderWork_
+        /// runs here, so this IS lane execution through present. Two
+        /// steady_clock reads, no allocation; stamps on error returns too.
+        [[nodiscard]] std::error_code render() override {
+            const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            const std::error_code error = super_t::render();
+            const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+            m_render_ms_last = std::chrono::duration<float, std::milli>(end - start).count();
+            return error;
         }
 
         [[nodiscard]] std::error_code shutdown() override {

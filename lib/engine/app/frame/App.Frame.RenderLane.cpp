@@ -144,6 +144,7 @@ namespace pP {
         m_terminal_error.store(0, std::memory_order_release);
         m_final_sweep_error.store(0, std::memory_order_release);
         m_last_sweep_outstanding.store(0u, std::memory_order_release);
+        m_last_execute_us.store(0u, std::memory_order_relaxed);
         m_worker_finished.store(false, std::memory_order_release);
 
         // Synchronous init ON the lane: the owner id is established there
@@ -789,6 +790,11 @@ namespace pP {
             const std::lock_guard guard{m_callback_mutex};
             executor = m_executor ? &m_executor : nullptr;
         }
+        // True lane-execution wall clock for the display-only gauge (see
+        // lastExecuteUs): the store lands beside the lane_execute_end
+        // stamp below. Two steady_clock reads, one relaxed store: no
+        // allocation, noexcept, worker thread only.
+        const std::chrono::steady_clock::time_point execute_start = std::chrono::steady_clock::now();
         {
             // Executor runs OUTSIDE the callback lock: it may legitimately
             // need the same mutex indirectly (wake/notify/timeout paths), so
@@ -823,6 +829,15 @@ namespace pP {
         if (result.m_error) {
             noteFirstError_(result.m_error);
         }
+        // Gauge write: executor wall time in microseconds, monotonically
+        // overwriting the last value. Display only — never read back for
+        // admission/retirement. The clamp only guards a non-monotonic
+        // clock; steady_clock never goes backwards here.
+        const std::chrono::steady_clock::time_point execute_end = std::chrono::steady_clock::now();
+        const i64 execute_delta_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(execute_end - execute_start).count();
+        const u64 execute_us = execute_delta_us > 0 ? static_cast<u64>(execute_delta_us) : 0u;
+        m_last_execute_us.store(execute_us, std::memory_order_relaxed);
         // ora-25: execute-end stamp with the exact executor outcome (the
         // begin stamp rides executeRenderWork_ itself, so early returns
         // there stay untouched). NOTE the submit-inside-execution ordering:
