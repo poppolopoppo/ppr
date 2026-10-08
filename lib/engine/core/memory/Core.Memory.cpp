@@ -89,7 +89,8 @@ namespace pP {
     }
 
     auto mem::SmallPage::getThreadLocalCache() noexcept -> local_block_cache_t & {
-        [[maybe_unused]] static const auto &_{HugePage::getThreadLocalCache()};
+        // Init HugePage TLS per thread so SmallPage TLS teardown never outlives its backing cache.
+        (void) HugePage::getThreadLocalCache();
         alignas(hal::cacheline_size_v) thread_local local_block_cache_t g_instance_tls{};
         return g_instance_tls;
     }

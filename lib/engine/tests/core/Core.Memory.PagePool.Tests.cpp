@@ -66,6 +66,35 @@ namespace pP::tests::detail {
                 pool.deallocateRaw(ptrs[i], 4096u);
             }
         };
+
+        PPR_UNIT_TEST (small_page_tls_teardown_order) {
+            // Regression: SmallPage TLS flush releases backing pools through HugePage TLS, so each thread must build
+            // HugePage TLS before SmallPage TLS; otherwise a late SmallPage flush re-enters a destroyed HugePage cache.
+            // Prime the calling thread first so per-thread ordering is what protects the workers, not first-call order.
+            {
+                const auto alloc = mem::SmallPage::allocateRaw(mem::SmallPage::block_size_v, max_align_v);
+                PPR_TEST_ASSERT(alloc.ptr != nullptr);
+                mem::SmallPage::deallocateRaw(alloc.ptr, alloc.count, max_align_v);
+            }
+
+            for (std::size_t i = 0u; i < 8u; ++i) {
+                std::atomic<bool> ok{false};
+                std::thread worker{[&] {
+                    const auto alloc = mem::SmallPage::allocateRaw(mem::SmallPage::block_size_v, max_align_v);
+                    if (alloc.ptr != nullptr) {
+                        mem::SmallPage::deallocateRaw(alloc.ptr, alloc.count, max_align_v);
+                        ok.store(true, std::memory_order_relaxed);
+                    }
+                    // Blocks stay cached in TLS; thread-exit flush must release through a live HugePage TLS cache.
+                }};
+                worker.join();
+                PPR_TEST_ASSERT(ok.load(std::memory_order_relaxed));
+            }
+
+            const auto alloc = mem::SmallPage::allocateRaw(mem::SmallPage::block_size_v, max_align_v);
+            PPR_TEST_ASSERT(alloc.ptr != nullptr);
+            mem::SmallPage::deallocateRaw(alloc.ptr, alloc.count, max_align_v);
+        };
     }
 } // namespace pP::tests::detail
 
@@ -76,6 +105,7 @@ namespace pP::tests {
             detail::Page_pool::bundle_flow,
             detail::Page_pool::shrink_mechanics,
             detail::Page_pool::allocate_deallocate_cycle,
+            detail::Page_pool::small_page_tls_teardown_order,
         });
     };
 
