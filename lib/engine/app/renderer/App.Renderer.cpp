@@ -21,17 +21,20 @@ namespace pP {
     namespace {
         // ora-25 measurement-only probe writer: acquire/submit/present and
         // fence retirement stamp SEPARATELY with outcomes + fence values.
-        // Runs on the owner thread (lane worker, or main when inline), so
-        // it writes the spinlock-guarded lane buffer main merges after
-        // join. Epoch/frame keys are unavailable here (no reservation
-        // context); correlation rides cpu ticks + GPU fence values.
+        // The tick is an explicit caller-provided parameter read fresh from
+        // the monotonic backing clock at each probe boundary (time::now());
+        // never an implicit read inside the writer. Runs on the owner
+        // thread (lane worker, or main when inline), so it writes the
+        // spinlock-guarded lane buffer main merges after join.
+        // Epoch/frame keys are unavailable here (no reservation context);
+        // correlation rides cpu ticks + GPU fence values.
         // noexcept, allocation-free, never touches control flow.
         void recordRendererTelemetry_(
-            const EFrameTelemetryEvent kind, const int host_outcome = 0, const i64 detail_a = 0, const i64 detail_b = 0,
-            const FenceCompletionValue gpu_fence = kFenceValueNone) noexcept {
+            const EFrameTelemetryEvent kind, const TimePoint tick, const int host_outcome = 0, const i64 detail_a = 0,
+            const i64 detail_b = 0, const FenceCompletionValue gpu_fence = kFenceValueNone) noexcept {
             FrameTelemetryEvent event{};
             event.m_kind = kind;
-            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(ITimerClock::steady().now());
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
             event.m_gpu_fence_value = gpu_fence;
             event.m_detail_a = detail_a;
             event.m_detail_b = detail_b;
@@ -658,7 +661,7 @@ namespace pP {
         // domain, m_gpu_fence_value) plus outstanding count, separate from
         // submit/present stamps; poll failures carry the host outcome.
         recordRendererTelemetry_(
-            EFrameTelemetryEvent::fence_retired, retired ? 0 : retired.error().value(),
+            EFrameTelemetryEvent::fence_retired, time::now(), retired ? 0 : retired.error().value(),
             static_cast<i64>(m_retirement_frontier), static_cast<i64>(m_credits.outstanding()), m_retirement_frontier);
         if (not retired) {
             return retired.error();
@@ -1046,7 +1049,8 @@ namespace pP {
             // ora-25: acquire stamped SEPARATELY with its outcome (control
             // flow unchanged: the hoisted error takes the same macro path).
             const std::error_code acquire_err = make_error_code(record->m_surface->acquireNextImage(image.writeRef()));
-            recordRendererTelemetry_(EFrameTelemetryEvent::renderer_acquire, acquire_err ? acquire_err.value() : 0);
+            recordRendererTelemetry_(
+                EFrameTelemetryEvent::renderer_acquire, time::now(), acquire_err ? acquire_err.value() : 0);
             PPR_RETURN_ERROR_ON_FAIL(Renderer, acquire_err);
         }
 
@@ -1227,9 +1231,17 @@ namespace pP {
                         // fence value (GPU domain) or the failure outcome;
                         // a failed submit commits no value but may still have
                         // executed (quarantine path), so both ride the event.
+                        // NOTE the submit-inside-execution ordering: this
+                        // probe fires inside the keyed lane-execution
+                        // interval (after lane_execute_begin, before
+                        // lane_execute_end) and carries no reservation keys
+                        // itself — joins must correlate present/retirement
+                        // via the enclosing (epoch, frame) execution
+                        // interval + a nonzero fence value here, never by
+                        // timestamp proximity to the execute-end stamp.
                         recordRendererTelemetry_(
-                            EFrameTelemetryEvent::renderer_submit, submitted ? 0 : submitted.error().value(), 0, 0,
-                            submitted ? *submitted : kFenceValueNone);
+                            EFrameTelemetryEvent::renderer_submit, time::now(),
+                            submitted ? 0 : submitted.error().value(), 0, 0, submitted ? *submitted : kFenceValueNone);
                     }
                 }
             }
@@ -1244,9 +1256,13 @@ namespace pP {
             const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
             // ora-25: present stamped SEPARATELY with its outcome (control
             // flow unchanged: the hoisted error takes the same retain path).
+            // The accepted submit above (renderer_submit, nonzero fence)
+            // already committed before this present — correlate via that
+            // fence value, never via proximity between these two stamps.
             const std::error_code present_err = acquired_guard.settlePresent();
             recordRendererTelemetry_(
-                EFrameTelemetryEvent::renderer_present, present_err ? present_err.value() : 0, 0, 0, submitted_value);
+                EFrameTelemetryEvent::renderer_present, time::now(), present_err ? present_err.value() : 0, 0, 0,
+                submitted_value);
             PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, present_err);
         }
         return first_err;

@@ -83,10 +83,14 @@ export namespace pP {
     // never allocates, never throws, never alters control flow;
     // overflow is counted and reported at export, never silently shed.
     // The sink is explicit at every probe site (buffer + clock passed
-    // by the caller: Application threads m_application_clock.now()
-    // through; platform reads the application-owned TimerManager; the
-    // lane uses the same steady_clock backing that TimerManager
-    // defaults to), never an implicit singleton read inside logic.
+    // by the caller, stamped fresh from the monotonic backing clock via
+    // time::now() at each boundary — never a latched
+    // TimerManager::now()/m_application_clock read, never an implicit
+    // singleton read inside logic/writers). The backing clock is the
+    // same steady_clock TimerManager defaults to. Fake-clock caveat:
+    // harnesses driving a fake ITimerClock still stamp real backing-clock
+    // time here by design (cross-thread correlation needs one real
+    // clock); telemetry ticks never track fake-clock time.
     // ------------------------------------------------------------------
 
     enum class EFrameTelemetryEvent : u8 {
@@ -112,6 +116,17 @@ export namespace pP {
         renderer_submit,
         renderer_present,
         fence_retired,
+        // Distinct enqueue producers (supersede the retired detail_a
+        // 0/1/2 triple on lane_enqueue, which is retained unused as
+        // legacy): handoff = client-side handoff at the transport
+        // boundary; accepted = transport acceptance inside submitFrame
+        // (brackets handoff on the same keys); inline = transportless
+        // inline-path handoff (no acceptance follows, so it never pairs
+        // — kept distinct so handoff/accepted stay a strict bracket
+        // pair). u8 capacity: 27 of 256 used.
+        lane_enqueue_handoff,
+        lane_enqueue_inline,
+        lane_enqueue_accepted,
     };
 
     struct FrameTelemetryEvent {
@@ -206,6 +221,9 @@ export namespace pP {
             case EFrameTelemetryEvent::renderer_submit: return "renderer_submit";
             case EFrameTelemetryEvent::renderer_present: return "renderer_present";
             case EFrameTelemetryEvent::fence_retired: return "fence_retired";
+            case EFrameTelemetryEvent::lane_enqueue_handoff: return "lane_enqueue_handoff";
+            case EFrameTelemetryEvent::lane_enqueue_inline: return "lane_enqueue_inline";
+            case EFrameTelemetryEvent::lane_enqueue_accepted: return "lane_enqueue_accepted";
         }
         return "unknown";
     }

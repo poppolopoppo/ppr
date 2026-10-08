@@ -48,12 +48,14 @@ namespace pP {
             result.m_grid_ack_revisions = stage.m_ack_revisions;
         }
 
-        // ora-25 measurement-only probe writers. Main-thread sites use the
-        // application-owned TimerManager tick explicitly; lane/owner-thread
-        // sites (executeRenderWork_ on the worker) use the same
-        // steady_clock backing TimerManager defaults to. Both write
-        // side-channel events keyed by reservation epoch + frame id;
-        // FramePacket semantics are untouched. noexcept, allocation-free.
+        // ora-25 measurement-only probe writers. Main-thread sites pass the
+        // monotonic backing clock read fresh at each probe boundary
+        // (time::now(), never the latched TimerManager::now()); lane/
+        // owner-thread sites (executeRenderWork_ on the worker) pass the
+        // same steady_clock backing TimerManager defaults to, read fresh
+        // at their boundary. Both write side-channel events keyed by
+        // reservation epoch + frame id; FramePacket semantics are
+        // untouched. noexcept, allocation-free.
         void recordEditorTelemetry_(
             const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
             const i64 detail_a = 0, const i64 detail_b = 0, const int host_outcome = 0) noexcept {
@@ -867,11 +869,11 @@ namespace pP {
                 m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
                     m_main_viewport->getWindow().m_handle);
             }
-            // ora-25: packet-snapshot stamp keyed by epoch + frame id
-            // (side channel; packet fields untouched). detail_a carries the
-            // surface generation claim at capture.
+            // ora-25: packet-snapshot stamp on the backing clock fresh at
+            // the capture boundary (side channel; packet fields untouched).
+            // detail_a carries the surface generation claim at capture.
             recordEditorTelemetry_(
-                EFrameTelemetryEvent::packet_snapshot, reservationEpoch_(), getFrameIndex(), getTimerManager().now(),
+                EFrameTelemetryEvent::packet_snapshot, reservationEpoch_(), getFrameIndex(), time::now(),
                 static_cast<i64>(m_frame_packet->m_surface_generation));
         }
 
@@ -1039,19 +1041,27 @@ namespace pP {
                 onLaneFrameConsumed_(dropped_or_failed);
                 return dropped_or_failed.m_error;
             }
-            // ora-25: enqueue-handoff stamp (client side of the transport;
-            // RenderLane::submitFrame stamps transport acceptance below with
-            // the same keys, so the two bracket the handoff).
+            // ora-25: enqueue-handoff stamp, fresh at the handoff boundary
+            // (client side of the transport; RenderLane::submitFrame stamps
+            // lane_enqueue_accepted below with the same keys, so the two
+            // bracket the handoff).
             recordEditorTelemetry_(
-                EFrameTelemetryEvent::lane_enqueue, reservationEpoch_(), packet.m_frame_id, getTimerManager().now());
+                EFrameTelemetryEvent::lane_enqueue_handoff, reservationEpoch_(), packet.m_frame_id, time::now());
             if (const std::error_code submit_err = renderLane()->submitFrame(std::move(request))) {
                 // Bounded fallback, never an app failure: a full transport
                 // drops presentation for this frame. The slot still gets a
                 // durable settlement result (never-applied), so armed
                 // flags re-arm and the dirty set stays pending.
+                // Client-observed transport failure (post-handoff): same keys
+                // as the handoff stamp above, fresh at the failure boundary.
+                // Dropped stays a single kind by design (unlike the
+                // handoff/accepted/inline enqueue split): client-observed
+                // failures emit detail_a 0 here; lane-side drops inside
+                // submitFrame emit detail_a 0/1 (1 == full) with the
+                // translated outcome in host_outcome.
                 recordEditorTelemetry_(
-                    EFrameTelemetryEvent::lane_enqueue_dropped, reservationEpoch_(), packet.m_frame_id,
-                    getTimerManager().now(), 0, 0, submit_err.value());
+                    EFrameTelemetryEvent::lane_enqueue_dropped, reservationEpoch_(), packet.m_frame_id, time::now(), 0,
+                    0, submit_err.value());
                 dropped_or_failed.m_dropped = true;
                 if (submit_err == std::make_error_code(std::errc::device_or_resource_busy)) {
                     if ((++m_lane_dropped_frames % 60u) == 1u) {
@@ -1116,10 +1126,17 @@ namespace pP {
             return inline_result.m_error;
         }
         std::error_code inline_err{};
-        // ora-25: inline enqueue stamp (detail_a = 1 marks the transportless
-        // path) and execute-end stamp with the exact outcome below.
+        // ora-25: inline enqueue stamp fresh at the inline-handoff boundary
+        // (transportless path: no acceptance follows, so it uses its own
+        // kind and never pairs with lane_enqueue_accepted), and execute-end
+        // stamp with the exact outcome below. NOTE the submit-inside-execution ordering: the
+        // renderer_submit probe inside executeRenderWork_ fires strictly
+        // between lane_execute_begin and this lane_execute_end — joins must
+        // correlate present/retirement via the enclosing keyed execution
+        // interval + a nonzero fence value, never by timestamp proximity
+        // to this end stamp alone.
         recordEditorTelemetry_(
-            EFrameTelemetryEvent::lane_enqueue, reservationEpoch_(), packet.m_frame_id, getTimerManager().now(), 1);
+            EFrameTelemetryEvent::lane_enqueue_inline, reservationEpoch_(), packet.m_frame_id, time::now());
         try {
             inline_err = executeRenderWork_(inline_request, inline_result);
         } catch (const std::bad_alloc &) {
@@ -1127,6 +1144,9 @@ namespace pP {
         } catch (...) {
             inline_err = std::make_error_code(std::errc::state_not_recoverable);
         }
+        // Execute-end for the inline path (thread_tag 0 marks main; the
+        // lane path stamps thread_tag 1 in handleFrameEvent_). Encloses
+        // renderer_submit per the ordering note above.
         recordLaneTelemetry_(
             EFrameTelemetryEvent::lane_execute_end, inline_request.m_reservation_epoch,
             inline_request.m_reservation_frame_id, ITimerClock::steady().now(), 0, 0,

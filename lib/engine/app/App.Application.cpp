@@ -21,10 +21,15 @@ namespace pP {
 
     namespace {
         // ora-25 measurement-only probe writer: fills one side-channel
-        // event from the caller-provided application-clock tick and sink.
-        // noexcept, allocation-free, never touches control flow or
-        // error_code discipline; the sink + clock stay explicit at each
-        // probe site (never an implicit read inside logic).
+        // event from the caller-provided tick and sink. The tick is always
+        // the monotonic backing clock read fresh at the probe boundary
+        // (time::now() == the steady_clock backing TimerManager defaults
+        // to in production), NEVER the latched TimerManager::now()
+        // (Core.Timer.cpp:50-52 latch, stale by construction once client
+        // work advances past the last tick). noexcept, allocation-free,
+        // never touches control flow or error_code discipline; the sink +
+        // clock stay explicit at each probe site (never an implicit read
+        // inside logic).
         [[nodiscard]] i64 telemetryUs_(const TimeSpan span) noexcept {
             return static_cast<i64>(std::chrono::duration_cast<std::chrono::microseconds>(span).count());
         }
@@ -238,8 +243,8 @@ namespace pP {
                     // measured too — never only successful frames. The dt
                     // carry preserves sim time; the event preserves evidence.
                     recordMainTelemetry_(
-                        EFrameTelemetryEvent::frame_skipped, m_reservation_epoch, getFrameIndex(),
-                        m_application_clock.now(), telemetryUs_(dt));
+                        EFrameTelemetryEvent::frame_skipped, m_reservation_epoch, getFrameIndex(), time::now(),
+                        telemetryUs_(dt));
                     noteSkippedFrameDt(dt);
                     if (m_platform) {
                         // Single collection per busy frame through the
@@ -292,12 +297,13 @@ namespace pP {
                 const TimeSpan carry = claimSkippedFrameDt();
                 const TimeSpan effective_dt = dt + carry;
                 std::error_code update_err{};
-                // ora-25: actual client-phase start AND end on the single CPU
-                // clock, keyed by epoch + frame id (admitted frames only;
-                // skipped frames emit frame_skipped above instead).
+                // ora-25: actual client-phase start AND end on the backing
+                // clock read fresh at each boundary (never the latched
+                // TimerManager::now()), keyed by epoch + frame id (admitted
+                // frames only; skipped frames emit frame_skipped above).
                 recordMainTelemetry_(
-                    EFrameTelemetryEvent::client_phase_begin, m_reservation_epoch, getFrameIndex(),
-                    m_application_clock.now(), telemetryUs_(effective_dt), telemetryUs_(carry));
+                    EFrameTelemetryEvent::client_phase_begin, m_reservation_epoch, getFrameIndex(), time::now(),
+                    telemetryUs_(effective_dt), telemetryUs_(carry));
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};
                     const hal::ProfileScope scope_frame_advance{"PPR.Frame.AdvanceClient"};
@@ -305,9 +311,9 @@ namespace pP {
                     update_err = first_err;
                 }
                 recordMainTelemetry_(
-                    EFrameTelemetryEvent::client_phase_end, m_reservation_epoch, getFrameIndex(),
-                    m_application_clock.now(), telemetryUs_(effective_dt),
-                    update_err ? static_cast<i64>(update_err.value()) : 0, update_err ? update_err.value() : 0);
+                    EFrameTelemetryEvent::client_phase_end, m_reservation_epoch, getFrameIndex(), time::now(),
+                    telemetryUs_(effective_dt), update_err ? static_cast<i64>(update_err.value()) : 0,
+                    update_err ? update_err.value() : 0);
 
                 // Render only when update succeeded: a failed update already
                 // latched its error and the loop retires below.
@@ -466,9 +472,8 @@ namespace pP {
             admission_err = std::make_error_code(std::errc::state_not_recoverable);
         }
         recordMainTelemetry_(
-            EFrameTelemetryEvent::admission_credit, m_reservation_epoch, getFrameIndex(), m_application_clock.now(),
-            out_skip ? 1 : 0, static_cast<i64>(m_frame_reservations.outstanding()),
-            admission_err ? admission_err.value() : 0);
+            EFrameTelemetryEvent::admission_credit, m_reservation_epoch, getFrameIndex(), time::now(), out_skip ? 1 : 0,
+            static_cast<i64>(m_frame_reservations.outstanding()), admission_err ? admission_err.value() : 0);
         return admission_err;
     }
 
@@ -1099,8 +1104,10 @@ namespace pP {
             break;
         }
         if (first_period <= TimeSpan{}) {
+            // Uncapped boundary: fresh backing-clock read (the latched
+            // now() here would still be the previous frame's tick).
             recordMainTelemetry_(
-                EFrameTelemetryEvent::clock_uncapped, m_reservation_epoch, getFrameIndex(), m_application_clock.now());
+                EFrameTelemetryEvent::clock_uncapped, m_reservation_epoch, getFrameIndex(), time::now());
         } else {
             // detail_a carries the intended period (us); the deadline tick
             // itself rides m_cpu_tick_ns (previous tick + period).
@@ -1112,9 +1119,11 @@ namespace pP {
         // detail_a carries the observed dt (us, 0 when the tick failed);
         // detail_b marks whether any pacer wait ran (missed deadline when
         // waited yet dt overruns the period — classified downstream, never
-        // here).
+        // here). The stamp reads the backing clock fresh at the post-tick
+        // boundary (the just-latched now() would equal the tick instant,
+        // not the emission instant).
         recordMainTelemetry_(
-            EFrameTelemetryEvent::clock_tick_actual, m_reservation_epoch, getFrameIndex(), m_application_clock.now(),
+            EFrameTelemetryEvent::clock_tick_actual, m_reservation_epoch, getFrameIndex(), time::now(),
             not tick_err and out_delta_time != nullptr ? telemetryUs_(*out_delta_time) : 0, waited ? 1 : 0,
             tick_err ? tick_err.value() : 0);
         return tick_err;
