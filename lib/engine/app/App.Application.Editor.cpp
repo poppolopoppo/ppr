@@ -5,6 +5,7 @@ module;
 module engine.app;
 
 import :application_editor;
+import :frame.packet;
 import :frame.render_lane;
 import :input.action;
 import :input.device;
@@ -45,6 +46,43 @@ namespace pP {
             result.m_grid_ack_seed = stage.m_ack_seed;
             result.m_grid_ack_chunk_ids = stage.m_ack_chunk_ids;
             result.m_grid_ack_revisions = stage.m_ack_revisions;
+        }
+
+        // ora-25 measurement-only probe writers. Main-thread sites use the
+        // application-owned TimerManager tick explicitly; lane/owner-thread
+        // sites (executeRenderWork_ on the worker) use the same
+        // steady_clock backing TimerManager defaults to. Both write
+        // side-channel events keyed by reservation epoch + frame id;
+        // FramePacket semantics are untouched. noexcept, allocation-free.
+        void recordEditorTelemetry_(
+            const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
+            const i64 detail_a = 0, const i64 detail_b = 0, const int host_outcome = 0) noexcept {
+            FrameTelemetryEvent event{};
+            event.m_kind = kind;
+            event.m_epoch = epoch;
+            event.m_frame_id = frame_id;
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
+            event.m_detail_a = detail_a;
+            event.m_detail_b = detail_b;
+            event.m_host_outcome = host_outcome;
+            event.m_thread_tag = 0u;
+            frameTelemetryMainBuffer().record(event);
+        }
+
+        void recordLaneTelemetry_(
+            const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
+            const i64 detail_a = 0, const i64 detail_b = 0, const int host_outcome = 0,
+            const u8 thread_tag = 1u) noexcept {
+            FrameTelemetryEvent event{};
+            event.m_kind = kind;
+            event.m_epoch = epoch;
+            event.m_frame_id = frame_id;
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
+            event.m_detail_a = detail_a;
+            event.m_detail_b = detail_b;
+            event.m_host_outcome = host_outcome;
+            event.m_thread_tag = thread_tag;
+            frameTelemetryRecordLane(event);
         }
     } // namespace
 
@@ -779,6 +817,12 @@ namespace pP {
                 m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
                     m_main_viewport->getWindow().m_handle);
             }
+            // ora-25: packet-snapshot stamp keyed by epoch + frame id
+            // (side channel; packet fields untouched). detail_a carries the
+            // surface generation claim at capture.
+            recordEditorTelemetry_(
+                EFrameTelemetryEvent::packet_snapshot, reservationEpoch_(), getFrameIndex(), getTimerManager().now(),
+                static_cast<i64>(m_frame_packet->m_surface_generation));
         }
 
         // P2 pass-affinity: pass mutations run ON the owner lane (worker
@@ -945,11 +989,19 @@ namespace pP {
                 onLaneFrameConsumed_(dropped_or_failed);
                 return dropped_or_failed.m_error;
             }
+            // ora-25: enqueue-handoff stamp (client side of the transport;
+            // RenderLane::submitFrame stamps transport acceptance below with
+            // the same keys, so the two bracket the handoff).
+            recordEditorTelemetry_(
+                EFrameTelemetryEvent::lane_enqueue, reservationEpoch_(), packet.m_frame_id, getTimerManager().now());
             if (const std::error_code submit_err = renderLane()->submitFrame(std::move(request))) {
                 // Bounded fallback, never an app failure: a full transport
                 // drops presentation for this frame. The slot still gets a
                 // durable settlement result (never-applied), so armed
                 // flags re-arm and the dirty set stays pending.
+                recordEditorTelemetry_(
+                    EFrameTelemetryEvent::lane_enqueue_dropped, reservationEpoch_(), packet.m_frame_id,
+                    getTimerManager().now(), 0, 0, submit_err.value());
                 dropped_or_failed.m_dropped = true;
                 if (submit_err == std::make_error_code(std::errc::device_or_resource_busy)) {
                     if ((++m_lane_dropped_frames % 60u) == 1u) {
@@ -1014,6 +1066,10 @@ namespace pP {
             return inline_result.m_error;
         }
         std::error_code inline_err{};
+        // ora-25: inline enqueue stamp (detail_a = 1 marks the transportless
+        // path) and execute-end stamp with the exact outcome below.
+        recordEditorTelemetry_(
+            EFrameTelemetryEvent::lane_enqueue, reservationEpoch_(), packet.m_frame_id, getTimerManager().now(), 1);
         try {
             inline_err = executeRenderWork_(inline_request, inline_result);
         } catch (const std::bad_alloc &) {
@@ -1021,6 +1077,10 @@ namespace pP {
         } catch (...) {
             inline_err = std::make_error_code(std::errc::state_not_recoverable);
         }
+        recordLaneTelemetry_(
+            EFrameTelemetryEvent::lane_execute_end, inline_request.m_reservation_epoch,
+            inline_request.m_reservation_frame_id, ITimerClock::steady().now(), 0, 0,
+            inline_err ? inline_err.value() : 0, 0u);
         inline_result.m_error = inline_err;
         m_diagnostics.m_grid_staged_tiles = inline_result.m_grid_staged_tiles;
         m_diagnostics.m_grid_cached_tiles = inline_result.m_grid_cached_tiles;
@@ -1042,6 +1102,13 @@ namespace pP {
         out_result.m_reservation_epoch = request.m_reservation_epoch;
         out_result.m_reservation_frame_id = request.m_reservation_frame_id;
         stampGridEcho(grid_stage, out_result);
+        // ora-25: execute-begin stamp (side channel; the end stamp rides
+        // the caller's settlement with the exact outcome, so early returns
+        // below stay untouched). Tag follows affinity: lane-owned runs on
+        // the worker (1), inline runs on main (0).
+        recordLaneTelemetry_(
+            EFrameTelemetryEvent::lane_execute_begin, request.m_reservation_epoch, request.m_reservation_frame_id,
+            ITimerClock::steady().now(), 0, 0, 0, renderLaneOwnsRenderer_() ? 1u : 0u);
 
         // Cell uploads write a mapped atlas shared with earlier GPU frames.
         // Fence and publish pending visible cells before opening the

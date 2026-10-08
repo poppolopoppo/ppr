@@ -5,6 +5,7 @@ module;
 module engine.app;
 
 import :application;
+import :frame.packet;
 import :frame.render_lane;
 import :platform;
 import :renderer;
@@ -17,6 +18,32 @@ import std;
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
+
+    namespace {
+        // ora-25 measurement-only probe writer: fills one side-channel
+        // event from the caller-provided application-clock tick and sink.
+        // noexcept, allocation-free, never touches control flow or
+        // error_code discipline; the sink + clock stay explicit at each
+        // probe site (never an implicit read inside logic).
+        [[nodiscard]] i64 telemetryUs_(const TimeSpan span) noexcept {
+            return static_cast<i64>(std::chrono::duration_cast<std::chrono::microseconds>(span).count());
+        }
+
+        void recordMainTelemetry_(
+            const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
+            const i64 detail_a = 0, const i64 detail_b = 0, const int host_outcome = 0) noexcept {
+            FrameTelemetryEvent event{};
+            event.m_kind = kind;
+            event.m_epoch = epoch;
+            event.m_frame_id = frame_id;
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
+            event.m_detail_a = detail_a;
+            event.m_detail_b = detail_b;
+            event.m_host_outcome = host_outcome;
+            event.m_thread_tag = 0u;
+            frameTelemetryMainBuffer().record(event);
+        }
+    }
 
     Application::Application(
         ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv)
@@ -207,6 +234,12 @@ namespace pP {
                 // skipped frame), latches a collection failure, and finishes
                 // the iteration.
                 if (admitted_skip) {
+                    // ora-25: skipped (capacity-busy or exit-armed) frames are
+                    // measured too — never only successful frames. The dt
+                    // carry preserves sim time; the event preserves evidence.
+                    recordMainTelemetry_(
+                        EFrameTelemetryEvent::frame_skipped, m_reservation_epoch, getFrameIndex(),
+                        m_application_clock.now(), telemetryUs_(dt));
                     noteSkippedFrameDt(dt);
                     if (m_platform) {
                         // Single collection per busy frame through the
@@ -259,12 +292,22 @@ namespace pP {
                 const TimeSpan carry = claimSkippedFrameDt();
                 const TimeSpan effective_dt = dt + carry;
                 std::error_code update_err{};
+                // ora-25: actual client-phase start AND end on the single CPU
+                // clock, keyed by epoch + frame id (admitted frames only;
+                // skipped frames emit frame_skipped above instead).
+                recordMainTelemetry_(
+                    EFrameTelemetryEvent::client_phase_begin, m_reservation_epoch, getFrameIndex(),
+                    m_application_clock.now(), telemetryUs_(effective_dt), telemetryUs_(carry));
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};
                     const hal::ProfileScope scope_frame_advance{"PPR.Frame.AdvanceClient"};
                     PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(effective_dt));
                     update_err = first_err;
                 }
+                recordMainTelemetry_(
+                    EFrameTelemetryEvent::client_phase_end, m_reservation_epoch, getFrameIndex(),
+                    m_application_clock.now(), telemetryUs_(effective_dt),
+                    update_err ? static_cast<i64>(update_err.value()) : 0, update_err ? update_err.value() : 0);
 
                 // Render only when update succeeded: a failed update already
                 // latched its error and the loop retires below.
@@ -404,21 +447,29 @@ namespace pP {
         // ledger is the source of truth; pacer/lane signals are hints
         // rechecked here. Fail-closed like the loop boundary it replaces:
         // unexpected exceptions convert to error codes, never escape.
+        // ora-25: the credit/admission outcome is recorded side-channel
+        // (skip + outstanding + error value), never only on success.
         out_skip = false;
         if (const std::error_code clock_err = advanceClock_(out_delta_time)) {
             return clock_err;
         }
+        std::error_code admission_err{};
         try {
-            return probeFrameAdmissionPreUpdate_(out_skip);
+            admission_err = probeFrameAdmissionPreUpdate_(out_skip);
         } catch (const std::system_error &e) {
-            return e.code();
+            admission_err = e.code();
         } catch (const std::invalid_argument &) {
-            return std::make_error_code(std::errc::invalid_argument);
+            admission_err = std::make_error_code(std::errc::invalid_argument);
         } catch (const std::bad_alloc &) {
-            return std::make_error_code(std::errc::not_enough_memory);
+            admission_err = std::make_error_code(std::errc::not_enough_memory);
         } catch (...) {
-            return std::make_error_code(std::errc::state_not_recoverable);
+            admission_err = std::make_error_code(std::errc::state_not_recoverable);
         }
+        recordMainTelemetry_(
+            EFrameTelemetryEvent::admission_credit, m_reservation_epoch, getFrameIndex(), m_application_clock.now(),
+            out_skip ? 1 : 0, static_cast<i64>(m_frame_reservations.outstanding()),
+            admission_err ? admission_err.value() : 0);
+        return admission_err;
     }
 
     void Application::waitForAdmissionHint_() {
@@ -1010,16 +1061,29 @@ namespace pP {
         // target change, so a long background wait wakes within one quantum
         // on exit or retarget; a retarget loops to recompute the deadline
         // from the same previous tick before admission.
+        // ora-25: record the intended deadline (first-iteration target) and
+        // the actual tick, including missed/skipped waits and the uncapped
+        // path — never only on-time frames.
+        bool first_iteration = true;
+        bool waited = false;
+        TimeSpan first_period{};
+        TimePoint first_previous_tick{};
         for (;;) {
             const std::optional<TimeSpan> target = getTargetFrameTime();
             const TimeSpan period = target.value_or(TimeSpan{});
             const TimePoint previous_tick = m_application_clock.now();
+            if (first_iteration) {
+                first_iteration = false;
+                first_period = period;
+                first_previous_tick = previous_tick;
+            }
             if (period <= TimeSpan{}) {
                 break;
             }
             if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
                 break;
             }
+            waited = true;
             m_pacer.waitForTarget(period, previous_tick, [this, target]() noexcept -> bool {
                 if (isExitRequested()) {
                     return true;
@@ -1034,7 +1098,26 @@ namespace pP {
             }
             break;
         }
-        return m_application_clock.tick(out_delta_time, TimeSpan{});
+        if (first_period <= TimeSpan{}) {
+            recordMainTelemetry_(
+                EFrameTelemetryEvent::clock_uncapped, m_reservation_epoch, getFrameIndex(), m_application_clock.now());
+        } else {
+            // detail_a carries the intended period (us); the deadline tick
+            // itself rides m_cpu_tick_ns (previous tick + period).
+            recordMainTelemetry_(
+                EFrameTelemetryEvent::clock_deadline_intended, m_reservation_epoch, getFrameIndex(),
+                first_previous_tick + first_period, telemetryUs_(first_period), waited ? 1 : 0);
+        }
+        const std::error_code tick_err = m_application_clock.tick(out_delta_time, TimeSpan{});
+        // detail_a carries the observed dt (us, 0 when the tick failed);
+        // detail_b marks whether any pacer wait ran (missed deadline when
+        // waited yet dt overruns the period — classified downstream, never
+        // here).
+        recordMainTelemetry_(
+            EFrameTelemetryEvent::clock_tick_actual, m_reservation_epoch, getFrameIndex(), m_application_clock.now(),
+            not tick_err and out_delta_time != nullptr ? telemetryUs_(*out_delta_time) : 0, waited ? 1 : 0,
+            tick_err ? tick_err.value() : 0);
+        return tick_err;
     }
 
     std::error_code Application::finishRun_(const std::error_code prior) {
@@ -1057,6 +1140,13 @@ namespace pP {
         // immediate categories self-flush, so only shutdown waits.
         // Retain a drain failure instead of silently ignoring it.
         PPR_RETAIN_ERROR_ON_FAIL(App, result, Log::flush(true));
+
+        // ora-25 exit-time export (bounded, once; never per-frame): merge
+        // lane/owner-thread events (drained at join) into the main buffer,
+        // then print the single CPU-clock CSV. Overflow counts ride the
+        // header, never silently.
+        std::ignore = frameTelemetryMergeLaneIntoMain();
+        dumpFrameTelemetryMain();
 
         if (result) [[unlikely]] {
             m_request_exit(result);

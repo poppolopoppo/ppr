@@ -2,6 +2,7 @@ module;
 #include "pP/Macros.h"
 module engine.app;
 
+import :frame.packet;
 import :renderer;
 import :renderer.frame_fence;
 import :renderer.types;
@@ -16,6 +17,29 @@ import engine.rhi;
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Renderer, info, none)
+
+    namespace {
+        // ora-25 measurement-only probe writer: acquire/submit/present and
+        // fence retirement stamp SEPARATELY with outcomes + fence values.
+        // Runs on the owner thread (lane worker, or main when inline), so
+        // it writes the spinlock-guarded lane buffer main merges after
+        // join. Epoch/frame keys are unavailable here (no reservation
+        // context); correlation rides cpu ticks + GPU fence values.
+        // noexcept, allocation-free, never touches control flow.
+        void recordRendererTelemetry_(
+            const EFrameTelemetryEvent kind, const int host_outcome = 0, const i64 detail_a = 0, const i64 detail_b = 0,
+            const FenceCompletionValue gpu_fence = kFenceValueNone) noexcept {
+            FrameTelemetryEvent event{};
+            event.m_kind = kind;
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(ITimerClock::steady().now());
+            event.m_gpu_fence_value = gpu_fence;
+            event.m_detail_a = detail_a;
+            event.m_detail_b = detail_b;
+            event.m_host_outcome = host_outcome;
+            event.m_thread_tag = 1u;
+            frameTelemetryRecordLane(event);
+        }
+    }
 
     // ------------------------------------------------------------------
     // attachment validation and setup
@@ -629,8 +653,15 @@ namespace pP {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
         sweepCompleted_();
-        if (const Expected<FenceCompletionValue> completed = m_frame_fence.pollCompleted(); not completed) {
-            return completed.error();
+        const Expected<FenceCompletionValue> retired = m_frame_fence.pollCompleted();
+        // ora-25: fence-retirement stamp with the proven frontier (GPU
+        // domain, m_gpu_fence_value) plus outstanding count, separate from
+        // submit/present stamps; poll failures carry the host outcome.
+        recordRendererTelemetry_(
+            EFrameTelemetryEvent::fence_retired, retired ? 0 : retired.error().value(),
+            static_cast<i64>(m_retirement_frontier), static_cast<i64>(m_credits.outstanding()), m_retirement_frontier);
+        if (not retired) {
+            return retired.error();
         }
         return default_value_v;
     }
@@ -1012,7 +1043,11 @@ namespace pP {
         rhi::ComPtr<rhi::ITexture> image;
         {
             const hal::ProfileScope scope_acquire{"App.Renderer.Acquire"};
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, record->m_surface->acquireNextImage(image.writeRef()));
+            // ora-25: acquire stamped SEPARATELY with its outcome (control
+            // flow unchanged: the hoisted error takes the same macro path).
+            const std::error_code acquire_err = make_error_code(record->m_surface->acquireNextImage(image.writeRef()));
+            recordRendererTelemetry_(EFrameTelemetryEvent::renderer_acquire, acquire_err ? acquire_err.value() : 0);
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, acquire_err);
         }
 
         // Acquired-image settlement guard, armed IMMEDIATELY post-acquire:
@@ -1188,6 +1223,13 @@ namespace pP {
                             first_err = submitted.error();
                             settlement = FrameSettlement::kSubmitFailed;
                         }
+                        // ora-25: submit stamped SEPARATELY with the committed
+                        // fence value (GPU domain) or the failure outcome;
+                        // a failed submit commits no value but may still have
+                        // executed (quarantine path), so both ride the event.
+                        recordRendererTelemetry_(
+                            EFrameTelemetryEvent::renderer_submit, submitted ? 0 : submitted.error().value(), 0, 0,
+                            submitted ? *submitted : kFenceValueNone);
                     }
                 }
             }
@@ -1200,7 +1242,12 @@ namespace pP {
         // including the present-only path above.
         {
             const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
-            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, acquired_guard.settlePresent());
+            // ora-25: present stamped SEPARATELY with its outcome (control
+            // flow unchanged: the hoisted error takes the same retain path).
+            const std::error_code present_err = acquired_guard.settlePresent();
+            recordRendererTelemetry_(
+                EFrameTelemetryEvent::renderer_present, present_err ? present_err.value() : 0, 0, 0, submitted_value);
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, present_err);
         }
         return first_err;
     }

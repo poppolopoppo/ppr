@@ -4,6 +4,7 @@ module;
 
 module engine.app;
 
+import :frame.packet;
 import :platform.glfw;
 import :platform.glfw.input;
 import :platform.glfw.player;
@@ -13,6 +14,30 @@ import engine.core;
 
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwPlatform, info, none)
+
+    namespace {
+        // ora-25 measurement-only probe writer: one side-channel event per
+        // collection/wait/dispatch step on the single CPU clock. The clock
+        // is the application-owned TimerManager explicitly (never an
+        // implicit read inside logic); pre-init/edge paths fall back to
+        // the same steady_clock backing TimerManager defaults to.
+        // noexcept, allocation-free, never touches control flow.
+        void recordPlatformTelemetry_(
+            const safe_ptr<Application> &app, const EFrameTelemetryEvent kind, const int host_outcome = 0) noexcept {
+            TimePoint tick{};
+            if (app.isValid()) {
+                tick = app->getTimerManager().now();
+            } else {
+                tick = ITimerClock::steady().now();
+            }
+            FrameTelemetryEvent event{};
+            event.m_kind = kind;
+            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
+            event.m_host_outcome = host_outcome;
+            event.m_thread_tag = 0u;
+            frameTelemetryMainBuffer().record(event);
+        }
+    }
 
     namespace platform {
         class GlfwErrorCategory : public std::error_category {
@@ -194,6 +219,11 @@ namespace pP {
         // Collection only: window-event callbacks stage owned records into
         // the input batch; no client callback runs until update() dispatches
         // the completed batches below. Repeatable within a frame.
+        // ora-25: active drain half of the wait/drain split (see
+        // waitNativeEvents below); complements the outer
+        // PPR.Frame.ServicePlatform scope owned by Application.
+        const hal::ProfileScope scope_collect{"PPR.Frame.PlatformCollect"};
+        recordPlatformTelemetry_(m_application, EFrameTelemetryEvent::platform_collect);
         GlfwInput *const p_inputs = m_input_service.get();
         if (p_inputs != nullptr) [[likely]] {
             p_inputs->setNativeBatchCollection(true);
@@ -232,8 +262,22 @@ namespace pP {
         };
 
         if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
-            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->waitEventsTimeout(timeout));
-            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+            // ora-25 wait/drain split: the intentional native wait and the
+            // active collection drain carry distinct scopes AND distinct
+            // side-channel stamps, so Phase 3 can attribute parked time vs
+            // collection work (the outer PPR.Frame.ServicePlatform scope in
+            // Application encloses both and is left untouched).
+            {
+                const hal::ProfileScope scope_wait{"PPR.Frame.PlatformWait"};
+                recordPlatformTelemetry_(m_application, EFrameTelemetryEvent::platform_wait_begin);
+                PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->waitEventsTimeout(timeout));
+                recordPlatformTelemetry_(m_application, EFrameTelemetryEvent::platform_wait_end);
+            }
+            {
+                const hal::ProfileScope scope_collect{"PPR.Frame.PlatformCollect"};
+                recordPlatformTelemetry_(m_application, EFrameTelemetryEvent::platform_collect);
+                PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
+            }
         } else {
             // Headless: paced slice with no native queue to service.
             if (timeout > TimeSpan{}) {
@@ -266,7 +310,10 @@ namespace pP {
         // only reset transient
         // state), and dispatch below then uses this frame's delta time.
         if (GlfwInput *const p_inputs = m_input_service.get()) [[likely]] {
+            const hal::ProfileScope scope_poll{"PPR.Frame.PlatformDevicePoll"};
             PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_inputs->pollInputDevices(dt));
+            // ora-25: device-poll stamp (all collection paths stamped).
+            recordPlatformTelemetry_(m_application, EFrameTelemetryEvent::platform_device_poll);
         }
 
         PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, pumpNativeEvents());
@@ -299,8 +346,14 @@ namespace pP {
                 }
                 return p_inputs->notifyDeviceDisconnected(*device);
             };
-            PPR_RETURN_ERROR_ON_FAIL(
-                GlfwPlatform, p_inputs->dispatchCollectedBatches(std::move(focus_applier), std::move(device_applier)));
+            const std::error_code dispatch_err = p_inputs->dispatchCollectedBatches(
+                std::move(focus_applier), std::move(device_applier));
+            // ora-25: input-consumption stamp at the exactly-once dispatch
+            // point, including failed dispatches (outcome carried, control
+            // flow unchanged).
+            recordPlatformTelemetry_(
+                m_application, EFrameTelemetryEvent::input_consumed, dispatch_err ? dispatch_err.value() : 0);
+            PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, dispatch_err);
         }
 
         return default_value_v;

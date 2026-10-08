@@ -103,6 +103,10 @@ namespace demo {
         std::string m_profile_label{"live"};
         std::vector<u64> m_profile_frame_us{};
         u64 m_profile_backlog_frames{0u};
+        // Slice 6b (ora-25 entry telemetry): bounded raw update-body records
+        // capped at the requested frame count; samples past the cap count
+        // here so the CSV reports the shed instead of hiding it.
+        u64 m_profile_frame_dropped{0u};
         // Slice 6 windows: first K frames run fully but are excluded from the
         // frame vector and both stage tables (counted nowhere); the N-frame
         // countdown below runs on measured (post-skip) frames only, so the
@@ -1654,6 +1658,7 @@ namespace demo {
             m_profile_csv_total = frames;
             m_profile_frame_us.clear();
             m_profile_backlog_frames = 0u;
+            m_profile_frame_dropped = 0u;
             m_profile_frame_index = 0u;
             try {
                 m_profile_frame_us.reserve(static_cast<std::size_t>(frames));
@@ -1747,9 +1752,27 @@ namespace demo {
                 m_profile_label, workload);
             printLiveTimingsCsv_(m_translator.stageTimings());
             std::println(
-                stderr, "[profile-csv label={}{}] frame intervals (live dt is real-time; frame counts vary)",
+                stderr,
+                "[profile-csv label={}{}] update-body wall time "
+                "(NOT inter-frame/display cadence; live dt is real-time; frame counts vary)",
                 m_profile_label, workload);
             printProfileFrameCsv_();
+            printProfileFrameRawCsv_();
+        }
+
+        void printProfileFrameRawCsv_() const {
+            // Raw per-frame update-body records in sample order (bounded to
+            // the requested frame count; shed samples count in
+            // m_profile_frame_dropped above, never silently). Printed once
+            // at export, never per-frame.
+            std::println("frame_sample_index,update_body_us");
+            for (std::size_t index = 0u; index < m_profile_frame_us.size(); ++index) {
+                // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
+                // C3546 on this toolchain; output is byte-identical CSV.
+                std::printf(
+                    "%llu,%llu\n", static_cast<unsigned long long>(index),
+                    static_cast<unsigned long long>(m_profile_frame_us[index]));
+            }
         }
 
         void printProfileFrameCsv_() const {
@@ -1760,6 +1783,7 @@ namespace demo {
             u64 p50 = 0u;
             u64 p95 = 0u;
             u64 p99 = 0u;
+            u64 p999 = 0u;
             u64 max_us = 0u;
             u64 over_16667 = 0u;
             u64 over_33333 = 0u;
@@ -1774,9 +1798,18 @@ namespace demo {
                     }
                     return sorted[index];
                 };
+                const auto at_permill = [&sorted, count](const u64 permill) noexcept -> u64 {
+                    std::size_t index = (static_cast<std::size_t>(permill) * count + 999u) / 1000u;
+                    index = index > 0u ? index - 1u : 0u;
+                    if (index >= count) {
+                        index = count - 1u;
+                    }
+                    return sorted[index];
+                };
                 p50 = at_rank(50u);
                 p95 = at_rank(95u);
                 p99 = at_rank(99u);
+                p999 = at_permill(999u);
                 max_us = sorted[count - 1u];
                 for (const u64 value: sorted) {
                     if (value > 16667u) {
@@ -1787,15 +1820,19 @@ namespace demo {
                     }
                 }
             }
-            std::println("frame_label,frames,p50_us,p95_us,p99_us,max_us,over_16667,over_33333,backlog_frames");
+            std::println(
+                "frame_label,frames,p50_us,p95_us,p99_us,p999_us,max_us,over_16667,over_33333,backlog_frames,"
+                "raw_dropped");
             // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
             // C3546 on this toolchain; output is byte-identical CSV.
             std::printf(
-                "%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", m_profile_label.c_str(),
+                "%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", m_profile_label.c_str(),
                 static_cast<unsigned long long>(count), static_cast<unsigned long long>(p50),
                 static_cast<unsigned long long>(p95), static_cast<unsigned long long>(p99),
-                static_cast<unsigned long long>(max_us), static_cast<unsigned long long>(over_16667),
-                static_cast<unsigned long long>(over_33333), static_cast<unsigned long long>(m_profile_backlog_frames));
+                static_cast<unsigned long long>(p999), static_cast<unsigned long long>(max_us),
+                static_cast<unsigned long long>(over_16667), static_cast<unsigned long long>(over_33333),
+                static_cast<unsigned long long>(m_profile_backlog_frames),
+                static_cast<unsigned long long>(m_profile_frame_dropped));
         }
 
     protected:
@@ -2530,14 +2567,18 @@ namespace demo {
                 m_pan_controller->translate(eye, true);
             }
 
-            // Phase: live frame interval (`--profile-csv N` only, post-skip):
-            // wall time of this body plus end-of-frame collider backlog.
-            // Bounded to N entries; pre-window frames record nowhere.
+            // Phase: live update-body wall time (`--profile-csv N` only,
+            // post-skip): wall time of this body plus end-of-frame collider
+            // backlog. This is update-body cost, NOT inter-frame/display
+            // cadence (display cadence is owned by PresentMon). Bounded to
+            // N entries; pre-window frames record nowhere; shed samples
+            // count in m_profile_frame_dropped, never silently.
             const bool profile_sample = m_profile_csv_active and profile_in_window;
             struct ProfileFrameScope {
                 std::vector<u64> *samples;
                 const u64 *cap;
                 u64 *backlog;
+                u64 *dropped;
                 const colony::ColonyDriver *driver;
                 std::chrono::steady_clock::time_point start;
                 bool armed;
@@ -2547,6 +2588,7 @@ namespace demo {
                             samples == nullptr or
                             cap == nullptr or
                             backlog == nullptr or
+                            dropped == nullptr or
                             driver == nullptr) {
                             return;
                         }
@@ -2556,6 +2598,8 @@ namespace demo {
                             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
                         if (samples->size() < static_cast<std::size_t>(*cap)) {
                             samples->push_back(elapsed);
+                        } else {
+                            ++(*dropped);
                         }
                         if (driver->colliderPending() != 0u) {
                             ++(*backlog);
@@ -2568,8 +2612,8 @@ namespace demo {
                 }
             };
             ProfileFrameScope profile_scope{
-                &m_profile_frame_us, &m_profile_csv_total, &m_profile_backlog_frames, &m_driver,
-                profile_sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{},
+                &m_profile_frame_us, &m_profile_csv_total, &m_profile_backlog_frames, &m_profile_frame_dropped,
+                &m_driver, profile_sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{},
                 profile_sample};
 
             // Phase: camera viewport. Follow client-extent changes before
