@@ -6,6 +6,7 @@ module;
 
 #include <pix3.h>
 #include <crtdbg.h>
+#include <errhandlingapi.h>
 #include <werapi.h>
 
 module engine.core;
@@ -65,13 +66,35 @@ namespace pP::hal {
         }
 #endif
 
-        ::SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+        // NOTE: SEM_NOGPFAULTERRORBOX is deliberately absent from the mask: it
+        // suppresses WER invocation entirely, which would block LocalDumps
+        // capture. UI suppression comes from WER_FAULT_REPORTING_NO_UI below.
+        ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
-        ::WerSetFlags(WER_FAULT_REPORTING_FLAG_QUEUE);
+        ::WerSetFlags(WER_FAULT_REPORTING_NO_UI);
     }
 
-#if PPR_ENABLE_ASSERTIONS
+    [[noreturn]] void fatalExit(const char *reason) noexcept {
+        // `reason` is a distinct static literal per call site; it is unused at
+        // runtime by design — the distinct return address of each caller
+        // (terminate vs invalid-parameter vs purecall vs assert vs
+        // unexpected-exception) is what distinguishes the dumps. No logging, no
+        // allocation, no locks: this runs inside noexcept terminate and under
+        // broken CRT invariants. RaiseFailFastException bypasses every handler
+        // and raises a WER-captured fail-fast without unwinding.
+        (void) reason;
+        ::RaiseFailFastException(nullptr, nullptr, 0);
+        // Unreachable: RaiseFailFastException never returns. TerminateProcess
+        // is a lock-free backstop that preserves the [[noreturn]] contract.
+        ::TerminateProcess(::GetCurrentProcess(), 3);
+        std::unreachable();
+    }
+
     namespace {
+        // CRT report hook: stderr routing plus dialog suppression. Never shows
+        // a message box: it claims the report so no Abort/Retry/Ignore dialog
+        // appears, then returns control to the caller whose fatal policy
+        // (fail-fast above) produces the WER dump.
         int __cdecl crtReportHook([[maybe_unused]] int reportType, char *message, int *returnValue) {
             if (returnValue) {
                 *returnValue = 0; // suppress the default CRT debug-break / dialog
@@ -82,30 +105,65 @@ namespace pP::hal {
             }
 
             // Break into the debugger if one is attached. If no debugger is
-            // attached this is a no-op and the process continues (or aborts via
-            // the caller's assert logic). No exception is thrown so the failure
-            // cannot be silently swallowed by caller exception handling.
+            // attached this is a no-op and the process continues to the caller's
+            // fatal path. No exception is thrown so the failure cannot be
+            // silently swallowed by caller exception handling.
             breakpointIfDebugging();
 
             return TRUE; // we have handled the report: no "Abort/Retry/Ignore" box
         }
 
         void __cdecl invalidParamHandler(
-            const wchar_t *expr, const wchar_t *func, const wchar_t *file, const unsigned int line, uintptr_t) {
-            char buf[2048];
-            const auto w2a = [](const wchar_t *ws) -> std::string {
-                if (!ws)
-                    return std::string("(null)");
-                return toString<char>(std::wstring_view(ws));
+            const wchar_t *expr, const wchar_t *func, const wchar_t *file, const unsigned int line,
+            [[maybe_unused]] uintptr_t reserved) {
+            // Bounded, allocation-free debug record: fixed buffer with
+            // truncated transcoding, no std::string. Informational only —
+            // fatalExit takes no pointers into this buffer.
+            char reason[256];
+            std::size_t length = 0u;
+            const auto append_wide = [&](const wchar_t *wide) noexcept {
+                if (wide != nullptr and length < sizeof(reason) - 1u) {
+                    // transcode reports the full required size when the tail
+                    // does not fit (nothing is written then): clamp so length
+                    // never overshoots the buffer.
+                    const std::size_t rest = sizeof(reason) - 1u - length;
+                    const std::size_t written = transcode(std::wstring_view(wide), reason + length, rest);
+                    length += written < rest ? written : rest;
+                }
             };
-            const auto [end, _] = std::format_to_n(
-                buf, sizeof(buf) - 1, "Invalid parameter: {} in {} at {}:{}", w2a(expr), w2a(func), w2a(file), line);
-            *end = '\0';
+            const auto append_ansi = [&](const char *ansi) noexcept {
+                if (ansi != nullptr and length < sizeof(reason) - 1u) {
+                    const std::size_t rest = sizeof(reason) - 1u - length;
+                    const std::size_t count = std::strlen(ansi) < rest ? std::strlen(ansi) : rest;
+                    std::memcpy(reason + length, ansi, count);
+                    length += count;
+                }
+            };
+            append_ansi("Invalid parameter: ");
+            append_wide(expr);
+            append_ansi(" in ");
+            append_wide(func);
+            append_ansi(" at ");
+            append_wide(file);
+            append_ansi(":");
+            {
+                char digits[12];
+                std::size_t digit_count = 0u;
+                unsigned int rest = line;
+                do {
+                    digits[digit_count++] = static_cast<char>('0' + rest % 10u);
+                    rest /= 10u;
+                } while (rest > 0u and digit_count < sizeof(digits));
+                while (digit_count > 0u and length < sizeof(reason) - 1u) {
+                    reason[length++] = digits[--digit_count];
+                }
+            }
+            reason[length] = '\0';
 
-            outputDebug(buf);
+            outputDebug(reason);
             breakpointIfDebugging();
 
-            throw std::logic_error(buf);
+            fatalExit("invalid-parameter");
         }
 
         void __cdecl purecallHandler() {
@@ -114,28 +172,32 @@ namespace pP::hal {
             outputDebug(msg);
             breakpointIfDebugging();
 
-            throw std::logic_error(msg);
+            fatalExit("purecall");
         }
 
         [[noreturn]] void terminateHandler() noexcept {
-            outputDebug("Terminate called, exiting\n");
+            // No outputDebug here: OutputDebugString synchronizes on a system
+            // mutex and can block, which is unsafe inside noexcept terminate
+            // under broken invariants. The fail-fast below needs no logging —
+            // the dump's call stack identifies this path.
             breakpointIfDebugging();
 
-            std::_Exit(3);
+            fatalExit("terminate");
         }
     }
-#endif
 
     void installDebugAssertHooks() noexcept {
-#if PPR_ENABLE_ASSERTIONS
-        // if (::IsDebuggerPresent())
-        {
-            ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
-            ::_set_invalid_parameter_handler(&invalidParamHandler);
-            ::_set_purecall_handler(&purecallHandler);
-            std::set_terminate(&terminateHandler);
-        }
-#endif
+        // Installed in ALL builds, not only PPR_ENABLE_ASSERTIONS: Release
+        // still needs dump-producing fatal paths for terminate,
+        // invalid-parameter, and purecall (PPR_ASSERT itself compiles out in
+        // Release, but these CRT/terminate paths stay live). The CRT report
+        // hook is ungated with them: it is a harmless no-op where debug CRT
+        // reporting is compiled out, and keeps stderr routing plus dialog
+        // suppression wherever reports can fire. No path shows a message box.
+        ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
+        ::_set_invalid_parameter_handler(&invalidParamHandler);
+        ::_set_purecall_handler(&purecallHandler);
+        std::set_terminate(&terminateHandler);
     }
 
     namespace {

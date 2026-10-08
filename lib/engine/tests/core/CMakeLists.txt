@@ -38,6 +38,7 @@ target_sources(engine.tests.core
         Core.Service.Tests.cpp
         Core.Logger.Tests.cpp
         Core.Error.Tests.cpp
+        Core.Fatal.Tests.cpp
 )
 
 setup_ppr_project(engine.tests.core

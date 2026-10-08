@@ -3260,9 +3260,13 @@ int main(const int argc, char *argv[]) {
         return run_error.value();
     } catch (const std::exception &error) {
         std::fprintf(stderr, "[fatal-ex] %s\n", error.what());
-        return 100;
+        // Unexpected: anything escaping the app run that is not an ordinary
+        // reported operational error enters the fail-fast endpoint so a WER
+        // dump is captured instead of an unexplained exit code. (stderr is
+        // unbuffered, so the line above is already emitted.)
+        pP::hal::fatalExit("unexpected-std-exception");
     } catch (...) {
         std::fprintf(stderr, "[fatal-ex] unknown non-std exception\n");
-        return 101;
+        pP::hal::fatalExit("unexpected-unknown-exception");
     }
 }

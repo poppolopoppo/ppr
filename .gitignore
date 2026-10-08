@@ -112,6 +112,12 @@ local-services/runtime-report.txt
 TTD/
 dumps/
 
+# PPR crash-diagnostics runs: per-run dirs, shared symbol cache, triage scratch
+# (host-local, never commit)
+out/crashes/
+**/symbol-cache/
+**/analysis-scratch/
+
 # PIX MCP (PozLabs pix-mcp) host-local artifacts (never commit; *.exe already covered above)
 local-services/pix/*.exe
 local-services/pix/*.zip

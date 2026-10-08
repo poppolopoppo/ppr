@@ -11,6 +11,9 @@ import std;
 #if PPR_ENABLE_ASSERTIONS
 namespace pP {
     void Assertion::Handler::defaultAssertFailure_(const Assertion &condition) {
+        // Bounded, allocation-free reason record: fixed buffer + format_to_n
+        // (no heap, no exceptions). The buffer feeds debug output only; the
+        // fatal endpoint below takes no pointers into it.
         char buffer[2048];
         const auto [out, size] = std::format_to_n(
             buffer, sizeof(buffer) - 1,
@@ -23,10 +26,11 @@ namespace pP {
         hal::outputDebug(buffer);
         hal::breakpointIfDebugging();
 
-        static volatile bool g_throw_exception = true;
-        if (g_throw_exception) {
-            throw std::logic_error(buffer);
-        }
+        // Fatal by default: the shared fail-fast endpoint captures a WER dump
+        // instead of throwing into arbitrary application recovery. The explicit
+        // test-policy override (setFailurePolicy, used by the unit-test runner
+        // to install a throwing handler) is preserved untouched.
+        hal::fatalExit("assert");
     }
 
     Assertion::Handler &Assertion::Handler::get() noexcept {

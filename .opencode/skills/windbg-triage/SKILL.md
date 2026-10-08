@@ -8,6 +8,10 @@ description: >
 
 # WinDbg Triage
 
+For game-crash triage (WER LocalDumps capture through `windbg-tool dump
+triage`), the entry point is `docs/debugging/crash-analysis.md` — follow that
+runbook instead of improvising this skill's commands.
+
 ## When to use
 
 Use this skill when triaging a native crash dump (`.dmp`/`.hdmp`/`.mdmp`) or a
@@ -69,6 +73,13 @@ Then navigate the recording: snapshot, disassembly, registers, position set /
 step / replay-to, stack backtrace, memory dump, exception focus. Prefer the CLI
 for live probing; use the `ttd_*` / `target_*` MCP tools for the same
 operations inside the agent session.
+
+## Trace record flags
+
+Pass `--ttd-exe` with the explicit recorder path when the elevated `trace
+record` invocation lacks it on `PATH`. `--disable-user-shadow-stack` is
+required with `--ring` / `--record-for-seconds`. `--max-file-mb` conflicts
+with `--profile`: pass one or the other, never both.
 
 ## Live-probe note
 

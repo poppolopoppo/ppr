@@ -377,6 +377,14 @@ export namespace pP {
 
         void installDebugAssertHooks() noexcept;
 
+        // Fail-fast fatal endpoint shared by the assert, terminate,
+        // invalid-parameter, purecall, and unexpected-exception paths. Never
+        // allocates, takes no locks, and never shows UI; on Windows it raises
+        // a WER-captured fail-fast (LocalDumps) without unwinding. `reason`
+        // must point to static storage; each call site passes a distinct
+        // literal so dumps stay distinguishable by call stack.
+        [[noreturn]] void fatalExit(const char *reason) noexcept;
+
         // ------------------------------------------------------------------
         // profiling markers (PIX on Windows, no-op elsewhere)
         // ------------------------------------------------------------------

@@ -33,6 +33,13 @@ namespace pP::hal {
     void installDebugAssertHooks() noexcept {
     }
 
+    // Non-Windows fail-fast: abort() raises SIGABRT for core-dump capture.
+    // The WER/LocalDumps routing lives in the Windows backend only.
+    [[noreturn]] void fatalExit(const char *reason) noexcept {
+        (void) reason;
+        std::abort();
+    }
+
     // ------------------------------------------------------------------
     // profiling markers (PIX on Windows, no-op elsewhere)
     // ------------------------------------------------------------------
