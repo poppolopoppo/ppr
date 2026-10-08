@@ -138,6 +138,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (obsolete_surface_work_rejects_before_acquisition) {
+            // Private by mandate: pure-CPU surface-identity rule, no device;
+            // never enters any shared scope.
             // No record yet (first frame, lazily created surface): accept.
             PPR_TEST_ASSERT(not isSurfaceWorkObsolete(false, kSurfaceGenerationNone, kSurfaceGenerationNone));
             PPR_TEST_ASSERT(not isSurfaceWorkObsolete(false, 7u, 3u));
@@ -177,6 +179,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (failed_frames_return_their_credit_exactly_once) {
+            // Private: uninitialized-Renderer fresh semantics with no device
+            // booted at all; nothing to share.
             // Uninitialized renderer: every submission path fails before or
             // at admission, and each failure settles its lease — no credit
             // is held, none leaks, none returns twice.
@@ -374,14 +378,102 @@ namespace pP::tests::detail {
             return target;
         }
 
-        PPR_UNIT_TEST (two_signalled_submits_complete_in_order) {
-            OffscreenApp test_app{"FrameFenceTwoSubmits"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
+        namespace SharedFrameFenceGpu {
+            // Shared process device for the frame_fence GPU leaves.
+            //
+            // Shape mirrors SharedWindowInputGpu (Holder + mutex + refcount +
+            // acquire/release + service accessors); adapted: one OffscreenApp
+            // is booted once (RHI + shader + content dir + skipped-dt carry),
+            // while per-leaf Renderer/GridPass/TrianglePass/targets stay
+            // leaf-local and tear down in inverse order before the group
+            // release, so every safe_ptr dies before the device it observes.
+            // RHI::initialize (RHI.cpp:235) and IShaderService::initialize
+            // (Shader.cpp:170) are verified no-ops on the live pair, so the
+            // per-leaf service-validity asserts are known-state gates, not
+            // rebuilds; resetBetweenLeaves re-establishes the known state
+            // (live services, empty dt carry) every leaf starts from.
+            //
+            // Sharing stops at the group boundary: quarantine/device-loss and
+            // shutdown-orchestration leaves keep private devices (named reason
+            // on each leaf), and a private leaf's teardown destroys the live
+            // device — so every App-booting private leaf runs outside the
+            // acquire/release scope in the recurse list below.
+            struct Holder {
+                std::mutex m_mutex{};
+                unsigned m_refs = 0u;
+                std::unique_ptr<OffscreenApp> m_app{};
             };
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            [[nodiscard]] Holder &holder() {
+                static Holder s_holder{};
+                return s_holder;
+            }
+
+            [[nodiscard]] std::error_code acquire() {
+                Holder &state = holder();
+                const std::lock_guard lock{state.m_mutex};
+                if (state.m_refs == 0u) {
+                    auto shared = std::make_unique<OffscreenApp>("FrameFenceSharedGpu");
+                    if (const std::error_code err = shared->boot()) {
+                        return err;
+                    }
+                    state.m_app = std::move(shared);
+                }
+                ++state.m_refs;
+                return default_value_v;
+            }
+
+            [[nodiscard]] std::error_code release() {
+                Holder &state = holder();
+                const std::lock_guard lock{state.m_mutex};
+                if (state.m_refs == 0u) {
+                    return default_value_v;
+                }
+                PPR_ASSERT(state.m_refs > 0u);
+                if (--state.m_refs == 0u) {
+                    PPR_ASSERT(state.m_app != nullptr);
+                    const std::error_code err = state.m_app->teardown();
+                    state.m_app.reset();
+                    return err;
+                }
+                return default_value_v;
+            }
+
+            [[nodiscard]] OffscreenApp &app() {
+                return *holder().m_app;
+            }
+
+            [[nodiscard]] safe_ptr<IRhiService> rhi() {
+                return app().getServices().get<IRhiService>();
+            }
+
+            [[nodiscard]] safe_ptr<IShaderService> shader() {
+                return app().getServices().get<IShaderService>();
+            }
+
+            void resetBetweenLeaves() {
+                // Explicit state-reset between leaves (not a rebuild): every
+                // leaf starts from live services and an empty skipped-frame dt
+                // carry. Only the saturation leaf writes the carry and it
+                // drains it to empty itself, so a non-empty claim here is
+                // cross-leaf contamination, never inherited state.
+                // Quarantine/hold-sweep seams live on the leaf-local Renderer
+                // (torn down each leaf), so no renderer state persists here.
+                OffscreenApp &shared = app();
+                const auto live_rhi = shared.getServices().get<IRhiService>();
+                const auto live_shaders = shared.getServices().get<IShaderService>();
+                PPR_TEST_ASSERT(live_rhi.isValid());
+                PPR_TEST_ASSERT(live_shaders.isValid());
+                PPR_TEST_ASSERT(shared.claimSkippedFrameDt() == TimeSpan{});
+            }
+        } // namespace SharedFrameFenceGpu
+
+        PPR_UNIT_TEST (two_signalled_submits_complete_in_order) {
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
+
+            const auto rhi = SharedFrameFenceGpu::rhi();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
@@ -421,17 +513,15 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (encode_failure_settles_credit_without_submit) {
-            // Injected post-admission failure on a REAL path (offscreen):
-            // a draw callback that fails closed must propagate the error,
-            // commit no fence value, and return its credit exactly once —
-            // no submit, no leak, no double return.
-            OffscreenApp test_app{"FrameFenceEncodeFailure"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release. Injected
+            // post-admission failure on a REAL path (offscreen): a draw
+            // callback that fails closed must propagate the error, commit no
+            // fence value, and return its credit exactly once — no submit, no
+            // leak, no double return.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
@@ -457,10 +547,11 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (injected_signal_failure_quarantines_admission) {
-            // Injected possibly-executed submit failure on a REAL path:
-            // the frame quarantines (admission stops, credit held, no
-            // value committed or reused) until shutdown proves idle and
-            // drains — the confirmed-loss/normal-release split.
+            // Private device: quarantine-lifecycle leaf; full rebuild kept.
+            // Injected possibly-executed submit failure on a REAL path: the
+            // frame quarantines (admission stops, credit held, no value
+            // committed or reused) until shutdown proves idle and drains —
+            // the confirmed-loss/normal-release split.
             OffscreenApp test_app{"FrameFenceQuarantine"};
             PPR_TEST_ASSERT(not test_app.boot());
             PPR_DEFER {
@@ -506,20 +597,20 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (throwing_draw_callback_unwinds_exactly_once) {
-            // Real injected unwind on a REAL path (offscreen): a draw
-            // callback that throws mid-encode must propagate the exception
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release. Real
+            // injected unwind on a REAL path (offscreen): a draw callback
+            // that throws mid-encode must propagate the exception
             // through the production settlement machinery, commit no fence
             // value, and return its credit exactly once — no submit, no
             // leak, no double return. (The surface half of post-acquire
             // unwind — the AcquiredImageGuard present obligation — needs a
             // live swapchain and stays an explicit windowed-manual item.)
-            OffscreenApp test_app{"FrameFenceThrowingUnwind"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
@@ -551,9 +642,11 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (parked_admission_stays_distinct_from_capacity_busy) {
-            // Derived-client saturation shape (the run-level gate never enters
-            // update() on a busy frame; renderAndPresent's admission stays
-            // the defensive backstop): while
+            // Private device: quarantine + confirmed-device-loss leaf (parks
+            // admission, proves the idle drain, then asserts the loss code);
+            // full rebuild kept. Derived-client saturation shape (the run-level
+            // gate never enters update() on a busy frame; renderAndPresent's
+            // admission stays the defensive backstop): while
             // the pipeline is parked, admission refuses with a parked code —
             // never capacity-busy — so a saturated producer skips derived
             // work while a parked pipeline routes to teardown/recovery.
@@ -596,18 +689,16 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (pass_shutdown_after_established_idle) {
+            // Shared device (group acquire); Renderer + passes + target stay
+            // leaf-local and tear down inverse-order before the group release.
             // Pass-resource shutdown ordering (the Editor contract): GPU
             // completion is established FIRST via the renderer idle wait,
             // and only then do the pass-owned rings/pipelines/caches
             // release — never a normal release against pending work.
-            OffscreenApp test_app{"FrameFencePassShutdownOrder"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
-            const auto shaders = test_app.getServices().get<IShaderService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            const auto shaders = SharedFrameFenceGpu::shader();
             PPR_TEST_ASSERT(rhi.isValid());
             PPR_TEST_ASSERT(shaders.isValid());
             rhi::IDevice &device = rhi->getDevice();
@@ -619,10 +710,11 @@ namespace pP::tests::detail {
             };
 
             GridPass grid{};
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
 
             TrianglePass triangles{};
-            PPR_TEST_ASSERT(not triangles.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(
+                not triangles.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
 
             const TimeSpan kDt = std::chrono::milliseconds{16};
             PPR_TEST_ASSERT(not grid.update(kDt, orthoSnapshot800x600()));
@@ -652,14 +744,12 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (grid_ring_growth_is_fenced_and_roots_encode) {
-            OffscreenApp test_app{"FrameFenceGridGrowth"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            // Shared device (group acquire); Renderer + pass + target stay
+            // leaf-local and tear down inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
-            const auto shaders = test_app.getServices().get<IShaderService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            const auto shaders = SharedFrameFenceGpu::shader();
             PPR_TEST_ASSERT(rhi.isValid());
             PPR_TEST_ASSERT(shaders.isValid());
             rhi::IDevice &device = rhi->getDevice();
@@ -671,7 +761,7 @@ namespace pP::tests::detail {
             };
 
             GridPass grid{};
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
             PPR_DEFER {
                 PPR_TEST_ASSERT(not grid.shutdown());
             };
@@ -741,14 +831,12 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (triangle_payload_growth_and_variant_roots_encode) {
-            OffscreenApp test_app{"FrameFenceTriangleGrowth"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            // Shared device (group acquire); Renderer + pass + target stay
+            // leaf-local and tear down inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
-            const auto shaders = test_app.getServices().get<IShaderService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            const auto shaders = SharedFrameFenceGpu::shader();
             PPR_TEST_ASSERT(rhi.isValid());
             PPR_TEST_ASSERT(shaders.isValid());
             rhi::IDevice &device = rhi->getDevice();
@@ -760,7 +848,8 @@ namespace pP::tests::detail {
             };
 
             TrianglePass triangles{};
-            PPR_TEST_ASSERT(not triangles.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(
+                not triangles.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
             PPR_DEFER {
                 PPR_TEST_ASSERT(not triangles.shutdown());
             };
@@ -806,15 +895,13 @@ namespace pP::tests::detail {
             // run headless; the fence-aware UI arm follows the identical
             // notifyFrameSubmitted rule (wired in stampSubmittedPasses_),
             // and only the true present-failure half needs a live surface
-            // (explicit windowed-manual item).
-            OffscreenApp test_app{"FrameFenceStamping"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not test_app.teardown());
-            };
+            // (explicit windowed-manual item). Shared device (group acquire);
+            // Renderer + passes + target stay leaf-local and tear down
+            // inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
-            const auto shaders = test_app.getServices().get<IShaderService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            const auto shaders = SharedFrameFenceGpu::shader();
             PPR_TEST_ASSERT(rhi.isValid());
             PPR_TEST_ASSERT(shaders.isValid());
             rhi::IDevice &device = rhi->getDevice();
@@ -826,13 +913,14 @@ namespace pP::tests::detail {
             };
 
             GridPass grid{};
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
             PPR_DEFER {
                 PPR_TEST_ASSERT(not grid.shutdown());
             };
 
             TrianglePass triangles{};
-            PPR_TEST_ASSERT(not triangles.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(
+                not triangles.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
             PPR_DEFER {
                 PPR_TEST_ASSERT(not triangles.shutdown());
             };
@@ -878,21 +966,16 @@ namespace pP::tests::detail {
             // so both stay outstanding at assert time. Accepted N and N+1 are
             // both uncompleted (observed completion below the first), queue
             // depth is 2, and ordered completion drains exactly once each.
-            OffscreenApp test_app{"FrameFenceTwoPending"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            bool app_torn_down = false;
-            PPR_DEFER {
-                if (not app_torn_down) {
-                    std::ignore = test_app.teardown();
-                }
-            };
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
             // Declared before the teardown defers so every exit path can
-            // release the DeviceChild ref BEFORE renderer/app shutdown
+            // release the DeviceChild ref BEFORE renderer shutdown
             // (RHI::destroy aborts on live device children).
             rhi::ComPtr<rhi::ITexture> target{};
             Renderer renderer{};
@@ -947,8 +1030,6 @@ namespace pP::tests::detail {
             target.setNull();
             PPR_TEST_ASSERT(not renderer.shutdown());
             renderer_torn_down = true;
-            PPR_TEST_ASSERT(not test_app.teardown());
-            app_torn_down = true;
         };
 
         // --- B3' queue-gate evidence ------------------------------------
@@ -1039,17 +1120,13 @@ namespace pP::tests::detail {
             // accepted N+1/N+2, gate still 0, fresh poll below N+1,
             // outstanding == 2, third admission busy → host-signals THE GATE
             // → wait N+2, retire, zero outstanding, readback proves execution.
-            OffscreenApp test_app{"FrameFenceQueueGate"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            bool app_torn_down = false;
-            PPR_DEFER {
-                if (not app_torn_down) {
-                    std::ignore = test_app.teardown();
-                }
-            };
+            // Shared device (group acquire); Renderer + pass + targets + gate
+            // stay leaf-local and tear down inverse-order before the group
+            // release.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
-            const auto shaders = test_app.getServices().get<IShaderService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            const auto shaders = SharedFrameFenceGpu::shader();
             PPR_TEST_ASSERT(rhi.isValid());
             PPR_TEST_ASSERT(shaders.isValid());
             rhi::IDevice &device = rhi->getDevice();
@@ -1081,7 +1158,7 @@ namespace pP::tests::detail {
             };
 
             GridPass grid{};
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, test_app.getContentDir().path()));
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, SharedFrameFenceGpu::app().getContentDir().path()));
             bool grid_torn_down = false;
             PPR_DEFER {
                 if (not grid_torn_down) {
@@ -1191,8 +1268,6 @@ namespace pP::tests::detail {
             renderer_torn_down = true;
             PPR_TEST_ASSERT(not grid.shutdown());
             grid_torn_down = true;
-            PPR_TEST_ASSERT(not test_app.teardown());
-            app_torn_down = true;
         };
 
         PPR_UNIT_TEST (saturated_frame_skips_without_building_and_preserves_dt) {
@@ -1205,21 +1280,19 @@ namespace pP::tests::detail {
             // admitted frame. The live-window ImGui-frame half stays an
             // explicit manual item; the probe codes and parked split are
             // covered in parked_admission_stays_distinct_from_capacity_busy.
-            OffscreenApp test_app{"FrameFenceSaturation"};
-            PPR_TEST_ASSERT(not test_app.boot());
-            bool saturation_app_torn_down = false;
-            PPR_DEFER {
-                if (not saturation_app_torn_down) {
-                    std::ignore = test_app.teardown();
-                }
-            };
+            // Shared device (group acquire); Renderer + target stay leaf-local
+            // and tear down inverse-order before the group release. The dt
+            // carry below addresses the shared app: this leaf is its only
+            // writer and drains it to empty itself, which resetBetweenLeaves
+            // re-verifies for every leaf.
+            SharedFrameFenceGpu::resetBetweenLeaves();
 
-            const auto rhi = test_app.getServices().get<IRhiService>();
+            const auto rhi = SharedFrameFenceGpu::rhi();
             PPR_TEST_ASSERT(rhi.isValid());
             rhi::IDevice &device = rhi->getDevice();
 
             // Declared before the teardown defers so every exit path can
-            // release the DeviceChild ref BEFORE renderer/app shutdown.
+            // release the DeviceChild ref BEFORE renderer shutdown.
             rhi::ComPtr<rhi::ITexture> target{};
             Renderer renderer{};
             PPR_TEST_ASSERT(not renderer.initialize(*rhi));
@@ -1264,14 +1337,14 @@ namespace pP::tests::detail {
             // accumulates and the next admitted frame claims it whole.
             const TimeSpan kSkipped = std::chrono::milliseconds{16};
             const TimeSpan kNext = std::chrono::milliseconds{16};
-            test_app.noteSkippedFrameDt(kSkipped);
-            test_app.noteSkippedFrameDt(kSkipped);
-            const TimeSpan carry = test_app.claimSkippedFrameDt();
+            SharedFrameFenceGpu::app().noteSkippedFrameDt(kSkipped);
+            SharedFrameFenceGpu::app().noteSkippedFrameDt(kSkipped);
+            const TimeSpan carry = SharedFrameFenceGpu::app().claimSkippedFrameDt();
             PPR_TEST_ASSERT(carry == kSkipped + kSkipped);
             const TimeSpan effective = kNext + carry;
             PPR_TEST_ASSERT(effective == kSkipped + kSkipped + kNext);
             // Carry is single-use: a second claim is empty.
-            PPR_TEST_ASSERT(test_app.claimSkippedFrameDt() == TimeSpan{});
+            PPR_TEST_ASSERT(SharedFrameFenceGpu::app().claimSkippedFrameDt() == TimeSpan{});
 
             renderer.setTestHoldSweep(false);
             PPR_TEST_ASSERT(not renderer.waitForFenceValue(frontier));
@@ -1282,11 +1355,12 @@ namespace pP::tests::detail {
             target.setNull();
             PPR_TEST_ASSERT(not renderer.shutdown());
             saturation_renderer_torn_down = true;
-            PPR_TEST_ASSERT(not test_app.teardown());
-            saturation_app_torn_down = true;
         };
 
         PPR_UNIT_TEST (shutdown_under_load_drains_retirement) {
+            // Private device: Renderer shutdown-under-load lifecycle leaf
+            // (pending frames drain through shutdown, double shutdown stays a
+            // no-op success); full rebuild kept.
             OffscreenApp test_app{"FrameFenceShutdownLoad"};
             PPR_TEST_ASSERT(not test_app.boot());
             PPR_DEFER {
@@ -1332,6 +1406,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (editor_shutdown_orchestration_is_idle_first_and_null_safe) {
+            // Private device: Editor shutdown-orchestration leaf (real
+            // Editor::shutdown order over a base-initialized editor); full
+            // rebuild kept.
             // Drives the REAL Editor::shutdown orchestration order headless:
             // base-initialized (platform + RHI + renderer live; window,
             // passes, viewport, and scene absent) so the GPU preamble runs
@@ -1348,6 +1425,9 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (loaded_editor_shutdown_under_pending_frames) {
+            // Private device: loaded-Editor shutdown-orchestration leaf
+            // (pending frames through the real idle-first Editor::shutdown);
+            // full rebuild kept.
             // B3 loaded Editor-driven shutdown (headless): pending offscreen
             // frames through the REAL ApplicationEditor::shutdown idle-first
             // order (waitOnHost, then member teardown, then the
@@ -1438,6 +1518,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (shutdown_releases_after_idle_proof_with_gate) {
+            // Private device: Editor shutdown-orchestration leaf (harness-owned
+            // passes/targets/gate, exact stage-log order); full rebuild kept.
             // B3' shutdown test: fully populated fixture (real Grid/Tri
             // resources, nonzero draws — UI buffers/fonts are NOT claimed
             // here: no window exists in the test environment), warmed, gate
@@ -1537,6 +1619,8 @@ namespace pP::tests::detail {
 
 namespace pP::tests {
     const UnitTest frame_fence = UnitTest::Named("frame_fence") / [](UnitTest::IRun &_) -> void {
+        // CPU-only / device-free leaves hold no SharedFrameFenceGpu refs and
+        // never boot a device.
         _.recurse({
             detail::FrameFence::slot_selection_skips_incomplete_slots,
             detail::FrameFence::delayed_completion_never_overwrites_early,
@@ -1547,20 +1631,39 @@ namespace pP::tests {
             detail::FrameFence::packet_carries_surface_identity,
             detail::FrameFence::failed_frames_return_their_credit_exactly_once,
             detail::FrameFence::delayed_completion_retires_through_real_queues,
+        });
+        // Private-device lifecycle leaves: full rebuild kept (quarantine,
+        // device-loss, and Renderer shutdown-under-load semantics). Each boots
+        // and tears down its own device outside the shared scope below — a
+        // teardown inside the scope would destroy the shared device.
+        _.recurse({
+            detail::FrameFence::parked_admission_stays_distinct_from_capacity_busy,
+            detail::FrameFence::injected_signal_failure_quarantines_admission,
+            detail::FrameFence::shutdown_under_load_drains_retirement,
+        });
+        // Shared-device scope: one boot serves every GPU leaf below (each
+        // observes it through resetBetweenLeaves; per-leaf Renderer/passes/
+        // targets tear down inverse-order before the group release, so no
+        // leaf-local safe_ptr outlives the device).
+        PPR_TEST_ASSERT(not detail::FrameFence::SharedFrameFenceGpu::acquire());
+        _.recurse({
             detail::FrameFence::two_signalled_submits_complete_in_order,
             detail::FrameFence::two_truly_pending_submissions_via_real_fence_values,
             detail::FrameFence::two_frames_pending_behind_queue_gate_with_execution_proof,
-            detail::FrameFence::shutdown_releases_after_idle_proof_with_gate,
             detail::FrameFence::saturated_frame_skips_without_building_and_preserves_dt,
             detail::FrameFence::encode_failure_settles_credit_without_submit,
             detail::FrameFence::throwing_draw_callback_unwinds_exactly_once,
-            detail::FrameFence::parked_admission_stays_distinct_from_capacity_busy,
-            detail::FrameFence::injected_signal_failure_quarantines_admission,
             detail::FrameFence::grid_ring_growth_is_fenced_and_roots_encode,
             detail::FrameFence::triangle_payload_growth_and_variant_roots_encode,
             detail::FrameFence::submission_acceptance_drives_pass_stamping,
             detail::FrameFence::pass_shutdown_after_established_idle,
-            detail::FrameFence::shutdown_under_load_drains_retirement,
+        });
+        PPR_TEST_ASSERT(not detail::FrameFence::SharedFrameFenceGpu::release());
+        // Private editor-lifecycle leaves: each drives its own
+        // ApplicationEditor harness (idle-first shutdown orchestration) with a
+        // private device; full rebuild kept.
+        _.recurse({
+            detail::FrameFence::shutdown_releases_after_idle_proof_with_gate,
             detail::FrameFence::loaded_editor_shutdown_under_pending_frames,
             detail::FrameFence::editor_shutdown_orchestration_is_idle_first_and_null_safe,
         });
