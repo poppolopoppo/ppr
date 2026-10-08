@@ -762,20 +762,23 @@ namespace pP {
         // owned packet storage BEFORE pass staging. Owner-lane pass updates
         // consume the packet-owned snapshot — never the live camera — so a
         // post-capture producer mutation cannot alter render preparation.
-        m_frame_packet = makeFramePacket(
-            getFrameIndex(), dt, getTimerManager().getTotalElapsed(), m_camera->getSnapshot(),
-            m_main_viewport->getViewport(), m_main_viewport->getViewportRevision(), m_main_viewport->getWindow());
-        // Generational surface claim at capture: the consume path rejects
-        // a stale packet before acquisition. First frame observes
-        // kSurfaceGenerationNone (no record yet) and always accepts. On the
-        // lane the mirror (fed by lane results) is the hint; the lane
-        // re-verifies every claim against the live record at submit — main
-        // never touches Renderer state while the lane owns it.
-        if (renderLaneOwnsRenderer_()) {
-            m_frame_packet->m_surface_generation = laneSurfaceGeneration(m_main_viewport->getWindow().m_handle);
-        } else {
-            m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
-                m_main_viewport->getWindow().m_handle);
+        {
+            const hal::ProfileScope scope_frame_packet{"PPR.Frame.BuildPacket"};
+            m_frame_packet = makeFramePacket(
+                getFrameIndex(), dt, getTimerManager().getTotalElapsed(), m_camera->getSnapshot(),
+                m_main_viewport->getViewport(), m_main_viewport->getViewportRevision(), m_main_viewport->getWindow());
+            // Generational surface claim at capture: the consume path rejects
+            // a stale packet before acquisition. First frame observes
+            // kSurfaceGenerationNone (no record yet) and always accepts. On the
+            // lane the mirror (fed by lane results) is the hint; the lane
+            // re-verifies every claim against the live record at submit — main
+            // never touches Renderer state while the lane owns it.
+            if (renderLaneOwnsRenderer_()) {
+                m_frame_packet->m_surface_generation = laneSurfaceGeneration(m_main_viewport->getWindow().m_handle);
+            } else {
+                m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
+                    m_main_viewport->getWindow().m_handle);
+            }
         }
 
         // P2 pass-affinity: pass mutations run ON the owner lane (worker
@@ -1093,6 +1096,7 @@ namespace pP {
         // upload cells ride the per-frame staged payload built by the
         // client — nothing live is read by either.
         {
+            const hal::ProfileScope scope_frame_prepare{"PPR.Frame.PrepareRender"};
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
@@ -1213,8 +1217,11 @@ namespace pP {
             }
         };
         const SubmitFateFinalizer submit_fate_guard{this, &renderer, &out_result, previously_submitted, &frame_err};
-        frame_err = renderer.renderAndPresent(
-            window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface);
+        {
+            const hal::ProfileScope scope_frame_execute{"PPR.Frame.Execute"};
+            frame_err = renderer.renderAndPresent(
+                window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface);
+        }
 
         // Surface lane-observable outcome: the accepted SUBMIT value
         // independent of present, and the possibly-executed discriminator

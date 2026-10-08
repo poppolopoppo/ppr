@@ -261,6 +261,7 @@ namespace pP {
                 std::error_code update_err{};
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};
+                    const hal::ProfileScope scope_frame_advance{"PPR.Frame.AdvanceClient"};
                     PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(effective_dt));
                     update_err = first_err;
                 }
@@ -515,6 +516,7 @@ namespace pP {
     }
 
     std::error_code Application::pumpRenderCompletions_() {
+        const hal::ProfileScope scope_frame_retire{"PPR.Frame.Retire"};
         if (not m_render_lane) {
             return default_value_v;
         }
@@ -708,6 +710,7 @@ namespace pP {
         // throwing.
         try {
             if (m_platform) {
+                const hal::ProfileScope scope_frame_service{"PPR.Frame.ServicePlatform"};
                 if (const std::error_code pump_err = m_platform->pumpNativeEvents();
                     pump_err and
                     not m_wait_pump_error and
@@ -1423,6 +1426,8 @@ namespace pP {
     }
 
     void Application::failStopOnUnknownGpuTeardown_(const std::error_code quiescence_error) noexcept {
+        // PIX breadcrumb only: no logging, no allocation — the process exits below.
+        const hal::ProfileScope scope_frame_fail_stop{"PPR.Frame.FailStop"};
         // Best-effort diagnostics first: no logger-drain dependency — the
         // process is exiting and the OS reclaims retained GPU objects.
         try {

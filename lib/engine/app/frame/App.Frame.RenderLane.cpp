@@ -724,6 +724,7 @@ namespace pP {
             // setExecutor) never races a running executor — the contract
             // binds it before the first submit.
             if (executor != nullptr) {
+                const hal::ProfileScope scope_lane_execute{"PPR.Frame.LaneExecute"};
                 try {
                     result.m_error = (*executor)(*holder, result);
                 } catch (const std::bad_alloc &) {
@@ -767,6 +768,7 @@ namespace pP {
         try {
             // Sweep runs OUTSIDE the callback lock (same self-deadlock
             // class as the executor above).
+            const hal::ProfileScope scope_lane_sweep{"PPR.Frame.LaneSweep"};
             if (sweep != nullptr) {
                 sweep_err = (*sweep)(outstanding);
             }
@@ -819,6 +821,7 @@ namespace pP {
     }
 
     void RenderLane::sweepEstimateOnLane_() noexcept {
+        const hal::ProfileScope scope_lane_sweep{"PPR.Frame.LaneSweep"};
         u32 outstanding = 0u;
         std::error_code sweep_err{};
         RenderLaneSweep *sweep = nullptr;
@@ -996,6 +999,7 @@ namespace pP {
         // (posted back as dropped, best-effort) and retire submitted work
         // through one final sweep. Submitted GPU work itself retires in the
         // Renderer shutdown that follows on this same lane.
+        const hal::ProfileScope scope_lane_quiesce{"PPR.Frame.LaneQuiesce"};
         u64 settled = 0u;
         for (;;) {
             auto acquired = m_frames->consumerAcquire(RawChannel::peek_without_blocking);

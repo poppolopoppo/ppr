@@ -617,6 +617,7 @@ namespace pP {
     }
 
     std::error_code Renderer::retireCompletedFrames() {
+        const hal::ProfileScope scope_frame_retire{"PPR.Frame.Retire"};
         // Post-shutdown: the fence/queue/service are released, so a poll
         // would report not_connected. Retirement is DONE at that point —
         // report the proven clean state, never an invented failure. Real
