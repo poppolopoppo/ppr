@@ -6,6 +6,10 @@ import std;
 
 namespace pP {
     namespace {
+        std::unique_ptr<FrameTelemetryEvent[]> allocateFrameTelemetryEvents_(const u32 count) noexcept {
+            return std::unique_ptr<FrameTelemetryEvent[]>{new (std::nothrow) FrameTelemetryEvent[count]};
+        }
+
         // Lane/owner-thread side channel: capture-only heap-backed storage
         // (2,097,152 events x 64B = 128MiB) preallocated once before the
         // first record, guarded by a lock-free spin flag (record/drain stay
@@ -17,7 +21,7 @@ namespace pP {
         // exit-time export.
         std::atomic_flag g_lane_telemetry_lock{};
         std::unique_ptr<FrameTelemetryEvent[]> g_lane_telemetry_events{
-            new (std::nothrow) FrameTelemetryEvent[kFrameTelemetryLaneCapacity]{}};
+            allocateFrameTelemetryEvents_(kFrameTelemetryLaneCapacity)};
         u32 g_lane_telemetry_count{0u};
         u32 g_lane_telemetry_dropped{0u};
 
@@ -29,6 +33,9 @@ namespace pP {
         void unlockLaneTelemetry_() noexcept {
             g_lane_telemetry_lock.clear(std::memory_order_release);
         }
+    }
+
+    FrameTelemetryBuffer::FrameTelemetryBuffer() noexcept : m_events(allocateFrameTelemetryEvents_(kCapacity)) {
     }
 
     FrameTelemetryBuffer &frameTelemetryMainBuffer() noexcept {

@@ -161,9 +161,11 @@ export namespace pP {
 
     struct FrameTelemetryBuffer {
         static constexpr u32 kCapacity{kFrameTelemetryMainCapacity};
-        std::unique_ptr<FrameTelemetryEvent[]> m_events{new (std::nothrow) FrameTelemetryEvent[kCapacity]{}};
+        std::unique_ptr<FrameTelemetryEvent[]> m_events{};
         u32 m_count{0u};
         u32 m_dropped{0u};
+
+        FrameTelemetryBuffer() noexcept;
 
         void record(const FrameTelemetryEvent &event) noexcept {
             if (m_events == nullptr or m_count >= kCapacity) {
