@@ -13,7 +13,6 @@ $wingetPackages = @(
     @{ Id = 'RedHat.Podman'; Name = 'Podman' },
     @{ Id = 'OpenJS.NodeJS.22'; Name = 'Node.js 22' },
     @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12' },
-    @{ Id = 'Microsoft.DotNet.SDK.10'; Name = '.NET 10 SDK' },
     @{ Id = 'Microsoft.PIX'; Name = 'Microsoft PIX' }
 )
 
@@ -106,9 +105,6 @@ function Assert-WindowsAndPrerequisites {
     $python = Get-CommandPath 'python'
     $pythonVersion = if ($null -ne $python) { Get-Version $python @('--version') } else { $null }
     if ($null -eq $pythonVersion -or $pythonVersion.Major -lt 3 -or ($pythonVersion.Major -eq 3 -and $pythonVersion.Minor -lt 12)) { $missing.Add('Python.Python.3.12') }
-    $dotnet = Get-CommandPath 'dotnet'
-    $dotnetVersion = if ($null -ne $dotnet) { Get-Version $dotnet @('--version') } else { $null }
-    if ($null -eq $dotnetVersion -or $dotnetVersion.Major -lt 10) { $missing.Add('Microsoft.DotNet.SDK.10') }
     if (-not (Test-PixtoolAvailable)) { $missing.Add('Microsoft.PIX') }
     Install-MissingWingetPackages $missing.ToArray()
 
@@ -116,8 +112,7 @@ function Assert-WindowsAndPrerequisites {
     $podman = Get-CommandPath 'podman'
     $node = Get-CommandPath 'node'
     $python = Get-CommandPath 'python'
-    $dotnet = Get-CommandPath 'dotnet'
-    if ($null -eq $podman -or $null -eq $node -or $null -eq $python -or $null -eq $dotnet) {
+    if ($null -eq $podman -or $null -eq $node -or $null -eq $python) {
         Stop-Setup 'A newly installed prerequisite is not on PATH. Open a new PowerShell shell and rerun install.ps1.'
     }
     if (-not (Test-PixtoolAvailable)) {
@@ -125,7 +120,6 @@ function Assert-WindowsAndPrerequisites {
     }
     Assert-MinimumVersion 'Node.js' $node @('--version') ([version]'22.0')
     Assert-MinimumVersion 'Python' $python @('--version') ([version]'3.12')
-    Assert-MinimumVersion '.NET SDK' $dotnet @('--version') ([version]'10.0')
     Write-Output "Podman detected at $podman."
 }
 

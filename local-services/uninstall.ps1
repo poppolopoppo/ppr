@@ -43,20 +43,7 @@ if (Get-Command podman -ErrorAction SilentlyContinue) {
     Write-Log 'Podman not found; skipping container cleanup.'
 }
 
-# 1b. Best-effort windbg-tool daemon stop (host-native stdio MCP; no containers).
-# `daemon stop` per wiring spec; `windbg-tool --help` could not be verified here
-# (tool not installed on this host), so this stays best-effort and never fails uninstall.
-if (Get-Command windbg-tool -ErrorAction SilentlyContinue) {
-    try {
-        Write-Log 'Stopping windbg-tool daemon (best-effort)...'
-        & windbg-tool daemon stop 2>$null
-        if ($LASTEXITCODE -ne 0) { Write-Log 'windbg-tool daemon stop reported non-zero; continuing uninstall.' }
-    } catch {
-        Write-Log 'windbg-tool daemon stop failed; continuing uninstall.'
-    }
-} else {
-    Write-Log 'windbg-tool not found; skipping daemon stop.'
-}
+# Microsoft WinDbg and its user-owned sessions are independent of this stack.
 
 # 1c. Best-effort pix-mcp binary cache removal (host-native stdio MCP; no containers, no daemon).
 # Removes the downloaded exe/zip/staging only; the version.txt pin is committed

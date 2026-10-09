@@ -39,7 +39,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\local-services\uninstall.ps1 -Fo
 ```
 
 - Stops and removes the `searxng` container on `podman-machine-default`
-- Best-effort `windbg-tool daemon stop`; skipped silently when the tool is absent, never fails uninstall
+- Leaves Microsoft WinDbg and user-owned debugger sessions running independently
 - Best-effort `pix-mcp.exe` binary cache removal (plus stale `pix-mcp-*.zip` archives and `_staging/`); `version.txt` pin and `captures/` are preserved, never fails uninstall
 - Prunes unused networks
 - Deletes `local-services/.env` and `local-services/runtime-report.txt` if present
@@ -65,16 +65,26 @@ Invoke-WebRequest http://127.0.0.1:8080/search?q=smoke&format=json -Headers @{'X
 Get-Content .\local-services\runtime-report.txt
 ```
 
-## WinDbg/TTD (host-native, not containerized)
+## Official WinDbg MCP (host-native)
 
-`windbg-tool` (Devolutions, Rust + C++, win-x64/arm64 only, stdio-only MCP) cannot run in a container (needs host kernel/TTD driver/elevation/DbgEng/host PIDs/named pipes), so it runs host-exec alongside the four containers: transport stdio, command `["windbg-tool", "mcp"]`.
+WinDbg 1.2610.1001.0 or newer includes the MCP service and stdio proxy. The
+`WinDbg` registration in `opencode.json` invokes the installed app alias
+`DbgX.Mcp.Proxy.exe` directly with no arguments. Codex uses the same proxy.
+No separate .NET tool or debugger daemon is installed by this stack.
 
-- Prereqs: .NET 10 SDK. `install.ps1` gates `dotnet --version >= 10` and installs `Microsoft.DotNet.SDK.10` via WinGet unless `-SkipPrerequisiteInstall`.
-- `launch.ps1` runs `dotnet tool install -g Devolutions.WinDbg.Tool` when `windbg-tool` is missing (otherwise `dotnet tool update -g`, tolerating already-current failure), refreshes `%USERPROFILE%\.dotnet\tools` on `PATH`, then `windbg-tool discover` plus `windbg-tool daemon ensure` (named-pipe daemon). Verification is `windbg-tool --compact --envelope discover` with a 2-minute retry loop, recorded as `windbg_tool_ensure` / `windbg_tool_discover` in `runtime-report.txt`. No ports, no secrets, never dump/trace contents.
-- Verify manually: `windbg-tool --compact --envelope discover`.
-- opencode (`opencode.json`, native V2 shape): `{"mcp":{"servers":{"windbg-ttd":{"type":"local","command":["windbg-tool","mcp"],"disabled":false,"timeout":{"catalog":60000,"execution":60000}}}}}`.
-- Triage: `windbg-tool dump triage <dmp> --max-frames 32`; `windbg-tool open <trace.run> --binary-path <exe>` then snapshot/disasm/registers/position set/step/replay-to/backtrace/memory dump/exception focus. `trace record` requires elevation via inline `sudo windbg-tool trace record ...` (New-Window sudo mode is rejected). Live managed-break `--allow-runtime-write` is test-VM-only. See `.opencode/skills/windbg-triage/SKILL.md`.
-- Artifacts (never commit, gitignored): `*.dmp`, `*.hdmp`, `*.mdmp`, `*.run/`, `*.ttd/`, `TTD/`, `dumps/`.
+`launch.ps1` validates that the configured proxy exists. It does not start a
+WinDbg session, open a target, or alter security settings. In WinDbg, enable
+MCP in Settings and start MCP Service before loading a target. Discover
+`list_sessions`, select the intended session, and verify `get_target_state`.
+One client can connect to each session. Uninstalling local services leaves
+WinDbg and its sessions alone.
+
+Follow `.opencode/skills/windbg-triage/SKILL.md` and
+`docs/debugging/crash-analysis.md` for investigation. See
+[Microsoft setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/set-up-windbg-mcp)
+and [client limitations](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/windbg-mcp-overview).
+Codex is a best-effort custom client; protected operations require MCP sampling.
+Leave debugger protections unchanged unless an authorized operator decides otherwise.
 
 ## PIX MCP (host-native, not containerized)
 

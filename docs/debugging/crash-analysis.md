@@ -1,17 +1,10 @@
 # Game crash analysis runbook
 
-> Status: **TESTED end to end 2026-10-08** (rev 33a2d89 + smoke-test fixes):
-> armed `--diag-crash=abort` via Run-GameWithDiagnostics (msvc-live) →
-> WER full dump (338MB, exit 0xC0000602) → Invoke-CrashAnalysis SUCCESS
-> with symbolized stack (fatalExit ← diagSigAbrt ← abort ← main).
-> Reproducible recipe: `pwsh -NoProfile -File
-> scripts/Run-GameWithDiagnostics.ps1 -Preset msvc-live -- --diag-crash=abort`
-> then `pwsh -NoProfile -File scripts/Invoke-CrashAnalysis.ps1 -Pending`.
-> Symbol-cache warm-up downloads PDBs on first use; rerun is offline.
-> Remaining gates are genuinely outstanding: capture matrix across the other
-> fatal paths (terminate, invalid-parameter, purecall, fail-fast directly),
-> PDB matching per preset, zero dialogs. The three scripts are proven on the
-> abort path; other paths' artifacts are contract, not yet observed.
+> Status: WER capture was previously exercised on the abort path. Analysis now
+> uses Microsoft's official WinDbg MCP; the prior CLI triage result is not
+> validation of this integration. Verify a live MCP session and matching symbols
+> before claiming an end-to-end diagnosis. The remaining fatal-path capture
+> matrix and original binary/PDB matching checks remain outstanding.
 
 All commands run from the repo root (`E:\Code\ppr`). Stock 5.1-compatible
 syntax; invoke with either `powershell.exe` (Windows PowerShell 5.1) or `pwsh`
@@ -85,7 +78,7 @@ Example: `pwsh -NoProfile -File scripts/Run-GameWithDiagnostics.ps1 -Preset msvc
 (`--` separates runner args from game args; `GameArgs` is passed through to
 `out\build\<Preset>\game\app.game.exe`). The runner never builds; a missing exe
 is a hard error telling the operator to build first (`cmake --preset <name>`
-configures; `cmake --build --preset <name>` builds). The runner first gates on
+configures; `cmake --build out/build/<name> --target app.game` builds). The runner first gates on
 `Setup-CrashDiagnostics.ps1 -Mode Check` and exits 1 with the elevated Install
 command when provisioning is absent.
 
@@ -128,68 +121,52 @@ unclaimed inbox dump, each with a manifest (`directLaunch: true`, `pid`/`exePath
 means there is nothing unclaimed (claimed = named in any existing manifest or
 already present as `*.dmp` under `out/crashes/`).
 
-## 3. Analyze the dump
+## 3. Analyze through official WinDbg MCP
+
+Prepare the newest unanalyzed captured run, or select a run explicitly:
 
 ```powershell
-pwsh -NoProfile -File scripts/Invoke-CrashAnalysis.ps1 -Pending
+pwsh -NoProfile -File scripts/Prepare-CrashAnalysis.ps1 -Pending
+pwsh -NoProfile -File scripts/Prepare-CrashAnalysis.ps1 -RunDir out/crashes/<UTC>-<PID>
 ```
 
-or target one run explicitly:
+Exactly one selector is required. `-Pending` skips runs with an existing
+`triage-summary.md` or legacy `triage.json`. The script writes
+`analysis-request.json` containing dump paths, image/source locations derived
+from the run manifest, a WinDbg symbol path, and the intended report location.
+It does not launch a debugger or perform analysis. Exit 0 means preparation
+completed; exit 1 means no dump/pending run, and exit 2 means usage/manifest error.
+Existing reports are preserved. Multiple dumps are listed for explicit selection.
+Direct-launch manifests can lack image identity; establish it from the dump before
+claiming symbols match.
 
-```powershell
-pwsh -NoProfile -File scripts/Invoke-CrashAnalysis.ps1 -RunDir out/crashes/<UTC>-<PID>
-```
+1. Open an empty WinDbg window and start MCP Service before opening the dump.
+   Enable the server in MCP service settings if necessary. The configured
+   `WinDbg` proxy connects the client to this service; registration alone does
+   not create a debugging session.
+2. Discover tools, use `list_sessions`, and select the intended WinDbg PID with
+   `connect_session`. Verify `get_target_state`. One MCP client can connect to a
+   session at a time; do not replace a target already under investigation.
+3. Use `open_dump` with the selected full dump path and no active target. Use
+   `show_output` with a debugger command and a short explanation for each query.
+4. Set `.sympath` to the request's `symbolPath` and `.srcpath` to its `sourceRoot`,
+   quoting paths as needed. The symbol path combines the original image directory
+   with `srv*<cache>*https://msdl.microsoft.com/download/symbols`. Inspect `get_logs`
+   when loading fails. Verify original image/PDB identity with module/symbol
+   evidence; a rebuild does not recreate matching symbols for an old dump.
+5. Inspect exception, context, stack, and modules as appropriate (`!analyze -v`,
+   `.exr -1`, `.ecxr`, `kv`, `lm`). Test alternatives rather than treating a stack
+   pattern as a cause. Save `triage-summary.md` with target/binary identity,
+   verified symbols, commands/evidence, candidate cause, confidence, gaps, and
+   next checks. Preserve prior reports and do not invent the old JSON envelope.
 
-`-Pending` selects the newest run directory that has `run-manifest.json` plus a
-collected dump but no `triage.json` yet. Exactly one of `-RunDir`/`-Pending` is
-required. The script derives the dump path, image directory, source root, and
-symbol cache from `run-manifest.json` (plus `build-manifest.json` beside the exe
-when present) — never from operator input — clears `_NT_SYMBOL_PATH`, sets
-`_NT_SOURCE_PATH` to the source root, runs `windbg-tool discover` then
-`windbg-tool --compact --envelope dump triage <dump> --max-frames 64
---image-path <images> --symbol-cache <cache>`, staging raw bytes in
-`analysis-scratch/triage.raw.json` before validating and publishing.
-
-Symbol configuration is local-only: the image directory plus `--symbol-cache`,
-NO `srv*` entry. This windbg-tool build errors on DbgEng server paths, so the
-script removes `_NT_SYMBOL_PATH` entirely (an inherited `srv*` entry, including
-any `srv*...msdl.microsoft.com` value, makes dump triage fail outright); clear
-it before manual runs too (`Remove-Item Env:_NT_SYMBOL_PATH`). The Rust-native
-prefetcher fed by `--image-path` / `--symbol-cache` downloads PDBs into the
-cache on first use; reruns are offline. Canonical triage shape:
-`windbg-tool dump triage <dump> --max-frames 64 --image-path <dir> --symbol-cache <dir>`.
-
-Envelope contract: success is `ok:true`; no top-level `status` field is
-required (only an explicit `error` / `failed` / `failure` status fails). The
-triage payload lives at `data.triage`. Under `Set-StrictMode -Version Latest`
-every optional read is preceded by a PSObject existence probe
-(`$x.PSObject.Properties['name']`); summaries render from the unwrapped payload
-(`data.triage` when present, else top level).
-
-Expect these artifacts in the run directory:
-
-- `triage.json` (machine-readable triage result, published only after validation).
-- `triage-summary.md` (human-readable: dump, exe/preset/rev, command, outcome,
-  exception record, top frames, modules/symbols).
-- `analysis-scratch/triage.raw.json` (raw envelope bytes), `triage.stderr.log`
-  (tool stderr).
-
-Failure means (exit 1; `triage-summary.md` records `FAILED: ...`):
-
-- No dump in the run directory: `FAILED: no dump was collected for this run (the
-  process may not have crashed).` See section 4 for non-crash exits.
-- PDB missing beside the exe (`<image-dir>/app.game.pdb`): `FAILED: symbols
-  missing ...` The tool is not invoked. Recovery is to locate the ORIGINAL
-  exe+PDB pair that produced the dump first — a rebuild does not match (PDB
-  signature mismatch) and will not symbolize this dump — then re-run analysis.
-- `windbg-tool` absent from `PATH` or `discover` failing: install/daemon problem
-  (exit 2 for missing tool); fix before opening dumps.
-- Tool non-zero exit, empty output, non-JSON output, symbol-mismatch text
-  (`pdb ... mismatch`, `symbol ... could not be loaded`, `failed to load
-  symbols`, `symbol file not found`), an explicit `status` of error/failed/failure,
-  or a non-empty `errors` array: triage failure. An empty triage is **never**
-  written as success — `windbg-tool produced no output; refusing to write an
-  empty success report.` Exit 0 means triage completed with frames/symbols recorded.
+Follow `.opencode/skills/windbg-triage/SKILL.md` for live/hang/TTD investigations.
+Microsoft documents Codex/custom clients as best effort; protected output requires
+MCP sampling and may be blocked. Keep WinDbg security settings unchanged and
+report the blocker. See [official setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/set-up-windbg-mcp)
+and [security/client requirements](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/windbg-mcp-overview).
+No connected MCP session, missing/mismatched symbols, or insufficient dump data
+must be reported as incomplete analysis, never a successful diagnosis.
 
 ## 4. Fatal-path contract
 
@@ -267,22 +244,10 @@ fail-stop), or an unexplained crash-like exit produced nothing — which stays a
 capture investigation (provisioning check → pending collection → reproduce under
 the runner).
 
-## 5. Validation gate (outstanding only)
+## 5. Validation status
 
-Proven (2026-10-08, msvc-live): armed `--diag-crash=abort` → WER full dump
-(exit 0xC0000602) → `Invoke-CrashAnalysis` SUCCESS with symbolized stack
-(`fatalExit` ← `diagSigAbrt` ← `abort` ← `main`). Rerun the intro recipe to
-re-confirm.
-
-Still outstanding:
-
-- End-to-end WER dump capture for each remaining fatal path (`terminate`,
-  `invalid-parameter`, `purecall`, fail-fast directly) via
-  `Run-GameWithDiagnostics.ps1`.
-- Symbolized-stack recovery (`triage.json` top frames resolving to PDB symbols)
-  via `Invoke-CrashAnalysis.ps1`, including PDB matching for the preset that
-  built the crashing exe.
-- Zero-dialog behavior on a real crash (no Abort/Retry/Ignore, no WER UI).
-
-Until this gate passes, treat every artifact expectation for the unproven paths
-in sections 1–3 as contract, not accomplishment.
+The previous abort-path capture established that WER can collect a dump. Recheck
+capture and diagnosis separately: preparation syntax/error paths, official proxy
+startup, intended WinDbg session selection, target identity, original PDB match,
+and evidence-backed analysis. The complete fatal-path capture matrix is still an
+acceptance check; do not infer it from one abort-path observation.

@@ -37,7 +37,7 @@
         "mcps": [
           "clion",
           "codegraph",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "fixer": {
@@ -60,7 +60,7 @@
           "clion",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "explorer": {
@@ -83,7 +83,7 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "designer": {
@@ -141,7 +141,7 @@
         "mcps": [
           "clion",
           "codegraph",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "librarian": {
@@ -153,7 +153,7 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "explorer": {
@@ -195,7 +195,7 @@
           "clion",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "observer": {
@@ -245,7 +245,7 @@
         "mcps": [
           "clion",
           "codegraph",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "explorer": {
@@ -268,7 +268,7 @@
           "gh_grep",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "designer": {
@@ -300,7 +300,7 @@
           "clion",
           "codegraph",
           "searxng",
-          "windbg-ttd"
+          "WinDbg"
         ]
       },
       "observer": {

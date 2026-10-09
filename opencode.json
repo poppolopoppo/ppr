@@ -69,11 +69,10 @@
         "url": "https://learn.microsoft.com/api/mcp",
         "disabled": false
       },
-      "windbg-ttd": {
+      "WinDbg": {
         "type": "local",
         "command": [
-          "C:\\Users\\bek4b\\.dotnet\\tools\\.store\\devolutions.windbg.tool\\0.2.0\\devolutions.windbg.tool.win-x64\\0.2.0\\tools\\net10.0\\win-x64\\Devolutions.WinDbg.Tool.exe",
-          "mcp"
+          "C:\\Users\\bek4b\\AppData\\Local\\Microsoft\\WindowsApps\\Microsoft.WinDbg_8wekyb3d8bbwe\\DbgX.Mcp.Proxy.exe"
         ],
         "disabled": false,
         "timeout": {
