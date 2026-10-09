@@ -67,9 +67,7 @@
         "model": "opencode/space-bunny-free",
         "temperature": 0.2,
         "variant": "high",
-        "skills": [
-          "git-log-fast-navigation"
-        ],
+        "skills": [],
         "mcps": [
           "clion",
           "codegraph"
@@ -161,9 +159,7 @@
       "explorer": {
         "model": "openai/gpt-6-luna",
         "variant": "low",
-        "skills": [
-          "git-log-fast-navigation"
-        ],
+        "skills": [],
         "mcps": [
           "clion",
           "codegraph"
@@ -256,9 +252,7 @@
         "model": "opencode/space-bunny-free",
         "temperature": 0.2,
         "variant": "high",
-        "skills": [
-          "git-log-fast-navigation"
-        ],
+        "skills": [],
         "mcps": [
           "clion",
           "codegraph"

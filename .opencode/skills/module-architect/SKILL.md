@@ -78,7 +78,8 @@ target_sources(engine.core
 
 - The CMake target equals the module name for engine libraries and test
   executables: `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`,
-  `engine.app`, `engine.tests`, `engine.tests.core`, and `engine.tests.app`.
+  `engine.app`, `engine.tests`, `engine.tests.core`, `engine.tests.sim`,
+  `engine.tests.app`, `engine.tests.asset`, and `game.tests`, among others.
 - Put every `.cppm` in the target's public `FILE_SET CXX_MODULES`; put matching
   `.cpp` implementation units in `PRIVATE` sources. CMake does not infer either
   registration.
@@ -108,15 +109,17 @@ For a new, moved, split, renamed, or removed partition:
 
 ## Test modules
 
-- Core tests import `engine.core`; app tests import `engine.app`; shared test
-  support is `engine.tests`.
-- Test suites keep ONE exported root (`core` / `app`, declared `extern` in the
+- Match imports to the owning suite and its current CMake dependencies; core
+  tests import `engine.core`, while sim/app/asset/game have their own boundaries.
+  Shared test support is `engine.tests`.
+- Test suites keep ONE exported root (`core`, `sim`, `app`, `asset`, or `game`, declared `extern` in the
   umbrella `.cppm`, defined in the suite root `.cpp` — decl-only `.cppm` +
   out-of-line def is the MSVC C1001 workaround). Thematic test groups are
-  private `.cpp` impl units (`module engine.tests.<suite>;`): non-exported
+  private `.cpp` impl units (`module engine.tests.<suite>;` or `module game.tests;`): non-exported
   `detail::` leaves plus one TU-local `const UnitTest` and one non-exported
   `const UnitTest &<node>Tests() noexcept` accessor per root-visible node built
-  in the same TU; file-local sub-groups need no accessor. No `export module engine.tests.<suite>:<part>` partitions.
+  in the same TU; file-local sub-groups need no accessor. Game tests use
+  `pP::game::tests` rather than the engine suites' `pP::tests` namespace. No `export module engine.tests.<suite>:<part>` partitions.
 - Register the umbrella `.cppm` in the executable's `FILE_SET CXX_MODULES` and
   every group/root `.cpp` in PRIVATE SOURCES; the suite root `.cpp`
   forward-declares each accessor and calls it in `_.recurse({...})` in fixed order.

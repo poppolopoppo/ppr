@@ -28,25 +28,11 @@ checks are repeated.
    by hand and never through the CLion `reformat_file` router.
    Reuse a valid Check result when source and check inputs are unchanged; do not
    re-execute an identical check.
-3. Configure, build, and test through the `build-system` authority, not from
-   this skill: target/preset/test selection, command form, ordering, and
-   runner rules all come from the `build-system` table. Execution is
-   cmake-direct inside the one persistent Insiders `vcvars64` shell owned by
-   the builder lane — `cmake --preset`, `cmake --build ... --target`, and
-   `ctest` all run in that same long-lived shell (`build-system` §0), so
-   vcvars is paid once and `VSINSTALLDIR` reaches every configure. There is no
-   `build_project`: the live `clion_execute_tool` registry probe (2026-09-28)
-   returned 47 tools with no `build_project`, and no router invocation can
-   reach it. The orchestrator/builder lane owns project-wide builds (there is
-   no per-target IDE selector) and batches them rather than building per edit.
-   - A fresh per-invocation shell that skips Insiders `vcvars64.bat` is NEVER
-     a build path — it silently resolves Community 14.44 plus a bad vcpkg
-     path, and an ad-hoc terminal stays separate from the
-     `build-system`-owned persistent-shell route above.
-   - `clion_execute_run_configuration` is documented run-only, but it
-     implicitly builds the configured run target first (IJPL-217679 /
-     IJPL-218400); it is restricted to allow-listed executables, never
-     libraries.
+3. Configure, build, and test through `build-system`: its platform environment,
+   target/preset selection, persistent-shell execution, and batching rules are
+   authoritative. Discover current IDE capabilities when needed; do not infer
+   them from a historical tool count. Run configurations can implicitly build
+   and must refer to executable targets.
 4. Run the deterministic gates for touched C++ and block validation on any
    failure: `scripts/Format-Cpp.ps1` (Check) and
    `scripts/Check-SemanticStyle.ps1 -Files '<touched>'`. Reuse the unchanged-source
@@ -74,7 +60,7 @@ checks are repeated.
   gates and review. Record why focused groups prove the affected claim.
 - **Local phase completion:** run one loop of all affected suites.
   Cross-cutting app/render-lane changes, including Phase 4, require the full
-  nine-entry matrix, including asset.
+  ten-entry matrix, including asset.
 - **Pre-merge CI:** run the full matrix for one loop plus the platform/build
   matrix from `build-system`.
 - **Nightly stress:** run the full ASan matrix with three same-process

@@ -13,7 +13,7 @@ Run this skill before sending local commits to a remote. It works only on
 already-committed history; `git-commit-planner` separately plans commits from
 uncommitted changes.
 
-For interactive history browsing, load `git-log-fast-navigation`. For full
+Use bounded native `git log` queries when history context is needed. For full
 project verification after history is finalized, load `validation`.
 
 ## Contract

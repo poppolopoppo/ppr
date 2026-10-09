@@ -1,102 +1,76 @@
 ---
 name: pix-profiling
-description: >
-  GPU performance capture and analysis for app.game via pix-mcp: bounded
-  profiling runs, GPU capture, frame triage, and D3D12 validation.
+description: Capture and analyze app.game DirectX 12 work through the configured PozLabs pix-mcp server, including GPU triage, timing capture, and bounded comparisons.
 ---
 
-# PIX Profiling (GPU)
+# PIX Profiling
 
-GPU-only profiling workflow for `app.game`. CPU timing captures are
-explicitly out of scope: pixtool cannot open them programmatically
-(`PIXTOOL6 - Unsupported file type`), so they are a manual PIX UI task.
+Use the `pix-mcp` server configured in `opencode.json` under `mcp.servers`.
+The upstream [README](https://github.com/PozLabs/pix-mcp/blob/main/README.md)
+owns server capabilities and compatibility notes. Discover the installed tool
+schemas before calling them: a configured server may lag upstream. Do not
+reinstall the server or substitute an unrelated PIX integration.
 
-## 0 Scope and prerequisites
+## Prepare a reproducible workload
 
-- Use for: GPU pass costs, draw/barrier counts, frame structure, D3D12
-  validation of `app.game` changes.
-- Build: `msvc-profile` preset, `app.game` target (see `build-system` for
-  configure/build ownership). The preset sets `USE_PIX=1` (PIX markers) and
-  `PPR_LOGGING_LEVEL=EMPHASIS`.
-- Check `pix_status` first: `pixtool.exe` must be found. GPU capture needs no
-  admin. Capture *analysis* verbs (`save-event-list`, counters, screenshots,
-  `run-debug-layer`) need Windows Developer Mode.
-- Do not route elevation, UAC, scheduled tasks, or timing-capture automation
-  through this skill. There is no supported programmatic timing-analysis path.
+1. Use `build-system` to build `app.game` with `msvc-profile` when profiling
+   markers are needed. Verify the binary and workload configuration correspond
+   to the change under investigation.
+2. Call `pix_status`; inspect installed PIX, advertised commands, privileges,
+   and analysis readiness. Windows Developer Mode is required for analysis
+   operations. Normal GPU capture does not require elevation.
+3. Choose a repeatable scene, camera, edit workload, warmup, and capture point.
+   Record effective display/focus settings. Game arguments/configuration are
+   resolved by `game/Game.Config.*`, not a hand-written loop in `main.cpp`.
+   Profiling defaults can disable unfocused throttling, but explicit settings
+   can override them; verify the effective configuration.
+4. Use fresh absolute artifact paths under `out/pix-manual/` and create the
+   parent directory. Keep captures out of commits. Server-relative paths depend
+   on its capture directory and working directory.
 
-## 1 Bounded runs
+## Choose capture mode
 
-The game loop exits only on window close, so profiling runs must bound
-themselves. Flags live in the hand-rolled CLI loop in `game/main.cpp`
-(supports `--flag value` and `--flag=value`; invalid numerics print
-`[cli] ...` to stderr and exit `2`):
+- For an initial GPU triage, use `pix_capture_and_analyze` or
+  `pix_gpu_capture_launch` with the executable and destination paths. Start with
+  one frame; use multiple frames only for an explicit workload need.
+- PID GPU capture requires a process launched under PIX. Do not attach to a
+  separately started game or treat `pix_launch`'s launcher PID as the game PID.
+- `pix_programmatic_capture` needs the target to invoke PIX's in-process capture
+  API at the selected region. Verify instrumentation exists before choosing it.
+- For CPU/GPU timelines, use `pix_timing_capture` with a supported preset and
+  inspect the reported effective settings. It requires an elevated server;
+  follow the harness approval policy for elevation. Timing-capture analysis
+  currently belongs in the PIX UI, rather than GPU-analysis tools.
 
-| Flag | Effect |
-|---|---|
-| `--auto-exit S` (alias `--exit-after S`) | Wall-clock exit after S seconds via `TimerManager::scheduleAfter` in `TurboLarbin::initialize()`; graceful `requestExit()`, never `std::exit` |
-| `--profile-csv N` (+ `--profile-skip K`, `--profile-label`, `--profile-edits`, `--profile-pan`, `--profile100`) | Existing CSV profiling machinery; `--profile-csv N` also `requestExit()`s after N measured frames |
-| `--no-focus-throttle` | Bare flag; also **auto-implied** by `--auto-exit`, `--profile-csv`, `--profile100` |
+The documented pixtool argument transport rejects many ordinary CLI arguments,
+including prefixed tokens and values with spaces. Use the game's supported config
+or autoexec mechanism after checking its actual lookup and precedence; do not
+silently drop arguments or assume a separately launched process becomes capturable.
+Bound timing duration and programmatic waits through the discovered tool schema.
+Do not assume an arbitrary launch/capture mode gracefully exits the target.
 
-Focus rule: an unfocused window is throttled to 5 fps
-(`ApplicationEditor::onMainWindowFocused_` → `setBackgroundPriority`).
-Profiling/bounded runs disable this automatically; a bare interactive run
-left unfocused will take ~5x longer wall-clock. `setTargetFrameRate(0)` does
-not defeat the background throttle — only the opt-out does.
+## Analyze evidence
 
-## 2 Capture
+1. Inspect structured results and warnings, not only a success status.
+   `pix_analyze_frame` provides heuristic triage. Request available counters
+   through the installed schema when costs are needed; absent timing is not zero.
+2. Use bounded `pix_get_event_list` pages for event structure and
+   `pix_list_counters` for counter availability. Export large event lists to CSV.
+3. Use `pix_get_screenshot` for the captured frame; inspect its result and open
+   the capture with `pix_open_capture` when deeper UI inspection is required.
+4. `pix_run_analysis` validates debug-layer replay. Its output does not contain
+   the complete debug-layer diagnostic stream; an empty issue list cannot prove
+   the application emitted no diagnostics.
 
-One-shot GPU capture of a single frame (pixtool closes the app promptly,
-so no exit flag is needed here):
+## Compare and report
 
-```js
-pix_gpu_capture_launch({
-  exe_path: "E:\\Code\\ppr\\out\\build\\msvc-profile\\game\\app.game.exe",
-  frames: 1,
-  output_path: "E:\\Code\\ppr\\out\\pix-manual\\gpu-test.wpix",
-})
-```
+`pix_compare_captures` can compare event structure and optional timing aggregates.
+Check completeness, warnings, and whether it fell back to `metadata_only`.
+Metadata, file size, and timestamps do not establish a performance change.
+Use matching workloads and repeated paired measurements for performance claims;
+report sample spread and capture overhead. Separate measured costs from heuristic
+triage. Preserve capture paths, binary/configuration identity, effective settings,
+and any unavailable counters or failed replay in the validation record.
 
-Constraints learned the hard way:
-
-- Do **not** pass dash-prefixed args (`--auto-exit`, …) to the launch:
-  pixtool rejects `--command-line` values starting with `-`/`+` and may
-  ignore them. For captures that need more than one frame, stage a bounded
-  run separately instead.
-- Save captures under `out/pix-manual/` (git-ignored scratch). Reference
-  run from this repo: 11 draws, 77 events, `GridPass → DrawInstanced`
-  ~101µs dominating, UI pass ~24µs.
-
-## 3 Analyze (in order)
-
-1. `pix_analyze_frame({capture_path, include_counters: true})` — first
-   triage: draw/dispatch/copy counts, render-target changes, barriers, and
-   `top_events` ranked by GPU time. Without counters there is no timing
-   column.
-2. `pix_get_event_list({capture_path, limit, response_format: "summary"})` —
-   paginated D3D12 call stream (`Queue ID, Parent, Name, Global ID`);
-   hierarchical (`ppr → GridPass → state setup → Draw`). Save full CSV via
-   `output_path` for large frames.
-3. `pix_list_counters({capture_path})` — available GPU counters
-   (EOP timings, IA/PS invocations, samples, …).
-4. `pix_run_analysis({capture_path})` — D3D12 debug-layer replay; gate on
-   `error_count == 0`.
-
-Known gap: `pix_get_screenshot` replay can time out on some captures
-(observed 2× on an 11-draw frame). For pixels, open the `.wpix` in PIX UI
-(`pix_open_capture`) instead of retrying indefinitely.
-
-## 4 Regress
-
-`pix_compare_captures({capture_a, capture_b})` — size/modification
-comparison for before/after change validation. Keep baseline captures next
-to the change under test; do not commit `.wpix` files.
-
-## 5 Troubleshooting
-
-- App never exits: no bound flag passed, or an old binary predating
-  `--auto-exit` is running — check `Get-Process -Name app.game`.
-- Run takes ~5x expected: window lost focus without a profiling flag;
-  rerun with any flag from §1.
-- `PIXTOOL6 - Unsupported file type`: a timing capture was passed to a
-  GPU-analysis verb — out of scope, use PIX UI.
-- Empty `top_events`: rerun step 1 with `include_counters: true`.
+If tools are unavailable, report that the configured server is not callable in
+this session and retain the reproducible capture request. Do not invent results.

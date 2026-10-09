@@ -646,3 +646,8 @@ imgui.ini
 
 # PIX MCP host-local version marker (sibling of the ignored pix-mcp artifacts above)
 local-services/pix/version.txt
+
+# Repository build introspection skill is source, not a build directory.
+!.opencode/skills/build-introspection/
+!.opencode/skills/build-introspection/SKILL.md
+!.opencode/skills/build-introspection/Inspect-BuildFileApi.ps1

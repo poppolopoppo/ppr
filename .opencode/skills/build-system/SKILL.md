@@ -78,25 +78,11 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
   presets exist in `CMakePresets.json` — it defines `configurePresets` only,
   ending at `:240`). CLion is reserved
   for debugging and code search; it is not the build runner.
-- Probe 2026-09-28: `clion_execute_tool(command="__probe_unknown_tool__")`
-  returned the authoritative 47-tool registry (identical to the earlier list,
-  router included) with NO `build_project` anywhere — measured, not inferred.
-- `build_project` is documented in the JetBrains reference but VERIFIED ABSENT
-  from this session's server. Name resolution fails before argument parsing, so
-  no `build_project --filesToRebuild ...` invocation can work on this server.
-- This server exposes NO build verb, so there is no IDE-side build path at all:
-  `clion_execute_terminal_command` is an ad-hoc shell (2000-line output cap,
-  confirmation-gated unless Brave Mode) and is never a build path, and
-  `clion_execute_run_configuration` is documented run-only — it implicitly
-  triggers a build (IJPL-217679/218400; historically lossy error reporting) but
-  is never a build path by contract. Brave Mode also gates run configurations.
-  (The modal hazard below is empirical, not JetBrains-documented.)
-- Project-wide build scope (reference fact): the reference maps Build Project
-  to the `all` target for the active CMake profile; its documented
-  `build_project` parameters (`rebuild`, `filesToRebuild`, `timeout`,
-  `projectPath`) are unavailable here.
-- Empirical (not JetBrains-documented): never invoke a run configuration on a
-  library target — it bricks the IDE with an undismissable modal.
+- Discover the current CLion router catalog before using IDE functionality;
+  historical tool counts are not a current capability guarantee. Keep configure,
+  build, and test execution on this skill's persistent-shell path.
+- Run configurations may trigger implicit builds. Use only executable targets;
+  do not invoke a library as a run configuration.
 - Builds and tests are owned above fixer (orchestrator / builder lane),
   batched — not per-edit; the builder lane keeps the persistent shell open so
   vcvars is paid once for the whole batch.
@@ -108,15 +94,11 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
 | Kind | Targets | Run eligibility |
 |---|---|---|
 | Libraries | `engine.core`, `engine.math`, `engine.shader`, `engine.rhi`, `engine.sim`, `engine.app`, `engine.image`, `engine.mesh`, `engine.physics`, `engine.tests` | never run |
-| Executables | `engine.tests.core`, `engine.tests.sim`, `engine.tests.app`, `engine.tests.asset`, `app.game` | may run |
+| Executables | `engine.tests.core`, `engine.tests.sim`, `engine.tests.app`, `engine.tests.asset`, `game.tests`, `app.game` | may run |
 
-No kind is selectable as an IDE build target: this server exposes no build
-verb, and the documented `build_project` (absent here) builds the whole
-project. In the persistent shell, build targets are chosen explicitly with
-`cmake --build ... --target <name>`; this table governs run eligibility and
-modal safety only.
-The catalog contains no CMake/target-specific build tool at all — nothing in
-the reference mentions CMake, ninja, toolchain, or vcvars.
+Choose build targets explicitly with `cmake --build ... --target <name>` in
+that persistent shell. The table distinguishes executable run eligibility from
+library buildability.
 
 Do not invent PascalCase target aliases. `run-engine-tests` is an aggregate
 build target, not a test executable.
@@ -184,8 +166,8 @@ configure/build evidence to the validation owner.
 
 - Shared test infrastructure is the `engine.tests` static library (never run);
   runnable test executables are listed in the target-kinds table.
-- The nine CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
-  `app_a1_death_lifecycle`, `app_a2_gates`, `app_b_sim`, `app_c_fence`,
+- The ten CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
+  `app_a1_death_lifecycle`, `app_a2_gates`, `app_a3_display_window`, `app_b_sim`, `app_c_fence`,
   `app_d_io`, `EngineAssetUnitTests`, and `GameConfigUnitTests`.
 - `PPR_TEST_LOOPS` is a cache switch: default `1` for development;
   configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
@@ -194,6 +176,8 @@ configure/build evidence to the validation owner.
 - There are no CTest *test presets*. Use the executables directly or
   the approved scheduling command
   `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`.
+- All six app shards and `EngineAssetUnitTests` currently set `RUN_SERIAL TRUE`;
+  CTest honors that exclusion even under `-j4`.
 - Run only one matrix invocation per machine at a time, with no competing
   profiling/game workload. For tests requiring exclusive scheduling within
   the matrix, prefer `RUN_SERIAL` over `RESOURCE_LOCK`; neither replaces

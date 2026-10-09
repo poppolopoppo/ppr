@@ -722,46 +722,43 @@ join); close is covered by `close_idempotent`, `close_record_consumed`,
 
 ## 13. Common Patterns and Idioms
 
-### 13.1 Select-Based Worker (canonical drain loop)
+### 13.1 Select-Based Worker
 
-```cpp
-void worker(SharedRawChannelPtr channel, SharedContext ctx) {
-    bool should_drain = false;
-    for (auto event : select(*channel, *ctx)) {
-        std::visit(pP::overloaded{
-            [&](RawChannel *) {
-                while (auto recv = channel->consumerAcquire(
-                           RawChannel::peek_without_blocking)) {
-                    dispatch(recv->data());
-                    channel->consumerRelease(*recv);
-                }
-            },
-            [&](IContext *) { should_drain = true; },
-        }, event);
-        if (should_drain && channel->isClosedOrClosing()) break;
-    }
-}
-```
+Subscribe before checking the stable context `error()` latch. A late subscriber
+receives no replay of an earlier cancellation (§5.3); the latch must be checked
+before the first wait and again after wakes. Keep the subscription alive across
+checks and waits. Do not use the event pulse as persistent cancellation state.
 
-The `for` increment owns the event reset — never reset the observed source
-inside the body. Check the stable `error()` latch for shutdown decisions,
-not the pulse that just fired.
+On channel readiness, drain with non-blocking acquires, releasing every acquired
+record. Distinguish `error_empty` from `error_closed`; after consuming the close
+record, leave the receive loop rather than waiting for another notification.
+The select iterator owns reset; do not reset its source inside the body.
+
+Cancellation requests shutdown; it does not close producer channels or join
+workers. The owner must stop admission, settle outstanding producer reservations,
+and close channels while consumers can still drain them. Join consumers only
+after their terminal receive condition. Specify whether cancellation drains or
+discards work before implementing the loop; no universal loop serves both policies.
 
 ### 13.2 Fan-Out with Multiple Channels
 
-One `RawChannel` per consumer, atomic-counter distribution; each consumer
-drains its channel until `error_closed`, then producers `flush` + `close`.
+Use one `RawChannel` per consumer. Stop producer admission and settle outstanding
+reservations first. If a flush barrier is required, flush while consumers remain
+active; then close each channel. Consumers drain to `error_closed`, then the
+owner joins them and releases storage. Never wait for consumers to observe close
+before issuing close, or flush after consumers have stopped.
 
 ### 13.3 Context-Bounded Operation with Timeout
 
-```cpp
-auto [ctx, cancel] = context::withCancel(context::background());
-TimerManager timer{ITimerClock::steady()};
-auto deadline = context::withTimeout(ctx, std::chrono::seconds(5), timer);
-auto result = do_work_with_timeout(deadline);
-if (deadline->error()) { /* timed_out or operation_canceled */ }
-cancel();  // quiesce: release the tree explicitly
-```
+Use the owner's injected, actively advanced `TimerManager` with
+`context::withTimeout`. Scheduling a deadline does not start a timer thread:
+the owner must continue calling `tick()` while the operation is pending.
+A local manager followed by a blocking operation on that same thread cannot
+fire the timeout. Tests advance an injected clock and tick deterministically.
+
+Observe the context's stable error result at the operation boundary. Calling
+its cancellation function signals cancellation only; explicitly detach callbacks
+and drain/join in-flight work before releasing the context tree and timer owner.
 
 ## 14. Constraints and Pitfalls
 

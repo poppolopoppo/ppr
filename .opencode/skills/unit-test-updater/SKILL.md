@@ -36,7 +36,7 @@ directly.
   the first cleanup error. Avoid timing-dependent assumptions.
 - Use `PPR_TEST_ASSERT` for test assertions in every build configuration; do not use raw `new`/`delete` where engine allocator or lifetime rules apply.
 - Follow the test group convention (thematic private `.cpp` group files in
-  `lib/engine/tests/core/` or `lib/engine/tests/app/`, never new `.cppm`
+  the owning suite directory, never new `.cppm`
   partitions), umbrella registration, and matching CMake source registration.
   Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
 
@@ -58,8 +58,8 @@ group file(s) corresponding to the modified source:
   e.g. `lib/engine/tests/core/Core.Allocator.Tests.cpp` (allocator group)
 - Source `lib/engine/app/...` → leaves in the matching group file,
   e.g. `lib/engine/tests/app/App.Player.Tests.cpp` (player group)
-- Test layout: each suite keeps ONE exported root (`core` / `app`) and a set of
-  thematic private group `.cpp` files (`module engine.tests.<suite>;` impl units,
+- Test layout: each suite keeps ONE exported root (for example `core`, `sim`, `app`, `asset`, or `game`) and a set of
+  thematic private group `.cpp` files (the owning suite module impl units,
   `namespace detail` leaves, one TU-local `const UnitTest` plus one
   non-exported `const UnitTest &<node>Tests() noexcept` accessor per
   root-visible node; file-local sub-groups need no accessor; `memory`/`containers`
@@ -69,6 +69,20 @@ group file(s) corresponding to the modified source:
   (PRIVATE SOURCES + 1 accessor forward-declare + 1 recurse call per root-visible node).
 
 ---
+
+Choose the suite by ownership, not just core versus app:
+
+| Area | Suite target / directory |
+|---|---|
+| Core/HAL | `engine.tests.core` / `lib/engine/tests/core` |
+| Simulation and physics | `engine.tests.sim` / `lib/engine/tests/sim` |
+| Application | `engine.tests.app` / `lib/engine/tests/app` |
+| Assets, image, mesh | `engine.tests.asset` / `lib/engine/tests/asset` |
+| Game-owned behavior | `game.tests` / `game` (see its codemap and CMake registration) |
+
+Core and sim suites are GLFW-free. Check the owning codemap for app/asset/game
+runtime prerequisites and exact-path CTest shards. Copy the existing suite's
+module/root convention rather than renaming every suite to core.
 
 ## Step 2 — Analyse the diff
 
@@ -91,14 +105,14 @@ For each changed observable behavior, classify the required test action:
    `lib/engine/tests/core/Core.Allocator.Tests.cpp` (never a new `.cppm`
    partition — per-test partitions were collapsed; do not create
    `export module engine.tests.<suite>:<part>`).
-2. **Module declaration:** `module engine.tests.core;` (plain impl unit, no
+2. **Module declaration:** the owning suite, e.g. `module engine.tests.core;` or `module game.tests;` (plain impl unit, no
    `export`, no partition name).
-3. **Includes:** `module;` + `#include "pP/UnitTest.h"` (always) then `module engine.tests.core;` + `import engine.core;` (`engine.app` for app tests) + `import std;`. Add `"pP/Macros.h"` or third-party headers to the global fragment only when the test body needs them (e.g. `App.Camera.Tests.cpp` includes both `Macros.h` and `UnitTest.h`; `App.Render.Tests.cpp` includes `slang.h`)
-4. **Namespace:** Leaves in `namespace pP::tests::detail`; group/root nodes in `namespace pP::tests`
+3. **Includes:** use the existing group's global fragment and owning module declaration, with `#include "pP/UnitTest.h"` for test macros. Import the dependencies needed by that suite and `std` where used. Add `"pP/Macros.h"` or third-party headers to the global fragment only when the test body needs them (e.g. `App.Camera.Tests.cpp` includes both `Macros.h` and `UnitTest.h`)
+4. **Namespace:** follow the owning suite: engine leaves use `pP::tests::detail` and groups use `pP::tests`; game uses `pP::game::tests` and its `detail` namespace.
 5. **Nested grouping:** Use inner namespaces under `detail` for sub-grouping
 6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`). The macro expands to a variable declaration, so every body ends with `};` — a bare `}` is a syntax defect that cascades into misparsed-declaration errors far from the site.
-7. **Parent tests:** one TU-local group plus one accessor per root-visible node: `const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` then `const UnitTest &<group>Tests() noexcept { return <group>; }` — file-local sub-groups need no accessor; direct-root singleton leaves use `const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`; never spell `extern` except for the `core`/`app` roots
-8. **Top-level registration:** In the suite root `.cpp` (`Core.Tests.cpp` / `App.Tests.cpp`), forward-declare the accessor (`const UnitTest &<group>Tests() noexcept;`) and call it in the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET) in the same change
+7. **Parent tests:** one TU-local group plus one accessor per root-visible node: `const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` then `const UnitTest &<group>Tests() noexcept { return <group>; }` — file-local sub-groups need no accessor; direct-root singleton leaves use `const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`; never spell `extern` except for the exported suite root
+8. **Top-level registration:** In the suite root `.cpp` (e.g. `Core.Tests.cpp`, `Sim.Tests.cpp`, `App.Tests.cpp`, `Asset.Tests.cpp`, or `Game.Tests.cpp`), forward-declare the accessor (`const UnitTest &<group>Tests() noexcept;`) and call it in the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET) in the same change
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
 10. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
 11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
@@ -173,7 +187,7 @@ tree level and change its path); see `module-architect`.
 
 1. Forward-declare the accessor: `const UnitTest &<subsystem>Tests() noexcept;`
 2. Call `<subsystem>Tests()` in the root `_.recurse({...})` in fixed order (test
-   paths `core/<...>` / `app/<...>` derive from these names — keep them stable)
+   paths `<suite>/<...>` derive from these names — keep them stable)
 3. Leaves covered only by exact-path CTest shards (`--run-test` token lists in
    the suite `CMakeLists.txt`) must be added to exactly one shard's token list;
    token values have a length budget (~1K — split shards when exceeded) and the
@@ -186,42 +200,10 @@ tree level and change its path); see `module-architect`.
 
 Build and run the test executable to confirm all tests pass.
 
-Tool carve-outs (authorities: `build-system` for builds, `AGENTS.md` for tool
-access):
-
-- **Builds:** the agent path is the `build-system` authority, and it is
-  cmake-direct inside the one persistent Insiders `vcvars64` shell, not
-  `build_project`: the live `clion_execute_tool` registry probe (2026-09-28)
-  returned 47 tools with no `build_project`, and no router invocation can
-  reach it, so execution routes through the `build-system`-owned
-  persistent-shell `cmake --preset` / `cmake --build ... --target` path (or
-  an allow-listed run configuration, which implicitly builds). The shell
-  `cmake --build` form below is **human-fallback only** — agents never invoke
-  it directly, only through that `build-system`-owned path.
-- **Runs:** `clion_execute_run_configuration` is IDE-side only — documented
-  run-only, but it implicitly builds the configured run target first
-  (IJPL-217679 / IJPL-218400) — and is cross-referenced to the 5-executable
-  allow-list in `build-system`
-  (`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`,
-  `engine.tests.asset`, `app.game`) — never a library target and never a
-  library source path via `filePath`+`line`.
-
-Prefer CLion MCP run tools (tool access per `AGENTS.md`):
-
-```
-clion_execute_run_configuration(configurationName="engine.tests.core", programArguments="--shuffle")
-```
-
-If CLion is unavailable, a human may fall back to CMake presets directly
-(human-fallback only — agents stay on the `build-system` path above):
-
-```powershell
-cmake --build out/build/msvc-dev --target engine.tests.core
-ctest --test-dir out/build/msvc-dev --output-on-failure
-```
-
-Use `msvc-dev` or `clang-dev` as applicable; do not use a `gcc-*` preset for
-module-build verification.
+Follow `build-system` for the platform environment, affected target build, and
+focused suite execution, then `validation` for proportionate gates. Use current
+registered target and CTest names; discover the latter with `ctest -N`. Do not
+copy a session-specific IDE tool catalog or prescribe a second build route here.
 
 If any test fails, treat the failure as a bug — do not weaken assertions.
 
@@ -238,8 +220,8 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 - **Never modify production code** to make tests pass. If a test reveals a design issue, flag it to the user.
 - **Do not test private/implementation details.** Test through public API only.
 - **Keep tests self-contained.** Each `PPR_UNIT_TEST` should be independent.
-- **If the diff has no public API changes** (e.g., internal refactor, comment fix), output "No test changes required" and stop.
-- **Large diffs:** Group related changes and ask the user which area to test first.
+- **If the diff changes no observable behavior** (e.g., a behavior-preserving refactor or comment fix), output "No test changes required" and stop.
+- **Large diffs:** Group related changes and cover the affected contracts; ask only when scope is genuinely ambiguous.
 
 ---
 
