@@ -42,6 +42,10 @@ target_sources(engine.core
             containers/Core.Containers.SparseVector.cppm
             containers/Core.Containers.StableVector.cppm
             containers/Core.Containers.cppm
+            config/Core.Config.Cli.cppm
+            config/Core.Config.Environment.cppm
+            config/Core.Config.File.cppm
+            config/Core.Config.cppm
             Core.Enums.cppm
             function/Core.Function.Callback.cppm
             function/Core.Function.Ref.cppm
@@ -72,6 +76,10 @@ target_sources(engine.core
         concurrency/Core.Concurrency.Event.cpp
         concurrency/Core.Concurrency.Scheduler.cpp
         concurrency/Core.Concurrency.Thread.cpp
+        config/Core.Config.Cli.cpp
+        config/Core.Config.Environment.cpp
+        config/Core.Config.File.cpp
+        config/Core.Config.cpp
         containers/Core.Containers.HashMap.cpp
         containers/Core.Containers.StableVector.cpp
         io/Core.Io.FileWatcher.cpp
@@ -106,8 +114,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     )
 endif()
 
+# toml++ codec dependency: vcpkg config package or the pinned CPM fallback
+# (cmake/external/tomlplusplus.cmake, via cmake/Dependencies.cmake).
+if(NOT TARGET tomlplusplus::tomlplusplus)
+    find_package(tomlplusplus CONFIG REQUIRED)
+endif()
+
 setup_ppr_project(engine.core
-    EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash
+    EXTERNAL_SYSTEM_PRIVATE_DEPS rapidhash tomlplusplus::tomlplusplus
 )
 
 # WinPix event markers (Windows-only HAL profiling backend). The import

@@ -37,7 +37,15 @@ namespace pP::tests {
 
     const UnitTest &errorTests() noexcept;
 
+    const UnitTest &configTests() noexcept;
+
+    const UnitTest &configCliTests() noexcept;
+
+    const UnitTest &configFileTests() noexcept;
+
     const UnitTest &fatalTests() noexcept;
+
+    const UnitTest &testHarnessTests() noexcept;
 
     const UnitTest &page_poolTests() noexcept;
 
@@ -128,6 +136,10 @@ namespace pP::tests {
             serviceTests(),
             loggerTests(),
             errorTests(),
+            configTests(),
+            configCliTests(),
+            configFileTests(),
+            testHarnessTests(),
             fatalTests(),
         });
     };

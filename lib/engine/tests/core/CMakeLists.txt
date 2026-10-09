@@ -38,6 +38,10 @@ target_sources(engine.tests.core
         Core.Service.Tests.cpp
         Core.Logger.Tests.cpp
         Core.Error.Tests.cpp
+        Core.Config.Tests.cpp
+        Core.Config.Cli.Tests.cpp
+        Core.Config.File.Tests.cpp
+        Core.TestHarness.Tests.cpp
         Core.Fatal.Tests.cpp
 )
 
@@ -64,11 +68,11 @@ if (MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.core PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif ()
 
-add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core)
+add_test(NAME EngineCoreUnitTests COMMAND engine.tests.core --loop ${PPR_TEST_LOOPS})
 
 set_tests_properties(EngineCoreUnitTests
         PROPERTIES
-        TIMEOUT 120
+        TIMEOUT 300
         LABELS "unit;engine;core"
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.core>"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.core>"

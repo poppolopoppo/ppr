@@ -1,69 +1,163 @@
 module;
 #include "pP/Macros.h"
+#include <cstdio>
 
 module engine.tests;
+
+import engine.core;
 
 import std;
 
 namespace pP::tests {
     static std::atomic<bool> g_tests_failed{false};
 
-    TestCli parseCli(const int argc, char *argv[]) {
-        UnitTest::Context context{};
-        context.m_fail_with = [](const UnitTest::IRun &run, const char *failure) {
-            g_tests_failed = true;
-            std::cerr << "unit-test <" << run.getTestId().path() << "> failed with: " << failure << std::endl;
-        };
+    [[nodiscard]] config::CliSchema testCliSchema(const std::string_view program) {
+        config::CliSchema schema{};
+        schema.m_program = program;
+        schema.m_description = "Test runner invocation.";
 
-        TestCli cli{};
-        bool shuffle_seen = false;
-        std::random_device rng{};
+        config::OptionDecl filter{};
+        filter.m_canonical = "test.filter";
+        filter.m_description = "Run a specific test (or subtree) by path. "
+                               "If the filter matches no tests, the exit code will be non-zero.";
+        filter.m_aliases.push_back("run-test");
+        schema.m_options.push_back(std::move(filter));
 
-        for (int i = 1; i < argc; ++i) {
-            const std::string_view arg{argv[i]};
+        config::OptionDecl child{};
+        child.m_canonical = "test.child_run";
+        child.m_description = "Mark this process as a child (forked) test runner.";
+        child.m_aliases.push_back("child-run");
+        child.m_is_switch = true;
+        schema.m_options.push_back(std::move(child));
 
-            if (arg == "--run-test" && i + 1 < argc) {
-                context.setFilter(argv[++i]);
-            } else if (arg == "--child-run") {
-                context.markAsChildRun();
-            } else if (arg == "--shuffle") {
-                shuffle_seen = true;
-                unsigned seed = rng();
-                if (i + 1 < argc) {
-                    const std::string_view next{argv[i + 1]};
-                    if (auto [ptr, ec] = std::from_chars(next.data(), next.data() + next.size(), seed);
-                        ec == std::errc{}) {
-                        ++i;
-                    }
-                }
-                context.m_shuffle_seed = seed;
-            } else if (arg == "--no-shuffle") {
-                shuffle_seen = true;
-                context.m_shuffle_seed = std::nullopt;
-            } else if (arg == "--loop" && i + 1 < argc) {
-                cli.m_loops = static_cast<unsigned>(std::stoul(argv[++i]));
-            } else if (arg == "--help" || arg == "-h") {
-                std::println(
-                    "Usage: <test> [--run-test <path>] [--child-run] [--shuffle [<seed>]] [--no-shuffle] [--loop <N>] [--help]\n"
-                    "\n"
-                    "  --run-test <path>   Run a specific test (or subtree) by path\n"
-                    "                  If the filter matches no tests, the exit code will be non-zero\n"
-                    "  --child-run         Mark this process as a child (forked) test runner\n"
-                    "  --shuffle [<seed>]  Randomize test execution order (default: on, auto-seed)\n"
-                    "  --no-shuffle        Disable test shuffling (declaration order)\n"
-                    "  --loop <N>          Run the full test suite N times\n"
-                    "  -h, --help          Show this help message\n");
-                cli.m_loops = 0;
+        config::OptionDecl shuffle{};
+        shuffle.m_canonical = "test.shuffle_seed";
+        shuffle.m_description = "Randomize test execution order (default: on, auto-seed).";
+        shuffle.m_aliases.push_back("shuffle");
+        shuffle.m_value_optional = true;
+        shuffle.m_absent_value = "";
+        schema.m_options.push_back(std::move(shuffle));
+
+        config::OptionDecl no_shuffle{};
+        no_shuffle.m_canonical = "test.no_shuffle";
+        no_shuffle.m_description = "Disable test shuffling (declaration order).";
+        no_shuffle.m_aliases.push_back("no-shuffle");
+        no_shuffle.m_is_switch = true;
+        schema.m_options.push_back(std::move(no_shuffle));
+
+        config::OptionDecl loops{};
+        loops.m_canonical = "test.loops";
+        loops.m_description = "Run the full test suite N times.";
+        loops.m_aliases.push_back("loop");
+        schema.m_options.push_back(std::move(loops));
+
+        return schema;
+    }
+
+    [[nodiscard]] Expected<ParsedTests> parseTestInvocation(
+        const std::span<const std::string_view> args, const std::string_view program,
+        const std::span<const config::Layer> lowerLayers, config::Diagnostics &diagnostics) {
+        const config::CliSchema schema = testCliSchema(program);
+        auto parsed = config::parseCliArgs(args, schema, diagnostics);
+        if (not parsed) {
+            return std::unexpected{parsed.error()};
+        }
+        if (auto valid = config::validateSchema<TestSettings>(diagnostics); not valid) {
+            return std::unexpected{valid.error()};
+        }
+        if (parsed->m_help_requested) {
+            ParsedTests help{};
+            help.m_cli = std::move(*parsed);
+            help.m_help_requested = true;
+            return help;
+        }
+
+        config::CliResult cli_copy{};
+        cli_copy.m_assignments = parsed->m_assignments;
+        cli_copy.m_command = parsed->m_command;
+        cli_copy.m_help_requested = parsed->m_help_requested;
+
+        Array<config::Layer> layers{};
+        for (const auto &layer: lowerLayers) {
+            layers.push_back(layer);
+        }
+        layers.push_back(config::toLayer(std::move(*parsed), "cli"));
+
+        auto resolved = config::resolve<TestSettings>(
+            std::span<const config::Layer>{layers.data(), layers.size()}, diagnostics);
+        if (not resolved) {
+            return std::unexpected{resolved.error()};
+        }
+
+        ParsedTests invocation{};
+        invocation.m_settings = std::move(*resolved);
+        invocation.m_cli = std::move(cli_copy);
+        return invocation;
+    }
+
+    [[nodiscard]] Expected<ParsedTests> parseTestInvocation(
+        const std::span<const std::string_view> args, const std::string_view program,
+        config::Diagnostics &diagnostics) {
+        return parseTestInvocation(args, program, std::span<const config::Layer>{}, diagnostics);
+    }
+
+    [[nodiscard]] Expected<ParsedTests> parseTestInvocation(
+        const int argc, char *const *argv, const std::string_view program, config::Diagnostics &diagnostics) {
+        Array<std::string_view> args{};
+        for (int index = 1; index < argc; ++index) {
+            args.emplace_back(argv[index] != nullptr ? argv[index] : "");
+        }
+        return parseTestInvocation(std::span<const std::string_view>{args.data(), args.size()}, program, diagnostics);
+    }
+
+    [[nodiscard]] bool shuffleEnabled(const ParsedTests &parsed) noexcept {
+        const config::Assignment *last = nullptr;
+        for (const auto &assignment: parsed.m_cli.m_assignments) {
+            if (assignment.m_name == "test.shuffle_seed" or assignment.m_name == "test.no_shuffle") {
+                last = std::addressof(assignment);
             }
         }
-
-        if (!shuffle_seen) {
-            context.m_shuffle_seed = rng();
+        // Order-sensitive precedence: an explicit --shuffle mention always
+        // enables shuffling, while the winning --no-shuffle mention applies
+        // its resolved boolean (so --no-shuffle=false enables shuffling).
+        // With no CLI mention the resolved value covers explicitly supplied
+        // file layers and defaults.
+        if (last != nullptr and last->m_name == "test.shuffle_seed") {
+            return true;
         }
-
-        cli.m_context = std::move(context);
-        return cli;
+        return not parsed.m_settings.m_value.m_no_shuffle;
     }
+
+    namespace {
+        /// Runner-boundary construction from a parsed invocation. Seed
+        /// generation stays here (and in runSuite for auto-seed); parsing
+        /// itself never touches random_device. Shuffle/no-shuffle conflicts
+        /// resolve by CLI order: the last mention wins, matching the legacy
+        /// option-order precedence. Without any CLI mention, an explicitly
+        /// supplied no-shuffle value (file layer) still disables shuffling.
+        [[nodiscard]] TestCli makeTestCli(const ParsedTests &parsed) {
+            TestCli cli{};
+
+            const TestSettings &settings = parsed.m_settings.m_value;
+            cli.m_loops = settings.m_loops;
+            cli.m_context.m_fail_with = [](const UnitTest::IRun &run, const char *failure) {
+                g_tests_failed = true;
+                std::cerr << "unit-test <" << run.getTestId().path() << "> failed with: " << failure << std::endl;
+            };
+            if (not settings.m_filter.empty()) {
+                cli.m_context.setFilter(settings.m_filter);
+            }
+            if (settings.m_child_run) {
+                cli.m_context.markAsChildRun();
+            }
+            cli.m_context.m_shuffle_seed = settings.m_shuffle_seed;
+            cli.m_shuffle_enabled = shuffleEnabled(parsed);
+            if (not cli.m_shuffle_enabled) {
+                cli.m_context.m_shuffle_seed = std::nullopt;
+            }
+            return cli;
+        }
+    } // namespace
 
     int runSuite(TestCli cli, const UnitTest &root) {
         if (cli.m_loops == 0) {
@@ -73,16 +167,24 @@ namespace pP::tests {
         hal::disableSystemErrorReporting();
         hal::installDebugAssertHooks();
 
+        if (cli.m_shuffle_enabled and not cli.m_context.m_shuffle_seed.has_value()) {
+            std::random_device rng{};
+            cli.m_context.m_shuffle_seed = rng();
+        }
+        if (not cli.m_shuffle_enabled) {
+            cli.m_context.m_shuffle_seed = std::nullopt;
+        }
+
         if (cli.m_context.hasFilter()) {
             std::cerr << "[Filter: " << cli.m_context.m_filter_path << "]" << std::endl;
         }
 
         for (unsigned iter = 0u; iter < cli.m_loops; ++iter) {
-            if (iter > 0 && cli.m_context.m_shuffle_seed.has_value()) {
+            if (iter > 0 and cli.m_context.m_shuffle_seed.has_value()) {
                 std::random_device rng{};
                 cli.m_context.m_shuffle_seed = rng();
             }
-            if (cli.m_loops > 1 && cli.m_context.m_shuffle_seed.has_value()) {
+            if (cli.m_loops > 1 and cli.m_context.m_shuffle_seed.has_value()) {
                 std::cout << "[Running tests][Loop: " << iter << "/" << cli.m_loops << "][Shuffle: " << std::hex
                           << std::uppercase << std::setw(16) << std::setfill('0')
                           << cli.m_context.m_shuffle_seed.value_or(0u) << std::dec << "]" << std::endl;
@@ -90,11 +192,25 @@ namespace pP::tests {
             UnitTest::run(cli.m_context, root);
         }
 
-        if (cli.m_context.hasFilter() && cli.m_context.numExecuted() == 0u) {
+        if (cli.m_context.hasFilter() and cli.m_context.numExecuted() == 0u) {
             std::cerr << "error: filter '" << cli.m_context.m_filter_path << "' matched no tests" << std::endl;
             g_tests_failed = true;
         }
 
         return g_tests_failed ? -1 : 0;
+    }
+
+    [[nodiscard]] int runTests(const int argc, char *argv[], const UnitTest &root, const std::string_view program) {
+        config::Diagnostics diagnostics{};
+        auto parsed = parseTestInvocation(argc, argv, program, diagnostics);
+        if (not parsed) {
+            std::println(stderr, "{}", diagnostics.format());
+            return config::kExitInvalidUsage;
+        }
+        if (parsed->m_help_requested) {
+            std::println("{}", config::generateHelp(testCliSchema(program), parsed->m_settings.m_value));
+            return 0;
+        }
+        return runSuite(makeTestCli(*parsed), root);
     }
 }

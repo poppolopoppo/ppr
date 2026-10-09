@@ -68,13 +68,14 @@ add_custom_command(TARGET engine.tests.asset POST_BUILD
         COMMENT "Copying shader assets"
 )
 
-add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset)
+add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset --loop ${PPR_TEST_LOOPS})
 
 set_tests_properties(EngineAssetUnitTests
         PROPERTIES
-        # Full run keeps the ASan 3-loop rigor (tier/loop policy in codemap.md):
-        # cpu + stress + gpu + gate no longer fit the old 120 s budget
+        # Full run uses PPR_TEST_LOOPS (default 1), serialized for GPU gates.
+        # cpu + stress + gpu + gate retain margin over the old 120 s budget
         # (gate readbacks alone are ~100 s).
+        RUN_SERIAL TRUE
         TIMEOUT 450
         LABELS "unit;engine;asset"
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.asset>"

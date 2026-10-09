@@ -30,7 +30,7 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.sim PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-add_test(NAME EngineSimUnitTests COMMAND engine.tests.sim)
+add_test(NAME EngineSimUnitTests COMMAND engine.tests.sim --loop ${PPR_TEST_LOOPS})
 
 # World-gen runs several full-grid (4096x4096) generate passes per suite run;
 # the debug build (Od+RTC+ASan) measures ~69s for the suite, so this timeout

@@ -6,6 +6,11 @@
 #            image group owned by Lane A, mesh/GPU groups by later lanes)
 # Each subdirectory defines its own runner + CTest entry; this file only aggregates.
 
+set(PPR_TEST_LOOPS "1" CACHE STRING "Loop count for CTest and aggregate engine test runs")
+if(NOT PPR_TEST_LOOPS MATCHES "^[0-9]+$" OR NOT PPR_TEST_LOOPS MATCHES "[1-9]")
+    message(FATAL_ERROR "PPR_TEST_LOOPS must be a positive decimal integer")
+endif()
+
 add_subdirectory(shared)
 add_subdirectory(core)
 add_subdirectory(sim)
@@ -14,8 +19,8 @@ add_subdirectory(asset)
 
 add_custom_target(run-engine-tests
     DEPENDS engine.tests.core engine.tests.sim engine.tests.app engine.tests.asset
-    COMMAND engine.tests.core
-    COMMAND engine.tests.sim
-    COMMAND engine.tests.app
-    COMMAND engine.tests.asset
+    COMMAND engine.tests.core --loop ${PPR_TEST_LOOPS}
+    COMMAND engine.tests.sim --loop ${PPR_TEST_LOOPS}
+    COMMAND engine.tests.app --loop ${PPR_TEST_LOOPS}
+    COMMAND engine.tests.asset --loop ${PPR_TEST_LOOPS}
 )

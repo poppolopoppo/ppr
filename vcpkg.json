@@ -10,6 +10,7 @@
     "zstd",
     "lcms",
     "simdjson",
+    "tomlplusplus",
     "glfw3",
     "box2d",
     "vulkan-headers",
