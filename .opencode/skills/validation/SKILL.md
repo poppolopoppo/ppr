@@ -47,7 +47,8 @@ checks are repeated.
    skipped and never reported as passed.
 6. Before the reviewer verdict, run any triggered focused measurement or boundary
    test not already covered. Reuse valid evidence for unchanged code,
-   configuration, and workload.
+   configuration, and workload. For build-performance triggers, use
+   `build-system`'s Build-performance workflow and the gate below.
    Invoke `code-reviewer` and incorporate its verdict and findings without
    repeating its taxonomy. A failed or unresolved finding leaves validation
    incomplete even when commands pass.
@@ -78,6 +79,17 @@ checks are repeated.
   request `code-reviewer`'s docs-only gate.
 - Config-only changes run syntax/reference checks plus the smallest affected
   configure/build/test command; expand only if they alter wider behavior.
+
+## Triggered build-performance gate
+
+For triggers defined in `build-system`'s Build-performance workflow, retain the
+representative workload evidence. For optimization claims compare baseline and
+candidate with identical workload, toolchain, parallelism, and cache policy.
+Repeat paired runs and report samples plus spread, not one percentage. Use
+UNINSTRUMENTED timing for the improvement claim; tracing explains it. Preserve
+correctness tests, module dependencies, sanitizers, and requested output semantics.
+Do not invent a global percentage threshold. Missing required evidence leaves
+the claim unverified; a successful capture alone does not prove a fix.
 
 ## C++ formatting gate
 
@@ -198,5 +210,8 @@ Report the selected scope, configure/build/test/inspection results, reviewer
 verdict, failures or skips, and rerun evidence. Include final CLion inspection
 timeouts in the inspection-unavailable/skipped result with their evidence. Do
 not claim a green result for checks that were not executed.
+For triggered build-performance work, reference the evidence directory and give
+the measurement verdict, explicitly separating measured and pending evidence and
+workflow success from any unverified optimization/fix claim.
 Use commands and statuses, concise excerpts, evidence references, and one verdict;
 do not duplicate design review.

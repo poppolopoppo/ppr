@@ -53,7 +53,7 @@ game/main.cpp → game.config / game.display / game.colony.*
   `Application` owns the run loop + platform/services/shader-RHI-`Renderer`
   bootstrap; `ApplicationEditor` implements `IClientService` and owns scene,
   player, camera, viewport, input-context, triangle pass, and UI state.
-  `WindowViewport` supplies window geometry; `CameraSnapshot` carries the
+  Interactive rendering defaults to the Application-owned dedicated render lane; headless rendering stays inline. Main builds owned frame/pass/UI requests and the owner lane applies them; consumption acknowledgments and GPU completion are distinct. See [frame map](lib/engine/app/frame/codemap.md). `WindowViewport` supplies window geometry; `CameraSnapshot` carries the
   derived viewport size/aspect (`m_viewport_size`/`m_aspect_ratio`). `Renderer`
   consumes `initializer_list<DrawSubmission>` through `render`/`renderToTexture`
   and `initializer_list<SurfaceRenderPass>` through `renderAndPresent`, while
@@ -136,4 +136,4 @@ Validation scope is defined by [validation](.opencode/skills/validation/SKILL.md
 Keep this document focused on finding code. Update links and summaries with
 their corresponding source changes; put durable rules in `AGENTS.md` instead.
 
-- Diagrams: rendered PlantUML galleries under `docs/diagrams/` — `app-game-engine-arch/`, `engine.app/`, `readme/`.
+- Diagrams: rendered PlantUML galleries under `docs/diagrams/` — `app-game-engine-arch/`, `engine.app/`, `readme/`, and `build-report/` (measured build costs, critical-path table, and Ninja graph downloads).

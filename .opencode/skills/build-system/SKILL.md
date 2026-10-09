@@ -2,7 +2,7 @@
 name: build-system
 description: >
   PPR CMake presets, target setup, dependency registration, module workarounds,
-  and sanitizer guidance.
+  sanitizer guidance, and build-performance diagnosis.
 ---
 
 # Build System
@@ -115,9 +115,75 @@ build target, not a test executable.
   C++23 language prerequisite, but the hidden `gcc-dev` and `gcc-rel` presets
   do not support this project's module builds and are not validation candidates.
 - On Windows, the normal validation set is `msvc-dev`, `msvc-live`, and
-  `msvc-rel` (`msvc-profile` is the instrumented Release profiling preset,
-  not part of normal validation); on Linux/Darwin it is `clang-dev` and `clang-rel` unless the
+  `msvc-rel` (`msvc-profile` is the instrumented Release runtime-profiling preset,
+  not build-time profiling or part of normal validation); on Linux/Darwin it is `clang-dev` and `clang-rel` unless the
   requested scope specifies otherwise.
+
+## Build-performance workflow
+
+Always-on, cheap: for already-required builds retain the exact command,
+preset/targets, exit code, wall time, log path, and whether configure/regeneration
+occurred. This adds no builds or ETW captures.
+
+Activate focused measurement for explicit build-speed work or an improvement
+claim; broad import/re-export/header dependency changes; module/source splitting,
+target-graph, compiler/linker flag, custom-command, or scheduling changes; or
+unexpected fan-out, repeated regeneration, or unexplained slowdown.
+
+The build hot-path is edit-to-ready latency for a named edit class, target closure,
+and preset, not the slowest TU.
+
+| Change under investigation | Representative workload |
+|---|---|
+| Implementation-local | Warm implementation edit → affected executable/test |
+| Interface/import/dependency | Interface edit → dependent closure; clean build if topology changes |
+| Flags, scheduling, source organization | Clean configured-tree build plus representative incremental build |
+| CMake/custom commands | Configure/regenerate and no-op behavior |
+| Release code generation/LTCG | `msvc-rel`, not extrapolated Debug results |
+| Edit-and-Continue | `msvc-live` |
+
+Default to `msvc-dev`; select other presets by risk. Separate dependency
+acquisition and configure from compilation. Distinguish clean outputs from cold
+OS cache. Use an isolated tree for cleaning/source-mutation experiments; NEVER
+clean the developer's active tree.
+
+Retain artifacts in `out/build-perf/<case>/<baseline-or-candidate>/<run>/`:
+`manifest.json`, `build.log`, `ninja.before.log`, `ninja.after.log`, `summary.md`,
+and conditional `compiler.json`, `raw.etl`, or `configure.json`. The manifest
+records revision/dirty identity, exact commands, working/build directories,
+preset/targets/parallelism, toolchain versions, edit/reset and cache preparation,
+wall time, exit codes, capture status, and artifact paths. The summary separates
+measured from pending evidence and records samples/spread, executed-edge count,
+top-five attributable costs, proposed cause, and verdict. Read summaries first.
+
+Isolate the current Ninja invocation; detect log compaction and deduplicate
+multi-output edges. Never sum nested compiler spans into wall time or call a long
+TU the critical path without dependency evidence. `vcperf` remaps process/thread
+IDs for visualization: they are not physical-concurrency evidence. The builder
+owns a unique capture session and stops only that session even on build failure;
+preserve build failure separately from capture/conversion failure. Unsupported
+tools/permissions mean profiling unavailable, not success.
+
+### First worked example — Packet
+
+Measured-dev: revision `bb546b05f107d54e8163970e78e908c018681a3a`
+(2026-10-09), warm single-TU mtime edit of
+`lib/engine/app/frame/App.Frame.Packet.cpp`, `engine.app`, `msvc-dev`, parallelism
+8. Evidence: `out/build-perf/packet/baseline/run1/summary.md` and `manifest.json`.
+Readiness no-op ~4.99s (dyndep regeneration only); measured build wall 609.62s,
+Packet.obj Ninja 608.09s, FrontEndPass 607.81s, BackEndPass 0.163s → 99.97%
+frontend. Build and `/level2` capture exited 0; no dropped events/buffers. This
+passes the plan §2 actionable workflow gate, not the full pilot ladder or §8 fix
+gate. Frontend mechanism and RAM-phase attribution remain unresolved.
+
+Pending-live: `msvc-live` trace; also pending are the interface-rebuild ladder,
+failure-teardown validation, and paired uninstrumented comparisons. The existing
+live repro without ASan rejects ASan as primary, but is not a measured live trace
+or a speedup. The next experiment is `/showIncludes` inventory, then one
+`/level3` + `/templates` capture with unchanged workload.
+
+Non-goals: new presets, always-on ETW, GUI automation, telemetry, compiler
+upgrades, module-cache enablement, or disabling checks/weakening build semantics.
 
 ## Target setup
 
@@ -205,4 +271,9 @@ configure/build evidence to the validation owner.
 | Find existing CMake/preset patterns | `@explorer` |
 | Apply bounded CMake/preset edits | `@fixer` (edit only; no build/run) |
 | Configure, build, and test | validation owner / builder lane |
+| Capture and measure build performance | validation owner / builder lane |
+| Apply bounded performance edits | `@fixer` (edit only; no build/run) |
+| Interpret build-performance evidence once | reviewer / `@oracle`; validation incorporates the verdict |
 | Diagnose a persistent toolchain or linker failure | `@oracle` with persistent-shell or debugger evidence |
+
+Benchmark execution — including workload-file touching, `vcperf` start/stop, `cmake --build`, and trace-export commands — belongs to the orchestrator/builder lane, never read-only `@explorer`; a cheaper model may be used within that authorized execution lane.

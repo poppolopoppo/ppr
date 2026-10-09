@@ -1,36 +1,95 @@
 ---
-description: Generate PlantUML diagrams using the toy theme with consistent color-coded boxes.
+description: Generate focused PlantUML diagrams for code architecture, workflows, data, timelines, and reports using the toy theme.
 ---
 
-Load the `plantuml-skill` skill (repo path `.opencode/skills/plantuml-skill`) and the `verification-planning` skill (user-global) and follow their workflows to generate the diagrams described by the user. The user's diagram description is: `$ARGUMENTS`. If `$ARGUMENTS` is empty or whitespace-only, ask the user for clarification — what diagram type, scope, and key elements to include — and do not proceed until provided.
+The user's request is: `$ARGUMENTS`.
 
-If `plantuml-skill` is unavailable (not installed or fails to load), stop and tell the user — never draw without it. If `verification-planning` is denied or unavailable, route verification through the orchestrator as a substitute (proportionate claims + `file:line` evidence as above) and record the substitution in the Step-8 report — never proceed silently unverified. Skill names/paths are pinned: `plantuml-skill` = `.opencode/skills/plantuml-skill`, `verification-planning` = user-global.
+If the request is empty or whitespace-only, ask what to visualize and stop until
+the user supplies a scope. Otherwise infer reasonable defaults; ask only when
+missing information materially affects correctness, disclosure, or diagram choice.
 
-## Decomposition (N Focused Diagrams)
+Load `plantuml-skill` from `.opencode/skills/plantuml-skill` and the user-global
+`verification-planning` skill before drawing. If `plantuml-skill` cannot load,
+stop and explain. If verification-planning is unavailable or denied, use an
+explicit proportionate verification plan through the orchestrator; if no
+orchestrator is available, state and apply that plan directly. Report the
+substitution.
 
-Split `$ARGUMENTS` into N focused diagrams — one module/aspect per diagram — per the one-module-per-diagram rule in `.opencode/skills/plantuml-skill/references/from-source-code.md` (scope large inputs: split rather than cram). Each diagram gets its own `.puml`/`.svg` pair (see Output Layout). N is capped at 5 per query — if more are needed, split across runs or ask the user which 5 to draw first.
+Use the skill for PlantUML syntax and rendering guidance. This command overrides
+its defaults for scope, theme, palette, SVG deliverables, backend selection,
+retry limits, and publication safety. Never remove or change the toy theme as a
+fallback.
 
-## Verification (Proportionate, First)
+## Scope: 1–8 Focused Diagrams
 
-Load `verification-planning` BEFORE drawing. Keep it proportionate: 1 factual claim per diagram, each backed by 1–2 codegraph/CLion `file:line` refs — never run a full 6-step verification per diagram. Record each claim→evidence pair, then close the path post-render with an SVG check (claim→evidence→SVG check, reported in Step 8).
+Produce the smallest useful set, not automatically eight diagrams. Each diagram
+answers one question or explains one coherent aspect.
 
-## Mandatory Theme Override
+- Code: use the skill's `references/from-source-code.md`. Keep detailed views
+  focused on one module/package. A dependency overview or cross-module sequence
+  may span modules when those relationships are the subject.
+- Reports and documents: split by question, process, dataset, or time period,
+  not artificial code-module boundaries.
+- Mixed requests: identify the evidence source separately for each view.
 
-EVERY `.puml` file MUST start with `!theme toy` immediately after `@startuml`. This is mandatory — never use `!theme plain`, `!theme cerulean`, `!theme blueprint`, `!theme aws-orange`, `!theme vibrant`, or any other theme. The toy theme is the only allowed theme for this command.
+Choose the type that fits the content: component/class for structure, activity
+for workflows, sequence for interactions, ER/data-flow for data, state for
+lifecycles, and Gantt or another suitable supported type for timelines.
+Do not invent dates, durations, quantities, or causal relationships to fill gaps.
+Label illustrative scenarios, proposals, and assumptions explicitly.
 
-Example header:
+Cap the batch at eight diagrams. If more are needed, ask which eight to prioritize
+or propose follow-up batches. Do not silently omit requested scope or cram extra
+views into unreadable diagrams.
+
+Before drawing, make a compact inventory:
+`NN | slug | question/type | evidence source | key checks`.
+Reuse it for the gallery and final report.
+
+## Verification: Proportionate and Source-Appropriate
+
+Verify the material entities, relationships, ordering, values, and dates shown.
+Use the smallest sufficient evidence:
+
+- Code: relevant source and build declarations; use CodeGraph when available
+  under repository policy. Cite `file:line`. Use runtime/debugger evidence only
+  when the claim actually requires runtime observations.
+- Reports/documents: cite the document and section/page, or URL and section.
+- Data: identify the input, relevant rows/columns, units, time range, and any
+  transformation used.
+- User-described designs: identify the user specification as the source and
+  label the result as proposed or illustrative, not independently observed.
+
+Reuse shared evidence across diagrams. Do not repeat a full verification
+workflow per diagram. Record one or a few representative claim→evidence checks
+per view; these summarize verification rather than excuse unsupported content.
+Mark uncertainty and omitted scope.
+
+Content verification, SVG validity, and visual readability are separate checks.
+A successful render does not prove the depicted facts.
+
+## Mandatory Theme
+
+Every `.puml` must contain `!theme toy` immediately after its opening directive.
+Use matching delimiters for the selected type, such as `@startuml`/`@enduml` or
+`@startgantt`/`@endgantt`. Never substitute another theme.
 
 ```plantuml
 @startuml
 !theme toy
 title Example Architecture
-' ... rest of diagram
+' ... diagram content
 @enduml
 ```
 
+If the selected type/backend cannot render with toy, report the incompatibility
+and propose a compatible representation; do not silently drop the theme.
+
 ## Color Coding Conventions
 
-All diagrams use a consistent palette on top of the `toy` theme. Apply inline `#HexColor` on elements to encode semantics. Colors are chosen to remain accessible and distinct under the toy theme.
+Use this palette consistently across the batch. Select only categories that
+apply; not every diagram needs every color. Use labels/shapes as well as color,
+and check contrast in the rendered result.
 
 | Color | Hex | Usage |
 |-------|-----|-------|
@@ -42,72 +101,173 @@ All diagrams use a consistent palette on top of the `toy` theme. Apply inline `#
 | Purple | `#CF9FFF` | shared libs / utilities |
 | Grey | `#B0B0B0` | legacy / deprecated / optional |
 
-Usage — per-kind WINNER forms only (empirically pinned by Kroki probe 2026-09-05, server `1.2026.6`, `!theme toy`; re-probe if the backend version changes):
+For non-code reports, use corresponding meanings such as participants, process
+steps, external dependencies, risks, data, shared resources, and optional work.
+Explain the mapping; do not repurpose colors as an unexplained quantitative scale.
 
-Activity actions — post-semicolon stereotype (the ONLY form that fills the box):
+Known-working forms with toy (historical probe: PlantUML `1.2026.6`, 2026-09-05):
+
+Activity actions — post-semicolon stereotype:
 
 ```plantuml
-:Application::run entry;<<#6CB4EE>>
-:initialize - platform init;<<#77DD77>>
+:Receive request;<<#6CB4EE>>
+:Process request;<<#77DD77>>
 ```
 
-Declarations (sequence participants, actors, components, databases, clouds) — trailing `#HEX`:
+Declarations — trailing color:
 
 ```plantuml
 actor "Client" as client #6CB4EE
-participant "P" as p #6CB4EE
-component "User Service" as svc #77DD77
-cloud "Payment Gateway" as pay #FFB347
-database "DB" as db #FDFD96
-component "Auth Lib" as auth #CF9FFF
-rectangle "Legacy Batch" as legacy #B0B0B0
+participant "Processor" as processor #77DD77
+component "Service" as service #77DD77
+cloud "External System" as external #FFB347
+database "Data" as data #FDFD96
+component "Shared Utility" as shared #CF9FFF
+rectangle "Optional Step" as optional #B0B0B0
 ```
 
-Legend swatches — font-colored `■` glyph (renders as a visual square):
+Do not use `:Label #HEX;` or `#HEX:Label;` for activity fills, or
+`<back:#HEX>` for legend swatches. These produced incorrect output in the probe.
+For other diagram types, use their native coloring syntax and inspect the result;
+do not assume declaration or activity syntax is universal.
+
+When three or more semantic colors are used, include a legend covering every
+used category with visual swatches:
 
 ```plantuml
 legend
-<font color="#6CB4EE">■</font> entry points / actors
-<font color="#77DD77">■</font> application / services
+<font color="#6CB4EE">■</font> participants
+<font color="#77DD77">■</font> processing
+<font color="#FFB347">■</font> external dependencies
 endlegend
 ```
 
-(`<color:#HEX>■</color>` renders byte-identically and is an accepted alias; prefer `<font color>` as canonical.)
+Check color application during normal visual inspection. Run a small focused
+probe only for an unfamiliar syntax/type, a known backend-version change, or
+unexpected rendering—not once per diagram. Never claim the historical probe
+version is the current backend version.
 
-BANNED forms (probe-proven broken):
+## Output and Rerun Safety
 
-- `:Label #HEX;` — suffix inside the action label: box stays gray (`#F1F1F1`) and the hex leaks as literal text (probe `probe-a1-activity-suffix.svg`: `<rect fill="#F1F1F1">` + `<text>Test A #6CB4EE</text>`). This was the Round-1 bug in `01-application-lifecycle`.
-- `#HEX:Label;` — prefix: deprecated; gray box plus a rendered deprecation banner (probe `probe-a3-activity-prefix.svg`).
-- `<back:#HEX>..</back>` for legend swatches: renders an `feFlood` filter wash, not a crisp square (probe `probe-c3-legend-back.svg`).
+Publish under `docs/diagrams/<topic>/`:
 
-Correction 2026-09-05: the pre-probe hypothesis blamed `:Label;<<#HEX>>` for the gray+literal-text bug; the probe refutes it — `:Test B;<<#6CB4EE>>` yields `<rect fill="#6CB4EE">` with clean `<text>Test B</text>` (probe `probe-a2-activity-control.svg`). Pin the winners above, not the hypothesis.
+- `NN-slug.puml` and `NN-slug.svg` per diagram; `NN` is `01`–`08`.
+- `index.html` with a heading, concise description, evidence/assumptions,
+  validation status, and relative source/image links for each diagram.
+- Display each SVG with a relative `<img src="NN-slug.svg">`, meaningful alt
+  text, and responsive sizing. Use embedded CSS with a dark gallery palette.
+  Do not fetch scripts, styles, fonts, or images from the network.
 
-Apply colors consistently — the same semantic category always uses the same hex across all diagrams.
+Keep stems and anchors stable during refinement. Escape HTML text and attributes;
+treat user/report labels as data, not HTML or executable PlantUML directives.
+Do not introduce remote includes or externally loaded assets.
 
-Legend behavior: if a diagram uses 3 or more color types, include a small `legend` block listing each used color as a VISUAL swatch (`<font color="#HEX">■</font>`) followed by its meaning label — never bare hex text (e.g. never write `#6CB4EE = entry`). Cover every color type used in that diagram.
+An explicit topic takes precedence over an inferred topic, but must still pass
+sanitization. Topic components may contain lowercase ASCII letters, digits, and
+single dashes, separated by single dots (for example `engine.app`). Slugs use
+lowercase ASCII letters/digits separated by single dashes. Remove or replace
+other characters; trim separators. Use `diagram` if empty, and prefix Windows
+reserved device names with `diagram-`.
 
-## Output Layout
+Ensure all resolved output paths remain under `docs/diagrams/`; reject symlink
+or junction traversal outside that directory. If sanitization collides with an
+existing unrelated topic, ask before overwriting it. Quote filesystem arguments;
+never interpolate raw request text into shell commands.
 
-Write deliverables under `docs/diagrams/<topic>/`:
+Stage new renders in an approved scratch directory. Never purge the topic
+directory. Preserve existing deliverables until the replacement batch validates.
+Replace only the intended output files and publish the gallery last. Preserve
+unrelated files; remove obsolete generated pairs only with explicit approval.
+Repeated successful runs must not append duplicate entries or versioned copies.
 
-- One `NN-slug.puml` + `NN-slug.svg` pair per diagram (`NN` = zero-padded index `01`–`05`, `slug` = short kebab-case aspect name).
-- One `index.html` gallery: dark theme via an EMBEDDED `<style>` dark palette (no external CSS fetch — must render over `file://` offline). Per-diagram section = `<h2>` heading + structured `<ul>` bullets (what it shows; flow summary; verification evidence with `file:line` refs) + hyperlinks to local files: relative `<a href="NN-slug.svg">` and `<a href="NN-slug.puml">` plus evidence source links (e.g. `<a href="../../../lib/engine/app/...">`) where relevant.
-- Reuse the same stable `NN-slug` stem across the `.puml`/`.svg` files and the gallery anchors.
+Source links should be relative where possible. Show `file:line` as citation
+text; do not promise local HTML links will navigate to a source line. External
+evidence links may be optional navigation, but the gallery must display offline.
 
-Sanitize `<topic>` and each `slug`: lowercase alphanumeric + dashes, plus single `.` allowed in `<topic>` (e.g. `engine.app`); strip path traversal (`..` sequences, `/`, `\`, `:`); empty result falls back to `diagram`. Derive `<topic>` from the query nouns in kebab-case; fall back to `diagram` when no nouns apply; an explicit user-provided topic always wins. Reruns are idempotent: re-running the same `<topic>` purges that topic directory first and regenerates it; never append duplicate `NN-slug` pairs, never touch other topic directories.
+## Rendering Workflow
 
-## Workflow
+1. **Shared setup, once per batch.**
+   Check renderer tooling and choose one backend:
+   explicit user choice, otherwise nonempty `KROKI_URL`, otherwise reachable
+   `http://localhost:8000`, otherwise consider `https://kroki.io`.
+   An explicitly selected backend failing is not permission to switch.
 
-1. Follow `plantuml-skill` Steps 1-3 per diagram: check dependencies (`curl --version`), pick the best diagram type for that diagram's aspect of `$ARGUMENTS`, and write `docs/diagrams/<topic>/NN-slug.puml` with `@startuml`/`@enduml` and the mandatory `!theme toy` header plus color-coded elements from the table above.
-2. Export each `.puml` via Kroki per Step 4 — POST the file to `{kroki}/plantuml/svg`, where `{kroki}` resolves by precedence: `$KROKI_URL` if set, else local `http://localhost:8000`, else public `https://kroki.io`. For sensitive diagrams prefer local Kroki and warn before uploading to public kroki.io.
-3. Validate and self-correct per Step 5 — treat each export as failed unless ALL hold: HTTP `200`, content-type `image/svg+xml`, body starts with `<svg`, size > 1KB, body ends with `</svg>`. On `400`, `cat` the output file for Kroki's error line, fix the flagged `.puml` line, and re-render. Retry up to 3 times with backoff, then follow the skill's 6-step degradation ladder (SVG → PNG fallback → local/error note) before surfacing the raw error — never fail silently.
-4. Self-check per Step 6 — read each rendered SVG for label truncation, overlap, orientation, edge spaghetti, wrong type, or low contrast; fix and re-render/re-validate (max 2 rounds per diagram).
-5. After Steps 5-6 pass for all N diagrams, write `docs/diagrams/<topic>/index.html` embedding/linking every SVG with its description, then follow Steps 7-8: show the gallery, handle refinement requests with minimal `.puml` edits, and report per Step 8 below.
+   Before sending source, disclose the destination. For sensitive or uncertain
+   content, require explicit approval before using any non-local backend,
+   including a remote `KROKI_URL`. If approval is absent, stay local or stop with
+   source-only output. Never silently fall back to a public endpoint or follow
+   a redirect that changes the approved destination. Use bounded connection and
+   request timeouts. Do not install or launch services without authorization.
+
+2. **Generate.**
+   Write the planned `.puml` files with matching delimiters, toy, the palette,
+   and evidence-grounded content. Share source discovery across views.
+
+3. **Export and structurally validate.**
+   POST each file to `{backend}/plantuml/svg`, capturing HTTP status, response
+   headers, body, and transport errors separately. Success requires:
+   - successful transport and HTTP `200`;
+   - media type `image/svg+xml` (allow parameters such as charset);
+   - nonempty, well-formed XML whose root is SVG in the SVG namespace.
+
+   Allow an XML declaration, BOM, comments, and surrounding whitespace.
+   Do not impose an arbitrary minimum file size. Parse without resolving
+   external entities or fetching DTDs. Reject HTML/text error bodies and rendered
+   PlantUML error diagnostics; an SVG-shaped error is not a successful diagram.
+
+4. **Correct and visually inspect.**
+   Read syntax-error responses and fix the relevant source. Retry transient
+   transport/rate-limit/server failures with bounded backoff; do not retry
+   authentication or configuration failures blindly.
+
+   Allow at most three export attempts per diagram in this batch, including
+   syntax fixes, transient retries, and visual corrections. Inspect the rendered
+   image for clipped labels, overlap, flow direction, edge clarity, applied
+   colors, contrast, and error messages. XML inspection alone is not a visual
+   check. If SVG cannot be viewed directly, use a locally produced raster preview
+   where available; it does not replace the SVG deliverable.
+
+   Simplify syntax or layout without changing meaning or removing toy.
+   Do not silently remove relationships, notes carrying facts, or requested scope.
+   If visual inspection is unavailable, say so rather than claiming readability.
+   Stop after the attempt budget and report remaining problems.
+
+5. **Publish or report incomplete output.**
+   After all planned SVGs pass structural validation, publish the batch and
+   offline gallery, carrying any visual-review limitations explicitly.
+   If any SVG fails, preserve the previous gallery and report staged sources,
+   successful renders, and failures. Publish a partial gallery only if the user
+   requests it, with missing views clearly identified.
+
+   A local renderer is an alternative only when available and explicitly selected
+   after a Kroki failure; apply equivalent SVG and visual checks and report it.
+   PNG-only output is incomplete for this command, never disguised as SVG success.
+
+6. **Refine.**
+   Apply minimal edits to affected diagrams, revalidate their outputs, and update
+   their gallery entries. Do not regenerate unaffected views or restart discovery
+   without a reason.
 
 ## Durability
 
-`docs/diagrams/` is versioned deliverable output (commit-tracked). Scratch/intermediate renders stay in `.slim/tmp/` per AGENTS.md temp rules. Greenfield only — do NOT migrate `.slim/tmp/diagrams*/` pilots into `docs/diagrams/`. `docs/` is a new top-level directory: leave a codemap note for it (pointer in the root `codemap.md`) when first created.
+Successful deliverables belong under versioned `docs/diagrams/`, not scratch
+storage. Do not stage or commit automatically. Keep diagnostics and intermediate
+renders in approved scratch storage; do not migrate unrelated pilot output.
+Update repository navigation only when a genuinely new documented location
+requires it.
+
+Review sources, SVG metadata, and gallery text for sensitive content before
+publication: local rendering alone does not make an artifact safe to commit.
 
 ## Step-8 Report
 
-Report: `docs/diagrams/<topic>/` path, N-of-N rendered counts (`.puml` + `.svg` + gallery), per-diagram claim→evidence→SVG check lines, backend used per diagram, whether source left the machine, plus any verification substitution (orchestrator-routed) and the probe backend/version when colors were (re-)pinned.
+Report:
+
+- Output/gallery path and requested N; structurally valid SVG count out of N.
+- Which artifacts were published versus left in scratch.
+- Per-diagram claim→evidence summary and separate structural/visual check status.
+- Backend used and whether source left the machine; report version only if known.
+- Assumptions, omitted scope, failed renders, and unperformed checks.
+- Any verification substitution or focused color-probe result.
+
+Never report N-of-N completion when outputs or required checks are missing.

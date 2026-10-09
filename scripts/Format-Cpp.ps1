@@ -324,7 +324,7 @@ try {
                 if ($SourceExtensions -notcontains [IO.Path]::GetExtension($rel)) { continue }
                 $full = Join-Path $RepoRoot $rel
                 if (Test-Path -LiteralPath $full -PathType Leaf) {
-                    $work += New-WorkItem $full $false (Get-ChangedRanges $full $Base)
+                    $work += New-WorkItem $full $false @(Get-ChangedRanges $full $Base)
                 }
             }
 
