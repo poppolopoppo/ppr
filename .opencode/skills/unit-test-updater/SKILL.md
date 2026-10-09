@@ -96,7 +96,7 @@ For each changed observable behavior, classify the required test action:
 3. **Includes:** `module;` + `#include "pP/UnitTest.h"` (always) then `module engine.tests.core;` + `import engine.core;` (`engine.app` for app tests) + `import std;`. Add `"pP/Macros.h"` or third-party headers to the global fragment only when the test body needs them (e.g. `App.Camera.Tests.cpp` includes both `Macros.h` and `UnitTest.h`; `App.Render.Tests.cpp` includes `slang.h`)
 4. **Namespace:** Leaves in `namespace pP::tests::detail`; group/root nodes in `namespace pP::tests`
 5. **Nested grouping:** Use inner namespaces under `detail` for sub-grouping
-6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`)
+6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`). The macro expands to a variable declaration, so every body ends with `};` — a bare `}` is a syntax defect that cascades into misparsed-declaration errors far from the site.
 7. **Parent tests:** one TU-local group plus one accessor per root-visible node: `const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` then `const UnitTest &<group>Tests() noexcept { return <group>; }` — file-local sub-groups need no accessor; direct-root singleton leaves use `const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`; never spell `extern` except for the `core`/`app` roots
 8. **Top-level registration:** In the suite root `.cpp` (`Core.Tests.cpp` / `App.Tests.cpp`), forward-declare the accessor (`const UnitTest &<group>Tests() noexcept;`) and call it in the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET) in the same change
 9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
@@ -174,6 +174,11 @@ tree level and change its path); see `module-architect`.
 1. Forward-declare the accessor: `const UnitTest &<subsystem>Tests() noexcept;`
 2. Call `<subsystem>Tests()` in the root `_.recurse({...})` in fixed order (test
    paths `core/<...>` / `app/<...>` derive from these names — keep them stable)
+3. Leaves covered only by exact-path CTest shards (`--run-test` token lists in
+   the suite `CMakeLists.txt`) must be added to exactly one shard's token list;
+   token values have a length budget (~1K — split shards when exceeded) and the
+   exact-once coverage-count comment must stay truthful (bump it with every
+   addition, never let shards overlap)
 
 ---
 

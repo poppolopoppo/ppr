@@ -12,7 +12,10 @@ application.
 
 ## Design
 
-- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`, `:frame.packet`,
+- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`,
+  `:display` (`DisplayController` pacing policy + helpers) + `:display.settings`
+  (`DisplaySettings` schema + `displayCliOptions`) + `:startup.settings`
+  (`StartupSettings` schema + `startupCliOptions`), `:frame.packet`,
   `:input.*` (7, incl. `:input.batch` owned pump batches),
   `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
   `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
@@ -20,17 +23,26 @@ application.
   `:ui.imgui`.
 - `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
   `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerManager`
-  `m_application_clock`, `optional<TimeSpan> m_target_frame_time` plus `m_has_background_priority` (background 5 fps
-  throttle surfaced via `getTargetFrameTime`), `const unique_ptr<IPlatform> m_platform`
+  `m_application_clock`, `optional<TimeSpan> m_target_frame_time` (single foreground CPU authority) plus
+  `DisplayController m_display_controller` (committed `DisplaySettings`, one pending
+  candidate, provenance/revision, ack-only publication; default follow-vsync) and
+  `bool m_presentation_vsync` (requested vsync half: applied to fresh renderers pre-lane-start;
+  post-start changes go through lane-affine surface transactions with commit-on-acknowledgement) plus `m_has_background_priority` (background-throttle
+  activation surfaced via `getTargetFrameTime`), `const unique_ptr<IPlatform> m_platform`
   (declared before `ServicesStore m_services` so reverse-destruction releases store observers before platform owners),
   `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`,
   `Array<string>` args, `string` name, `const ApplicationDomain m_domain`, `directory_entry` dirs
   (install/content/working resolved; config left default). Ctor wires `IPlatform::create()` plus
   `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")` + `main_group` (`App.Application.cpp:31`). Forward-declares `IClientService`. Accessors:
   `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services/TimerManager` (const + mutable overloads),
-  `getTargetFrameTime`, dir getters; `requestExit(clause = {})` (empty raises only the `m_exit_requested` latch — `run()` returns success; nonzero latches the cause + emits), `isExitRequested()` (latch OR latched cancel error), `setBackgroundPriority(throttle)`,
+  `getTargetFrameTime` (Phase 3 §4.2 overlay: `max(foreground or zero, 200ms)` when background priority is
+  active with the legacy opt-out off and `display.throttle_unfocused` enabled — a slower explicit cap is
+  preserved; otherwise the foreground target), dir getters; `requestExit(clause = {})` (empty raises only the `m_exit_requested` latch — `run()` returns success; nonzero latches the cause + emits), `isExitRequested()` (latch OR latched cancel error), `setBackgroundPriority(throttle)`,
   `setTargetFrameDuration(TimeDuration/nullopt)`,
-  `setTargetFrameRate(fps)` (non-positive clears throttle), `run()`.
+  `setTargetFrameRate(fps)` (non-positive clears throttle), `setDisplaySettings(DisplaySettings)` (stages a
+  pending `DisplayController` candidate; foreground CPU target + acknowledged generation mirror commit only
+  on lane acknowledgement — never direct renderer writes), `displayController()`/`displayView()`/`presentationVsyncRequested()`/`unfocusedThrottleEnabled()`
+  (telemetry + focus policy), `run()`.
 - `ApplicationDomain` — immutable-after-construction bitfield struct: `m_is_headless` (false), `m_is_interactive`
   (true), `m_needs_presence` (false), `m_needs_rendering` (true), `m_needs_user_interface` (true); `ApplicationEditor`
   fixes these values at construction.
@@ -41,8 +53,10 @@ application.
    `unique_ptr<TrianglePass>` + `unique_ptr<GridPass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
    getters (input getters wrap `&m_main_input_context->m_context`) plus protected `getApplication()` returning `this`.
    Owns `unique_ptr<InputBackgroundLatch> m_input_background_latch` (registrar == owner; actuator borrows it,
-   detach-before-destroy) + device-disconnect handle. Private `onMainWindowFocused_(window, focused)` throttles to
-   5 fps via `setBackgroundPriority` and, on focus loss, resets the routing latch + camera-controller motion state.
+   detach-before-destroy) + device-disconnect handle. Private `onMainWindowFocused_(window, focused)` sets
+   background priority via `backgroundThrottleWanted_` (raw focus loss); the legacy opt-out and
+   `display.throttle_unfocused` apply centrally in `getTargetFrameTime`/`displayView`. On focus loss the
+   callback also resets the routing latch + camera-controller motion state.
     Public `getGridPass()` exposes editor-owned tile staging; `replaceMainCameraController(unique_ptr<ICameraController>,
     ECameraProjection)` prepares a fresh mapping, detaches the previous mapping and resets input, then attaches the
     replacement at camera priority (invalid null → `invalid_argument`; absent editor state → `not_connected`; projection + cut `App.Application.Editor.cpp:224-225`).
@@ -107,8 +121,8 @@ application.
    motion) → `app_services.inject()` deducing `IRhiService/IShaderService` → `TrianglePass::initialize(rhi, shader,
     getContentDir())` → `GridPass::initialize(rhi, shader, getContentDir())` →
     `ui::createImGuiService()->initialize(input_context, rhi, shader, latch.m_foreground_priority)` →
-   `latch.initialize(context, ui-listener)` → `IWindowService::createWindow({title = getName(), 1280x720})` → refresh-rate
-   throttle from the monitor video mode → `WindowViewport(main_window, ViewportLayout{})` →
+   `latch.initialize(context, ui-listener)` → `IWindowService::createWindow({title = getName(), 1280x720})` → approved follow-vsync default (no monitor-derived CPU cap; monitor refresh stays informational) →
+   `WindowViewport(main_window, ViewportLayout{})` →
    `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
 4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
    `camera->updateModel(dt, controller, viewport->getViewport())` → packet construction (the run-level gate
@@ -153,6 +167,19 @@ application.
 - `App.cppm` — umbrella re-export list incl. `:application_editor` + `:service.client` (no runtime code).
 - `App.Application.cppm/.cpp` — slim `Application` base: domain/run-loop/platform/services/shader-RHI-renderer bootstrap.
 - `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/grid/triangle/UI ownership.
+- `App.Display.cppm/.cpp` (`engine.app:display`) — `DisplayController` (committed `DisplaySettings` plus one
+  pending candidate, provenance/revision, acknowledgement-only publication, degraded-state reporting; no
+  window/monitor/renderer state) + pure helpers `foregroundFramePeriod`/`presentationVsync`/`pacingTargets`
+  (§4.1 table) + `effectiveFramePeriod` (§4.2 `max(foreground or zero, 200ms)` overlay) + `DisplayView`
+  telemetry snapshot (§5.1: requested policy, foreground/effective targets, vsync, throttle reason).
+- `App.Display.Settings.cppm/.cpp` (`engine.app:display.settings`) — `DisplaySettings` schema
+   (nine pacing/window/monitor/dimensions/refresh fields, follow-vsync + windowed defaults) plus visitor-derived CLI
+   bindings with legacy throttle aliases. Capability-independent cross-field validation runs during resolution.
+   `Application::displayCapabilities()` and `displayWindowGeometry()` return owned, handle-free views; runtime
+   native apply/rollback is coordinated inside suspended surface transactions. See [DisplayControls.md](DisplayControls.md)
+   for exact panel Apply/Keep/Revert contracts and capability semantics.
+- `App.Startup.Settings.cppm/.cpp` (`engine.app:startup.settings`) — `StartupSettings` schema
+  (core/gpu validation, startup-only) plus `--core-validation`/`--gpu-validation` bindings.
 - `frame/App.Frame.Packet.cppm/.cpp` — `engine.app:frame.packet`: owned `FramePacket` (camera/viewport/window copies),
   `makeFramePacket` capture, `hasRenderTarget` derived-from-size guard (see `frame/codemap.md`).
 - `App.TemplateInstantiations.cpp` — explicit `Delegate`/`BroadcastCallback` instantiations.

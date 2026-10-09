@@ -184,10 +184,20 @@ configure/build evidence to the validation owner.
 
 - Shared test infrastructure is the `engine.tests` static library (never run);
   runnable test executables are listed in the target-kinds table.
-- CTest tests are named `EngineCoreUnitTests`, `EngineSimUnitTests`,
-  `EngineAppUnitTests`, and `EngineAssetUnitTests`.
+- The nine CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
+  `app_a1_death_lifecycle`, `app_a2_gates`, `app_b_sim`, `app_c_fence`,
+  `app_d_io`, `EngineAssetUnitTests`, and `GameConfigUnitTests`.
+- `PPR_TEST_LOOPS` is a cache switch: default `1` for development;
+  configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
+  shuffled loops). When reusing that build directory for development,
+  explicitly restore `-DPPR_TEST_LOOPS=1`.
 - There are no CTest *test presets*. Use the executables directly or
-  `ctest --test-dir out/build/<preset> --output-on-failure`.
+  the approved scheduling command
+  `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`.
+- Run only one matrix invocation per machine at a time, with no competing
+  profiling/game workload. For tests requiring exclusive scheduling within
+  the matrix, prefer `RUN_SERIAL` over `RESOURCE_LOCK`; neither replaces
+  machine-wide exclusivity between independent invocations.
 - Never use `gcc-*` presets for module builds.
 
 ## Toolchain constraints

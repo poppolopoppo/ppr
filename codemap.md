@@ -157,17 +157,28 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
   `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
   `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
   CTest sharding (Phase 2.5 A1): 5 parallel-safe entries (`app_a1_death_lifecycle`, `app_a2_gates`, `app_b_sim`,
-  `app_c_fence`, `app_d_io`; 8 entries total with core/sim/asset) invoke the same exe with `--run-test` token lists
-  at the ASan 3-loop default. Live wall-test standard is serial: `ctest --test-dir out/build/msvc-live -j1
-  --output-on-failure` (parallel `-j4` not blessed on live pending flake diagnostics); dev keeps the 8-entry
-  sharded matrix with `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure` (7/7 green measured 358s wall);
+  `app_c_fence`, `app_d_io`) invoke the same exe with `--run-test` token lists.
+  The nine-entry matrix adds `EngineCoreUnitTests`, `EngineSimUnitTests`, `EngineAssetUnitTests`, and
+  `GameConfigUnitTests`. `PPR_TEST_LOOPS` defaults to 1 for development; `-DPPR_TEST_LOOPS=3` selects
+  three same-process shuffled loops for CI stress. Reusing a stress build directory requires explicitly
+  restoring `-DPPR_TEST_LOOPS=1`. Approved scheduling:
+  `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`;
   focused: `ctest --test-dir out/build/<preset> -R <shard>`. To add/move a leaf, edit the
   token lists in `lib/engine/tests/app/CMakeLists.txt` keeping exact-once coverage; filter matching is
   prefix-based both ways, so use full `app/<group>` paths — `app/player/` needs its trailing slash to avoid also
   matching siblings `app/player_service` / `app/player_graph`, and `app/run_gate` splits by full leaf tokens.
   Per-shard `TIMEOUT` 600/600/600/600/300 with `WORKING_DIRECTORY` at the exe dir; keep concurrent independent
-  full-matrix runs exclusive (no concurrent independent matrix invocations — the death-child marker is a fixed
-  machine-temp path shared across processes, and GPU contention changes timing-sensitive outcomes).
+  full-matrix runs exclusive (one matrix invocation per machine at a time, no competing profiling/game
+  workload — the death-child marker is a fixed machine-temp path shared across processes, and GPU contention
+  changes timing-sensitive outcomes). Prefer `RUN_SERIAL` over `RESOURCE_LOCK` for in-matrix exclusivity.
+  Validation gates: local edit batches build affected targets/dependents and run one shuffled loop of affected
+  suites or justified focused groups plus format/style/review; local phase completion runs one loop of all
+  affected suites (cross-cutting app/render-lane changes, including Phase 4, require all nine entries including
+  asset). Pre-merge CI runs the full matrix once plus the platform/build matrix; nightly stress runs the full
+  ASan matrix for three same-process shuffled loops. High-risk merges (concurrency/lifetime/teardown/render
+  transactions, including Phase 4) require three-loop affected suites. Asset is required for rendering,
+  surfaces, resource lifetime, asset handling, or shared-dependency changes, not nightly-only; unrelated
+  config-only iterations need not rerun it. Record failure seeds; no automatic retries masking flakes.
 - Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
   TU-local `const UnitTest` + non-exported `const UnitTest &<node>Tests() noexcept` accessor per root-visible node;
   file-local sub-groups need no accessor; `memory`/`containers` assembled in `Core.Tests.cpp`.
@@ -189,7 +200,8 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
   ordering/backlog), `sim/snapshot` (save/load/versioned apply round-trips), `sim/ecs`, `sim/worldgen`,
   `sim/physics`. Links PUBLIC `engine.core + engine.math + engine.sim + engine.tests`, PRIVATE `engine.physics`
   (GLFW-free, CPU-only; TIMEOUT 300).
-- Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `parseCli()`, `runSuite()`).
+- Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `TestSettings` invocation schema,
+  `parseTestInvocation()`, shared `runTests()` entry, `runSuite()`).
 - Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
 
 ## Map maintenance

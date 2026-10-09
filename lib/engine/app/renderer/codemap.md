@@ -11,8 +11,17 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 
 ## Design
 
-- **Renderer** (`App.Renderer.cppm/.cpp`): config `m_preferred_surface_format` (default Undefined → backend
-  preferred), `m_desired_image_count{3}`, `m_enable_vsync{true}` (vsync policy unchanged by P1); state `FlatMap<WindowHandle, SurfaceRecord>` +
+- **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),
+  explicit `Renderer(SurfaceSettings initial_settings = {})` captures startup vsync for new surfaces;
+  per-surface vsync changes only through lane-affine `reconfigureWindowSurface(handle, generation, settings)`.
+  `SurfaceSettings::m_extent` absent retains current geometry. Creation, resize, and explicit changes converge
+  on `updateWindowSurface_` and one `buildSurfaceConfig_` helper. Exact nonzero generation is mandatory for
+  controls; missing/stale records are rejected, never recreated by a control or stale claimed packet.
+  Failed destructive backend operations explicitly restore the old configuration; failure preserves the
+  original error, publishes restoration failure/unavailability through `appliedSurfaceSettingsFor`, and
+  quarantines admission if unavailable. Restored configurations also mint a new generation.
+  Applied vsync denotes successful backend configuration, not proof of physical display synchronization.
+  State `FlatMap<WindowHandle, SurfaceRecord>` +
   `m_graphics_queue` + `safe_ptr<IRhiService>` + `m_owner` thread id. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
   depth texture/view, last `m_extent`, `m_configured`, and a generational `m_generation` minted from
   `m_surface_epoch` on every create/resize/unconfigure (zero-size included). The depth pair is shared only by passes that explicitly

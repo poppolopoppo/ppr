@@ -13,7 +13,7 @@ instantiation now lives centrally in `App.TemplateInstantiations.cpp`, so the he
 - GLFW backend (`GlfwWindow` inherits `IWindowService`) — singleton `GlfwWindow::get()` manages the single GLFW instance's window list, monitor list, and callback registration. All GLFW callbacks (close, focus, resize, iconify, framebuffer, content-scale, key, char, mouse-button, cursor-position, scroll) are registered in `createWindow()` and operate on the `Window` object's user pointer.
 - Callbacks are `Callback<std::error_code(const Window&)>` or similar — consumers register via `whenWindowCreated`, `whenWindowResized`, `whenWindowFocused`, etc.
 - `getNativeHandle(window)` → `glfwGetWin32Window()` for RHI surface creation.
-- `setWindowMonitor(window, monitor, position, size)` → `glfwSetWindowMonitor()`.
+- `setWindowMonitor(window, monitor, position, size)` → `glfwSetWindowMonitor()`; returns `std::error_code` for both apply and rollback failures (success is an empty code), never a dismissed notification.
 - `pollEvents()` → `glfwPollEvents()`, `waitEvents()` → `glfwWaitEvents()`.
 - **Viewport geometry** (`engine.app:window.viewport`, moved here from the deleted renderer `App.Viewport.cpp/.cppm`):
   `BasicRect<T>` (origin/extent rect with `fromAabb`/`fromSize`, edge getters/setters, `getAspectRatio` asserting

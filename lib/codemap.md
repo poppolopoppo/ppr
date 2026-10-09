@@ -70,7 +70,8 @@ and diagnostics (`PPR_ASSERT/VERIFY/ENSURE` + async logger drain).
 ## Integration
 
 - Consumed by: `game/` (entry point), CMake build system (`cmake/`), test targets (`engine.tests.core`
-  GLFW-free, `engine.tests.app` GLFW-dependent sharing the `engine.tests` static lib `parseCli`/`runSuite`).
+  GLFW-free, `engine.tests.app` GLFW-dependent sharing the `engine.tests` static lib (`runTests`/`runSuite`
+  over the `TestSettings` invocation schema).
 - Depends on: third-party libraries (Slang, Slang-RHI, mango::math, GLFW, DearImGui `imgui.base`/`imgui`,
   rapidhash, STB) via `cmake/external/` + `setup_ppr_project`. Lower layers never depend upward, preserving
   acyclicity.

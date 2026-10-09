@@ -26,7 +26,9 @@ window, and UI overlay.
   `App.TemplateInstantiations.cpp`).
 - `IWindowService` (`App.Service.Window.cppm`, `:service.window`) — event pump (`pollEvents`/`waitEvents`), monitor
   enumeration + primary + video modes + gamma, monitor connect/disconnect callbacks, window
-  create/destroy/focused/main, resize/focus/close callbacks, manipulation + clipboard.
+   create/destroy/focused/main, resize/focus/close callbacks, manipulation + clipboard. `configureDisplayWindow`
+   accepts a nullable monitor and optional exclusive refresh, returns authoritative `WindowDisplayGeometry`, and
+   is native-thread-only; `displayWindowGeometry` queries observations. Capability flags default unsupported.
 - `IUIService` (`App.Service.UI.cppm`, `:service.ui`) — overlay contract only: `initialize(WindowInputContext &,
   IRhiService &, IShaderService &, int input_listener_priority)`, `shutdown`, `update(TimeSpan, const WindowViewport
   &)`, `render(const DrawContext &)`, `getContext`. Implementation lives in `ui/App.UI.ImGui.cpp`, NOT here.

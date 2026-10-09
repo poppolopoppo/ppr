@@ -77,7 +77,7 @@ messaging via `producerReserve`/`producerSubmit` → `consumerAcquire`/`consumer
 ## Integration
 
 - Consumed by: `game/main.cpp`, test targets (`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`,
-  `engine.tests.asset` via the `engine.tests` shared lib `parseCli`/`runSuite`).
+  `engine.tests.asset` via the `engine.tests` shared lib `runTests`/`runSuite`).
 - Depends on: third-party libraries (Slang, Slang-RHI, mango::math, GLFW, DearImGui `imgui.base`/`imgui`,
   rapidhash, STB) via `cmake/external/` + `setup_ppr_project`. Lower layers never depend upward, preserving
   acyclicity.

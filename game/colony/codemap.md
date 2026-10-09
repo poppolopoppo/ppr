@@ -14,7 +14,7 @@ the single `Colony` plus its fixed-step clock and pause/step/speed/regenerate
 controls. `ColonyTranslator` stages resident chunks to `GridPass` each frame and
 uploads only unseen/explicitly invalidated chunk materials (vacuum becomes
 `0xffff`). `ColonyPanel` is the game-owned panel (tools, tabs, intents, chrome frame).
-`ColonySmoke` is the separate headless `--smoke` entry (`runColonySmoke`).
+`ColonySmoke` is the separate headless `--smoke` entry (`runColonySmoke(SmokeOptions)`).
 `TimeTrials` (`game.colony.timetrials`, `runTimeTrials`) is the deterministic
 headless `--time-trials` runner: S1 steady plus S2 scripted wall-building,
 driver-only CSVs, no renderer or translator. `ColonySmoke` also exposes
@@ -61,10 +61,18 @@ across ticks, with counters for the panel.
   chunk descriptor per frame, copies cell materials only for unseen/invalidated
   chunks, `reset` clears pass staging/cache on regeneration. Never clears sim dirt.
 - `ColonyPanel.cppm/.cpp` (`game.colony.panel`) — single export
-  `drawColonyUi(const ColonyDriver &, const ColonyUiView &, std::span<const ColonyShortcut>, ColonyUiState &) -> ColonyUiFrame`
-  (`ColonyPanel.cppm:295-297`, called `main.cpp:1574`); caller supplies the
-  read-only view plus shortcuts, owns the returned chrome frame.
-- `ColonySmoke.cppm/.cpp` (`game.colony.smoke`) — `runColonySmoke(argv)` drives a
+  `drawColonyUi(const ColonyDriver &, const ColonyUiView &, const ColonyDisplaySnapshot &, std::span<const ColonyShortcut>, ColonyUiState &)
+  -> ColonyUiFrame`; caller supplies the
+  read-only view plus shortcuts, owns the returned chrome frame. The Display
+  window (help-window precedent: centered, reopenable, `m_display_open`)
+  edits a session draft only; Apply/Reset/Save/Keep/Revert/monitor-cap leave
+  as typed intents the caller submits through `requestDisplaySettings`. The
+  snapshot carries the copied controller view (requested policy, targets,
+  throttle reason), the acknowledged device report, pending transaction plus
+  last failure, and monitor telemetry; requested and reported stay in
+  separate sections, unavailable reads as unavailable. 24 `EColonyIntent`
+  values (17 colony + 7 display).
+- `ColonySmoke.cppm/.cpp` (`game.colony.smoke`) — `runColonySmoke(SmokeOptions)` drives a
   headless rendering-enabled `Application` for one offscreen GridPass frame with
   GPU readback; separate from the interactive `TurboLarbin` editor path.
   `runLoad100()` drives the Slice 6 sustained-load host (100 agents, 600

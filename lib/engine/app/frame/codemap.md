@@ -40,6 +40,17 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   (`PulseEvent` + `postEmptyEvent`).
 - Ownership != affinity: content owners keep their objects (editor-owned passes, client-owned ImGui context,
   game-owned snapshots/translator); the lane is only the fixed execution affinity.
+- Phase 4 surface transactions: `requestSurfaceReconfigure(RenderSurfaceRequest)` owns its value payload,
+  returns busy/canceled on non-admission, and permits one outstanding transaction until its ack is drained.
+  `setSurfaceExecutor` binds the lane callback before admission. Existing queued frames execute before the
+  surface callback; there is no CPU barrier parking their executor. Backend present/idle calls can delay the ack.
+  `RenderFrameResult::m_surface_result` is a distinct control completion on the existing reliable result
+  transport/stash: **dispatch it before frame credit/staging accounting**, including in suspended-admission
+  pump paths. It carries transaction ID, echoed handle/request generation, actual applied generation/state,
+  original error and restoration error. Validate the echoed identity against the current pending candidate;
+  only then update the mirror and resume admission. No control message consumes a frame credit.
+  `drainQueuedFrames` closes surface admission and cancels/acknowledges queued controls before resource release;
+  requestStop settles remaining controls, and join precedes storage destruction.
 
 ## Flow
 

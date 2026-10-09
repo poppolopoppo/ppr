@@ -108,6 +108,16 @@ work in that area.
   release behavior uses assumptions. Tests use `PPR_TEST_ASSERT`.
 - Make failure and cancellation visible in the signature or result. A caller
   must be able to distinguish success, expected absence, and failure.
+- Never swallow an exception silently to satisfy `noexcept`: a bare
+  `try { ... } catch (...) {}` with no log, error code, or diagnostic is
+  forbidden. Either remove `noexcept` and let the failure reach a reporting
+  boundary, or translate it into the function's `std::error_code` /
+  `std::expected` result (bad allocation → `not_enough_memory`,
+  `system_error` → its code, otherwise `state_not_recoverable`). Best-effort
+  paths (hints, diagnostics, best-effort teardown logging) are the only
+  exception, and must say so in a comment. Never guard a smart-pointer
+  assignment with a blind catch merely to keep `noexcept`; make the owning
+  operation fallible instead.
 
 ## Rendering and camera contract
 
@@ -140,6 +150,9 @@ post-change checklist.
 - Applicable correctness, compatibility, resource, and performance gates are
   acceptance criteria. Report what was verified and any remaining limitation;
   explicitly identify any unmet or unrun gate.
+- `std::error_code` converts to bool only explicitly: assert `not ec`
+  (or `!ec`) for success and `ec == <expected error>` for specific failures —
+  never a bare `error_code` as an assert predicate or bool initializer.
 
 ## C++ and API rules
 

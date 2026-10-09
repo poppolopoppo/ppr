@@ -69,10 +69,24 @@ checks are repeated.
 
 ## Scope rules
 
-- Source, module, build, or runtime-behavior changes normally require the full
-  selected preset build and relevant engine suites.
-- A focused target/test run is permitted only when the user explicitly scopes
-  validation or the orchestrator records why it proves the affected claim.
+- **Local edit batch:** build affected targets and dependents; run one shuffled
+  loop of affected suites or justified focused groups; apply format/style
+  gates and review. Record why focused groups prove the affected claim.
+- **Local phase completion:** run one loop of all affected suites.
+  Cross-cutting app/render-lane changes, including Phase 4, require the full
+  nine-entry matrix, including asset.
+- **Pre-merge CI:** run the full matrix for one loop plus the platform/build
+  matrix from `build-system`.
+- **Nightly stress:** run the full ASan matrix with three same-process
+  shuffled loops (`-DPPR_TEST_LOOPS=3`).
+- **High-risk merge:** run three-loop affected suites for concurrency,
+  lifetime, teardown, or render-transaction changes; Phase 4 qualifies.
+- Asset is not nightly-only: it is required when rendering, surfaces,
+  resource lifetime, asset handling, or shared dependencies change. Unrelated
+  config-only iterations need not rerun it.
+- Keep failure seeds in the validation record; do not use automatic retries
+  to mask flakes. Follow `build-system` for loop-cache restoration and
+  exclusive matrix scheduling.
 - Documentation-only changes need no build or executable tests unless they
   alter executable instructions; run proportionate reference/link checks and
   request `code-reviewer`'s docs-only gate.

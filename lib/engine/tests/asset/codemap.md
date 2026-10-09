@@ -32,14 +32,14 @@ lives in engine.tests.core).
   core/app suites (MSVC C1001 workaround): `Asset.Tests.cppm` declares
   `extern const UnitTest asset`; `Asset.Tests.cpp` defines it and recurses the group
   accessors; groups are private `module engine.tests.asset;` TUs (`detail::` leaves +
-  TU-local root + accessor); `main.cpp` runs `parseCli`/`runSuite`.
+  TU-local root + accessor); `main.cpp` runs the shared `runTests()` entry.
 - Links `engine.image + engine.mesh + engine.app + engine.rhi + engine.shader +
   engine.core + engine.math + engine.tests` (private `mango-image` for fixture encoding,
   private GLFW for GPU integration); test dependencies never change the production graph.
 
 ## Flow
 
-`main` → `runSuite(cli, asset)` → group accessors → per-leaf asserts
+`main` → shared `runTests()` → `runSuite(cli, asset)` → group accessors → per-leaf asserts
 with `PPR_TEST_ASSERT` (engine asserts route to the runner policy, never abort).
 
 ## Test tiers
