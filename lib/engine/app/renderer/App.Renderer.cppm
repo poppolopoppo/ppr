@@ -55,11 +55,33 @@ export namespace pP {
         std::string_view m_title{};
     };
 
+    struct SurfaceSettings {
+        bool m_vsync{true};
+        // Absent means retain the lane's current geometry (vsync-only edit).
+        std::optional<int2> m_extent{};
+    };
+
+    struct AppliedSurfaceSettings {
+        SurfaceGeneration m_generation{kSurfaceGenerationNone};
+        int2 m_extent{zero_v};
+        bool m_vsync{true};
+        bool m_available{false};
+        std::error_code m_restoration_error{};
+    };
+
     class Renderer final {
     public:
-        rhi::Format m_preferred_surface_format{rhi::Format::Undefined};
-        u32 m_desired_image_count{3u};
-        bool m_enable_vsync{true};
+        // Initial vsync is used for new surfaces; geometry always comes from
+        // the window snapshot (initial_settings.m_extent is not consumed).
+        explicit Renderer(SurfaceSettings initial_settings = {});
+
+        // Lane-affine; requires an existing, exact nonzero generation. Never
+        // creates a surface from a stale handle. Failure preserves the original
+        // error; appliedSurfaceSettingsFor reports restoration/unavailability.
+        [[nodiscard]] Expected<AppliedSurfaceSettings> reconfigureWindowSurface(
+            WindowHandle window_handle, SurfaceGeneration generation, SurfaceSettings settings);
+        // Owner-lane observation only. No record -> unavailable/no generation.
+        [[nodiscard]] AppliedSurfaceSettings appliedSurfaceSettingsFor(WindowHandle window_handle) const noexcept;
 
         [[nodiscard]] std::error_code initialize(IRhiService &rhi_service);
 
@@ -262,6 +284,8 @@ export namespace pP {
             // a packet built for an older shape is rejected before
             // acquisition instead of encoding against a stale surface.
             SurfaceGeneration m_generation{kSurfaceGenerationNone};
+            bool m_vsync{true};
+            std::error_code m_restoration_error{};
             bool m_configured: 1 {false};
         };
 
@@ -285,6 +309,10 @@ export namespace pP {
             const SurfaceWindowSnapshot &window, SurfaceRecord **out_record);
 
         [[nodiscard]] std::error_code resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent);
+
+        [[nodiscard]] std::error_code updateWindowSurface_(SurfaceRecord &record, const int2 &new_extent, bool vsync);
+        [[nodiscard]] rhi::SurfaceConfig buildSurfaceConfig_(const int2 &extent, bool vsync) const;
+        void restoreWindowSurface_(SurfaceRecord &record, bool was_configured);
 
         [[nodiscard]] std::error_code createSurfaceDepth_(
             const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture,
@@ -334,6 +362,9 @@ export namespace pP {
 
         [[nodiscard]] bool onRenderThread_() const noexcept;
 
+        const rhi::Format m_preferred_surface_format{rhi::Format::Undefined};
+        const u32 m_desired_image_count{3u};
+        const bool m_initial_vsync;
         FlatMap<WindowHandle, SurfaceRecord> m_surfaces{};
         // Surface-generation epoch: every create/resize/unconfigure mints a
         // fresh nonzero generation from this counter. Never reused, never

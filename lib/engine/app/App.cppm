@@ -4,6 +4,8 @@ export module engine.app;
 
 export import :application;
 export import :application_editor;
+export import :display;
+export import :display.settings;
 
 export import :frame.packet;
 export import :frame.render_lane;
@@ -36,6 +38,8 @@ export import :service.input;
 export import :service.player;
 export import :service.ui;
 export import :service.window;
+
+export import :startup.settings;
 
 export import :ui.imgui;
 

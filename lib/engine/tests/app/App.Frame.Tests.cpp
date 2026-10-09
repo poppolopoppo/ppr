@@ -492,7 +492,187 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
         };
 
-        // F2 wait/pump spy (FakeFrameInput pattern): counts the platform
+        // Phase 3 pacing policy: DisplaySettings commits map to the §4.1
+        // foreground target plus the vsync half; the approved default is
+        // follow-vsync (no CPU cap). Legacy setters keep working alongside.
+        PPR_UNIT_TEST (display_pacing_modes_map_to_foreground_and_vsync) {
+            HeadlessApp test_app{"PacingModes"};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_pacing == EFramePacing::follow_vsync);
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+            PPR_TEST_ASSERT(test_app.presentationVsyncRequested());
+
+            DisplaySettings uncapped{};
+            uncapped.m_pacing = EFramePacing::uncapped;
+            test_app.setDisplaySettings(uncapped);
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+            PPR_TEST_ASSERT(not test_app.presentationVsyncRequested());
+
+            DisplaySettings paced{};
+            paced.m_pacing = EFramePacing::paced;
+            paced.m_cap_hz = 30u;
+            paced.m_paced_vsync = false;
+            test_app.setDisplaySettings(paced);
+            const TimeSpan k30 = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 30.0});
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+            PPR_TEST_ASSERT(not test_app.presentationVsyncRequested());
+
+            paced.m_paced_vsync = true;
+            test_app.setDisplaySettings(paced);
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+            PPR_TEST_ASSERT(test_app.presentationVsyncRequested());
+        };
+
+        // Phase 3 overlay (§4.2): background priority floors the effective
+        // target at 200ms, preserves a slower explicit cap instead of
+        // speeding it up to 5fps, and restores the foreground mode on
+        // refocus. Vsync never toggles on focus changes.
+        PPR_UNIT_TEST (display_unfocused_overlay_floors_and_preserves_slow_caps) {
+            HeadlessApp test_app{"PacingOverlay"};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            const TimeSpan kFloor{std::chrono::milliseconds{200}};
+
+            test_app.setBackgroundPriority(true);
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == kFloor);
+
+            DisplaySettings slow{};
+            slow.m_pacing = EFramePacing::paced;
+            slow.m_cap_hz = 1u;
+            test_app.setDisplaySettings(slow);
+            const TimeSpan k1Fps = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0});
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k1Fps);
+            PPR_TEST_ASSERT(test_app.presentationVsyncRequested());
+
+            test_app.setBackgroundPriority(false);
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k1Fps);
+            PPR_TEST_ASSERT(test_app.presentationVsyncRequested());
+        };
+
+        // Both opt-outs disable the overlay: display.throttle_unfocused and
+        // the legacy profiling/bounded-run switch leave the foreground
+        // target untouched while background priority is active.
+        PPR_UNIT_TEST (display_throttle_opt_outs_disable_overlay) {
+            HeadlessApp test_app{"PacingOptOut"};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            DisplaySettings no_throttle{};
+            no_throttle.m_throttle_unfocused = false;
+            test_app.setDisplaySettings(no_throttle);
+            PPR_TEST_ASSERT(not test_app.unfocusedThrottleEnabled());
+            test_app.setBackgroundPriority(true);
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+
+            DisplaySettings throttled{};
+            test_app.setDisplaySettings(throttled);
+            PPR_TEST_ASSERT(test_app.unfocusedThrottleEnabled());
+            test_app.setNoFocusThrottle(true);
+            PPR_TEST_ASSERT(test_app.getNoFocusThrottle());
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+            test_app.setNoFocusThrottle(false);
+            const TimeSpan kFloor{std::chrono::milliseconds{200}};
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == kFloor);
+        };
+
+        // Telemetry view (§5.1): requested policy, foreground/effective
+        // targets, vsync, and the throttle reason in one copyable snapshot.
+        PPR_UNIT_TEST (display_view_reports_policy_and_throttle_state) {
+            HeadlessApp test_app{"PacingView"};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            DisplaySettings paced{};
+            paced.m_pacing = EFramePacing::paced;
+            paced.m_cap_hz = 60u;
+            test_app.setDisplaySettings(paced);
+            test_app.setBackgroundPriority(true);
+
+            const DisplayView view = test_app.displayView();
+            const TimeSpan k60 = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 60.0});
+            const TimeSpan kFloor{std::chrono::milliseconds{200}};
+            PPR_TEST_ASSERT(view.m_committed.m_pacing == EFramePacing::paced);
+            PPR_TEST_ASSERT(view.m_foreground == k60);
+            PPR_TEST_ASSERT(view.m_effective == kFloor);
+            PPR_TEST_ASSERT(view.m_vsync);
+            PPR_TEST_ASSERT(view.m_background_priority);
+            PPR_TEST_ASSERT(view.m_throttle_active);
+
+            // Legacy setters override the live target while the committed
+            // policy is retained separately: a paced-1fps foreground stays
+            // 1fps under the active overlay instead of speeding up to 5fps.
+            test_app.setTargetFrameRate(1);
+            const TimeSpan k1Fps = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0});
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k1Fps);
+            const DisplayView legacy = test_app.displayView();
+            PPR_TEST_ASSERT(legacy.m_committed.m_pacing == EFramePacing::paced);
+            PPR_TEST_ASSERT(legacy.m_committed.m_cap_hz == 60u);
+            PPR_TEST_ASSERT(legacy.m_foreground == k1Fps);
+            PPR_TEST_ASSERT(legacy.m_effective == k1Fps);
+            PPR_TEST_ASSERT(legacy.m_effective == test_app.getTargetFrameTime());
+        };
+
+        // Setter coverage: manually supplied settings update foreground
+        // pacing and requested presentation state after initialization.
+        PPR_UNIT_TEST (display_settings_setter_updates_pacing_and_presentation_request) {
+            HeadlessApp test_app{"DisplaySetter"};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            DisplaySettings display{};
+            display.m_pacing = EFramePacing::paced;
+            display.m_cap_hz = 30u;
+            display.m_paced_vsync = false;
+            test_app.setDisplaySettings(display);
+            const TimeSpan k30 = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 30.0});
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+            PPR_TEST_ASSERT(not test_app.presentationVsyncRequested());
+            PPR_TEST_ASSERT(test_app.unfocusedThrottleEnabled());
+            const DisplayView view = test_app.displayView();
+            PPR_TEST_ASSERT(view.m_foreground == k30);
+            PPR_TEST_ASSERT(view.m_effective == k30);
+            PPR_TEST_ASSERT(not view.m_vsync);
+
+            display.m_paced_vsync = true;
+            test_app.setDisplaySettings(display);
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+            PPR_TEST_ASSERT(test_app.presentationVsyncRequested());
+            PPR_TEST_ASSERT(test_app.displayView().m_vsync);
+        };
+
+        // Pre-initialization presentation boundary: requested startup state
+        // is available before boot and retained through headless initialization.
+        // Actual surface presentation and runtime switching are not exercised here.
+        PPR_UNIT_TEST (display_settings_before_initialization_retain_presentation_request) {
+            for (const bool vsync: {false, true}) {
+                HeadlessApp test_app{"StartupPresentation"};
+                DisplaySettings display{};
+                display.m_pacing = EFramePacing::paced;
+                display.m_cap_hz = 30u;
+                display.m_paced_vsync = vsync;
+                test_app.setDisplaySettings(display);
+                const TimeSpan k30 = std::chrono::duration_cast<TimeSpan>(TimeDuration{1.0 / 30.0});
+                PPR_TEST_ASSERT(test_app.presentationVsyncRequested() == vsync);
+                PPR_TEST_ASSERT(test_app.displayView().m_vsync == vsync);
+                PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+
+                PPR_TEST_ASSERT(not test_app.boot());
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not test_app.teardown());
+                };
+                PPR_TEST_ASSERT(test_app.presentationVsyncRequested() == vsync);
+                PPR_TEST_ASSERT(test_app.displayView().m_vsync == vsync);
+                PPR_TEST_ASSERT(test_app.getTargetFrameTime() == k30);
+            }
+        };
         // wait/pump boundary the pacer sleep primitive drives
         // (pacerSleepSlice_ pumps then waits natively per slice), so a zero
         // count proves no sleep slice executed. The manual clock is
@@ -595,6 +775,37 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(dt == TimeSpan{});
         };
 
+        // Blur → enable → refocus: blurring while throttling is disabled
+        // preserves the raw focus loss, so enabling throttle_unfocused
+        // while still blurred activates the overlay without another focus
+        // event; refocus restores the foreground target. The focus→priority
+        // mapping lives in the production callback; this test pins overlay
+        // behavior through the same public setBackgroundPriority calls.
+        PPR_UNIT_TEST (editor_blur_enable_refocus_activates_throttle) {
+            PaceSpyClock clock{};
+            HeadlessApp test_app{"BlurEnableRefocus", std::make_unique<PaceSpyPlatform>(), clock};
+            DisplaySettings no_throttle{};
+            no_throttle.m_throttle_unfocused = false;
+            test_app.setDisplaySettings(no_throttle);
+            test_app.setBackgroundPriority(true);
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+            PPR_TEST_ASSERT(not test_app.displayView().m_throttle_active);
+            PPR_TEST_ASSERT(test_app.displayView().m_vsync);
+
+            DisplaySettings throttled{};
+            test_app.setDisplaySettings(throttled);
+            const TimeSpan kFloor{std::chrono::milliseconds{200}};
+            PPR_TEST_ASSERT(test_app.getTargetFrameTime() == kFloor);
+            PPR_TEST_ASSERT(test_app.displayView().m_throttle_active);
+            PPR_TEST_ASSERT(test_app.displayView().m_effective == kFloor);
+            PPR_TEST_ASSERT(test_app.displayView().m_vsync);
+
+            test_app.setBackgroundPriority(false);
+            PPR_TEST_ASSERT(not test_app.getTargetFrameTime().has_value());
+            PPR_TEST_ASSERT(not test_app.displayView().m_throttle_active);
+            PPR_TEST_ASSERT(test_app.displayView().m_vsync);
+        };
+
         struct RunCleanupApp final : HeadlessApp {
             using HeadlessApp::HeadlessApp;
 
@@ -659,6 +870,13 @@ namespace pP::tests {
             detail::FrameStages::packet_reports_zero_size_as_non_rendering,
             detail::FrameStages::render_preparation_consumes_packet_not_live_camera,
             detail::FrameStages::target_time_reflects_focus_and_rate,
+            detail::FrameStages::display_pacing_modes_map_to_foreground_and_vsync,
+            detail::FrameStages::display_unfocused_overlay_floors_and_preserves_slow_caps,
+            detail::FrameStages::display_throttle_opt_outs_disable_overlay,
+            detail::FrameStages::display_view_reports_policy_and_throttle_state,
+            detail::FrameStages::display_settings_setter_updates_pacing_and_presentation_request,
+            detail::FrameStages::display_settings_before_initialization_retain_presentation_request,
+            detail::FrameStages::editor_blur_enable_refocus_activates_throttle,
             detail::FrameStages::preset_exit_stops_clock_admission,
             detail::FrameStages::run_returns_shutdown_error_on_graceful_exit,
             detail::FrameStages::run_keeps_first_error_across_shutdown_failure,

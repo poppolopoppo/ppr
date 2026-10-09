@@ -171,6 +171,235 @@ namespace pP::tests::detail {
             return false;
         }
 
+        [[nodiscard]] RenderSurfaceRequest surfaceRequest(const u64 transaction_id = 1u) {
+            return {
+                .m_transaction_id = transaction_id,
+                .m_identity = {WindowHandle{reinterpret_cast<void *>(1)}, 7u},
+                .m_settings = {.m_vsync = false}};
+        }
+
+        [[nodiscard]] bool awaitSurfaceResult(
+            RenderLane &lane, std::counting_semaphore<> &wake, Array<RenderFrameResult> &results) {
+            for (u32 attempt = 0u; attempt < 1000u; ++attempt) {
+                std::ignore = lane.drainResults(results);
+                if (std::ranges::any_of(
+                        results, [](const RenderFrameResult &result) { return result.m_surface_result.has_value(); })) {
+                    return true;
+                }
+                if (not wake.try_acquire_for(std::chrono::seconds{30})) {
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        PPR_UNIT_TEST (surface_ack_without_admitted_frame_and_busy_until_consumed) {
+            std::counting_semaphore<> wake{0};
+            RenderLane lane{};
+            lane.setSurfaceExecutor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                result.m_applied = {
+                    .m_generation = 8u,
+                    .m_extent = int2{64, 64},
+                    .m_vsync = request.m_settings.m_vsync,
+                    .m_available = true};
+            });
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.requestSurfaceReconfigure(surfaceRequest()));
+            PPR_TEST_ASSERT(
+                lane.requestSurfaceReconfigure(surfaceRequest(2u)) ==
+                std::make_error_code(std::errc::device_or_resource_busy));
+            Array<RenderFrameResult> results{};
+            PPR_TEST_ASSERT(awaitSurfaceResult(lane, wake, results));
+            PPR_TEST_ASSERT(results.size() == 1u);
+            const RenderSurfaceResult &ack = *results[0].m_surface_result;
+            PPR_TEST_ASSERT(ack.m_transaction_id == 1u);
+            PPR_TEST_ASSERT(ack.m_identity.m_generation == 7u);
+            PPR_TEST_ASSERT(ack.m_applied.m_generation == 8u);
+            PPR_TEST_ASSERT(not ack.m_error and not ack.m_applied.m_vsync);
+            PPR_TEST_ASSERT(lane.submittedCount() == 0u and lane.inflightEstimate() == 0u);
+            PPR_TEST_ASSERT(not lane.requestSurfaceReconfigure(surfaceRequest(2u)));
+            results.clear();
+            PPR_TEST_ASSERT(awaitSurfaceResult(lane, wake, results));
+            PPR_TEST_ASSERT(results[0].m_surface_result->m_transaction_id == 2u);
+        };
+
+        PPR_UNIT_TEST (surface_transaction_drains_two_frames_settles_staging_once) {
+            std::binary_semaphore entered{0}, release{0};
+            std::counting_semaphore<> wake{0};
+            std::atomic<u32> executed{0u};
+            std::atomic<u32> outstanding{0u};
+            bool released = false;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            lane.setSurfaceExecutor([&](const RenderSurfaceRequest &, RenderSurfaceResult &result) {
+                result.m_applied = {
+                    .m_generation = 8u, .m_extent = int2{80, 80}, .m_vsync = false, .m_available = true};
+                // These represent two accepted submits: reconfiguration must
+                // not turn their settlement into rejection or return credits.
+                if (executed.load() != 2u or outstanding.load() != 2u) {
+                    result.m_error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            });
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &request, RenderFrameResult &result) -> std::error_code {
+                    if (executed.fetch_add(1u) == 0u) {
+                        entered.release();
+                        release.acquire();
+                    }
+                    result.m_submit_value = request.m_packet->m_frame_id;
+                    result.m_grid_ack_seed = request.m_grid_stage.m_ack_seed;
+                    result.m_grid_ack_chunk_ids = request.m_grid_stage.m_ack_chunk_ids;
+                    outstanding.fetch_add(1u);
+                    return {};
+                },
+                [&](u32 &count) -> std::error_code {
+                    count = outstanding.load();
+                    return {};
+                },
+                [&] { wake.release(); }));
+            auto first = makeRequest(1u);
+            first.m_grid_stage.m_ack_seed = 19u;
+            first.m_grid_stage.m_ack_chunk_ids.push_back(3u);
+            PPR_TEST_ASSERT(not lane.submitFrame(std::move(first)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            auto second = makeRequest(2u);
+            second.m_grid_stage.m_ack_seed = 20u;
+            second.m_grid_stage.m_ack_chunk_ids.push_back(4u);
+            PPR_TEST_ASSERT(not lane.submitFrame(std::move(second)));
+            PPR_TEST_ASSERT(not lane.requestSurfaceReconfigure(surfaceRequest()));
+            release.release();
+            released = true;
+            Array<RenderFrameResult> results{};
+            PPR_TEST_ASSERT(awaitSurfaceResult(lane, wake, results));
+            PPR_TEST_ASSERT(results.size() == 3u);
+            PPR_TEST_ASSERT(results[0].m_submit_value == 1u and results[1].m_submit_value == 2u);
+            PPR_TEST_ASSERT(results[0].m_grid_ack_seed == 19u and results[1].m_grid_ack_seed == 20u);
+            PPR_TEST_ASSERT(results[0].m_grid_ack_chunk_ids[0] == 3u);
+            PPR_TEST_ASSERT(results[1].m_grid_ack_chunk_ids[0] == 4u);
+            PPR_TEST_ASSERT(results[2].m_surface_result and not results[2].m_surface_result->m_error);
+            PPR_TEST_ASSERT(outstanding.load() == 2u);
+            results.clear();
+            PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
+            outstanding.store(0u);
+        };
+
+        PPR_UNIT_TEST (surface_pending_shutdown_cancels_ack_and_rejects_new_requests) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            PPR_TEST_ASSERT(not lane.requestSurfaceReconfigure(surfaceRequest()));
+            lane.requestStop();
+            PPR_TEST_ASSERT(
+                lane.requestSurfaceReconfigure(surfaceRequest(2u)) ==
+                std::make_error_code(std::errc::operation_canceled));
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not lane.join());
+            Array<RenderFrameResult> results{};
+            std::ignore = lane.drainResults(results);
+            u32 acks = 0u;
+            for (const RenderFrameResult &result: results) {
+                if (result.m_surface_result) {
+                    ++acks;
+                    PPR_TEST_ASSERT(
+                        result.m_surface_result->m_error == std::make_error_code(std::errc::operation_canceled));
+                }
+            }
+            PPR_TEST_ASSERT(acks == 1u);
+        };
+
+        PPR_UNIT_TEST (surface_control_full_is_visible_nonblocking_retry) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            for (u32 count = 0u; count < 65536u; ++count) {
+                lane.postControl(RenderControl::Kind::kWake);
+            }
+            PPR_TEST_ASSERT(
+                lane.requestSurfaceReconfigure(surfaceRequest()) ==
+                std::make_error_code(std::errc::device_or_resource_busy));
+            lane.requestStop();
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not lane.join());
+            Array<RenderFrameResult> results{};
+            std::ignore = lane.drainResults(results);
+            PPR_TEST_ASSERT(std::ranges::none_of(results, [](const RenderFrameResult &result) {
+                return result.m_surface_result.has_value();
+            }));
+        };
+
+        PPR_UNIT_TEST (surface_failed_rollback_ack_reports_unavailable_and_terminal) {
+            std::counting_semaphore<> wake{0};
+            RenderLane lane{};
+            lane.setSurfaceExecutor([](const RenderSurfaceRequest &, RenderSurfaceResult &result) {
+                result.m_error = std::make_error_code(std::errc::io_error);
+                result.m_applied = {
+                    .m_generation = 8u,
+                    .m_vsync = true,
+                    .m_available = false,
+                    .m_restoration_error = std::make_error_code(std::errc::not_connected)};
+            });
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.requestSurfaceReconfigure(surfaceRequest()));
+            Array<RenderFrameResult> results{};
+            PPR_TEST_ASSERT(awaitSurfaceResult(lane, wake, results));
+            const RenderSurfaceResult &ack = *results[0].m_surface_result;
+            PPR_TEST_ASSERT(ack.m_error == std::make_error_code(std::errc::io_error));
+            PPR_TEST_ASSERT(ack.m_applied.m_restoration_error == std::make_error_code(std::errc::not_connected));
+            PPR_TEST_ASSERT(not ack.m_applied.m_available);
+            PPR_TEST_ASSERT(lane.terminalError() == std::make_error_code(std::errc::state_not_recoverable));
+        };
+
         PPR_UNIT_TEST (lane_exit_wakeup_joins_promptly) {
             // 2.B exit wakeup: a parked worker (no frames queued) observes
             // the exit signal and joins; the lane reports stopped.
@@ -198,6 +427,205 @@ namespace pP::tests::detail {
             lane.join();
             PPR_TEST_ASSERT(not lane.isRunning());
             PPR_TEST_ASSERT(wakes.load(std::memory_order_acquire) >= 1u);
+        };
+
+        PPR_UNIT_TEST (throwing_init_reports_mapped_error_and_joins_worker) {
+            const std::error_code errors[]{
+                std::make_error_code(std::errc::not_enough_memory), std::make_error_code(std::errc::permission_denied),
+                std::make_error_code(std::errc::state_not_recoverable)};
+            for (u32 kind = 0u; kind < 3u; ++kind) {
+                std::atomic<u32> executions{0u};
+                RenderLane lane{};
+                const std::error_code error = lane.start(
+                    [kind]() -> std::error_code {
+                        if (kind == 0u) {
+                            throw std::bad_alloc{};
+                        }
+                        if (kind == 1u) {
+                            throw std::system_error{std::make_error_code(std::errc::permission_denied)};
+                        }
+                        throw std::runtime_error{"init failure"};
+                    },
+                    [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                        executions.fetch_add(1u, std::memory_order_relaxed);
+                        return {};
+                    },
+                    {}, {});
+                PPR_TEST_ASSERT(error == errors[kind]);
+                PPR_TEST_ASSERT(lane.terminalError() == errors[kind]);
+                PPR_TEST_ASSERT(not lane.isRunning());
+                PPR_TEST_ASSERT(not lane.join());
+                PPR_TEST_ASSERT(executions.load(std::memory_order_relaxed) == 0u);
+                PPR_TEST_ASSERT(
+                    lane.submitFrame(makeRequest(1u)) == std::make_error_code(std::errc::operation_canceled));
+                PPR_TEST_ASSERT(lane.start({}, {}, {}, {}) == std::make_error_code(std::errc::operation_not_permitted));
+            }
+        };
+
+        PPR_UNIT_TEST (throwing_wait_pump_restored_and_first_terminal_error_retained) {
+            std::binary_semaphore release{0};
+            bool released = false;
+            u32 pumps = 0u;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, {}));
+            const std::error_code first = std::make_error_code(std::errc::io_error);
+            lane.setWaitPump([&] {
+                ++pumps;
+                if (pumps == 1u) {
+                    throw std::system_error{first};
+                }
+                if (pumps == 2u) {
+                    throw std::bad_alloc{};
+                }
+                if (not released) {
+                    released = true;
+                    release.release();
+                }
+            });
+            bool ran = false;
+            const std::error_code error = lane.runOnLaneSync(
+                [&]() -> std::error_code {
+                    release.acquire();
+                    return {};
+                },
+                &ran);
+            PPR_TEST_ASSERT(ran);
+            PPR_TEST_ASSERT(error == first);
+            PPR_TEST_ASSERT(lane.terminalError() == first);
+            PPR_TEST_ASSERT(pumps >= 3u);
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+            PPR_TEST_ASSERT(not lane.isRunning());
+        };
+
+        PPR_UNIT_TEST (throwing_wait_pump_keeps_installed_replacement) {
+            std::binary_semaphore release{0};
+            bool released = false;
+            u32 original_calls = 0u;
+            u32 replacement_calls = 0u;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, {}));
+            lane.setWaitPump([&] {
+                ++original_calls;
+                lane.setWaitPump([&] {
+                    ++replacement_calls;
+                    if (replacement_calls == 1u) {
+                        throw std::bad_alloc{};
+                    }
+                    if (not released) {
+                        released = true;
+                        release.release();
+                    }
+                });
+                throw std::runtime_error{"original pump"};
+            });
+            bool ran = false;
+            const std::error_code error = lane.runOnLaneSync(
+                [&]() -> std::error_code {
+                    release.acquire();
+                    return {};
+                },
+                &ran);
+            PPR_TEST_ASSERT(ran);
+            PPR_TEST_ASSERT(error == std::make_error_code(std::errc::state_not_recoverable));
+            PPR_TEST_ASSERT(lane.terminalError() == error);
+            PPR_TEST_ASSERT(original_calls == 1u);
+            PPR_TEST_ASSERT(replacement_calls >= 2u);
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+        };
+
+        PPR_UNIT_TEST (saturated_results_preserve_order_and_exactly_once_delivery) {
+            std::counting_semaphore<> wake{0};
+            RenderLane lane{};
+            PPR_TEST_ASSERT(not lane.start(
+                {}, [](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code { return {}; }, {},
+                [&] { wake.release(); }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            // Deliberately leave results unread across far more records than the bounded channel holds.
+            constexpr u64 count = 256u;
+            for (u64 frame = 1u; frame <= count; ++frame) {
+                RenderFrameRequest request = makeRequest(frame);
+                request.m_reservation_epoch = 9u;
+                request.m_reservation_frame_id = frame;
+                PPR_TEST_ASSERT(not lane.submitFrame(std::move(request)));
+                PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+            }
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+            Array<RenderFrameResult> results{};
+            PPR_TEST_ASSERT(not lane.drainResults(results));
+            PPR_TEST_ASSERT(results.size() == count);
+            for (u64 index = 0u; index < count; ++index) {
+                PPR_TEST_ASSERT(results[index].m_frame_id == index + 1u);
+                PPR_TEST_ASSERT(results[index].m_reservation_epoch == 9u);
+                PPR_TEST_ASSERT(results[index].m_reservation_frame_id == index + 1u);
+                PPR_TEST_ASSERT(not results[index].m_dropped);
+                PPR_TEST_ASSERT(not results[index].m_error);
+            }
+            results.clear();
+            PPR_TEST_ASSERT(not lane.drainResults(results));
+            PPR_TEST_ASSERT(results.empty());
+            PPR_TEST_ASSERT(not lane.terminalError());
+        };
+
+        PPR_UNIT_TEST (throwing_wake_keeps_terminal_and_results_observable) {
+            // Item 14 exclusion: IPlatform::wakeNativeEvents is noexcept. Throwing from that native
+            // boundary terminates by design; changing its signature is not a test seam. The injectable
+            // RenderLaneWake callback below still covers a failed wake hint without weakening that contract.
+            std::atomic<bool> fail_sweep{false};
+            std::atomic<u32> wakes{0u};
+            RenderLane lane{};
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    fail_sweep.store(true, std::memory_order_release);
+                    return {};
+                },
+                [&](u32 &outstanding) -> std::error_code {
+                    outstanding = 0u;
+                    return fail_sweep.load(std::memory_order_acquire) ? std::make_error_code(std::errc::io_error)
+                                                                      : std::error_code{};
+                },
+                [&] {
+                    wakes.fetch_add(1u, std::memory_order_relaxed);
+                    throw std::bad_alloc{};
+                }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(17u)));
+            Array<RenderFrameResult> results{};
+            // Bounded polling succeeds without relying on the failed wake hint.
+            PPR_TEST_ASSERT(awaitResult(lane, 17u, results));
+            PPR_TEST_ASSERT(results.size() == 1u);
+            PPR_TEST_ASSERT(results[0].m_sweep_error == std::make_error_code(std::errc::io_error));
+            PPR_TEST_ASSERT(lane.terminalError() == std::make_error_code(std::errc::io_error));
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+            PPR_TEST_ASSERT(not lane.isRunning());
+            PPR_TEST_ASSERT(wakes.load(std::memory_order_relaxed) >= 1u);
+            results.clear();
+            PPR_TEST_ASSERT(not lane.drainResults(results));
+            PPR_TEST_ASSERT(results.empty());
         };
 
         PPR_UNIT_TEST (lane_credit_return_wakes_main) {
@@ -715,8 +1143,18 @@ namespace pP::tests {
             detail::RenderLaneGate::pacer_seam_posted_wake_wins,
             detail::RenderLaneGate::pacer_seam_real_thread_wake,
             detail::RenderLaneGate::lane_exit_wakeup_joins_promptly,
+            detail::RenderLaneGate::throwing_init_reports_mapped_error_and_joins_worker,
+            detail::RenderLaneGate::throwing_wait_pump_restored_and_first_terminal_error_retained,
+            detail::RenderLaneGate::throwing_wait_pump_keeps_installed_replacement,
+            detail::RenderLaneGate::saturated_results_preserve_order_and_exactly_once_delivery,
+            detail::RenderLaneGate::throwing_wake_keeps_terminal_and_results_observable,
             detail::RenderLaneGate::lane_credit_return_wakes_main,
             detail::RenderLaneGate::lane_control_wake_without_work,
+            detail::RenderLaneGate::surface_ack_without_admitted_frame_and_busy_until_consumed,
+            detail::RenderLaneGate::surface_transaction_drains_two_frames_settles_staging_once,
+            detail::RenderLaneGate::surface_pending_shutdown_cancels_ack_and_rejects_new_requests,
+            detail::RenderLaneGate::surface_control_full_is_visible_nonblocking_retry,
+            detail::RenderLaneGate::surface_failed_rollback_ack_reports_unavailable_and_terminal,
             detail::RenderLaneGate::lane_full_queue_exit_never_blocks,
             detail::RenderLaneGate::lane_exit_wake_covers_idle_and_inflight_parks,
             detail::RenderLaneGate::destruction_with_live_work_joins_before_members_die,

@@ -320,6 +320,9 @@ namespace pP {
     // renderer lifecycle and submission
     // ------------------------------------------------------------------
 
+    Renderer::Renderer(const SurfaceSettings initial_settings) : m_initial_vsync(initial_settings.m_vsync) {
+    }
+
     std::error_code Renderer::initialize(IRhiService &rhi_service) {
         const hal::ProfileScope scope{"App.Renderer.Initialize"};
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
@@ -692,7 +695,7 @@ namespace pP {
     bool Renderer::isSurfaceWorkObsolete(const SurfaceIdentity identity) const noexcept {
         const auto it = m_surfaces.find(identity.m_handle);
         if (it == m_surfaces.end()) {
-            return false;
+            return identity.m_generation != kSurfaceGenerationNone;
         }
         return ::pP::isSurfaceWorkObsolete(true, identity.m_generation, it->second.m_generation);
     }
@@ -993,6 +996,9 @@ namespace pP {
         // for that same reconfigure.
         {
             const auto existing = m_surfaces.find(window.m_handle);
+            if (existing == m_surfaces.end() and identity.m_generation != kSurfaceGenerationNone) {
+                return std::make_error_code(std::errc::resource_unavailable_try_again);
+            }
             if (existing != m_surfaces.end() and
                 identity.m_generation != kSurfaceGenerationNone and
                 ::pP::isSurfaceWorkObsolete(true, identity.m_generation, existing->second.m_generation)) [[unlikely]] {
@@ -1079,6 +1085,8 @@ namespace pP {
                     try {
                         std::ignore = m_surface->present();
                     } catch (...) {
+                        // Unwind cleanup only: one fallback attempt, never replace the propagating primary failure.
+                        // Normal settlePresent still returns its operational error to the caller.
                     }
                 }
             }
@@ -1300,6 +1308,7 @@ namespace pP {
 
         SurfaceRecord record{};
         record.m_surface = std::move(surface);
+        record.m_vsync = m_initial_vsync;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(record, window.m_framebuffer_size));
 
         const auto [it, inserted] = m_surfaces.try_emplace(window.m_handle, std::move(record));
@@ -1319,11 +1328,56 @@ namespace pP {
     }
 
     std::error_code Renderer::resizeWindowSurface_(SurfaceRecord &record, const int2 &new_extent) {
+        return updateWindowSurface_(record, new_extent, record.m_vsync);
+    }
+
+    rhi::SurfaceConfig Renderer::buildSurfaceConfig_(const int2 &extent, const bool vsync) const {
+        rhi::SurfaceConfig config{};
+        config.width = safe_narrowing(extent.x);
+        config.height = safe_narrowing(extent.y);
+        config.format = m_preferred_surface_format;
+        config.desiredImageCount = m_desired_image_count;
+        config.vsync = vsync;
+        return config;
+    }
+
+    AppliedSurfaceSettings Renderer::appliedSurfaceSettingsFor(const WindowHandle window_handle) const noexcept {
+        const auto it = m_surfaces.find(window_handle);
+        if (it == m_surfaces.end()) {
+            return {};
+        }
+        const SurfaceRecord &record = it->second;
+        return {record.m_generation, record.m_extent, record.m_vsync, record.m_configured, record.m_restoration_error};
+    }
+
+    Expected<AppliedSurfaceSettings> Renderer::reconfigureWindowSurface(
+        const WindowHandle window_handle, const SurfaceGeneration generation, const SurfaceSettings settings) {
+        const hal::ProfileScope scope{"App.Renderer.Reconfigure"};
+        if (not onRenderThread_()) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
+        const auto it = m_surfaces.find(window_handle);
+        if (it == m_surfaces.end() or generation == kSurfaceGenerationNone or it->second.m_generation != generation) {
+            return std::unexpected{std::make_error_code(std::errc::resource_unavailable_try_again)};
+        }
+        if (m_submit_quarantine or m_frame_fence.isTerminal()) {
+            return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
+        }
+        SurfaceRecord &record = it->second;
+        const int2 extent = settings.m_extent.value_or(record.m_extent);
+        if (const std::error_code error = updateWindowSurface_(record, extent, settings.m_vsync)) {
+            return std::unexpected{error};
+        }
+        return appliedSurfaceSettingsFor(window_handle);
+    }
+
+    std::error_code Renderer::updateWindowSurface_(SurfaceRecord &record, const int2 &new_extent, const bool vsync) {
         PPR_ASSERT(record.m_surface);
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 
+        record.m_restoration_error = {};
         // The cached entries describe the old surface shape, so every slot is
         // invalidated before the surface is touched: the minimize and error
         // paths below leave them invalid (the next frame rebuilds from live
@@ -1343,12 +1397,16 @@ namespace pP {
             if (record.m_configured) {
                 const rhi::Result unconfigure_result = record.m_surface->unconfigure();
                 record.m_configured = false;
-                PPR_RETURN_ERROR_ON_FAIL(Renderer, unconfigure_result);
+                if (const std::error_code error = make_error_code(unconfigure_result)) {
+                    restoreWindowSurface_(record, true);
+                    return error;
+                }
             }
 
             record.m_depth_view.setNull();
             record.m_depth_texture.setNull();
             record.m_extent = new_extent;
+            record.m_vsync = vsync;
             // Zero-size is an explicit shape change: mint a fresh generation
             // so packets built for the old shape are rejected before
             // acquisition instead of encoding against a dead surface.
@@ -1356,12 +1414,7 @@ namespace pP {
             return default_value_v;
         }
 
-        rhi::SurfaceConfig surface_config{};
-        surface_config.width = safe_narrowing(new_extent.x);
-        surface_config.height = safe_narrowing(new_extent.y);
-        surface_config.format = m_preferred_surface_format;
-        surface_config.desiredImageCount = m_desired_image_count;
-        surface_config.vsync = m_enable_vsync;
+        const rhi::SurfaceConfig surface_config = buildSurfaceConfig_(new_extent, vsync);
 
         rhi::ComPtr<rhi::ITexture> depth_texture;
         rhi::ComPtr<rhi::ITextureView> depth_view;
@@ -1369,12 +1422,19 @@ namespace pP {
 
         // Drop the configured claim before reconfiguration so a failed
         // configure cannot leave a stale configured record behind.
+        const bool was_configured = record.m_configured;
         record.m_configured = false;
-        PPR_RETURN_ERROR_ON_FAIL(Renderer, record.m_surface->configure(surface_config));
+        if (const std::error_code error = make_error_code(record.m_surface->configure(surface_config))) {
+            // configure may destroy the previous swapchain before failing. A
+            // surviving descriptor is not proof: explicitly restore it.
+            restoreWindowSurface_(record, was_configured);
+            return error;
+        }
 
         record.m_depth_texture = std::move(depth_texture);
         record.m_depth_view = std::move(depth_view);
         record.m_extent = new_extent;
+        record.m_vsync = vsync;
         record.m_configured = true;
         // A successful reconfigure is a new surface shape: mint a fresh
         // generation (existing waitOnHost ordering above is preserved — the
@@ -1394,6 +1454,21 @@ namespace pP {
                 {"height", record.m_extent.y},
             });
         return default_value_v;
+    }
+
+    void Renderer::restoreWindowSurface_(SurfaceRecord &record, const bool was_configured) {
+        record.m_generation = ++m_surface_epoch;
+        if (was_configured) {
+            record.m_restoration_error = make_error_code(
+                record.m_surface->configure(buildSurfaceConfig_(record.m_extent, record.m_vsync)));
+            record.m_configured = not record.m_restoration_error;
+            if (record.m_configured) {
+                recomputeSurfaceSignatures_(record);
+            }
+        }
+        if (not record.m_configured) {
+            quarantineAdmission();
+        }
     }
 
     // Reseeds the cacheable per-pass signature entries from the inputs that

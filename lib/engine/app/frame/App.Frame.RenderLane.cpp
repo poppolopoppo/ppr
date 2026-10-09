@@ -74,6 +74,20 @@ namespace pP {
         }
     }
 
+    namespace {
+        [[nodiscard]] std::error_code laneExceptionError_() noexcept {
+            try {
+                throw;
+            } catch (const std::bad_alloc &) {
+                return std::make_error_code(std::errc::not_enough_memory);
+            } catch (const std::system_error &error) {
+                return error.code();
+            } catch (...) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+        }
+    }
+
     RenderLane::RenderLane()
         : m_frames(std::make_shared<RawChannel>(kFrameDepth, sizeof(std::shared_ptr<const RenderFrameRequest>))),
           m_results(std::make_shared<RawChannel>(kResultDepth, sizeof(RenderFrameResult))),
@@ -81,10 +95,7 @@ namespace pP {
         // Overflow stash is pre-sized so the bounded 2-permit settlement
         // path stays allocation-free in practice: pushes never allocate
         // until the stash itself overflows (terminal path, above).
-        try {
-            m_result_stash.reserve(kResultDepth * 4u);
-        } catch (...) {
-        }
+        m_result_stash.reserve(kResultDepth * 4u);
     }
 
     RenderLane::~RenderLane() noexcept {
@@ -107,7 +118,7 @@ namespace pP {
         // construction (fputs/fflush cannot throw; terminate never
         // returns).
         if (const std::error_code join_err = join()) {
-            std::fputs("RenderLane: worker join timed out; fail-stop (no drain behind live work)\n", stderr);
+            std::fputs("RenderLane: worker join failed; fail-stop (no drain behind live work)\n", stderr);
             std::fflush(nullptr);
             std::terminate();
         }
@@ -153,30 +164,30 @@ namespace pP {
         std::future<std::error_code> init_done = init_ack.get_future();
         m_thread = std::jthread{[this, init_op = std::move(init), ack = std::move(init_ack)]() mutable noexcept {
             hal::setThreadName("RenderLane");
-            if (init_op) {
+            {
+                // The actual promise owner dies before runLane_: publication failure breaks the future
+                // rather than leaving start() blocked while the worker enters its long-lived loop.
+                auto phase_ack = std::move(ack);
                 std::error_code init_err{};
                 try {
-                    init_err = init_op();
-                    if (init_err) {
-                        noteFirstError_(init_err);
-                        setTerminal_(init_err);
+                    if (init_op) {
+                        init_err = init_op();
                     }
-                    ack.set_value(init_err);
                 } catch (...) {
-                    init_err = std::make_error_code(std::errc::state_not_recoverable);
+                    init_err = laneExceptionError_();
+                }
+                if (init_err) {
                     noteFirstError_(init_err);
                     setTerminal_(init_err);
-                    try {
-                        ack.set_value(init_err);
-                    } catch (...) {
-                    }
+                }
+                try {
+                    phase_ack.set_value(init_err);
+                } catch (...) {
+                    const std::error_code error = laneExceptionError_();
+                    noteFirstError_(error);
+                    setTerminal_(error);
                 }
                 init_op = nullptr;
-            } else {
-                try {
-                    ack.set_value(default_value_v);
-                } catch (...) {
-                }
             }
             runLane_();
             m_worker_finished.store(true, std::memory_order_release);
@@ -186,7 +197,13 @@ namespace pP {
         try {
             init_err = init_done.get();
         } catch (...) {
-            init_err = std::make_error_code(std::errc::state_not_recoverable);
+            init_err = terminalError();
+            if (not init_err) {
+                init_err = laneExceptionError_();
+            }
+        }
+        if (not init_err) {
+            init_err = terminalError();
         }
         if (init_err) {
             requestStop();
@@ -200,6 +217,40 @@ namespace pP {
         m_executor = std::move(executor);
     }
 
+    void RenderLane::setSurfaceExecutor(RenderSurfaceExecutor executor) {
+        const std::lock_guard guard{m_callback_mutex};
+        m_surface_executor = std::move(executor);
+    }
+
+    std::error_code RenderLane::requestSurfaceReconfigure(const RenderSurfaceRequest request) noexcept {
+        const std::lock_guard guard{m_result_stash_mutex};
+        if (m_stop_initiated.load(std::memory_order_acquire) or
+            m_surface_admission_closed.load(std::memory_order_acquire) or
+            not m_running.load(std::memory_order_acquire)) {
+            return std::make_error_code(std::errc::operation_canceled);
+        }
+        if (request.m_transaction_id == 0u or
+            not request.m_identity.m_handle or
+            request.m_identity.m_generation == kSurfaceGenerationNone) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        if (m_surface_transaction_pending) {
+            return std::make_error_code(std::errc::device_or_resource_busy);
+        }
+        if (const std::error_code terminal = terminalError()) {
+            return terminal;
+        }
+        auto reserved = m_controls->producerReserve(sizeof(RenderControl), RawChannel::drop_if_full);
+        if (not reserved) {
+            return translateProduceError_(reserved.error());
+        }
+        new (reserved->data())
+            RenderControl{.m_kind = RenderControl::Kind::kReconfigureSurface, .m_surface_request = request};
+        m_surface_transaction_pending = true;
+        m_controls->producerSubmit(*reserved);
+        return {};
+    }
+
     std::error_code RenderLane::submitFrame(RenderFrameRequest request) noexcept {
         // ora-25: client-side keys captured before the move below; every
         // outcome below stamps the same keys (accepted == transport
@@ -207,7 +258,8 @@ namespace pP {
         // the translated outcome).
         const u64 telemetry_epoch = request.m_reservation_epoch;
         const u64 telemetry_frame = request.m_reservation_frame_id;
-        if (not m_running.load(std::memory_order_acquire)) [[unlikely]] {
+        if (m_stop_initiated.load(std::memory_order_acquire) or not m_running.load(std::memory_order_acquire))
+            [[unlikely]] {
             const std::error_code closed{std::make_error_code(std::errc::operation_canceled)};
             recordSubmitTelemetry_(
                 EFrameTelemetryEvent::lane_enqueue_dropped, telemetry_epoch, telemetry_frame, time::now(), 0,
@@ -259,12 +311,9 @@ namespace pP {
             m_exit_requested.store(true, std::memory_order_release);
         }
         if (auto reserved = m_controls->producerReserve(sizeof(RenderControl), RawChannel::drop_if_full)) {
-            try {
-                new (reserved->data()) RenderControl{.m_kind = kind};
-                m_controls->producerSubmit(*reserved);
-            } catch (...) {
-                m_controls->producerDiscard(*reserved);
-            }
+            static_assert(std::is_nothrow_default_constructible_v<RenderControl>);
+            new (reserved->data()) RenderControl{.m_kind = kind};
+            m_controls->producerSubmit(*reserved);
         }
         // A dropped wake/control is still a hint: the lane rechecks the
         // exit atomic and both queues every iteration, so nothing is lost.
@@ -311,7 +360,7 @@ namespace pP {
                 std::unique_lock guard{m_sync_mutex};
                 if (m_sync_condition.wait_for(guard, kLaneSyncWaitSlice, [this] { return m_sync_done; })) {
                     publish_ack_(true);
-                    return m_sync_result;
+                    return m_sync_result ? m_sync_result : terminalError();
                 }
             }
             // Slice elapsed without the lane acknowledging: let main do its
@@ -347,6 +396,8 @@ namespace pP {
                         m_sync_condition.notify_all();
                     }
                 } catch (...) {
+                    // Timeout is already latched. Failed reclaim proves nothing; a false execution ack
+                    // grants no permission to release captures or storage behind potentially running work.
                 }
                 publish_ack_(false);
                 return timeout;
@@ -367,14 +418,9 @@ namespace pP {
             if (not reserved) {
                 break;
             }
-            try {
-                new (reserved->data()) RenderFrameResult(std::move(pending));
-                m_results->producerSubmit(*reserved);
-                ++flushed;
-            } catch (...) {
-                m_results->producerDiscard(*reserved);
-                break;
-            }
+            new (reserved->data()) RenderFrameResult(std::move(pending));
+            m_results->producerSubmit(*reserved);
+            ++flushed;
         }
         if (flushed > 0u) {
             stash.erase(stash.begin(), stash.begin() + static_cast<std::ptrdiff_t>(flushed));
@@ -382,13 +428,9 @@ namespace pP {
         if (stash.empty()) {
             auto reserved = m_results->producerReserve(sizeof(RenderFrameResult), RawChannel::drop_if_full);
             if (reserved) {
-                try {
-                    new (reserved->data()) RenderFrameResult(std::move(result));
-                    m_results->producerSubmit(*reserved);
-                    return;
-                } catch (...) {
-                    m_results->producerDiscard(*reserved);
-                }
+                new (reserved->data()) RenderFrameResult(std::move(result));
+                m_results->producerSubmit(*reserved);
+                return;
             }
         }
         try {
@@ -448,6 +490,10 @@ namespace pP {
             }
             RenderFrameResult *const result = static_cast<RenderFrameResult *>(acquired->data());
             const std::error_code record_err = result->m_error;
+            if (result->m_surface_result) {
+                const std::lock_guard guard{m_result_stash_mutex};
+                m_surface_transaction_pending = false;
+            }
             try {
                 if (not failed) {
                     out.push_back(std::move(*result));
@@ -480,6 +526,9 @@ namespace pP {
             const std::lock_guard stash_guard{m_result_stash_mutex};
             std::size_t moved = 0u;
             for (RenderFrameResult &pending: m_result_stash) {
+                if (pending.m_surface_result) {
+                    m_surface_transaction_pending = false;
+                }
                 try {
                     const std::error_code pending_err = pending.m_error;
                     if (not failed) {
@@ -529,11 +578,18 @@ namespace pP {
     }
 
     void RenderLane::requestStop() noexcept {
+        // Serialize admission publication with exit: every accepted request
+        // precedes stop and will receive a canceled or completed ack.
+        const std::lock_guard guard{m_result_stash_mutex};
         m_stop_initiated.store(true, std::memory_order_release);
         postControl(RenderControl::Kind::kExit);
     }
 
     std::error_code RenderLane::drainQueuedFrames(bool *out_operation_ran) noexcept {
+        {
+            const std::lock_guard guard{m_result_stash_mutex};
+            m_surface_admission_closed.store(true, std::memory_order_release);
+        }
         // Runs on the lane (serialized after any executing frame): queued
         // frames can no longer start once the executor is nulled, and the
         // drain below converts them to dropped results. A stopped lane
@@ -589,22 +645,21 @@ namespace pP {
                                 const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
                                 noteFirstError_(oom);
                                 setTerminal_(oom);
-                                try {
-                                    postResult_(
-                                        RenderFrameResult{
-                                            .m_frame_id = request->m_packet->m_frame_id,
-                                            .m_error = std::make_error_code(std::errc::operation_canceled),
-                                            .m_dropped = true,
-                                            .m_reservation_epoch = request->m_reservation_epoch,
-                                            .m_reservation_frame_id = request->m_reservation_frame_id,
-                                        });
-                                } catch (...) {
-                                }
+                                static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
+                                postResult_(
+                                    RenderFrameResult{
+                                        .m_frame_id = request->m_packet->m_frame_id,
+                                        .m_error = std::make_error_code(std::errc::operation_canceled),
+                                        .m_dropped = true,
+                                        .m_reservation_epoch = request->m_reservation_epoch,
+                                        .m_reservation_frame_id = request->m_reservation_frame_id,
+                                    });
                             }
                         }
                     }
                     m_queued_frames.store(0u, std::memory_order_release);
                     refreshEstimate_();
+                    std::ignore = handleControlEvent_();
                     return default_value_v;
                 },
                 &handoff_ran);
@@ -651,6 +706,10 @@ namespace pP {
                 m_thread.join();
             }
         } catch (...) {
+            const std::error_code error = laneExceptionError_();
+            noteFirstError_(error);
+            setTerminal_(error);
+            return error;
         }
         m_running.store(false, std::memory_order_release);
         // ora-25: merge lane/owner-thread side channel into the main buffer
@@ -677,6 +736,9 @@ namespace pP {
         try {
             pump();
         } catch (...) {
+            const std::error_code error = laneExceptionError_();
+            noteFirstError_(error);
+            setTerminal_(error);
         }
         const std::lock_guard guard{m_pump_mutex};
         if (not m_pump_slice) {
@@ -715,6 +777,8 @@ namespace pP {
             try {
                 (*wake)();
             } catch (...) {
+                // Wake is only a hint: terminal/error latches and queued results remain durable.
+                // Owner waits recheck those truths on bounded pump slices even when this hint is lost.
             }
         }
     }
@@ -894,9 +958,59 @@ namespace pP {
                 return serviced;
             }
             const RenderControl control = *static_cast<const RenderControl *>(acquired->data());
+            std::destroy_at(static_cast<RenderControl *>(acquired->data()));
             m_controls->consumerRelease(*acquired);
             serviced = true;
             if (control.m_kind == RenderControl::Kind::kConfigChanged) {
+                wakeMain_();
+            }
+            if (control.m_kind == RenderControl::Kind::kReconfigureSurface) {
+                RenderFrameResult completion{};
+                completion.m_surface_result.emplace();
+                RenderSurfaceResult &result = *completion.m_surface_result;
+                const RenderSurfaceRequest &request = control.m_surface_request;
+                result.m_transaction_id = request.m_transaction_id;
+                result.m_identity = request.m_identity;
+                if (m_stop_initiated.load(std::memory_order_acquire) or
+                    m_surface_admission_closed.load(std::memory_order_acquire)) {
+                    result.m_error = std::make_error_code(std::errc::operation_canceled);
+                } else {
+                    // Admission is suspended by the owner before posting. Run
+                    // existing queued frames, not a barrier that parks their
+                    // executor. GPU idleness is then established by Renderer.
+                    while (m_queued_frames.load(std::memory_order_acquire) != 0u) {
+                        handleFrameEvent_();
+                    }
+                    RenderSurfaceExecutor *executor = nullptr;
+                    {
+                        const std::lock_guard guard{m_callback_mutex};
+                        executor = m_surface_executor ? &m_surface_executor : nullptr;
+                    }
+                    try {
+                        if (executor != nullptr) {
+                            (*executor)(request, result);
+                        } else {
+                            result.m_error = std::make_error_code(std::errc::not_connected);
+                        }
+                    } catch (const std::bad_alloc &) {
+                        result.m_error = std::make_error_code(std::errc::not_enough_memory);
+                    } catch (...) {
+                        result.m_error = std::make_error_code(std::errc::state_not_recoverable);
+                    }
+                }
+                // Control errors live in the control ack, not the frame error
+                // stream. Failed restoration is terminal; accepted GPU submits
+                // retain their original fence/credit/staging settlement.
+                result.m_transaction_id = request.m_transaction_id;
+                result.m_identity = request.m_identity;
+                if (result.m_applied.m_restoration_error or
+                    (result.m_error and
+                        result.m_applied.m_generation != kSurfaceGenerationNone and
+                        not result.m_applied.m_available)) {
+                    noteFirstError_(result.m_error);
+                    setTerminal_(std::make_error_code(std::errc::state_not_recoverable));
+                }
+                postResult_(std::move(completion));
                 wakeMain_();
             }
         }
@@ -1131,17 +1245,15 @@ namespace pP {
                     const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
                     noteFirstError_(oom);
                     setTerminal_(oom);
-                    try {
-                        postResult_(
-                            RenderFrameResult{
-                                .m_frame_id = request->m_packet->m_frame_id,
-                                .m_error = std::make_error_code(std::errc::operation_canceled),
-                                .m_dropped = true,
-                                .m_reservation_epoch = request->m_reservation_epoch,
-                                .m_reservation_frame_id = request->m_reservation_frame_id,
-                            });
-                    } catch (...) {
-                    }
+                    static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
+                    postResult_(
+                        RenderFrameResult{
+                            .m_frame_id = request->m_packet->m_frame_id,
+                            .m_error = std::make_error_code(std::errc::operation_canceled),
+                            .m_dropped = true,
+                            .m_reservation_epoch = request->m_reservation_epoch,
+                            .m_reservation_frame_id = request->m_reservation_frame_id,
+                        });
                 }
             }
         }
@@ -1178,6 +1290,10 @@ namespace pP {
         // second run; one accepted after sees the published stop and fails
         // closed instead of hanging.
         m_running.store(false, std::memory_order_release);
+        // Catch all accepted controls before storage can be released. Stop
+        // serializes with request publication; these acknowledgements require
+        // neither a new frame nor client update to be consumed.
+        std::ignore = handleControlEvent_();
         runSyncHandoffIfPending_();
         wakeMain_();
     }

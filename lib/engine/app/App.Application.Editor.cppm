@@ -113,6 +113,13 @@ export namespace pP {
     private:
         void onMainWindowFocused_(const Window &window, bool focused);
 
+        // Phase 3 focus policy: preserves raw focus loss; the legacy
+        // opt-out and display.throttle_unfocused apply centrally in
+        // Application::getTargetFrameTime/displayView, so enabling
+        // throttling while already blurred takes effect without another
+        // focus event. Focus detection and input routing are unchanged.
+        [[nodiscard]] bool backgroundThrottleWanted_(bool focused) const noexcept;
+
         [[nodiscard]] std::error_code submitSceneInstances_();
 
         // P2 client/lane split (explicit hooks, no wholesale virtual move):
@@ -181,7 +188,7 @@ export namespace pP {
         // Submission acceptance is independent of present: every participant
         // stamps off the accepted SUBMIT value (lastSubmitted advancement),
         // never off the present verdict.
-        void stampSubmittedPasses_(FenceCompletionValue accepted_value);
+        void stampSubmittedPasses_(FenceCompletionValue accepted_value) noexcept;
 
         // Owned packet staged by update() for render(); cleared on consume.
         std::optional<FramePacket> m_frame_packet{};

@@ -3,6 +3,7 @@ module;
 export module engine.app:frame.render_lane;
 
 import :frame.packet;
+import :renderer;
 import :renderer.frame_fence;
 import :renderer.grid_pass;
 import :renderer.triangle_pass;
@@ -62,10 +63,34 @@ export namespace pP {
         u64 m_reservation_frame_id{0u};
     };
 
+    struct RenderSurfaceRequest {
+        u64 m_transaction_id{0u};
+        SurfaceIdentity m_identity{};
+        SurfaceSettings m_settings{};
+    };
+
+    struct RenderSurfaceResult {
+        u64 m_transaction_id{0u};
+        SurfaceIdentity m_identity{}; // Echoes the request, NOT the new generation.
+        AppliedSurfaceSettings m_applied{};
+        std::error_code m_error{};
+    };
+
+    // Executes on the lane. Fill actual state even on error (including failed
+    // restoration); generation validation belongs to Renderer. Bind before
+    // the first request. Captured owners must outlive lane join.
+    using RenderSurfaceExecutor = std23::move_only_function<void(const RenderSurfaceRequest &, RenderSurfaceResult &)>;
+
     // Per-frame completion posted back to main: submission acceptance is
     // independent of present (a submitted value travels with the fence
     // until completion; a dropped frame carries m_dropped and no value).
     struct RenderFrameResult {
+        // Distinct control completion on the existing reliable result stream.
+        // When set, this record has NO frame/reservation/staging settlement.
+        // Main must dispatch it before frame accounting, even while admission
+        // is suspended; validate transaction ID + echoed handle/generation
+        // against the pending candidate before committing m_applied.
+        std::optional<RenderSurfaceResult> m_surface_result{};
         u64 m_frame_id{0u};
         FenceCompletionValue m_submit_value{kFenceValueNone};
         std::error_code m_error{};
@@ -113,16 +138,18 @@ export namespace pP {
         Array<u64> m_grid_ack_revisions{};
     };
 
-    // Independent control/wake path (never capacity-blocked; the exit kind
-    // is additionally latched in an atomic so it survives a full queue).
+    // Independent control/wake path. Hints never wait; transactions explicitly
+    // report full. Exit is additionally latched so it survives a full queue.
     struct RenderControl {
         enum class Kind : u8 {
             kWake,
             kExit,
             kConfigChanged,
+            kReconfigureSurface,
         };
 
         Kind m_kind{Kind::kWake};
+        RenderSurfaceRequest m_surface_request{};
     };
 
     // Lane work: consumes one owned request, fills the result (submit
@@ -194,11 +221,20 @@ export namespace pP {
         // first submit; safe under the lane mutex.
         void setExecutor(RenderFrameExecutor executor);
 
+        void setSurfaceExecutor(RenderSurfaceExecutor executor);
+
+        // One outstanding transaction, including its undrained ack. No frame
+        // credit is charged. Full/busy -> bounded caller retry; stopped ->
+        // operation_canceled. Success means queued, NEVER applied. Payload is
+        // owned; no panel/scratch borrow. Ack uses drainResults + wakeMain.
+        [[nodiscard]] std::error_code requestSurfaceReconfigure(RenderSurfaceRequest request) noexcept;
+
         // Nonblocking submit. Full -> device_or_resource_busy (drop the
         // frame, never fail the app); closed -> operation_canceled.
         [[nodiscard]] std::error_code submitFrame(RenderFrameRequest request) noexcept;
 
-        // Nonblocking control post. Never blocks, never fails on capacity:
+        // Nonblocking hint post (wake/exit/config only; surface requests must
+        // use requestSurfaceReconfigure). Never blocks, never fails on capacity:
         // kExit additionally latches the exit atomic, so signalling exit
         // behind a full queue still terminates promptly.
         void postControl(RenderControl::Kind kind) noexcept;
@@ -229,7 +265,10 @@ export namespace pP {
 
         // Teardown settle step (runs a sync handoff internally): nulls the
         // frame executor and drops every queued-but-unexecuted frame,
-        // posting dropped results best-effort. After this, no lane frame
+        // posting dropped results best-effort. Also disables surface-control
+        // admission and settles queued controls as canceled acknowledgements
+        // before returning; call before releasing callback-captured resources.
+        // After this, no lane frame
         // can start, so surface/pass release may proceed. Idempotent.
         // Returns the handoff error (never swallows): `out_operation_ran`
         // distinguishes acknowledged completion from handoff failure; the
@@ -364,6 +403,10 @@ export namespace pP {
 
         std::mutex m_callback_mutex{};
         RenderFrameExecutor m_executor{};
+        RenderSurfaceExecutor m_surface_executor{};
+        // Protected by the existing result-stash mutex. Released only when
+        // main consumes the control ack; therefore ack storage stays bounded.
+        bool m_surface_transaction_pending{false};
         RenderLaneSweep m_sweep{};
         RenderLaneWake m_wake{};
 
@@ -377,6 +420,7 @@ export namespace pP {
         // Set by requestStop: no new sync handoff is accepted afterwards,
         // so a release can never be posted behind the exit it precedes.
         std::atomic<bool> m_stop_initiated{false};
+        std::atomic<bool> m_surface_admission_closed{false};
 
         std::atomic<u32> m_inflight_estimate{0u};
         std::atomic<u32> m_last_sweep_outstanding{0u};

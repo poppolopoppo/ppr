@@ -137,6 +137,7 @@ namespace pP::tests::detail {
             // frames.
             std23::move_only_function<void(ScriptedPlatform &platform, u32 pump)> m_on_pump{};
             std::error_code m_pump_error{};
+            std23::move_only_function<std::error_code(TimeSpan)> m_on_wait{};
 
             u32 m_watchdog_pumps{1000u};
             bool m_watchdog_fired{false};
@@ -230,6 +231,13 @@ namespace pP::tests::detail {
                     m_application->requestExit();
                 }
                 return m_pump_error;
+            }
+
+            [[nodiscard]] std::error_code waitNativeEvents(const TimeSpan timeout) override {
+                if (m_on_wait) {
+                    return m_on_wait(timeout);
+                }
+                return IPlatform::waitNativeEvents(timeout);
             }
 
             // Admitted frames only: poll-once (single device-time advance
@@ -511,9 +519,18 @@ namespace pP::tests::detail {
                 u32 m_destroys{0u};
                 u32 m_set_mains{0u};
                 u32 m_polls{0u};
+                std::error_code m_set_monitor_error{};
                 IWindowService::ECursorMode m_cursor_mode{IWindowService::ECursorMode::normal};
                 bool m_close_requested{false};
                 std::string m_clipboard{};
+                bool m_display_enabled{false};
+                bool m_monitor_present{true};
+                Monitor m_display_monitor{
+                    MonitorHandle{}, "scripted", VideoMode{int2{1920, 1080}, int3{}, 60}, int2{}, int2{}, true};
+                WindowDisplayGeometry m_display_geometry{int2{20, 30}, int2{800, 600}, int2{1600, 1200}};
+                Array<std::thread::id> m_display_threads{};
+                Array<std::error_code> m_display_errors{};
+                u32 m_display_calls{0u};
 
                 explicit WindowService(ScriptedPlatform *owner) noexcept : m_owner(owner) {
                 }
@@ -538,7 +555,11 @@ namespace pP::tests::detail {
                     return default_value_v;
                 }
 
-                [[nodiscard]] std::error_code enumerateMonitors(Collector<SharedMonitor>) const noexcept override {
+                [[nodiscard]] std::error_code enumerateMonitors(
+                    Collector<SharedMonitor> collect) const noexcept override {
+                    if (m_display_enabled and m_monitor_present) {
+                        return collect(SharedMonitor{&m_display_monitor});
+                    }
                     return default_value_v;
                 }
 
@@ -547,8 +568,39 @@ namespace pP::tests::detail {
                 }
 
                 [[nodiscard]] std::error_code enumerateMonitorVideoModes(
-                    const Monitor &, Collector<VideoMode>) const noexcept override {
+                    const Monitor &, Collector<VideoMode> collect) const noexcept override {
+                    if (m_display_enabled and m_monitor_present) {
+                        return collect(m_display_monitor.m_video_mode);
+                    }
                     return default_value_v;
+                }
+
+                bool supportsDisplayWindowChanges() const noexcept override {
+                    return m_display_enabled;
+                }
+                bool supportsExclusiveRefresh() const noexcept override {
+                    return m_display_enabled;
+                }
+                Expected<WindowDisplayGeometry> displayWindowGeometry(const Window &) const override {
+                    return m_display_geometry;
+                }
+                Expected<WindowDisplayGeometry> configureDisplayWindow(
+                    const Window &window, const Monitor *monitor, const int2 &position, const int2 &size,
+                    std::optional<u32> refresh) override {
+                    m_display_threads.push_back(std::this_thread::get_id());
+                    const u32 call = m_display_calls++;
+                    if (call < m_display_errors.size() and m_display_errors[call]) {
+                        return std::unexpected{m_display_errors[call]};
+                    }
+                    m_display_geometry = {
+                        position, size, int2{size.x * 2, size.y * 2}, refresh, monitor != nullptr,
+                        monitor != nullptr ? monitor->m_name : ""};
+                    if (window.m_handle == m_owner->m_window.m_handle) {
+                        m_owner->m_window.m_window_position = position;
+                        m_owner->m_window.m_window_size = size;
+                        m_owner->m_window.m_framebuffer_size = m_display_geometry.m_framebuffer_size;
+                    }
+                    return m_display_geometry;
                 }
 
                 void setMonitorGamma(const Monitor &, const float) noexcept override {
@@ -637,7 +689,9 @@ namespace pP::tests::detail {
                     return {};
                 }
 
-                void setWindowMonitor(const Window &, const Monitor &, const int2 &, const int2 &) override {
+                [[nodiscard]] std::error_code setWindowMonitor(
+                    const Window &, const Monitor &, const int2 &, const int2 &) override {
+                    return m_set_monitor_error;
                 }
 
                 [[nodiscard]] bool getWindowShouldClose(const Window &) const noexcept override {
@@ -758,12 +812,321 @@ namespace pP::tests::detail {
             }
         };
 
+        PPR_UNIT_TEST (monitor_change_and_revert_report_operational_errors) {
+            ScriptedPlatform platform{};
+            Monitor monitor{MonitorHandle{}, "scripted", VideoMode{}, int2{}, int2{}, false};
+            IWindowService &windows = *platform.getWindowService();
+            const int2 position{0, 0};
+            const int2 size{800, 600};
+
+            PPR_TEST_ASSERT(not windows.setWindowMonitor(platform.m_window, monitor, position, size));
+
+            const std::error_code apply_error = std::make_error_code(std::errc::io_error);
+            platform.m_window_service->m_set_monitor_error = apply_error;
+            const std::error_code apply_result = windows.setWindowMonitor(
+                platform.m_window, monitor, position, int2{1920, 1080});
+            PPR_TEST_ASSERT(apply_result == apply_error);
+
+            // Rollback uses the same operational boundary, not a notification
+            // callback: its failure remains available to the transaction caller.
+            const std::error_code revert_error = std::make_error_code(std::errc::state_not_recoverable);
+            platform.m_window_service->m_set_monitor_error = revert_error;
+            const std::error_code revert_result = windows.setWindowMonitor(platform.m_window, monitor, position, size);
+            PPR_TEST_ASSERT(revert_result == revert_error);
+        };
+
         // The injected clock must be fully constructed BEFORE the
         // Application base (which holds a non-owning view of it): a base
         // class is initialized before the derived Editor base, unlike a
         // member. ScriptedPlatform has no such constraint (factory call).
         struct HarnessClock {
             FakeClock m_clock{};
+        };
+
+        struct WindowTransactionHarness final : HarnessClock, Application {
+            ScriptedPlatform *m_scripted{};
+            WindowTransactionHarness()
+                : HarnessClock{},
+                  Application(
+                      ApplicationDomain{.m_is_interactive = false, .m_needs_user_interface = false}, "display-window",
+                      {}, std::make_unique<ScriptedPlatform>(), HarnessClock::m_clock) {
+                m_scripted = static_cast<ScriptedPlatform *>(const_cast<IPlatform *>(&getPlatform()));
+                auto &service = *m_scripted->m_window_service;
+                service.m_display_enabled = true;
+                service.m_main_window = SharedWindow{&m_scripted->m_window};
+            }
+            ~WindowTransactionHarness() noexcept override {
+                std::ignore = shutdown();
+            }
+            std::error_code boot() {
+                const std::error_code error = initialize();
+                if (not error) {
+                    bindDisplaySurface_(m_scripted->m_window.m_handle, 7u);
+                }
+                return error;
+            }
+            void executor(RenderSurfaceExecutor execute) {
+                renderLane()->setSurfaceExecutor(std::move(execute));
+            }
+            std::error_code pump() {
+                return pumpRenderCompletions_();
+            }
+            std::error_code synchronize() {
+                bool ran = false;
+                const auto error = renderLane()->runOnLaneSync([]() -> std::error_code { return {}; }, &ran);
+                return ran ? error : std::make_error_code(std::errc::not_connected);
+            }
+            std::error_code synchronize(RenderLaneOperation operation, bool &ran) {
+                return renderLane()->runOnLaneSync(std::move(operation), &ran);
+            }
+            void recreate() {
+                bindDisplaySurface_(m_scripted->m_window.m_handle, 99u);
+            }
+            std::error_code close() {
+                return shutdown();
+            }
+        };
+
+        config::Resolved<DisplaySettings> fullscreenCandidate() {
+            config::Resolved<DisplaySettings> candidate{};
+            candidate.m_value.m_window_mode = EDisplayWindowMode::fullscreen;
+            candidate.m_value.m_monitor = "scripted";
+            candidate.m_value.m_width = 1920u;
+            candidate.m_value.m_height = 1080u;
+            candidate.m_value.m_refresh_hz = 60u;
+            return candidate;
+        }
+
+        PPR_UNIT_TEST (throwing_native_pump_and_wait_shutdown_retains_first_error) {
+            for (const bool throw_first: {false, true}) {
+                std::binary_semaphore release{0};
+                bool released = false;
+                u32 waits = 0u;
+                WindowTransactionHarness test_app{};
+                PPR_TEST_ASSERT(not test_app.boot());
+                PPR_DEFER {
+                    if (not released) {
+                        release.release();
+                    }
+                    std::ignore = test_app.close();
+                };
+                const std::error_code first = std::make_error_code(std::errc::io_error);
+                test_app.setGpuTeardownEntryHookForTest([] { throw std::bad_alloc{}; });
+                test_app.m_scripted->m_pump_error = first;
+                test_app.m_scripted->m_on_pump = [throw_first, first](ScriptedPlatform &, u32) {
+                    if (throw_first) {
+                        throw std::system_error{first};
+                    }
+                };
+                test_app.m_scripted->m_on_wait = [&](TimeSpan) -> std::error_code {
+                    ++waits;
+                    if (not released) {
+                        released = true;
+                        release.release();
+                    }
+                    throw std::bad_alloc{};
+                };
+                bool ran = false;
+                PPR_TEST_ASSERT(not test_app.synchronize(
+                    [&]() -> std::error_code {
+                        release.acquire();
+                        return {};
+                    },
+                    ran));
+                PPR_TEST_ASSERT(ran);
+                PPR_TEST_ASSERT(waits >= 1u);
+                PPR_TEST_ASSERT(test_app.m_scripted->m_pumps >= 1u);
+                PPR_TEST_ASSERT(test_app.close() == first);
+                PPR_TEST_ASSERT(test_app.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+                PPR_TEST_ASSERT(not test_app.getServices().tryGet<IRhiService>().isValid());
+                const Array<std::string> expected{"quiescence", "idle-proven", "renderer", "rhi", "platform"};
+                const auto stages = test_app.gpuTeardownStageLog();
+                PPR_TEST_ASSERT(stages.size() == expected.size());
+                for (u32 index = 0u; index < expected.size(); ++index) {
+                    PPR_TEST_ASSERT(stages[index] == expected[index]);
+                }
+                test_app.m_scripted->m_on_pump = {};
+                test_app.m_scripted->m_on_wait = {};
+                test_app.m_scripted->m_pump_error = {};
+                PPR_TEST_ASSERT(not test_app.boot());
+                PPR_TEST_ASSERT(not test_app.close());
+            }
+        };
+
+        PPR_UNIT_TEST (display_window_mode_ack_while_suspended_and_revert) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                std::ignore = test_app.close();
+            };
+            std::atomic<u32> calls{0u};
+            int2 requested{};
+            test_app.executor([&](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                const u32 call = calls.fetch_add(1u);
+                requested = request.m_settings.m_extent.value_or(int2{});
+                if (call == 0u) {
+                    entered.release();
+                    release.acquire();
+                }
+                result.m_applied = {8u + call, requested, true, true};
+            });
+            const auto prior = test_app.displayController().resolved();
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            PPR_TEST_ASSERT(test_app.displayController().admissionSuspended());
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(
+                test_app.m_scripted->m_window_service->m_display_threads.front() == std::this_thread::get_id());
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not test_app.synchronize());
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(requested.x == 3840 and requested.y == 2160);
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_window_mode == EDisplayWindowMode::fullscreen);
+            PPR_TEST_ASSERT(not test_app.displayController().admissionSuspended());
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(prior));
+            const auto revert_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            while (test_app.displayController().committed().m_window_mode != EDisplayWindowMode::windowed) {
+                PPR_TEST_ASSERT(std::chrono::steady_clock::now() < revert_deadline);
+                PPR_TEST_ASSERT(not test_app.pump());
+                PPR_TEST_ASSERT(not test_app.synchronize());
+                PPR_TEST_ASSERT(not test_app.pump());
+            }
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_window_mode == EDisplayWindowMode::windowed);
+            PPR_TEST_ASSERT(requested.x == 1600 and requested.y == 1200);
+            PPR_TEST_ASSERT(test_app.m_scripted->m_window_service->m_display_calls == 2u);
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_stale_generation_never_applies_native_mode) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            test_app.recreate();
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(test_app.m_scripted->m_window_service->m_display_calls == 0u);
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_failed_apply_and_restore_are_honest) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            const auto apply_error = std::make_error_code(std::errc::io_error);
+            const auto restore_error = std::make_error_code(std::errc::permission_denied);
+            auto &service = *test_app.m_scripted->m_window_service;
+            service.m_display_errors.push_back(apply_error);
+            service.m_display_errors.push_back(restore_error);
+            std::atomic<u32> executions{0u};
+            test_app.executor([&](const RenderSurfaceRequest &, RenderSurfaceResult &) { executions.fetch_add(1u); });
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(test_app.displayController().restoring());
+            PPR_TEST_ASSERT(test_app.pump() == apply_error);
+            PPR_TEST_ASSERT(service.m_display_calls == 2u and executions.load() == 0u);
+            PPR_TEST_ASSERT(test_app.displayController().transactionState() == EDisplayTransaction::degraded);
+            PPR_TEST_ASSERT(test_app.displayController().applied().m_restoration_error == restore_error);
+            PPR_TEST_ASSERT(not test_app.displayController().applied().m_available);
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(test_app.close() == apply_error);
+        };
+
+        PPR_UNIT_TEST (display_window_reenumeration_rejects_removed_monitor_before_apply) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            auto &service = *test_app.m_scripted->m_window_service;
+            service.m_monitor_present = false;
+            test_app.executor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                result.m_applied = {8u, *request.m_settings.m_extent, true, true};
+            });
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(test_app.displayController().restoring());
+            PPR_TEST_ASSERT(service.m_display_calls == 0u);
+            const auto rejection_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            while (test_app.displayController().transactionState() != EDisplayTransaction::idle) {
+                PPR_TEST_ASSERT(std::chrono::steady_clock::now() < rejection_deadline);
+                PPR_TEST_ASSERT(not test_app.pump());
+                PPR_TEST_ASSERT(not test_app.synchronize());
+                PPR_TEST_ASSERT(not test_app.pump());
+            }
+            PPR_TEST_ASSERT(test_app.displayController().transactionState() == EDisplayTransaction::idle);
+            PPR_TEST_ASSERT(
+                test_app.displayController().transactionError() == std::make_error_code(std::errc::no_such_device));
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_surface_failure_restores_native_geometry) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            std::atomic<u32> executions{0u};
+            int2 restored_extent{};
+            test_app.executor([&](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                const u32 call = executions.fetch_add(1u);
+                result.m_applied = {8u + call, *request.m_settings.m_extent, true, true};
+                if (call == 0u) {
+                    result.m_error = std::make_error_code(std::errc::io_error);
+                } else {
+                    restored_extent = *request.m_settings.m_extent;
+                }
+            });
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            const auto restoration_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            // Executor entry alone does not publish the restored geometry or its acknowledgement.
+            while (executions.load() != 2u or
+                   test_app.displayController().transactionState() != EDisplayTransaction::idle) {
+                PPR_TEST_ASSERT(std::chrono::steady_clock::now() < restoration_deadline);
+                PPR_TEST_ASSERT(not test_app.pump());
+                PPR_TEST_ASSERT(not test_app.synchronize());
+                PPR_TEST_ASSERT(not test_app.pump());
+            }
+            PPR_TEST_ASSERT(executions.load() == 2u);
+            PPR_TEST_ASSERT(restored_extent.x == 1600 and restored_extent.y == 1200);
+            const auto geometry = test_app.displayWindowGeometry();
+            PPR_TEST_ASSERT(geometry.has_value() and not geometry->m_fullscreen);
+            PPR_TEST_ASSERT(geometry->m_position.x == 20 and geometry->m_position.y == 30);
+            PPR_TEST_ASSERT(test_app.displayController().transactionState() == EDisplayTransaction::idle);
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(
+                test_app.displayController().transactionError() == std::make_error_code(std::errc::io_error));
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_stale_ack_cannot_publish_recreated_window) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                std::ignore = test_app.close();
+            };
+            test_app.executor([&](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                entered.release();
+                release.acquire();
+                result.m_applied = {8u, *request.m_settings.m_extent, true, true};
+            });
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            test_app.recreate();
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not test_app.synchronize());
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_window_mode == EDisplayWindowMode::windowed);
+            PPR_TEST_ASSERT(test_app.m_scripted->m_window_service->m_display_calls == 1u);
+            PPR_TEST_ASSERT(not test_app.close());
         };
 
         // Derived Editor fixture: real camera + real Grid/Triangle passes,
@@ -2758,27 +3121,30 @@ namespace pP::tests::detail {
         // cleanup: instrumentation is best-effort, release still completes,
         // and run() still succeeds.
         PPR_UNIT_TEST (healthy_teardown_survives_diagnostic_failure) {
-            SaturatingHarness harness{"RunGateDiagFail"};
-            PPR_TEST_ASSERT(not harness.boot());
-            PPR_DEFER {
-                std::ignore = harness.teardown();
-            };
-            ScriptedPlatform &platform = *harness.m_scripted;
-            harness.setGpuTeardownEntryHookForTest([] { throw std::runtime_error{"diagnostic failure"}; });
-            platform.m_on_pump = [&](ScriptedPlatform &self, const u32 pump) {
-                if (pump >= 2u) {
-                    self.endRun();
+            for (const std::error_code original: {std::error_code{}, std::make_error_code(std::errc::io_error)}) {
+                SaturatingHarness harness{"RunGateDiagFail"};
+                PPR_TEST_ASSERT(not harness.boot());
+                PPR_DEFER {
+                    std::ignore = harness.teardown();
+                };
+                ScriptedPlatform &platform = *harness.m_scripted;
+                harness.setGpuTeardownEntryHookForTest([] { throw std::bad_alloc{}; });
+                platform.m_on_pump = [&](ScriptedPlatform &, const u32 pump) {
+                    if (pump >= 2u) {
+                        harness.requestExit(original);
+                    }
+                };
+                const std::error_code result = harness.run();
+                PPR_TEST_ASSERT(result == original);
+                PPR_TEST_ASSERT(not platform.m_watchdog_fired);
+                PPR_TEST_ASSERT(harness.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+                const std::span<const std::string> stages = harness.gpuTeardownStageLog();
+                const Array<std::string> expected{
+                    "quiescence", "idle-proven", "scene", "ui", "renderer", "rhi", "platform"};
+                PPR_TEST_ASSERT(stages.size() == expected.size());
+                for (u32 i = 0u; i < expected.size(); ++i) {
+                    PPR_TEST_ASSERT(stages[i] == expected[i]);
                 }
-            };
-            PPR_TEST_ASSERT(not harness.run());
-            PPR_TEST_ASSERT(not platform.m_watchdog_fired);
-            PPR_TEST_ASSERT(harness.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
-            const std::span<const std::string> stages = harness.gpuTeardownStageLog();
-            const Array<std::string> expected{
-                "quiescence", "idle-proven", "scene", "ui", "renderer", "rhi", "platform"};
-            PPR_TEST_ASSERT(stages.size() == expected.size());
-            for (u32 i = 0u; i < expected.size(); ++i) {
-                PPR_TEST_ASSERT(stages[i] == expected[i]);
             }
         };
 
@@ -3178,12 +3544,20 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest run_gate = UnitTest::Named("run_gate") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::RunGate::monitor_change_and_revert_report_operational_errors,
+            detail::RunGate::display_window_mode_ack_while_suspended_and_revert,
+            detail::RunGate::display_window_stale_generation_never_applies_native_mode,
+            detail::RunGate::display_window_failed_apply_and_restore_are_honest,
+            detail::RunGate::display_window_reenumeration_rejects_removed_monitor_before_apply,
+            detail::RunGate::display_window_surface_failure_restores_native_geometry,
+            detail::RunGate::display_window_stale_ack_cannot_publish_recreated_window,
             detail::RunGate::saturated_run_preserves_time_and_input,
             detail::RunGate::terminal_probe_runs_zero_client_work,
             detail::RunGate::first_error_precedence_clock_over_terminal,
             detail::RunGate::busy_collection_failure_latches_first,
             detail::RunGate::sim_catch_up_preserves_skipped_time,
             detail::RunGate::healthy_teardown_releases_in_order,
+            detail::RunGate::throwing_native_pump_and_wait_shutdown_retains_first_error,
             detail::RunGate::removal_confirmed_preserves_first_error,
             detail::RunGate::focus_loss_gain_ordered_across_busy,
             detail::RunGate::two_runs_reestablish_quiescence_independently,

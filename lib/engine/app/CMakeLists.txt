@@ -7,6 +7,9 @@ target_sources(engine.app
         App.cppm
         App.Application.cppm
         App.Application.Editor.cppm
+        App.Display.cppm
+        App.Display.Settings.cppm
+        App.Startup.Settings.cppm
 
         frame/App.Frame.Packet.cppm
         frame/App.Frame.RenderLane.cppm
@@ -54,6 +57,9 @@ target_sources(engine.app
 
         App.Application.cpp
         App.Application.Editor.cpp
+        App.Display.cpp
+        App.Display.Settings.cpp
+        App.Startup.Settings.cpp
         App.TemplateInstantiations.cpp
 
         frame/App.Frame.Packet.cpp

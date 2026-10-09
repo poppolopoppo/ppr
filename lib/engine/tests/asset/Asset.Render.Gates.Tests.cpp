@@ -1140,6 +1140,53 @@ namespace pP::tests::detail {
                 ImGui::SetCurrentContext(nullptr);
             }
 
+            {
+                const auto windows = test_app.getServices().get<IWindowService>();
+                PPR_TEST_ASSERT(windows.isValid());
+                const auto &window = windows->getMainWindow();
+                PPR_TEST_ASSERT(window.isValid());
+                const SurfaceGeneration initial = renderer.surfaceGenerationFor(window->m_handle);
+                const auto before = renderer.appliedSurfaceSettingsFor(window->m_handle);
+                PPR_TEST_ASSERT(initial != kSurfaceGenerationNone and before.m_available);
+
+                // Real-backend vsync-only change, no window resize required.
+                // A successful host present is not physical display delivery.
+                const auto changed = renderer.reconfigureWindowSurface(
+                    window->m_handle, initial, SurfaceSettings{.m_vsync = not before.m_vsync});
+                PPR_TEST_ASSERT(changed.has_value());
+                PPR_TEST_ASSERT(changed->m_extent.x == before.m_extent.x and changed->m_extent.y == before.m_extent.y);
+                PPR_TEST_ASSERT(changed->m_vsync != before.m_vsync and changed->m_generation != initial);
+                PPR_TEST_ASSERT(not renderer.renderAndPresent(*window, {SurfaceRenderPass{}}));
+                const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
+                PPR_TEST_ASSERT(accepted != kFenceValueNone);
+
+                // Resize and explicit control share one update path. A control
+                // captured before the shape change cannot apply afterwards.
+                const auto minimized = renderer.reconfigureWindowSurface(
+                    window->m_handle, changed->m_generation,
+                    SurfaceSettings{.m_vsync = changed->m_vsync, .m_extent = int2{zero_v}});
+                PPR_TEST_ASSERT(minimized.has_value() and not minimized->m_available);
+                const auto stale = renderer.reconfigureWindowSurface(window->m_handle, initial, SurfaceSettings{});
+                PPR_TEST_ASSERT(
+                    not stale and stale.error() == std::make_error_code(std::errc::resource_unavailable_try_again));
+                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == accepted);
+                PPR_TEST_ASSERT(not renderer.renderAndPresent(*window, {SurfaceRenderPass{}}));
+
+                const SurfaceGeneration restored = renderer.surfaceGenerationFor(window->m_handle);
+                PPR_TEST_ASSERT(restored != minimized->m_generation);
+                PPR_TEST_ASSERT(not renderer.destroyWindowSurface(window->m_handle));
+                const auto destroyed = renderer.reconfigureWindowSurface(window->m_handle, restored, SurfaceSettings{});
+                PPR_TEST_ASSERT(not destroyed);
+                // A stale packet cannot lazily resurrect the destroyed record.
+                PPR_TEST_ASSERT(
+                    renderer.renderAndPresent(
+                        *window, {SurfaceRenderPass{}}, SurfaceIdentity{window->m_handle, restored}) ==
+                    std::make_error_code(std::errc::resource_unavailable_try_again));
+                PPR_TEST_ASSERT(not renderer.renderAndPresent(*window, {SurfaceRenderPass{}}));
+                PPR_TEST_ASSERT(renderer.surfaceGenerationFor(window->m_handle) != restored);
+                PPR_TEST_ASSERT(not renderer.reconfigureWindowSurface(window->m_handle, restored, SurfaceSettings{}));
+            }
+
             PPR_TEST_ASSERT(not test_app.unloadScene());
             // Release the device ref BEFORE teardown: the render target holds a
             // DeviceChild ref and RHI destroy asserts on live children (same

@@ -99,9 +99,20 @@ export namespace pP {
 
         SharedWindow setMainWindow(SharedWindow window) override;
 
+        [[nodiscard]] bool supportsDisplayWindowChanges() const noexcept override {
+            return true;
+        }
+        [[nodiscard]] bool supportsExclusiveRefresh() const noexcept override {
+            return true;
+        }
+        [[nodiscard]] Expected<WindowDisplayGeometry> displayWindowGeometry(const Window &window) const override;
+        [[nodiscard]] Expected<WindowDisplayGeometry> configureDisplayWindow(
+            const Window &window, const Monitor *monitor, const int2 &position, const int2 &size,
+            std::optional<u32> refresh_hz) override;
+
         [[nodiscard]] SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept override;
 
-        void setWindowMonitor(
+        [[nodiscard]] std::error_code setWindowMonitor(
             const Window &window, const Monitor &monitor, const int2 &window_position,
             const int2 &window_size) override;
 

@@ -19,6 +19,15 @@ export namespace pP {
     using SharedWindow = safe_ptr<const Window>;
     using SharedWindowViewport = safe_ptr<const WindowViewport>;
 
+    struct WindowDisplayGeometry {
+        int2 m_position{};
+        int2 m_size{};
+        int2 m_framebuffer_size{};
+        std::optional<u32> m_refresh_hz{};
+        bool m_fullscreen{false};
+        std::string m_monitor{};
+    };
+
     // ------------------------------------------------------------------
     // window service interface
     // ------------------------------------------------------------------
@@ -85,8 +94,24 @@ export namespace pP {
 
         [[nodiscard]] virtual SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept = 0;
 
-        virtual void setWindowMonitor(
+        [[nodiscard]] virtual std::error_code setWindowMonitor(
             const Window &window, const Monitor &monitor, const int2 &window_position, const int2 &window_size) = 0;
+
+        /// Main/native-thread only. Null monitor means windowed; absence of refresh
+        /// means platform default. Returns native geometry, including HiDPI extent.
+        [[nodiscard]] virtual bool supportsDisplayWindowChanges() const noexcept {
+            return false;
+        }
+        [[nodiscard]] virtual bool supportsExclusiveRefresh() const noexcept {
+            return false;
+        }
+        [[nodiscard]] virtual Expected<WindowDisplayGeometry> displayWindowGeometry(const Window &) const {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_supported)};
+        }
+        [[nodiscard]] virtual Expected<WindowDisplayGeometry> configureDisplayWindow(
+            const Window &, const Monitor *, const int2 &, const int2 &, std::optional<u32>) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_supported)};
+        }
 
         [[nodiscard]] virtual bool getWindowShouldClose(const Window &window) const noexcept = 0;
 

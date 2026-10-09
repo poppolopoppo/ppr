@@ -5,6 +5,8 @@ module;
 module engine.app;
 
 import :application_editor;
+import :display;
+import :display.settings;
 import :frame.packet;
 import :frame.render_lane;
 import :input.action;
@@ -21,8 +23,10 @@ import :renderer.types;
 import :scene.camera.controller;
 import :service.input;
 import :service.ui;
+import :service.window;
 import :ui.imgui;
 import :window.viewport;
+import :window.monitor;
 
 import engine.core;
 import engine.image;
@@ -256,25 +260,51 @@ namespace pP {
                         },
                         &main_window));
 
-        SharedMonitor main_monitor = window_service.getWindowFullscreenMonitor(*main_window);
-        if (not main_monitor) {
-            main_monitor = window_service.getPrimaryMonitor();
+        // There is no surface or admitted frame yet. Apply validated startup
+        // window intent on the native thread; the first surface is created on
+        // its owner lane from this resulting framebuffer geometry. Runtime
+        // changes instead use Application's suspended request/ack transaction.
+        const DisplaySettings &display_settings = displayController().committed();
+        const auto capabilities = displayCapabilities();
+        if (not capabilities) {
+            return capabilities.error();
         }
-        if (main_monitor and PPR_ENSURE(main_monitor->m_video_mode.m_refresh_rate > 0)) {
-            const TimeDuration min_frame_duration{1.0 / main_monitor->m_video_mode.m_refresh_rate};
-
-            PPR_LOG(
-                Editor, info, "set maximum refresh rate",
-                {
-                    {"width", main_monitor->m_video_mode.m_resolution.x},
-                    {"height", main_monitor->m_video_mode.m_resolution.y},
-                    {"refresh_rate", main_monitor->m_video_mode.m_refresh_rate},
-                });
-
-            setTargetFrameDuration(min_frame_duration);
+        config::Diagnostics display_diagnostics{};
+        if (const std::error_code error = validateDisplaySettings(
+                display_settings, *capabilities, display_diagnostics)) {
+            return error;
+        }
+        if (displayWindowChange(display_settings, DisplaySettings{})) {
+            SharedMonitor monitor{};
+            PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.enumerateMonitors([&](const SharedMonitor &entry) {
+                if ((display_settings.m_monitor == "auto" and entry->m_primary_monitor) or
+                    display_settings.m_monitor == entry->m_name) {
+                    monitor = entry;
+                }
+                return std::error_code{};
+            }));
+            int2 size = main_window->m_window_size;
+            if (display_settings.m_width != 0u) {
+                size = int2{static_cast<int>(display_settings.m_width), static_cast<int>(display_settings.m_height)};
+            } else if (display_settings.m_window_mode == EDisplayWindowMode::fullscreen) {
+                size = monitor->m_video_mode.m_resolution;
+            }
+            const auto geometry = window_service.configureDisplayWindow(
+                *main_window, display_settings.m_window_mode == EDisplayWindowMode::fullscreen ? &*monitor : nullptr,
+                monitor ? monitor->m_virtual_position : main_window->m_window_position, size,
+                display_settings.m_refresh_hz != 0u ? std::optional<u32>{display_settings.m_refresh_hz} : std::nullopt);
+            if (not geometry) {
+                return geometry.error();
+            }
         }
 
+        // Phase 3 approved default (follow-vsync): no monitor-derived CPU
+        // cap. The foreground target comes from the committed
+        // DisplaySettings (Application::setDisplaySettings); monitor refresh
+        // stays informational (a panel "use current refresh as cap" action
+        // is Phase 5, never an implicit cap).
         m_main_viewport = std::make_unique<WindowViewport>(main_window, ViewportLayout{});
+        bindDisplaySurface_(main_window->m_handle);
 
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_main_input_context->initialize(main_window));
 
@@ -814,7 +844,7 @@ namespace pP {
     }
 
     void ApplicationEditor::onMainWindowFocused_([[maybe_unused]] const Window &window, const bool focused) {
-        setBackgroundPriority(not focused and not getNoFocusThrottle());
+        setBackgroundPriority(backgroundThrottleWanted_(focused));
 
         if (not focused) {
             // Session reset (Routing latch) is separate from motion reset (controller).
@@ -826,6 +856,15 @@ namespace pP {
                 m_camera_controller->resetInputState();
             }
         }
+    }
+
+    bool ApplicationEditor::backgroundThrottleWanted_(const bool focused) const noexcept {
+        // Raw focus loss only: the legacy opt-out and
+        // display.throttle_unfocused apply centrally in
+        // Application::getTargetFrameTime/displayView, so enabling
+        // throttling while already blurred takes effect without another
+        // focus event.
+        return not focused;
     }
 
     std::error_code ApplicationEditor::update(TimeSpan dt) {
@@ -936,7 +975,7 @@ namespace pP {
         m_diagnostics.m_last_submit_value = result.m_submit_value;
     }
 
-    void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) {
+    void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) noexcept {
         // Submission acceptance is independent of present: the Renderer
         // commits the SUBMIT's value before presenting, so an accepted
         // submit advances lastSubmitted even when the present below it
@@ -1318,38 +1357,35 @@ namespace pP {
             FenceCompletionValue m_before;
             const std::error_code *m_frame_err;
             ~SubmitFateFinalizer() noexcept {
-                try {
-                    m_self->stampSubmittedPasses_(m_before);
-                    // Off-thread (affinity) rejection is invocation-local:
-                    // the Renderer leaves owner-confined settlement untouched
-                    // on that path, so classify from the returned error and
-                    // never consult the member (which still holds the
-                    // previous owner-thread fate). Every other path classifies
-                    // THIS invocation only (F1 stale fate): an accepted SUBMIT
-                    // must advance the fence strictly past this frame's before
-                    // value. A rejection reports definitely-unsubmitted with
-                    // this frame's identity — never the previous frame's value
-                    // — and only a submit failure quarantines (possibly
-                    // executed, no value).
-                    if (m_frame_err != nullptr and
-                        *m_frame_err == std::make_error_code(std::errc::operation_not_permitted)) {
-                        m_out->m_submit_value = kFenceValueNone;
-                        m_out->m_submit_possibly_executed = false;
-                        return;
-                    }
-                    const FenceCompletionValue after = m_renderer->lastSubmittedFenceValue();
-                    const FrameSettlement fate = m_renderer->lastSubmitSettlement();
-                    if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > m_before) {
-                        m_out->m_submit_value = after;
-                        m_out->m_submit_possibly_executed = false;
-                    } else if (fate == FrameSettlement::kSubmitFailed) {
-                        m_out->m_submit_value = kFenceValueNone;
-                        m_out->m_submit_possibly_executed = true;
-                    } else {
-                        m_out->m_submit_value = kFenceValueNone;
-                        m_out->m_submit_possibly_executed = false;
-                    }
-                } catch (...) {
+                m_self->stampSubmittedPasses_(m_before);
+                // Off-thread (affinity) rejection is invocation-local:
+                // the Renderer leaves owner-confined settlement untouched
+                // on that path, so classify from the returned error and
+                // never consult the member (which still holds the
+                // previous owner-thread fate). Every other path classifies
+                // THIS invocation only (F1 stale fate): an accepted SUBMIT
+                // must advance the fence strictly past this frame's before
+                // value. A rejection reports definitely-unsubmitted with
+                // this frame's identity — never the previous frame's value
+                // — and only a submit failure quarantines (possibly
+                // executed, no value).
+                if (m_frame_err != nullptr and
+                    *m_frame_err == std::make_error_code(std::errc::operation_not_permitted)) {
+                    m_out->m_submit_value = kFenceValueNone;
+                    m_out->m_submit_possibly_executed = false;
+                    return;
+                }
+                const FenceCompletionValue after = m_renderer->lastSubmittedFenceValue();
+                const FrameSettlement fate = m_renderer->lastSubmitSettlement();
+                if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > m_before) {
+                    m_out->m_submit_value = after;
+                    m_out->m_submit_possibly_executed = false;
+                } else if (fate == FrameSettlement::kSubmitFailed) {
+                    m_out->m_submit_value = kFenceValueNone;
+                    m_out->m_submit_possibly_executed = true;
+                } else {
+                    m_out->m_submit_value = kFenceValueNone;
+                    m_out->m_submit_possibly_executed = false;
                 }
             }
         };

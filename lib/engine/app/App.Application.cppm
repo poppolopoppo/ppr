@@ -2,9 +2,13 @@ module;
 
 export module engine.app:application;
 
+import :display;
+import :display.settings;
 import :frame.render_lane;
+import :renderer;
 import :renderer.frame_fence;
 import :window.handle;
+import :service.window;
 
 import engine.core;
 import std;
@@ -139,6 +143,56 @@ export namespace pP {
 
         void setTargetFrameRate(int fps) noexcept;
 
+        /// Phase 3 pacing policy: commit resolved DisplaySettings. The
+        /// foreground CPU target syncs immediately from the §4.1 mapping;
+        /// presentation applies to renderer construction only. With an active
+        /// render lane, the setter records requested state; reconfiguring
+        /// the current surface requires requestDisplaySettings. Foreground mode is remembered
+        /// across focus changes; the background overlay never toggles vsync.
+        /// Legacy setters above keep writing the foreground CPU target
+        /// directly and stay usable by tests and non-editor applications.
+        void setDisplaySettings(const DisplaySettings &settings);
+
+        /// Runtime edit: accepted means pending, never applied. CPU pacing and
+        /// provenance publish only after the owner-lane acknowledgement.
+        [[nodiscard]] std::error_code requestDisplaySettings(config::Resolved<DisplaySettings> candidate);
+        [[nodiscard]] std::error_code requestDisplaySettings(
+            config::Resolved<DisplaySettings> candidate, config::Diagnostics &diagnostics);
+        /// Main-thread copied capabilities; re-enumerated at validation and OS apply.
+        [[nodiscard]] Expected<DisplayCapabilities> displayCapabilities() const;
+        [[nodiscard]] Expected<WindowDisplayGeometry> displayWindowGeometry() const;
+
+        [[nodiscard]] const DisplayController &displayController() const noexcept {
+            return m_display_controller;
+        }
+
+        /// Requested presentation synchronization from committed settings
+        /// (§4.1 mapping). Recorded at commit; applied to new surfaces.
+        [[nodiscard]] bool presentationVsyncRequested() const noexcept {
+            return m_presentation_vsync;
+        }
+
+        /// display.throttle_unfocused from committed settings.
+        [[nodiscard]] bool unfocusedThrottleEnabled() const noexcept {
+            return m_display_controller.committed().m_throttle_unfocused;
+        }
+
+        /// Telemetry view (§5.1): requested policy, foreground/effective
+        /// targets, vsync, and the throttle reason. Foreground/effective
+        /// follow the live m_target_frame_time authority (legacy setters
+        /// included); the committed policy is retained separately.
+        [[nodiscard]] DisplayView displayView() const {
+            const bool background = m_has_background_priority and not m_no_focus_throttle;
+            return DisplayView{
+                .m_committed = m_display_controller.committed(),
+                .m_foreground = m_target_frame_time,
+                .m_effective = getTargetFrameTime(),
+                .m_vsync = m_presentation_vsync,
+                .m_background_priority = background,
+                .m_throttle_active = m_display_controller.throttleActive(background),
+            };
+        }
+
         [[nodiscard]] std::error_code run();
 
         // Dedicated render lane posture. Enabled by default for windowed
@@ -246,6 +300,16 @@ export namespace pP {
         // refreshes the surface-generation mirror, and counts drops.
         [[nodiscard]] std::error_code pumpRenderCompletions_();
 
+        // Main-side surface lifetime boundary. Rebinding invalidates the old
+        // capture mirror; pending acknowledgements retain their old lifetime.
+        // A nonzero generation must come from an owner-lane observation.
+        void bindDisplaySurface_(
+            WindowHandle handle, SurfaceGeneration observed_generation = kSurfaceGenerationNone) noexcept;
+        [[nodiscard]] std::error_code serviceDisplayTransaction_();
+        [[nodiscard]] std::error_code onSurfaceReconfigured_(const RenderSurfaceResult &result);
+        [[nodiscard]] Expected<WindowDisplayGeometry> applyDisplayWindow_(
+            const DisplaySettings &settings, bool restore);
+
         // P2 pacer seam, installed once: every pacer sleep slice pumps
         // native events then waits natively, so waits stay event-driven.
         void installPacerSleepOnce_();
@@ -293,9 +357,7 @@ export namespace pP {
     protected:
         // B3' lifecycle evidence: derived stages append exactly once each,
         // in inverse-of-setup order, always after idle proof above.
-        void noteTeardownStage_(std::string stage) {
-            m_gpu_teardown_stages.push_back(std::move(stage));
-        }
+        void noteTeardownStage_(const char *stage) noexcept;
 
         // B1' fail-stop: invoke when the recorded disposition is UNKNOWN at
         // a shutdown entry. Calls the constructor-injected handler, then
@@ -384,6 +446,14 @@ export namespace pP {
         TimeSpan m_pending_skipped_dt{};
         std::optional<TimeSpan> m_target_frame_time{};
 
+        // Phase 3 pacing policy: committed DisplaySettings plus the requested
+        // vsync half of the §4.1 mapping. m_target_frame_time stays the
+        // single foreground CPU authority (legacy setters write it directly;
+        // setDisplaySettings syncs it from the policy); getTargetFrameTime
+        // applies the §4.2 overlay on top.
+        DisplayController m_display_controller{};
+        bool m_presentation_vsync{true};
+
         // P2 dedicated render lane (Application-owned coordinator state).
         // When running, it owns Renderer affinity: init/shutdown, sweeps,
         // and all submission paths execute on it; main coordinates via the
@@ -410,6 +480,18 @@ export namespace pP {
         // lane re-verifies every claim against the live record at submit).
         WindowHandle m_lane_surface_handle{};
         SurfaceGeneration m_lane_surface_generation{kSurfaceGenerationNone};
+        WindowHandle m_display_surface_handle{};
+        u64 m_display_surface_lifetime{0u};
+        u64 m_pending_surface_lifetime{0u};
+        SurfaceIdentity m_pending_surface_identity{};
+        DisplaySettings m_restore_window_settings{};
+        WindowDisplayGeometry m_restore_window_geometry{};
+        std::optional<WindowDisplayGeometry> m_pending_window_geometry{};
+        std::optional<WindowDisplayGeometry> m_windowed_geometry{};
+        u64 m_window_operation_transaction{0u};
+        bool m_pending_window_change{false};
+        const std::thread::id m_display_thread{std::this_thread::get_id()};
+        bool m_display_transactions_stopped{false};
         // Main-side mirror of the Renderer retirement frontier, published
         // by the lane's sweep callback (lane writes release, main reads
         // acquire). A submitted reservation releases only after the CPU

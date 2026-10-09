@@ -5,6 +5,7 @@ module;
 
 module engine.app;
 
+import :platform;
 import :platform.glfw.input;
 import :platform.glfw.window;
 import :window.handle;
@@ -110,6 +111,12 @@ namespace pP {
         }
 
         for (const std::unique_ptr<Monitor> &monitor: m_monitors) {
+            // Refresh native current-mode telemetry on every enumeration.
+            const ::GLFWvidmode *const current = ::glfwGetVideoMode(glfwHandle_(monitor->m_handle));
+            if (current == nullptr) {
+                return std::make_error_code(std::errc::no_such_device);
+            }
+            monitor->m_video_mode = glfwVideoMode_(*current);
             PPR_RETAIN_ERROR_ON_FAIL(GlfwWindow, first_err, m_when_monitor_disconnected(*monitor));
 
             ::glfwSetMonitorUserPointer(glfwHandle_(monitor->release()), nullptr);
@@ -669,11 +676,82 @@ namespace pP {
         return SharedMonitor{};
     }
 
-    void GlfwWindow::setWindowMonitor(
+    std::error_code GlfwWindow::setWindowMonitor(
         const Window &window, const Monitor &monitor, const int2 &window_position, const int2 &window_size) {
+        // GLFW stores one error per thread. Clear stale state so each apply
+        // or rollback reports only the outcome of its own native operation.
+        std::ignore = ::glfwGetError(nullptr);
         ::glfwSetWindowMonitor(
             glfwHandle_(window.m_handle), glfwHandle_(monitor.m_handle), window_position.x, window_position.y,
             window_size.x, window_size.y, GLFW_DONT_CARE);
+
+        const char *description = nullptr;
+        const int error = ::glfwGetError(&description);
+        if (error != GLFW_NO_ERROR) {
+            PPR_LOG(
+                GlfwWindow, error, "failed to set window monitor",
+                {{"error_code", error}, {"description", description != nullptr ? description : ""}});
+            return platform::make_error_code(GLFW_FALSE);
+        }
+        return {};
+    }
+
+    Expected<WindowDisplayGeometry> GlfwWindow::configureDisplayWindow(
+        const Window &window, const Monitor *const monitor, const int2 &position, const int2 &size,
+        const std::optional<u32> refresh_hz) {
+        if (size.x <= 0 or
+            size.y <= 0 or
+            (monitor == nullptr and refresh_hz.has_value()) or
+            (refresh_hz and (*refresh_hz == 0u or *refresh_hz > 2147483647u))) {
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+        ::GLFWwindow *const native = glfwHandle_(window.m_handle);
+        std::ignore = ::glfwGetError(nullptr);
+        ::glfwSetWindowMonitor(
+            native, monitor != nullptr ? glfwHandle_(monitor->m_handle) : nullptr, position.x, position.y, size.x,
+            size.y, refresh_hz ? static_cast<int>(*refresh_hz) : GLFW_DONT_CARE);
+        if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+            return std::unexpected{platform::make_error_code(GLFW_FALSE)};
+        }
+
+        const auto observed = displayWindowGeometry(window);
+        if (not observed) {
+            return std::unexpected{observed.error()};
+        }
+        const WindowDisplayGeometry &geometry = *observed;
+        // Native queries are authoritative even when GLFW callbacks are deferred.
+        const auto found = glfwAllocation_(m_windows, window.m_handle);
+        if (found != m_windows.end()) {
+            Window &stored = **found;
+            stored.m_window_position = geometry.m_position;
+            stored.m_window_size = geometry.m_size;
+            stored.m_framebuffer_size = geometry.m_framebuffer_size;
+            stored.m_fullscreen_monitor = monitor != nullptr ? SharedMonitor{monitor} : SharedMonitor{};
+        }
+        return geometry;
+    }
+
+    Expected<WindowDisplayGeometry> GlfwWindow::displayWindowGeometry(const Window &window) const {
+        ::GLFWwindow *const native = glfwHandle_(window.m_handle);
+        std::ignore = ::glfwGetError(nullptr);
+        WindowDisplayGeometry geometry{};
+        ::glfwGetWindowPos(native, &geometry.m_position.x, &geometry.m_position.y);
+        ::glfwGetWindowSize(native, &geometry.m_size.x, &geometry.m_size.y);
+        ::glfwGetFramebufferSize(native, &geometry.m_framebuffer_size.x, &geometry.m_framebuffer_size.y);
+        if (::GLFWmonitor *const actual = ::glfwGetWindowMonitor(native)) {
+            geometry.m_fullscreen = true;
+            if (const char *const name = ::glfwGetMonitorName(actual)) {
+                geometry.m_monitor = name;
+            }
+            if (const ::GLFWvidmode *const mode = ::glfwGetVideoMode(actual);
+                mode != nullptr and mode->refreshRate > 0) {
+                geometry.m_refresh_hz = static_cast<u32>(mode->refreshRate);
+            }
+        }
+        if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+            return std::unexpected{platform::make_error_code(GLFW_FALSE)};
+        }
+        return geometry;
     }
 
     [[nodiscard]] bool GlfwWindow::getWindowShouldClose(const Window &window) const noexcept {

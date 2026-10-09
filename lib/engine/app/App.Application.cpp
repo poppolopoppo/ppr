@@ -5,10 +5,14 @@ module;
 module engine.app;
 
 import :application;
+import :display;
+import :display.settings;
 import :frame.packet;
 import :frame.render_lane;
 import :platform;
 import :renderer;
+import :service.window;
+import :window.monitor;
 
 import engine.core;
 import engine.rhi;
@@ -20,6 +24,39 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(App, debug, none)
 
     namespace {
+        [[nodiscard]] std::error_code applicationExceptionError_() noexcept {
+            try {
+                throw;
+            } catch (const std::bad_alloc &) {
+                return std::make_error_code(std::errc::not_enough_memory);
+            } catch (const std::system_error &error) {
+                return error.code();
+            } catch (...) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+        }
+
+        template<typename Operation>
+        std::error_code pumpOperationBestEffort_(Operation &&operation, std::error_code &first_error) noexcept {
+            std::error_code error{};
+            try {
+                error = operation();
+            } catch (...) {
+                error = applicationExceptionError_();
+            }
+            if (error and error != std::make_error_code(std::errc::operation_canceled) and not first_error) {
+                first_error = error;
+                try {
+                    PPR_LOG(
+                        App, debug, "wait pump retains first error",
+                        {{"category", error.category().name()}, {"value", error.value()}});
+                } catch (...) {
+                    // Only diagnostics are lost; remaining pump/wait phases still run with the retained cause.
+                }
+            }
+            return error;
+        }
+
         // ora-25 measurement-only probe writer: fills one side-channel
         // event from the caller-provided tick and sink. The tick is always
         // the monotonic backing clock read fresh at the probe boundary
@@ -82,18 +119,17 @@ namespace pP {
     Application::~Application() noexcept = default;
 
     std::optional<TimeSpan> Application::getTargetFrameTime() const noexcept {
-        if (m_has_background_priority) {
-            constexpr TimeSpan background_frame_duration = std::chrono::duration_cast<TimeSpan>(
-                TimeDuration{1.0 / 5.0});
-            return background_frame_duration; // 5fps
-        }
-        return m_target_frame_time;
+        // Phase 3 overlay (§4.2): background priority activates the throttle
+        // only when the legacy opt-out is off and display.throttle_unfocused
+        // is enabled. The max() preserves a slower explicit cap (a paced 1fps
+        // foreground stays 1fps) instead of speeding it up to 5fps; the
+        // foreground mode (and vsync) is remembered and restored on refocus.
+        const bool background = m_has_background_priority and not m_no_focus_throttle;
+        return effectiveFramePeriod(m_target_frame_time, m_display_controller.throttleActive(background));
     }
 
     void Application::requestExit(const std::error_code clause) const noexcept {
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
-            PPR_LOG(App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
-
             if (not clause) {
                 // Graceful exit is not cancellation: raise the exit latch so
                 // the run loop terminates, but record no error — run() still
@@ -102,10 +138,16 @@ namespace pP {
                 // Wake any pacer/hint wait so the exit lands within one
                 // slice instead of a full background period.
                 requestFrameAdmissionWake();
-                return;
+            } else {
+                m_request_exit(clause);
+                requestFrameAdmissionWake();
             }
-            m_request_exit(clause);
-            requestFrameAdmissionWake();
+            try {
+                PPR_LOG(
+                    App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
+            } catch (...) {
+                // Diagnostics only: losing the message cannot lose or alter the published exit cause.
+            }
         }
     }
 
@@ -113,12 +155,13 @@ namespace pP {
         // Pure hint: coalesce the pulse, then wake the native wait (if
         // any). Both halves are any-thread safe; waiters recheck persistent
         // state and never admit on the hint alone.
+        m_admission_wake.emitEvent();
         try {
-            m_admission_wake.emitEvent();
             if (m_platform) {
                 m_platform->postEmptyEvent();
             }
         } catch (...) {
+            // Native wake is a hint; exit/error and the pulse remain durable, rechecked within one bounded slice.
         }
     }
 
@@ -151,6 +194,357 @@ namespace pP {
         } else {
             setTargetFrameDuration(std::nullopt);
         }
+    }
+
+    void Application::setDisplaySettings(const DisplaySettings &settings) {
+        // Startup policy only; window intent is validated against native
+        // capabilities during editor initialization. Runtime uses ack-only requests.
+        m_display_controller.setCommitted(settings);
+        const PacingTargets targets = pacingTargets(settings);
+        m_target_frame_time = targets.m_target;
+        m_presentation_vsync = targets.m_vsync;
+        // Startup intent only. A constructed renderer has private presentation
+        // state; runtime edits use requestDisplaySettings and commit on ack.
+    }
+
+    void Application::bindDisplaySurface_(
+        const WindowHandle handle, const SurfaceGeneration observed_generation) noexcept {
+        m_display_surface_handle = handle;
+        m_windowed_geometry.reset();
+        ++m_display_surface_lifetime;
+        m_lane_surface_handle = handle;
+        m_lane_surface_generation = observed_generation;
+    }
+
+    std::error_code Application::requestDisplaySettings(config::Resolved<DisplaySettings> candidate) {
+        config::Diagnostics diagnostics{};
+        return requestDisplaySettings(std::move(candidate), diagnostics);
+    }
+
+    Expected<DisplayCapabilities> Application::displayCapabilities() const {
+        if (std::this_thread::get_id() != m_display_thread) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
+        DisplayCapabilities capabilities{};
+        const safe_ptr<IWindowService> service = m_platform->getWindowService();
+        if (not service) {
+            return capabilities;
+        }
+        capabilities.m_window_changes = service->supportsDisplayWindowChanges();
+        capabilities.m_exclusive_refresh = service->supportsExclusiveRefresh();
+        const auto modeView = [](const VideoMode &mode) {
+            return DisplayModeCapability{
+                mode.m_resolution.x > 0 ? static_cast<u32>(mode.m_resolution.x) : 0u,
+                mode.m_resolution.y > 0 ? static_cast<u32>(mode.m_resolution.y) : 0u,
+                mode.m_refresh_rate > 0 ? std::optional<u32>{static_cast<u32>(mode.m_refresh_rate)} : std::nullopt};
+        };
+        std::error_code modes_error{};
+        const std::error_code error = service->enumerateMonitors([&](const SharedMonitor &monitor) {
+            DisplayMonitorCapability entry{};
+            entry.m_name = monitor->m_name;
+            entry.m_primary = monitor->m_primary_monitor;
+            entry.m_current = modeView(monitor->m_video_mode);
+            const std::error_code enumerated = service->enumerateMonitorVideoModes(
+                *monitor, [&](const VideoMode &mode) {
+                    entry.m_modes.push_back(modeView(mode));
+                    return std::error_code{};
+                });
+            if (enumerated and not modes_error) {
+                modes_error = enumerated;
+            }
+            capabilities.m_monitors.push_back(std::move(entry));
+            return std::error_code{};
+        });
+        if (error or modes_error) {
+            return std::unexpected{error ? error : modes_error};
+        }
+        return capabilities;
+    }
+
+    Expected<WindowDisplayGeometry> Application::displayWindowGeometry() const {
+        if (std::this_thread::get_id() != m_display_thread) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
+        const safe_ptr<IWindowService> service = m_platform->getWindowService();
+        if (not service or
+            not service->getMainWindow() or
+            service->getMainWindow()->m_handle != m_display_surface_handle) {
+            return std::unexpected{std::make_error_code(std::errc::not_connected)};
+        }
+        return service->displayWindowGeometry(*service->getMainWindow());
+    }
+
+    std::error_code Application::requestDisplaySettings(
+        config::Resolved<DisplaySettings> candidate, config::Diagnostics &diagnostics) {
+        if (std::this_thread::get_id() != m_display_thread) {
+            return std::make_error_code(std::errc::operation_not_permitted);
+        }
+        if (m_display_transactions_stopped or isExitRequested()) {
+            return std::make_error_code(std::errc::operation_canceled);
+        }
+        if (not m_display_surface_handle or not m_renderer) {
+            return std::make_error_code(std::errc::not_connected);
+        }
+        const SurfaceGeneration generation = renderLaneOwnsRenderer_()
+                                                 ? laneSurfaceGeneration(m_display_surface_handle)
+                                                 : m_renderer->surfaceGenerationFor(m_display_surface_handle);
+        if (generation == kSurfaceGenerationNone) {
+            return std::make_error_code(std::errc::resource_unavailable_try_again);
+        }
+        const auto capabilities = displayCapabilities();
+        if (not capabilities) {
+            return capabilities.error();
+        }
+        const bool window_change = displayWindowChange(candidate.m_value, m_display_controller.committed());
+        if (const std::error_code error = m_display_controller.begin(
+                std::move(candidate), *capabilities, diagnostics)) {
+            return error;
+        }
+
+        m_pending_surface_identity = {m_display_surface_handle, generation};
+        m_pending_surface_lifetime = m_display_surface_lifetime;
+        m_pending_window_change = window_change;
+        m_window_operation_transaction = 0u;
+        m_pending_window_geometry.reset();
+        requestFrameAdmissionWake();
+        return {};
+    }
+
+    Expected<WindowDisplayGeometry> Application::applyDisplayWindow_(
+        const DisplaySettings &settings, const bool restore) {
+        if (std::this_thread::get_id() != m_display_thread) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
+        const safe_ptr<IWindowService> service = m_platform->getWindowService();
+        if (not service or
+            not service->getMainWindow() or
+            service->getMainWindow()->m_handle != m_pending_surface_identity.m_handle) {
+            return std::unexpected{std::make_error_code(std::errc::not_connected)};
+        }
+        const Window &window = *service->getMainWindow();
+        if (not restore) {
+            const auto geometry = service->displayWindowGeometry(window);
+            if (not geometry) {
+                return std::unexpected{geometry.error()};
+            }
+            if (geometry->m_size.x <= 0 or geometry->m_size.y <= 0) {
+                return std::unexpected{std::make_error_code(std::errc::not_connected)};
+            }
+            m_restore_window_geometry = *geometry;
+            m_restore_window_settings = m_display_controller.committed();
+            m_restore_window_settings.m_width = static_cast<u32>(geometry->m_size.x);
+            m_restore_window_settings.m_height = static_cast<u32>(geometry->m_size.y);
+            m_restore_window_settings.m_window_mode = geometry->m_fullscreen ? EDisplayWindowMode::fullscreen
+                                                                             : EDisplayWindowMode::windowed;
+            m_restore_window_settings.m_monitor = geometry->m_fullscreen ? geometry->m_monitor : "auto";
+            m_restore_window_settings.m_refresh_hz = geometry->m_fullscreen ? geometry->m_refresh_hz.value_or(0u) : 0u;
+            if (not geometry->m_fullscreen) {
+                m_windowed_geometry = *geometry;
+            }
+        }
+        const auto capabilities = displayCapabilities();
+        if (not capabilities) {
+            return std::unexpected{capabilities.error()};
+        }
+        config::Diagnostics diagnostics{};
+        if (const std::error_code error = validateDisplaySettings(settings, *capabilities, diagnostics)) {
+            return std::unexpected{error};
+        }
+
+        SharedMonitor selected{};
+        const std::error_code error = service->enumerateMonitors([&](const SharedMonitor &monitor) {
+            if ((settings.m_monitor == "auto" and monitor->m_primary_monitor) or
+                settings.m_monitor == monitor->m_name) {
+                selected = monitor;
+            }
+            return std::error_code{};
+        });
+        if (error) {
+            return std::unexpected{error};
+        }
+        if (settings.m_window_mode == EDisplayWindowMode::fullscreen and not selected) {
+            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+        }
+
+        int2 size = restore ? m_restore_window_geometry.m_size : window.m_window_size;
+        int2 position = restore ? m_restore_window_geometry.m_position : window.m_window_position;
+        if (not restore and settings.m_window_mode == EDisplayWindowMode::windowed and m_windowed_geometry) {
+            size = m_windowed_geometry->m_size;
+            position = m_windowed_geometry->m_position;
+        }
+        if (settings.m_width != 0u) {
+            size = int2{static_cast<int>(settings.m_width), static_cast<int>(settings.m_height)};
+        } else if (settings.m_window_mode == EDisplayWindowMode::fullscreen) {
+            size = selected->m_video_mode.m_resolution;
+        }
+        if (not restore and
+            selected and
+            (settings.m_monitor != "auto" or settings.m_window_mode == EDisplayWindowMode::fullscreen)) {
+            position = selected->m_virtual_position;
+        }
+        // Mark before entering the operational boundary: even allocation failure
+        // while collecting its result must not make a native mutation cancellable.
+        m_display_controller.markWindowApplied();
+        return service->configureDisplayWindow(
+            window, settings.m_window_mode == EDisplayWindowMode::fullscreen ? &*selected : nullptr, position, size,
+            settings.m_refresh_hz != 0u ? std::optional<u32>{settings.m_refresh_hz} : std::nullopt);
+    }
+
+    std::error_code Application::serviceDisplayTransaction_() {
+        const EDisplayTransaction state = m_display_controller.transactionState();
+        if (state == EDisplayTransaction::degraded) {
+            return m_display_controller.transactionError();
+        }
+        if (state != EDisplayTransaction::unsubmitted and state != EDisplayTransaction::restore_unsubmitted) {
+            return {};
+        }
+        if (m_display_transactions_stopped) {
+            m_display_controller.cancelUnsubmitted();
+            if (not m_display_controller.restoring()) {
+                return {};
+            }
+        }
+        if (m_pending_surface_lifetime != m_display_surface_lifetime) {
+            m_display_controller.invalidatePending();
+            return {};
+        }
+
+        // Drain old frame work through the existing ledger, never cancel an
+        // accepted GPU submission or bypass its exactly-once settlement.
+        reconcileSubmittedReservations_();
+        if (m_frame_reservations.outstanding() != 0u) {
+            return {};
+        }
+
+        const bool restore = m_display_controller.restoring();
+        const DisplaySettings &settings = restore ? m_display_controller.committed()
+                                                  : m_display_controller.pending()->m_resolved.m_value;
+        if (restore) {
+            // Restoration addresses the actual generation reported by failed apply.
+            if (m_display_controller.applied().m_generation != kSurfaceGenerationNone) {
+                m_pending_surface_identity.m_generation = m_display_controller.applied().m_generation;
+            }
+        }
+        SurfaceSettings surface{.m_vsync = presentationVsync(settings)};
+        if (m_pending_window_change) {
+            if (not restore and m_window_operation_transaction == 0u) {
+                const SurfaceGeneration current = renderLaneOwnsRenderer_()
+                                                      ? laneSurfaceGeneration(m_pending_surface_identity.m_handle)
+                                                      : m_renderer->surfaceGenerationFor(
+                                                            m_pending_surface_identity.m_handle);
+                if (current != m_pending_surface_identity.m_generation) {
+                    m_display_controller.invalidatePending();
+                    return {};
+                }
+            }
+            const u64 transaction = m_display_controller.pending()->m_transaction_id;
+            if (m_window_operation_transaction != transaction) {
+                // Admission is suspended and the old reservation ledger drained.
+                // OS work stays on the main/native thread; the renderer only sees
+                // copied framebuffer geometry through the existing lane transport.
+                m_window_operation_transaction = transaction;
+                const auto geometry = applyDisplayWindow_(restore ? m_restore_window_settings : settings, restore);
+                if (not geometry) {
+                    m_display_controller.markSubmitted();
+                    const DisplayAppliedState &observed = m_display_controller.applied();
+                    AppliedSurfaceSettings actual{
+                        m_pending_surface_identity.m_generation, m_restore_window_geometry.m_framebuffer_size,
+                        observed.m_vsync, false, restore ? geometry.error() : std::error_code{}};
+                    RenderSurfaceResult failed{transaction, m_pending_surface_identity, actual, geometry.error()};
+                    return onSurfaceReconfigured_(failed);
+                }
+                m_pending_window_geometry = *geometry;
+            }
+            surface.m_extent = m_pending_window_geometry->m_framebuffer_size;
+        }
+        RenderSurfaceRequest request{
+            m_display_controller.pending()->m_transaction_id, m_pending_surface_identity, surface};
+
+        if (renderLaneOwnsRenderer_()) {
+            const std::error_code error = m_render_lane->requestSurfaceReconfigure(request);
+            if (error == std::make_error_code(std::errc::resource_unavailable_try_again) or
+                error == std::make_error_code(std::errc::device_or_resource_busy)) {
+                return {}; // Visibly unsubmitted; bounded retry at each pump.
+            }
+            if (error) {
+                m_display_controller.markSubmitted();
+                const DisplayAppliedState &observed = m_display_controller.applied();
+                AppliedSurfaceSettings actual{
+                    observed.m_generation != kSurfaceGenerationNone ? observed.m_generation
+                                                                    : request.m_identity.m_generation,
+                    int2{observed.m_width, observed.m_height}, observed.m_vsync, observed.m_available,
+                    observed.m_restoration_error};
+                RenderSurfaceResult failed{request.m_transaction_id, request.m_identity, actual, error};
+                return onSurfaceReconfigured_(failed);
+            }
+            m_display_controller.markSubmitted();
+            return {};
+        }
+
+        m_display_controller.markSubmitted();
+        RenderSurfaceResult result{request.m_transaction_id, request.m_identity};
+        const auto applied = m_renderer->reconfigureWindowSurface(
+            request.m_identity.m_handle, request.m_identity.m_generation, request.m_settings);
+        result.m_applied = m_renderer->appliedSurfaceSettingsFor(request.m_identity.m_handle);
+        if (not applied) {
+            result.m_error = applied.error();
+        }
+        return onSurfaceReconfigured_(result);
+    }
+
+    std::error_code Application::onSurfaceReconfigured_(const RenderSurfaceResult &result) {
+        if (not m_display_controller.pending() or
+            result.m_transaction_id != m_display_controller.pending()->m_transaction_id or
+            result.m_identity.m_handle != m_pending_surface_identity.m_handle or
+            result.m_identity.m_generation != m_pending_surface_identity.m_generation) {
+            return {};
+        }
+        if (m_pending_surface_lifetime != m_display_surface_lifetime or
+            result.m_identity.m_handle != m_display_surface_handle) {
+            // Consume the old transaction without publishing any old-window
+            // observation or pacing to the recreated window.
+            m_display_controller.invalidatePending();
+            return {};
+        }
+
+        const AppliedSurfaceSettings &applied = result.m_applied;
+        const DisplaySettings &requested = m_display_controller.restoring()
+                                               ? m_display_controller.committed()
+                                               : m_display_controller.pending()->m_resolved.m_value;
+        const bool valid_observation = applied.m_generation != kSurfaceGenerationNone and
+                                       applied.m_vsync == presentationVsync(requested) and
+                                       (not m_pending_window_change or
+                                           not m_pending_window_geometry or
+                                           (applied.m_extent.x == m_pending_window_geometry->m_framebuffer_size.x and
+                                               applied.m_extent.y ==
+                                                   m_pending_window_geometry->m_framebuffer_size.y)) and
+                                       (applied.m_available or applied.m_extent.x <= 0 or applied.m_extent.y <= 0);
+        const std::error_code error = result.m_error
+                                          ? result.m_error
+                                          : (valid_observation ? std::error_code{}
+                                                               : std::make_error_code(std::errc::not_connected));
+        const DisplayAppliedState observation{
+            applied.m_generation, applied.m_extent.x, applied.m_extent.y, applied.m_vsync, applied.m_available,
+            applied.m_restoration_error};
+        const bool was_restoring = m_display_controller.restoring();
+        if (not m_display_controller.acknowledge(result.m_transaction_id, observation, error)) {
+            return {};
+        }
+
+        m_lane_surface_handle = result.m_identity.m_handle;
+        m_lane_surface_generation = applied.m_generation;
+        if (m_display_controller.transactionState() == EDisplayTransaction::idle) {
+            if (not was_restoring) {
+                const PacingTargets targets = pacingTargets(m_display_controller.committed());
+                m_target_frame_time = targets.m_target;
+                m_presentation_vsync = targets.m_vsync;
+            }
+            requestFrameAdmissionWake();
+        }
+        if (m_display_controller.transactionState() == EDisplayTransaction::degraded) {
+            return m_display_controller.transactionError();
+        }
+        return {};
     }
 
     std::error_code Application::run() {
@@ -266,7 +660,7 @@ namespace pP {
                     // the inline retire/mirror when no lane owns the
                     // renderer, then reconcile. Errors retained with the
                     // same first-error rule; canceled stays neutral.
-                    if (m_render_lane) {
+                    if (m_render_lane or m_display_controller.admissionSuspended()) {
                         if (const std::error_code busy_drain_err = pumpRenderCompletions_();
                             busy_drain_err and
                             not first_err and
@@ -496,12 +890,6 @@ namespace pP {
         const TimePoint budget_deadline = time::now() + kMaxHintSlices * FramePacer::kWakeQuantum;
         m_admission_wake.resetEvent();
         for (int slice = 0; slice < kMaxHintSlices; ++slice) {
-            if (isExitRequested()) {
-                return;
-            }
-            if (m_render_lane and m_render_lane->terminalError()) {
-                return;
-            }
             if (const std::error_code hint_drain_err = pumpRenderCompletions_();
                 hint_drain_err and
                 not m_wait_pump_error and
@@ -514,6 +902,9 @@ namespace pP {
                             {"origin", "waitForAdmissionHint_:hint_drain"}});
                 } catch (...) {
                 }
+            }
+            if (isExitRequested() or (m_render_lane and m_render_lane->terminalError())) {
+                return;
             }
             // Credit release for accepted submissions is the AND of CPU
             // settlement and the published retirement frontier — recheck by
@@ -588,7 +979,7 @@ namespace pP {
     std::error_code Application::pumpRenderCompletions_() {
         const hal::ProfileScope scope_frame_retire{"PPR.Frame.Retire"};
         if (not m_render_lane) {
-            return default_value_v;
+            return serviceDisplayTransaction_();
         }
         m_render_result_scratch.clear();
         // Nonblocking drain. The error is retained, never discarded: it
@@ -598,9 +989,18 @@ namespace pP {
         const std::error_code drain_error = m_render_lane->drainResults(m_render_result_scratch);
         std::error_code first_err{};
         for (const RenderFrameResult &result: m_render_result_scratch) {
+            if (result.m_surface_result) {
+                const std::error_code surface_error = onSurfaceReconfigured_(*result.m_surface_result);
+                if (surface_error and not first_err) {
+                    first_err = surface_error;
+                }
+                continue; // Control completion owns no credit or staging ack.
+            }
             // Surface-generation mirror (hint): the lane re-verifies every
             // capture claim against the live record at submit.
-            if (result.m_surface_handle) {
+            if (result.m_surface_handle and
+                (not m_display_surface_handle or result.m_surface_handle == m_display_surface_handle) and
+                result.m_surface_generation >= m_lane_surface_generation) {
                 m_lane_surface_handle = result.m_surface_handle;
                 m_lane_surface_generation = result.m_surface_generation;
             }
@@ -625,6 +1025,10 @@ namespace pP {
             }
         }
         m_render_result_scratch.clear();
+        if (const std::error_code transaction_error = serviceDisplayTransaction_();
+            transaction_error and not first_err) {
+            first_err = transaction_error;
+        }
         // Retained drain/transport failure joins with the same precedence
         // (result errors seen above win; canceled is neutral).
         if (not first_err and drain_error and drain_error != std::make_error_code(std::errc::operation_canceled)) {
@@ -793,30 +1197,27 @@ namespace pP {
             const TimePoint deadline = time::now() + slice;
             if (m_platform) {
                 const hal::ProfileScope scope_frame_service{"PPR.Frame.ServicePlatform"};
-                if (const std::error_code pump_err = m_platform->pumpNativeEvents();
-                    pump_err and
-                    not m_wait_pump_error and
-                    pump_err != std::make_error_code(std::errc::operation_canceled)) {
-                    m_wait_pump_error = pump_err;
-                    PPR_LOG(
-                        App, debug, "pacerSleepSlice_:pump retains wait_pump_error",
-                        {{"category", pump_err.category().name()}, {"value", pump_err.value()},
-                            {"origin", "pacerSleepSlice_:pump"}});
+                std::ignore = pumpOperationBestEffort_(
+                    [this] { return m_platform->pumpNativeEvents(); }, m_wait_pump_error);
+                // A long old CPU cap must not defer a display acknowledgement
+                // until another admitted frame. Retargeting still uses the
+                // existing wakeable pacer and its original tick anchor.
+                if (m_display_controller.admissionSuspended()) {
+                    if (const std::error_code completion_error = pumpOperationBestEffort_(
+                            [this] { return pumpRenderCompletions_(); }, m_wait_pump_error);
+                        completion_error and completion_error != std::make_error_code(std::errc::operation_canceled)) {
+                        if (not m_wait_pump_error) {
+                            m_wait_pump_error = completion_error;
+                        }
+                        requestExit(m_wait_pump_error);
+                    }
                 }
                 const TimeSpan remaining = deadline - time::now();
                 if (remaining <= TimeSpan{}) {
                     return;
                 }
-                if (const std::error_code wait_err = m_platform->waitNativeEvents(remaining);
-                    wait_err and
-                    not m_wait_pump_error and
-                    wait_err != std::make_error_code(std::errc::operation_canceled)) {
-                    m_wait_pump_error = wait_err;
-                    PPR_LOG(
-                        App, debug, "pacerSleepSlice_:wait retains wait_pump_error",
-                        {{"category", wait_err.category().name()}, {"value", wait_err.value()},
-                            {"origin", "pacerSleepSlice_:wait"}});
-                }
+                std::ignore = pumpOperationBestEffort_(
+                    [this, remaining] { return m_platform->waitNativeEvents(remaining); }, m_wait_pump_error);
             } else {
                 const TimeSpan remaining = deadline - time::now();
                 if (remaining <= TimeSpan{}) {
@@ -825,6 +1226,10 @@ namespace pP {
                 std::this_thread::sleep_for(remaining);
             }
         } catch (...) {
+            const std::error_code error = applicationExceptionError_();
+            if (not m_wait_pump_error and error != std::make_error_code(std::errc::operation_canceled)) {
+                m_wait_pump_error = error;
+            }
         }
     }
 
@@ -841,7 +1246,7 @@ namespace pP {
         return m_render_lane != nullptr and m_renderer != nullptr;
     }
 
-    std::error_code Application::startRenderLane_() {
+    std::error_code Application::startRenderLane_() try {
         // The lane owns Renderer affinity from here on: init runs ON the
         // lane (owner id never migrates), sweeps run per frame on it, and
         // the wake callback relays hints to main. The frame executor is
@@ -851,6 +1256,18 @@ namespace pP {
         PPR_ASSERT(not renderLaneOwnsRenderer_());
         auto lane = std::make_unique<RenderLane>();
         RenderLane *const lane_view = lane.get();
+        lane_view->setSurfaceExecutor([this](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+            if (not m_renderer) {
+                result.m_error = std::make_error_code(std::errc::not_connected);
+                return;
+            }
+            const auto applied = m_renderer->reconfigureWindowSurface(
+                request.m_identity.m_handle, request.m_identity.m_generation, request.m_settings);
+            result.m_applied = m_renderer->appliedSurfaceSettingsFor(request.m_identity.m_handle);
+            if (not applied) {
+                result.m_error = applied.error();
+            }
+        });
         RenderLaneSweep sweep{[this](u32 &out_outstanding) -> std::error_code {
             // Fail-closed, never teardown-abort: the lane can still issue a
             // settle sweep during stop+join ordering gaps; a null renderer
@@ -870,6 +1287,8 @@ namespace pP {
         }};
         RenderLaneWake wake{[this]() noexcept { requestFrameAdmissionWake(); }};
         safe_ptr<IRhiService> rhi_service{getServices().get<IRhiService>()};
+        // Publish ownership before thread startup. Every later failure must stop/join the owned lane.
+        m_render_lane = std::move(lane);
         if (const std::error_code start_err = lane_view->start(
                 [this, rhi_service]() -> std::error_code {
                     PPR_ASSERT(m_renderer != nullptr);
@@ -879,9 +1298,9 @@ namespace pP {
                     return m_renderer->initialize(*rhi_service);
                 },
                 RenderFrameExecutor{}, std::move(sweep), std::move(wake))) {
+            std::ignore = stopRenderLane_();
             return start_err;
         }
-        m_render_lane = std::move(lane);
         // P2 teardown protocol: while the caller waits on a sync
         // handoff or a lane join, main keeps the platform service
         // alive. Mirror waitForAdmissionHint_: completions first, then
@@ -896,45 +1315,22 @@ namespace pP {
         // pump stops, and the latched first/terminal error is
         // handed to the fail-stop boundary.
         m_render_lane->setWaitPump([this]() noexcept {
-            try {
-                // Pump errors are retained durably, never silently shed:
-                // the first one wins and travels with the shutdown result.
-                if (const std::error_code pump_err = pumpRenderCompletions_();
-                    pump_err and
-                    not m_wait_pump_error and
-                    pump_err != std::make_error_code(std::errc::operation_canceled)) {
-                    m_wait_pump_error = pump_err;
-                    PPR_LOG(
-                        App, debug, "startRenderLane_:waitPump:pump retains wait_pump_error",
-                        {{"category", pump_err.category().name()}, {"value", pump_err.value()},
-                            {"origin", "startRenderLane_:waitPump:pump"}});
-                }
-                if (m_platform) {
-                    if (const std::error_code native_err = m_platform->pumpNativeEvents();
-                        native_err and
-                        not m_wait_pump_error and
-                        native_err != std::make_error_code(std::errc::operation_canceled)) {
-                        m_wait_pump_error = native_err;
-                        PPR_LOG(
-                            App, debug, "startRenderLane_:waitPump:native retains wait_pump_error",
-                            {{"category", native_err.category().name()}, {"value", native_err.value()},
-                                {"origin", "startRenderLane_:waitPump:native"}});
-                    }
-                    if (const std::error_code wait_err = m_platform->waitNativeEvents(FramePacer::kWakeQuantum);
-                        wait_err and
-                        not m_wait_pump_error and
-                        wait_err != std::make_error_code(std::errc::operation_canceled)) {
-                        m_wait_pump_error = wait_err;
-                        PPR_LOG(
-                            App, debug, "startRenderLane_:waitPump:wait retains wait_pump_error",
-                            {{"category", wait_err.category().name()}, {"value", wait_err.value()},
-                                {"origin", "startRenderLane_:waitPump:wait"}});
-                    }
-                }
-            } catch (...) {
+            // Each phase retains its error before proceeding; diagnostics cannot suppress later servicing.
+            std::ignore = pumpOperationBestEffort_([this] { return pumpRenderCompletions_(); }, m_wait_pump_error);
+            if (m_platform) {
+                std::ignore = pumpOperationBestEffort_(
+                    [this] { return m_platform->pumpNativeEvents(); }, m_wait_pump_error);
+                std::ignore = pumpOperationBestEffort_(
+                    [this] { return m_platform->waitNativeEvents(FramePacer::kWakeQuantum); }, m_wait_pump_error);
             }
         });
         return default_value_v;
+    } catch (...) {
+        const std::error_code error = applicationExceptionError_();
+        if (m_render_lane) {
+            std::ignore = stopRenderLane_();
+        }
+        return error;
     }
 
     std::error_code Application::stopRenderLane_() noexcept {
@@ -942,29 +1338,48 @@ namespace pP {
         // prepareGpuTeardown_) and exit already signalled; settle + join
         // here while the platform still pumps, then destroy the transports
         // after the last emitter is gone.
-        std::error_code lane_err{};
-        try {
-            if (m_render_lane) {
+        std::error_code lane_err = m_wait_pump_error;
+        if (m_render_lane) {
+            try {
+                m_display_transactions_stopped = true;
+                m_display_controller.stopTransactions();
                 m_render_lane->requestStop();
                 if (const std::error_code join_err = m_render_lane->join(); join_err) {
                     failStopOnUnknownGpuTeardown_(join_err);
                 }
-                // Unconditional final settle BEFORE the transports die and
-                // accounting resets: drain every remaining settlement and
-                // surface the lane's final sweep status even when the join
-                // already latched a timeout. Raw channels run no element
-                // dtors, so this drain is also what retires the last live
-                // RenderFrameResult/shared_ptr bytes.
-                if (const std::error_code drain_err = pumpRenderCompletions_(); drain_err) {
-                    PPR_LOG(
-                        App, info, "stopRenderLane_:drain retains drain_err",
-                        {{"category", drain_err.category().name()}, {"value", drain_err.value()},
-                            {"origin", "stopRenderLane_:drain"}});
-                    lane_err = drain_err;
-                }
-                m_render_lane.reset();
+            } catch (...) {
+                // No proven join: never reset ownership or free transports behind potentially live work.
+                failStopOnUnknownGpuTeardown_(applicationExceptionError_());
             }
-        } catch (...) {
+            if (not lane_err) {
+                lane_err = m_wait_pump_error;
+            }
+            // Unconditional final settle BEFORE the transports die and
+            // accounting resets: drain every remaining settlement and
+            // surface the lane's final sweep status even when the join
+            // already latched a timeout. Raw channels run no element
+            // dtors, so this drain is also what retires the last live
+            // RenderFrameResult/shared_ptr bytes.
+            try {
+                if (const std::error_code drain_err = pumpRenderCompletions_(); drain_err) {
+                    if (not lane_err) {
+                        lane_err = drain_err;
+                    }
+                    try {
+                        PPR_LOG(
+                            App, info, "stopRenderLane_:drain retains drain_err",
+                            {{"category", drain_err.category().name()}, {"value", drain_err.value()},
+                                {"origin", "stopRenderLane_:drain"}});
+                    } catch (...) {
+                        // Reporting cannot change retained error or bypass independent cleanup after join.
+                    }
+                }
+            } catch (...) {
+                if (not lane_err) {
+                    lane_err = applicationExceptionError_();
+                }
+            }
+            m_render_lane.reset();
         }
         if (m_wait_pump_error) {
             try {
@@ -1015,6 +1430,10 @@ namespace pP {
             // never before it (otherwise it can never release on the threaded
             // path, which emits no other reconcile trigger per frame).
             reconcileSubmittedReservations_();
+            if (m_display_controller.admissionSuspended()) {
+                out_skip = true;
+                return default_value_v;
+            }
             if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
                 // The frontier mirror may have retired a still-charged record
                 // above. Only the settled/retired half leaves — a merely
@@ -1032,7 +1451,14 @@ namespace pP {
             // Keyed record replaces the lane pending counter: the credit
             // stays charged from BEFORE construction through CPU settlement
             // AND (for accepted submissions) GPU retirement.
-            FrameReservation &reservation = m_reservations.emplace_back();
+            FrameReservation &reservation = [this]() -> FrameReservation & {
+                try {
+                    return m_reservations.emplace_back();
+                } catch (...) {
+                    std::ignore = m_frame_reservations.release();
+                    throw;
+                }
+            }();
             reservation.m_active = true;
             reservation.m_epoch = m_reservation_epoch;
             reservation.m_frame_id = getFrameIndex();
@@ -1068,6 +1494,13 @@ namespace pP {
         // all keep it where it last proved a real one).
         m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
         reconcileSubmittedReservations_();
+        if (const std::error_code transaction_error = serviceDisplayTransaction_()) {
+            return transaction_error;
+        }
+        if (m_display_controller.admissionSuspended()) {
+            out_skip = true;
+            return default_value_v;
+        }
         if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
             out_skip = true;
             return default_value_v;
@@ -1081,7 +1514,14 @@ namespace pP {
         }
         // Same keyed record as the lane branch: the credit releases only
         // after CPU settlement AND the matching GPU retirement.
-        FrameReservation &reservation = m_reservations.emplace_back();
+        FrameReservation &reservation = [this]() -> FrameReservation & {
+            try {
+                return m_reservations.emplace_back();
+            } catch (...) {
+                std::ignore = m_frame_reservations.release();
+                throw;
+            }
+        }();
         reservation.m_active = true;
         reservation.m_epoch = m_reservation_epoch;
         reservation.m_frame_id = getFrameIndex();
@@ -1095,7 +1535,8 @@ namespace pP {
         // then the manager ticks with a zero target so now() stays latched
         // and only callback dispatch + dt accounting run. Focus/background/
         // uncapped transitions re-evaluate here every frame via
-        // getTargetFrameTime(). Each wait slices at the wake quantum and the
+        // getTargetFrameTime() (Phase 3 DisplayController overlay: §4.1
+        // foreground mapping plus the §4.2 unfocused floor). Each wait slices at the wake quantum and the
         // predicate covers the persistent exit/error latch plus a sampled
         // target change, so a long background wait wakes within one quantum
         // on exit or retarget; a retarget loops to recompute the deadline
@@ -1254,7 +1695,9 @@ namespace pP {
             }
             m_services.insert_or_assign(rhi_service);
 
-            auto renderer = std::make_unique<Renderer>();
+            auto renderer = std::make_unique<Renderer>(SurfaceSettings{.m_vsync = m_presentation_vsync});
+            // Committed startup presentation settings cross the ownership
+            // boundary by value. Later edits use the acknowledged transaction.
             if (m_render_lane_enabled and not m_domain.m_is_headless) {
                 // P2: the Renderer initializes ON the dedicated lane, so
                 // its owner id is the lane from birth and never migrates.
@@ -1417,11 +1860,18 @@ namespace pP {
         m_gpu_teardown_error = default_value_v;
         m_gpu_teardown_stages.clear();
         m_wait_pump_error = default_value_v;
+        m_display_transactions_stopped = false;
+        m_display_controller.startTransactions();
+        bindDisplaySurface_({});
         // Fresh settlement epoch: stale lane results from a finished run
         // can never match (and so never release) a record again. Any
         // unsettled reservation records from the previous epoch are gone —
         // the teardown settle discarded them under a proven disposition.
         ++m_reservation_epoch;
+    }
+
+    void Application::noteTeardownStage_(const char *stage) noexcept {
+        noteGpuTeardownStageBestEffort_(stage);
     }
 
     void Application::noteGpuTeardownStageBestEffort_(const char *stage) noexcept {
@@ -1443,12 +1893,10 @@ namespace pP {
             return m_gpu_teardown_error;
         }
 
-        // Stop admission permanently FIRST: no new frame may be built while
-        // GPU state of unknown completion is being classified. noexcept.
-        // On the lane this runs there (no cross-thread ledger race); inline
-        // it runs here directly.
-        if (m_renderer and not renderLaneOwnsRenderer_()) {
-            m_renderer->quarantineAdmission();
+        m_display_transactions_stopped = true;
+        m_display_controller.stopTransactions();
+        if (m_display_controller.transactionState() == EDisplayTransaction::degraded and not m_wait_pump_error) {
+            m_wait_pump_error = m_display_controller.transactionError();
         }
 
         // B3' entry hook (tests only): owners alive, nothing released yet.
@@ -1459,6 +1907,50 @@ namespace pP {
                 std::move(m_gpu_teardown_entry_hook)();
             }
         } catch (...) {
+            // Instrumentation cannot bypass classification or the UNKNOWN fail-stop boundary.
+        }
+
+        // A native apply can precede a full control queue. It is not a cancellable
+        // no-op: finish its restoration before quarantining the renderer. Existing
+        // owner-lane handoffs drain accepted controls without admitting a frame.
+        if (m_pending_window_change and m_window_operation_transaction != 0u) {
+            try {
+                for (u32 attempt = 0u; attempt < 3u and m_display_controller.pending(); ++attempt) {
+                    m_display_controller.cancelUnsubmitted();
+                    const std::error_code transaction_error = serviceDisplayTransaction_();
+                    if (transaction_error and not m_wait_pump_error) {
+                        m_wait_pump_error = transaction_error;
+                    }
+                    if (renderLaneOwnsRenderer_()) {
+                        bool acknowledged = false;
+                        const std::error_code drain_error = m_render_lane->runOnLaneSync(
+                            []() -> std::error_code { return {}; }, &acknowledged);
+                        if (drain_error or not acknowledged) {
+                            if (not m_wait_pump_error) {
+                                m_wait_pump_error = drain_error ? drain_error
+                                                                : std::make_error_code(std::errc::timed_out);
+                            }
+                            break;
+                        }
+                    }
+                    if (const std::error_code error = pumpRenderCompletions_(); error and not m_wait_pump_error) {
+                        m_wait_pump_error = error;
+                    }
+                }
+                if (m_display_controller.pending() and not m_wait_pump_error) {
+                    m_wait_pump_error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            } catch (...) {
+                if (not m_wait_pump_error) {
+                    m_wait_pump_error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            }
+        }
+
+        // Transactions are now settled; stop backend admission before GPU
+        // completion classification. Inline access has no concurrent submitter.
+        if (m_renderer and not renderLaneOwnsRenderer_()) {
+            m_renderer->quarantineAdmission();
         }
 
         if (not m_renderer) {

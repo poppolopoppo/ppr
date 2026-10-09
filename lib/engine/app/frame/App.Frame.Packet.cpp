@@ -107,6 +107,7 @@ namespace pP {
                     static_cast<unsigned>(event.m_thread_tag));
             }
         } catch (...) {
+            // Diagnostics only, including throwing std::println: lost output cannot alter settlement or shutdown.
         }
         buffer.clear();
     }
