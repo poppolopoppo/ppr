@@ -7,6 +7,7 @@ export module engine.core:concurrency.scheduler;
 import :assert;
 import :concurrency.channel;
 import :concurrency.context;
+import :concurrency.event;
 import :concurrency.thread;
 import :containers.stl;
 import :function.ref;
@@ -140,8 +141,10 @@ export namespace pP {
             std::atomic<u32> m_num_outstanding{0u};
             const u32 m_index;
 
-            std::jthread m_thread;
             const safe_ptr<const ParallelScheduler> m_owner;
+            // Keep close notifications valid after workerLoop exits; join precedes signal/source destruction.
+            Signal<IContext, RawChannel> m_signal;
+            std::jthread m_thread;
 
             WorkerState_(safe_ptr<const ParallelScheduler> owner, std::size_t index, std::size_t capacity_bytes);
 

@@ -808,6 +808,61 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(bool(sched.schedule([](const IContext &) {}, std::nullopt, Policy::drop_if_full)));
         };
 
+        PPR_UNIT_TEST (cancelled_close_join_repeated_with_gated_worker) {
+            // Repeated close after cancellation exercises workers that can exit before close emits.
+            // Task gates coordinate drain, not the internal emit window: this is bounded race stress.
+            constexpr std::size_t kRounds = 256u;
+            const std::error_code expected = std::make_error_code(std::errc::operation_canceled);
+            for (std::size_t round = 0u; round < kRounds; ++round) {
+                std::latch worker_pinned{1};
+                std::latch join_started{1};
+                std::atomic<bool> release{false};
+                std::atomic<int> ran{0};
+                std::atomic<int> saw_cancelled{0};
+                WaitGroup wg{};
+                std::error_code join_err{};
+                auto [parent, cancel] = context::withCancel(context::background());
+                ParallelScheduler sched{"scheduler-test", 2u, queueBytes(), parent};
+                PPR_DEFER {
+                    openGate(release);
+                };
+
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &context) {
+                        worker_pinned.count_down();
+                        awaitGate(release);
+                        ran.fetch_add(1, std::memory_order_acq_rel);
+                        if (context.error() == expected) {
+                            saw_cancelled.fetch_add(1, std::memory_order_acq_rel);
+                        }
+                    },
+                    wg, Policy::wait_if_full));
+                worker_pinned.wait();
+                PPR_TEST_ASSERT(not sched.schedule(
+                    [&](const IContext &) { ran.fetch_add(1, std::memory_order_acq_rel); }, wg, Policy::wait_if_full));
+
+                // Finish the external cancellation emitter before scheduler destruction.
+                cancel();
+                std::jthread joiner([&] {
+                    join_started.count_down();
+                    join_err = sched.join();
+                });
+                join_started.wait();
+                openGate(release);
+                joiner.join();
+
+                PPR_TEST_ASSERT(join_err == expected);
+                PPR_TEST_ASSERT(not wg.wait());
+                PPR_TEST_ASSERT(ran.load(std::memory_order_acquire) == 2);
+                PPR_TEST_ASSERT(saw_cancelled.load(std::memory_order_acquire) == 1);
+                PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+                PPR_TEST_ASSERT(sched.join() == expected);
+                PPR_TEST_ASSERT(
+                    sched.schedule([](const IContext &) {}, wg, Policy::drop_if_full) == RawChannel::error_closed);
+                PPR_TEST_ASSERT(not wg.wait());
+            }
+        };
+
         PPR_UNIT_TEST (schedule_saturated_returns_full) {
             // One worker pinned in a gated task, then fill its queue with
             // explicit drop_if_full until admission is rejected nonblockingly
@@ -1512,6 +1567,7 @@ namespace pP::tests {
             detail::Scheduler::outstanding_count_while_executing,
             detail::Scheduler::cancel_parent_drains_accepted_rejects_later,
             detail::Scheduler::join_with_cause_cancels_and_drains,
+            detail::Scheduler::cancelled_close_join_repeated_with_gated_worker,
             detail::Scheduler::schedule_saturated_returns_full,
             detail::Scheduler::join_drains_full_channel,
             detail::Scheduler::schedule_default_blocks_until_drained,

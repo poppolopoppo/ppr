@@ -143,7 +143,8 @@ namespace pP {
     ParallelScheduler::WorkerState_::WorkerState_( // NOLINT(*-pro-type-member-init)
         safe_ptr<const ParallelScheduler> owner, const std::size_t index, const std::size_t capacity_bytes)
         : m_tasks_queued(std::bit_ceil(capacity_bytes)), m_lifecycle(owner->m_lifecycle),
-          m_index(checked_cast<u32>(index)), m_thread(&WorkerState_::workerLoop, this), m_owner(std::move(owner)) {
+          m_index(checked_cast<u32>(index)), m_owner(std::move(owner)), m_signal(*m_lifecycle, m_tasks_queued),
+          m_thread(&WorkerState_::workerLoop, this) {
     }
 
     [[nodiscard]] static std::error_code runTaskUnderSafetyNet_(
@@ -181,7 +182,7 @@ namespace pP {
         };
 
         bool should_drain = false;
-        for (auto signal: select(*m_lifecycle, m_tasks_queued)) {
+        for (auto signal: m_signal) {
             should_drain |= std::visit(
                 overloaded(
                     [&](IContext *) -> bool { return true; },
