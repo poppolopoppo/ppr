@@ -19,6 +19,8 @@ import game.colony.panel;
 import game.colony.pathfinding;
 import game.colony.smoke;
 import game.colony.timetrials;
+import game.config;
+import game.display;
 
 namespace demo {
     using namespace pP;
@@ -191,6 +193,27 @@ namespace demo {
         // camera controller (Slice 2 resize-deviation fix).
         colony::ColonyUiState m_ui_state{};
         colony::ColonyHover m_hover{};
+        // Phase 5 display session, all game-owned. The startup baseline is
+        // the "Back to startup" reset target (captured once from the
+        // resolved invocation with values and provenance; runtime edits
+        // never touch it). The monitor cache refreshes about once a second
+        // while the Display window stands; the acknowledgement watch and
+        // trial countdown live in m_ui_state.m_display and are polled once
+        // a frame.
+        config::Resolved<DisplaySettings> m_display_baseline{};
+        Array<colony::ColonyMonitorView> m_display_monitors{};
+        std::string m_display_fullscreen_monitor{};
+        bool m_display_fullscreen{false};
+        float m_display_monitor_age{3600.0f};
+        // Owned handle-free capability and geometry views for the Display
+        // window's switching controls and observed-geometry telemetry.
+        // Refreshed with the monitor cache above; a failed query keeps the
+        // flags clear so the panel reads "unavailable", never stale data.
+        DisplayCapabilities m_display_capabilities{};
+        bool m_display_has_capabilities{false};
+        std::error_code m_display_capabilities_error{};
+        WindowDisplayGeometry m_display_geometry{};
+        bool m_display_has_geometry{false};
         // Slice 4 selection: the stable agent key (NEVER a row index) plus
         // scratch naming the selection on the status line. The hovered key
         // is the marker under the pointer (same pick a click runs), and the
@@ -247,6 +270,7 @@ namespace demo {
         std::size_t m_frame_head{};
         u64 m_frame_samples{};
         u64 m_frame_stats_frame{};
+        bool m_frame_stats_stale{true};
         float m_frame_p50{0.0f};
         float m_frame_p95{0.0f};
         float m_frame_min{0.0f};
@@ -331,118 +355,130 @@ namespace demo {
         }
 
         void acquireToolGesture_() noexcept {
-            // Slice 5: build_wall and demolish arm a footprint gesture under
-            // the same ownership gates as dig; the dig body below is
-            // otherwise byte-identical.
-            const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
-                                        m_ui_state.m_tool == colony::EColonyTool::demolish;
-            const bool armed = (m_tool.m_dig_armed or footprint_tool) and not m_tool.m_held and not m_input_error;
-            if (not armed) {
-                return;
-            }
+            try {
+                // Slice 5: build_wall and demolish arm a footprint gesture under
+                // the same ownership gates as dig; the dig body below is
+                // otherwise byte-identical.
+                const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                            m_ui_state.m_tool == colony::EColonyTool::demolish;
+                const bool armed = (m_tool.m_dig_armed or footprint_tool) and not m_tool.m_held and not m_input_error;
+                if (not armed) {
+                    return;
+                }
 
-            // A press starting over UI never acquires world ownership.
-            const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
-            const bool ui_captured = ui and ui->hasMouseCaptureUnlessPopupClose();
-            if (ui_captured) {
-                return;
-            }
+                // A press starting over UI never acquires world ownership.
+                const safe_ptr<IUIService> ui = getServices().tryGet<IUIService>();
+                const bool ui_captured = ui and ui->hasMouseCaptureUnlessPopupClose();
+                if (ui_captured) {
+                    return;
+                }
 
-            m_tool.m_held = true;
-            m_tool.m_owner = EToolGestureOwner::world;
-            m_actions[kToolPressAction]->setConsumeInput(true);
-            m_actions[kToolCursorAction]->setConsumeInput(true);
+                m_tool.m_held = true;
+                m_tool.m_owner = EToolGestureOwner::world;
+                m_actions[kToolPressAction]->setConsumeInput(true);
+                m_actions[kToolCursorAction]->setConsumeInput(true);
 
-            if (m_tool.m_dig_armed) {
-                // Press immediately queues one accepted click (latest wins if an
-                // earlier same-poll press has not drained yet); release
-                // finalizes drag state but never un-queues it.
-                m_tool.m_accepted_click = pickCell_(m_tool.m_cursor_client);
+                if (m_tool.m_dig_armed) {
+                    // Press immediately queues one accepted click (latest wins if an
+                    // earlier same-poll press has not drained yet); release
+                    // finalizes drag state but never un-queues it.
+                    m_tool.m_accepted_click = pickCell_(m_tool.m_cursor_client);
+                    m_tool.m_visited.clear();
+                    m_tool.m_last_cell.reset();
+                    if (m_tool.m_accepted_click.has_value()) {
+                        m_tool.m_visited.push_back(*m_tool.m_accepted_click);
+                        m_tool.m_last_cell = m_tool.m_accepted_click;
+                        PPR_LOG(
+                            Demo, info, "tool accepted",
+                            {
+                                {"slot", "click"},
+                                {"x", m_tool.m_accepted_click->m_x},
+                                {"y", m_tool.m_accepted_click->m_y},
+                            });
+                    }
+                    return;
+                }
+
+                // Footprint snapshot: anchor the press cell and publish the
+                // preview; the dig accepted queue is never touched here.
                 m_tool.m_visited.clear();
                 m_tool.m_last_cell.reset();
-                if (m_tool.m_accepted_click.has_value()) {
-                    m_tool.m_visited.push_back(*m_tool.m_accepted_click);
-                    m_tool.m_last_cell = m_tool.m_accepted_click;
-                    PPR_LOG(
-                        Demo, info, "tool accepted",
-                        {
-                            {"slot", "click"},
-                            {"x", m_tool.m_accepted_click->m_x},
-                            {"y", m_tool.m_accepted_click->m_y},
-                        });
+                m_tool.m_footprint_anchor = pickCell_(m_tool.m_cursor_client);
+                m_build_preview = BuildPreview{};
+                m_build_preview.m_active = true;
+                if (not m_tool.m_footprint_anchor.has_value()) {
+                    m_build_preview.m_reason = "press outside the world";
+                    return;
                 }
-                return;
+                m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
+                m_build_preview.m_min = *m_tool.m_footprint_anchor;
+                m_build_preview.m_max = *m_tool.m_footprint_anchor;
+            } catch (...) {
+                retainInputError_(currentException_());
+                cancelToolGesture_();
             }
-
-            // Footprint snapshot: anchor the press cell and publish the
-            // preview; the dig accepted queue is never touched here.
-            m_tool.m_visited.clear();
-            m_tool.m_last_cell.reset();
-            m_tool.m_footprint_anchor = pickCell_(m_tool.m_cursor_client);
-            m_build_preview = BuildPreview{};
-            m_build_preview.m_active = true;
-            if (not m_tool.m_footprint_anchor.has_value()) {
-                m_build_preview.m_reason = "press outside the world";
-                return;
-            }
-            m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
-            m_build_preview.m_min = *m_tool.m_footprint_anchor;
-            m_build_preview.m_max = *m_tool.m_footprint_anchor;
         }
 
         void trackToolCursor_(const float2 cursor_absolute) noexcept {
-            m_tool.m_cursor_client = cursor_absolute;
+            try {
+                m_tool.m_cursor_client = cursor_absolute;
 
-            // World-origin drags stay world-owned across panels (no UI
-            // re-check here); UI-origin drags never set held, so this gate
-            // also stops them becoming world-owned mid-gesture.
-            const bool track_drag = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world and not m_input_error;
-            if (not track_drag) {
-                return;
-            }
-
-            // Slice 5: footprint drags update the preview rect only; the dig
-            // visited/queue body below stays byte-identical.
-            if (not m_tool.m_dig_armed) {
-                if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
-                    m_ui_state.m_tool == colony::EColonyTool::demolish) {
-                    updateBuildPreview_();
+                // World-origin drags stay world-owned across panels (no UI
+                // re-check here); UI-origin drags never set held, so this gate
+                // also stops them becoming world-owned mid-gesture.
+                const bool track_drag = m_tool.m_held and
+                                        m_tool.m_owner == EToolGestureOwner::world and
+                                        not m_input_error;
+                if (not track_drag) {
+                    return;
                 }
-                return;
-            }
 
-            const std::optional<sim::GlobalCellPos> cell = pickCell_(cursor_absolute);
-            if (not cell.has_value() or m_tool.m_last_cell == cell) {
-                return;
-            }
-            const bool seen = std::ranges::any_of(
-                m_tool.m_visited, [&](const sim::GlobalCellPos known) noexcept { return known == *cell; });
-            if (seen) {
+                // Slice 5: footprint drags update the preview rect only; the dig
+                // visited/queue body below stays byte-identical.
+                if (not m_tool.m_dig_armed) {
+                    if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                        m_ui_state.m_tool == colony::EColonyTool::demolish) {
+                        updateBuildPreview_();
+                    }
+                    return;
+                }
+
+                const std::optional<sim::GlobalCellPos> cell = pickCell_(cursor_absolute);
+                if (not cell.has_value() or m_tool.m_last_cell == cell) {
+                    return;
+                }
+                const bool seen = std::ranges::any_of(
+                    m_tool.m_visited, [&](const sim::GlobalCellPos known) noexcept { return known == *cell; });
+                if (seen) {
+                    m_tool.m_last_cell = cell;
+                    return;
+                }
+
+                // Bounded visited set (drop-oldest); an evicted cell may re-fire
+                // if revisited later in the same drag.
+                if (m_tool.m_visited.size() >= kMaxDragVisitedCells) {
+                    m_tool.m_visited.erase(m_tool.m_visited.begin());
+                }
+                m_tool.m_visited.push_back(*cell);
                 m_tool.m_last_cell = cell;
-                return;
-            }
 
-            // Bounded visited set (drop-oldest); an evicted cell may re-fire
-            // if revisited later in the same drag.
-            if (m_tool.m_visited.size() >= kMaxDragVisitedCells) {
-                m_tool.m_visited.erase(m_tool.m_visited.begin());
+                // Bounded drag queue (drop-oldest tail under extreme event
+                // rates); the click slot is never shed.
+                if (m_tool.m_drag_queue.size() >= kMaxQueuedDragCells) {
+                    m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
+                }
+                m_tool.m_drag_queue.push_back(*cell);
+                PPR_LOG(
+                    Demo, info, "tool accepted",
+                    {
+                        {"slot", "drag"},
+                        {"x", cell->m_x},
+                        {"y", cell->m_y},
+                    });
+            } catch (...) {
+                retainInputError_(currentException_());
+                cancelToolGesture_();
             }
-            m_tool.m_visited.push_back(*cell);
-            m_tool.m_last_cell = cell;
-
-            // Bounded drag queue (drop-oldest tail under extreme event
-            // rates); the click slot is never shed.
-            if (m_tool.m_drag_queue.size() >= kMaxQueuedDragCells) {
-                m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
-            }
-            m_tool.m_drag_queue.push_back(*cell);
-            PPR_LOG(
-                Demo, info, "tool accepted",
-                {
-                    {"slot", "drag"},
-                    {"x", cell->m_x},
-                    {"y", cell->m_y},
-                });
         }
 
         /// Slice 5 preview update: anchor to cursor, inclusive, normalized to
@@ -531,8 +567,7 @@ namespace demo {
             }
             if (not placed) {
                 const std::error_code error = placed.error();
-                const std::errc code = error == std::errc::operation_not_permitted ? std::errc::operation_not_permitted
-                                                                                   : std::errc::invalid_argument;
+                retainInputError_(error);
                 PPR_LOG(
                     Demo, warning, "build order rejected",
                     {
@@ -541,7 +576,7 @@ namespace demo {
                         {"error", error.value()},
                         {"category", error.category().name()},
                     });
-                postNotice_(is_wall ? "Rock wall order rejected" : "Demolish order rejected", code);
+                postDisplayNotice_(is_wall ? "Rock wall order rejected" : "Demolish order rejected", error);
                 return;
             }
 
@@ -559,6 +594,9 @@ namespace demo {
                 m_ui_state.m_notice.m_error = std::error_code{};
                 m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
             } catch (...) {
+                retainInputError_(currentException_());
+                m_ui_state.m_notice.m_text.clear();
+                m_ui_state.m_notice.m_seconds_left = 0.0f;
             }
         }
 
@@ -1001,6 +1039,33 @@ namespace demo {
                     }
                     break;
 
+                case colony::EColonyIntent::toggle_display:
+                    // The window's draft is uncommitted scratch: closing
+                    // discards it (resynced on the next open). An armed trial
+                    // keeps counting while closed; expiry reverts to the
+                    // known-good values, which is the safe direction.
+                    m_ui_state.m_display_open = not m_ui_state.m_display_open;
+                    if (not m_ui_state.m_display_open) {
+                        m_ui_state.m_display.m_synced = false;
+                    }
+                    break;
+
+                case colony::EColonyIntent::display_apply: submitDisplayDraft_(); break;
+
+                case colony::EColonyIntent::display_reset_overrides: submitDisplayReset_(); break;
+
+                case colony::EColonyIntent::display_save: saveDisplayOverlay_(); break;
+
+                case colony::EColonyIntent::display_keep:
+                    game::disarmDisplayConfirm(m_ui_state.m_display.m_confirm);
+                    m_ui_state.m_display.m_revert_failed = false;
+                    postDisplayNotice_("Keeping the new picture settings.", std::error_code{});
+                    break;
+
+                case colony::EColonyIntent::display_revert: revertDisplayNow_(); break;
+
+                case colony::EColonyIntent::display_use_monitor_cap: useMonitorCapAsDraft_(); break;
+
                 default:
                     // Future intents get a handler here; never silent.
                     break;
@@ -1010,10 +1075,30 @@ namespace demo {
         /// Standing instruction on the status line (shown when no notice is
         /// visible); rewritten only on an actual tool change so a repeated
         /// selection cannot stomp a fresh notice's window.
+        [[nodiscard]] static std::error_code currentException_() noexcept {
+            try {
+                throw;
+            } catch (const std::bad_alloc &) {
+                return std::make_error_code(std::errc::not_enough_memory);
+            } catch (const std::system_error &error) {
+                return error.code();
+            } catch (...) {
+                return std::make_error_code(std::errc::state_not_recoverable);
+            }
+        }
+
+        void retainInputError_(const std::error_code error) noexcept {
+            if (not m_input_error) {
+                m_input_error = error;
+            }
+        }
+
         void setStatus_(const char *const text) noexcept {
             try {
                 m_ui_state.m_instruction = text;
             } catch (...) {
+                retainInputError_(currentException_());
+                m_ui_state.m_instruction.clear();
             }
         }
 
@@ -1023,12 +1108,527 @@ namespace demo {
         /// one is cleared every frame, so it cannot hold an error the
         /// player has time to read).
         void postNotice_(const char *const text, const std::errc error) noexcept {
+            postDisplayNotice_(text, std::make_error_code(error));
+        }
+
+        /// Status notice from owned text (dynamic display messages). Same
+        /// bounded lifetime as postNotice_; failures carry their code for
+        /// the muted suffix, successes state their result.
+        void postDisplayNotice_(const std::string_view text, const std::error_code error) noexcept {
+            retainInputError_(error);
+            m_ui_state.m_notice.m_error = error;
             try {
                 m_ui_state.m_notice.m_text = text;
-                m_ui_state.m_notice.m_error = std::make_error_code(error);
                 m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
             } catch (...) {
+                retainInputError_(currentException_());
+                m_ui_state.m_notice.m_text.clear();
+                m_ui_state.m_notice.m_seconds_left = 0.0f;
             }
+        }
+
+        /// First resolution diagnostic as one bounded notice line. May
+        /// allocate; every caller runs inside a try block.
+        [[nodiscard]] std::string displayRejectionText_(const config::Diagnostics &diagnostics) {
+            std::string text{"Picture change rejected."};
+            if (not diagnostics.entries().empty()) {
+                const auto &first = diagnostics.entries().front();
+                text = first.m_property + ": " + first.m_message;
+                if (text.size() > 180u) {
+                    text.resize(180u);
+                }
+            }
+            return text;
+        }
+
+        /// Apply: validate the draft as one runtime layer, then submit
+        /// through requestDisplaySettings. Commit happens on acknowledgement
+        /// only; the poll below watches for it. A queued candidate is never
+        /// labeled applied. While a trial confirmation is unresolved the
+        /// intent is rejected (Keep or Revert first), never silently
+        /// dropped and never stacked onto the trial baseline.
+        void submitDisplayDraft_() noexcept {
+            try {
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                if (game::displayTrialUnresolved(session.m_confirm)) {
+                    postDisplayNotice_(
+                        "Confirm the trial picture settings (Keep or Revert) before applying more changes.",
+                        std::make_error_code(std::errc::device_or_resource_busy));
+                    return;
+                }
+                if (displayController().pending()) {
+                    postDisplayNotice_(
+                        "A picture change is already in flight.",
+                        std::make_error_code(std::errc::device_or_resource_busy));
+                    return;
+                }
+
+                const game::DisplayDraft draft = session.m_draft;
+                config::Diagnostics diagnostics{};
+                // Early rejection against the cached snapshot (stale cache
+                // reads as no support, never as a pass); the transaction
+                // itself re-enumerates and gates again on submit.
+                const DisplayCapabilities no_capabilities{};
+                const DisplayCapabilities &capabilities = m_display_has_capabilities ? m_display_capabilities
+                                                                                     : no_capabilities;
+                auto candidate = game::validateDisplayDraft(
+                    displayController().resolved(), draft, capabilities, diagnostics);
+                if (not candidate) {
+                    retainInputError_(candidate.error());
+                    const std::string reason = displayRejectionText_(diagnostics);
+                    session.m_last_error = reason;
+                    postDisplayNotice_(reason, candidate.error());
+                    return;
+                }
+
+                const bool vsync_affecting = presentationVsync(candidate->m_value) !=
+                                             presentationVsync(displayController().committed());
+                const bool window_change = displayWindowChange(candidate->m_value, displayController().committed());
+                auto geometry = game::captureDisplayTrialGeometry(
+                    window_change, [this] { return displayWindowGeometry(); });
+                if (not geometry) {
+                    retainInputError_(geometry.error());
+                    session.m_last_error = "Picture change failed: cannot capture the current window for Revert.";
+                    postDisplayNotice_(session.m_last_error, geometry.error());
+                    return;
+                }
+                session.m_watch_prior = displayController().committed();
+                session.m_watch_geometry = std::move(*geometry);
+
+                if (const std::error_code error = requestDisplaySettings(std::move(*candidate), diagnostics)) {
+                    retainInputError_(error);
+                    const std::string reason = diagnostics.entries().empty() ? error.message()
+                                                                             : displayRejectionText_(diagnostics);
+                    session.m_last_error = "Picture change failed: " + reason + ".";
+                    postDisplayNotice_(session.m_last_error, error);
+                    return;
+                }
+
+                session.m_watch_ack = true;
+                session.m_watch_revert = false;
+                session.m_watch_revision = displayController().resolved().m_revision;
+                session.m_watch_vsync_affecting = vsync_affecting;
+                session.m_watch_window_change = window_change;
+                session.m_revert_failed = false;
+            } catch (...) {
+                postDisplayNotice_("Picture change failed.", currentException_());
+            }
+        }
+
+        /// Reset to startup: submit the lower-precedence baseline (values
+        /// and provenance from the resolved invocation) as the candidate,
+        /// so acknowledgement removes the runtime assignments instead of
+        /// stacking another runtime layer. Gated like Apply while a trial
+        /// or transaction is open, but independently of the draft: after an
+        /// acknowledgement the draft matches while overrides remain.
+        void submitDisplayReset_() noexcept {
+            try {
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                if (game::displayTrialUnresolved(session.m_confirm)) {
+                    postDisplayNotice_(
+                        "Confirm the trial picture settings (Keep or Revert) before applying more changes.",
+                        std::make_error_code(std::errc::device_or_resource_busy));
+                    return;
+                }
+                if (displayController().pending()) {
+                    postDisplayNotice_(
+                        "A picture change is already in flight.",
+                        std::make_error_code(std::errc::device_or_resource_busy));
+                    return;
+                }
+                if (not game::displayHasRuntimeOverrides(displayController().resolved())) {
+                    postDisplayNotice_("Picture settings already match the startup values.", std::error_code{});
+                    return;
+                }
+
+                config::Resolved<DisplaySettings> candidate = game::displayResetCandidate(m_display_baseline);
+                auto draft = game::displayDraftFrom(candidate.m_value);
+                if (not draft) {
+                    postDisplayNotice_("Picture change failed.", draft.error());
+                    return;
+                }
+                const bool vsync_affecting = presentationVsync(candidate.m_value) !=
+                                             presentationVsync(displayController().committed());
+                const bool window_change = displayWindowChange(candidate.m_value, displayController().committed());
+                auto geometry = game::captureDisplayTrialGeometry(
+                    window_change, [this] { return displayWindowGeometry(); });
+                if (not geometry) {
+                    retainInputError_(geometry.error());
+                    session.m_last_error = "Picture change failed: cannot capture the current window for Revert.";
+                    postDisplayNotice_(session.m_last_error, geometry.error());
+                    return;
+                }
+                session.m_watch_prior = displayController().committed();
+                session.m_watch_geometry = std::move(*geometry);
+
+                config::Diagnostics diagnostics{};
+                if (const std::error_code error = requestDisplaySettings(std::move(candidate), diagnostics)) {
+                    retainInputError_(error);
+                    const std::string reason = diagnostics.entries().empty() ? error.message()
+                                                                             : displayRejectionText_(diagnostics);
+                    session.m_last_error = "Picture change failed: " + reason + ".";
+                    postDisplayNotice_(session.m_last_error, error);
+                    return;
+                }
+
+                session.m_watch_ack = true;
+                session.m_watch_revert = false;
+                session.m_watch_revision = displayController().resolved().m_revision;
+                session.m_watch_vsync_affecting = vsync_affecting;
+                session.m_watch_window_change = window_change;
+                session.m_revert_failed = false;
+                session.m_draft = std::move(*draft);
+                session.m_synced = true;
+            } catch (...) {
+                postDisplayNotice_("Picture change failed.", currentException_());
+            }
+        }
+
+        /// Keep/Revert intent and trial-expiry path: submit the pre-trial
+        /// requested policy pinned to the observed pre-trial geometry
+        /// through the same transaction path, so explicit sizes restore the
+        /// previous window instead of re-requesting "keep current size".
+        /// A failed revert is an operational error: sticky notice plus the
+        /// persistent window line, never a dismissed notification.
+        void revertDisplayNow_() noexcept {
+            try {
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                // Stop time, not the trial: failure retains the submission gate
+                // and baseline until Keep or a successful explicit retry.
+                session.m_confirm.m_countdown_active = false;
+                if (displayController().pending()) {
+                    postDisplayNotice_(
+                        "A picture change is already in flight.",
+                        std::make_error_code(std::errc::device_or_resource_busy));
+                    return;
+                }
+                auto revert = game::displayRevertSettings(session.m_confirm);
+                if (not revert) {
+                    session.m_revert_failed = true;
+                    postDisplayNotice_("Revert failed.", revert.error());
+                    return;
+                }
+                if (game::displaySettingsEqual(*revert, displayController().committed())) {
+                    game::disarmDisplayConfirm(session.m_confirm);
+                    session.m_revert_failed = false;
+                    postDisplayNotice_("Picture settings already match the previous values.", std::error_code{});
+                    return;
+                }
+                config::Diagnostics diagnostics{};
+                const DisplayCapabilities no_capabilities{};
+                const DisplayCapabilities &capabilities = m_display_has_capabilities ? m_display_capabilities
+                                                                                     : no_capabilities;
+                auto draft = game::displayDraftFrom(*revert);
+                if (not draft) {
+                    session.m_revert_failed = true;
+                    postDisplayNotice_("Revert failed.", draft.error());
+                    return;
+                }
+                auto candidate = game::validateDisplayDraft(
+                    displayController().resolved(), *draft, capabilities, diagnostics);
+                if (not candidate) {
+                    retainInputError_(candidate.error());
+                    session.m_revert_failed = true;
+                    session.m_confirm.m_revert_pending = false;
+                    const std::string reason = displayRejectionText_(diagnostics);
+                    session.m_last_error = reason;
+                    session.m_revert_failed = true;
+                    session.m_confirm.m_revert_pending = false;
+                    postDisplayNotice_(reason, candidate.error());
+                    return;
+                }
+                session.m_watch_prior = displayController().committed();
+                session.m_watch_geometry = m_display_has_geometry
+                                               ? std::optional<WindowDisplayGeometry>{m_display_geometry}
+                                               : std::nullopt;
+                if (const std::error_code error = requestDisplaySettings(std::move(*candidate), diagnostics)) {
+                    retainInputError_(error);
+                    session.m_revert_failed = true;
+                    session.m_confirm.m_revert_pending = false;
+                    const std::string reason = diagnostics.entries().empty() ? error.message()
+                                                                             : displayRejectionText_(diagnostics);
+                    session.m_last_error = "Revert failed: " +
+                                           reason +
+                                           ". The previous picture settings may still be active.";
+                    session.m_revert_failed = true;
+                    session.m_confirm.m_revert_pending = false;
+                    postDisplayNotice_(session.m_last_error, error);
+                    return;
+                }
+                session.m_watch_ack = true;
+                session.m_watch_revert = true;
+                session.m_watch_revision = displayController().resolved().m_revision;
+                session.m_watch_vsync_affecting = false;
+                session.m_watch_window_change = false;
+                session.m_confirm.m_revert_pending = true;
+            } catch (...) {
+                m_ui_state.m_display.m_revert_failed = true;
+                m_ui_state.m_display.m_confirm.m_revert_pending = false;
+                postDisplayNotice_("Revert failed.", currentException_());
+            }
+        }
+
+        /// "Use N Hz as cap" intent: draft paced mode with the reported
+        /// monitor refresh, narrowed to the schema domain edge. Apply still
+        /// rejects anything outside [1, 1000] with diagnostics.
+        void useMonitorCapAsDraft_() noexcept {
+            try {
+                const colony::ColonyMonitorView *monitor = nullptr;
+                for (const colony::ColonyMonitorView &entry: m_display_monitors) {
+                    if (entry.m_primary) {
+                        monitor = &entry;
+                        break;
+                    }
+                }
+                if (monitor == nullptr and not m_display_monitors.empty()) {
+                    monitor = &m_display_monitors.front();
+                }
+                if (monitor == nullptr or monitor->m_refresh_hz <= 0) {
+                    postDisplayNotice_("No monitor refresh reported.", std::make_error_code(std::errc::not_supported));
+                    return;
+                }
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                session.m_draft.m_pacing = EFramePacing::paced;
+                session.m_draft.m_cap_hz = static_cast<u32>(
+                    monitor->m_refresh_hz > 1000 ? 1000 : monitor->m_refresh_hz);
+            } catch (...) {
+                postDisplayNotice_("Monitor cap failed.", currentException_());
+            }
+        }
+
+        /// Save intent: write the acknowledged values only. Committed state
+        /// publishes on acknowledgement, so it always reflects successful
+        /// application — never the draft. Merges over the existing overlay
+        /// (unrelated entries preserved; an unreadable file is never
+        /// overwritten) through a same-directory temp file plus atomic
+        /// replace. Success is claimed only after the rename lands.
+        void saveDisplayOverlay_() noexcept {
+            try {
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                auto overlay_path = game::resolveDisplayOverlayPath();
+                if (not overlay_path) {
+                    retainInputError_(overlay_path.error());
+                    session.m_last_error = "Picture settings NOT saved: the program folder is unavailable.";
+                    postDisplayNotice_(session.m_last_error, overlay_path.error());
+                    return;
+                }
+                config::Diagnostics diagnostics{};
+                config::Document existing{};
+                {
+                    auto prior = game::readOverlayBytes(*overlay_path, diagnostics);
+                    if (not prior) {
+                        retainInputError_(prior.error());
+                        session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
+                                               "refusing to overwrite it.";
+                        postDisplayNotice_(session.m_last_error, prior.error());
+                        return;
+                    }
+                    if (prior->has_value()) {
+                        auto decoded = config::decode(**prior, overlay_path->string(), diagnostics);
+                        if (not decoded) {
+                            retainInputError_(decoded.error());
+                            session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
+                                                   "refusing to overwrite it.";
+                            postDisplayNotice_(session.m_last_error, decoded.error());
+                            return;
+                        }
+                        existing = std::move(*decoded);
+                    }
+                }
+                auto merged = game::buildDisplayOverlayDocument(existing, displayController().committed());
+                if (not merged) {
+                    retainInputError_(merged.error());
+                    session.m_last_error = "Picture settings NOT saved: " + merged.error().message() + ".";
+                    postDisplayNotice_(session.m_last_error, merged.error());
+                    return;
+                }
+                auto bytes = game::encodeDisplayOverlay(*merged);
+                if (not bytes) {
+                    retainInputError_(bytes.error());
+                    session.m_last_error = "Picture settings NOT saved: " + bytes.error().message() + ".";
+                    postDisplayNotice_(session.m_last_error, bytes.error());
+                    return;
+                }
+                if (const std::error_code error = game::writeFileAtomically(*overlay_path, *bytes)) {
+                    retainInputError_(error);
+                    session.m_last_error = "Picture settings NOT saved: " + error.message() + ".";
+                    postDisplayNotice_(session.m_last_error, error);
+                    return;
+                }
+                session.m_last_error.clear();
+                if (game::displayDraftMatches(session.m_draft, displayController().committed())) {
+                    postDisplayNotice_(
+                        "Picture settings saved. "
+                        "Command line and environment entries still take priority on next launch.",
+                        std::error_code{});
+                } else {
+                    postDisplayNotice_(
+                        "Saved the applied picture settings; open edits were not included. "
+                        "Command line and environment entries still take priority.",
+                        std::error_code{});
+                }
+            } catch (...) {
+                postDisplayNotice_("Picture settings NOT saved.", currentException_());
+            }
+        }
+
+        /// Monitor telemetry cache for the Display window (primary name,
+        /// mode, refresh; fullscreen state). Publish only complete replacements.
+        [[nodiscard]] std::error_code refreshDisplayMonitors_() noexcept {
+            m_display_monitor_age = 0.0f;
+            const auto unavailable = [this](const std::error_code error) noexcept {
+                m_display_has_capabilities = false;
+                m_display_has_geometry = false;
+                m_display_capabilities_error = error;
+                m_display_monitors.clear();
+                m_display_fullscreen = false;
+                m_display_fullscreen_monitor.clear();
+                return error;
+            };
+            try {
+                const safe_ptr<IWindowService> windows = getServices().tryGet<IWindowService>();
+                if (not windows.isValid()) {
+                    return unavailable(std::make_error_code(std::errc::not_connected));
+                }
+                Array<colony::ColonyMonitorView> fresh{};
+                const std::error_code enumeration_error = windows->enumerateMonitors(
+                    [&](const SharedMonitor &monitor) -> std::error_code {
+                        if (not monitor.isValid() or fresh.size() >= 8u) {
+                            return {};
+                        }
+                        const VideoMode &mode = monitor->m_video_mode;
+                        fresh.push_back(
+                            colony::ColonyMonitorView{
+                                .m_name = monitor->m_name,
+                                .m_width = mode.m_resolution.x,
+                                .m_height = mode.m_resolution.y,
+                                .m_refresh_hz = mode.m_refresh_rate,
+                                .m_primary = monitor->m_primary_monitor,
+                            });
+                        return {};
+                    });
+                if (enumeration_error) {
+                    return unavailable(enumeration_error);
+                }
+                auto capabilities = displayCapabilities();
+                if (not capabilities) {
+                    return unavailable(capabilities.error());
+                }
+                auto geometry = displayWindowGeometry();
+                bool is_fullscreen = false;
+                std::string fullscreen_monitor{};
+                const SharedWindow &main_window = windows->getMainWindow();
+                if (main_window.isValid()) {
+                    const SharedMonitor fullscreen = windows->getWindowFullscreenMonitor(*main_window);
+                    if (fullscreen.isValid()) {
+                        fullscreen_monitor = fullscreen->m_name;
+                        is_fullscreen = true;
+                    }
+                }
+                m_display_monitors = std::move(fresh);
+                m_display_capabilities = std::move(*capabilities);
+                m_display_has_capabilities = true;
+                m_display_capabilities_error = {};
+                m_display_has_geometry = geometry.has_value();
+                if (geometry) {
+                    m_display_geometry = std::move(*geometry);
+                }
+                m_display_fullscreen_monitor = std::move(fullscreen_monitor);
+                m_display_fullscreen = is_fullscreen;
+                return {};
+            } catch (...) {
+                return unavailable(currentException_());
+            }
+        }
+
+        /// Once-a-frame display watch: detect the acknowledgement of one
+        /// submitted change (the resolved revision moves on ack only),
+        /// surface failures with their code, arm the Keep/Revert trial after
+        /// an acknowledged presentation change, tick the trial by this
+        /// frame's post-acknowledgement delta only (the arming poll holds
+        /// its delta, so a delayed acknowledgement cannot expire instantly),
+        /// and expire it into a revert through the same path. Operational
+        /// failures return through update without consuming unfinished watches.
+        [[nodiscard]] std::error_code pollDisplaySession_(const float dt_seconds) noexcept {
+            try {
+                if (m_ui_state.m_display_open) {
+                    m_display_monitor_age += dt_seconds;
+                    if (m_display_monitor_age >= game::kDisplayMonitorRefreshSeconds) {
+                        if (const std::error_code error = refreshDisplayMonitors_()) {
+                            retainInputError_(error);
+                            return m_input_error;
+                        }
+                    }
+                }
+                colony::ColonyDisplaySession &session = m_ui_state.m_display;
+                bool armed_this_poll = false;
+                if (session.m_watch_ack and not displayController().pending()) {
+                    if (displayController().resolved().m_revision != session.m_watch_revision) {
+                        auto draft = game::displayDraftFrom(displayController().committed());
+                        if (not draft) {
+                            retainInputError_(draft.error());
+                            return m_input_error;
+                        }
+                        session.m_last_error.clear();
+                        session.m_draft = std::move(*draft);
+                        session.m_synced = true;
+                        if (session.m_watch_revert) {
+                            session.m_watch_revert = false;
+                            session.m_revert_failed = false;
+                            game::disarmDisplayConfirm(session.m_confirm);
+                            postDisplayNotice_("Picture settings reverted.", std::error_code{});
+                        } else if (session.m_watch_vsync_affecting or session.m_watch_window_change) {
+                            game::armDisplayConfirmOwned(
+                                session.m_confirm, std::move(session.m_watch_prior),
+                                std::move(session.m_watch_geometry));
+                            armed_this_poll = true;
+                            postDisplayNotice_(
+                                "Picture settings applied. Keep or Revert them in the Display window.",
+                                std::error_code{});
+                        } else {
+                            postDisplayNotice_("Picture settings applied.", std::error_code{});
+                        }
+                    } else {
+                        session.m_last_error.clear();
+                        std::error_code error = displayController().transactionError();
+                        if (not error) {
+                            error = std::make_error_code(std::errc::operation_canceled);
+                        }
+                        retainInputError_(error);
+                        if (session.m_watch_revert) {
+                            session.m_confirm.m_revert_pending = false;
+                            session.m_revert_failed = true;
+                            session.m_last_error = "Revert failed: " +
+                                                   error.message() +
+                                                   ". The previous picture settings may still be active.";
+                        } else {
+                            session.m_last_error = "Picture change failed: " + error.message() + ".";
+                        }
+                        postDisplayNotice_(session.m_last_error, error);
+                    }
+                    session.m_watch_ack = false;
+                    session.m_watch_revert = false;
+                }
+                if (game::tickDisplayConfirmPoll(session.m_confirm, dt_seconds, armed_this_poll)) {
+                    revertDisplayNow_();
+                }
+                return m_input_error;
+            } catch (...) {
+                retainInputError_(currentException_());
+                m_ui_state.m_notice.m_text.clear();
+                m_ui_state.m_notice.m_seconds_left = 0.0f;
+                return m_input_error;
+            }
+        }
+
+        /// Display teardown: disarm the trial and drop the watch. A
+        /// submitted-but-unacked change settles through the normal lane
+        /// drain in super shutdown; this session starts nothing new here.
+        void cancelDisplaySession_() noexcept {
+            game::disarmDisplayConfirm(m_ui_state.m_display.m_confirm);
+            m_ui_state.m_display.m_watch_ack = false;
+            m_ui_state.m_display.m_watch_revert = false;
+            m_ui_state.m_display_open = false;
         }
 
         /// Tool selection keeps the dig invariant (armed == tool == dig).
@@ -1218,6 +1818,8 @@ namespace demo {
                                    ")";
                 setStatus_(m_status_scratch.c_str());
             } catch (...) {
+                retainInputError_(currentException_());
+                m_ui_state.m_instruction.clear();
             }
         }
 
@@ -1382,7 +1984,7 @@ namespace demo {
         /// values are as fresh as the rows; the panel borrows them for one
         /// frame only. Read-only: no simulation state is written, so the
         /// snapshot stays pure.
-        void refreshAgentNeeds_() noexcept {
+        void refreshAgentNeeds_() {
             m_agent_needs_rows.clear();
             sim::Registry &registry = m_driver.registry();
             for (const auto &[entity, agent]: registry.view<colony::Agent>()) {
@@ -1446,7 +2048,9 @@ namespace demo {
                 m_frame_max = frame_ms;
             }
 
-            // Slice 6 sampler push (cheap per frame: one store + counters).
+            // Observation only: samples/statistics never drive simulation,
+            // admission, or profiling-success decisions. Failed insertions do
+            // not advance the ring; the previous statistics remain stale.
             // Sampling continues while paused - frames still tick; only the
             // sim step counters freeze, naturally, in the driver.
             try {
@@ -1461,6 +2065,8 @@ namespace demo {
                 m_frame_head = (m_frame_head + 1u) % kFrameWindow;
                 ++m_frame_samples;
             } catch (...) {
+                m_frame_stats_stale = true;
+                return;
             }
             if (m_frame_count - m_frame_stats_frame >= kFrameStatsEvery or
                 (m_frame_stats_frame == 0u and m_frame_samples > 0u)) {
@@ -1474,21 +2080,18 @@ namespace demo {
         /// most every 15 frames; allocation failure - or an empty helper
         /// result - keeps the previous stale values.
         void refreshFrameStats_() noexcept {
-            m_frame_stats_frame = m_frame_count;
+            m_frame_stats_stale = true;
             const std::size_t count = m_frame_ring.size();
             if (count == 0u) {
                 return;
             }
             try {
                 m_frame_sort.resize(count);
-                if (const std::optional<float> p50 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.5f)) {
-                    m_frame_p50 = *p50;
+                const auto p50 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.5f);
+                const auto p95 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.95f);
+                if (not p50 or not p95) {
+                    return;
                 }
-                if (const std::optional<float> p95 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.95f)) {
-                    m_frame_p95 = *p95;
-                }
-                m_frame_min = m_frame_sort.front();
-                m_frame_window_max = m_frame_sort.back();
                 u64 over = 0u;
                 for (const float sample: m_frame_sort) {
                     if (sample > kFrameBudgetMs) {
@@ -1496,6 +2099,12 @@ namespace demo {
                     }
                 }
                 m_frame_over = over;
+                m_frame_p50 = *p50;
+                m_frame_p95 = *p95;
+                m_frame_min = m_frame_sort.front();
+                m_frame_window_max = m_frame_sort.back();
+                m_frame_stats_frame = m_frame_count;
+                m_frame_stats_stale = false;
             } catch (...) {
             }
         }
@@ -1605,6 +2214,7 @@ namespace demo {
                         .m_over_budget = m_frame_over,
                         .m_window_samples = window_samples,
                         .m_window_def = static_cast<u32>(kFrameWindow),
+                        .m_statistics_stale = m_frame_stats_stale,
                         .m_tick_hz = tick_hz,
                         .m_tick_count = tick_count,
                         .m_sim_ms = sim_ms,
@@ -1646,9 +2256,39 @@ namespace demo {
                 .m_presentation_stages = std::span<const colony::StageStat>{m_translator.stageTimings().m_stats},
             };
 
-            const colony::ColonyUiFrame frame = colony::drawColonyUi(m_driver, view, m_shortcut_rows, m_ui_state);
+            // Display snapshot: the copied controller view (§5.1 requested
+            // policy, targets, throttle reason) plus the acknowledged device
+            // report, pending transaction, last failure, and the monitor
+            // cache. The panel renders it read-only; applied changes return
+            // as intents through dispatchIntent_ above.
+            const DisplayView display_view = displayView();
+            const DisplayController &display_controller = displayController();
+            const std::optional<DisplayCandidate> &display_pending = display_controller.pending();
+            const colony::ColonyDisplaySnapshot display_snapshot{
+                .m_view = display_view,
+                .m_applied = display_controller.applied(),
+                .m_transaction = display_controller.transactionState(),
+                .m_error = display_controller.transactionError(),
+                .m_has_pending = display_pending.has_value(),
+                .m_pending_id = display_pending ? display_pending->m_transaction_id : 0u,
+                .m_revision = display_controller.resolved().m_revision,
+                .m_has_runtime_overrides = game::displayHasRuntimeOverrides(display_controller.resolved()),
+                .m_monitors =
+                    std::span<const colony::ColonyMonitorView>{m_display_monitors.data(), m_display_monitors.size()},
+                .m_fullscreen = m_display_fullscreen,
+                .m_fullscreen_monitor = m_display_fullscreen_monitor,
+                .m_capabilities = m_display_has_capabilities ? &m_display_capabilities : nullptr,
+                .m_capabilities_error = m_display_capabilities_error,
+                .m_geometry = m_display_has_geometry ? &m_display_geometry : nullptr,
+            };
+
+            const colony::ColonyUiFrame frame = colony::drawColonyUi(
+                m_driver, view, display_snapshot, m_shortcut_rows, m_ui_state);
             if (frame.m_intent.has_value()) {
                 dispatchIntent_(*frame.m_intent);
+            }
+            if (m_input_error) {
+                return m_input_error;
             }
             // Hand the keyboard back after a completed chrome click so the
             // colony shortcuts regain capture (mirrors the engine's
@@ -1686,7 +2326,15 @@ namespace demo {
         /// driver+translator timing CSVs and exit(0). 0 disables. Live dt is
         /// real-time, so frame/tick counts vary run to run; the CSV shapes
         /// match the trials runner.
-        void setProfileCsvFrames(const u64 frames) noexcept {
+        [[nodiscard]] std::error_code setProfileCsvFrames(const u64 frames) noexcept {
+            if (frames > std::numeric_limits<std::size_t>::max() or frames > m_profile_frame_us.max_size()) {
+                return std::make_error_code(std::errc::value_too_large);
+            }
+            try {
+                m_profile_frame_us.reserve(static_cast<std::size_t>(frames));
+            } catch (...) {
+                return currentException_();
+            }
             m_profile_csv_active = frames > 0u;
             m_profile_csv_remaining = frames;
             m_profile_csv_total = frames;
@@ -1694,10 +2342,7 @@ namespace demo {
             m_profile_backlog_frames = 0u;
             m_profile_frame_dropped = 0u;
             m_profile_frame_index = 0u;
-            try {
-                m_profile_frame_us.reserve(static_cast<std::size_t>(frames));
-            } catch (...) {
-            }
+            return {};
         }
 
         /// Skip window for the live CSV fixture: the first K frames run fully
@@ -1736,6 +2381,13 @@ namespace demo {
             Application::setNoFocusThrottle(enabled);
         }
 
+        /// Startup picture baseline: the lower-precedence reset target with
+        /// values and provenance from the resolved invocation. Captured
+        /// once in main(); runtime edits never touch it.
+        void noteDisplayStartup(const config::Resolved<DisplaySettings> &baseline) {
+            m_display_baseline = baseline;
+        }
+
         /// Label attached to every profile-csv banner/frame line. Default "live".
         void setProfileLabel(std::string label) {
             m_profile_label = std::move(label);
@@ -1770,7 +2422,7 @@ namespace demo {
                 suffix += " pan";
             }
             if (m_profile_skip > 0u) {
-                suffix += std::format(" skip={}", m_profile_skip);
+                suffix += pP::config::configFormat(" skip={}", m_profile_skip);
             }
             return suffix;
         }
@@ -2074,7 +2726,7 @@ namespace demo {
         /// straddled the rect edges half in and half out.
         static void overlayRectBorder_(
             ImDrawList *const draw, const ScreenMap &map, const float cx, const float cy, const float hx,
-            const float hy, const float band_world, const ImU32 color) noexcept {
+            const float hy, const float band_world, const ImU32 color) {
             if (draw == nullptr) {
                 return;
             }
@@ -2094,7 +2746,7 @@ namespace demo {
         /// the cell centre with half extents 0.5 and the standing 0.5-cell
         /// band, exactly as before.
         static void overlayCellBorder_(
-            ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) noexcept {
+            ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) {
             overlayRectBorder_(
                 draw, map, static_cast<float>(cell.m_x) + 0.5f, static_cast<float>(cell.m_y) + 0.5f, 0.5f, 0.5f, 0.5f,
                 color);
@@ -2106,7 +2758,7 @@ namespace demo {
         /// three states as before (valid solid, clamped with badges on the
         /// capped sides, invalid broken with corner gaps). The reason stays
         /// text in the tool strip, never drawn into the world.
-        void overlayFootprintPreview_(ImDrawList *const draw, const ScreenMap &map) noexcept {
+        void overlayFootprintPreview_(ImDrawList *const draw, const ScreenMap &map) {
             if (draw == nullptr) {
                 return;
             }
@@ -2227,99 +2879,99 @@ namespace demo {
         /// so the clip stays conservative, then inset by this frame's panel
         /// chrome (top bar, status line, side panel). A viewport/IO mismatch
         /// skips the overlay rather than misplacing feedback.
-        void drawFeedbackOverlay_(const colony::ColonyUiFrame &frame) noexcept {
-            try {
-                const ScreenMap map = screenMap_();
-                if (not map.m_valid) {
-                    return;
-                }
-                const ImGuiIO &io = ImGui::GetIO();
-                if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
-                    return;
-                }
-                const bool extent_match = std::abs(io.DisplaySize.x - map.m_extent.x) <= 1.0f and
-                                          std::abs(io.DisplaySize.y - map.m_extent.y) <= 1.0f;
-                if (not extent_match) {
-                    return;
-                }
-                if (io.DisplayFramebufferScale.x <= 0.0f or io.DisplayFramebufferScale.y <= 0.0f) {
-                    return;
-                }
-                ImDrawList *draw = ImGui::GetForegroundDrawList();
-                if (draw == nullptr) {
-                    return;
-                }
+        void drawFeedbackOverlay_(const colony::ColonyUiFrame &frame) {
+            const ScreenMap map = screenMap_();
+            if (not map.m_valid) {
+                return;
+            }
+            const ImGuiIO &io = ImGui::GetIO();
+            if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
+                return;
+            }
+            const bool extent_match = std::abs(io.DisplaySize.x - map.m_extent.x) <= 1.0f and
+                                      std::abs(io.DisplaySize.y - map.m_extent.y) <= 1.0f;
+            if (not extent_match) {
+                return;
+            }
+            if (io.DisplayFramebufferScale.x <= 0.0f or io.DisplayFramebufferScale.y <= 0.0f) {
+                return;
+            }
+            ImDrawList *draw = ImGui::GetForegroundDrawList();
+            if (draw == nullptr) {
+                return;
+            }
 
-                // Clip source: framebuffer viewport rect to ImGui coords.
-                const float fb_w = map.m_extent.x * io.DisplayFramebufferScale.x;
-                const float fb_h = map.m_extent.y * io.DisplayFramebufferScale.y;
-                const float ui_w = fb_w / io.DisplayFramebufferScale.x;
-                const float ui_h = fb_h / io.DisplayFramebufferScale.y;
-                const ImVec2 clip_min{0.0f, frame.m_chrome_top};
-                const ImVec2 clip_max{std::ceil(ui_w) - frame.m_chrome_right, std::ceil(ui_h) - frame.m_chrome_bottom};
-                const bool clip_ok = clip_max.x > clip_min.x and clip_max.y > clip_min.y;
-                if (not clip_ok) {
-                    return;
+            // Clip source: framebuffer viewport rect to ImGui coords.
+            const float fb_w = map.m_extent.x * io.DisplayFramebufferScale.x;
+            const float fb_h = map.m_extent.y * io.DisplayFramebufferScale.y;
+            const float ui_w = fb_w / io.DisplayFramebufferScale.x;
+            const float ui_h = fb_h / io.DisplayFramebufferScale.y;
+            const ImVec2 clip_min{0.0f, frame.m_chrome_top};
+            const ImVec2 clip_max{std::ceil(ui_w) - frame.m_chrome_right, std::ceil(ui_h) - frame.m_chrome_bottom};
+            const bool clip_ok = clip_max.x > clip_min.x and clip_max.y > clip_min.y;
+            if (not clip_ok) {
+                return;
+            }
+            draw->PushClipRect(clip_min, clip_max, true);
+            struct ClipScope {
+                ImDrawList *draw;
+                ~ClipScope() noexcept {
+                    draw->PopClipRect();
                 }
-                draw->PushClipRect(clip_min, clip_max, true);
+            } clip_scope{draw};
 
-                // Colonist outlines, one treatment per agent — a persistent
-                // selection outranks a transient hover, so the two never draw
-                // on top of each other. Band and gaps keep the standing
-                // pixel-derived formulas, so the weights match at every zoom;
-                // the ring centre sits one gap outside the body plus half a
-                // band, derived from the same 0.4 x 0.9 halves the hit-test
-                // uses. The bolder hover band grows inward no further than
-                // the body edge (gap >= 0.4 * band at every clamped zoom), so
-                // it never covers the marker it outlines.
-                const float scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
-                const float band = std::clamp(scale * 1.5f, 0.25f, 0.75f);
-                const float gap = std::clamp(scale * 1.0f, 0.10f, 0.50f);
-                const float outer_gap = std::clamp(scale * 3.0f, 0.30f, 1.50f);
-                for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
-                    // Ring centre sits one gap outside the body, plus half a band.
-                    const float ring_x = 0.4f + gap + band * 0.5f;
-                    const float ring_y = 0.9f + gap + band * 0.5f;
+            // Colonist outlines, one treatment per agent — a persistent
+            // selection outranks a transient hover, so the two never draw
+            // on top of each other. Band and gaps keep the standing
+            // pixel-derived formulas, so the weights match at every zoom;
+            // the ring centre sits one gap outside the body plus half a
+            // band, derived from the same 0.4 x 0.9 halves the hit-test
+            // uses. The bolder hover band grows inward no further than
+            // the body edge (gap >= 0.4 * band at every clamped zoom), so
+            // it never covers the marker it outlines.
+            const float scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
+            const float band = std::clamp(scale * 1.5f, 0.25f, 0.75f);
+            const float gap = std::clamp(scale * 1.0f, 0.10f, 0.50f);
+            const float outer_gap = std::clamp(scale * 3.0f, 0.30f, 1.50f);
+            for (const colony::AgentSummary &agent: m_driver.agentSummaries()) {
+                // Ring centre sits one gap outside the body, plus half a band.
+                const float ring_x = 0.4f + gap + band * 0.5f;
+                const float ring_y = 0.9f + gap + band * 0.5f;
 
-                    if (agent.m_key == m_selected_agent) {
-                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
-                        // Outer ring: one outer_gap clear of the inner ring's
-                        // outer edge, same band width.
-                        const float outer_x = ring_x + outer_gap + band;
-                        const float outer_y = ring_y + outer_gap + band;
-                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
-                    } else if (agent.m_key == m_hovered_agent) {
-                        overlayRectBorder_(
-                            draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f, kFeedbackOrange);
-                    } else {
-                        overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
-                    }
+                if (agent.m_key == m_selected_agent) {
+                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
+                    // Outer ring: one outer_gap clear of the inner ring's
+                    // outer edge, same band width.
+                    const float outer_x = ring_x + outer_gap + band;
+                    const float outer_y = ring_y + outer_gap + band;
+                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
+                } else if (agent.m_key == m_hovered_agent) {
+                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f, kFeedbackOrange);
+                } else {
+                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
                 }
+            }
 
-                // Pointer preview in the same order the pass submission used:
-                // a held footprint drag outlines the rect being sized (most
-                // specific state first, dig stays out while a footprint tool
-                // is active); the pinned outline stays independent of the
-                // drag preview (both draw, the preview on top), so a held
-                // drag never hides the pin; while dig is armed, the cell a
-                // click would dig draws (cyan when diggable, agent orange
-                // when it would not land); otherwise the pinned cell draws.
-                const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
-                                            m_ui_state.m_tool == colony::EColonyTool::demolish;
-                if (m_build_preview.m_active and footprint_tool) {
-                    if (m_ui_state.m_pinned.has_value()) {
-                        overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
-                    }
-                    overlayFootprintPreview_(draw, map);
-                } else if (m_tool.m_dig_armed and m_hover.m_world) {
-                    const ImU32 color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
-                    overlayCellBorder_(draw, map, m_hover.m_target, color);
-                } else if (m_ui_state.m_pinned.has_value()) {
+            // Pointer preview in the same order the pass submission used:
+            // a held footprint drag outlines the rect being sized (most
+            // specific state first, dig stays out while a footprint tool
+            // is active); the pinned outline stays independent of the
+            // drag preview (both draw, the preview on top), so a held
+            // drag never hides the pin; while dig is armed, the cell a
+            // click would dig draws (cyan when diggable, agent orange
+            // when it would not land); otherwise the pinned cell draws.
+            const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                        m_ui_state.m_tool == colony::EColonyTool::demolish;
+            if (m_build_preview.m_active and footprint_tool) {
+                if (m_ui_state.m_pinned.has_value()) {
                     overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
                 }
-
-                draw->PopClipRect();
-            } catch (...) {
+                overlayFootprintPreview_(draw, map);
+            } else if (m_tool.m_dig_armed and m_hover.m_world) {
+                const ImU32 color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
+                overlayCellBorder_(draw, map, m_hover.m_target, color);
+            } else if (m_ui_state.m_pinned.has_value()) {
+                overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
             }
         }
 
@@ -2332,34 +2984,35 @@ namespace demo {
         /// (render runs after this panel). Non-interactive (NoInputs)
         /// so world picking is unaffected; skipped while the display is
         /// degenerate.
-        void drawLaneReadout_(const float chrome_bottom) noexcept {
-            try {
-                const ImGuiIO &io = ImGui::GetIO();
-                if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
-                    return;
-                }
-                ImGui::SetNextWindowPos(
-                    ImVec2{8.0f, io.DisplaySize.y - chrome_bottom - 8.0f}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
-                ImGui::SetNextWindowBgAlpha(0.55f);
-                constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                                   ImGuiWindowFlags_NoInputs |
-                                                   ImGuiWindowFlags_NoSavedSettings |
-                                                   ImGuiWindowFlags_NoFocusOnAppearing |
-                                                   ImGuiWindowFlags_NoNav |
-                                                   ImGuiWindowFlags_NoMove;
-                if (not ImGui::Begin("##frame_lanes", nullptr, flags)) {
-                    ImGui::End();
-                    return;
-                }
-                // Honest render number: the display-only last-execute gauge
-                // (worker thread, relaxed). 0.00 until the first lane frame
-                // completes; never the main-side handoff cost.
-                ImGui::Text(
-                    "Frame total %.2f ms  main %.2f ms  render (lane) %.2f ms", m_frame_ms_last, m_main_ms_last,
-                    laneExecuteMs_());
-                ImGui::End();
-            } catch (...) {
+        void drawLaneReadout_(const float chrome_bottom) {
+            const ImGuiIO &io = ImGui::GetIO();
+            if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
+                return;
             }
+            ImGui::SetNextWindowPos(
+                ImVec2{8.0f, io.DisplaySize.y - chrome_bottom - 8.0f}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
+            ImGui::SetNextWindowBgAlpha(0.55f);
+            constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                               ImGuiWindowFlags_NoInputs |
+                                               ImGuiWindowFlags_NoSavedSettings |
+                                               ImGuiWindowFlags_NoFocusOnAppearing |
+                                               ImGuiWindowFlags_NoNav |
+                                               ImGuiWindowFlags_NoMove;
+            const bool visible = ImGui::Begin("##frame_lanes", nullptr, flags);
+            struct WindowScope {
+                ~WindowScope() noexcept {
+                    ImGui::End();
+                }
+            } window_scope;
+            if (not visible) {
+                return;
+            }
+            // Honest render number: the display-only last-execute gauge
+            // (worker thread, relaxed). 0.00 until the first lane frame
+            // completes; never the main-side handoff cost.
+            ImGui::Text(
+                "Frame total %.2f ms  main %.2f ms  render (lane) %.2f ms", m_frame_ms_last, m_main_ms_last,
+                laneExecuteMs_());
         }
 
         [[nodiscard]] std::error_code submitDebugInstances_() {
@@ -2669,16 +3322,22 @@ namespace demo {
                 std::chrono::steady_clock::time_point start;
                 bool armed;
                 void record() noexcept {
+                    if (not armed) {
+                        return;
+                    }
+                    armed = false;
+                    if (samples == nullptr or
+                        cap == nullptr or
+                        backlog == nullptr or
+                        dropped == nullptr or
+                        driver == nullptr) {
+                        return;
+                    }
+                    // Backlog accounting is independent of sample storage.
+                    if (driver->colliderPending() != 0u) {
+                        ++(*backlog);
+                    }
                     try {
-                        if (not armed or
-                            samples == nullptr or
-                            cap == nullptr or
-                            backlog == nullptr or
-                            dropped == nullptr or
-                            driver == nullptr) {
-                            return;
-                        }
-                        armed = false;
                         const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
                         const u64 elapsed = static_cast<u64>(
                             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
@@ -2687,10 +3346,9 @@ namespace demo {
                         } else {
                             ++(*dropped);
                         }
-                        if (driver->colliderPending() != 0u) {
-                            ++(*backlog);
-                        }
                     } catch (...) {
+                        // Dropped is reported in CSV, never counted as collected.
+                        ++(*dropped);
                     }
                 }
                 ~ProfileFrameScope() noexcept {
@@ -2841,8 +3499,12 @@ namespace demo {
             // outline, status line, and Inspector all describe the cell a
             // click would act on this frame. The 3D debug submission keeps
             // bodies, paths, grid, and edit outlines; drawPanel_ draws
-            // chrome plus the screen-space feedback overlay.
+            // chrome plus the screen-space feedback overlay. The display poll
+            // runs ahead of the draw so acknowledgements, the trial
+            // countdown, and monitor telemetry land in this same frame's
+            // Display window.
             refreshHover_();
+            PPR_RETURN_ERROR_ON_FAIL(Demo, pollDisplaySession_(std::chrono::duration<float>(dt).count()));
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitDebugInstances_());
             PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
             // Single-use packet retired on this thread; next frame rebuilds.
@@ -2893,16 +3555,21 @@ namespace demo {
             // before the colony one.
             cancelToolGesture_();
             clearAgentSelection_();
+            first_error = m_input_error;
+            // Display teardown first among UI state: disarm the trial and
+            // drop the acknowledgement watch. A submitted-but-unacked change
+            // settles through the lane drain in super shutdown below.
+            cancelDisplaySession_();
             m_focus_handle.reset();
             if (m_tool_mapping) {
-                if (not getMainPlayer()->getListener().removeInputMapping(*m_tool_mapping)) {
+                if (not getMainPlayer()->getListener().removeInputMapping(*m_tool_mapping) and not first_error) {
                     first_error = make_error_code(std::errc::not_connected);
                 }
                 m_tool_mapping.reset();
             }
             // Unregister borrowed action pointers and callbacks before releasing owners.
             if (m_colony_mapping) {
-                if (not getMainPlayer()->getListener().removeInputMapping(*m_colony_mapping)) {
+                if (not getMainPlayer()->getListener().removeInputMapping(*m_colony_mapping) and not first_error) {
                     first_error = make_error_code(std::errc::not_connected);
                 }
                 m_colony_mapping.reset();
@@ -3140,12 +3807,53 @@ namespace {
 
 int main(const int argc, char *argv[]) {
     const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};
-    if (argc > 1 and std::string_view{argv[1]} == "--smoke") {
+
+    pP::config::Diagnostics diagnostics{};
+    // Generated picture-settings overlay: resolved through the executable
+    // folder (explicit platform boundary, no working-directory search) and
+    // loaded between the base files and the environment. A missing file
+    // means first launch and loads nothing; an undecodable file is invalid
+    // usage like a bad base file. An unavailable program folder simply
+    // skips the overlay; the Display window reports it on Save.
+    std::filesystem::path overlay_path{};
+    if (auto overlay = pP::game::resolveDisplayOverlayPath()) {
+        overlay_path = std::move(*overlay);
+    } else {
+        std::println(stderr, "[display] picture-settings file unavailable: {}", overlay.error().message());
+    }
+    auto invocation = pP::game::resolveGameInvocationWithOverlay(argc, argv, overlay_path, diagnostics);
+    if (not invocation) {
+        std::println(stderr, "{}", diagnostics.format());
+        return pP::config::kExitInvalidUsage;
+    }
+    if (invocation->m_help_requested) {
+        std::println("{}", pP::game::gameHelpText());
+        return 0;
+    }
+
+    const pP::game::GameSettings &settings = invocation->m_game.m_value;
+    const pP::DisplaySettings &display = invocation->m_display.m_value;
+    const pP::StartupSettings &startup = invocation->m_startup.m_value;
+
+    // Single GPU-runner boundary for startup validation: explicitly supplied
+    // true/false values (CLI/file/environment) reach the RHI before any
+    // command constructs GPU work; defaults leave the RHI build defaults
+    // (core validation in debug, GPU-assisted under ASan) untouched.
+    if (const auto *origin = invocation->m_startup.find("startup.core_validation");
+        origin != nullptr and origin->m_source != pP::config::ESource::none) {
+        pP::IRhiService::get()->setCoreValidation(startup.m_core_validation);
+    }
+    if (const auto *origin = invocation->m_startup.find("startup.gpu_validation");
+        origin != nullptr and origin->m_source != pP::config::ESource::none) {
+        pP::IRhiService::get()->setGpuAssistedValidation(startup.m_gpu_validation);
+    }
+
+    if (settings.m_command == pP::game::EGameCommand::smoke) {
         pP::hal::installDebugAssertHooks();
         pP::hal::disableSystemErrorReporting();
-        return pP::colony::runColonySmoke(args).value();
+        return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
-    if (argc > 1 and std::string_view{argv[1]} == "--load100") {
+    if (settings.m_command == pP::game::EGameCommand::load100) {
         pP::hal::installDebugAssertHooks();
         pP::hal::disableSystemErrorReporting();
         const auto load = pP::colony::runLoad100();
@@ -3154,7 +3862,7 @@ int main(const int argc, char *argv[]) {
         }
         return 0;
     }
-    if (argc > 1 and std::string_view{argv[1]} == "--time-trials") {
+    if (settings.m_command == pP::game::EGameCommand::time_trials) {
         pP::hal::installDebugAssertHooks();
         pP::hal::disableSystemErrorReporting();
         const auto trials = pP::colony::runTimeTrials();
@@ -3163,102 +3871,34 @@ int main(const int argc, char *argv[]) {
         }
         return 0;
     }
+
     demo::TurboLarbin app("ppr", args);
-    // Slice 6 profiling fixture: deterministic 100-agent load for PIX
-    // captures. Production default stays 3; the interactive loop is identical.
-    // `--profile-csv N` adds a live CSV dump after N measured frames (exit(0));
-    // it never alters the simulation, only reports timings.
-    // `--profile-label <name>` (default "live") tags every banner/frame line.
-    // `--profile-skip K` (default 0) runs the first K frames fully but excludes
-    // them from every table; the N-frame countdown runs post-skip (K + N total).
-    // `--profile-edits` / `--profile-pan` add the scripted S2 edit schedule /
-    // camera route inside measured windows (frame 0 first, combinable).
-    // `--auto-exit S` (alias `--exit-after S`, both `--flag value` and
-    // `--flag=value`) exits gracefully after S wall-clock seconds.
-    // Profiling/bounded runs (--profile100, --profile-csv, --auto-exit)
-    // disable the focus throttle; `--no-focus-throttle` forces it off.
-    // `--diag-crash=<abort|failfast>` is a TEST-ONLY armed crash for the
-    // crash-diagnostics smoke test (docs/debugging/crash-analysis.md): it
-    // fires after full CLI parsing through the normal binary startup path
-    // so WER captures a dump. Never used in production runs.
-    std::string diag_crash{};
-    bool profiling{false};
-    for (std::size_t index = 0u; index < args.size(); ++index) {
-        const std::string_view arg{args[index]};
-        if (arg == "--profile100") {
-            app.setAgentCount(100u);
-            profiling = true;
-        } else if (arg == "--profile-csv" and index + 1u < args.size()) {
-            pP::u64 frames = 0u;
-            const std::string_view count{args[++index]};
-            std::from_chars(count.data(), count.data() + count.size(), frames);
-            app.setProfileCsvFrames(frames);
-            profiling = true;
-        } else if (arg.starts_with("--profile-csv=")) {
-            pP::u64 frames = 0u;
-            const std::string_view count = arg.substr(std::string_view{"--profile-csv="}.size());
-            std::from_chars(count.data(), count.data() + count.size(), frames);
-            app.setProfileCsvFrames(frames);
-            profiling = true;
-        } else if (arg == "--profile-label" and index + 1u < args.size()) {
-            const std::string_view label{args[++index]};
-            app.setProfileLabel(std::string{label});
-        } else if (arg.starts_with("--profile-label=")) {
-            const std::string_view label = arg.substr(std::string_view{"--profile-label="}.size());
-            app.setProfileLabel(std::string{label});
-        } else if (arg == "--profile-skip" and index + 1u < args.size()) {
-            pP::u64 frames = 0u;
-            const std::string_view count{args[++index]};
-            std::from_chars(count.data(), count.data() + count.size(), frames);
-            app.setProfileSkip(frames);
-        } else if (arg.starts_with("--profile-skip=")) {
-            pP::u64 frames = 0u;
-            const std::string_view count = arg.substr(std::string_view{"--profile-skip="}.size());
-            std::from_chars(count.data(), count.data() + count.size(), frames);
-            app.setProfileSkip(frames);
-        } else if (arg == "--profile-edits") {
-            app.setProfileEdits(true);
-        } else if (arg == "--profile-pan") {
-            app.setProfilePan(true);
-        } else if (arg == "--no-focus-throttle") {
-            profiling = true;
-        } else if ((arg == "--auto-exit" or arg == "--exit-after") and index + 1u < args.size()) {
-            const std::string_view text{args[++index]};
-            double seconds{0};
-            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), seconds);
-            if (ec != std::errc{} or ptr != text.data() + text.size() or not std::isfinite(seconds) or seconds <= 0.0) {
-                std::fprintf(
-                    stderr, "[cli] --auto-exit: invalid seconds '%.*s' (expected a positive number)\n",
-                    static_cast<int>(text.size()), text.data());
-                return 2;
-            }
-            app.setAutoExitSeconds(pP::TimeDuration(seconds));
-            profiling = true;
-        } else if (arg.starts_with("--auto-exit=") or arg.starts_with("--exit-after=")) {
-            const std::string_view text = arg.starts_with("--auto-exit=")
-                                              ? arg.substr(std::string_view{"--auto-exit="}.size())
-                                              : arg.substr(std::string_view{"--exit-after="}.size());
-            double seconds = 0.0;
-            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), seconds);
-            if (ec != std::errc{} or ptr != text.data() + text.size() or not std::isfinite(seconds) or seconds <= 0.0) {
-                std::fprintf(
-                    stderr, "[cli] --auto-exit: invalid seconds '%.*s' (expected a positive number)\n",
-                    static_cast<int>(text.size()), text.data());
-                return 2;
-            }
-            app.setAutoExitSeconds(pP::TimeDuration(seconds));
-            profiling = true;
-        } else if (arg == "--core-validation") {
-            pP::IRhiService::get()->setCoreValidation(true);
-        } else if (arg == "--gpu-validation") {
-            pP::IRhiService::get()->setGpuAssistedValidation(true);
-        } else if (arg.starts_with("--diag-crash=")) {
-            diag_crash = std::string{arg.substr(std::string_view{"--diag-crash="}.size())};
-        }
+    // Invocation details (commands, profiling fixtures, exit policy) are
+    // declared in game/Game.Config.cppm; `--help` prints the generated
+    // reference. Slice 6 profiling fixture: deterministic 100-agent load
+    // for PIX captures. Production default stays 3; the interactive loop
+    // is identical.
+    if (settings.m_profile100) {
+        app.setAgentCount(100u);
     }
-    if (profiling) {
-        app.setNoFocusThrottle(true);
+    if (const std::error_code error = app.setProfileCsvFrames(settings.m_profile_csv_frames)) {
+        std::fprintf(stderr, "[fatal] profiling setup failed: %s\n", error.message().c_str());
+        return error.value();
     }
+    app.setProfileLabel(settings.m_profile_label);
+    app.setProfileSkip(settings.m_profile_skip);
+    app.setProfileEdits(settings.m_profile_edits);
+    app.setProfilePan(settings.m_profile_pan);
+    if (settings.m_exit_after.has_value()) {
+        app.setAutoExitSeconds(pP::TimeDuration{*settings.m_exit_after});
+    }
+    app.setDisplaySettings(display);
+    // Startup picture baseline for "Back to startup": the lower-precedence
+    // values the reset intent exposes with their provenance. Runtime edits
+    // never touch it.
+    app.noteDisplayStartup(invocation->m_display);
+    const std::string diag_crash = settings.m_diag_crash.value_or("");
+    // Legacy hand-rolled parser removed: invocation resolves in game/Game.Config.cppm.
     if (not diag_crash.empty()) {
         // TEST-ONLY armed crash (see declaration above): fire through the
         // real fatal paths so WER LocalDumps captures a dump for the

@@ -3258,14 +3258,13 @@ namespace pP::colony {
         return std::array<u32, 3u>{static_cast<u32>(peak), planned, static_cast<u32>(third_replay.size())};
     }
 
-    std::error_code runColonySmoke(const std::span<const char *const> argv) {
+    std::error_code runColonySmoke(const SmokeOptions &options) {
         // Opt-in GPU-assisted validation (default off everywhere; accepted
-        // and ignored in Release). Parsed before any stage so the RHI
-        // service carries the effective value into Application::initialize().
-        for (const char *const arg: argv) {
-            if (arg != nullptr and std::string_view{arg} == "--gpu-validation") {
-                IRhiService::get()->setGpuAssistedValidation(true);
-            }
+        // and ignored in Release). The typed value arrives from the shared
+        // game invocation resolution before any stage, so the RHI service
+        // carries the effective value into Application::initialize().
+        if (options.m_gpu_validation) {
+            IRhiService::get()->setGpuAssistedValidation(true);
         }
         // Stage entries go to stderr (unbuffered): on abort/exception the
         // last entered stage survives, which buffered stdout would lose.
@@ -3289,7 +3288,7 @@ namespace pP::colony {
             (*agents)[2u]);
 
         std::println(stderr, "SMOKE-STAGE buildings");
-        ColonySmokeApp app{argv};
+        ColonySmokeApp app{std::span<const char *const>{}};
         const auto built = checkBuildings();
         if (not built) {
             std::println("SMOKE-BUILD result=FAIL error={}", built.error().message());

@@ -4,9 +4,11 @@ module;
 
 export module game.colony.panel;
 
+import engine.app;
 import engine.core;
 import engine.sim;
 import game.colony.driver;
+import game.display;
 import std;
 
 export namespace pP::colony {
@@ -67,6 +69,13 @@ export namespace pP::colony {
         toggle_pin, // Inspector pin button; cell clicks pin directly
         dismiss_notice, // status-line Dismiss button
         select_tab, // m_arg = EColonyPanelTab (section buttons)
+        toggle_display, // Display button: open or close the Display window
+        display_apply, // apply the Display draft through a display transaction
+        display_reset_overrides, // runtime values back to the startup snapshot, same path
+        display_save, // write the acknowledged values to the user-settings overlay
+        display_keep, // confirm the trial picture settings
+        display_revert, // revert the trial to the pre-apply values, same path
+        display_use_monitor_cap, // draft paced + cap from the reported monitor refresh
     };
 
     /// One typed intent; trivially copyable so keyboard callbacks, buttons,
@@ -104,12 +113,86 @@ export namespace pP::colony {
         }
     };
 
+    /// One monitor's reported identity for the Display window. Assembled by
+    /// the caller from the window service (cached about once a second while
+    /// the window stands); a zero refresh means the service did not report
+    /// one, and the panel prints "unknown" instead of guessing.
+    struct ColonyMonitorView final {
+        std::string m_name{};
+        int m_width{};
+        int m_height{};
+        int m_refresh_hz{};
+        bool m_primary{false};
+    };
+
+    /// Everything the Display window renders: the §5.1 copied controller
+    /// view (requested policy, computed targets, throttle reason), the
+    /// acknowledged device report, the pending transaction plus the last
+    /// failure, and the monitor telemetry. Requested policy and reported
+    /// outcomes stay in separate sections; unavailable measurements read as
+    /// unavailable, never as zero. The monitor list borrows the caller's
+    /// cache for the frame, like the agent-needs span in ColonyUiView. The
+    /// capability and geometry views are owned by the caller (handle-free
+    /// snapshots from displayCapabilities/displayWindowGeometry); null
+    /// means the query failed, and the switching controls render disabled
+    /// with the stored reason while telemetry stays visible.
+    struct ColonyDisplaySnapshot final {
+        DisplayView m_view{};
+        DisplayAppliedState m_applied{};
+        EDisplayTransaction m_transaction{EDisplayTransaction::idle};
+        std::error_code m_error{};
+        bool m_has_pending{false};
+        u64 m_pending_id{0u};
+        u64 m_revision{0u};
+        /// True when committed state carries runtime-layer assignments:
+        /// Reset has something to remove even when the draft matches
+        /// committed (the post-acknowledgement state), so it gates
+        /// independently of the Apply dirty state.
+        bool m_has_runtime_overrides{false};
+        std::span<const ColonyMonitorView> m_monitors{};
+        bool m_fullscreen{false};
+        std::string_view m_fullscreen_monitor{};
+        const DisplayCapabilities *m_capabilities{nullptr};
+        std::error_code m_capabilities_error{};
+        const WindowDisplayGeometry *m_geometry{nullptr};
+    };
+
+    /// Display session owned by the caller-side UI state. The draft holds
+    /// uncommitted edits (resynced from committed whenever the window opens
+    /// and after every acknowledgement); the trial counts down an
+    /// acknowledged change that touched presentation; the watch tracks one
+    /// submitted transaction until its acknowledgement lands; the last error
+    /// stays on screen until the next success. Closing the window discards
+    /// the draft but never cancels an armed trial: expiry reverts to the
+    /// known-good values, which is the safe direction.
+    struct ColonyDisplaySession final {
+        bool m_synced{false};
+        game::DisplayDraft m_draft{};
+        game::DisplayConfirm m_confirm{};
+        bool m_watch_ack{false};
+        u64 m_watch_revision{0u};
+        bool m_watch_vsync_affecting{false};
+        bool m_watch_window_change{false};
+        bool m_watch_revert{false};
+        DisplaySettings m_watch_prior{};
+        /// Pre-submit native geometry carried to the trial arm, so the
+        /// revert restores observed state instead of re-requesting zeros.
+        std::optional<WindowDisplayGeometry> m_watch_geometry{std::nullopt};
+        bool m_revert_failed{false};
+        std::string m_last_error{};
+    };
+
     /// Mutable UI session state owned by the caller. The panel reads all of
     /// it and writes only session bookkeeping (`m_build_menu_open` as a
     /// one-shot trigger, `m_regen_confirm_open` when the player decides,
     /// `m_popup_visible_last_frame` for focus hand-back, and
     /// `m_focus_agent` as the one-shot Focus key hand-off); everything else
     /// changes through the intent dispatch.
+    ///
+    /// The Display session below follows the same rule one level down: the
+    /// panel edits the draft + trial countdown in place (uncommitted scratch,
+    /// discarded when the window closes), while Apply/Reset/Save/Keep/Revert
+    /// are intents the caller submits through the display transaction path.
     struct ColonyUiState final {
         EColonyTool m_tool{EColonyTool::inspect};
         EColonyPanelTab m_tab{EColonyPanelTab::colony};
@@ -133,6 +216,8 @@ export namespace pP::colony {
         /// cleared on consumption, so a stale key can never fire twice.
         std::optional<u64> m_focus_agent{};
         ColonyNotice m_notice{};
+        bool m_display_open{false};
+        ColonyDisplaySession m_display{};
     };
 
     /// Resolved pointer hover over the world, from the caller's single
@@ -189,6 +274,8 @@ export namespace pP::colony {
         u64 m_over_budget{}; // samples above the 16.67ms reference, in-window
         u64 m_window_samples{}; // min(total pushes, m_window_def)
         u32 m_window_def{};
+        /// Failed observation refresh retains explicitly stale display values.
+        bool m_statistics_stale{true};
         /// Slice 6 simulation: m_sim_ms is SIMULATED time (tick * period),
         /// never CPU; m_tick_hz is derived (1000 * ticks / simMs), 0 before
         /// the first tick.
@@ -287,19 +374,24 @@ export namespace pP::colony {
     /// Draws the full colony chrome: a wrapping top simulation bar plus a
     /// contextual tool strip, a right side panel (Colony and Performance
     /// sections with a persistent Inspector), a bottom status line, the help
-    /// window, and the build/regenerate popups. The central world stays
+    /// window, the display window, and the build/regenerate popups. The central world stays
     /// mouse pass-through: no dockspace, no full-screen host window, no
     /// invisible input sinks, fixed chrome bands only.
     ///
     /// Returns at most one intent (buttons, menu items, section tabs,
-    /// colonist row Focus/Find/Stop-follow buttons, and the Esc keyboard
+    /// colonist row Focus/Find/Stop-follow buttons, display actions, and the Esc keyboard
     /// mirror) and `m_focus_release`, which the caller
     /// honors by clearing window focus so shortcuts regain keyboard capture
     /// after a completed chrome click. The panel never requests focus
     /// release while a popup is open: ImGui closes every popup for a null
     /// focus request (FocusWindow(NULL) -> ClosePopupsOverWindow(NULL)),
     /// so open popups own their own close path.
+    ///
+    /// The display snapshot carries the copied controller view plus monitor
+    /// telemetry; the panel never touches the renderer, calls lane-affine
+    /// functions, or resolves services. Every applied display change leaves
+    /// as a typed intent the caller submits through requestDisplaySettings.
     [[nodiscard]] ColonyUiFrame drawColonyUi(
-        const ColonyDriver &driver, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
-        ColonyUiState &state);
+        const ColonyDriver &driver, const ColonyUiView &view, const ColonyDisplaySnapshot &display,
+        const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state);
 } // namespace pP::colony
