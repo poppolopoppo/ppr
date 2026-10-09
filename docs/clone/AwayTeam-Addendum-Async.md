@@ -1,5 +1,7 @@
 ## Async execution and responsiveness
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 **Update:** Architecture §4.2/§8–9; Roadmap P0/MVP-2; UX §2.1.
 
 - **Keep input responsive:** input capture, camera, previews and UI must not wait synchronously for disk I/O, solver jobs or staging completion. Queue tick-stamped intents; expose pending/rejected operations rather than silently dropping them.

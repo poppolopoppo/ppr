@@ -1,5 +1,7 @@
 # Away Team — UX / UI + Art Direction (Clone Spec)
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 > Companion to [AwayTeam-Gameplay-Inventory.md](AwayTeam-Gameplay-Inventory.md)
 > (systems, numbers, scope). This file covers how the clone *looks, feels and
 > reads*: controls, camera, build placement, overlays, HUD, tooltips, art

@@ -1,206 +1,94 @@
 # PPR Game Engine
 
-[![CI](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/poppolopoppo/ppr/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/poppolopoppo/ppr)](https://github.com/poppolopoppo/ppr/blob/main/LICENSE) [![CMake](https://img.shields.io/badge/CMake-4.3%2B-064F8C?logo=cmake&logoColor=white)](https://cmake.org/) [![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](https://en.cppreference.com/w/cpp) [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-4c4c4c)](#features)
+PPR is a real-time C++23 engine built with C++20 modules. Nine engine libraries support an interactive colony demo, headless GPU checks, and CPU simulation workloads. The engine is the foundation; the demo contains game-specific agents, pathfinding, digging, and building rather than a finished game.
 
-A real-time C++23 game engine built with C++20 modules. Eight libraries, one demo, no game yet.
+## Start here
 
-`Architecture · Build · Demo · Tests · Status · Docs`
-
-## Purpose
-
-PPR exists to answer a concrete question: what does a from-scratch engine look like when it uses modern C++ throughout — modules instead of headers, ownership visible in the type system, errors returned as values instead of thrown or hidden? The engine is the product. The demo application is the reference client that exercises it, the way samples serve for sokol or Diligent: proof the engine runs real frames on real machines.
-
-What PPR is not: not a game, not an editor, not a framework with shipped titles behind it. There is no gameplay code in this repo.
-
-## Platform support
-
-| Platform | Compiler presets | CI |
-|---|---|---|
-| Windows | `msvc-dev`, `msvc-live`, `msvc-rel`, `msvc-profile`, `clang-cl-dev`, `clang-cl-rel` | `windows-msvc-dev` |
-| Linux | `clang-dev`, `clang-rel` | `linux-clang-dev` (Xvfb + Mesa) |
-| macOS | `clang-dev`, `clang-rel` | — |
-
-GPU backends go through a single abstraction over Slang-RHI (D3D12 on Windows, Vulkan elsewhere). The hidden `gcc-*` presets do not support C++ modules and are not usable builds.
-
-## Features
-
-- C++20 modules throughout; one public header (`Macros.h`), everything else imported
-- Tiered memory management: OS page allocation, page pools, arenas with watermark restore, composable pool/fallback allocators, PMR/STL adapters
-- Non-owning lifetime-checked pointers in debug builds that compile to raw pointers in release
-- Lock-free message channel, compile-time event multiplexing, structured cancellation for async work
-- Platform layer with Windows, Linux, macOS, and stub backends: memory, timers, processes, file watching, async I/O
-- Slang shaders compiled at startup; one GPU abstraction for devices, buffers, and command lists
-- Content-free renderer: it owns frame orchestration and presentation only; each render pass owns its own pipelines and GPU caches and draws from an immutable per-frame camera snapshot
-- Recoverable failures returned as `std::error_code` / `std::expected`, consistently; teardown releases in reverse and keeps the first error
-- Eight CTest entries wired into CTest (five app shards plus core/sim/asset suites), running on CI
-
-## Build
-
-Prerequisites: CMake 4.3+, Ninja, Vulkan SDK, Git, and a C++23 toolchain — VS 18 Insiders (MSVC 14.51) required for `import std` / `CXX_MODULE_STD` on Windows, Clang 18+ elsewhere. First configure needs network access (dependencies are fetched via vcpkg and CPM).
-
-```bash
-git clone https://github.com/poppolopoppo/ppr.git
-cd ppr
-```
-
-Windows builds run in one long-lived `vcvars64` shell: pay vcvars once, then configure, build, and test inside that same shell for the whole session.
-
-```bat
-REM Windows - VS 18 Insiders vcvars, paid once per shell/session
-call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat"
-
-REM Configure (or choose clang-cl-dev instead on Windows)
-cmake --preset msvc-dev
-REM Build
-cmake --build out/build/msvc-dev --parallel
-REM Run the test matrix (8 entries: 5 app shards + core/sim/asset)
-ctest --test-dir out/build/msvc-dev --output-on-failure
-```
-
-A shell that skips the Insiders `vcvars64.bat` now fails fast in the MSVC pre-project guard instead of configuring; repeat the `call` in every new shell. (Before the guard, this silently resolved VS 2022 Community 14.44 plus a bad vcpkg toolchain path and yielded an unusable build tree.) On Linux/macOS, skip the `call` and use the `clang-*` presets.
-
-For MSVC-only presets, first configure pins `cl`, `link`, and `lib`, but vcvars alone cannot undo LLVM-MinGW `ld`/`ar` selected by an inherited `PATH` or cached CMake values. Check `CMAKE_CXX_COMPILER`, `CMAKE_LINKER`, and `CMAKE_AR` in `out/build/msvc-dev/CMakeCache.txt` and the generated archive rule for MSVC tools. Vcpkg detects its compiler separately and can pick installed VS 2022 even when CMake uses VS 18; MSVC-only presets set `VCPKG_VISUAL_STUDIO_PATH` from the active `VSINSTALLDIR` for initial configure. Ninja auto-regeneration during a separate `cmake --build` omits preset environment; vcvars supplies `VSINSTALLDIR` but not `VCPKG_VISUAL_STUDIO_PATH`, so the helper restores its normalized value from `VSINSTALLDIR` when the override is absent. Vcpkg rejected `.../18/Insiders/` despite detecting `.../18/Insiders`. On the first fresh configure, check vcpkg's `Compiler found:` output points to VS 18. If an existing `msvc-dev` tree is contaminated, run `cmake --fresh --preset msvc-dev` once in that same VS 18 Insiders vcvars shell and recheck. Otherwise use normal `cmake --preset msvc-dev`; source-refactor compilation errors are a separate issue.
-
-`msvc-dev` is the daily preset. `msvc-live` is the Edit & Continue preset. `msvc-rel` is the optimized build (tests off, stripped PDB alongside the full one). `msvc-profile` inherits `msvc-rel` (same `/O2`/`/Ob2`/`/GL`/`/Gw`, LTCG, NDEBUG, PDBSTRIPPED) plus `PPR_ENABLE_PROFILING=ON` (`/DUSE_PIX`, `cmake/compiler/MSVC.cmake:89-94`) and `PPR_LOGGING_LEVEL=EMPHASIS` (`CMakePresets.json:117-127`). The `*-dev` presets configure with developer mode (warnings as errors and sanitizers). There are no build or test presets — build and test paths are passed explicitly.
-
-## Demo
-
-`game/main.cpp` defines the demo application. `demo::TurboLarbin : ApplicationEditor` owns a seeded generated-colony simulation and submits resident chunks to the editor-owned `GridPass`, presenting camera-visible counts in a Colony panel; `--smoke` instead runs a separate headless, rendering-enabled `Application` for offscreen GPU readback. The editor keeps its `TrianglePass` initialized and actively fed — a generated unit-quad bag plus packed debug materials with per-frame agent/path/grid/edit instances — but loads no committed-asset fixture scene (see `codemap.md:19-23`). Kenney `kenney_colony` assets remain on disk and staged (`game/CMakeLists.txt:57-63`). Shutdown releases GPU resources in reverse order.
-
-```bash
-cmake --build out/build/msvc-dev --parallel
-out/build/msvc-dev/game/app.game   # .exe on Windows; shaders, textures, meshes are staged beside it
-```
-
-The whole scene draws through a single Slang shader program (`assets/shaders/mesh_bindless.slang`). That is deliberate: one direct draw path, currently no indirect lanes.
-
-![Frame flow — the app snapshots the camera, the render pass encodes its own draws, the renderer submits and presents](docs/diagrams/app-game-engine-arch/03-renderer-scene-relationships.svg)
-
-Startup, frame loop, and shutdown follow the same shape every run — initialize services, load and upload the scene, re-submit each frame, release everything in reverse on the way out:
-
-![Application lifecycle — initialize, run frames, shut down in reverse](docs/diagrams/app-game-engine-arch/01-application-lifecycle.svg)
-
-## Tests
-
-```bash
-ctest --test-dir out/build/msvc-dev --output-on-failure
-```
-
-The full matrix is sharded for parallel runs (8 entries: 5 app shards plus
-core/sim/asset):
-
-```bash
-ctest --test-dir out/build/msvc-dev -j4 --output-on-failure
-```
-
-| CTest entry | What it covers | Needs a window |
-|---|---|---|
-| `EngineCoreUnitTests` | Memory, containers, concurrency, I/O | No |
-| `EngineSimUnitTests` | Chunk grid, fixed-timestep tick, snapshots | No |
-| `app_a1_death_lifecycle` | Run-gate death lifecycle + fast lifecycle leaves | Yes (GLFW) |
-| `app_a2_gates` | Slow run-gate leaves | Yes (GLFW) |
-| `app_b_sim` | Devices, player, dispatch, snapshot, render-view groups | Yes (GLFW) |
-| `app_c_fence` | Frame-fence group | Yes (GLFW) |
-| `app_d_io` | Player service, shader, renderer/flat `app/*` leaves, window input, routing | Yes (GLFW) |
-| `EngineAssetUnitTests` | Image decode, mesh import, GPU caches, render gate | Headless GPU tiers |
-
-The five `app_*` shards invoke the same exe with `--run-test` token lists
-(the shard map lives in `lib/engine/tests/app/CMakeLists.txt`; every leaf
-appears in exactly one shard). Focused runs select shards by regex, e.g.
-`ctest --test-dir out/build/msvc-live -R app_a2_gates`. Live wall-test
-standard is serial: `ctest --test-dir out/build/msvc-live -j1
---output-on-failure` (parallel `-j4` is not blessed on live pending flake
-diagnostics); dev keeps the 8-entry sharded matrix with `ctest --test-dir
-out/build/msvc-dev -j4 --output-on-failure` (7/7 green measured 358s wall).
-Shards keep the ASan 3-loop default (no `--loop` override); per-shard
-`TIMEOUT`s are 600/600/600/600/300, and asset tests run with
-`WORKING_DIRECTORY` set to the exe dir. Keep concurrent independent
-full-matrix invocations exclusive (no concurrent independent matrix
-invocations): the death-child marker file is a fixed machine-temp path
-(`ppr-gate1-b1-markers.txt`) shared across processes, and GPU contention
-changes timing-sensitive outcomes.
-
-![Build, test, and CI pipeline](docs/diagrams/readme/build-test-ci.svg)
+- [AGENTS.md](AGENTS.md) is the engineering contract.
+- [codemap.md](codemap.md) locates current subsystems; source and CMake registration establish implemented behavior.
+- [docs/README.md](docs/README.md) distinguishes current reference material from proposals and historical evidence.
+- Operational procedures live in [.opencode/skills/](.opencode/skills/), especially [build-system](.opencode/skills/build-system/SKILL.md) and [validation](.opencode/skills/validation/SKILL.md).
 
 ## Architecture
 
+| Module | Responsibility | Engine dependencies |
+|---|---|---|
+| `engine.core` | Types, memory, containers, concurrency, I/O, configuration, services, HAL | Foundation |
+| `engine.math` | Mango math and engine math helpers | core |
+| `engine.shader` | Slang compilation | core |
+| `engine.rhi` | Slang-RHI abstraction and projection helpers | core, math, shader |
+| `engine.image` | CPU image decoding and processing | core, math |
+| `engine.mesh` | CPU static mesh import | core, math |
+| `engine.sim` | Chunk grid, ECS, fixed timestep, snapshots, world generation | core, math |
+| `engine.physics` | Box2D scene, chunk colliders, coupling | core, math; private Box2D |
+| `engine.app` | Application lifecycle, platform, input, camera, UI, rendering | core, math, shader, rhi, image, mesh |
+
+Dependencies point down this graph. Simulation and physics are siblings; `engine.app` links neither. The game owns their coordination and links physics privately. See [engine map](lib/engine/codemap.md) and the owning `CMakeLists.txt` files for public/private external dependency details.
+
+`Application` owns the run loop, platform/services, renderer, and render worker. `ApplicationEditor` owns the interactive window, input, player, camera, viewport, render passes, and UI. Client ownership remains explicit even when GPU work executes on the worker.
+
+The interactive path defaults to a dedicated render lane. The main thread pumps events, updates simulation and UI, and publishes owned camera/window/pass/UI payloads. The worker prepares GPU resources, encodes, submits, and presents. Headless applications use the inline path. Frame admission is bounded; busy admission preserves elapsed simulation time and keeps collecting native events. GPU completion, CPU payload consumption, and presentation are distinct milestones. See [application](lib/engine/app/codemap.md) and [frame](lib/engine/app/frame/codemap.md) maps.
+
+The renderer owns device-facing orchestration. Each pass owns its pipelines, buffers, and content encoding. Grid tiles use `grid_tiles.slang`, generated debug geometry uses `mesh_bindless.slang`, and ImGui supplies the UI path. Drawing consumes immutable camera snapshots with row-major, row-vector, left-handed, +Z-forward, +Y-up matrices and [0,1] depth.
+
+Recoverable operational failures use `std::error_code` / `std::expected`. Teardown detaches producers, settles work, then releases dependent resources while retaining the first error. GPU teardown requires proven idle or confirmed device removal; unknown completion takes the application's fail-stop path before resource release.
+
+## Build
+
+The checked-in configuration requires CMake 4.3+, Ninja, Git, and a toolchain supporting C++23 modules and `import std`. MSVC presets require an activated x64 VS 18 Insiders environment with MSVC 14.51+; [MSVCToolchain.cmake](cmake/MSVCToolchain.cmake) enforces this. Clang builds also require a compatible standard library/module toolchain. Hidden `gcc-*` presets are explicitly unsupported for modules.
+
+Windows: keep one developer shell for configure, build, and test:
+
+```bat
+call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat"
+cmake --preset msvc-dev
+cmake --build out/build/msvc-dev --parallel
+ctest --test-dir out/build/msvc-dev -j4 --output-on-failure
 ```
-game/main.cpp → engine.app → engine.core / engine.math / engine.shader /
-                                engine.rhi / engine.image / engine.mesh
-                  engine.rhi   → engine.core / engine.math / engine.shader
-                  engine.sim   → engine.core / engine.math
-                  engine.shader → engine.core
-                  engine.math   → engine.core
-                  engine.image  → engine.core / engine.math
-                  engine.mesh   → engine.core / engine.math
+
+Linux/macOS use `clang-dev` or `clang-rel`; Unix presets reference the vcpkg toolchain through `VCPKG_ROOT`. First-time dependency setup needs network access. Dependency resolution and GPU backend requirements are documented in [cmake/codemap.md](cmake/codemap.md). There are configure presets only, so build/test commands take explicit directories.
+
+`msvc-dev` enables developer diagnostics and ASan. `msvc-live` enables Debug Edit & Continue and disables sanitizers/cache. `msvc-rel` is optimized with tests disabled; `msvc-profile` inherits it and enables profiling markers plus EMPHASIS logging. Other release presets do not automatically disable tests. See [CMakePresets.json](CMakePresets.json).
+
+Windows and Linux have jobs in [.github/workflows/ci.yml](.github/workflows/ci.yml); macOS has a HAL and Clang presets but no CI job. Workflow presence does not establish a currently passing build, and its Windows environment activation must satisfy the stricter MSVC guard.
+
+## Demo
+
+```bat
+out\build\msvc-dev\game\app.game.exe --help
+out\build\msvc-dev\game\app.game.exe
+out\build\msvc-dev\game\app.game.exe --smoke
 ```
 
-One rule: dependencies point down. Nothing below the application layer knows about windows, cameras, or game objects. The shape of every program using the engine is the same:
+The interactive demo presents a seeded 4096×4096-cell colony with agents, bounded pathfinding, dig/build/demolish tools, inspection, camera controls, and Colony/Performance/Display UI. It draws generated grid tiles and debug geometry; it does not load a committed Kenney fixture scene. Assets are staged beside the executable by `game/CMakeLists.txt`.
 
-```cpp
-demo::TurboLarbin app("ppr", argv_span);
-const std::error_code err = app.run();
-return err.value();
-```
+`--smoke` runs offscreen GPU readback, `--load100` runs a sustained 100-agent GPU workload, and `--time-trials` runs deterministic CPU simulation trials. Startup/profile/display options are resolved through typed configuration; `--help` is generated from the current declarations. See [game/codemap.md](game/codemap.md) rather than copying an old flag list.
 
-![Module dependencies point down only — lower layers never know about windows, cameras, or game objects](docs/diagrams/app-game-engine-arch/02-global-engine-architecture.svg)
+## Tests
 
-Ownership follows the same shape. The application owns the platform, the services, and the renderer; the editor layer owns the scene, the camera, and the render passes; the renderer itself only presents what it is given:
+With tests enabled, current CMake registers ten entries:
 
-![Ownership — who holds the services, the passes, and the frame](docs/diagrams/app-game-engine-arch/04-services-ownership-dataflow.svg)
-
-| Directory | Responsibility |
+| Entry | Coverage |
 |---|---|
-| `game/` | Demo entry point and scene |
-| `assets/` | Shaders, textures, meshes staged next to the executable |
-| `lib/engine/core/` | Types, allocators, containers, concurrency, I/O, platform layer |
-| `lib/engine/math/` | Vector / matrix / quaternion math |
-| `lib/engine/image/` | CPU image decoding (PNG, JPG, KTX2, DDS) |
-| `lib/engine/mesh/` | CPU mesh import (glTF / GLB) |
-| `lib/engine/shader/` | Slang shader compilation service |
-| `lib/engine/rhi/` | GPU abstraction (devices, buffers, command lists) |
-| `lib/engine/sim/` | Deterministic simulation: chunk grid, fixed-timestep tick, snapshot |
-| `lib/engine/app/` | Application lifecycle, window, input, scene, UI, renderer |
-| `lib/engine/tests/` | Test suites plus the shared harness |
-| `cmake/` | Presets, toolchain flags, dependency resolution |
-| `include/pP/` | The single public header |
+| `EngineCoreUnitTests` | Foundation, including configuration; GLFW-free |
+| `EngineSimUnitTests` | Grid, timestep, snapshots, ECS, world generation, physics; GLFW-free |
+| `app_a1_death_lifecycle` | Death/lifecycle and fast run gates |
+| `app_a2_gates` | Slow lifecycle/admission gates |
+| `app_a3_display_window` | Display/window transactions |
+| `app_b_sim` | Input/player/camera, packets, pacing, grid and display groups |
+| `app_c_fence` | Frame fences |
+| `app_d_io` | Services, shader, renderer/UI lifecycle, render lane and window input |
+| `EngineAssetUnitTests` | Image/mesh processing, GPU caches and render integration |
+| `GameConfigUnitTests` | Game invocation and display model/persistence |
 
-## Status
+All six app shards and the asset suite have `RUN_SERIAL TRUE`; `-j4` respects those properties. Keep independent matrix invocations exclusive on one machine. App/GPU tests need the platform/GPU facilities documented in their owning CMake files; Linux CI runs under Xvfb with Mesa.
 
-What the demo exercises today vs. what is still ahead. No dates; the checked items have tests behind them.
+`PPR_TEST_LOOPS` defaults to **1**, including ASan builds. Configure with `-DPPR_TEST_LOOPS=3` for stress, then explicitly restore `1` when reusing that build tree. Focused runs use `ctest --test-dir out/build/<preset> -R <entry> --output-on-failure`. Counts and filters are defined in [app tests](lib/engine/tests/app/CMakeLists.txt), [engine tests](lib/engine/tests/CMakeLists.txt), and [game](game/CMakeLists.txt).
 
-- [x] Allocators, containers, concurrency primitives, async I/O
-- [x] Platform layer on Windows / Linux / macOS (+ stub)
-- [x] Image decode and mesh import on the CPU
-- [x] Shader compilation at startup, GPU abstraction over D3D12 / Vulkan
-- [x] Renderer with pass-owned resources, immutable camera snapshots
-- [x] Demo scene loading, submitting, presenting, and tearing down cleanly
-- [ ] Frame pacing from platform timers with per-stage diagnostics
-- [ ] Dedicated render thread
-- [ ] Deterministic fixed-timestep simulation substrate
-- [ ] Asset content pipeline (cooked packages)
-- [ ] Shading: PBR-style materials, global illumination, temporal upscaling, post-processing
-- [ ] Editor tooling beyond the debug overlay (picking, gizmos, asset browser)
+## Scope and contribution
 
-## Troubleshooting
+Implemented foundations include fixed-step simulation, a dedicated render lane, pacing, typed configuration, CPU assets, and pass-owned rendering. Cooked asset packages, advanced shading, full editor tooling, and the proposed particle/clone designs are not established by those foundations. Plans are design input, not proof of implementation or permission to expand a task.
 
-- `gcc-*` presets fail on modules. They are hidden for a reason; use MSVC or Clang presets.
-- Configure fails looking for Ninja. Module builds require it; install Ninja and re-configure.
-- First configure fails on dependencies. It needs network for vcpkg/CPM fetches (CI clones vcpkg itself); `VCPKG_ROOT` is optional if you already have one.
-- "Where is the exe?" It lands in `out/build/<preset>/game/`, not `out/build/<preset>/`. DLLs and asset directories are copied beside it by post-build steps.
-- Demo exits at startup with a filesystem error. It found no loadable models under the staged `meshes/` directory — check the log lines for which assets failed and why.
+Keep changes focused; follow the engineering contract and the owning subsystem map. Behavioral changes require proportionate tests. C++ formatting and semantic checks use the repository scripts, not hand formatting.
 
-## Docs
-
-- [codemap.md](codemap.md) — navigable repository map; start here for any area of the code
-- [AGENTS.md](AGENTS.md) — engineering contract and conventions (required reading before large changes)
-- `docs/diagrams/` — rendered architecture diagrams
-- `docs/plans/` — design notes; these describe intent, not implemented code
-
-## Contributing
-
-Focused changes, tests for behavior changes, a clean developer-mode build. See [AGENTS.md](AGENTS.md) before anything structural.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+MIT license: [LICENSE](LICENSE).

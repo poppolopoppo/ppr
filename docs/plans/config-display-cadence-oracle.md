@@ -1,5 +1,7 @@
 # PPR Configuration and Display Control Design
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 > Oracle output (ses_ee4238e69ffela3nSJqhCSK4vI), rescoped (ses_ee3c7cbaeffe6yKGY07Cj7kFJt): simulation/render decoupling deferred to a separate future effort (§8).
 
 ## Recommendation

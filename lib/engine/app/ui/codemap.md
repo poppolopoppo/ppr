@@ -1,117 +1,25 @@
-# lib/engine/app/ui
+# lib/engine/app/ui/
 
 ## Responsibility
 
-ImGui overlay layer implementing `IUIService` (`engine.app:service.ui`) on top of the RHI swap chain. Owns the ImGui
-context, font atlas texture, double-buffered draw buffers, and the dedicated overlay pipeline; routes engine input
-events into ImGui IO and renders ImGui draw data as a second viewport entry on top of the 3D scene.
+ImGui frontend and GPU overlay backend behind `IUIService`. `ui::createImGuiService()` returns an owning `unique_ptr<IUIService>`; `ImGuiService` is implemented privately in `App.UI.ImGui.cpp`. The editor owns it; worker execution does not transfer ownership.
 
-## Design
+## Thread and data boundary
 
-- Interface `pP::ui::createImGuiService()` (`App.UI.ImGui.cppm`, `:ui.imgui`) returns `unique_ptr<IUIService>`;
-  full `ImGuiService` class is file-local in `App.UI.ImGui.cpp` (`module engine.app;` + `import :ui.imgui`); `imVec`
-  helpers convert `float2/float4` ↔ `ImVec2/ImVec4`.
-- Embedded shader: `kImGuiShader` source string (pos/uv/col vertex → textured fragment with `g_scale`/`g_offset`
-  NDC-to-framebuffer projection) compiled via `IShaderService::loadModuleFromSource` (`imgui` / `imgui.slang`,
-  `vertexMain` + `fragmentMain` linked as `SingleProgram`) — no `.slang` file on disk.
-- Construction (`ImGuiService()`): installs `malloc`/`free` via `SetAllocatorFunctions` (TODO: custom scope), wires
-  `InputAction` callbacks (`any_digital` on started/triggered/completed, cursor/wheel/sticks/triggers on triggered),
-  and builds the `ImGuiInputs` mapping: `any_digital`, `gamepad_left/right_2d`, `gamepad_left/right_trigger_axis`,
-   `mouse_2d`, plus `mouse_wheel_axis_x/y` each folded into the wheel action via a small 1D→pair lambda; character
-   callback installed on the listener; raw-key callback arms `m_pending_deselect` on background-drag-button
-   pressed/repeat (`InputBackgroundLatch::isBackgroundDragButton`) when `hasMouseCaptureUnlessPopupClose()` is false,
-   always returning `unhandled`, drained in `update()` via `drainPendingDeselect_()`.
-- Input routing: seven `InputAction`s (split per device).
-  gamepad-button digitals, cursor axis_2d, wheel axis_1d, stick axis_2d, trigger
-  axis_1d). `update()` gates per-action consume AFTER `NewFrame()` (last
-  frame's widgets, one-frame staleness): keyboard follows `WantCaptureKeyboard`
-  (ActiveId/modal/nav — no `AnyWindowFocused` fallback); mouse follows
-  `WantCaptureMouseUnlessPopupClose` (hover-split); gamepad follows `NavActive`
-  with `NavEnableGamepad` (typing never blocks gamepad). Set flag sinks into
-  the UI (`consumed`); cleared flag yields `handled` downstream. `shutdown()`
-  resets all consume flags to non-consuming (player default). Character callback drops Ctrl+key control characters,
-  gates on `io.WantTextInput`, UTF-8-encodes the codepoint (`hal::native::utf8`) and returns `consumed`/`unhandled`.
-  Any-digital dispatches on `trigger.m_code` to `AddKeyEvent` (keyboard via `keyboardKeyToImGuiKey`, gamepad via
-  `gamepadButtonToImGuiKey`) or `AddMouseButtonEvent` (via `mouseButtonToImGui`); keyboard path also mirrors
-  left/right Ctrl/Shift/Alt/Super into `ImGuiMod_*`. Cursor forwards absolute client pos to `AddMousePosEvent`;
-  wheel forwards relative 2D delta to `AddMouseWheelEvent`; sticks fan out per left/right trigger to
-  `AddKeyAnalogEvent` L/R-stick directionals; triggers drive `AddKeyAnalogEvent` L2/R2.
-- Frame resources (P1 fence-governed): 2-slot vertex/index buffer ring (`FrameResources`) selected by
-  per-slot completion values (`m_slot_values`, never CPU parity — ZERO slack for 2 credits, so a doubly-pending
-  frame waits its slot out), reallocated on growth only after waiting for the youngest tracked use via the
-  frame's fence hook (`alignForward` 8192 vtx / 16384 idx, `Upload` `VertexBuffer|CopySource` /
-  `IndexBuffer|CopySource`), uploaded per-frame in `uploadDrawData_()` via map/`memcpy`/unmap (no-op when
-  `TotalVtx/IdxCount == 0`); the submitted value is recorded by `notifyFrameSubmitted` (via the exported
-  `IFenceAwareUiService` seam, frame owner post-submit only). Per-slot ROOT objects (`m_slot_roots`, font
-  bindings fixed at creation, scale/offset written per frame into the selected slot only) replace the
-  transient 1-arg `bindPipeline` object; replaced pipelines/roots defer through `m_deferred_releases`
-  (reclaimed each render entry, drained at shutdown). Font texture built once from `GetTexDataAsRGBA32`
-  (`DeviceLocal` RGBA8 `Texture2D` with `ShaderResource|CopyDestination`, `Upload` staging buffer,
-  `copyBufferToTexture` + `setTextureState(ShaderResource)` + `submit`/`waitOnHost`, `getDefaultView`,
-  `SetTexID` to the view; null pixels or non-positive atlas dims log and
-  return `invalid_argument` instead of faulting the staging row-pitch division); display-scale changes rebuild
-  it via `refreshFontTextureIfNeeded_` (upload's own global-idle wait first, then install + rebind every slot
-  root + drop the old atlas, counted in `m_font_rebuild_count`). Draw-list `UserCallback` policy: only
-  `GetPlatformIO().DrawCallback_ResetRenderState` is honored (reapplies render state; the legacy macro spelling does not cross the imgui module boundary); any other callback is rejected and
-  counted (`m_rejected_callback_count`), never invoked on the render path.
-- `initialize(WindowInputContext&, IRhiService&, IShaderService&, priority)` creates the context (`not_supported` when
-  null), installs `ErrorCallback` → `PPR_LOG_RAW` with `ConfigErrorRecovery=true`, `EnableAssert=false`,
-  `EnableDebugLog=true`, `EnableTooltip=PPR_ENABLE_DEBUG`, sets backend names (`pP_IUIService` / `pP_SlangRHI`,
-  `BackendPlatformUserData=this`) and flags (`HasGamepad`, `RendererHasVtxOffset`) and config flags (docking, DPI
-  font/viewport scale, gamepad + keyboard nav), seeds `DisplaySize` from `m_framebuffer_size` and
-  `DisplayFramebufferScale` from `m_content_scale`, attaches the listener at the given priority, then builds invariant
-  input layout/sampler (`POSITION/TEXCOORD RG32Float`, `COLOR RGBA8Unorm`; linear `ClampToEdge` sampler) + shader +
-  font. `update(dt, WindowViewport&)` (`not_connected` when no context) refreshes `DeltaTime` (`time::seconds`),
-  display size from `viewport.getViewport().getClientRect().m_extent`, framebuffer scale from
-   `viewport.getWindow().m_content_scale`, bumps `m_frame_revision`, calls `NewFrame`, refreshes the consume gate from
-   last frame's widgets (`WantCaptureKeyboard`/`WantCaptureMouseUnlessPopupClose`/gamepad nav), then
-   `drainPendingDeselect_()`. `render(DrawContext)`
-  (`not_connected` when no context; no-op when `draw_data` null/invalid) lazily rebuilds the pipeline per
-  `RenderPipelineKey` via `createRenderPipeline_` (rejects anything but a single color target with no depth
-  attachment — every `SampleCount` enumerator is accepted and forwarded; mismatch → `invalid_argument`;
-  SrcAlpha/InvSrcAlpha color blend, One/InvSrcAlpha alpha blend, `CullMode::None`, scissor on, no depth test/write,
-  label `render_imgui`), binds `g_scale` (`2/DisplaySize`, Y negated) / `g_offset` (`-1,1`) / font sampler/texture via
-  `ShaderCursor` (`broken_pipe` when `bindPipeline` fails), uploads draw data, then issues one indexed draw per command
-  with `(ClipRect−DisplayPos) × framebuffer-scale` scissors clamped to the viewport extent (degenerate rects skipped)
-  and `UserCallback` passthrough, accumulating global `VtxOffset`/`IdxOffset`. `shutdown()` removes the input listener
-  first, releases pipeline/buffers/texture-view/texture/sampler/layout/program, then detaches backend fields
-   (`Backend*Name/UserData=null`, `BackendFlags=None`, `SetTexID(nullptr)`), clears both the render-pipeline object
-   and its key, destroys the context, and nulls pointers. Same-object reinitialization therefore rebuilds the
-   pipeline when the prior lifecycle used the same key.
-  Helpers `keyboardKeyToImGuiKey` / `gamepadButtonToImGuiKey` / `mouseButtonToImGui` (unknown → `None`/`-1`),
-   `framebufferScaleFor` (logical→framebuffer ratio, guarded fallback to 1), and `imGuiDebugPrintf` (`%s` assert +
-   `PPR_LOG_RAW`). Linux/clang bring-up: both helpers are `[[maybe_unused]]` (Clang warns on the file-local debug-only
-   functions MSVC keeps silently); scissor math uses `roundToUInt<float, 4u>` with an explicit dim; `ImDrawList` counts
-   cross the `int`-vs-`u32` boundary only via `checked_cast<u32/size_t>` (`TotalVtx/IdxCount`, `Vtx/IdxBuffer.Size`,
-   `global_vtx/idx_offset` accumulation, `memcpy` sizes); `startVertexLocation` is `static_cast<u32>` (not `i32`);
-   `pixelDataSize`/row-pitch arithmetic widens `height` to `u64` before multiply/divide. `getContext()` exposes the raw `ImGuiContext*` so `game/main.cpp` can `SetCurrentContext` +
-   `ShowDemoWindow`; `getInputListener()` exposes the foreground listener for latch registration;
-   `hasMouseCaptureUnlessPopupClose()` reports `m_input_any_mouse_button.hasConsumeInput()`; `clearWindowFocus()`
-   clears ImGui window focus; destructor asserts context already destroyed and clears mapping/listener bindings.
+- Main/client owns the live ImGui context, input routing, DPI/frame setup and UI construction. `update(dt, viewport)` begins frontend work. `buildDetachedUiFrame` completes `ImGui::Render()` and deep-copies vertices, indices and commands into `DetachedUiDrawData`.
+- Detached commands carry baked framebuffer clip/scale data and opaque texture identities. Unknown texture identities are rejected; arbitrary client callbacks do not cross the lane. A known reset-render-state command is represented explicitly.
+- The render owner lane calls `renderDetachedUiFrame(detached, draw_context)`. It uses detached inputs and lane-confined GPU state, never live ImGui IO/context/GetDrawData. The inline reference consumes the same payload shape.
+- Font rebuilds publish owned pixels, dimensions and a version. The worker installs the atlas and reports its version; results acknowledge the publication. A dropped frame must not lose an unacknowledged font update.
+- `IFenceAwareUiService::notifyFrameSubmitted` associates upload/resource use with the accepted submit's fence value. Buffer ring capacity is not completion proof. The editor stamps accepted work even when presentation subsequently fails.
 
-## Flow
+The embedded `kImGuiShader` is compiled from source text; there is no separate ImGui `.slang` asset. UI is encoded after grid/triangle work, loading the surface color attachment without attaching scene depth.
 
-1. `Application::initialize()` → `createImGuiService()` → `initialize(window_input_context, rhi, shader, priority)`:
-   context + error/recovery config, backend names/flags + docking/DPI/nav flags, display size/scale seed, shader from
-   source string, invariant input layout/sampler, font texture, input-listener attach.
-2. Per-frame `update(dt, viewport)`: display size from the client rect, framebuffer scale from content scale, delta
-   time, routed input → `ImGui::NewFrame()` (game code then records widgets, e.g. demo window).
-3. Per-frame `render(draw_context)` → `ImGui::Render()`, lazy pipeline rebind on key change, `g_scale`/`g_offset`
-   cursor setup, `uploadDrawData_`, scissored indexed draws over the scene pass.
-4. `shutdown()` → listener detach, pipeline/buffer/texture release, backend-field clear, context destroy, null pointers.
+## Lifecycle and navigation
 
-## Integration
+Initialize with input context, shader/RHI references and listener priority. Frontend input/capture behavior uses the routing latch described in [input](../input/codemap.md). Editor teardown first stops submissions and establishes GPU quiescence; GPU cleanup stays on the owner lane and live context/native work stays on main. See [application flow](../codemap.md) for complete partial-init and shutdown ordering.
 
-- **Consumers**: `Application` (creates/owns `m_ui_service`, calls `initialize/update/render/shutdown`), `game/main.cpp`
-  (debug-only `ShowDemoWindow` via `getUiServices().get<IUIService>()` + `getContext()`).
-- **Depends on**: `:service.ui` (contract), `:service.input/window` (events, size), `:input.key/device/listener`
-  (actions, mappings, contexts), `:window.handle/viewport` (window + viewport inputs), `engine.rhi` (pipeline/buffers/
-  textures), `engine.shader` (from-source compile), `engine.core` (logging, `safe_ptr`, `safe_narrowing`, time),
-  `engine.math` (`float2/float4`, `int2`, `uint4`), `imgui` + `imgui_internal` (context, IO, draw data).
-- **Provides**: `:ui.imgui` factory + `IFenceAwareUiService` submit-notification seam + `imVec` conversions only; the class itself is intentionally not exported.
-
-## Key Files
-
-- `App.UI.ImGui.cppm` — `pP::ui::createImGuiService()` factory + `IUIService` forward declaration + `imVec` helpers.
-- `App.UI.ImGui.cpp` — `ImGuiService` implementation (initialize/update/render/shutdown, font/upload/pipeline helpers,
-  input-to-ImGuiIO translation, embedded shader string).
+- `App.UI.ImGui.cppm`: factory, detached UI vocabulary, fence-awareness seam and conversion helpers.
+- `App.UI.ImGui.cpp`: frontend/backend implementation, embedded shader, upload/resource management, DPI and font handling.
+- `../service/App.Service.UI.cppm`: lifecycle/frontend/detached rendering contract.
+- [frame map](../frame/codemap.md): request/result transport and font acknowledgment.
+- `../../tests/app/App.ImGuiRouting.Tests.cpp`, `App.ImguiDpi.Tests.cpp`, and asset render gates cover relevant behavior; owning test CMake files establish registration.

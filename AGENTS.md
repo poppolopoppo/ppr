@@ -283,4 +283,4 @@ tool, the `execute_tool` router; agents call it with `projectPath="E:/Code/ppr"`
 ## Repository Map
 
 Read the root `codemap.md` before working and a directory's `codemap.md` for
-work in that area (41 codemaps indexed by `.codegraph/`).
+work in that area (use the linked maps and current `.codegraph/` index).

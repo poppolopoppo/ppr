@@ -1,5 +1,7 @@
 # Away Team — Gameplay Loop + Mechanics + Inventory (Clone Spec)
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 > Title correction: **Away Team** (Steam 2168390), Klei. Not "Away-Team" / "AwayTeam".
 > Genre: 2D side-scroller, single directly-controlled duplicant platformer.
 > Closed playtest: Apr 2026, ~50-cycle cap [INFERRED-PT] (proof #1).

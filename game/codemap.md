@@ -2,199 +2,35 @@
 
 ## Responsibility
 
-Demo executable (`app.game`): `main()` resolves the invocation through
-`game/Game.Config.cppm` (`pP::game::resolveGameInvocation`) and dispatches the
-resolved command, unless `--smoke` selects the separate headless
-`pP::colony::runColonySmoke` host before the editor is constructed.
-`--time-trials` selects the deterministic `runTimeTrials` runner and
-`--load100` the sustained `runLoad100` load host; `--profile*` flags tune the
-live Slice 6 profiling fixture on the interactive path.
-The interactive editor presents a seeded, generated 4096×4096-cell colony
-through its `GridPass` and a compact ImGui status panel. It still initializes
-`TrianglePass`, but submits no Kenney fixture scene. `ApplicationEditor` owns
-the window, player, camera, viewport, input context, UI, and both passes;
-game code owns the colony driver, render translator, and game input mapping.
-The editor module ships unconditionally, independent of `BUILD_TESTING`.
+`app.game` is the reference client for PPR: an interactive generated colony plus headless smoke/load/time-trial commands. It owns game state and policy, not engine infrastructure. `demo::TurboLarbin : ApplicationEditor` owns the colony driver, translator, simulation packet, tool/selection/follow state, game input mapping, and display drafts/persistence. The editor base owns window, player, camera, viewport, UI service and both render passes.
 
-## Design
+## Entry and configuration
 
-- `main.cpp` — `TurboLarbin` lifecycle hooks return `std::error_code`.
-  `initialize()` first initializes `ApplicationEditor`, then generates seed
-  `1234567`, installs `PanCameraController` in orthographic XY mode near world
-  center (pixel extent × scale 0.5, eye z = -0.5), and registers owned
-  `InputAction`s in the player listener at camera mapping priority without
-  shadowing camera WASD/wheel or the higher-priority UI. Space toggles pause;
-  N single-steps only while paused; 1/2/3 select tick speed; R only opens the
-  regen confirm modal (never regenerates inline) — Confirm re-dispatches the
-  intent confirmed and defers the regenerate + `translator.reset` to the top
-  of the next `update()` via `m_regen_pending` (`main.cpp:846-859`,
-  `:2338-2355`). G toggles dig mode, H the edit highlight, V the chunk grid
-  overlay, I selects inspect, B opens the build menu, F selects the next
-  colonist, F1 toggles help, F3 toggles the Colony/Performance tab, Esc runs
-  the cancel chain (stop follow, gesture, tool, pin, selection, Help)
-  (`main.cpp:656-750,1007-1034`); the tool mapping
-  (left-button press plus mouse_2d cursor, dispatched before the camera
-  mapping) owns the drag gesture and submits the picked rect through
-  `requestDig`. Input errors surface through `update()`.
-- `update(dt)` runs the editor, advances the fixed-step driver, drains edit
-  chunks into presentation via `presentEdits`, stages resident chunk tiles via
-  `ColonyTranslator`, then resolves hover (`refreshHover_`), submits 3D debug
-  instances (`submitDebugInstances_`: bodies, paths, grid, edit outlines), and
-  draws the panel plus the ImGui foreground screen-space feedback overlay
-  (`drawPanel_` → `drawFeedbackOverlay_`; `main.cpp:2515-2527,2081-2175`).
-  Frustum-visible tile/chunk counts come from `GridPass::planTiles` against the
-  camera snapshot inside `drawPanel_` (`:1447-1473` called `:2527`), not a
-  separate phase. One chunk-sized tile per chunk makes the two visible counts
-  equal.
-  `shutdown()` cancels the tool gesture, clears agent selection, resets the
-  window-focus handle and the pan controller, detaches the game mapping before
-  destroying callbacks/actions, resets translator staging, shuts down the
-  driver, then shuts down the editor while retaining the first cleanup error
-  (`main.cpp:2546-2580`).
-- `colony/Colony.cppm/.cpp` and `WorldGen.cppm/.cpp` — game-owned colony
-  lifecycle and deterministic `sim::generate` world generation; element IDs
-  live in `colony/Colony.Elements.h`.
-- `colony/ColonyDriver.cppm/.cpp` — seeded `Colony` plus bounded fixed-timestep
-  accumulator, pause/step/speed controls, regeneration, and grid/clock access.
-  Default tick is 60 Hz (`ColonyDriverDesc::m_tick_hz`); physics integrates at
-  fixed 1/60 s. Six fixed-timestep steps run in declaration order each tick —
-  `tool`, `build`, `pathfind`, `aiplan`, `movestep`, `physics`
-  (`ColonyDriver.cpp:22-28,175-210`; `build` before `pathfind`). Each stage records wall-clock `StageTimings` under
-  `hal::ProfileScope` `Colony.*` names (observation only, never sim state); a
-  spawn-count override (`m_agent_count`, Slice 6 fixture) persists across
-  regeneration. It owns the driver-local `physics::Scene` and `physics::ChunkColliders`;
-  box2d stays behind `engine.physics`. Agent summaries (`AgentSummary`) and dig stats (`DigStats`,
-  `ColonyDriver.cppm:24-28,88-111`) feed the panel. No rendering or application dependency and no implicit clock.
-- `colony/ColonyTranslator.cppm/.cpp` — render-thread-confined bridge from
-  resident `engine.sim` chunks to `GridPass` tile and cell-material submissions;
-  unseen/invalidated chunks upload, vacuum maps to transparent `0xffff`, and
-  reset or submission failure clears pass staging/cache. Its submitted-chunk
-  counter is not a frustum-visibility count.
-- `colony/ColonyPanel.cppm/.cpp` — game-owned ImGui panel: owns `EColonyTool`
-  (4: inspect/dig/build_wall/demolish), `EColonyPanelTab`, 24 `EColonyIntent`
-  values (17 colony + 7 display), plus `ColonyShortcut`/`ColonyNotice`/`ColonyUiState`/`ColonyHover`/
-  `ColonyPerfView`/`ColonyPreviewView`/`AgentNeedsRow`/`ColonyUiView`,
-  `ColonyMonitorView`/`ColonyDisplaySnapshot`/`ColonyDisplaySession` and the
-  chrome `ColonyUiFrame` it returns (`ColonyPanel.cppm`). Single export
-  `drawColonyUi(driver, view, display, shortcuts, state) -> ColonyUiFrame`; seed, tick,
-  sim time, pause/speed, resident chunks, frustum-visible counts, selection,
-  follow, pin/Inspector, feedback overlay, footprint preview, tool strip, help,
-  the Performance tab, and the Display window ride the views/frame, never globals.
-  Display labels/ranges/enum choices come from schema metadata; the panel
-  never touches the renderer, calls lane-affine functions, or resolves services.
-- `colony/ColonySmoke.cppm/.cpp` — `game.colony.smoke` exposes
-  `runColonySmoke(SmokeOptions)` (typed startup options from the shared game
-  invocation; no second CLI scan). Its own headless, rendering-enabled `Application`
-  generates a colony, renders one `GridPass` frame into an RGBA8 offscreen
-  target, checks a generated temperate rock cell by GPU readback, prints a
-  PASS/FAIL summary, and does not create an editor window or UI. Slice 5
-  dig smoke prints `SMOKE-DIG dug=... result=PASS` (D6 v4 snapshot +
-  capture/restore checks, D7 double-run/restore equality); dig CPU-refresh
-  evidence (translator/GridPass uploads) stays distinct from this
-  GPU-readback rasterization proof. `game.colony.smoke` also exposes
-  `runLoad100` (`--load100`: 100-agent sustained driver plus
-  translator/GridPass load, 600 fixed-1/60 frames, driver/translator CSVs, scripted 4-waypoint pan period-150 plus pan-invariance upload check
-   (see the colony map for waypoints).
+- `main.cpp`: resolves invocation through `Game.Config.*`, loads the display overlay through `Game.Display.*`, applies explicitly supplied startup validation settings before GPU work, and dispatches the selected command. Help is generated from schema declarations; invalid usage exits 2. Smoke returns its error value; load/time-trials return their error value or zero. Interactive `app.run()` errors are printed and returned; unexpected exceptions escaping that boundary invoke `hal::fatalExit`.
+- `Game.Config.cppm/.cpp` (`game.config`): typed game command/profile/exit schema, combined CLI and configuration resolution. Distinct command selectors conflict; they are not gameplay toggles. Use `--help` and declarations for the current option set.
+- `Game.Display.cppm/.cpp` (`game.display`): draft validation/provenance, persistable overlay merge/encode/atomic write, overlay load, and injected-time Keep/Revert state. Overlay precedence is base < overlay < environment < CLI. The panel produces intents; application-level generation/ack checks govern native/surface changes. See [DisplayControls](../lib/engine/app/DisplayControls.md).
 
-## Flow
+## Interactive flow
 
-1. `main(argc, argv)` resolves the game invocation (`GameSettings` plus the
-   engine.app display/startup schemas) through `resolveGameInvocationWithOverlay`:
-   the generated `user-settings.toml` overlay beside the executable loads
-   between the base files and the environment (missing means first launch;
-   test executables use the hermetic `resolveGameInvocation` and never load
-   it). `--smoke` runs
-   `runColonySmoke(SmokeOptions)` and returns its error value; `--time-trials`
-   runs `runTimeTrials()` and `--load100` runs `runLoad100()`; otherwise
-   construct `TurboLarbin("ppr", args)` and return `app.run().value()`
-   (other flags, including `--profile*`, retain the editor path).
-   Invalid invocations exit 2; `--help` prints generated help and exits 0
-   without executing.
-2. Editor initialization bootstraps window/services/shaders/passes/UI,
-   generates the default colony, installs orthographic pan/zoom camera and
-   registers colony keys. No fixture import, scene merge, or triangle submission.
-3. Each interactive frame serves a pending confirmed regen first, updates editor and colony, presents edits, translates resident
-   chunks into `GridPass` submissions, plans visible tile counts, and draws
-   the panel plus feedback overlay before editor-owned rendering/presentation.
-4. On exit, remove the colony input mapping before its actions, clear staged
-   grid tiles, shut down the driver, and perform editor teardown; preserve the
-   first error. The smoke path independently tears down its offscreen target,
-   grid pass, driver, and base `Application`.
-5. `app.game` POST_BUILD stages `assets/shaders/` and `assets/textures/` beside
-   the executable, and `assets/meshes/` if it exists. The generated-colony
-   render and smoke paths need the staged shaders, not Kenney meshes.
+1. Initialize the editor, seeded colony, orthographic pan controller, game input mapping, and generated debug geometry/materials. Kenney assets are staged but no committed fixture scene is loaded.
+2. On admitted update, the editor advances platform/input/camera/UI. Game update handles deferred intents, advances `ColonyDriver` with explicit elapsed time, then captures an owned `SimFramePacket` containing simulation identity, counters and chunk copies. Preparation validates tick/world-generation coherence and builds owned `GridStagedFrame`; debug instances become `TriangleStagedFrame`. The UI uses client data and result-fed render diagnostics, not live worker caches.
+3. Editor render sends owned frame/pass/UI payloads to the render lane. Grid/triangle pass mutation, upload preparation, encoding and presentation run there. Inline hosts consume the same request structure without transport.
+4. `TurboLarbin::onLaneFrameConsumed_` validates matching packet/epoch/revision acknowledgments before clearing pending edit obligations. Dropped or unapplied payloads remain pending for a later frame. CPU consumption is distinct from GPU completion.
+5. Shutdown detaches game input/callbacks, resets game staging, shuts down driver resources, and delegates worker/GPU/window teardown to the editor while preserving the first cleanup error.
 
-## Integration
+Controls and panel intents are declared in `main.cpp` and `colony/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, Performance and Display UI. Regeneration is confirmed and deferred to an update boundary.
 
-- **Consumers**: interactive `app.game` and `app.game --smoke` run configurations.
-- **Depends on**: `engine.core`, `engine.app`, `engine.math`, `engine.shader`,
-  `engine.rhi`, and `engine.sim` via `game/CMakeLists.txt`, plus PRIVATE
-  `engine.physics` (Slice 4 Oracle grant: driver-owned Scene/ChunkColliders;
-  box2d types never leak past `engine.physics`). The editor uses
-  `ApplicationEditor`, `GridPass`,
-  `PanCameraController`, input actions, and ImGui; smoke uses `Application`,
-  `Renderer`, `GridPass`, and RHI readback. Runtime `shaders/` are staged.
-- **Provides**: process entry point, the `game.config` invocation schema
-  (`Game.Config.cppm/.cpp`: commands, profiling fixtures, exit policy, plus
-  `resolveGameInvocationWithOverlay` for the generated picture-settings
-  overlay), the `game.display` picture model (`Game.Display.cppm/.cpp`:
-  draft validation, overlay merge/atomic-write, Keep/Revert trial), and the
-  11 `game.colony*` module APIs
-  (`game.colony`, `.worldgen`, `.driver`, `.translator`, `.panel`, `.smoke`,
-  `.agents`, `.pathfinding`, `.buildings`, `.digtool`, `.timetrials` — one
-  `.cppm` plus matching `.cpp` each per `game/CMakeLists.txt`).
-  `main.cpp` directly imports `engine.app/core/math/mesh/sim/rhi` plus `imgui` and `std`,
-  plus the buildings/driver/translator/panel/pathfinding/smoke/timetrials
-  modules and `game.display`.
+## Colony modules and workloads
 
-## Key Files
+See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` modules. Driver/simulation code is renderer-independent; `SimFramePacket` and translator bridge to owned presentation data. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
 
-- `main.cpp` — editor-facing generated colony, controls, panel, resolved `--smoke`/`--time-trials`/`--load100` dispatch.
-  Startup validation applies once at the GPU-runner boundary: explicitly
-  supplied true/false values reach the RHI before any command runs, while
-  defaults leave the RHI build defaults untouched.
-- `Game.Tests.cppm/.cpp`, `Game.Config.Tests.cpp`, `Game.Display.Tests.cpp`, `Game.Tests.Main.cpp`
-  (`game.tests` executable + `GameConfigUnitTests` ctest) — game-owned Phase 2
-  compatibility gate: selectors/conflicts, legacy value forms, profiling
-  triggers, startup booleans, configuration precedence, and help without
-  configuration-file availability; plus the Phase 5 display-model gate:
-  draft validation/provenance/rejection, overlay merge/encode/atomic-write,
-  overlay precedence (base < overlay < environment < CLI), and the
-  Keep/Revert trial machine.
-- `Game.Config.cppm/.cpp` (`game.config`) — game-owned invocation schema and resolution.
-  Selectors are fixed CLI-only selections: conflicting selectors (different
-  commands) and explicit selector values are rejected as invalid usage (exit
-  2) before resolution; `--auto-exit` strict positivity lives in the field
-  domain so shadowed zero values fail; `--profile-label=`/`--profile-label ""`
-  preserve empty text via the binding policy.
-- `colony/Colony.Elements.h`, `colony/Colony.cppm/.cpp`, `colony/WorldGen.cppm/.cpp` — element IDs, grid ownership, seeded generation.
-- `colony/ColonyDriver.cppm/.cpp` — deterministic fixed-step simulation host.
-- `colony/SimFramePacket.cppm/.cpp` (`game.colony.sim_packet`) — owned sim packet (tick/seed/counters/chunk copies),
-  `makeSimFramePacket` capture, `isSimPacketCoherent` tick+epoch gate for the present phase.
-- `colony/ColonyTranslator.cppm/.cpp` — GridPass submissions and cache invalidation.
-- `colony/ColonyPanel.cppm/.cpp` — game-owned ImGui panel: owns `EColonyTool`
-  (4: inspect/dig/build_wall/demolish), `EColonyPanelTab`, 24 `EColonyIntent`
-  values (17 colony + 7 display), plus `ColonyShortcut`/`ColonyNotice`/`ColonyUiState`/`ColonyHover`/
-  `ColonyPerfView`/`ColonyPreviewView`/`AgentNeedsRow`/`ColonyUiView`,
-  `ColonyMonitorView`/`ColonyDisplaySnapshot`/`ColonyDisplaySession`, and the
-  chrome `ColonyUiFrame` it returns. Single export
-  `drawColonyUi(driver, view, display, shortcuts, state) -> ColonyUiFrame`; seed, tick,
-  sim time, pause/speed, resident chunks, frustum-visible counts, selection,
-  follow, pin/Inspector, feedback overlay, footprint preview, tool strip, help,
-  the Performance tab, and the Display window ride the views/frame, never globals.
-  Display labels/ranges/enum choices come from schema metadata; the panel
-  never touches the renderer, calls lane-affine functions, or resolves services.
-- `Game.Display.cppm/.cpp` (`game.display`) — game-owned display model, no
-  ImGui/services: `DisplayDraft` plus draft/committed conversions,
-  runtime-layer building with `applyRuntime` validation, persistable-only
-  overlay merge/encode plus same-directory-temp atomic write, overlay loading
-  (missing means absent), overlay path through
-  `hal::process::currentExecutablePath`, and the injected-time Keep/Revert
-  trial machine. Covered by `Game.Display.Tests.cpp` in `game.tests`.
-- `colony/ColonySmoke.cppm/.cpp` — one-frame headless GPU readback smoke host, plus `--load100`.
-- `colony/Agents.cppm/.cpp`, `colony/Buildings.cppm/.cpp`, `colony/Pathfinding.cppm/.cpp` — agents, edit domain, budgeted BFS with kMaxSearchNodes 4096 and kExpansionsPerTick 256.
-- `colony/DigTool.cppm/.cpp` — immediate rect-clear dig edits.
-- `colony/TimeTrials.cppm/.cpp` — deterministic headless `--time-trials` runner.
-- `colony/StageTiming.h` — plain-header per-stage wall-clock timings shared by driver/translator/trials; 19 rows incl. 4 counter rows.
-- `colony/codemap.md` — colony module detail map.
-- `CMakeLists.txt` — `app.game` modules/dependencies and shader/texture/conditional mesh staging.
+- `--smoke`: separate headless rendering-enabled Application, generated-cell offscreen readback.
+- `--load100`: sustained 100-agent driver + translator/GridPass workload with CSV timing and scripted pan checks.
+- `--time-trials`: deterministic CPU driver trials and CSV output; no renderer/translator.
+- Interactive `--profile*`: fixture setup and live timing; current options come from `Game.Config.*`.
+
+## Build and tests
+
+`CMakeLists.txt` registers twelve colony modules plus `game.config` and `game.display`, their implementations and `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. POST_BUILD stages shaders, textures and meshes when present.
+
+`game.tests` registers `GameConfigUnitTests` unless tests are explicitly disabled. `Game.Config.Tests.cpp` covers invocation compatibility, source precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and Keep/Revert. Engine test targets never depend on these game modules.

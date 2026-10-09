@@ -33,7 +33,7 @@ module bindings for third-party libraries consumed by the engine.
 - **CMake 4.4 workaround**: both `imgui.base` and `imgui` pin `CXX_MODULE_STD OFF` (root-scope `include()`d
   targets reference the synthetic `@cmake_cxx_std.lib` as a bare `@`-name on link lines; MSVC parses the
   leading `@` as response-file syntax and every link fails with LNK2001 on std-module inline definitions).
-  Re-test on newer CMake — see AGENTS.md "CMake Version Tracking". `imgui` additionally carries PUBLIC
+  Re-test when changing CMake under the [build-system](../../.opencode/skills/build-system/SKILL.md) procedure. `imgui` additionally carries PUBLIC
   `$<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-c++98-compat-extra-semi>` — the upstream-generated `imgui.cppm`
   has an extra `;` after a member body that clang promotes under project `-Werror`; PUBLIC (not PRIVATE) so
   the suppression reaches the `imgui@synth_*` BMI compiles of importers.

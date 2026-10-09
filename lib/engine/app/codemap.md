@@ -1,186 +1,39 @@
-# lib/engine/app
+# lib/engine/app/
 
 ## Responsibility
 
-`engine.app` is the application-layer umbrella module: the single compile-time aggregation point (`import engine.app;`)
-for application lifecycle, input, player, scene camera, services, window, platform, renderer, and UI.
-`pP::Application` (`:application`) is the slim lifecycle base — `ApplicationDomain`, run-loop, `IPlatform`,
-`ServicesStore`, shader/RHI/`Renderer` bootstrap, directory resolution. `pP::ApplicationEditor`
-(`:application_editor`) is the interactive-client subclass that owns window, viewport, input context, player, camera,
-  triangle and grid passes, and ImGui service, and implements `IClientService`. `game/main.cpp` drives `run()` on the concrete
-application.
+`engine.app` aggregates application lifecycle, display/startup settings, owned frame transport, platform/window services, input/player, camera, pass-owned rendering, and ImGui. It depends on core/math/shader/rhi/image/mesh, not sim or physics. `App.cppm` is the authoritative export list; `CMakeLists.txt` registers interfaces/implementations and external dependencies.
 
-## Design
+## Ownership and execution
 
-- Umbrella `App.cppm` only `export import`s partitions — `:application` + `:application_editor`,
-  `:display` (`DisplayController` pacing policy + helpers) + `:display.settings`
-  (`DisplaySettings` schema + `displayCliOptions`) + `:startup.settings`
-  (`StartupSettings` schema + `startupCliOptions`), `:frame.packet`,
-  `:input.*` (7, incl. `:input.batch` owned pump batches),
-  `:player` + `:player.graph`, `:scene.camera` + `:scene.camera.controller`, `:service.client` + `:service.input` +
-  `:service.player` + `:service.ui` + `:service.window`, `:window.*` (viewport/handle/monitor), `:platform`,
-  `:renderer` + `:renderer.frame_fence` + `:renderer.gpu_caches` + `:renderer.grid_pass` + `:renderer.triangle_pass` + `:renderer.types`,
-  `:ui.imgui`.
-- `Application` (`App.Application.cppm/.cpp`, `module engine.app:application`) — `safe_object` subclass with virtual
-  `initialize/update/render/shutdown` returning `std::error_code`. Owns `unique_ptr<Renderer>`, `TimerManager`
-  `m_application_clock`, `optional<TimeSpan> m_target_frame_time` (single foreground CPU authority) plus
-  `DisplayController m_display_controller` (committed `DisplaySettings`, one pending
-  candidate, provenance/revision, ack-only publication; default follow-vsync) and
-  `bool m_presentation_vsync` (requested vsync half: applied to fresh renderers pre-lane-start;
-  post-start changes go through lane-affine surface transactions with commit-on-acknowledgement) plus `m_has_background_priority` (background-throttle
-  activation surfaced via `getTargetFrameTime`), `const unique_ptr<IPlatform> m_platform`
-  (declared before `ServicesStore m_services` so reverse-destruction releases store observers before platform owners),
-  `SharedContext m_lifecycle` + `context::CancelClauseFunc m_request_exit`,
-  `Array<string>` args, `string` name, `const ApplicationDomain m_domain`, `directory_entry` dirs
-  (install/content/working resolved; config left default). Ctor wires `IPlatform::create()` plus
-  `hal::disableSystemErrorReporting/installDebugAssertHooks/setThreadName("Application")` + `main_group` (`App.Application.cpp:31`). Forward-declares `IClientService`. Accessors:
-  `getName/Arguments/Domain/Platform/Lifecycle` (const ref), `getRenderer/Services/TimerManager` (const + mutable overloads),
-  `getTargetFrameTime` (Phase 3 §4.2 overlay: `max(foreground or zero, 200ms)` when background priority is
-  active with the legacy opt-out off and `display.throttle_unfocused` enabled — a slower explicit cap is
-  preserved; otherwise the foreground target), dir getters; `requestExit(clause = {})` (empty raises only the `m_exit_requested` latch — `run()` returns success; nonzero latches the cause + emits), `isExitRequested()` (latch OR latched cancel error), `setBackgroundPriority(throttle)`,
-  `setTargetFrameDuration(TimeDuration/nullopt)`,
-  `setTargetFrameRate(fps)` (non-positive clears throttle), `setDisplaySettings(DisplaySettings)` (stages a
-  pending `DisplayController` candidate; foreground CPU target + acknowledged generation mirror commit only
-  on lane acknowledgement — never direct renderer writes), `displayController()`/`displayView()`/`presentationVsyncRequested()`/`unfocusedThrottleEnabled()`
-  (telemetry + focus policy), `run()`.
-- `ApplicationDomain` — immutable-after-construction bitfield struct: `m_is_headless` (false), `m_is_interactive`
-  (true), `m_needs_presence` (false), `m_needs_rendering` (true), `m_needs_user_interface` (true); `ApplicationEditor`
-  fixes these values at construction.
-- `ApplicationEditor` (`App.Application.Editor.cppm/.cpp`, `module engine.app:application_editor`) — `public
-  Application, protected IClientService`. Owns `unique_ptr<Player>`, `unique_ptr<Camera>`,
-  `unique_ptr<ICameraController>`, `unique_ptr<WindowInputContext> m_main_input_context`,
-  `unique_ptr<InputMapping> m_camera_input_mapping`, `unique_ptr<IUIService>`, `unique_ptr<WindowViewport>`,
-   `unique_ptr<TrianglePass>` + `unique_ptr<GridPass>`. Implements `IClientService` const + mutable `getMainCamera/Player/Viewport/InputContext`
-   getters (input getters wrap `&m_main_input_context->m_context`) plus protected `getApplication()` returning `this`.
-   Owns `unique_ptr<InputBackgroundLatch> m_input_background_latch` (registrar == owner; actuator borrows it,
-   detach-before-destroy) + device-disconnect handle. Private `onMainWindowFocused_(window, focused)` sets
-   background priority via `backgroundThrottleWanted_` (raw focus loss); the legacy opt-out and
-   `display.throttle_unfocused` apply centrally in `getTargetFrameTime`/`displayView`. On focus loss the
-   callback also resets the routing latch + camera-controller motion state.
-    Public `getGridPass()` exposes editor-owned tile staging; `replaceMainCameraController(unique_ptr<ICameraController>,
-    ECameraProjection)` prepares a fresh mapping, detaches the previous mapping and resets input, then attaches the
-    replacement at camera priority (invalid null → `invalid_argument`; absent editor state → `not_connected`; projection + cut `App.Application.Editor.cpp:224-225`).
-    Input-chain order comes from `:service.input`: listener `EInputListenerPriority { ui = 0, detector = 1, player = 2 }`
-   with mapping `EInputMappingPriority::camera = 1`.
-- `App.TemplateInstantiations.cpp` pins explicit instantiations for `Delegate` (window events incl. key/mouse/char
-  overloads) and `BroadcastCallback` (monitor/window/input/player/time) so downstream users don't pay
-  implicit-instantiation cost. Linux/clang bring-up: the seven `extern template` pins removed
-  from `:window.handle` are covered here by explicit `Delegate` window-event instantiations instead, keeping the header
-  free of per-TU instantiation pins.
-- Linux/clang bring-up summary (detail per area): GLFW native headers gated per OS + complete-type partition imports
-  (`platform/glfw`); `[[nodiscard]]`-free friend declarations with namespace-scope attribute declarations (`input.key`);
-  `:input.action` imported by the scene controller (`scene`); conditional `std23::move_only_function` callback aliases
-  (`input`, `service`); explicit mango dims (`<float, 2u/3u/4u>`, `toFloat<int, 2u>`) at the `int`-vs-`u32` boundary
-  (`input`, `scene`, `ui`, `window`); `[[fallthrough]]` + index-loop `Listener` fixes (`input`); `checked_cast` +
-  `static_cast<double/u32/u64>` conversions (`input`, `platform/glfw`, `ui`); `.indexBuffer = {}` (`renderer`);
-  `[[maybe_unused]]` debug helpers (`ui`).
-- CMakeLists registers `App.cppm`, `App.Application.cppm`, `App.Application.Editor.cppm`, input (7, incl. `:input.batch` owned pump batches + `:input.routing`), frame (1, `:frame.packet`), platform (5),
-  player (2), renderer (6, `Types` is `.cppm`-only — no `Types.cpp`), scene camera (2 — `App.Scene.World.cppm` exists on
-  disk but is unregistered, see `scene/codemap.md`), service (5, incl. new `service/App.Service.Client.cppm`), ui (1), window
-  (3) as `FILE_SET CXX_MODULES`; `App.Application.cpp`, `App.Application.Editor.cpp` + per-area `.cpp` files
-  privately. Links `engine.core/math/shader/rhi/image/mesh` internal-public, `glfw`/`mango` private, `imgui.base` + `imgui`
-  public (so `import imgui;` resolves for importers).
-- Linux bring-up conformance (no lifecycle/renderer contract change): call sites spell the same explicit dim
-  args math requires (`opaqueValue<float,2u/3u>` on the axis structs — same mango `int`-dim vs engine
-  `u32`-dim boundary); `std23::move_only_function` without `const noexcept`, explicit `[[fallthrough]]`,
-  index loops over `views::enumerate`, no `[[nodiscard]]` on friend declarations — all Clang/libc++ strictness.
+- `App.Application.cppm/.cpp`: `Application` owns the immutable `ApplicationDomain`, platform, service store, `TimerManager`, renderer, optional `RenderLane`, frame reservation/settlement state, and display controller. Rendering-enabled non-headless applications default to a dedicated worker (`m_render_lane_enabled`); headless or explicitly disabled-lane applications initialize and render inline. `setRenderLaneEnabled` is a pre-initialization choice.
+- `App.Application.Editor.cppm/.cpp`: `ApplicationEditor` implements `IClientService` and owns window/viewport, input context and mappings, player, camera/controller, TrianglePass, GridPass, ImGui service, and client-side staged payloads. Object ownership stays here while pass GPU mutation and renderer operations execute on their owner lane.
+- [frame](frame/codemap.md): copied camera/window metadata, immutable render requests, detached UI, bounded transports and reliable settlement results.
+- [renderer](renderer/codemap.md): device-facing submission, surface generations, GPU fences/credits, pass caches, GridPass and TrianglePass. Renderer boundary types contain no mutable camera.
+- [input](input/codemap.md), [player](player/codemap.md), [scene](scene/codemap.md), [window](window/codemap.md), [platform](platform/codemap.md), [service](service/codemap.md), [ui](ui/codemap.md): owning subsystem details.
 
-## Flow
+`App.Scene.World.cppm` exists but is neither registered nor re-exported; it is not a usable built world API. Its presence does not require an unrelated task to register or delete it.
 
-1. `Application::run()` → `initialize()` (re-arms the `m_exit_requested` latch) → fused `finishRun_()` on every
-   path (first error retained across `prepareGpuTeardown_()` + `shutdown()` + `Log::flush(true)`; loop error read BEFORE `shutdown()` resets the
-   lifecycle; exception-only safety-net defer otherwise) → loop `while (not isExitRequested())` — exit latch OR latched
-   cancel error, never the consumable event pulse alone: `advanceClock_()` (wakeable `FramePacer` wait on the
-   exit/error latch with 2ms quantum, then zero-target `m_application_clock.tick()` — `now()` stays latched) →
-   clock-error OR exit latches + leaves the loop with no client/render work → admission gate BEFORE the whole
-   virtual update stage (`probeFrameAdmissionPreUpdate_`: retire + probe with terminal precedence over poll errors;
-   terminal retains first-error, latches, and leaves BEFORE carry/update/render; capacity-busy accumulates dt into
-   the single Application-owned `m_pending_skipped_dt`, runs `IPlatform::pumpNativeEvents()` collection ONLY
-   (never `update(dt)`), latches a collection failure, and finishes the iteration; admitted frames run
-   `update(dt + carry)` and `render()` only when update succeeded) inside one exception boundary whose handlers
-   retain the first error, never overwriting it; exceptions map to exit clauses (`system_error→e.code()`,
-   `invalid_argument`, `bad_alloc→not_enough_memory`, `...→state_not_recoverable`) via first-error retention;
-   no per-frame flush — shutdown drain only.
-2. `Application::initialize()` → clock reset (`App.Application.cpp:141`) BEFORE platform init (`:151`) → `PPR_DEFER`-on-failure `shutdown()` rollback
-   (`success` flag; service registrations torn down explicitly via `shutdown()`, not the defer pair) →
-   `content/install` = executable parent (`install` aliases `content`), `working` = `current_path`
-   (`config` untouched), `withCancelClause(background())` →
-   if `m_domain.m_needs_rendering`: `IShaderService::get()->initialize()` + insert, `IRhiService::get()->initialize(
-   DeviceType::Default, shader)` + insert, `make_unique<Renderer>()->initialize(rhi)`. `update()` =
-   `not_connected` guard + `m_platform->update(dt)` (`App.Application.cpp:243-250`); `render()` = no-op default.
-   `shutdown()` (B1' fail-stop: `prepareGpuTeardown_()` stops admission permanently, establishes
-   idle-proven vs removal-confirmed vs UNKNOWN, and records the disposition + stage log; UNKNOWN fail-stops the
-   process via the constructor-injected noexcept handler + unconditional `_Exit(0xB1)` BEFORE any release; only
-   proven idle or confirmed removal releases): `m_renderer->shutdown()` + reset → shutdown RHI then erase
-   on success → shutdown shader then erase on success → `m_platform->shutdown(*this)` last;
-   `PPR_RETAIN_ERROR_ON_FAIL` first-error accumulation.
-3. `ApplicationEditor::initialize()` → `Application::initialize()` → `Player(PlayerIdentity{})` +
-   `Camera(perspective)` + `InputMapping("camera_input_mapping")` + `FreeCameraController::lookAt`/`provideInputActionKeyMappings`
-   → player listener `addInputMapping(camera_mapping, EInputMappingPriority::camera)` → `WindowInputContext(input_service)`
-   → `InputBackgroundLatch(ui, player-listener, player, detector)` + device-disconnect handle (resets latch + controller
-   motion) → `app_services.inject()` deducing `IRhiService/IShaderService` → `TrianglePass::initialize(rhi, shader,
-    getContentDir())` → `GridPass::initialize(rhi, shader, getContentDir())` →
-    `ui::createImGuiService()->initialize(input_context, rhi, shader, latch.m_foreground_priority)` →
-   `latch.initialize(context, ui-listener)` → `IWindowService::createWindow({title = getName(), 1280x720})` → approved follow-vsync default (no monitor-derived CPU cap; monitor refresh stays informational) →
-   `WindowViewport(main_window, ViewportLayout{})` →
-   `input_context.initialize(main_window)` + ignored-`setMainWindow` + `m_when_focused` subscription → `insert_or_assign(ui)`.
-4. Per-frame editor: `update()` = `Application::update` → `viewport->updateFromWindow()` →
-   `camera->updateModel(dt, controller, viewport->getViewport())` → packet construction (the run-level gate
-   already admitted this frame, so the packet is always built; busy frames never reach `update()`; the
-   Renderer re-checks admission at submit time as the defensive backstop) →
-   `triangle_pass->update(dt, packet.m_camera)` + `grid_pass->update(dt, packet.m_camera)` (packet-owned snapshot;
-    passes never consult the mutable `Camera` while drawing) + `submitSceneInstances_()` when a scene is loaded →
-   `ui_service->update(dt, *viewport)`; the owned `FramePacket` (P0: camera/viewport/window copies) is built right
-   after the camera update and before pass staging (same-thread consume); `render()` = `Application::render()` → consume the staged packet (fail closed when absent;
-   zero-size/minimized is an explicit non-rendering success) → two explicit surface passes:
-    GridPass prepares visible pending cell-atlas uploads before `renderAndPresent` (RHI device from services;
-    renderer-owned `waitOnHost` fence on demand). GridPass and TrianglePass encode in the same renderer-owned-depth surface pass,
-    then ImGui selects no depth and loads the existing color
-   attachment; both render before one present. Submission acceptance is independent of present: the fence
-   frontier is captured before `renderAndPresent` and ALL participants (grid, triangle, fence-aware UI) are
-   stamped off an accepted SUBMIT even when present fails; obsolete/capacity-busy frames drop as
-   non-rendering success (next frame recaptures), while quarantine/terminal failures keep their distinct
-   codes into teardown/recovery. `shutdown()` fail-stops first (`prepareGpuTeardown_()` + UNKNOWN check —
-   no release on UNKNOWN), then on proven idle or confirmed removal (renderer `notifyDeviceLost` + pass
-   `notifyDeviceLost`, surface destroy skipped) runs `unloadScene()` (`App.Application.Editor.cpp:338-340`) + `destroyWindowSurface` (`:399`), then detaches the
-   device-disconnect handle first, resets controller motion, shuts down + resets the latch (detector-first detach),
-    erases + shuts down UI, grid pass, triangle pass, clears player mappings + frame messages, shuts down + clears the input context,
-   resets viewport, drops the focus subscription, destroys the window, resets mapping/controller/camera, then
-   `Application::shutdown()`.
-5. Titles (P0 no-op record): ZERO live title producers — `renameWindow` has no callers, so no
-   coalescing/rate-limiting exists. `WindowModel::m_title` is copied render metadata only
-   (see `FramePacket::m_window_title`).
-6. No runtime logic in `App.cppm` itself — compile-time re-export only.
+## Runtime flow
 
-## Integration
+1. `Application::run()` re-arms its epoch and initializes. Platform and shader/RHI services bootstrap before renderer setup. The renderer initializes on the worker when that lane is enabled; headless rendering initializes inline. Editor initialization creates client objects, resources, input routing, window and viewport. Startup service references are captured for worker callbacks.
+2. The main loop advances its explicit clock and services completions/display control. Admission happens before virtual client update. A capacity-busy frame collects native events without advancing client work and carries elapsed time to the next admitted update. Terminal failures stop client/render work; an empty `requestExit()` is graceful success, while an error exit retains its cause.
+3. Editor update runs platform/input work, syncs viewport, advances the camera, captures an owned `FramePacket`, prepares client-side content payloads, and updates UI. Game overrides add simulation and staged grid/debug data. Main does not mutate worker-owned pass caches.
+4. Editor render consumes the packet once, builds detached UI draw data on main, and packages `RenderFrameRequest` with owned grid/triangle staging and reservation identity. The worker (or inline reference) applies staging, updates passes from the packet camera, prepares cell uploads, and encodes grid + triangle followed by color-loading UI before one present. Zero-size and obsolete frames are explicit non-rendering outcomes.
+5. Results distinguish CPU staging consumption, submission acceptance, sweep failure, surface generation and UI acknowledgments. A CPU consumption acknowledgment is not GPU completion. Accepted submits stamp all participating resources even if presentation subsequently fails. Reservation accounting and GPU fences govern reuse; transport capacity is not completion proof.
+6. `finishRun_` retains the first error through GPU preparation, shutdown and logger drain. Teardown stops admission and controls, settles queued/in-flight work, and keeps pumping native events during worker waits. It proves GPU idle or confirms removal before releasing resources. Unknown completion invokes the fail-stop boundary before ordinary destruction. Pass/surface/renderer cleanup runs on the owner lane; windows/platform cleanup runs on main. The worker joins before its storage/services die. A new run creates a new lane instance and epoch.
 
-- **Consumers**: `game/main.cpp` (concrete application subclass), `engine.tests.app` (platform tests).
-- **Depends on**: `engine.core` (services, context, delegates), `engine.math`, `engine.rhi`, `engine.shader`
-  (via renderer/UI pass), `engine.image` + `engine.mesh` (public, `CMakeLists.txt:86`; cache upload types), external `glfw`/`mango`/`imgui`.
-- **Asset consumer**: pass caches upload `engine.image`/`engine.mesh` CPU types (no sim types at the boundary).
-- **Provides**: every `engine.app:*` namespace; `Application` lifecycle + service-store accessors
-  (`getServices()`, `getPlatform()`, `getRenderer()`, `getDomain()`, `getTimerManager()`); `ApplicationEditor` client
-  ownership via `IClientService`.
+## Settings and transactions
 
-## Key Files
+- `App.Display.Settings.cppm/.cpp`: typed display schema and CLI bindings.
+- `App.Display.cppm/.cpp`: requested/committed policy, provenance, pending candidate, acknowledgment-driven commit, effective pacing and degraded state.
+- `App.Startup.Settings.cppm/.cpp`: startup-only core/GPU validation settings.
+- [DisplayControls.md](DisplayControls.md): native mode/surface transactions, capabilities, Apply/Keep/Revert contracts. Game-specific drafts and persistent overlays live in `game/Game.Display.*`.
 
-- `App.cppm` — umbrella re-export list incl. `:application_editor` + `:service.client` (no runtime code).
-- `App.Application.cppm/.cpp` — slim `Application` base: domain/run-loop/platform/services/shader-RHI-renderer bootstrap.
-- `App.Application.Editor.cppm/.cpp` — `ApplicationEditor`: window/viewport/input/player/camera/grid/triangle/UI ownership.
-- `App.Display.cppm/.cpp` (`engine.app:display`) — `DisplayController` (committed `DisplaySettings` plus one
-  pending candidate, provenance/revision, acknowledgement-only publication, degraded-state reporting; no
-  window/monitor/renderer state) + pure helpers `foregroundFramePeriod`/`presentationVsync`/`pacingTargets`
-  (§4.1 table) + `effectiveFramePeriod` (§4.2 `max(foreground or zero, 200ms)` overlay) + `DisplayView`
-  telemetry snapshot (§5.1: requested policy, foreground/effective targets, vsync, throttle reason).
-- `App.Display.Settings.cppm/.cpp` (`engine.app:display.settings`) — `DisplaySettings` schema
-   (nine pacing/window/monitor/dimensions/refresh fields, follow-vsync + windowed defaults) plus visitor-derived CLI
-   bindings with legacy throttle aliases. Capability-independent cross-field validation runs during resolution.
-   `Application::displayCapabilities()` and `displayWindowGeometry()` return owned, handle-free views; runtime
-   native apply/rollback is coordinated inside suspended surface transactions. See [DisplayControls.md](DisplayControls.md)
-   for exact panel Apply/Keep/Revert contracts and capability semantics.
-- `App.Startup.Settings.cppm/.cpp` (`engine.app:startup.settings`) — `StartupSettings` schema
-  (core/gpu validation, startup-only) plus `--core-validation`/`--gpu-validation` bindings.
-- `frame/App.Frame.Packet.cppm/.cpp` — `engine.app:frame.packet`: owned `FramePacket` (camera/viewport/window copies),
-  `makeFramePacket` capture, `hasRenderTarget` derived-from-size guard (see `frame/codemap.md`).
-- `App.TemplateInstantiations.cpp` — explicit `Delegate`/`BroadcastCallback` instantiations.
-- `CMakeLists.txt` — module + source registration, `setup_ppr_project` deps.
+Display controls use owned lane-affine transactions; native window changes stay on main. Do not bypass generation/acknowledgment checks with direct cross-thread renderer writes. Default pacing follows vsync, and background throttling is centrally applied.
+
+## Tests and registration
+
+`lib/engine/tests/app/CMakeLists.txt` owns six serialized app shards, including display/window transactions, render lane and lifetime/failure gates. Asset tests cover GPU/asset integration. See [root tests](../../../codemap.md#test-infrastructure) for scheduling and loop policy.
+
+For source additions, register the interface and matching implementation in `CMakeLists.txt` and update `App.cppm` only when exporting the partition. `App.TemplateInstantiations.cpp` owns explicit template instantiations. Do not infer registration from files merely present on disk.

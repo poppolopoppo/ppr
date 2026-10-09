@@ -5,8 +5,9 @@
 Typed, visitor-described configuration foundation (`pP::config`): schema
 metadata/descriptors, transactional resolution with provenance, CLI and
 environment adapters, and a format-neutral file codec. Knows nothing about
-displays, rendering, profiling, or test execution; later phases own their
-schemas and application policy on top of this library.
+displays, rendering, profiling, or test execution; app/game own their
+schemas and application policy on top of this library. See the app display/startup
+settings and game invocation/display modules for current consumers.
 
 ## Design
 

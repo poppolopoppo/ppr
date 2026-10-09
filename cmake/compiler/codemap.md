@@ -37,12 +37,12 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known versioned/multiarch fallbacks
   (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`); `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the
   file exists, otherwise left unset for CMake default lookup;
-  **clang-cl** reuses it in MSVC-compat mode (`clang-cl-dev`/`clang-cl-rel` presets). **GCC** (`GCC.cmake`)
+  **clang-cl** follows the MSVC-compatible branch when CMake sets `MSVC`; the dispatcher checks `MSVC` before compiler ID. **GCC** (`GCC.cmake`)
   extends Clang warnings — presets stay hidden: **no C++ modules support**.
 
 ## Flow
 
-1. `Compilers.cmake` dispatches on `MSVC`, then `CMAKE_CXX_COMPILER_ID` (`.*Clang` including clang-cl,
+1. `Compilers.cmake` dispatches on `MSVC`, then `CMAKE_CXX_COMPILER_ID` (`.*Clang` when the MSVC branch did not match,
   `GNU`), and includes the matching `compiler/*.cmake` file.
 2. Global genex `add_compile_options` apply per-compiler/config flags to every target including synth targets.
 3. `setup_ppr_project()` layers `cxx_std_23` / `CXX_MODULE_STD ON` / warning sets / link edges per target.
@@ -54,8 +54,7 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   every `setup_ppr_project()` target opts back out via `ppr_disable_compiler_cache()` (module BMIs uncacheable).
 - Preset side: `msvc-live` sets `PPR_EDIT_AND_CONTINUE=ON` (→ `/ZI` path); `PPR_RELEASE_PERF_FLAGS=OFF` there.
   `msvc-rel` sets `BUILD_TESTING=OFF` (test targets + `:unit_test` excluded from shipping configs).
-- Workaround refs: root-scope `@cmake_cxx_std.lib` LNK2001 (see `cmake/external/` + AGENTS.md "CMake Version
-  Tracking") is why `imgui`/`imgui.base` pin `CXX_MODULE_STD OFF`.
+- Workaround refs: root-scope `@cmake_cxx_std.lib` LNK2001 (see `cmake/external/`) is why `imgui`/`imgui.base` pin `CXX_MODULE_STD OFF`.
 
 ## Key Files
 
@@ -65,6 +64,6 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   `/DEBUG`, `/PDBSTRIPPED`), `/EHsc`, `/utf-8`, `/bigobj`, `/O2` + `/Ob2` + `/GL` + `/Gw` + `/Zc:checkGwOdr`,
   opt-in `/arch:AVX2` (`PPR_ENABLE_AVX2`),
   `/Zc:__cplusplus`, `PPR_PROJECT_WARNINGS_CXX`, ASAN/`/WX` tails.
-- `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate (also serves clang-cl).
+- `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate.
 - `GCC.cmake` — Clang base + GCC-specific warnings (modules unsupported).
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project()`.

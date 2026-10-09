@@ -4,9 +4,8 @@
 
 `engine.sim` owns deterministic, renderer-independent simulation state for the chunk world: the
 fixed cell grid, the fixed-timestep tick driver plus declared system order, the snapshot
-(save/load) contract, and the ECS registry/views substrate. Later phases still to come are
-  renderer/HRC integration — only the state those phases build on. Scripting/modding attaches
-  outside this module (see Flow/Integration) — `engine.sim` never imports a script engine.
+(save/load) contract, and the ECS registry/views substrate. The game already integrates this state with rendering
+through owned simulation packets; the sim module itself has no renderer or script-engine dependency.
   `:footprint` adds plain ECS body vocabulary (`BodyState`/`BodyDefinition` live; `SolidFootprint`
   (Sim.Footprint.cppm:45-50) and `Sensor` (:52-57) declared but zero external refs) without importing physics.
 
@@ -118,7 +117,7 @@ fixed cell grid, the fixed-timestep tick driver plus declared system order, the 
 
 ## Flow
 
-Simulation work later phases submit stays outside this module: a driver advances
+Game-specific simulation systems stay outside this module: a driver advances
  `FixedTimestep`, runs the bound steps strictly in `StepRegistry::order()` (or runs none if any
  declared step is unbound), writes cells through `ChunkGrid`,
 and `capture` → `save` for a checkpoint (`load` → `apply` restores grid deltas;
@@ -130,13 +129,6 @@ chunk's `dirtyBounds` rect, and leaves the grid alone;
 and dirty) and leaves every other cell's content and dirty state untouched (`clearAllDirty` is the
 reset path), so `capture(apply(g)) == snapshot` holds only for a clean `g` and a duplicate-free
 snapshot.
-
-Scripting/modding (future step, outside this module): a script host (leaf `engine.script` or
-`game`-owned service) binds gameplay/mod logic as `StepRegistry` systems
-(`SystemFn = move_only_function<void(Registry&)>`) and drives them via the existing
-`FixedTimestep` owner. Script state never enters `Snapshot`; only C++ `Registry`/`ChunkGrid`/
-`RngStream` capture. Scripts run single-threaded on the tick thread, receive time/RNG as
-injected parameters, and per-call errors isolate without throwing into the run loop.
 
 ## Integration
 

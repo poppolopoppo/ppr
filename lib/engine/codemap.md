@@ -1,101 +1,31 @@
 # lib/engine/
 
-## Responsibility
+## Responsibility and dependencies
 
-The PPR engine library tree. Hosts the C++20 module libraries that compose the engine (core/math/sim/physics/shader/rhi/image/mesh/app), organized by
-dependency layer: `engine.core` (foundation) → `engine.math` (vector math) → `engine.sim`
-(deterministic simulation: chunk grid, fixed-timestep tick, snapshot) + `engine.physics` (Box2D boundary, PRIVATE box2d) → `engine.shader` (Slang
-compilation) → `engine.rhi` (GPU abstraction) → `engine.image`/`engine.mesh` → `engine.app` (application layer).
-`engine.core` is the umbrella foundation re-exporting ~30 partitions into a single `pP` namespace
-(`import engine.core;`). `engine.app` is the single compile-time aggregation point (`import engine.app;`):
-slim `Application` lifecycle base + `ApplicationEditor` interactive-client subclass owning window, viewport,
-input, player, camera, triangle pass, grid pass, and ImGui service via `IClientService`.
+Nine production modules form an acyclic graph, not a linear chain. These engine dependencies are registered by each module's `CMakeLists.txt`:
 
-## Design
+| Module | Responsibility | Engine dependencies |
+|---|---|---|
+| [core](core/codemap.md) | Types, allocators, containers, concurrency, I/O, configuration, services, HAL | none |
+| [math](math/codemap.md) | Mango math and helpers | core |
+| [shader](shader/codemap.md) | Slang shader service | core |
+| [rhi](rhi/codemap.md) | Slang-RHI and projection helpers | core, math, shader |
+| [image](image/codemap.md) | CPU image assets | core, math |
+| [mesh](mesh/codemap.md) | CPU static mesh assets | core, math |
+| [sim](sim/codemap.md) | Chunk grid, ECS, footprint vocabulary, fixed timestep, snapshots, worldgen | core, math |
+| [physics](physics/codemap.md) | Scene, chunk colliders, coupling; private Box2D | core, math |
+| [app](app/codemap.md) | Lifecycle, platform, input/player, camera, UI, renderer | core, math, shader, rhi, image, mesh |
 
-- **Layered acyclic dependency chain** (mirrored in each `CMakeLists.txt` via `setup_ppr_project`, no upward
-  or cyclic edges): `engine.app` → core + math + shader + rhi + image + mesh (+ `glfw`, `mango` private,
-  `imgui.base`/`imgui` public); `engine.rhi` → core + math + shader (public) + `slang-rhi`/`slang` (public);
-  `engine.sim` →
-  core + math (public); `engine.physics` → core + math (public) + box2d::box2d (private); physics/sim siblings, no cross-import; `engine.shader` → core
-  (public) + `slang` (private); `engine.math` → core (public) + `mango` (private); `engine.image` → core +
-  math (public) + `mango-image`/`stb` (private); `engine.mesh` → core + math (public) + `mango-import3d`
-  (private); `engine.core` → `rapidhash`
-  (private) + per-platform HAL sources (windows + linux `Random`/`RingBuffer` (11 shared HAL areas + per-platform `Random`/`RingBuffer` pairs)).
-- **Module convention**: `.cppm` = interface (exports), `.cpp` = implementation; single-module libraries
-  (`math`, `shader`, `rhi`) vs partitioned umbrellas (`core`, `app`); implementations use `module engine.<lib>;`
-  + `import :partition;`. App umbrella `App.cppm` only re-exports (`:application` + `:application_editor`,
-  `:input.*`, `:player` + `:player.graph`, `:scene.camera` + controller, five `:service.*`, `:window.*`,
-  `:platform`, `:renderer` + triangle_pass + grid_pass + types, `:ui.imgui`).
-- **Application lifecycle types**: `ApplicationDomain` immutable-after-construction bitfield
-  (`m_is_headless`/`m_is_interactive`/`m_needs_presence`/`m_needs_rendering`/`m_needs_user_interface`);
-  `Application` (`:application`) is a `safe_object` subclass with virtual
-  `initialize/update/render/shutdown` returning `std::error_code`, owning `unique_ptr<Renderer>`,
-  `TimerExplicitClock`, `const unique_ptr<IPlatform>` ordered before `ServicesStore` for safe reverse
-  destruction, `SharedContext m_lifecycle` + cancel clause, single-use torn-down latch, args/name/domain/four
-  directory entries. `ApplicationEditor` (`:application_editor`, `public Application, protected IClientService`)
-  owns `Player`/`Camera`/`ICameraController`/`WindowInputContext`/`InputMapping`/`IUIService`/`WindowViewport`/
-   `TrianglePass` with listener `EInputListenerPriority { ui, detector, player }` + mapping
-   `EInputMappingPriority::camera` ordering the input chain.
-  `App.TemplateInstantiations.cpp` pins explicit `Delegate`/`BroadcastCallback` instantiations.
-- **Service locator**: `IService : safe_object` base (no UID member) → `ServicesStore`
-  (`FlatMap<type_index, safe_ptr<IService>>` keyed by `typeid(T)`, `shared_mutex`, parent-chain fallback on
-  `tryGet`) → `ServiceInjector` implicit DI; per-viewport child stores chain to the root. App services are five
-  contracts: `service.client/input/player/ui/window`. Lifetime checked by `safe_ptr` (debug assert, release raw).
-- **Foundation details (core)**: strong `Numeric<T,TagT>` + integer aliases/literals/sentinels; rapidhash-backed
-  `hash_t` + seedable range combiners + consteval FNV-1a + `Memoizer`; `opaque::Value`/`Block`/`Unique`/`Dict`;
-  async `Log::Handler` (~2 MiB `RawChannel`, mutex-guarded policy, `std::jthread` drain, verbosity gate);
-  heap-based `TimerManager` (`TimerExplicitClock` + `mainTimer()` backing deadlines); `UnitTest` tree (macros in
-  `pP/UnitTest.h`); HAL partition also holds shared helpers (`simd_128_t`, `hash::mix`/`combine`, `overloaded`,
-  `Deferred`/`defer`, RNG).
-- **Matrix convention**: Mango-native left-handed view space (+Z forward, +Y up), row-major, row-vector
-  `mul(float4, matrix)`; Slang sessions fix `SLANG_MATRIX_LAYOUT_ROW_MAJOR`; RHI projections use
-  `orthoD3D`/`perspectiveD3D` with [0,1] depth, shared untransposed by all backends.
-- **Linux bring-up conformance** (no contract changes): math spells explicit `<T,DimV>` at `vectorCast`/
-  `roundHalfAwayFromZero` call sites with inner forwarding (mango `int`-dim vs engine `u32`-dim boundary),
-  float literals by policy (`2.0f`, no double promotion), no trailing `;` in `PPR_POLYMORPHIC_BASIC_NUMBER`;
-  mango `-m(avx512|avx|sse|bmi|fma|…)` flags are filtered from its `INTERFACE_COMPILE_OPTIONS` so every
-  importer shares one AVX-baseline BMI; RHI/Shader error-category instances are `static const` (libc++
-  rejects `constexpr` on the polymorphic `std::error_category`).
+Sim and physics do not import each other. App links neither; the game combines them and translates simulation state into owned render payloads. `import engine.app` does not expose all engine modules.
 
-## Flow
+## Runtime navigation
 
-`game/main.cpp` (`app.game`: core + app + math + shader + rhi + sim, plus PRIVATE physics for the driver-owned Scene) → `import engine.app` pulls the engine modules transitively → concrete `Application`/`ApplicationEditor` constructs → `run()` (torn-down guard →
-`initialize()` → `PPR_DEFER shutdown()` → loop `while (not m_lifecycle->error())`: clock tick, sleep-throttle
-to target frame duration, `update(dt)` + `render()` with first-error-wins exit via request-exit clause):
-platform init, directory resolution (`content/install` = executable parent, `working` = `current_path`),
-shader/RHI/`Renderer` bootstrap when `ApplicationDomain.m_needs_rendering`, then editor window/viewport/player/
-camera/triangle/UI setup → per-frame update (`TimerManager` tick + platform update → viewport sync →
-camera model → triangle-pass update → UI update) and render (`renderer.renderAndPresent` over triangle pass +
-UI service); shutdown unwinds UI + triangle + renderer, then RHI + shader, then platform last.
-Underpinning core flows: allocation via `GPA` → `OS` → `PagePool` → `HugePage`/`SmallPage` → `Arena`/`ScratchPad`;
-messaging via `producerReserve`/`producerSubmit` → `consumerAcquire`/`consumerRelease` with
-`Signal`/`select` multiplexing and `IContext` cancellation; IO via `IoPort::open`/`read`/`write` +
-`pollCompletions`/`waitForCompletions` and `mapFile`/`DirectoryWatcher`; diagnostics via
-`PPR_ASSERT/VERIFY/ENSURE` + async logger drain.
+`Application` owns platform/services, `TimerManager`, renderer and the optional render lane. `ApplicationEditor` owns client objects and pass/UI resources. Interactive rendering defaults to the worker; headless rendering stays inline. Both consume owned frame inputs. See [app](app/codemap.md) for admission, errors, display transactions, and teardown; avoid reconstructing those contracts from historical plans.
 
-## Integration
+`Application::run()` re-arms its per-run state; it is not guarded by a permanent single-use application latch. A `RenderLane` instance itself is single-use and is recreated for a new run.
 
-- Consumed by: `game/main.cpp`, test targets (`engine.tests.core`, `engine.tests.sim`, `engine.tests.app`,
-  `engine.tests.asset` via the `engine.tests` shared lib `runTests`/`runSuite`).
-- Depends on: third-party libraries (Slang, Slang-RHI, mango::math, GLFW, DearImGui `imgui.base`/`imgui`,
-  rapidhash, STB) via `cmake/external/` + `setup_ppr_project`. Lower layers never depend upward, preserving
-  acyclicity.
-- Provides: transitive `import engine.app` / `import engine.core` for all engine consumers; `Application`
-  lifecycle + service-store accessors and `ApplicationEditor` client ownership via `IClientService`; RHI behind
-  `IRhiService` and Slang compilation behind `IShaderService` reading sources through `io::mapFile`.
+Module interfaces live in `.cppm`; non-inline/non-template definitions live in `.cpp`. Umbrella interfaces re-export their partitions. `CMakeLists.txt` adds each production directory and adds `tests/` unless `BUILD_TESTING` is explicitly OFF.
 
-## Key Files
+## Tests
 
-- `core/` — foundation library (types, memory, containers, concurrency, IO, HAL).
-  See [core/codemap.md](core/codemap.md).
-- `math/` — mango re-export, constants, math helpers (`Math.cppm` only). See [math/codemap.md](math/codemap.md).
-- `shader/` — Slang session + module loading. See [shader/codemap.md](shader/codemap.md).
-- `rhi/` — GPU abstraction + projections + `IRhiService`. See [rhi/codemap.md](rhi/codemap.md).
-- `image/` — CPU image decode + mip generation (Mango/private). See [image/codemap.md](image/codemap.md).
-- `mesh/` — GLB/gltf import + conversion to render meshes (mango-import3d/private). See [mesh/codemap.md](mesh/codemap.md).
-- `sim/` — deterministic simulation state: chunk grid, fixed-timestep tick + step registry, snapshot
-  save/load. See [sim/codemap.md](sim/codemap.md).
-- `physics/` — Box2D Scene/ChunkColliders/Coupling. See [physics/codemap.md](physics/codemap.md).
-- `app/` — application layer (slim Application, ApplicationEditor client, input, window, player, renderer, scene, UI,
-  platform, five service contracts). See [app/codemap.md](app/codemap.md).
+Engine test executables are core, sim, app, and asset, using the shared static `engine.tests` library. Game configuration tests live under `game/` so engine tests never depend upward on game modules. See the [root test map](../../codemap.md#test-infrastructure) and owning CMake files for the current ten-entry matrix.

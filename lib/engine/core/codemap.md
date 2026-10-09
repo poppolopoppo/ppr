@@ -17,13 +17,14 @@ Umbrella foundation library (`engine.core`) re-exporting 38 partitions into a si
 - **Build**: `CMakeLists.txt` registers every `.cppm` in `FILE_SET CXX_MODULES` plus per-partition `.cpp` and `${HAL_PLATFORM_SOURCES}` (10 shared HAL areas + `Random`/`RingBuffer` on windows + linux, `:4-29`); `Core.UnitTest.cppm/.cpp` join the sets only when tests are enabled; links `rapidhash` privately via `setup_ppr_project`. On Linux link engine.core PUBLIC atomic (`CMakeLists.txt:120-124`); libc++ emits libatomic calls for 16-byte atomic<error_code> (Context.cpp:57,86-88). Test aggregates (`engine.tests`, `engine.tests.core`, `engine.tests.app` under `lib/engine/`) are likewise skipped when `BUILD_TESTING` is explicitly `OFF`. The editor partition is NOT gated — it ships.
 
 ## Flow
-- **Startup**: `game/main.cpp` imports core/math/rhi/app + mesh/sim/imgui, constructs `Application`, which calls `hal::disableSystemErrorReporting`/`installDebugAssertHooks`, resolves dirs from `process::currentExecutablePath()`, registers services (input, window, player, only shader + RHI by `initialize`), then runs the update/render loop with a `SharedContext` lifecycle.
+- **Application consumers**: lifecycle, frame admission, render-lane coordination and teardown belong to [engine.app](../app/codemap.md); core provides their timers, contexts, transports and HAL facilities.
 - **Allocation**: callers go through `mem::GPA` → `mem::OS` (`hal::pageAlloc`) → `PagePool` bitmap → `HugePage`/`SmallPage` pools → `Arena`/`ScratchPad` (TLS), composed via `InSitu`/`Fallback`/`Threshold`/`Pooling`/`LocalCache`/`HintedPooling`, erased via `Allocator<A>`/`PMR` or adapted via `STL<A>`.
 - **Messaging/events**: producers `producerReserve` → placement-new → `producerSubmit`; consumers `consumerAcquire`/`consumerRelease`; `Signal`/`select` multiplexes `IEvent`s (`RawChannel`, `IoRequest`, `DirectoryWatcher`, contexts); cancellation propagates down the `IContext` tree.
 - **IO**: `IoPort::open` → `read`/`write(IoRequest&, …)` → `pollCompletions`/`waitForCompletions` drain (64-entry batches); `mapFile` for shader/asset bytes; `DirectoryWatcher::poll`/`wait` → `changes()`.
 - **Diagnostics**: `PPR_ASSERT/VERIFY/ENSURE` throw or `[[assume]]` per config; `Log::Handler` drains entries on a `std::jthread`; `hal::outputDebugFmt` is debug-only.
 
 ## Integration
+- **Configuration**: typed schemas, CLI/environment adapters and TOML codec; see [config/codemap.md](config/codemap.md).
 - **engine.math**: vector/matrix aliases and ops; `hashValue()`/`opaqueValue()` hooks from core.
 - **engine.rhi / engine.shader**: RHI wraps Slang-RHI behind `IRhiService`; shader compiles via `IShaderService` reading sources through `io::mapFile` (HAL `mapFile` + `MappedFileBlob`).
 - **engine.app**: owns `Application`, service stores, input/window/player/viewport/renderer layers; consumes HAL (platform selection via `PPR_HAL_PLATFORM`), concurrency, IO, timers.

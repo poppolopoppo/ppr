@@ -1,5 +1,7 @@
 # AwayTeam Clone — Architecture (Implementation Contract)
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 > Scope: commercial-grade clone of Klei's **Away Team** (reference game ID 2168390 —
 > that ID identifies Klei's title, not this clone; 2D side-scrolling single-duplicant
 > platformer + full gas/liquid/heat tile sim; closed playtest Apr 2026 only) `[ONI-REF]`.

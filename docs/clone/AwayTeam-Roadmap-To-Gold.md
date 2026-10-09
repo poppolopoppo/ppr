@@ -1,5 +1,7 @@
 # Roadmap: current PPR → commercial Gold
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 **Recommended sequence:** P0 feasibility → MVP-1 **Breathe** → MVP-2 **Plumb & Burn** → **Content-complete Beta** → **Polish** → **Gold**.
 
 MVP proves the complete survival loop; it is **not** the final product. Each gate produces a packaged, runnable build, reproducible evidence, and an explicit go/no-go decision. P0 is an internal technical release, not a public product.

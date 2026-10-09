@@ -1,5 +1,7 @@
 # Addendum: concurrent execution and responsiveness `[DECISION]`
 
+> **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
+
 **Applies to:** `docs/clone/AwayTeam-Addendum-Async.md`; `AwayTeam-Architecture.md` §4.2, §5–6, §8–9; `AwayTeam-Roadmap-To-Gold.md` P0/MVP-2/Polish; `AwayTeam-UX.md` §2.1/§11; `AwayTeam-Gameplay-Inventory.md` §4.3.
 
 ## 1. Decision and scope

@@ -31,7 +31,7 @@ window, and UI overlay.
    is native-thread-only; `displayWindowGeometry` queries observations. Capability flags default unsupported.
 - `IUIService` (`App.Service.UI.cppm`, `:service.ui`) — overlay contract only: `initialize(WindowInputContext &,
   IRhiService &, IShaderService &, int input_listener_priority)`, `shutdown`, `update(TimeSpan, const WindowViewport
-  &)`, `render(const DrawContext &)`, `getContext`. Implementation lives in `ui/App.UI.ImGui.cpp`, NOT here.
+  &)`, `render(const DrawContext &)`, `getContext`, and detached frontend/backend rendering. `buildDetachedUiFrame` runs on the client; `renderDetachedUiFrame` encodes owned data on the render owner lane; font-version acknowledgments cross back in frame results. See [UI map](../ui/codemap.md). Implementation lives in `ui/App.UI.ImGui.cpp`, NOT here.
 - Linux bring-up: no service-partition source changed — the bring-up contract change is that input callbacks posted
   through `IInputService` now resolve to the conditional `std23::move_only_function` alias from `Core.Function.Ref`
   (see `input/codemap.md`), so service consumers (`GlfwInput`, `ImGuiService`, player listeners) share one callback
@@ -45,12 +45,8 @@ window, and UI overlay.
    `IPlayerService` into `m_services`; rendering path inserts `IShaderService` + `IRhiService`. `ApplicationEditor::
    initialize()` additionally creates window/viewport/input-context/player/camera and inserts the initialized
    `IUIService` into `m_services` via `insert_or_assign`.
-2. Per-frame: platform `update(dt)` drives `IWindowService::pollEvents()` + input device polling/posting into
-   listeners/mappings (listener order `ui(0) < detector(1) < player(2)` with the camera mapping at `1`); `IPlayerService` callbacks fire on player
-   add/remove; editor `update` ticks camera model + `TrianglePass::update(dt, snapshot)` + `IUIService::update`, and
-   `render` submits `{ triangle_pass, ui_service }` via `Renderer::renderAndPresent`.
-3. Lookup rule: `m_services.get<T>()` first, else walk to parent store — UI-scoped code sees both `m_ui_services`
-   (where present) and the root store; client code reaches scene state through `IClientService` getters.
+2. Per-frame: platform polling/replay dispatches input through listeners/mappings (`ui(0) < detector(1) < player(2)`, camera mapping priority `1`). The editor updates camera/UI on main and publishes owned grid/triangle/UI payloads. Pass updates, GPU encoding, submission and presentation execute on the render lane (or inline reference), with grid/triangle followed by UI. See [application flow](../codemap.md); service lookup stays at the startup/client boundary rather than in worker callbacks.
+3. Lookup rule: a `ServicesStore` first checks its local map, then an explicitly supplied parent. The current UI implementation has no `m_ui_services` child store; it receives dependencies at initialization. Client code reaches camera/player/viewport state through `IClientService` getters.
 
 ## Integration
 

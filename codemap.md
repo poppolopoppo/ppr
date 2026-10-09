@@ -9,55 +9,25 @@ entry points change. For durable architecture and coding policy, see
 
 ## Project Responsibility
 
-A high-performance, real-time C++23 game engine built on C++20 modules. PPR
-provides a flat fan-out foundation, a tiered allocator hierarchy, lock-free
-concurrency primitives, a platform HAL (Windows/Linux/Darwin/Generic),
-Slang-based shader compilation, and a Slang-RHI GPU abstraction. Slim
-`Application` owns the run loop + platform/services/shader-RHI-`Renderer`
-bootstrap; interactive `ApplicationEditor` (`IClientService`) owns scene,
-player, camera, viewport, input-context, triangle and grid passes, and UI state.
-The `game/` demo hosts `TurboLarbin : ApplicationEditor`, which owns seeded
-generated-colony simulation, submits resident chunks to the editor-owned
-`GridPass`, and presents camera-visible counts in a Colony panel. `--smoke`
-instead runs a separate headless, rendering-enabled `Application` for offscreen
-GPU readback; the editor keeps its `TrianglePass` initialized and actively fed — a generated unit-quad bag + 2 packed materials (`uploadDebugDraw_`, `game/main.cpp:1788-1834`) with per-frame agent/path/grid/edit instances (`submitDebugInstances_`, `:2177-2284`; agents/paths/grid/edit outlines `:2220-2278`) — but loads no committed-asset fixture scene. Kenney `kenney_colony` assets remain on disk and staged (`assets/meshes/kenney_colony/PROVENANCE.md:1-5`, `game/CMakeLists.txt:57-63`).
+A real-time C++23 engine built on C++20 modules, with nine production libraries. Core supplies allocators, containers, concurrency, I/O, configuration and HAL; shader/RHI supply Slang-based GPU infrastructure. The game reference client exercises seeded colony simulation, physics, tools and generated rendering.
+
+`Application` owns lifecycle/platform/services/renderer and the render worker. `ApplicationEditor` owns window/input/player/camera/viewport, grid/triangle passes and UI. Interactive rendering defaults to the worker; headless hosts render inline. Game code captures owned simulation/pass payloads and acknowledges edits from matching consumed results. Kenney assets remain staged but the interactive demo draws generated grid/debug content rather than a committed fixture scene.
 
 ## System Entry Points
 
-- `game/main.cpp` — Process entry point; dispatches `--smoke` to `game.colony.smoke::runColonySmoke(argv)` (returns the resulting `std::error_code::value()`), `--load100` to `runLoad100()` and `--time-trials` to `runTimeTrials()` (each returns the error's value on failure, literal `0` on success: `:2826-2848`) before constructing the editor; the `--profile*` flags (`--profile100`, `--profile-csv`, `--profile-label`, `--profile-skip`, `--profile-edits`, `--profile-pan`) plus `--gpu-validation` instead configure the editor path (`:2863-2934`; `--profile-csv`/`--profile-label`/`--profile-skip` each accept space- and `=`-forms). Otherwise `demo::TurboLarbin : ApplicationEditor` initializes a seeded `ColonyDriver`, orthographic pan camera, game input mapping, and `ColonyTranslator`; per frame it drains edit chunks via `presentEdits`, stages generated tiles (`translator.submit`), resolves hover (`refreshHover_`), submits 3D debug instances (`submitDebugInstances_`), and draws the Colony panel plus the ImGui-foreground feedback overlay (`drawFeedbackOverlay_`, `:2081-2175`; frame phases `:2547-2556`). The run loop returns `run_error.value()` after a `[fatal]` print (`:2940-2947`); uncaught `std::exception`/unknown exceptions exit `100`/`101` (`:2948-2954`). Per-stage timings are an observation side-channel, not a module: `StageTimer`/`StageStat` accumulate wall-clock us per `Stage` (`game/colony/StageTiming.h:53-116`) under `hal::ProfileScope` `Colony.*` spans in `ColonyDriver.cpp`/`ColonyTranslator.cpp`; 4 of 19 rows (`CacheHit`/`CacheMiss`/`NeededCells`/`ChunksDrained`, `StageTiming.h:12-18`, classified by `stageIsCounter` in `ColonyPanel.cppm:162-167`) are call-count counters, not timed stages.
-- `game/colony/ColonySmoke.cppm` / `game/colony/ColonySmoke.cpp` — Separate headless `Application` host for one offscreen `GridPass` frame and generated-cell GPU readback; no editor window or UI.
-- `CMakeLists.txt` + `CMakePresets.json` — Build configuration. Scaffolding presets `default` (`CMakePresets.json:10`),
-  `developer` (`:23`), and `vcpkg` (`:32`) underlie the public presets, which
-  include `msvc-dev`, `msvc-live` (EnC: `/ZI` + `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` +
-  `/LTCG:OFF` + `/PDBTMCACHE`, all `PPR_EDIT_AND_CONTINUE`-scoped; `/MDd` is Debug-config-wide
-  (`MultiThreaded$<CONFIG:Debug>:DebugDLL`, `VCPkg.cmake:52-53`), not live-only; LNK4075 validators fail
-  at configure time), `msvc-rel` (shipping: pinned `/O2` + `/Ob2`, `/GL` + `/LTCG`, `/OPT:REF,ICF`,
-  `/INCREMENTAL:NO`, `/DEBUG` + stripped `app.game.stripped.pdb` beside full `app.game.pdb`; Release `/Zi`,
-  dev `/Z7`; `BUILD_TESTING OFF`), `msvc-profile` (inherits `msvc-rel`: same `/O2`/`/Ob2`/`/GL`/`/Gw`,
-  LTCG, NDEBUG, PDBSTRIPPED + `PPR_ENABLE_PROFILING=ON` (`/DUSE_PIX`, `cmake/compiler/MSVC.cmake:89-94`) +
-  `PPR_LOGGING_LEVEL=EMPHASIS`, `CMakePresets.json:118-127`); options `PPR_ENABLE_PROFILING` + `PPR_LOGGING_LEVEL`
-  (OFF/DEBUG/VERBOSE/INFO/EMPHASIS/WARNING/ERROR/FATAL → numeric `PPR_LOG_LEVEL_THRESHOLD`, `CMakeLists.txt:69-101`);
-  per-preset levels dev/live `DEBUG`, rel `WARNING` (default), profile `EMPHASIS`, `OFF` available; full-`OFF`
-  `app.game` unvalidated (suspected Insiders-MSVC IFC-import ICE, repro via git-ignored `CMakeUserPresets.json`
-  `msvc-off`, `.gitignore:64`); `OFF` green for core/shader/image/rhi; shipping `WARNING` + profiling `EMPHASIS`
-  validated separately. `clang-cl-*`, and `clang-*`;
-  `gcc-*` presets are hidden and do not support modules.
-- `include/pP/Macros.h` — The single public non-module header (included via `module; #include` in the global
-  fragment); engine-wide preprocessor vocabulary: build-mode + memory-poisoning detection, pointer-size
-  selection, compiler-attribute portability, wide-char literals, assertions, logging (compile-time
-  `PPR_LOG_LEVEL_THRESHOLD`, `OFF`=7 above fatal=6, `:215-244`; caller-side static erasure + `Log::isVisible`
-  runtime guard inside `PPR_LOG` (`:266-409`; `Core.Logger.cppm:88`, `Core.Logger.cpp:296-311`; fail-macros inherit
-  via `PPR_LOG`/`PPR_ENABLE_LOGGING`, `:549-627`), per-severity ring backpressure (wait at error+, drop below,
-  `Core.Logger.cpp:145-203`), no per-frame flush with shutdown drain retained (`App.Application.cpp:78-81`),
-  error-propagation returns, RAII helpers.
-- `vcpkg.json` — Dependency manifest (vcpkg or CPM fallback).
+- [game/main.cpp](game/main.cpp): typed invocation and configuration resolution, startup validation, smoke/load/time-trial dispatch, or `demo::TurboLarbin` interactive client. `--help` is generated from current declarations. `app.run()` errors are printed and returned; exceptions escaping that boundary enter `hal::fatalExit`. See [game map](game/codemap.md).
+- [ColonySmoke.cpp](game/colony/ColonySmoke.cpp): separate headless GPU readback and sustained load hosts.
+- [CMakeLists.txt](CMakeLists.txt) and [CMakePresets.json](CMakePresets.json): target graph, global options and configure presets. `msvc-dev` is diagnostic/ASan; `msvc-live` is Debug Edit & Continue without sanitizers/cache; `msvc-rel` disables tests; `msvc-profile` inherits release and adds profiling/EMPHASIS logging. Hidden gcc presets do not support modules. See [cmake map](cmake/codemap.md) and [build-system](.opencode/skills/build-system/SKILL.md) for toolchain, dependency and execution procedures.
+- [include/pP/Macros.h](include/pP/Macros.h): public macro header for build detection, compiler attributes, assertions, logging, error propagation and RAII helpers. `PPR_LOGGING_LEVEL` selects the compiled severity threshold; `OFF` removes all severities. Runtime visibility and backpressure live in `Core.Logger.*`. Old successful runs and compiler-failure hypotheses do not establish current validation status.
+- [vcpkg.json](vcpkg.json) and [cmake/external](cmake/external/codemap.md): dependency manifest and package/CPM fallback wiring.
+- [Documentation guide](docs/README.md): current references versus design proposals, historical plans and diagrams.
 
 ## Architecture Overview
 
 Module dependencies (flat fan-out, per CMake):
 
 ```
-game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.translator / game.colony.panel / game.colony.pathfinding / game.colony.smoke / game.colony.timetrials
+game/main.cpp → game.config / game.display / game.colony.*
               → engine.app + engine.core + engine.math + engine.sim (app.game; plus PRIVATE engine.physics per Slice 4 Oracle grant — box2d stays behind engine.physics)
                   engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
                  engine.rhi → engine.core / engine.math / engine.shader
@@ -70,7 +40,7 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
 ```
 
 - **Service Locator**: `IService` → `FlatMap<std::type_index, safe_ptr<IService>>` keyed by `typeid(T)` (`Core.Service.cppm:27-83`) → `ServicesStore` with parent-chain fallback →
-  `ServiceInjector`. Per-viewport child store (`m_ui_services`) chains to the root.
+  `ServiceInjector`. The store supports an explicitly supplied parent; current ImGui code does not own an `m_ui_services` child store.
 - **Allocator Composition**: `TAllocator` → `TOwningAllocator` → `TBlockAllocator` → `TArenaAllocator`; concrete
   allocators composed via `InSitu`, `Fallback`, `Threshold`, `Pooling`, `LocalCache`, `HintedPooling`; wrapped by
   `Allocator<A>`, `PMR`, `STL<A>`.
@@ -93,7 +63,8 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
 
 | Directory                       | Responsibility Summary                                                                                | Detailed Map                                        |
 |---------------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
-| `lib/engine/core/`              | Umbrella foundation: types, memory, containers, concurrency, IO, services, opaque, HAL.               | [View Map](lib/engine/core/codemap.md)              |
+| `lib/engine/core/`              | Umbrella foundation: types, memory, containers, concurrency, IO, configuration, services, opaque, HAL.               | [View Map](lib/engine/core/codemap.md)              |
+| `lib/engine/core/config/` | Typed schemas, resolution/provenance, CLI/environment and TOML adapters. | [View Map](lib/engine/core/config/codemap.md) |
 | `lib/engine/core/memory/`       | Allocator concepts, page pools, Arena/ScopedArena/ScratchPad, composite allocators, PMR, STL, poison. | [View Map](lib/engine/core/memory/codemap.md)       |
 | `lib/engine/core/containers/`   | Stack/RingBuffer, Sparse/StableVector, HashMap/HashSet/FlatMap, Bitmask, views, RelPtr/TagPtr.        | [View Map](lib/engine/core/containers/codemap.md)   |
 | `lib/engine/core/concurrency/`  | RawChannel (lock-free MPSC), Signal/select, IContext cancellation tree.                               | [View Map](lib/engine/core/concurrency/codemap.md)  |
@@ -140,73 +111,29 @@ game/main.cpp → game.colony.buildings / game.colony.driver / game.colony.trans
 >
 > On disk but NOT built: `lib/engine/app/scene/App.Scene.World.cppm` (`IWorld` +
 > `WorldHitResult`) is in neither `lib/engine/app/CMakeLists.txt` nor the
-> `App.cppm` re-export list, so it is dead code today. Register it (with its
-> `.cpp`) or delete it; either way `app/scene` and `app` need a follow-up.
+> `App.cppm` re-export list, so it is dead code today. Its presence does not make it a supported API or authorize unrelated cleanup.
 
 ## Test Infrastructure
 
-- Test targets + `Core.UnitTest` partition (`PPR_ENABLE_UNIT_TEST`, conditional `export import :unit_test`)
-  sit behind `BUILD_TESTING` (undefined-tolerant: present unless explicitly `OFF`; `msvc-rel` sets `OFF`).
-  The editor partition ships — `game/main.cpp` imports `ApplicationEditor` unconditionally.
-- `engine.tests.core` (`lib/engine/tests/core/`) — GLFW-free; memory, containers, concurrency, IO, strings, opaque,
-  services, enums. Thematic private groups (27 `*Tests.cpp` files: per-area splits such as `Core.Allocator.Tests.cpp`,
-  `Core.Memory.Slab/Arena/PagePool.Tests.cpp`, `Core.Containers.*.Tests.cpp`, `Core.Concurrency.*.Tests.cpp`,
-   `Core.Enums/Math/Strings/Utility.Tests.cpp`, `Core.Opaque/Service.Tests.cpp` (`16` top-level groups); umbrella exports only `extern const UnitTest core` (decl-only `.cppm` + out-of-line def is the MSVC C1001 workaround).
-- `engine.tests.app` (`lib/engine/tests/app/`) — links GLFW for platform-dependent tests. Thematic private groups
-  (18 `*Tests.cpp` files: `App.Player/PlayerService/Player.Graph`, `App.Devices/Input.Listener/FilteredAnalog/WindowInput`,
-  `App.Shader/Viewport/PixelReadback`, `App.Camera/Quaternion`, `App.ImGuiRouting/ImguiDpi/ZeroVProbe`
-  `Tests.cpp` + `App.Tests.cpp` root of 28 nodes; umbrella exports only `extern const UnitTest app` (same MSVC C1001 workaround).
-  CTest sharding (Phase 2.5 A1): 5 parallel-safe entries (`app_a1_death_lifecycle`, `app_a2_gates`, `app_b_sim`,
-  `app_c_fence`, `app_d_io`) invoke the same exe with `--run-test` token lists.
-  The nine-entry matrix adds `EngineCoreUnitTests`, `EngineSimUnitTests`, `EngineAssetUnitTests`, and
-  `GameConfigUnitTests`. `PPR_TEST_LOOPS` defaults to 1 for development; `-DPPR_TEST_LOOPS=3` selects
-  three same-process shuffled loops for CI stress. Reusing a stress build directory requires explicitly
-  restoring `-DPPR_TEST_LOOPS=1`. Approved scheduling:
-  `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`;
-  focused: `ctest --test-dir out/build/<preset> -R <shard>`. To add/move a leaf, edit the
-  token lists in `lib/engine/tests/app/CMakeLists.txt` keeping exact-once coverage; filter matching is
-  prefix-based both ways, so use full `app/<group>` paths — `app/player/` needs its trailing slash to avoid also
-  matching siblings `app/player_service` / `app/player_graph`, and `app/run_gate` splits by full leaf tokens.
-  Per-shard `TIMEOUT` 600/600/600/600/300 with `WORKING_DIRECTORY` at the exe dir; keep concurrent independent
-  full-matrix runs exclusive (one matrix invocation per machine at a time, no competing profiling/game
-  workload — the death-child marker is a fixed machine-temp path shared across processes, and GPU contention
-  changes timing-sensitive outcomes). Prefer `RUN_SERIAL` over `RESOURCE_LOCK` for in-matrix exclusivity.
-  Validation gates: local edit batches build affected targets/dependents and run one shuffled loop of affected
-  suites or justified focused groups plus format/style/review; local phase completion runs one loop of all
-  affected suites (cross-cutting app/render-lane changes, including Phase 4, require all nine entries including
-  asset). Pre-merge CI runs the full matrix once plus the platform/build matrix; nightly stress runs the full
-  ASan matrix for three same-process shuffled loops. High-risk merges (concurrency/lifetime/teardown/render
-  transactions, including Phase 4) require three-loop affected suites. Asset is required for rendering,
-  surfaces, resource lifetime, asset handling, or shared-dependency changes, not nightly-only; unrelated
-  config-only iterations need not rerun it. Record failure seeds; no automatic retries masking flakes.
-- Group pattern: `module engine.tests.<suite>;` impl unit (PRIVATE SOURCES) + non-exported `detail::` leaves + one
-  TU-local `const UnitTest` + non-exported `const UnitTest &<node>Tests() noexcept` accessor per root-visible node;
-  file-local sub-groups need no accessor; `memory`/`containers` assembled in `Core.Tests.cpp`.
-  Suite roots forward-declare each accessor and call it in `_.recurse({...})` in fixed order; only `core`/`app`
-  remain `extern`. Direct-root singleton leaves use a TU-local copy plus accessor
-  (`const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`,
-  called as `<leaf>Tests()` — no additional `Named` wrapper, which would add a tree
-  level and change its `core/<...>` / `app/<...>` path); see `module-architect`.
-- `engine.tests.asset` (`lib/engine/tests/asset/`) — asset-pipeline suite (`EngineAssetUnitTests`,
-  `asset/` root with the same extern-umbrella + `Tests()`-accessor + POST_BUILD fixture-staging
-  pattern): `asset/image` (decode/format/block/hash/error), `asset/mesh` (import/convert/layout),
-  `asset/staging` (separator regression), `asset/gpu` (handles/pack/caches), `asset/gate`
-  (textured render gate + arbitration + editor flow). Links `engine.image + engine.mesh +
-  engine.app + engine.rhi + engine.shader + engine.core + engine.math + engine.tests`
-  (private GLFW for GPU integration); test dependencies never change the production graph.
-- `engine.tests.sim` (`lib/engine/tests/sim/`) — renderer-independent simulation suite (`EngineSimUnitTests`,
-  `sim/` root with the same extern-umbrella + `Tests()`-accessor pattern, no fixture staging):
-  `sim/chunk_grid` (world geometry + coordinate/residency queries), `sim/tick` (fixed-timestep driver
-  ordering/backlog), `sim/snapshot` (save/load/versioned apply round-trips), `sim/ecs`, `sim/worldgen`,
-  `sim/physics`. Links PUBLIC `engine.core + engine.math + engine.sim + engine.tests`, PRIVATE `engine.physics`
-  (GLFW-free, CPU-only; TIMEOUT 300).
-- Shared infra in `lib/engine/tests/shared/` (`engine.tests`: `TestSettings` invocation schema,
-  `parseTestInvocation()`, shared `runTests()` entry, `runSuite()`).
-- Tests use `PPR_UNIT_TEST` macros from `lib/engine/tests/include/pP/UnitTest.h` (`UnitTest.h` always; add `Macros.h`/third-party headers to the global fragment only when the body needs them).
+Tests exist unless `BUILD_TESTING` is explicitly OFF (`msvc-rel` and inherited `msvc-profile`). `PPR_TEST_LOOPS` defaults to 1 even under ASan; configure 3 for stress and restore 1 explicitly when reusing the build directory.
+
+Current CMake registers ten entries: `EngineCoreUnitTests`, `EngineSimUnitTests`, `EngineAssetUnitTests`, `GameConfigUnitTests`, and six app shards: `app_a1_death_lifecycle`, `app_a2_gates`, `app_a3_display_window`, `app_b_sim`, `app_c_fence`, `app_d_io`. All app shards and asset use `RUN_SERIAL TRUE`; `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure` honors those exclusions. Only one independent matrix invocation per machine may run at once, without competing profiling/game workloads. Core/sim are GLFW-free; app and GPU asset tiers require platform/GPU facilities.
+
+- `lib/engine/tests/CMakeLists.txt`: shared loop setting, engine suites, aggregate engine-test target. The aggregate does not run game tests; full CTest includes them.
+- `lib/engine/tests/app/CMakeLists.txt`: exact shard filters, timeouts and serialization. Filter matching is prefix-based both ways; use complete group paths (`app/player/` avoids sibling matches) and full run-gate leaf tokens. App a3 isolates display/window transactions.
+- `lib/engine/tests/core/`: memory, containers, concurrency, I/O, configuration, services and other foundation behavior.
+- `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation, physics; physics links privately.
+- [asset tests](lib/engine/tests/asset/codemap.md): CPU image/mesh processing and GPU caches/render integration.
+- `game/CMakeLists.txt`: `game.tests` / `GameConfigUnitTests`, covering invocation and game display model/persistence without an upward engine-test dependency.
+- `lib/engine/tests/shared/`: shared invocation/run harness. Tests use `PPR_TEST_ASSERT`, not engine assumptions/assertions.
+
+Suite interfaces export declaration-only `extern const UnitTest` roots; implementations assemble private groups through `Tests()` accessors. Use `unit-test-updater` for test changes and owning CMake files for current file/group inventories rather than old counts.
+
+Validation scope is defined by [validation](.opencode/skills/validation/SKILL.md) and [build-system](.opencode/skills/build-system/SKILL.md): local batches run affected suites, phase completion runs all affected suites, cross-cutting app/render changes require the complete matrix including asset, and high-risk lifetime/concurrency/render transactions require three-loop affected suites. No automatic retries masking flakes; preserve failure seeds. Documentation-only changes use factual/reference checks and review rather than executable tests.
 
 ## Map maintenance
 
 Keep this document focused on finding code. Update links and summaries with
 their corresponding source changes; put durable rules in `AGENTS.md` instead.
 
-- Diagrams: rendered PlantUML galleries under `docs/diagrams/` — `app-game-engine-arch/`, `engine.app/`, and `readme/`.
+- Diagrams: rendered PlantUML galleries under `docs/diagrams/` — `app-game-engine-arch/`, `engine.app/`, `readme/`.

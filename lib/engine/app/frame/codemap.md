@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-`engine.app:frame.packet` is the P0 serial-explicit owned frame packet: values and owned storage only, built on the
+`engine.app:frame.packet` is the owned frame packet: values and owned storage only, built on the
 client thread after the camera update and consumed by render. It carries the frame id, latched
 timing, the copied `CameraSnapshot` (revision included), the copied `Viewport` plus viewport revision, copied
 window metadata (title string, framebuffer size, native-handle snapshot), and the generational surface claim
@@ -25,11 +25,11 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
 - `makeFramePacket(...)` copies every field at capture time; `hasRenderTarget(...)` is pure. Both are defined in
   `App.Frame.Packet.cpp` (non-inline, non-template definitions live with the matching `.cpp`; the `.cppm` exports
   declarations only).
-- Pass staging consumes the packet snapshot (`update(dt, packet.m_camera)`), never the live `Camera`, so a
+- Owner-lane pass updates consume the packet snapshot (`update(dt, packet.m_camera)`), never the live `Camera`, so a
   post-capture producer mutation cannot alter render preparation. `render()` consumes the staged packet single-use
   (fail closed when absent) and submits it (worker) or executes it (inline reference) the same frame.
 - `RenderLane` — one fixed worker + `Channel`-free `RawChannel` triple (depths 2/4/8: frames/results/control).
-  Forward requests carry `shared_ptr<const FramePacket>` + `DetachedUiDrawData` with `drop_if_full` (full maps to
+  Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`, and reservation epoch/frame identity with `drop_if_full` (full maps to
   capacity-busy: drop the frame, never fail the app); results carry submit value/error/drop/font-ack/surface
   generation; control carries wake/exit/config (exit additionally latches an atomic, so a full queue never blocks
   exit signalling). Exactly one logical consumer per channel; the signalling path never uses
@@ -54,17 +54,11 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
 
 ## Flow
 
-1. `ApplicationEditor::update()` → camera `updateModel` → `makeFramePacket(...)` → pass `update(dt, packet.m_camera)`
-   → scene/UI work.
-2. `ApplicationEditor::render()` → take + clear the staged packet → `submitRenderWork_(packet)` → `hasRenderTarget`
-   guard → `IUIService::buildDetachedUiFrame` on main (completes `ImGui::Render()`, publishes owned data) →
-   enqueue to the lane (`drop_if_full` → bounded hint wait) or `executeRenderWork_` inline.
-3. Lane `executeRenderWork_` → uploads (`prepareCellUploads`) → `renderAndPresent` from a `SurfaceWindowSnapshot`
-   (never the live `Window`) with lane-constructed detached UI draws → fence-value stamping → result fields
-   (surface generation, font ack). Generational obsolescence still retires stale packets before any backend work.
-4. Teardown: stop admission → detach callbacks → signal exit/cancel + wake all → `drainQueuedFrames` (settle) →
-   platform keeps pumping while the lane quiesces → pass-GPU/surface/Renderer release on the lane in reverse
-   order → windows/platform die on main → lane joins before channels/contexts die → first error wins.
+1. Main: `ApplicationEditor::update()` advances camera and captures `FramePacket`; client/game code builds owned pass staging and UI state. No main-thread mutation of worker-owned pass caches.
+2. Main: `render()` consumes the staged packet, detaches UI draw data, and submits an owned `RenderFrameRequest` or executes the same request inline. A transport-full outcome drops presentation; it does not acknowledge unapplied edits.
+3. Owner lane: `executeRenderWork_` validates packet/surface, applies staged grid/triangle data, updates passes from the packet camera, prepares uploads, encodes and submits, then presents. Results echo the edit manifest and distinguish CPU staging application from GPU submission/completion. The game acknowledges pending edit revisions only on a matching consumed result.
+4. Application construction reservations and renderer GPU credits bound live work. Queued/building work also needs reservation accounting; channel depth alone is not a lifetime guarantee.
+5. Teardown stops admission, settles queued work and proves quiescence while main pumps events. Owner-lane pass/surface/renderer cleanup precedes joining and destroying lane storage; native windows/platform remain main-thread work. Unknown GPU completion invokes the application fail-stop boundary before release.
 
 ## Key Files
 
