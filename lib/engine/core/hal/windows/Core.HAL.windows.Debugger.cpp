@@ -194,7 +194,7 @@ namespace pP::hal {
         // hook is ungated with them: it is a harmless no-op where debug CRT
         // reporting is compiled out, and keeps stderr routing plus dialog
         // suppression wherever reports can fire. No path shows a message box.
-        ::_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
+        _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crtReportHook);
         ::_set_invalid_parameter_handler(&invalidParamHandler);
         ::_set_purecall_handler(&purecallHandler);
         std::set_terminate(&terminateHandler);
