@@ -49,6 +49,30 @@ work in that area.
   `.cpp`. Follow **`module-architect`** for module procedure and
   **`build-system`** for targets and dependencies.
 
+## Design simplicity and reuse
+
+- Prefer existing engine facilities when their contracts fit. Before adding a
+  parallel facility, check the owning subsystem; extend or reuse it unless a
+  concrete semantic, dependency, or measured cost mismatch justifies separation.
+- Introduce abstractions and services for a current responsibility, required
+  boundary, or demonstrated variation — not hypothetical future reuse. Prefer a
+  local implementation when indirection adds no present value; keep ownership
+  and dependencies explicit.
+- Implement the smallest complete solution to the current requirement, including
+  required failure and teardown behavior. Do not add speculative extension points,
+  configuration, generic frameworks, or fallback paths.
+- Keep changes focused. Do not generalize unrelated code or extract shared helpers
+  solely because implementations look similar.
+
+## Runtime cost
+
+- Treat CPU/GPU work, allocation, synchronization, and resource growth as design
+  constraints. Material hot-path changes require proportionate cost evidence;
+  claimed performance improvements require measurement.
+- Applicable product budgets are defined outside AGENTS.md; do not invent
+  engine-wide thresholds. Do not introduce speculative optimization, caching, or
+  concurrency without demonstrated need.
+
 ## Ownership, lifetime, and teardown
 
 - Make ownership visible in types. RAII values and `unique_ptr` own; references,
@@ -101,13 +125,21 @@ work in that area.
   `App.Scene.Camera.cpp` and `engine.rhi` `RHI.cppm`/`RHI.cpp` (projection
   helpers) for the canonical implementation.
 
-## Tests
+## Tests and delivery readiness
 
 Test externally observable behavior, contracts, error paths, and lifetime and
 teardown effects; use `PPR_TEST_ASSERT`. Core/sim tests are GLFW-free;
 app/asset tiers use GLFW/headless as documented in `codemap.md`. Use
 **`unit-test-updater`** for test changes and **`validation`** for the
 post-change checklist.
+
+- Deliver complete behavior for the supported scope: success, expected absence,
+  failure, cancellation where applicable, and safe partial-initialization and
+  teardown paths. Do not present placeholders, silent degradation, or unverified
+  claims as completed work.
+- Applicable correctness, compatibility, resource, and performance gates are
+  acceptance criteria. Report what was verified and any remaining limitation;
+  explicitly identify any unmet or unrun gate.
 
 ## C++ and API rules
 
@@ -133,6 +165,9 @@ restate or compete with them.
   value-producing recoverable operations; make failure/cancellation visible,
   never opaque false/null/default. Assertions express violated programmer
   invariants (`PPR_ASSERT`/`PPR_VERIFY`); tests use `PPR_TEST_ASSERT`.
+- Prefer value semantics, RAII, and the simplest suitable standard or established
+  repository facility. Encode ownership and meaningful invariants in types; avoid
+  manual resource protocols where an existing owning type fits.
 - Prefer `constexpr`, `[[nodiscard]]` for meaningful results, and truthful
   `noexcept`. Use only macros from `include/pP/Macros.h` (plus test macros in
   `pP/UnitTest.h`). Accept the weakest useful input (views/spans, fields over

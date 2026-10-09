@@ -20,10 +20,14 @@ checks are repeated.
 
 1. Determine scope and platform. Honor explicitly requested presets/targets;
    otherwise use the standard platform matrix from `build-system`.
+   Record change class and triggered risks in one short line; the scope rules
+   below remain authoritative.
 2. Run `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` once over the
    change set, then `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (Check),
    before builds or other validation checks. Formatting is never applied per file
    by hand and never through the CLion `reformat_file` router.
+   Reuse a valid Check result when source and check inputs are unchanged; do not
+   re-execute an identical check.
 3. Configure, build, and test through the `build-system` authority, not from
    this skill: target/preset/test selection, command form, ordering, and
    runner rules all come from the `build-system` table. Execution is
@@ -45,15 +49,20 @@ checks are repeated.
      libraries.
 4. Run the deterministic gates for touched C++ and block validation on any
    failure: `scripts/Format-Cpp.ps1` (Check) and
-   `scripts/Check-SemanticStyle.ps1 -Files '<touched>'`. Design-level readability
-   — phase separation, guard grouping, helper extraction — is `code-reviewer`'s
-   verdict rather than a formatting check, and is not re-litigated here.
+   `scripts/Check-SemanticStyle.ps1 -Files '<touched>'`. Reuse the unchanged-source
+   Format Check result from step 2; still run the semantic style gate.
+   Design-level readability — phase separation, guard grouping, helper extraction
+   — is `code-reviewer`'s verdict rather than a formatting check, and is not
+   re-litigated here.
 5. Run the staged CLion inspection workflow for touched C++ files when the IDE
    is available (tool access follows the `AGENTS.md` guard; procedure is
    below). A final inspection timeout must be disclosed as
    inspection-unavailable/skipped with timeout evidence, never silently
    skipped and never reported as passed.
-6. Invoke `code-reviewer` and incorporate its verdict and findings without
+6. Before the reviewer verdict, run any triggered focused measurement or boundary
+   test not already covered. Reuse valid evidence for unchanged code,
+   configuration, and workload.
+   Invoke `code-reviewer` and incorporate its verdict and findings without
    repeating its taxonomy. A failed or unresolved finding leaves validation
    incomplete even when commands pass.
 7. Summarize each command/check as passed, failed, or skipped with its reason.
@@ -137,7 +146,8 @@ states the procedure and how those results enter the validation record.
   settle. There is no MCP index-ready endpoint; the IDE indexing indicator is
   authoritative. Do not inspect during active scans or model updates.
 - Use a bounded timeout and exactly one attempt per inspection mode per file.
-  Run one fast `errorsOnly=true` pass after open/readiness. After all edits and
+  An initial fast `errorsOnly=true` pass after open/readiness is optional; omit
+  it when edits and formatting are complete. After all edits and
   formatting are complete, run one final `errorsOnly=false` pass per touched C++
   file. The final warnings-inclusive result is authoritative.
 - `timedOut=true` means inspection unavailable, not clean. Do not immediately
@@ -195,3 +205,5 @@ Report the selected scope, configure/build/test/inspection results, reviewer
 verdict, failures or skips, and rerun evidence. Include final CLion inspection
 timeouts in the inspection-unavailable/skipped result with their evidence. Do
 not claim a green result for checks that were not executed.
+Use commands and statuses, concise excerpts, evidence references, and one verdict;
+do not duplicate design review.

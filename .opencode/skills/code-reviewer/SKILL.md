@@ -35,6 +35,8 @@ verdict.
    context and avoids rediscovery.
 2. Classify the change and choose proportional depth: docs/config, bounded code,
    or high-risk cross-system. Do not launch a reviewer per dimension.
+   Record only triggered risks and evidence needed; omit per-dimension
+   no-findings narratives.
 3. Inspect changed code and only the directly relevant callers, owners,
    teardown paths, module interfaces, and tests needed to prove or refute a
    concern. Prefer project-aware search and targeted reads; avoid repeatedly
@@ -60,7 +62,9 @@ verdict.
 - Exports are minimal and deliberate; implementation helpers stay private.
 - Public signatures make ownership, mutability, threading, failure, and ordering
   requirements visible. Inputs use the weakest useful type and avoid hidden
-  service/global access in leaf logic.
+   service/global access in leaf logic.
+- Check compatibility only when persisted, wire, plugin, or exported contracts
+  change.
 
 ### 3. Ownership, lifetime, and teardown
 - `unique_ptr` and RAII values own. `safe_ptr`, callbacks, references, and views
@@ -75,9 +79,13 @@ verdict.
   success, absence, failure, and cancellation states.
 - Recoverable operational failures use and propagate contextual `std::error_code`
   as required. Shutdown attempts independent cleanup and preserves the first
-  error rather than hiding it.
+   error rather than hiding it.
+- Check capacity, reclamation, and backpressure only when resource-growth policy
+  changes.
 
 ### 5. Subsystem responsibility and control flow
+- For new facilities, check current purpose and reuse of the owning subsystem;
+  screen material hot-path changes for cost evidence.
 - Each subsystem owns one coherent responsibility. Renderer/pass, scene/camera,
   service, and HAL boundaries retain their documented roles.
 - Framework hooks and callbacks are thin glue that delegates to engine logic;
@@ -97,7 +105,12 @@ verdict.
 - For the lexical tripwire, defer to the `scripts/Check-SemanticStyle.ps1` result
   produced by validation; do not re-derive its taxonomy here. Blocking classes are
   A-STRANDED, B-OP, and C-LEADING. B-CMP, C-DETACHED, and D-DENSE are advisory
-  and are formatter-owned or heuristic, so do not raise them as review findings.
+   and are formatter-owned or heuristic, so do not raise them as review findings.
+
+Trigger cost review when change alters recurring per-frame, per-tick, per-item,
+submission, or streaming work via iteration count, algorithm, allocation, sync,
+transfer volume, shader work, or retained resources. Renames/comments/equivalent
+extraction do not trigger measurement.
 
 #### Application and rendering boundary checks
 - A platform/application client owns application-facing window, viewport, and
@@ -116,7 +129,9 @@ verdict.
 - Observable behavior changes have focused tests at the appropriate core/app
   boundary, including meaningful failure, lifecycle, or teardown effects.
 - Tests use the project test contract (`PPR_TEST_ASSERT`) and validate behavior,
-  not private implementation structure.
+   not private implementation structure.
+- Require focused cost, compatibility, or operational evidence only for triggered
+  concerns; reuse validation evidence rather than duplicating execution.
 
 ### 7. Project formatting and local conventions
 - Changes follow the repository-root `.clang-format` as enforced by
