@@ -64,6 +64,8 @@ The interactive demo presents a seeded 4096×4096-cell colony with agents, bound
 
 `--smoke` runs offscreen GPU readback and simulation checks. For external profiling, `--profile100` selects a 100-agent fixture and `--exit-after S` bounds the run. Bespoke CSV timing, scripted profiling controls, load/time-trial commands, and game-local exception interception have been retired. Startup/profile/display options are resolved through typed configuration; `--help` is generated from the current declarations. See [game/codemap.md](game/codemap.md) rather than copying an old flag list.
 
+For agent-driven interactive debugging, [game-control](.opencode/skills/game-control/SKILL.md) documents an external Windows controller for process targeting, screenshots, keyboard, mouse, wheel, and normal shutdown. It uses pywinauto and Pillow without adding instrumentation to the engine; semantic engine-state access remains future MCP work.
+
 ## Tests
 
 With tests enabled, current CMake registers ten entries:
