@@ -1446,6 +1446,7 @@ namespace pP {
 
     std::error_code Renderer::createSurfaceDepth_(
         const int2 &extent, rhi::ComPtr<rhi::ITexture> &out_texture, rhi::ComPtr<rhi::ITextureView> &out_view) const {
+        static constexpr rhi::ClearValue depth_clear{.depthStencil = {1.f, 0}};
         rhi::TextureDesc depth_desc{};
         depth_desc.type = rhi::TextureType::Texture2D;
         depth_desc.size = {safe_narrowing<u32>(extent.x), safe_narrowing<u32>(extent.y), 1u};
@@ -1456,6 +1457,7 @@ namespace pP {
         depth_desc.memoryType = rhi::MemoryType::DeviceLocal;
         depth_desc.usage = rhi::TextureUsage::DepthStencil;
         depth_desc.defaultState = rhi::ResourceState::DepthWrite;
+        depth_desc.optimalClearValue = &depth_clear;
         depth_desc.label = "window surface depth";
 
         PPR_RETURN_ERROR_ON_FAIL(
@@ -1463,7 +1465,7 @@ namespace pP {
         out_view = out_texture->getDefaultView();
         if (not out_view) [[unlikely]] {
             out_texture.setNull();
-            return make_error_code(std::errc::resource_unavailable_try_again);
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, make_error_code(std::errc::resource_unavailable_try_again));
         }
         return default_value_v;
     }

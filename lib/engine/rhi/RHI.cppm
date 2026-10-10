@@ -57,6 +57,7 @@ export namespace pP::rhi {
     using slang_rhi::BufferOffsetPair;
     using slang_rhi::BufferRange;
     using slang_rhi::BufferUsage;
+    using slang_rhi::ClearValue;
     using slang_rhi::ColorClearValue;
     using slang_rhi::ColorTargetDesc;
     using slang_rhi::ComparisonFunc;

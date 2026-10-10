@@ -955,6 +955,17 @@ namespace pP {
         // CLIENT lane (main): detach the UI frame, then hand the owned
         // packet to the worker — or run it inline when no lane owns the
         // Renderer. Either way the same execute step runs exactly once.
+        if (not m_ui_service) [[unlikely]] {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, make_error_code(std::errc::not_connected));
+        }
+
+        // Complete the frontend frame even when minimization or a display
+        // transition leaves no render target. The next update starts a new
+        // ImGui frame regardless of whether this packet can reach the GPU.
+        DetachedUiDrawData detached{};
+        detached.m_frame_id = packet.m_frame_id;
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->buildDetachedUiFrame(detached));
+
         if (not hasRenderTarget(packet)) {
             // Durable slot outcome: no render target ⇒ dropped at admission,
             // and the staged payload never applied. The consumption hook
@@ -982,16 +993,6 @@ namespace pP {
             onLaneFrameConsumed_(transient);
             return default_value_v;
         }
-        if (not m_ui_service) [[unlikely]] {
-            return make_error_code(std::errc::not_connected);
-        }
-
-        // Client completes ImGui::Render() and publishes detached owned
-        // data; the worker never sees the live context/IO after this.
-        DetachedUiDrawData detached{};
-        detached.m_frame_id = packet.m_frame_id;
-        PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->buildDetachedUiFrame(detached));
-
         if (renderLaneOwnsRenderer_()) {
             RenderFrameRequest request{};
             try {

@@ -875,7 +875,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             texture_desc.format = rhi::Format::RGBA8Unorm;
             texture_desc.memoryType = rhi::MemoryType::DeviceLocal;
             texture_desc.usage = enumCombine(rhi::TextureUsage::ShaderResource, rhi::TextureUsage::CopyDestination);
-            texture_desc.defaultState = rhi::ResourceState::CopyDestination;
+            // The atlas is sampled after upload; command completion restores
+            // this state, so the final upload transition must agree with it.
+            texture_desc.defaultState = rhi::ResourceState::ShaderResource;
             texture_desc.label = "imgui_font_atlas";
 
             rhi::ComPtr<rhi::ITexture> texture;
@@ -1139,7 +1141,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
             texture_desc.format = rhi::Format::RGBA8Unorm;
             texture_desc.memoryType = rhi::MemoryType::DeviceLocal;
             texture_desc.usage = enumCombine(rhi::TextureUsage::ShaderResource, rhi::TextureUsage::CopyDestination);
-            texture_desc.defaultState = rhi::ResourceState::CopyDestination;
+            // Match the final upload transition and subsequent sampled use.
+            texture_desc.defaultState = rhi::ResourceState::ShaderResource;
             texture_desc.label = "imgui_font_atlas";
 
             rhi::ComPtr<rhi::ITexture> texture;
