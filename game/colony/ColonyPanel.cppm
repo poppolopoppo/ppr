@@ -112,49 +112,8 @@ export namespace pP::colony {
         }
     };
 
-    /// One monitor's reported identity for the Display window. Assembled by
-    /// the caller from the window service (cached about once a second while
-    /// the window stands); a zero refresh means the service did not report
-    /// one, and the panel prints "unknown" instead of guessing.
-    struct ColonyMonitorView final {
-        std::string m_name{};
-        int m_width{};
-        int m_height{};
-        int m_refresh_hz{};
-        bool m_primary{false};
-    };
-
-    /// Everything the Display window renders: the §5.1 copied controller
-    /// view (requested policy, computed targets, throttle reason), the
-    /// acknowledged device report, the pending transaction plus the last
-    /// failure, and the monitor telemetry. Requested policy and reported
-    /// outcomes stay in separate sections; unavailable measurements read as
-    /// unavailable, never as zero. The monitor list borrows the caller's
-    /// cache for the frame, like the agent-needs span in ColonyUiView. The
-    /// capability and geometry views are owned by the caller (handle-free
-    /// snapshots from displayCapabilities/displayWindowGeometry); null
-    /// means the query failed, and the switching controls render disabled
-    /// with the stored reason while telemetry stays visible.
-    struct ColonyDisplaySnapshot final {
-        DisplayView m_view{};
-        DisplayAppliedState m_applied{};
-        EDisplayTransaction m_transaction{EDisplayTransaction::idle};
-        std::error_code m_error{};
-        bool m_has_pending{false};
-        u64 m_pending_id{0u};
-        u64 m_revision{0u};
-        /// True when committed state carries runtime-layer assignments:
-        /// Reset has something to remove even when the draft matches
-        /// committed (the post-acknowledgement state), so it gates
-        /// independently of the Apply dirty state.
-        bool m_has_runtime_overrides{false};
-        std::span<const ColonyMonitorView> m_monitors{};
-        bool m_fullscreen{false};
-        std::string_view m_fullscreen_monitor{};
-        const DisplayCapabilities *m_capabilities{nullptr};
-        std::error_code m_capabilities_error{};
-        const WindowDisplayGeometry *m_geometry{nullptr};
-    };
+    using ColonyMonitorView = ui::DisplayWidgetMonitor;
+    using ColonyDisplaySnapshot = ui::DisplayWidgetSnapshot;
 
     /// Display session owned by the caller-side UI state. The draft holds
     /// uncommitted edits (resynced from committed whenever the window opens

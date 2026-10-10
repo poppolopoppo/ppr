@@ -42,6 +42,8 @@ export import :service.window;
 export import :startup.settings;
 
 export import :ui.imgui;
+export import :ui.widgets.display;
+export import :ui.widgets.performance;
 
 export import :window.handle;
 export import :window.monitor;

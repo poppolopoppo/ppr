@@ -186,29 +186,7 @@ namespace demo {
             return static_cast<float>(lane->lastExecuteUs()) / 1000.0f;
         }
 
-        // Slice 6 frame sampler: bounded 240-sample ring of inter-frame dt
-        // (ms). Boundary: update()'s dt (elapsed between update() calls) -
-        // it is NOT GPU/present time and is never presented as such. Memory:
-        // 240 floats (960 B) plus one reused sort scratch (<= 960 B).
-        // Percentiles recompute at most every 15 frames from a copied-sorted
-        // window (nearest-rank; O(n log n), n <= 240). Sampling continues
-        // while paused (frames still tick); sim step counters freeze
-        // naturally in the driver. The ring never resets except by its own
-        // overwrite window.
-        static constexpr std::size_t kFrameWindow = 240u;
-        static constexpr u64 kFrameStatsEvery = 15u;
-        static constexpr float kFrameBudgetMs = 1000.0f / 60.0f;
-        std::vector<float> m_frame_ring{};
-        std::vector<float> m_frame_sort{};
-        std::size_t m_frame_head{};
-        u64 m_frame_samples{};
-        u64 m_frame_stats_frame{};
-        bool m_frame_stats_stale{true};
-        float m_frame_p50{0.0f};
-        float m_frame_p95{0.0f};
-        float m_frame_min{0.0f};
-        float m_frame_window_max{0.0f};
-        u64 m_frame_over{0u};
+        ui::PerformanceWidget m_performance_widget{};
         // Slice 6 work-queue counters (game-side; no driver change): cells
         // handed to requestDig since launch/regen. The driver's digTotal
         // resets on the same regen path (clearToolState), so issued minus
@@ -1119,7 +1097,8 @@ namespace demo {
                 session.m_watch_revert = false;
                 session.m_watch_revision = displayController().resolved().m_revision;
                 session.m_watch_vsync_affecting = vsync_affecting;
-                session.m_watch_window_change = window_change;
+                session.m_watch_window_change = displayWindowChange(
+                    displayController().pending()->m_resolved.m_value, session.m_watch_prior);
                 session.m_revert_failed = false;
             } catch (...) {
                 postDisplayNotice_("Picture change failed.", currentException_());
@@ -1186,7 +1165,8 @@ namespace demo {
                 session.m_watch_revert = false;
                 session.m_watch_revision = displayController().resolved().m_revision;
                 session.m_watch_vsync_affecting = vsync_affecting;
-                session.m_watch_window_change = window_change;
+                session.m_watch_window_change = displayWindowChange(
+                    displayController().pending()->m_resolved.m_value, session.m_watch_prior);
                 session.m_revert_failed = false;
                 session.m_draft = std::move(*draft);
                 session.m_synced = true;
@@ -1415,6 +1395,7 @@ namespace demo {
                                 .m_height = mode.m_resolution.y,
                                 .m_refresh_hz = mode.m_refresh_rate,
                                 .m_primary = monitor->m_primary_monitor,
+                                .m_identity = monitor->m_identity,
                             });
                         return {};
                     });
@@ -1940,8 +1921,6 @@ namespace demo {
         /// Per-frame UI observation: the bounded notice countdown plus
         /// honest inter-frame timing (dt between update() calls) for the
         /// Performance section - never GPU time, labelled as such there.
-        /// Slice 6 appends the bounded sampler push below; percentile work
-        /// stays on the 15-frame stale cadence in refreshFrameStats_.
         void observeFrame_(const TimeSpan dt) noexcept {
             const float seconds = std::chrono::duration<float>(dt).count();
             if (m_ui_state.m_notice.m_seconds_left > 0.0f) {
@@ -1959,66 +1938,7 @@ namespace demo {
                 m_frame_max = frame_ms;
             }
 
-            // Observation only: samples/statistics never drive simulation,
-            // or admission decisions. Failed insertions do
-            // not advance the ring; the previous statistics remain stale.
-            // Sampling continues while paused - frames still tick; only the
-            // sim step counters freeze, naturally, in the driver.
-            try {
-                if (m_frame_ring.capacity() < kFrameWindow) {
-                    m_frame_ring.reserve(kFrameWindow);
-                }
-                if (m_frame_ring.size() < kFrameWindow) {
-                    m_frame_ring.push_back(frame_ms);
-                } else {
-                    m_frame_ring[m_frame_head] = frame_ms;
-                }
-                m_frame_head = (m_frame_head + 1u) % kFrameWindow;
-                ++m_frame_samples;
-            } catch (...) {
-                m_frame_stats_stale = true;
-                return;
-            }
-            if (m_frame_count - m_frame_stats_frame >= kFrameStatsEvery or
-                (m_frame_stats_frame == 0u and m_frame_samples > 0u)) {
-                refreshFrameStats_();
-            }
-        }
-
-        /// Slice 6 stale-copy refresh: nearest-rank p50/p95 (through the
-        /// shared core helper, same ceil-rank convention as before) plus
-        /// min, max, and over-budget count over the ring window. Runs at
-        /// most every 15 frames; allocation failure - or an empty helper
-        /// result - keeps the previous stale values.
-        void refreshFrameStats_() noexcept {
-            m_frame_stats_stale = true;
-            const std::size_t count = m_frame_ring.size();
-            if (count == 0u) {
-                return;
-            }
-            try {
-                m_frame_sort.resize(count);
-                const auto p50 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.5f);
-                const auto p95 = percentile_nearest_rank(m_frame_ring, m_frame_sort, 0.95f);
-                if (not p50 or not p95) {
-                    return;
-                }
-                u64 over = 0u;
-                for (const float sample: m_frame_sort) {
-                    if (sample > kFrameBudgetMs) {
-                        ++over;
-                    }
-                }
-                m_frame_over = over;
-                m_frame_p50 = *p50;
-                m_frame_p95 = *p95;
-                m_frame_min = m_frame_sort.front();
-                m_frame_window_max = m_frame_sort.back();
-                m_frame_stats_frame = m_frame_count;
-                m_frame_stats_stale = false;
-            } catch (...) {
-                // Best-effort diagnostic statistics retain their stale flag.
-            }
+            m_performance_widget.observe(frame_ms, laneExecuteMs_());
         }
 
         [[nodiscard]] std::error_code drawPanel_() {
@@ -2084,9 +2004,7 @@ namespace demo {
             const double sim_ms = m_driver.simMs();
             const double tick_hz = tick_count > 0u and sim_ms > 0.0 ? 1000.0 * static_cast<double>(tick_count) / sim_ms
                                                                     : 0.0;
-            const u64 window_samples = m_frame_samples < static_cast<u64>(kFrameWindow)
-                                           ? m_frame_samples
-                                           : static_cast<u64>(kFrameWindow);
+            const auto &frame_statistics = m_performance_widget.frameStatistics();
             const u64 dig_applied = static_cast<u64>(m_driver.digTotal());
             const u64 dig_pending_est = m_dig_issued >= dig_applied ? m_dig_issued - dig_applied : 0u;
 
@@ -2118,14 +2036,14 @@ namespace demo {
                         // worker gauge (same atomic the overlay reads).
                         .m_main_ms = m_main_ms_last,
                         .m_render_ms = laneExecuteMs_(),
-                        .m_p50_ms = m_frame_p50,
-                        .m_p95_ms = m_frame_p95,
-                        .m_min_ms = m_frame_min,
-                        .m_window_max_ms = m_frame_window_max,
-                        .m_over_budget = m_frame_over,
-                        .m_window_samples = window_samples,
-                        .m_window_def = static_cast<u32>(kFrameWindow),
-                        .m_statistics_stale = m_frame_stats_stale,
+                        .m_p50_ms = frame_statistics.m_p50,
+                        .m_p95_ms = frame_statistics.m_p95,
+                        .m_min_ms = frame_statistics.m_minimum,
+                        .m_window_max_ms = frame_statistics.m_maximum,
+                        .m_over_budget = frame_statistics.m_over_budget,
+                        .m_window_samples = m_performance_widget.sampleCount(),
+                        .m_window_def = static_cast<u32>(ui::PerformanceWidget::kWindow),
+                        .m_statistics_stale = false,
                         .m_tick_hz = tick_hz,
                         .m_tick_count = tick_count,
                         .m_sim_ms = sim_ms,
@@ -2213,7 +2131,7 @@ namespace demo {
             // Bounded lane readout in the same overlay (total + main +
             // render (lane)); the Performance tab Split line reads the same
             // worker gauge.
-            drawLaneReadout_(frame.m_chrome_bottom);
+            m_performance_widget.draw(frame.m_chrome_bottom);
             return {};
         }
 
@@ -2697,46 +2615,6 @@ namespace demo {
             } else if (m_ui_state.m_pinned.has_value()) {
                 overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
             }
-        }
-
-        /// Bounded lane readout: one compact line in the same ImGui overlay
-        /// as the panel — total (inter-frame cadence) + main (update-body
-        /// wall) + render (lane) (last completed lane execution from the
-        /// worker-published gauge, the same atomic the Performance tab
-        /// reads). Never handoff cost: m_render_ms_last (see render())
-        /// stays a main-side wall number only. Values lag one frame
-        /// (render runs after this panel). Non-interactive (NoInputs)
-        /// so world picking is unaffected; skipped while the display is
-        /// degenerate.
-        void drawLaneReadout_(const float chrome_bottom) {
-            const ImGuiIO &io = ImGui::GetIO();
-            if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
-                return;
-            }
-            ImGui::SetNextWindowPos(
-                ImVec2{8.0f, io.DisplaySize.y - chrome_bottom - 8.0f}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
-            ImGui::SetNextWindowBgAlpha(0.55f);
-            constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                               ImGuiWindowFlags_NoInputs |
-                                               ImGuiWindowFlags_NoSavedSettings |
-                                               ImGuiWindowFlags_NoFocusOnAppearing |
-                                               ImGuiWindowFlags_NoNav |
-                                               ImGuiWindowFlags_NoMove;
-            const bool visible = ImGui::Begin("##frame_lanes", nullptr, flags);
-            struct WindowScope {
-                ~WindowScope() noexcept {
-                    ImGui::End();
-                }
-            } window_scope;
-            if (not visible) {
-                return;
-            }
-            // Honest render number: the display-only last-execute gauge
-            // (worker thread, relaxed). 0.00 until the first lane frame
-            // completes; never the main-side handoff cost.
-            ImGui::Text(
-                "Frame total %.2f ms  main %.2f ms  render (lane) %.2f ms", m_frame_ms_last, m_main_ms_last,
-                laneExecuteMs_());
         }
 
         [[nodiscard]] std::error_code submitDebugInstances_() {

@@ -20,6 +20,7 @@ Initialize with input context, shader/RHI references and listener priority. Fron
 
 - `App.UI.ImGui.cppm`: factory, detached UI vocabulary, fence-awareness seam and conversion helpers.
 - `App.UI.ImGui.cpp`: frontend/backend implementation, embedded shader, upload/resource management, DPI and font handling.
+- [widgets](widgets/codemap.md): game-agnostic timing plots and display settings presentation, with client-owned state/policy.
 - `../service/App.Service.UI.cppm`: lifecycle/frontend/detached rendering contract.
 - [frame map](../frame/codemap.md): request/result transport and font acknowledgment.
 - `../../tests/app/App.ImGuiRouting.Tests.cpp`, `App.ImguiDpi.Tests.cpp`, and asset render gates cover relevant behavior; owning test CMake files establish registration.

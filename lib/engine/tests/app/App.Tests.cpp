@@ -81,6 +81,8 @@ namespace pP::tests {
 
     const UnitTest &imgui_dpiTests() noexcept;
 
+    const UnitTest &performance_widgetTests() noexcept;
+
     const UnitTest &zerov_probeTests() noexcept;
 
     // Defined here rather than as an inline constexpr umbrella in App.Tests.cppm:
@@ -126,6 +128,7 @@ namespace pP::tests {
             window_inputTests(),
             imgui_routingTests(),
             imgui_dpiTests(),
+            performance_widgetTests(),
             zerov_probeTests(),
         });
     };

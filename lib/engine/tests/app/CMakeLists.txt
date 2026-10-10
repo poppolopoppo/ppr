@@ -47,6 +47,7 @@ target_sources(engine.tests.app
         App.Quaternion.Tests.cpp
         App.ImGuiRouting.Tests.cpp
         App.ImguiDpi.Tests.cpp
+        App.PerformanceWidget.Tests.cpp
         App.ZeroVProbe.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
@@ -100,8 +101,8 @@ add_custom_command(TARGET engine.tests.app POST_BUILD
 # exact. app_a1 owns the death lifecycle (3 death-subprocess parents + the
 # unarmed child no-op run in the same process so their temp marker files stay
 # uncontended) plus the fast lifecycle leaves; app_a2 owns the slow gates;
-# app_a3 owns the six display_window leaves, keeping filter values under 1024 chars.
-# Every recurse child in App.Tests.cpp appears in exactly one shard (47/47);
+# app_a3 owns the seven display_window leaves, keeping filter values under 1024 chars.
+# Every recurse child in App.Tests.cpp appears in exactly one shard (48/48);
 # the 15 flat app/* leaves (renderer_*/imgui_live_*/app_*,
 # owned by the WindowInput/PixelReadback TUs) ride with app_d_io.
 add_test(NAME app_a1_death_lifecycle COMMAND engine.tests.app --run-test
@@ -117,7 +118,7 @@ add_test(NAME app_a3_display_window COMMAND engine.tests.app --run-test
     --loop ${PPR_TEST_LOOPS})
 
 add_test(NAME app_b_sim COMMAND engine.tests.app --run-test
-    "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/grid_pass,app/pixel_readback,app/camera,app/frame_stages,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/zerov_probe"
+    "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/grid_pass,app/pixel_readback,app/camera,app/frame_stages,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe"
     --loop ${PPR_TEST_LOOPS})
 
 add_test(NAME app_c_fence COMMAND engine.tests.app --run-test "app/frame_fence" --loop ${PPR_TEST_LOOPS})

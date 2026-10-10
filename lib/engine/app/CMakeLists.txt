@@ -48,6 +48,8 @@ target_sources(engine.app
         service/App.Service.Window.cppm
 
         ui/App.UI.ImGui.cppm
+        ui/widgets/App.UI.Widgets.Display.cppm
+        ui/widgets/App.UI.Widgets.Performance.cppm
 
         window/App.Window.Handle.cppm
         window/App.Window.Monitor.cppm
@@ -92,6 +94,8 @@ target_sources(engine.app
         scene/App.Scene.Camera.Controller.cpp
 
         ui/App.UI.ImGui.cpp
+        ui/widgets/App.UI.Widgets.Display.cpp
+        ui/widgets/App.UI.Widgets.Performance.cpp
 
         window/App.Window.Handle.cpp
         window/App.Window.Monitor.cpp

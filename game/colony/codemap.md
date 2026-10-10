@@ -32,4 +32,8 @@ Translator's submitted/resident counts are not frustum-visible counts. Cache inv
 
 `ColonyPanel` consumes views and returns intents/chrome; the main client applies actions. Display draft/persistence policy lives in `../Game.Display.*`. Pathfinding/build bounds and diagnostic row inventories live in their declarations; avoid duplicating stale numeric inventories here.
 
+Display controls and telemetry render through `engine.app:ui.widgets.display`.
+The colony panel retains draft synchronization and adapts widget actions to game
+intents; game code retains validation, transactions, confirmation timing and persistence.
+
 `ColonySmoke` supplies `runColonySmoke(SmokeOptions)` and verifies deterministic simulation contracts plus offscreen GPU readback. Platform profiler markers remain available for performance investigations.
