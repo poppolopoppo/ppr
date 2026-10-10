@@ -80,11 +80,35 @@ function Assert-Layout {
         'local-services\uninstall.ps1',
         'local-services\searxng\settings.yml',
         'local-services\pix\version.txt',
-        '.opencode\package.json',
-        '.opencode\package-lock.json'
+        '.opencode\package.json'
     )
     $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $projectRoot $_) -PathType Leaf) })
     if ($missing.Count -gt 0) { Stop-Setup "Required project files are missing: $($missing -join ', ')." }
+}
+
+function Install-OpencodeDependencies {
+    $opencodeDir = Join-Path $projectRoot '.opencode'
+    $manifest = Join-Path $opencodeDir 'package.json'
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return }
+
+    $npm = Get-CommandPath 'npm'
+    if ($null -eq $npm) { Stop-Setup 'npm was not found on PATH. Open a new PowerShell shell and rerun install.ps1.' }
+
+    # opencode.json starts searxng as `node .opencode/node_modules/mcp-searxng/dist/cli.js`,
+    # so the installed entry point is the observable requirement, not the lockfile.
+    $entryPoint = Join-Path $opencodeDir 'node_modules\mcp-searxng\dist\cli.js'
+    if (Test-Path -LiteralPath $entryPoint -PathType Leaf) {
+        Write-Output 'opencode npm dependencies already installed.'
+        return
+    }
+
+    Write-Output 'Installing .opencode npm dependencies (mcp-searxng)...'
+    & npm --prefix $opencodeDir install --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { Stop-Setup 'npm install failed in .opencode; inspect the output above, fix it, and rerun install.ps1.' }
+    if (-not (Test-Path -LiteralPath $entryPoint -PathType Leaf)) {
+        Stop-Setup 'npm install completed but .opencode\node_modules\mcp-searxng\dist\cli.js is missing; the searxng MCP server in opencode.json would fail to start.'
+    }
+    Write-Output 'opencode npm dependencies installed.'
 }
 
 function Assert-WindowsAndPrerequisites {
@@ -148,6 +172,7 @@ function Ensure-DefaultPodmanMachine {
 Assert-WindowsAndPrerequisites
 Ensure-DefaultPodmanMachine
 Assert-MinimumVersion 'Node.js' (Get-CommandPath 'node') @('--version') ([version]'22.0')
+Install-OpencodeDependencies
 
 if (-not $LaunchServices) {
     Write-Output 'Prerequisite and dependency gates passed; service launch is opt-in. Rerun with -LaunchServices to launch.'

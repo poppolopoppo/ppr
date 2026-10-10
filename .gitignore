@@ -644,8 +644,8 @@ imgui.ini
 .slim/worktrees.json
 # END oh-my-opencode-slim worktrees
 
-# PIX MCP host-local version marker (sibling of the ignored pix-mcp artifacts above)
-local-services/pix/version.txt
+# PIX MCP host-local binary artifacts stay ignored, but the version.txt pin is
+# committed source consumed by local-services/launch.ps1 and install.ps1.
 
 # Repository build introspection skill is source, not a build directory.
 !.opencode/skills/build-introspection/

@@ -1,0 +1,11 @@
+# PIX MCP (PozLabs, MIT) prebuilt binary pin.
+# Source of truth for local-services/launch.ps1: it downloads the release zip for
+# $env:PROCESSOR_ARCHITECTURE and refuses to extract unless SHA256 matches.
+# SHA256 values are the GitHub release-asset digests for tag v0.1.1
+# (https://api.github.com/repos/PozLabs/pix-mcp/releases/tags/v0.1.1).
+# Bump every key together, then update the version note in local-services/README.md.
+VERSION=v0.1.1
+X64_URL=https://github.com/PozLabs/pix-mcp/releases/download/v0.1.1/pix-mcp-v0.1.1-x86_64-pc-windows-msvc.zip
+X64_SHA256=f73da00c910d3267471ddf702f6d3ef3942d4c3d5ffd0926d540ce27483b54e7
+ARM64_URL=https://github.com/PozLabs/pix-mcp/releases/download/v0.1.1/pix-mcp-v0.1.1-aarch64-pc-windows-msvc.zip
+ARM64_SHA256=ecfa3e8324ace8b95045623ecfbedf5d02946ada7e4f8679191e6775c8d6292f
