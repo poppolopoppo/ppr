@@ -305,7 +305,7 @@ export namespace pP {
 
                 template<typename T>
                     requires requires (const ValueVariant &v) {
-                        { std::get_if<T>(v) } -> std::same_as<const T *>;
+                        { std::get_if<T>(&v) } -> std::same_as<const T *>;
                     }
                 [[nodiscard]] constexpr const T *as() const noexcept {
                     return std::get_if<T>(this);

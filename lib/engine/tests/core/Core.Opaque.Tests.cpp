@@ -207,6 +207,20 @@ namespace pP::tests::detail {
         };
 
         namespace Block {
+            PPR_UNIT_TEST (typed_access_preserves_numeric_type) {
+                opaque::Block::Value stored{i32{42}};
+                const auto *matched = stored.as<i32>();
+                PPR_TEST_ASSERT(matched != nullptr);
+                PPR_TEST_ASSERT(*matched == 42);
+                PPR_TEST_ASSERT(stored.as<i64>() == nullptr);
+                PPR_TEST_ASSERT(stored.as<bool>() == nullptr);
+
+                const opaque::Block::Value &read_only = stored;
+                static_assert(std::same_as<decltype(read_only.as<i32>()), const i32 *>);
+                PPR_TEST_ASSERT(read_only.as<i32>() == matched);
+                PPR_TEST_ASSERT(read_only.as<double>() == nullptr);
+            };
+
             PPR_UNIT_TEST (value) {
                 using BV = opaque::Block::Value;
 
@@ -517,6 +531,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (block) {
             _.recurse({
                 Block::value,
+                Block::typed_access_preserves_numeric_type,
                 Block::builder_scalars,
                 Block::builder_strings,
                 Block::builder_array,
@@ -552,6 +567,7 @@ namespace pP::tests {
     const UnitTest block = UnitTest::Named("block") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Opaque::Block::value,
+            detail::Opaque::Block::typed_access_preserves_numeric_type,
             detail::Opaque::Block::builder_scalars,
             detail::Opaque::Block::builder_strings,
             detail::Opaque::Block::builder_array,
