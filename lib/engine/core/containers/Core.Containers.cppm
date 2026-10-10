@@ -1303,6 +1303,7 @@ export namespace pP {
     template<typename T, std::size_t N>
         requires std::is_trivial_v<T>
     struct RingBuffer {
+        static_assert(N > 0u and N <= static_cast<std::size_t>(std::numeric_limits<i32>::max()));
         using value_type = T;
 
         [[nodiscard]] PPR_FORCE_INLINE static u32 arrIndex(const i32 pos) noexcept {
@@ -1314,15 +1315,38 @@ export namespace pP {
             }
         }
 
+    private:
         std::array<T, N> m_storage;
-        i32 m_back_pos{0};
-        i32 m_front_pos{0};
+        // Both values stay bounded by capacity; operation totals never accumulate.
+        std::size_t m_front_index{0u};
+        std::size_t m_count{0u};
 
+        [[nodiscard]] constexpr std::size_t physicalIndex_(const std::size_t offset) const noexcept {
+            const std::size_t until_end = N - m_front_index;
+            return offset < until_end ? m_front_index + offset : offset - until_end;
+        }
+
+        template<typename... ArgsT>
+        void constructSlot_(const std::size_t index, ArgsT &&...args) noexcept(
+            std::is_nothrow_constructible_v<T, ArgsT &&...>) {
+            T &slot = m_storage[index];
+            mem::unpoisonUninitialized(&slot);
+            bool constructed = false;
+            PPR_DEFER {
+                if (not constructed) {
+                    // Slot poisoning must not round into adjacent live values.
+                    mem::poisonDestroyed(&slot);
+                }
+            };
+            std::construct_at(&slot, std::forward<ArgsT>(args)...);
+            constructed = true;
+        }
+
+    public:
 #if PPR_ENABLE_SANITIZER_ADDRESS
         constexpr RingBuffer() noexcept {
             mem::poisonReserved(m_storage.data(), m_storage.size());
         }
-
         constexpr ~RingBuffer() noexcept {
             mem::unpoisonUninitialized(m_storage.data(), m_storage.size());
         }
@@ -1330,128 +1354,129 @@ export namespace pP {
         constexpr RingBuffer() noexcept = default;
 #endif
 
+        RingBuffer(const RingBuffer &other) noexcept : RingBuffer() {
+            for (const T &value: other) {
+                pushBackAssumeNotFull(value);
+            }
+        }
+        RingBuffer &operator=(const RingBuffer &other) noexcept {
+            if (this != &other) {
+                clear();
+                for (const T &value: other) {
+                    pushBackAssumeNotFull(value);
+                }
+            }
+            return *this;
+        }
+        RingBuffer(RingBuffer &&other) noexcept : RingBuffer(static_cast<const RingBuffer &>(other)) {
+        }
+        RingBuffer &operator=(RingBuffer &&other) noexcept {
+            return operator=(static_cast<const RingBuffer &>(other));
+        }
+
         [[nodiscard]] constexpr bool isEmpty() const noexcept {
-            return m_back_pos == m_front_pos;
+            return m_count == 0u;
         }
-
         [[nodiscard]] constexpr bool isFull() const noexcept {
-            const i32 count = m_back_pos - m_front_pos;
-            return count == static_cast<i32>(N);
+            return m_count == N;
         }
-
         [[nodiscard]] constexpr std::size_t size() const noexcept {
-            return checked_cast<std::size_t>(m_back_pos - m_front_pos);
+            return m_count;
         }
 
         [[nodiscard]] constexpr T &operator[](const std::size_t index) noexcept {
-            PPR_ASSERT(static_cast<std::size_t>(m_front_pos) + index < static_cast<std::size_t>(m_back_pos));
-            return m_storage[arrIndex(static_cast<i32>(static_cast<std::size_t>(m_front_pos) + index))];
+            PPR_ASSERT(index < m_count);
+            return m_storage[physicalIndex_(index)];
         }
-
         [[nodiscard]] constexpr const T &operator[](const std::size_t index) const noexcept {
-            PPR_ASSERT(static_cast<std::size_t>(m_front_pos) + index < static_cast<std::size_t>(m_back_pos));
-            return m_storage[arrIndex(static_cast<i32>(static_cast<std::size_t>(m_front_pos) + index))];
+            PPR_ASSERT(index < m_count);
+            return m_storage[physicalIndex_(index)];
         }
 
         template<typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
         [[nodiscard]] bool pushFront(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
-            if (!isFull()) [[likely]] {
+            if (not isFull()) [[likely]] {
                 pushFrontAssumeNotFull(std::forward<ArgsT>(args)...);
                 return true;
             }
             return false;
         }
-
         template<typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
         void pushFrontAssumeNotFull(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
-            PPR_ASSERT(!isFull());
-            --m_front_pos;
-            T &dst = m_storage[arrIndex(m_front_pos)];
-            mem::unpoisonUninitialized(&dst);
-            std::construct_at(&dst, std::forward<ArgsT>(args)...);
+            PPR_ASSERT(not isFull());
+            const std::size_t front = m_front_index == 0u ? N - 1u : m_front_index - 1u;
+            constructSlot_(front, std::forward<ArgsT>(args)...);
+            m_front_index = front;
+            ++m_count;
         }
 
         template<typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
         [[nodiscard]] bool pushBack(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
-            if (!isFull()) [[likely]] {
+            if (not isFull()) [[likely]] {
                 pushBackAssumeNotFull(std::forward<ArgsT>(args)...);
                 return true;
             }
             return false;
         }
-
         template<typename... ArgsT>
             requires std::is_constructible_v<T, ArgsT &&...>
         void pushBackAssumeNotFull(ArgsT &&...args) noexcept(std::is_nothrow_constructible_v<T, ArgsT &&...>) {
-            PPR_ASSERT(!isFull());
-            T &dst = m_storage[arrIndex(m_back_pos)];
-            mem::unpoisonUninitialized(&dst);
-            std::construct_at(&dst, std::forward<ArgsT>(args)...);
-            ++m_back_pos;
+            PPR_ASSERT(not isFull());
+            constructSlot_(physicalIndex_(m_count), std::forward<ArgsT>(args)...);
+            ++m_count;
         }
 
         [[nodiscard]] std::optional<T> popBack() noexcept {
-            if (!isEmpty()) [[likely]] {
+            if (not isEmpty()) [[likely]] {
                 return popBackAssumeNotEmpty();
             }
-            m_front_pos = m_back_pos = 0;
             return std::nullopt;
         }
-
         [[nodiscard]] T popBackAssumeNotEmpty() noexcept {
-            PPR_ASSERT(!isEmpty());
-            --m_back_pos;
-            T &src = m_storage[arrIndex(m_back_pos)];
-            T return_value = std::move(src);
-            mem::poisonDestroyed(&src);
-            return return_value; // NRVO applies
-        }
-
-        [[nodiscard]] std::optional<T> popFront() noexcept {
-            if (!isEmpty()) [[likely]] {
-                T &src = m_storage[arrIndex(m_front_pos)];
-                T return_value = std::move(src);
-                mem::poisonDestroyed(&src);
-                ++m_front_pos;
-                return return_value; // NRVO applies
-            }
-            m_front_pos = m_back_pos = 0;
-            return std::nullopt;
-        }
-
-        [[nodiscard]] T popFrontAssumeNotEmpty() noexcept {
-            PPR_ASSERT(!isEmpty());
-            T &src = m_storage[arrIndex(m_front_pos)];
+            PPR_ASSERT(not isEmpty());
+            T &src = m_storage[physicalIndex_(m_count - 1u)];
             T value = std::move(src);
             mem::poisonDestroyed(&src);
-            ++m_front_pos;
-            return value; // NRVO applies
+            --m_count;
+            return value;
         }
-
+        [[nodiscard]] std::optional<T> popFront() noexcept {
+            if (not isEmpty()) [[likely]] {
+                return popFrontAssumeNotEmpty();
+            }
+            return std::nullopt;
+        }
+        [[nodiscard]] T popFrontAssumeNotEmpty() noexcept {
+            PPR_ASSERT(not isEmpty());
+            T &src = m_storage[m_front_index];
+            T value = std::move(src);
+            mem::poisonDestroyed(&src);
+            m_front_index = m_front_index == N - 1u ? 0u : m_front_index + 1u;
+            --m_count;
+            return value;
+        }
         void clear() noexcept {
-            static_assert(std::is_trivially_destructible_v<T>);
             mem::poisonReserved(m_storage.data(), m_storage.size());
-            m_back_pos = m_front_pos = 0;
+            m_front_index = 0u;
+            m_count = 0u;
         }
 
         using iterator = IndexIterator<RingBuffer, T, i32>;
         using const_iterator = IndexIterator<const RingBuffer, const T, i32>;
-
         [[nodiscard]] constexpr iterator begin() noexcept {
             return iterator(*this, 0);
         }
         [[nodiscard]] constexpr iterator end() noexcept {
-            return iterator(*this, m_back_pos - m_front_pos);
+            return iterator(*this, checked_cast<i32>(m_count));
         }
-
         [[nodiscard]] constexpr const_iterator begin() const noexcept {
             return const_iterator(*this, 0);
         }
         [[nodiscard]] constexpr const_iterator end() const noexcept {
-            return const_iterator(*this, m_back_pos - m_front_pos);
+            return const_iterator(*this, checked_cast<i32>(m_count));
         }
     };
 

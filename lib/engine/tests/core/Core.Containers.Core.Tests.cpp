@@ -221,6 +221,144 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(!rb.popBack().has_value());
         };
 
+        template<std::size_t Capacity>
+        void exerciseRingAgainstDeque() {
+            RingBuffer<u64, Capacity> ring;
+            std::deque<u64> reference;
+            u32 random = 0x12345678u;
+            for (u64 step = 0u; step < 20000u; ++step) {
+                random = random * 1664525u + 1013904223u;
+                switch ((random >> 16u) % 4u) {
+                    case 0u: {
+                        const bool room = reference.size() < Capacity;
+                        PPR_TEST_ASSERT(ring.pushFront(step) == room);
+                        if (room) {
+                            reference.push_front(step);
+                        }
+                        break;
+                    }
+                    case 1u: {
+                        const bool room = reference.size() < Capacity;
+                        PPR_TEST_ASSERT(ring.pushBack(step) == room);
+                        if (room) {
+                            reference.push_back(step);
+                        }
+                        break;
+                    }
+                    case 2u: {
+                        const auto value = ring.popFront();
+                        PPR_TEST_ASSERT(value.has_value() == not reference.empty());
+                        if (value) {
+                            PPR_TEST_ASSERT(*value == reference.front());
+                            reference.pop_front();
+                        }
+                        break;
+                    }
+                    case 3u: {
+                        const auto value = ring.popBack();
+                        PPR_TEST_ASSERT(value.has_value() == not reference.empty());
+                        if (value) {
+                            PPR_TEST_ASSERT(*value == reference.back());
+                            reference.pop_back();
+                        }
+                        break;
+                    }
+                }
+                PPR_TEST_ASSERT(ring.size() == reference.size());
+                PPR_TEST_ASSERT(ring.isEmpty() == reference.empty());
+                PPR_TEST_ASSERT(ring.isFull() == (reference.size() == Capacity));
+                const auto &read_only = ring;
+                PPR_TEST_ASSERT(std::ranges::equal(read_only, reference));
+                for (std::size_t index = 0u; index < reference.size(); ++index) {
+                    PPR_TEST_ASSERT(ring[index] == reference[index]);
+                }
+            }
+            ring.clear();
+            PPR_TEST_ASSERT(ring.isEmpty() and ring.begin() == ring.end());
+            ring.pushFrontAssumeNotFull(42u);
+            PPR_TEST_ASSERT(ring.popBackAssumeNotEmpty() == 42u);
+            ring.pushBackAssumeNotFull(43u);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 43u);
+        }
+
+        PPR_UNIT_TEST (ringbuffer_bidirectional_wrap_matches_reference) {
+            exerciseRingAgainstDeque<1u>();
+            exerciseRingAgainstDeque<3u>();
+            exerciseRingAgainstDeque<8u>();
+            exerciseRingAgainstDeque<240u>();
+        };
+
+        PPR_UNIT_TEST (ringbuffer_front_insert_indexing_and_iteration) {
+            RingBuffer<int, 3u> ring;
+            ring.pushFrontAssumeNotFull(1);
+            ring.pushFrontAssumeNotFull(2);
+            ring.pushFrontAssumeNotFull(3);
+            const std::array expected{3, 2, 1};
+            PPR_TEST_ASSERT(ring[0] == 3 and ring[2] == 1);
+            PPR_TEST_ASSERT(std::ranges::equal(ring, expected));
+            for (int &value: ring) {
+                value += 10;
+            }
+            PPR_TEST_ASSERT(ring.popBackAssumeNotEmpty() == 11);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 13);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 12);
+        };
+
+        PPR_UNIT_TEST (ringbuffer_copies_only_live_wrapped_values) {
+            RingBuffer<u64, 5u> source;
+            for (u64 value = 0u; value < 5u; ++value) {
+                source.pushBackAssumeNotFull(value);
+            }
+            std::ignore = source.popFrontAssumeNotEmpty();
+            std::ignore = source.popFrontAssumeNotEmpty();
+            source.pushBackAssumeNotFull(5u);
+            const std::array<u64, 4u> expected{2u, 3u, 4u, 5u};
+            RingBuffer<u64, 5u> copied{source};
+            RingBuffer<u64, 5u> assigned;
+            assigned.pushFrontAssumeNotFull(99u);
+            assigned = source;
+            RingBuffer<u64, 5u> moved{std::move(copied)};
+            copied = std::move(assigned);
+            for (const auto *ring: {&source, &copied, &assigned, &moved}) {
+                PPR_TEST_ASSERT(std::ranges::equal(*ring, expected));
+            }
+            const auto &same_source = source;
+            source = same_source;
+            PPR_TEST_ASSERT(std::ranges::equal(source, expected));
+            moved.clear();
+            PPR_TEST_ASSERT(std::ranges::equal(source, expected));
+        };
+
+        struct ThrowingRingArgument {
+            operator u64() const {
+                throw 42;
+            }
+        };
+
+        PPR_UNIT_TEST (ringbuffer_failed_construction_preserves_live_values) {
+            RingBuffer<u64, 3u> ring;
+            ring.pushBackAssumeNotFull(7u);
+            for (const bool front: {false, true}) {
+                bool caught = false;
+                try {
+                    if (front) {
+                        std::ignore = ring.pushFront(ThrowingRingArgument{});
+                    } else {
+                        std::ignore = ring.pushBack(ThrowingRingArgument{});
+                    }
+                } catch (const int value) {
+                    caught = value == 42;
+                }
+                PPR_TEST_ASSERT(caught);
+                PPR_TEST_ASSERT(ring.size() == 1u and ring[0] == 7u);
+            }
+            ring.pushFrontAssumeNotFull(6u);
+            ring.pushBackAssumeNotFull(8u);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 6u);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 7u);
+            PPR_TEST_ASSERT(ring.popFrontAssumeNotEmpty() == 8u);
+        };
+
         PPR_UNIT_TEST (shellsort_empty_and_single) {
             std::vector<int> empty;
             sort::inplaceShell(empty);
@@ -372,6 +510,10 @@ namespace pP::tests {
         _.recurse({
             detail::Container::ringbuffer_push_pop_wrap,
             detail::Container::ringbuffer_pop_empty_resets_positions,
+            detail::Container::ringbuffer_bidirectional_wrap_matches_reference,
+            detail::Container::ringbuffer_front_insert_indexing_and_iteration,
+            detail::Container::ringbuffer_copies_only_live_wrapped_values,
+            detail::Container::ringbuffer_failed_construction_preserves_live_values,
         });
     };
 
