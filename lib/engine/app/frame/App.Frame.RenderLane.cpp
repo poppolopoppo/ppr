@@ -35,43 +35,6 @@ namespace pP {
             }
             return error.value();
         }
-
-        // ora-25 measurement-only probe writers. The tick is an explicit
-        // caller-provided parameter read fresh from the monotonic backing
-        // clock at each probe boundary (time::now()); submitFrame runs on
-        // the producer (main) thread and writes the per-thread main buffer,
-        // lane-thread sites write the spinlock-guarded lane buffer main
-        // merges after join. Events are keyed by reservation epoch + frame
-        // id; the transports themselves are untouched. noexcept,
-        // allocation-free. No implicit clock read inside either writer.
-        void recordSubmitTelemetry_(
-            const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
-            const i64 detail_a = 0, const int host_outcome = 0) noexcept {
-            FrameTelemetryEvent event{};
-            event.m_kind = kind;
-            event.m_epoch = epoch;
-            event.m_frame_id = frame_id;
-            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
-            event.m_detail_a = detail_a;
-            event.m_host_outcome = host_outcome;
-            event.m_thread_tag = 0u;
-            frameTelemetryMainBuffer().record(event);
-        }
-
-        void recordLaneTransportTelemetry_(
-            const EFrameTelemetryEvent kind, const u64 epoch, const u64 frame_id, const TimePoint tick,
-            const i64 detail_a = 0, const i64 detail_b = 0, const int host_outcome = 0) noexcept {
-            FrameTelemetryEvent event{};
-            event.m_kind = kind;
-            event.m_epoch = epoch;
-            event.m_frame_id = frame_id;
-            event.m_cpu_tick_ns = frameTelemetryCpuTickNs(tick);
-            event.m_detail_a = detail_a;
-            event.m_detail_b = detail_b;
-            event.m_host_outcome = host_outcome;
-            event.m_thread_tag = 1u;
-            frameTelemetryRecordLane(event);
-        }
     }
 
     namespace {
@@ -252,18 +215,10 @@ namespace pP {
     }
 
     std::error_code RenderLane::submitFrame(RenderFrameRequest request) noexcept {
-        // ora-25: client-side keys captured before the move below; every
-        // outcome below stamps the same keys (accepted == transport
-        // acceptance bracketing the editor's handoff stamp; drops carry
-        // the translated outcome).
-        const u64 telemetry_epoch = request.m_reservation_epoch;
-        const u64 telemetry_frame = request.m_reservation_frame_id;
         if (m_stop_initiated.load(std::memory_order_acquire) or not m_running.load(std::memory_order_acquire))
             [[unlikely]] {
             const std::error_code closed{std::make_error_code(std::errc::operation_canceled)};
-            recordSubmitTelemetry_(
-                EFrameTelemetryEvent::lane_enqueue_dropped, telemetry_epoch, telemetry_frame, time::now(), 0,
-                closed.value());
+
             return closed;
         }
         auto reserved = m_frames->producerReserve(sizeof(request), RawChannel::drop_if_full);
@@ -272,9 +227,7 @@ namespace pP {
                 m_dropped_count.fetch_add(1u, std::memory_order_acq_rel);
             }
             const std::error_code translated = translateProduceError_(reserved.error());
-            recordSubmitTelemetry_(
-                EFrameTelemetryEvent::lane_enqueue_dropped, telemetry_epoch, telemetry_frame, time::now(),
-                reserved.error() == RawChannel::error_full ? 1 : 0, translated.value());
+
             return translated;
         }
         // Charge the queued window BEFORE publishing: the consumer decrements
@@ -290,17 +243,12 @@ namespace pP {
             m_frames->producerDiscard(*reserved);
             m_queued_frames.fetch_sub(1u, std::memory_order_acq_rel);
             const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
-            recordSubmitTelemetry_(
-                EFrameTelemetryEvent::lane_enqueue_dropped, telemetry_epoch, telemetry_frame, time::now(), 0,
-                oom.value());
+
             return oom;
         }
         m_frames->producerSubmit(*reserved);
         m_submitted_count.fetch_add(1u, std::memory_order_acq_rel);
-        // Transport acceptance brackets the editor's lane_enqueue_handoff
-        // stamp on the same keys.
-        recordSubmitTelemetry_(
-            EFrameTelemetryEvent::lane_enqueue_accepted, telemetry_epoch, telemetry_frame, time::now());
+
         return default_value_v;
     }
 
@@ -712,10 +660,6 @@ namespace pP {
             return error;
         }
         m_running.store(false, std::memory_order_release);
-        // ora-25: merge lane/owner-thread side channel into the main buffer
-        // now the worker is proven gone (or was never started); the
-        // exit-time dump exports it. Overflow counts ride that header.
-        std::ignore = frameTelemetryMergeLaneIntoMain();
         return default_value_v;
     }
 
@@ -825,8 +769,7 @@ namespace pP {
         std::destroy_at(static_cast<std::shared_ptr<const RenderFrameRequest> *>(acquired->data()));
         m_frames->consumerRelease(*acquired);
         if (not holder or not holder->m_packet) [[unlikely]] {
-            // ora-25: null dequeue still stamps (keys unknown; detail_b = 1).
-            recordLaneTransportTelemetry_(EFrameTelemetryEvent::lane_dequeue, 0u, 0u, time::now(), 0, 1);
+
             m_queued_frames.fetch_sub(1u, std::memory_order_acq_rel);
             refreshEstimate_();
             return;
@@ -834,12 +777,7 @@ namespace pP {
         m_queued_frames.fetch_sub(1u, std::memory_order_acq_rel);
         m_executing_frames.fetch_add(1u, std::memory_order_acq_rel);
         refreshEstimate_();
-        // ora-25: dequeue stamp keyed by the reservation identity, with the
-        // post-decrement queued depth in detail_a, fresh at the dequeue
-        // boundary.
-        recordLaneTransportTelemetry_(
-            EFrameTelemetryEvent::lane_dequeue, holder->m_reservation_epoch, holder->m_reservation_frame_id,
-            time::now(), static_cast<i64>(m_queued_frames.load(std::memory_order_acquire)));
+
 
         RenderFrameResult result{};
         result.m_frame_id = holder->m_packet->m_frame_id;
@@ -855,8 +793,7 @@ namespace pP {
             executor = m_executor ? &m_executor : nullptr;
         }
         // True lane-execution wall clock for the display-only gauge (see
-        // lastExecuteUs): the store lands beside the lane_execute_end
-        // stamp below. Two steady_clock reads, one relaxed store: no
+        // lastExecuteUs). Two steady_clock reads, one relaxed store: no
         // allocation, noexcept, worker thread only.
         const std::chrono::steady_clock::time_point execute_start = std::chrono::steady_clock::now();
         {
@@ -902,17 +839,7 @@ namespace pP {
             std::chrono::duration_cast<std::chrono::microseconds>(execute_end - execute_start).count();
         const u64 execute_us = execute_delta_us > 0 ? static_cast<u64>(execute_delta_us) : 0u;
         m_last_execute_us.store(execute_us, std::memory_order_relaxed);
-        // ora-25: execute-end stamp with the exact executor outcome (the
-        // begin stamp rides executeRenderWork_ itself, so early returns
-        // there stay untouched). NOTE the submit-inside-execution ordering:
-        // renderer_submit fires inside this execution interval (after
-        // lane_execute_begin, before this stamp) with no reservation keys
-        // of its own — joins must correlate present/retirement via the
-        // enclosing keyed (epoch, frame) execution interval + a nonzero
-        // m_gpu_fence_value, never by timestamp proximity to this stamp.
-        recordLaneTransportTelemetry_(
-            EFrameTelemetryEvent::lane_execute_end, result.m_reservation_epoch, result.m_reservation_frame_id,
-            time::now(), 0, 0, result.m_error ? result.m_error.value() : 0);
+
         m_executing_frames.fetch_sub(1u, std::memory_order_acq_rel);
 
         // Sweep fence work on the lane (affinity-safe: the Renderer is lane

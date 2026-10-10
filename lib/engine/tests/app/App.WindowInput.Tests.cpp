@@ -1,14 +1,6 @@
 module;
 #include "pP/UnitTest.h"
 
-#include <cstdio>
-#include <fcntl.h>
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-
 module engine.tests.app;
 
 import engine.core;
@@ -1318,65 +1310,6 @@ namespace pP::tests::detail {
         // observes a live run, and run()'s return already proves the cause.
     };
 
-    PPR_UNIT_TEST (telemetry_unwritable_output_preserves_run_result, UnitTest::fork) {
-        // Isolate process-wide stdout and logger policy from all other leaves.
-        PPR_TEST_ASSERT(not Log::flush(true));
-        const auto silent_writer = [](const Log::Entry &) noexcept {};
-        auto policy = Log::setWriterPolicy(silent_writer);
-        PPR_DEFER {
-            std::ignore = Log::setWriterPolicy(std::move(policy));
-        };
-        std::ignore = std::fflush(stdout);
-#ifdef _WIN32
-        const int output = ::_fileno(stdout);
-        const int saved = ::_dup(output);
-        std::FILE *read_only_file = nullptr;
-        const int open_error = ::fopen_s(&read_only_file, "NUL", "r");
-        const int read_only = open_error == 0 and read_only_file != nullptr ? ::_fileno(read_only_file) : -1;
-        auto duplicate = [](const int from, const int to) { return ::_dup2(from, to); };
-        auto close = [](const int descriptor) { return ::_close(descriptor); };
-#else
-        const int output = ::fileno(stdout);
-        const int saved = ::dup(output);
-        const int read_only = ::open("/dev/null", O_RDONLY);
-        auto duplicate = [](const int from, const int to) { return ::dup2(from, to); };
-        auto close = [](const int descriptor) { return ::close(descriptor); };
-#endif
-        PPR_DEFER {
-            if (saved >= 0) {
-                std::ignore = std::fflush(stdout);
-                std::ignore = duplicate(saved, output);
-                std::ignore = close(saved);
-                std::clearerr(stdout);
-            }
-#ifdef _WIN32
-            if (read_only_file != nullptr) {
-                std::fclose(read_only_file);
-            }
-#else
-            if (read_only >= 0) {
-                std::ignore = close(read_only);
-            }
-#endif
-        };
-        PPR_TEST_ASSERT(saved >= 0 and read_only >= 0);
-        PPR_TEST_ASSERT(duplicate(read_only, output) >= 0);
-
-        const std::error_code cause = std::make_error_code(std::errc::io_error);
-        AppLifecycle::ExitAfterFramesApp graceful{"UnwritableTelemetryGraceful"};
-        const std::error_code graceful_result = graceful.run();
-        AppLifecycle::ExitAfterFramesApp failed{"UnwritableTelemetryFailure"};
-        failed.m_clause = cause;
-        const std::error_code failed_result = failed.run();
-        const bool output_failed = std::fflush(stdout) == EOF or std::ferror(stdout) != 0;
-
-        PPR_TEST_ASSERT(duplicate(saved, output) >= 0);
-        std::clearerr(stdout);
-        PPR_TEST_ASSERT(output_failed);
-        PPR_TEST_ASSERT(not graceful_result);
-        PPR_TEST_ASSERT(failed_result == cause);
-        PPR_TEST_ASSERT(frameTelemetryMainPending() == 0u);
-    };
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -1396,7 +1329,6 @@ namespace pP::tests {
             detail::WindowInput::drag_latch_release_without_press_resets,
             detail::WindowInput::drag_latch_reset_restores_disengaged,
             detail::WindowInput::drag_latch_tap_state_reset_clears_stale_hold,
-            detail::telemetry_unwritable_output_preserves_run_result,
         });
         // Shared-device scope: one boot serves every GPU leaf below (each
         // observes it through resetBetweenLeaves plus the initialize no-op

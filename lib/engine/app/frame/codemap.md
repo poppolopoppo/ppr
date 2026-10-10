@@ -60,6 +60,8 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
 4. Application construction reservations and renderer GPU credits bound live work. Queued/building work also needs reservation accounting; channel depth alone is not a lifetime guarantee.
 5. Teardown stops admission, settles queued work and proves quiescence while main pumps events. Owner-lane pass/surface/renderer cleanup precedes joining and destroying lane storage; native windows/platform remain main-thread work. Unknown GPU completion invokes the application fail-stop boundary before release.
 
+Production frame packets carry functional render data. Profiler scopes and bounded operational diagnostics provide observability without bulk event capture buffers or CSV export.
+
 ## Key Files
 
 - `App.Frame.Packet.cppm` — `engine.app:frame.packet`: `FramePacket`, `hasRenderTarget`, `makeFramePacket`.
