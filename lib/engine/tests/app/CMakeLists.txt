@@ -113,7 +113,7 @@ add_test(NAME app_a2_gates COMMAND engine.tests.app --run-test
     --loop ${PPR_TEST_LOOPS})
 
 add_test(NAME app_a3_display_window COMMAND engine.tests.app --run-test
-    "app/run_gate/display_window_mode_ack_while_suspended_and_revert,app/run_gate/display_window_stale_generation_never_applies_native_mode,app/run_gate/display_window_failed_apply_and_restore_are_honest,app/run_gate/display_window_reenumeration_rejects_removed_monitor_before_apply,app/run_gate/display_window_surface_failure_restores_native_geometry,app/run_gate/display_window_stale_ack_cannot_publish_recreated_window"
+    "app/run_gate/display_window_mode_ack_while_suspended_and_revert,app/run_gate/display_window_minimized_revert_failure_preserves_errors,app/run_gate/display_window_stale_generation_never_applies_native_mode,app/run_gate/display_window_failed_apply_and_restore_are_honest,app/run_gate/display_window_reenumeration_rejects_removed_monitor_before_apply,app/run_gate/display_window_surface_failure_restores_native_geometry,app/run_gate/display_window_stale_ack_cannot_publish_recreated_window"
     --loop ${PPR_TEST_LOOPS})
 
 add_test(NAME app_b_sim COMMAND engine.tests.app --run-test

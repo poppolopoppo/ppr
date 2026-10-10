@@ -22,6 +22,8 @@ export namespace pP {
         bool m_primary{false};
         DisplayModeCapability m_current{};
         Array<DisplayModeCapability> m_modes{};
+        /// Persistent OS interface identity, or empty when unsupported.
+        std::string m_identity{};
     };
 
     /// Owned, handle-free enumeration snapshot; refresh absence means unknown.
@@ -32,6 +34,16 @@ export namespace pP {
     };
 
     [[nodiscard]] bool displayWindowChange(const DisplaySettings &a, const DisplaySettings &b) noexcept;
+    struct DisplayMonitorSelection {
+        const DisplayMonitorCapability *m_monitor{nullptr};
+        bool m_ambiguous{false};
+    };
+    /// Pure lookup for UI availability; absence and ambiguity are explicit, allocation-free observations.
+    [[nodiscard]] DisplayMonitorSelection findDisplayMonitor(
+        std::string_view preference, const DisplayCapabilities &capabilities) noexcept;
+    /// Identity takes precedence over a unique legacy friendly name. Auto may resolve to null.
+    [[nodiscard]] Expected<const DisplayMonitorCapability *> resolveDisplayMonitor(
+        std::string_view preference, const DisplayCapabilities &capabilities, config::Diagnostics &diagnostics);
     [[nodiscard]] std::error_code validateDisplaySettings(
         const DisplaySettings &settings, const DisplayCapabilities &capabilities, config::Diagnostics &diagnostics);
     /// Background-throttle floor (§4.2): when display.throttle_unfocused is

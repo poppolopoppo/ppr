@@ -183,6 +183,7 @@ namespace pP {
         const WindowHandle handle, const SurfaceGeneration observed_generation) noexcept {
         m_display_surface_handle = handle;
         m_windowed_geometry.reset();
+        m_last_valid_window_geometry.reset();
         ++m_display_surface_lifetime;
         m_lane_surface_handle = handle;
         m_lane_surface_generation = observed_generation;
@@ -195,7 +196,7 @@ namespace pP {
 
     Expected<DisplayCapabilities> Application::displayCapabilities() const {
         if (std::this_thread::get_id() != m_display_thread) {
-            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::operation_not_permitted));
         }
         DisplayCapabilities capabilities{};
         const safe_ptr<IWindowService> service = m_platform->getWindowService();
@@ -214,6 +215,7 @@ namespace pP {
         const std::error_code error = service->enumerateMonitors([&](const SharedMonitor &monitor) {
             DisplayMonitorCapability entry{};
             entry.m_name = monitor->m_name;
+            entry.m_identity = monitor->m_identity;
             entry.m_primary = monitor->m_primary_monitor;
             entry.m_current = modeView(monitor->m_video_mode);
             const std::error_code enumerated = service->enumerateMonitorVideoModes(
@@ -228,54 +230,56 @@ namespace pP {
             return std::error_code{};
         });
         if (error or modes_error) {
-            return std::unexpected{error ? error : modes_error};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, error ? error : modes_error);
         }
         return capabilities;
     }
 
     Expected<WindowDisplayGeometry> Application::displayWindowGeometry() const {
         if (std::this_thread::get_id() != m_display_thread) {
-            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::operation_not_permitted));
         }
         const safe_ptr<IWindowService> service = m_platform->getWindowService();
         if (not service or
             not service->getMainWindow() or
             service->getMainWindow()->m_handle != m_display_surface_handle) {
-            return std::unexpected{std::make_error_code(std::errc::not_connected)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
         }
-        return service->displayWindowGeometry(*service->getMainWindow());
+        auto geometry = service->displayWindowGeometry(*service->getMainWindow());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(App, geometry);
+        return geometry;
     }
 
     std::error_code Application::requestDisplaySettings(
         config::Resolved<DisplaySettings> candidate, config::Diagnostics &diagnostics) {
         if (std::this_thread::get_id() != m_display_thread) {
-            return std::make_error_code(std::errc::operation_not_permitted);
+            PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::operation_not_permitted));
         }
         if (m_display_transactions_stopped or isExitRequested()) {
-            return std::make_error_code(std::errc::operation_canceled);
+            PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::operation_canceled));
         }
         if (not m_display_surface_handle or not m_renderer) {
-            return std::make_error_code(std::errc::not_connected);
+            PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
         }
         const SurfaceGeneration generation = renderLaneOwnsRenderer_()
                                                  ? laneSurfaceGeneration(m_display_surface_handle)
                                                  : m_renderer->surfaceGenerationFor(m_display_surface_handle);
         if (generation == kSurfaceGenerationNone) {
-            return std::make_error_code(std::errc::resource_unavailable_try_again);
+            PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::resource_unavailable_try_again));
         }
         const auto capabilities = displayCapabilities();
         if (not capabilities) {
-            return capabilities.error();
+            PPR_RETURN_ERROR_ON_FAIL(App, capabilities.error());
         }
-        const bool window_change = displayWindowChange(candidate.m_value, m_display_controller.committed());
         if (const std::error_code error = m_display_controller.begin(
                 std::move(candidate), *capabilities, diagnostics)) {
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(App, error);
         }
 
         m_pending_surface_identity = {m_display_surface_handle, generation};
         m_pending_surface_lifetime = m_display_surface_lifetime;
-        m_pending_window_change = window_change;
+        m_pending_window_change = displayWindowChange(
+            m_display_controller.pending()->m_resolved.m_value, m_display_controller.committed());
         m_window_operation_transaction = 0u;
         m_pending_window_geometry.reset();
         requestFrameAdmissionWake();
@@ -285,22 +289,32 @@ namespace pP {
     Expected<WindowDisplayGeometry> Application::applyDisplayWindow_(
         const DisplaySettings &settings, const bool restore) {
         if (std::this_thread::get_id() != m_display_thread) {
-            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::operation_not_permitted));
         }
         const safe_ptr<IWindowService> service = m_platform->getWindowService();
         if (not service or
             not service->getMainWindow() or
             service->getMainWindow()->m_handle != m_pending_surface_identity.m_handle) {
-            return std::unexpected{std::make_error_code(std::errc::not_connected)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
         }
         const Window &window = *service->getMainWindow();
         if (not restore) {
-            const auto geometry = service->displayWindowGeometry(window);
+            auto geometry = service->displayWindowGeometry(window);
             if (not geometry) {
-                return std::unexpected{geometry.error()};
+                PPR_RETURN_UNEXPECTED_ON_FAIL(App, geometry.error());
             }
             if (geometry->m_size.x <= 0 or geometry->m_size.y <= 0) {
-                return std::unexpected{std::make_error_code(std::errc::not_connected)};
+                if (not window.m_iconified or not m_last_valid_window_geometry) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
+                }
+                // Iconification can hide native dimensions. Rollback still needs
+                // the last proven geometry of this exact surface lifetime.
+                PPR_LOG(
+                    App, warning, "using acknowledged display geometry for iconified window",
+                    {{"surface_lifetime", m_display_surface_lifetime}});
+                *geometry = *m_last_valid_window_geometry;
+            } else if (geometry->m_framebuffer_size.x > 0 and geometry->m_framebuffer_size.y > 0) {
+                m_last_valid_window_geometry = *geometry;
             }
             m_restore_window_geometry = *geometry;
             m_restore_window_settings = m_display_controller.committed();
@@ -316,26 +330,38 @@ namespace pP {
         }
         const auto capabilities = displayCapabilities();
         if (not capabilities) {
-            return std::unexpected{capabilities.error()};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, capabilities.error());
         }
         config::Diagnostics diagnostics{};
         if (const std::error_code error = validateDisplaySettings(settings, *capabilities, diagnostics)) {
-            return std::unexpected{error};
+            PPR_LOG(
+                App, error, "native display settings rejected before mutation",
+                {{"restore", restore}, {"window_mode", static_cast<u32>(settings.m_window_mode)},
+                    {"monitor", settings.m_monitor}, {"width", settings.m_width}, {"height", settings.m_height},
+                    {"refresh_hz", settings.m_refresh_hz}, {"diagnostics", diagnostics.format()}});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, error);
         }
 
+        const auto resolved_monitor = resolveDisplayMonitor(settings.m_monitor, *capabilities, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(App, resolved_monitor);
+        const DisplayMonitorCapability *const capability = *resolved_monitor;
         SharedMonitor selected{};
         const std::error_code error = service->enumerateMonitors([&](const SharedMonitor &monitor) {
-            if ((settings.m_monitor == "auto" and monitor->m_primary_monitor) or
-                settings.m_monitor == monitor->m_name) {
+            if (capability != nullptr and
+                (not capability->m_identity.empty() ? monitor->m_identity == capability->m_identity
+                                                    : monitor->m_name == capability->m_name)) {
+                if (selected) {
+                    PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::invalid_argument));
+                }
                 selected = monitor;
             }
             return std::error_code{};
         });
         if (error) {
-            return std::unexpected{error};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, error);
         }
         if (settings.m_window_mode == EDisplayWindowMode::fullscreen and not selected) {
-            return std::unexpected{std::make_error_code(std::errc::no_such_device)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::no_such_device));
         }
 
         int2 size = restore ? m_restore_window_geometry.m_size : window.m_window_size;
@@ -357,9 +383,11 @@ namespace pP {
         // Mark before entering the operational boundary: even allocation failure
         // while collecting its result must not make a native mutation cancellable.
         m_display_controller.markWindowApplied();
-        return service->configureDisplayWindow(
+        auto configured = service->configureDisplayWindow(
             window, settings.m_window_mode == EDisplayWindowMode::fullscreen ? &*selected : nullptr, position, size,
             settings.m_refresh_hz != 0u ? std::optional<u32>{settings.m_refresh_hz} : std::nullopt);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(App, configured);
+        return configured;
     }
 
     std::error_code Application::serviceDisplayTransaction_() {
@@ -501,6 +529,15 @@ namespace pP {
         const bool was_restoring = m_display_controller.restoring();
         if (not m_display_controller.acknowledge(result.m_transaction_id, observation, error)) {
             return {};
+        }
+
+        if (not error and
+            m_pending_window_geometry and
+            m_pending_window_geometry->m_size.x > 0 and
+            m_pending_window_geometry->m_size.y > 0 and
+            m_pending_window_geometry->m_framebuffer_size.x > 0 and
+            m_pending_window_geometry->m_framebuffer_size.y > 0) {
+            m_last_valid_window_geometry = *m_pending_window_geometry;
         }
 
         m_lane_surface_handle = result.m_identity.m_handle;

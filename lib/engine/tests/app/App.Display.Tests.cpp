@@ -98,6 +98,81 @@ namespace pP::tests::detail {
             return result;
         }
 
+        PPR_UNIT_TEST (monitor_identity_disambiguates_names_and_rejects_stale_tokens) {
+            DisplayCapabilities capabilities = monitorCapabilities();
+            auto &first = capabilities.m_monitors.front();
+            first.m_identity = "win32-monitor:panel-a";
+            DisplayMonitorCapability second = first;
+            second.m_identity = "win32-monitor:panel-b";
+            second.m_primary = false;
+            second.m_current.m_refresh_hz = 144u;
+            capabilities.m_monitors.push_back(std::move(second));
+            config::Diagnostics diagnostics{};
+            PPR_TEST_ASSERT(
+                resolveDisplayMonitor("Panel A", capabilities, diagnostics).error() == std::errc::invalid_argument);
+            const auto selected = resolveDisplayMonitor("win32-monitor:panel-b", capabilities, diagnostics);
+            PPR_TEST_ASSERT(selected.has_value() and *selected == &capabilities.m_monitors.back());
+            PPR_TEST_ASSERT((*selected)->m_current.m_refresh_hz == 144u);
+            PPR_TEST_ASSERT(
+                resolveDisplayMonitor("auto", capabilities, diagnostics).value() == &capabilities.m_monitors.front());
+            capabilities.m_monitors.back().m_name = "win32-monitor:missing";
+            PPR_TEST_ASSERT(
+                resolveDisplayMonitor("win32-monitor:missing", capabilities, diagnostics).error() ==
+                std::errc::no_such_device);
+            capabilities.m_monitors.pop_back();
+            PPR_TEST_ASSERT(
+                resolveDisplayMonitor("win32-monitor:panel-b", capabilities, diagnostics).error() ==
+                std::errc::no_such_device);
+        };
+
+        PPR_UNIT_TEST (unique_legacy_monitor_is_canonicalized_before_ack_and_save) {
+            DisplayCapabilities capabilities = monitorCapabilities();
+            capabilities.m_monitors.front().m_identity = "win32-monitor:panel-a";
+            config::Resolved<DisplaySettings> candidate{};
+            candidate.m_value.m_monitor = "Panel A";
+            DisplayController controller{};
+            config::Diagnostics diagnostics{};
+            PPR_TEST_ASSERT(not controller.begin(std::move(candidate), capabilities, diagnostics));
+            PPR_TEST_ASSERT(controller.committed().m_monitor == "auto");
+            PPR_TEST_ASSERT(controller.pending()->m_resolved.m_value.m_monitor == "win32-monitor:panel-a");
+            controller.markSubmitted();
+            PPR_TEST_ASSERT(controller.acknowledge(
+                controller.pending()->m_transaction_id,
+                {.m_generation = 7u, .m_width = 1280, .m_height = 720, .m_available = true}, {}));
+            const auto document = config::documentFrom(controller.committed());
+            PPR_TEST_ASSERT(document.has_value());
+            const auto entry = std::ranges::find_if(
+                document->m_entries, [](const config::Entry &value) { return value.m_key == "display.monitor"; });
+            PPR_TEST_ASSERT(entry != document->m_entries.end() and entry->m_value.m_text == "win32-monitor:panel-a");
+            // Resetting a legacy startup preference to the same native monitor
+            // must not invent a window change or require native mutation support.
+            config::Resolved<DisplaySettings> legacy_reset = controller.resolved();
+            legacy_reset.m_value.m_monitor = "Panel A";
+            capabilities.m_window_changes = false;
+            PPR_TEST_ASSERT(not controller.begin(std::move(legacy_reset), capabilities, diagnostics));
+            PPR_TEST_ASSERT(not displayWindowChange(controller.pending()->m_resolved.m_value, controller.committed()));
+            controller.cancelUnsubmitted();
+            capabilities.m_monitors.front().m_name = "Renamed display";
+            PPR_TEST_ASSERT(not validateDisplaySettings(controller.committed(), capabilities, diagnostics));
+        };
+
+        PPR_UNIT_TEST (monitor_without_persistent_identity_keeps_unique_legacy_policy) {
+            DisplayCapabilities capabilities = monitorCapabilities();
+            config::Resolved<DisplaySettings> candidate{};
+            candidate.m_value.m_monitor = "Panel A";
+            config::Diagnostics diagnostics{};
+            DisplayController controller{};
+            PPR_TEST_ASSERT(not controller.begin(std::move(candidate), capabilities, diagnostics));
+            PPR_TEST_ASSERT(controller.pending()->m_resolved.m_value.m_monitor == "Panel A");
+            auto duplicate = capabilities.m_monitors.front();
+            duplicate.m_primary = false;
+            capabilities.m_monitors.push_back(std::move(duplicate));
+            const auto match = findDisplayMonitor("Panel A", capabilities);
+            PPR_TEST_ASSERT(match.m_ambiguous and match.m_monitor == nullptr);
+            PPR_TEST_ASSERT(
+                resolveDisplayMonitor("Panel A", capabilities, diagnostics).error() == std::errc::invalid_argument);
+        };
+
         PPR_UNIT_TEST (window_schema_defaults_cli_and_source_permissions) {
             config::Diagnostics diagnostics{};
             const auto resolved = config::resolve<DisplaySettings>({}, diagnostics);
@@ -642,6 +717,9 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest display = UnitTest::Named("display") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::Display::monitor_identity_disambiguates_names_and_rejects_stale_tokens,
+            detail::Display::unique_legacy_monitor_is_canonicalized_before_ack_and_save,
+            detail::Display::monitor_without_persistent_identity_keeps_unique_legacy_policy,
             detail::Display::window_schema_defaults_cli_and_source_permissions,
             detail::Display::window_schema_precedence_and_monitor_name_persistence,
             detail::Display::window_schema_source_validation_and_no_numeric_monitor_handles,

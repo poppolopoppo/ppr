@@ -226,25 +226,42 @@ namespace pP {
         // window intent on the native thread; the first surface is created on
         // its owner lane from this resulting framebuffer geometry. Runtime
         // changes instead use Application's suspended request/ack transaction.
-        const DisplaySettings &display_settings = displayController().committed();
+        DisplaySettings display_settings = displayController().committed();
         const auto capabilities = displayCapabilities();
         if (not capabilities) {
-            return capabilities.error();
+            PPR_RETURN_ERROR_ON_FAIL(Editor, capabilities.error());
         }
         config::Diagnostics display_diagnostics{};
         if (const std::error_code error = validateDisplaySettings(
                 display_settings, *capabilities, display_diagnostics)) {
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(Editor, error);
+        }
+        const auto selected_monitor = resolveDisplayMonitor(
+            display_settings.m_monitor, *capabilities, display_diagnostics);
+        PPR_RETURN_ERROR_ON_FAIL(Editor, selected_monitor);
+        const DisplayMonitorCapability *const selected_capability = *selected_monitor;
+        if (display_settings.m_monitor != "auto" and
+            selected_capability != nullptr and
+            not selected_capability->m_identity.empty()) {
+            display_settings.m_monitor = selected_capability->m_identity;
+            setDisplaySettings(display_settings);
         }
         if (displayWindowChange(display_settings, DisplaySettings{})) {
             SharedMonitor monitor{};
             PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.enumerateMonitors([&](const SharedMonitor &entry) {
-                if ((display_settings.m_monitor == "auto" and entry->m_primary_monitor) or
-                    display_settings.m_monitor == entry->m_name) {
+                if (selected_capability != nullptr and
+                    (not selected_capability->m_identity.empty() ? entry->m_identity == selected_capability->m_identity
+                                                                 : entry->m_name == selected_capability->m_name)) {
+                    if (monitor) {
+                        PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::invalid_argument));
+                    }
                     monitor = entry;
                 }
                 return std::error_code{};
             }));
+            if (display_settings.m_window_mode == EDisplayWindowMode::fullscreen and not monitor) {
+                PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::no_such_device));
+            }
             int2 size = main_window->m_window_size;
             if (display_settings.m_width != 0u) {
                 size = int2{static_cast<int>(display_settings.m_width), static_cast<int>(display_settings.m_height)};

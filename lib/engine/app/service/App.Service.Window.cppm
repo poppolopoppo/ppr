@@ -20,9 +20,9 @@ export namespace pP {
     using SharedWindowViewport = safe_ptr<const WindowViewport>;
 
     struct WindowDisplayGeometry {
-        int2 m_position{};
-        int2 m_size{};
-        int2 m_framebuffer_size{};
+        int2 m_position{zero_v};
+        int2 m_size{zero_v};
+        int2 m_framebuffer_size{zero_v};
         std::optional<u32> m_refresh_hz{};
         bool m_fullscreen{false};
         std::string m_monitor{};

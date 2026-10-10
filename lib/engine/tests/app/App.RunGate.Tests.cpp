@@ -990,6 +990,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(requested.x == 3840 and requested.y == 2160);
             PPR_TEST_ASSERT(test_app.displayController().committed().m_window_mode == EDisplayWindowMode::fullscreen);
             PPR_TEST_ASSERT(not test_app.displayController().admissionSuspended());
+            // Exclusive fullscreen can be iconified while a timed trial expires.
+            // Native zero sizes must not erase the acknowledged rollback baseline.
+            test_app.m_scripted->m_window.m_iconified = true;
+            auto &native_geometry = test_app.m_scripted->m_window_service->m_display_geometry;
+            native_geometry.m_size = int2{0, 0};
+            native_geometry.m_framebuffer_size = int2{0, 0};
             PPR_TEST_ASSERT(not test_app.requestDisplaySettings(prior));
             const auto revert_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
             while (test_app.displayController().committed().m_window_mode != EDisplayWindowMode::windowed) {
@@ -1002,6 +1008,45 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(requested.x == 1600 and requested.y == 1200);
             PPR_TEST_ASSERT(test_app.m_scripted->m_window_service->m_display_calls == 2u);
             PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_minimized_revert_failure_preserves_errors) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                std::ignore = test_app.close();
+            };
+            test_app.executor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                result.m_applied = {8u, *request.m_settings.m_extent, true, true};
+            });
+            const auto prior = test_app.displayController().resolved();
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(fullscreenCandidate()));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            while (test_app.displayController().committed().m_window_mode != EDisplayWindowMode::fullscreen) {
+                PPR_TEST_ASSERT(std::chrono::steady_clock::now() < deadline);
+                PPR_TEST_ASSERT(not test_app.pump());
+                PPR_TEST_ASSERT(not test_app.synchronize());
+                PPR_TEST_ASSERT(not test_app.pump());
+            }
+            auto &service = *test_app.m_scripted->m_window_service;
+            test_app.m_scripted->m_window.m_iconified = true;
+            service.m_display_geometry.m_size = int2{0, 0};
+            service.m_display_geometry.m_framebuffer_size = int2{0, 0};
+            const auto apply_error = std::make_error_code(std::errc::io_error);
+            const auto restore_error = std::make_error_code(std::errc::permission_denied);
+            service.m_display_errors.push_back(std::error_code{});
+            service.m_display_errors.push_back(apply_error);
+            service.m_display_errors.push_back(restore_error);
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(prior));
+            PPR_TEST_ASSERT(not test_app.pump());
+            PPR_TEST_ASSERT(test_app.displayController().restoring());
+            PPR_TEST_ASSERT(test_app.pump() == apply_error);
+            PPR_TEST_ASSERT(test_app.displayController().applied().m_restoration_error == restore_error);
+            PPR_TEST_ASSERT(service.m_display_calls == 3u);
+            PPR_TEST_ASSERT(test_app.displayController().transactionState() == EDisplayTransaction::degraded);
+            PPR_TEST_ASSERT(test_app.displayController().transactionError() == apply_error);
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_window_mode == EDisplayWindowMode::fullscreen);
+            PPR_TEST_ASSERT(test_app.close() == apply_error);
         };
 
         PPR_UNIT_TEST (display_window_stale_generation_never_applies_native_mode) {
@@ -3546,6 +3591,7 @@ namespace pP::tests {
         _.recurse({
             detail::RunGate::monitor_change_and_revert_report_operational_errors,
             detail::RunGate::display_window_mode_ack_while_suspended_and_revert,
+            detail::RunGate::display_window_minimized_revert_failure_preserves_errors,
             detail::RunGate::display_window_stale_generation_never_applies_native_mode,
             detail::RunGate::display_window_failed_apply_and_restore_are_honest,
             detail::RunGate::display_window_reenumeration_rejects_removed_monitor_before_apply,

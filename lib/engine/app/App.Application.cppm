@@ -488,6 +488,7 @@ export namespace pP {
         WindowDisplayGeometry m_restore_window_geometry{};
         std::optional<WindowDisplayGeometry> m_pending_window_geometry{};
         std::optional<WindowDisplayGeometry> m_windowed_geometry{};
+        std::optional<WindowDisplayGeometry> m_last_valid_window_geometry{};
         u64 m_window_operation_transaction{0u};
         bool m_pending_window_change{false};
         const std::thread::id m_display_thread{std::this_thread::get_id()};

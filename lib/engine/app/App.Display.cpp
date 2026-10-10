@@ -1,3 +1,6 @@
+module;
+#include "pP/Macros.h"
+
 module engine.app;
 
 import :display;
@@ -8,6 +11,56 @@ import engine.core;
 import std;
 
 namespace pP {
+    PPR_DEFINE_LOG_CATEGORY(DisplayPolicy, info, none);
+
+    DisplayMonitorSelection findDisplayMonitor(
+        const std::string_view preference, const DisplayCapabilities &capabilities) noexcept {
+        DisplayMonitorSelection result{};
+        const auto find = [&](const bool identities) {
+            for (const DisplayMonitorCapability &monitor: capabilities.m_monitors) {
+                const bool matches = preference == "auto" ? monitor.m_primary
+                                                          : (identities ? not monitor.m_identity.empty() and
+                                                                              preference == monitor.m_identity
+                                                                        : preference == monitor.m_name);
+                if (matches) {
+                    if (result.m_monitor != nullptr) {
+                        result.m_monitor = nullptr;
+                        result.m_ambiguous = true;
+                        return;
+                    }
+                    result.m_monitor = &monitor;
+                }
+            }
+        };
+        find(true);
+        // A serialized native token is never reinterpreted as another monitor's label.
+        if (result.m_monitor == nullptr and
+            not result.m_ambiguous and
+            preference != "auto" and
+            not preference.starts_with("win32-monitor:")) {
+            find(false);
+        }
+        return result;
+    }
+
+    Expected<const DisplayMonitorCapability *> resolveDisplayMonitor(
+        const std::string_view preference, const DisplayCapabilities &capabilities, config::Diagnostics &diagnostics) {
+        const DisplayMonitorSelection result = findDisplayMonitor(preference, capabilities);
+        if (result.m_ambiguous) {
+            const auto error = std::make_error_code(std::errc::invalid_argument);
+            diagnostics.add("display capabilities", "display.monitor", "Ambiguous monitor preference", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(DisplayPolicy, error);
+        }
+        if (result.m_monitor == nullptr and preference != "auto") {
+            const auto error = std::make_error_code(std::errc::no_such_device);
+            diagnostics.add(
+                "display capabilities", "display.monitor", "Monitor preference is absent from current enumeration",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(DisplayPolicy, error);
+        }
+        return result.m_monitor;
+    }
+
     std::optional<TimeSpan> foregroundFramePeriod(const DisplaySettings &settings) noexcept {
         switch (settings.m_pacing) {
             case EFramePacing::uncapped: return std::nullopt;
@@ -63,27 +116,18 @@ namespace pP {
     std::error_code validateDisplaySettings(
         const DisplaySettings &settings, const DisplayCapabilities &capabilities, config::Diagnostics &diagnostics) {
         if (const std::error_code error = DisplaySettings::validate(settings, diagnostics)) {
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, error);
         }
         const auto reject = [&](const std::string_view property, const std::string_view message,
                                 const std::errc reason = std::errc::invalid_argument) {
             const std::error_code error = std::make_error_code(reason);
             diagnostics.add("display capabilities", std::string{property}, std::string{message}, error);
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, error);
+            return std::error_code{};
         };
-        const DisplayMonitorCapability *selected = nullptr;
-        for (const DisplayMonitorCapability &monitor: capabilities.m_monitors) {
-            if ((settings.m_monitor == "auto" and monitor.m_primary) or settings.m_monitor == monitor.m_name) {
-                if (selected != nullptr) {
-                    return reject("display.monitor", "Ambiguous monitor preference");
-                }
-                selected = &monitor;
-            }
-        }
-        if (settings.m_monitor != "auto" and selected == nullptr) {
-            return reject(
-                "display.monitor", "Monitor preference is absent from current enumeration", std::errc::no_such_device);
-        }
+        const auto resolved = resolveDisplayMonitor(settings.m_monitor, capabilities, diagnostics);
+        PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, resolved);
+        const DisplayMonitorCapability *const selected = *resolved;
         if (settings.m_window_mode == EDisplayWindowMode::windowed) {
             return {};
         }
@@ -130,20 +174,25 @@ namespace pP {
         config::Resolved<DisplaySettings> candidate, const DisplayCapabilities &capabilities,
         config::Diagnostics &diagnostics) {
         if (m_transactions_stopped) {
-            return std::make_error_code(std::errc::operation_canceled);
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, std::make_error_code(std::errc::operation_canceled));
         }
         if (m_pending or m_transaction_state == EDisplayTransaction::degraded) {
-            return std::make_error_code(std::errc::device_or_resource_busy);
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, std::make_error_code(std::errc::device_or_resource_busy));
         }
-        const DisplaySettings &settings = candidate.m_value;
+        DisplaySettings &settings = candidate.m_value;
         if (const std::error_code error = validateDisplaySettings(settings, capabilities, diagnostics)) {
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, error);
+        }
+        const auto monitor = resolveDisplayMonitor(settings.m_monitor, capabilities, diagnostics);
+        PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, monitor);
+        if (settings.m_monitor != "auto" and *monitor != nullptr and not (*monitor)->m_identity.empty()) {
+            settings.m_monitor = (*monitor)->m_identity;
         }
         if (displayWindowChange(settings, m_committed) and not capabilities.m_window_changes) {
             const auto error = std::make_error_code(std::errc::operation_not_supported);
             diagnostics.add(
                 "display capabilities", "display.window_mode", "Native window changes are unsupported", error);
-            return error;
+            PPR_RETURN_ERROR_ON_FAIL(DisplayPolicy, error);
         }
         candidate.m_revision = m_resolved.m_revision + 1u;
         m_pending.emplace(DisplayCandidate{std::move(candidate), ++m_next_transaction_id});

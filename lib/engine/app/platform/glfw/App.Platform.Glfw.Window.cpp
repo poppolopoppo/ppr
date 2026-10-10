@@ -17,6 +17,41 @@ import std;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwWindow, info, none);
 
+    [[nodiscard]] static Expected<std::string> glfwMonitorIdentity_(GLFWmonitor *const native) {
+#ifdef _WIN32
+        const char *const adapter_name = ::glfwGetWin32Adapter(native);
+        const char *const monitor_name = ::glfwGetWin32Monitor(native);
+        if (adapter_name == nullptr or monitor_name == nullptr) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+        }
+        const auto adapter = hal::native::from(std::string_view{adapter_name});
+        const auto monitor = hal::native::from(std::string_view{monitor_name});
+        for (DWORD index = 0;; ++index) {
+            DISPLAY_DEVICEW device{};
+            device.cb = sizeof(device);
+            if (not ::EnumDisplayDevicesW(adapter.c_str(), index, &device, EDD_GET_DEVICE_INTERFACE_NAME)) {
+                break;
+            }
+            if (std::wstring_view{device.DeviceName} == monitor and device.DeviceID[0] != L'\0') {
+                const auto identity = hal::native::utf8(std::wstring_view{device.DeviceID});
+                return std::string{"win32-monitor:"}.append(
+                    reinterpret_cast<const char *>(identity.data()), identity.size());
+            }
+        }
+        PPR_LOG(
+            GlfwWindow, error, "monitor interface identity not found",
+            {{"adapter", adapter_name}, {"monitor", monitor_name}});
+        const std::error_code error = std::make_error_code(std::errc::no_such_device);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, error);
+        // This locally produced error is always nonzero; the conditional macro returns above.
+        std::unreachable();
+#else
+        std::ignore = native;
+        // Other GLFW backends do not expose a persistent identity through this boundary.
+        return std::string{};
+#endif
+    }
+
     // ------------------------------------------------------------------
     // GLFW static helpers
     // ------------------------------------------------------------------
@@ -52,21 +87,31 @@ namespace pP {
             allocations, [&](const std::unique_ptr<T> &owned) noexcept -> bool { return owned->m_handle == handle; });
     }
 
-    [[nodiscard]] static std::unique_ptr<Monitor> glfwCreateMonitor_(GLFWmonitor *const p_glfw_monitor) {
-        std::string monitor_name = ::glfwGetMonitorName(p_glfw_monitor);
+    [[nodiscard]] static Expected<std::unique_ptr<Monitor>> glfwCreateMonitor_(GLFWmonitor *const p_glfw_monitor) {
+        std::ignore = ::glfwGetError(nullptr);
+        auto identity = glfwMonitorIdentity_(p_glfw_monitor);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, identity);
+        const char *const name = ::glfwGetMonitorName(p_glfw_monitor);
+        if (name == nullptr) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+        }
+        std::string monitor_name = name;
 
-        int2 monitor_physical_size{};
+        int2 monitor_physical_size{zero_v};
         ::glfwGetMonitorPhysicalSize(p_glfw_monitor, &monitor_physical_size.x, &monitor_physical_size.y);
 
-        int2 monitor_virtual_position{};
+        int2 monitor_virtual_position{zero_v};
         ::glfwGetMonitorPos(p_glfw_monitor, &monitor_virtual_position.x, &monitor_virtual_position.y);
 
         const GLFWvidmode *p_video_mode = ::glfwGetVideoMode(p_glfw_monitor);
-        PPR_ASSERT(p_video_mode != nullptr);
+        if (p_video_mode == nullptr or ::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+        }
 
         auto monitor = std::make_unique<Monitor>(
             MonitorHandle{p_glfw_monitor}, std::move(monitor_name), glfwVideoMode_(*p_video_mode),
-            monitor_physical_size, monitor_virtual_position, ::glfwGetPrimaryMonitor() == p_glfw_monitor);
+            monitor_physical_size, monitor_virtual_position, ::glfwGetPrimaryMonitor() == p_glfw_monitor,
+            std::move(*identity));
 
         return monitor;
     }
@@ -125,34 +170,70 @@ namespace pP {
         return first_err;
     }
 
+    static void refreshGlfwPrimary_(GlfwWindow &service) noexcept {
+        GLFWmonitor *const primary = ::glfwGetPrimaryMonitor();
+        service.m_primary_monitor.reset();
+        for (const std::unique_ptr<Monitor> &monitor: service.m_monitors) {
+            monitor->m_primary_monitor = glfwHandle_(monitor->m_handle) == primary;
+            if (monitor->m_primary_monitor) {
+                service.m_primary_monitor.reset(monitor.get());
+            }
+        }
+    }
+
     static void glfwMonitorCallback_(GLFWmonitor *p_glfw_monitor, const int status) {
         PPR_ASSERT(p_glfw_monitor != nullptr);
         GlfwWindow &service = *g_glfw_window;
 
-        if (status == GLFW_CONNECTED) {
-            std::unique_ptr<Monitor> monitor = glfwCreateMonitor_(p_glfw_monitor);
-            service.m_monitors.push_back(std::move(monitor));
-            Monitor &published_monitor = *service.m_monitors.back();
-            ::glfwSetMonitorUserPointer(p_glfw_monitor, &published_monitor);
+        try {
+            if (status == GLFW_CONNECTED) {
+                auto monitor = glfwCreateMonitor_(p_glfw_monitor);
+                if (not monitor) {
+                    // GLFW cannot return callback errors. Stop the owning application explicitly.
+                    if (service.m_application)
+                        service.m_application->requestExit(monitor.error());
+                    return;
+                }
+                service.m_monitors.push_back(std::move(*monitor));
+                Monitor &published_monitor = *service.m_monitors.back();
+                ::glfwSetMonitorUserPointer(p_glfw_monitor, &published_monitor);
 
-            if (published_monitor.m_primary_monitor) {
-                service.m_primary_monitor.reset(&published_monitor);
+                refreshGlfwPrimary_(service);
+
+                PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_connected(published_monitor));
+                return;
             }
 
-            PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_connected(published_monitor));
-            return;
-        }
-
-        if (status == GLFW_DISCONNECTED) {
-            if (const auto it = glfwAllocation_(service.m_monitors, MonitorHandle{p_glfw_monitor});
-                service.m_monitors.end() != it) {
-                PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_disconnected(**it));
-                service.m_monitors.erase(it);
+            if (status == GLFW_DISCONNECTED) {
+                if (const auto it = glfwAllocation_(service.m_monitors, MonitorHandle{p_glfw_monitor});
+                    service.m_monitors.end() != it) {
+                    PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_monitor_disconnected(**it));
+                    if (service.m_primary_monitor.get() == it->get()) {
+                        service.m_primary_monitor.reset();
+                    }
+                    service.m_monitors.erase(it);
+                    refreshGlfwPrimary_(service);
+                }
+                return;
             }
-            return;
-        }
 
-        std::unreachable();
+            std::unreachable();
+        } catch (const std::bad_alloc &) {
+            PPR_LOG(GlfwWindow, error, "monitor callback allocation failed");
+            if (service.m_application)
+                service.m_application->requestExit(std::make_error_code(std::errc::not_enough_memory));
+        } catch (const std::system_error &error) {
+            PPR_LOG(
+                GlfwWindow, error, "monitor callback system failure",
+                {{"error_code", error.code().value()}, {"category", error.code().category().name()}});
+            if (service.m_application)
+                service.m_application->requestExit(
+                    error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable));
+        } catch (...) {
+            PPR_LOG(GlfwWindow, error, "monitor callback failed with an unexpected exception");
+            if (service.m_application)
+                service.m_application->requestExit(std::make_error_code(std::errc::state_not_recoverable));
+        }
     }
 
     std::error_code GlfwWindow::initializeMonitors_() {
@@ -169,7 +250,9 @@ namespace pP {
 
         for (int i = 0; i < monitors_count; ++i) {
             if (PPR_ENSURE(p_monitors_arr[i])) {
-                std::unique_ptr<Monitor> monitor = glfwCreateMonitor_(p_monitors_arr[i]);
+                auto created = glfwCreateMonitor_(p_monitors_arr[i]);
+                PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, created);
+                std::unique_ptr<Monitor> monitor = std::move(*created);
 
                 if (monitor->m_primary_monitor) {
                     staged_primary.reset(monitor.get());
@@ -703,20 +786,34 @@ namespace pP {
             size.y <= 0 or
             (monitor == nullptr and refresh_hz.has_value()) or
             (refresh_hz and (*refresh_hz == 0u or *refresh_hz > 2147483647u))) {
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::invalid_argument));
         }
         ::GLFWwindow *const native = glfwHandle_(window.m_handle);
         std::ignore = ::glfwGetError(nullptr);
+        const bool iconified = ::glfwGetWindowAttrib(native, GLFW_ICONIFIED) == GLFW_TRUE;
+        if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+        }
+        if (iconified) {
+            // Establish normal native placement before setting the requested
+            // geometry. Win32 monitor changes otherwise resize the iconic
+            // window while a later SW_RESTORE reinstates its old fullscreen rect.
+            // The application has already armed rollback before this boundary.
+            ::glfwRestoreWindow(native);
+            if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+            }
+        }
         ::glfwSetWindowMonitor(
             native, monitor != nullptr ? glfwHandle_(monitor->m_handle) : nullptr, position.x, position.y, size.x,
             size.y, refresh_hz ? static_cast<int>(*refresh_hz) : GLFW_DONT_CARE);
         if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
-            return std::unexpected{platform::make_error_code(GLFW_FALSE)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
         }
 
         const auto observed = displayWindowGeometry(window);
         if (not observed) {
-            return std::unexpected{observed.error()};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, observed.error());
         }
         const WindowDisplayGeometry &geometry = *observed;
         // Native queries are authoritative even when GLFW callbacks are deferred.
@@ -740,9 +837,12 @@ namespace pP {
         ::glfwGetFramebufferSize(native, &geometry.m_framebuffer_size.x, &geometry.m_framebuffer_size.y);
         if (::GLFWmonitor *const actual = ::glfwGetWindowMonitor(native)) {
             geometry.m_fullscreen = true;
-            if (const char *const name = ::glfwGetMonitorName(actual)) {
-                geometry.m_monitor = name;
+            const auto found = glfwAllocation_(m_monitors, MonitorHandle{actual});
+            if (found == m_monitors.end()) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::no_such_device));
             }
+            const Monitor &monitor = **found;
+            geometry.m_monitor = monitor.m_identity.empty() ? monitor.m_name : monitor.m_identity;
             if (const ::GLFWvidmode *const mode = ::glfwGetVideoMode(actual);
                 mode != nullptr and mode->refreshRate > 0) {
                 geometry.m_refresh_hz = static_cast<u32>(mode->refreshRate);

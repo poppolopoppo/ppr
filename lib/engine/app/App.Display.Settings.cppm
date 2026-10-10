@@ -81,8 +81,8 @@ export namespace pP {
                 field(
                     &DisplaySettings::m_monitor,
                     Metadata{
-                        "display.monitor", "Monitor name or auto (revalidated on enumeration)", "Display",
-                        EMutability::runtime, ESource::all, true},
+                        "display.monitor", "Monitor identity, unique legacy name, or auto (revalidated on enumeration)",
+                        "Display", EMutability::runtime, ESource::all, true},
                     any_domain),
                 field(
                     &DisplaySettings::m_width,

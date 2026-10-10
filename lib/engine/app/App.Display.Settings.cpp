@@ -27,7 +27,7 @@ namespace pP {
             return reject("display.refresh_hz", "Refresh is an exclusive fullscreen request only");
         }
         if (settings.m_monitor.empty()) {
-            return reject("display.monitor", "Use auto or an enumerated monitor name");
+            return reject("display.monitor", "Use auto, an enumerated monitor identity, or a unique legacy name");
         }
         return {};
     }
