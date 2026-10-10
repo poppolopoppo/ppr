@@ -2253,6 +2253,9 @@ namespace demo {
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, m_driver.init(colony::ColonyDriverDesc{.m_seed = 1234567u, .m_agent_count = m_agent_count}));
             m_driver_ready = true;
+            // A new render cache has no world cells until the first full upload.
+            // Simulation edit tracking covers later edits, not initial residency.
+            m_present_full_refresh = true;
 
             auto camera_controller = std::make_unique<PanCameraController>();
             constexpr float ortho_scale = 0.5f;
