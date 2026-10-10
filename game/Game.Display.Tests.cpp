@@ -554,6 +554,113 @@ namespace pP::game::tests::detail::display {
         std::filesystem::remove(path, remove_error);
     };
 
+    PPR_UNIT_TEST (atomic_write_failure_preserves_destination_and_cleans_staging) {
+        const auto dir = std::filesystem::temp_directory_path() / "ppr-display-overlay-write-failure";
+        std::error_code error{};
+        std::filesystem::create_directories(dir, error);
+        PPR_TEST_ASSERT(not error);
+        const auto destination = dir / "existing-directory";
+        std::filesystem::create_directories(destination, error);
+        PPR_TEST_ASSERT(not error);
+        const auto marker = destination / "preserve.txt";
+        {
+            std::ofstream file{marker};
+            file << "original";
+            PPR_TEST_ASSERT(static_cast<bool>(file));
+        }
+        PPR_DEFER {
+            std::filesystem::remove(marker, error);
+            std::filesystem::remove(destination, error);
+            std::filesystem::remove(dir, error);
+        };
+        const auto failed = writeFileAtomically(destination, "replacement");
+        PPR_TEST_ASSERT(failed != std::error_code{});
+        std::ifstream original{marker};
+        std::string content{};
+        original >> content;
+        PPR_TEST_ASSERT(content == "original");
+        original.close();
+        auto staging = destination;
+        staging += ".tmp";
+        PPR_TEST_ASSERT(not std::filesystem::exists(staging, error));
+        PPR_TEST_ASSERT(not error);
+    };
+
+    PPR_UNIT_TEST (atomic_write_open_failure_reports_error_without_creating_destination) {
+        const auto parent = std::filesystem::temp_directory_path() / "ppr-display-overlay-no-parent";
+        std::error_code error{};
+        PPR_TEST_ASSERT(not std::filesystem::exists(parent, error));
+        PPR_TEST_ASSERT(not error);
+        const auto destination = parent / "overlay.toml";
+        const auto failed = writeFileAtomically(destination, "replacement");
+        PPR_TEST_ASSERT(failed == std::errc::no_such_file_or_directory);
+        PPR_TEST_ASSERT(not std::filesystem::exists(destination, error));
+        PPR_TEST_ASSERT(not error);
+    };
+
+    PPR_UNIT_TEST (atomic_write_allocation_failure_is_not_enough_memory) {
+        const std::filesystem::path path{std::string(1024u, 'x')};
+#if defined(_MSC_VER) and defined(_ITERATOR_DEBUG_LEVEL)
+        const AllocationFailure fault{_ITERATOR_DEBUG_LEVEL != 0 ? 1 : 0};
+#elif defined(_MSC_VER) and defined(_DEBUG)
+        // MSVC Debug path::string first allocates an iterator proxy inside
+        // basic_string's noexcept allocator constructor. Failing that proxy
+        // terminates within the STL; fail the following payload allocation
+        // instead to exercise the recoverable application boundary.
+        const AllocationFailure fault{1};
+#else
+        const AllocationFailure fault{};
+#endif
+        const auto failed = writeFileAtomically(path, "replacement");
+        PPR_TEST_ASSERT(failed == std::errc::not_enough_memory);
+    };
+
+    PPR_UNIT_TEST (atomic_write_diagnostic_allocation_preserves_open_error) {
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_ERROR
+        const auto parent = std::filesystem::temp_directory_path() / "ppr-display-overlay-no-parent";
+        const auto destination = parent / "overlay.toml";
+        std::error_code error{};
+        PPR_TEST_ASSERT(not std::filesystem::exists(parent, error));
+        PPR_TEST_ASSERT(not error);
+        std::atomic<bool> captured_original{false};
+        const auto capture = [&](const Log::Entry &entry) noexcept {
+            if (entry.m_message != "display overlay write exception") {
+                return;
+            }
+            const auto *field = entry.m_params.empty() ? nullptr : entry.m_params->tryGet("code");
+            const auto *code = field != nullptr ? field->as<i32>() : nullptr;
+            if (code != nullptr and *code == static_cast<int>(std::errc::no_such_file_or_directory)) {
+                captured_original.store(true, std::memory_order_relaxed);
+            }
+        };
+        PPR_TEST_ASSERT(not Log::flush(true));
+        const auto previous_level = Log::setMinimumVerboseLevel(Log::ELevel::debug);
+        const auto previous_policy = Log::setWriterPolicy(capture);
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not Log::flush(true));
+            Log::setWriterPolicy(previous_policy);
+            Log::setMinimumVerboseLevel(previous_level);
+        };
+        // Warm the same public operation, including its logger, before measuring
+        // caller-thread allocations. This avoids guessing STL proxy counts.
+        PPR_TEST_ASSERT(writeFileAtomically(destination, "replacement") == std::errc::no_such_file_or_directory);
+        const auto before = allocationCount();
+        PPR_TEST_ASSERT(writeFileAtomically(destination, "replacement") == std::errc::no_such_file_or_directory);
+        const auto allocations = allocationCount() - before;
+        PPR_TEST_ASSERT(allocations > 0u);
+        std::error_code failed{};
+        {
+            const AllocationFailure fault{checked_cast<int>(allocations - 1u)};
+            failed = writeFileAtomically(destination, "replacement");
+        }
+        PPR_TEST_ASSERT(failed == std::errc::no_such_file_or_directory);
+        PPR_TEST_ASSERT(not Log::flush(true));
+        PPR_TEST_ASSERT(captured_original.load(std::memory_order_relaxed));
+        PPR_TEST_ASSERT(not std::filesystem::exists(destination, error));
+        PPR_TEST_ASSERT(not error);
+#endif
+    };
+
     PPR_UNIT_TEST (confirm_counts_down_and_expires_once) {
         DisplayConfirm confirm{};
         PPR_TEST_ASSERT(not tickDisplayConfirm(confirm, 1.0f));
@@ -996,6 +1103,10 @@ namespace pP::game::tests {
             detail::display::overlay_header_documents_override_order,
             detail::display::missing_overlay_is_absence_not_error,
             detail::display::atomic_write_round_trips_and_clears_temp,
+            detail::display::atomic_write_failure_preserves_destination_and_cleans_staging,
+            detail::display::atomic_write_open_failure_reports_error_without_creating_destination,
+            detail::display::atomic_write_allocation_failure_is_not_enough_memory,
+            detail::display::atomic_write_diagnostic_allocation_preserves_open_error,
             detail::display::confirm_counts_down_and_expires_once,
             detail::display::confirm_holds_while_revert_pends,
             detail::display::revert_restores_observed_geometry_not_requested_zeros,

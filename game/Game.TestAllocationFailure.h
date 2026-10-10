@@ -3,6 +3,7 @@
 namespace pP::game::tests {
     void failAllocationAfter(int successful_allocations) noexcept;
     void clearAllocationFailure() noexcept;
+    [[nodiscard]] unsigned long long allocationCount() noexcept;
 
     /// Test-executable-only, thread-local standard allocation fault.
     struct AllocationFailure final {

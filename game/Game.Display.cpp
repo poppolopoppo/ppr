@@ -1,3 +1,7 @@
+module;
+#include "pP/Macros.h"
+#include <cerrno>
+
 module game.display;
 
 import engine.app;
@@ -6,6 +10,7 @@ import engine.core;
 import std;
 
 namespace pP::game {
+    PPR_DEFINE_LOG_CATEGORY(GameDisplay, info, none);
     namespace {
         [[nodiscard]] std::error_code displayException() noexcept {
             try {
@@ -13,7 +18,7 @@ namespace pP::game {
             } catch (const std::bad_alloc &) {
                 return std::make_error_code(std::errc::not_enough_memory);
             } catch (const std::system_error &error) {
-                return error.code();
+                return error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable);
             } catch (...) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
@@ -199,9 +204,7 @@ namespace pP::game {
     Expected<config::Document> buildDisplayOverlayDocument(
         const config::Document &existing, const DisplaySettings &committed) {
         auto fresh = config::documentFrom(committed);
-        if (not fresh) {
-            return std::unexpected{fresh.error()};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, fresh);
 
         Array<std::string> persistable{};
         DisplaySettings probe{};
@@ -237,9 +240,7 @@ namespace pP::game {
 
     Expected<std::string> encodeDisplayOverlay(const config::Document &document) {
         auto body = config::encode(document);
-        if (not body) {
-            return std::unexpected{body.error()};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, body);
         std::string out{"# Saved from the Display window (Save button): acknowledged picture settings only.\n"
                         "# Hand-edited base files are never rewritten by this action.\n"
                         "# The command line and environment entries still take priority over this file.\n"};
@@ -248,45 +249,96 @@ namespace pP::game {
     }
 
     std::error_code writeFileAtomically(const std::filesystem::path &path, const std::string_view bytes) noexcept {
+        std::error_code operational_error{};
         try {
+            const std::basic_string_view<std::filesystem::path::value_type> path_text{path.native()};
+            const auto failure = [&](const char *operation, const std::error_code error) {
+                operational_error = error;
+                PPR_LOG(
+                    GameDisplay, error, "display overlay write failed",
+                    {{"path", path_text}, {"operation", operation}, {"code", error.value()},
+                        {"message", error.message()}});
+                return error;
+            };
+            const auto stream_error = [] {
+                return errno != 0 ? std::error_code{errno, std::generic_category()}
+                                  : std::make_error_code(std::errc::io_error);
+            };
             std::filesystem::path temp = path;
             temp += ".tmp";
+            bool acquired = false;
+            bool renamed = false;
+            PPR_DEFER {
+                if (acquired and not renamed) {
+                    // Failed saves preserve the destination; removing the owned
+                    // staging file is best effort and must not replace the cause.
+                    std::error_code cleanup_error{};
+                    std::filesystem::remove(temp, cleanup_error);
+                    try {
+                        PPR_LOG_WARNING_ON_FAIL(GameDisplay, cleanup_error);
+                    } catch (...) {
+                        // Best-effort teardown diagnostics must not throw from
+                        // the scope guard or replace the original save failure.
+                        PPR_LOG(
+                            GameDisplay, warning,
+                            "display overlay staging cleanup failed; diagnostic details unavailable");
+                    }
+                }
+            };
             {
+                errno = 0;
                 std::ofstream out{temp, std::ios::binary | std::ios::trunc};
                 if (not out) {
-                    return std::make_error_code(std::errc::io_error);
+                    PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("open temporary file", stream_error()));
                 }
+                acquired = true;
+                errno = 0;
                 out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
                 out.flush();
                 if (not out) {
-                    return std::make_error_code(std::errc::io_error);
+                    PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("write temporary file", stream_error()));
                 }
+                errno = 0;
                 out.close();
                 if (not out) {
-                    return std::make_error_code(std::errc::io_error);
+                    PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("close temporary file", stream_error()));
                 }
             }
             std::error_code rename_error{};
             std::filesystem::rename(temp, path, rename_error);
-            return rename_error;
+            if (rename_error) {
+                PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("replace destination", rename_error));
+            }
+            renamed = true;
+            return {};
         } catch (...) {
-            return std::make_error_code(std::errc::io_error);
+            const auto error = operational_error ? operational_error : displayException();
+            try {
+                PPR_LOG(
+                    GameDisplay, error, "display overlay write exception",
+                    {{"path", std::basic_string_view<std::filesystem::path::value_type>{path.native()}},
+                        {"category", error.category().name()}, {"code", error.value()}});
+                PPR_RETURN_ERROR_ON_FAIL(GameDisplay, error);
+            } catch (...) {
+                // Best-effort diagnostics can also exhaust memory. Preserve
+                // the save result instead of terminating from this noexcept boundary.
+                PPR_LOG(
+                    GameDisplay, error, "display overlay save failed; diagnostic details unavailable",
+                    {{"category", error.category().name()}, {"code", error.value()}});
+            }
+            return error;
         }
     }
 
     Expected<std::optional<config::Layer>> loadOverlayLayer(
         const std::filesystem::path &path, config::Diagnostics &diagnostics) {
         auto bytes = readOverlayBytes(path, diagnostics);
-        if (not bytes) {
-            return std::unexpected{bytes.error()};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, bytes);
         if (not bytes->has_value()) {
             return std::optional<config::Layer>{std::nullopt};
         }
         auto document = config::decode(**bytes, path.string(), diagnostics);
-        if (not document) {
-            return std::unexpected{document.error()};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, document);
         return std::optional<config::Layer>{
             config::toLayer(std::move(*document), "user-overlay(" + path.string() + ")")};
     }
@@ -295,7 +347,8 @@ namespace pP::game {
         try {
             return hal::process::currentExecutablePath().parent_path() / kDisplayOverlayFileName;
         } catch (...) {
-            return std::unexpected{std::make_error_code(std::errc::io_error)};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, displayException());
+            std::unreachable(); // Exception translation always produces failure.
         }
     }
 
@@ -420,11 +473,13 @@ namespace pP::game {
     Expected<std::string> readOverlayBytes(
         std::istream &stream, const std::uintmax_t size, const std::filesystem::path &path,
         config::Diagnostics &diagnostics) {
-        const auto failure = [&]() -> Expected<std::string> {
-            const std::error_code error = config::make_error_code(config::EConfigErrc::codec_error);
+        const auto failure = [&](const std::error_code error = config::make_error_code(
+                                     config::EConfigErrc::codec_error)) -> Expected<std::string> {
             diagnostics.add(
                 path.string(), "", "cannot read picture-settings file '" + path.string() + "'", error, "user-settings");
-            return std::unexpected{error};
+            PPR_LOG(GameDisplay, error, "display overlay read failed", {{"path", path.string()}});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, error);
+            std::unreachable(); // Every caller supplies a read failure.
         };
         try {
             std::string bytes{};
@@ -445,7 +500,7 @@ namespace pP::game {
             }
             return bytes;
         } catch (...) {
-            return failure();
+            return failure(displayException());
         }
     }
 
@@ -460,7 +515,8 @@ namespace pP::game {
             diagnostics.add(
                 path.string(), "", "cannot probe picture-settings file '" + path.string() + "'",
                 config::make_error_code(config::EConfigErrc::codec_error), "user-settings");
-            return std::unexpected{config::make_error_code(config::EConfigErrc::codec_error)};
+            PPR_LOG(GameDisplay, error, "display overlay file unavailable", {{"path", path.string()}});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, config::make_error_code(config::EConfigErrc::codec_error));
         }
         if (not present) {
             return std::optional<std::string>{std::nullopt};
@@ -470,7 +526,8 @@ namespace pP::game {
             diagnostics.add(
                 path.string(), "", "cannot open picture-settings file '" + path.string() + "'",
                 config::make_error_code(config::EConfigErrc::codec_error), "user-settings");
-            return std::unexpected{config::make_error_code(config::EConfigErrc::codec_error)};
+            PPR_LOG(GameDisplay, error, "display overlay file unavailable", {{"path", path.string()}});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, config::make_error_code(config::EConfigErrc::codec_error));
         }
         std::error_code size_error{};
         const std::uintmax_t size = std::filesystem::file_size(path, size_error);
@@ -478,12 +535,11 @@ namespace pP::game {
             diagnostics.add(
                 path.string(), "", "cannot read picture-settings file '" + path.string() + "'",
                 config::make_error_code(config::EConfigErrc::codec_error), "user-settings");
-            return std::unexpected{config::make_error_code(config::EConfigErrc::codec_error)};
+            PPR_LOG(GameDisplay, error, "display overlay file unavailable", {{"path", path.string()}});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, config::make_error_code(config::EConfigErrc::codec_error));
         }
         auto bytes = readOverlayBytes(file, size, path, diagnostics);
-        if (not bytes) {
-            return std::unexpected{bytes.error()};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, bytes);
         return std::optional<std::string>{std::move(*bytes)};
     }
 

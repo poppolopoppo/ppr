@@ -230,7 +230,7 @@ namespace demo {
                 m_present_full_refresh = true;
                 return error;
             } catch (const std::system_error &error) {
-                return error.code();
+                return error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable);
             }
         }
 
@@ -970,15 +970,24 @@ namespace demo {
             } catch (const std::bad_alloc &) {
                 return std::make_error_code(std::errc::not_enough_memory);
             } catch (const std::system_error &error) {
-                return error.code();
+                return error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable);
             } catch (...) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
         }
 
         void retainInputError_(const std::error_code error) noexcept {
-            if (not m_input_error) {
-                m_input_error = error;
+            try {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, m_input_error, error);
+            } catch (...) {
+                // Best-effort diagnostic formatting must not replace the originating
+                // failure or terminate this caller-thread reporting boundary.
+                if (error and not m_input_error) {
+                    m_input_error = error;
+                }
+                PPR_LOG(
+                    Demo, error, "game input failed; diagnostic details unavailable",
+                    {{"category", error.category().name()}, {"code", error.value()}});
             }
         }
 
@@ -1004,8 +1013,23 @@ namespace demo {
         /// bounded lifetime as postNotice_; failures carry their code for
         /// the muted suffix, successes state their result.
         void postDisplayNotice_(const std::string_view text, const std::error_code error) noexcept {
-            retainInputError_(error);
+            // A rejected user action leaves the game usable. Operational failures
+            // that prevent further updates are retained explicitly by the caller.
             m_ui_state.m_notice.m_error = error;
+            if (error) {
+                try {
+                    PPR_LOG(
+                        Demo, error, "game action rejected",
+                        {{"reason", text}, {"category", error.category().name()}, {"code", error.value()},
+                            {"message", error.message()}});
+                } catch (...) {
+                    // Diagnostic text is best effort; the rejected action's code
+                    // and borrowed context remain reportable without allocation.
+                    PPR_LOG(
+                        Demo, error, "game action rejected; diagnostic details unavailable",
+                        {{"reason", text}, {"category", error.category().name()}, {"code", error.value()}});
+                }
+            }
             try {
                 m_ui_state.m_notice.m_text = text;
                 m_ui_state.m_notice.m_seconds_left = colony::kNoticeSeconds;
@@ -1063,7 +1087,8 @@ namespace demo {
                 auto candidate = game::validateDisplayDraft(
                     displayController().resolved(), draft, capabilities, diagnostics);
                 if (not candidate) {
-                    retainInputError_(candidate.error());
+                    // Validation rejected the draft before any native mutation.
+                    // Keep the committed picture and let the user correct it.
                     const std::string reason = displayRejectionText_(diagnostics);
                     session.m_last_error = reason;
                     postDisplayNotice_(reason, candidate.error());
@@ -1298,17 +1323,18 @@ namespace demo {
                 colony::ColonyDisplaySession &session = m_ui_state.m_display;
                 auto overlay_path = game::resolveDisplayOverlayPath();
                 if (not overlay_path) {
-                    retainInputError_(overlay_path.error());
                     session.m_last_error = "Picture settings NOT saved: the program folder is unavailable.";
                     postDisplayNotice_(session.m_last_error, overlay_path.error());
                     return;
                 }
+                // Persistence failure rejects this action without invalidating
+                // the live picture or stopping further game updates.
+                PPR_LOG(Demo, info, "saving display overlay", {{"path", overlay_path->string()}});
                 config::Diagnostics diagnostics{};
                 config::Document existing{};
                 {
                     auto prior = game::readOverlayBytes(*overlay_path, diagnostics);
                     if (not prior) {
-                        retainInputError_(prior.error());
                         session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
                                                "refusing to overwrite it.";
                         postDisplayNotice_(session.m_last_error, prior.error());
@@ -1317,7 +1343,6 @@ namespace demo {
                     if (prior->has_value()) {
                         auto decoded = config::decode(**prior, overlay_path->string(), diagnostics);
                         if (not decoded) {
-                            retainInputError_(decoded.error());
                             session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
                                                    "refusing to overwrite it.";
                             postDisplayNotice_(session.m_last_error, decoded.error());
@@ -1328,20 +1353,17 @@ namespace demo {
                 }
                 auto merged = game::buildDisplayOverlayDocument(existing, displayController().committed());
                 if (not merged) {
-                    retainInputError_(merged.error());
                     session.m_last_error = "Picture settings NOT saved: " + merged.error().message() + ".";
                     postDisplayNotice_(session.m_last_error, merged.error());
                     return;
                 }
                 auto bytes = game::encodeDisplayOverlay(*merged);
                 if (not bytes) {
-                    retainInputError_(bytes.error());
                     session.m_last_error = "Picture settings NOT saved: " + bytes.error().message() + ".";
                     postDisplayNotice_(session.m_last_error, bytes.error());
                     return;
                 }
                 if (const std::error_code error = game::writeFileAtomically(*overlay_path, *bytes)) {
-                    retainInputError_(error);
                     session.m_last_error = "Picture settings NOT saved: " + error.message() + ".";
                     postDisplayNotice_(session.m_last_error, error);
                     return;
@@ -2853,9 +2875,7 @@ namespace demo {
             // and present run in render(), after this body, so the submits below
             // still land in the same frame's render.
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
-            if (m_input_error) [[unlikely]] {
-                return m_input_error;
-            }
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
 
             // Non-admitted frames never reach update(): the run-level gate
             // leaves busy frames before the whole virtual stage, and

@@ -8,6 +8,7 @@ import game.tests;
 
 namespace {
     thread_local int allocations_before_failure = -1;
+    thread_local unsigned long long allocation_count = 0u;
 }
 
 void pP::game::tests::failAllocationAfter(const int successful_allocations) noexcept {
@@ -18,7 +19,12 @@ void pP::game::tests::clearAllocationFailure() noexcept {
     allocations_before_failure = -1;
 }
 
+unsigned long long pP::game::tests::allocationCount() noexcept {
+    return allocation_count;
+}
+
 void *operator new(const std::size_t size) {
+    ++allocation_count;
     if (allocations_before_failure == 0) {
         allocations_before_failure = -1;
         throw std::bad_alloc{};
