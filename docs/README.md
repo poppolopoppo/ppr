@@ -9,6 +9,7 @@
 
 ## Current entry points
 
+- [Custom logger, public macros, and mandatory error propagation](logging-and-errors.md)
 - [Engine dependency map](../lib/engine/codemap.md)
 - [Application lifecycle/ownership](../lib/engine/app/codemap.md)
 - [Render worker and payload boundary](../lib/engine/app/frame/codemap.md)

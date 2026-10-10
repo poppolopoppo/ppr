@@ -97,6 +97,22 @@ work in that area.
 
 ## Errors and operational boundaries
 
+- Use the custom logger and public macros in `include/pP/Macros.h` for engine
+  diagnostics; see [logging and error propagation](docs/logging-and-errors.md)
+  for category setup, structured fields, filtering, and macro semantics.
+- Error-returning functions must use the applicable `PPR_RETURN_ERROR_ON_FAIL`,
+  `PPR_RETURN_UNEXPECTED_ON_FAIL`, or `PPR_RETURN_ON_FAIL` macro for ordinary
+  failure propagation and immediate error returns. This includes locally
+  produced error codes, not only failures returned by callees. For best-effort
+  cleanup, use `PPR_RETAIN_ERROR_ON_FAIL` to attempt all independent cleanup and
+  preserve the first error, then return the retained code. Explicit branches are
+  required when recovery, expected absence, error translation, or cleanup must
+  occur before returning; document that handling and propagate the final error
+  with the applicable macro. Do not replace these macros with handwritten
+  log-and-return checks. `PPR_LOG_WARNING_ON_FAIL` is only for deliberately
+  nonfatal failures and does not propagate an error. Success returns remain
+  ordinary returns. The header's names end in `_ON_FAIL`; there is no
+  `PPR_RETURN_ERROR_IF_FAILED` macro.
 - Use `std::error_code` for no-value lifecycle and operational actions:
   filesystem, process, platform/HAL, GPU/shader, service initialization, and
   shutdown. Value-producing recoverable operations use

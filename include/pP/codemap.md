@@ -8,6 +8,9 @@ portability, assertions, logging, error-propagation returns, and RAII helpers.
 
 ## Design
 
+Usage and behavior: [logging and error propagation](../../docs/logging-and-errors.md).
+Mandatory diagnostic and error-return policy lives in [AGENTS.md](../../AGENTS.md#errors-and-operational-boundaries).
+
 - **Build-mode detection**: `PPR_ENABLE_DEBUG` (`_DEBUG`/`!NDEBUG`) with `PPR_DECL_IF_DEBUG`/`PPR_EXPR_IF_DEBUG`;
   `PPR_ENABLE_SAFE_OBJECT_TRACKING` when ASAN (`PPR_ENABLE_SANITIZER_ADDRESS`);
   `PPR_ENABLE_MEMORY_POISONING` when debug; `PPR_ENABLE_ASSERTIONS`
