@@ -16,12 +16,11 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.pathfinding` | `Pathfinding.cppm/.cpp` | Bounded resumable BFS over vacuum cells |
 | `game.colony.digtool` | `DigTool.cppm/.cpp` | Rectangular dig edits |
 | `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp` | Owned simulation snapshots for presentation, coherence checks, grid staging |
-| `game.colony.translator` | `ColonyTranslator.cppm/.cpp` | Resident-chunk translation/cache revisions, presentation invalidation and timing |
+| `game.colony.translator` | `ColonyTranslator.cppm/.cpp` | Resident-chunk translation/cache revisions, presentation invalidation |
 | `game.colony.panel` | `ColonyPanel.cppm/.cpp` | ImGui views/state/intents; no renderer/service resolution |
-| `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke and sustained load host |
-| `game.colony.timetrials` | `TimeTrials.cppm/.cpp` | Deterministic CPU-only trial runner |
+| `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke |
 
-Check each `export module` declaration and `../CMakeLists.txt` for exact module names/registration. `Colony.Elements.h` owns element IDs (vacuum is 0). `StageTiming.h` is a diagnostic side channel shared by driver, translator and trials; its counter rows are call counts, not durations.
+Check each `export module` declaration and `../CMakeLists.txt` for exact module names/registration. `Colony.Elements.h` owns element IDs (vacuum is 0).
 
 ## Simulation and presentation contracts
 
@@ -33,4 +32,4 @@ Translator's submitted/resident counts are not frustum-visible counts. Cache inv
 
 `ColonyPanel` consumes views and returns intents/chrome; the main client applies actions. Display draft/persistence policy lives in `../Game.Display.*`. Pathfinding/build bounds and diagnostic row inventories live in their declarations; avoid duplicating stale numeric inventories here.
 
-`ColonySmoke` supplies `runColonySmoke(SmokeOptions)` and `runLoad100`; `TimeTrials` supplies `runTimeTrials`. The smoke/load paths use GPU resources; trials exercise the driver without rendering. Their workload checks and CSV formats are defined in the implementations, not by proposed clone/particle designs.
+`ColonySmoke` supplies `runColonySmoke(SmokeOptions)` and verifies deterministic simulation contracts plus offscreen GPU readback. Platform profiler markers remain available for performance investigations.

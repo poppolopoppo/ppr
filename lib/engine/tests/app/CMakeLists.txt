@@ -66,7 +66,7 @@ setup_ppr_project(engine.tests.app
 )
 
 # ColonyDriver links physics privately (same shape as engine.tests.sim);
-# the colony headers include StageTiming.h/Colony.Elements.h by relative name.
+# the colony headers include Colony.Elements.h by relative name.
 target_link_libraries(engine.tests.app PRIVATE engine.physics)
 
 target_include_directories(engine.tests.app PRIVATE

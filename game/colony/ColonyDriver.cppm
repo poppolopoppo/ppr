@@ -1,5 +1,4 @@
 module;
-#include "StageTiming.h"
 
 export module game.colony.driver;
 
@@ -130,7 +129,6 @@ export namespace pP::colony {
         const char *m_step_stage{""};
         bool m_steps_bound{false};
         bool m_physics_ready{false};
-        StageTimings m_timings{};
 
     private:
         std::error_code initPhysics();
@@ -235,14 +233,6 @@ export namespace pP::colony {
             return m_step_stage;
         }
 
-        /// Accumulated per-stage wall-clock timings (observation only; never
-        /// merged with the translator's submit-side table. Submit runs on the
-        /// presentation boundary with its own lifetime, so both tables are
-        /// reported side by side instead of summed).
-        [[nodiscard]] const StageTimings &stageTimings() const noexcept;
-
-        /// Clears the accumulated stage timings (same paths as clearToolState).
-        void resetStageTimings() noexcept;
 
         /// Cached counters from the last committed tick or edit (panel-safe).
         [[nodiscard]] PathCounts pathCounts() const noexcept;

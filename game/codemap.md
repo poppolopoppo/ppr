@@ -2,11 +2,11 @@
 
 ## Responsibility
 
-`app.game` is the reference client for PPR: an interactive generated colony plus headless smoke/load/time-trial commands. It owns game state and policy, not engine infrastructure. `demo::TurboLarbin : ApplicationEditor` owns the colony driver, translator, simulation packet, tool/selection/follow state, game input mapping, and display drafts/persistence. The editor base owns window, player, camera, viewport, UI service and both render passes.
+`app.game` is the reference client for PPR: an interactive generated colony plus headless smoke checks. It owns game state and policy, not engine infrastructure. `demo::TurboLarbin : ApplicationEditor` owns the colony driver, simulation packet, tool/selection/follow state, game input mapping, and display drafts/persistence. The editor base owns window, player, camera, viewport, UI service and both render passes.
 
 ## Entry and configuration
 
-- `main.cpp`: resolves invocation through `Game.Config.*`, loads the display overlay through `Game.Display.*`, applies explicitly supplied startup validation settings before GPU work, and dispatches the selected command. Help is generated from schema declarations; invalid usage exits 2. Smoke returns its error value; load/time-trials return their error value or zero. Interactive `app.run()` errors are printed and returned; unexpected exceptions escaping that boundary invoke `hal::fatalExit`.
+- `main.cpp`: resolves invocation through `Game.Config.*`, loads the display overlay through `Game.Display.*`, applies explicitly supplied startup validation settings before GPU work, and dispatches the selected command. Help is generated from schema declarations; invalid usage exits 2. Smoke returns its error value. Interactive `app.run()` errors are printed and returned; unexpected exceptions escaping that boundary invoke `hal::fatalExit`.
 - `Game.Config.cppm/.cpp` (`game.config`): typed game command/profile/exit schema, combined CLI and configuration resolution. Distinct command selectors conflict; they are not gameplay toggles. Use `--help` and declarations for the current option set.
 - `Game.Display.cppm/.cpp` (`game.display`): draft validation/provenance, persistable overlay merge/encode/atomic write, overlay load, and injected-time Keep/Revert state. Overlay precedence is base < overlay < environment < CLI. The panel produces intents; application-level generation/ack checks govern native/surface changes. See [DisplayControls](../lib/engine/app/DisplayControls.md).
 
@@ -22,15 +22,14 @@ Controls and panel intents are declared in `main.cpp` and `colony/ColonyPanel.*`
 
 ## Colony modules and workloads
 
-See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` modules. Driver/simulation code is renderer-independent; `SimFramePacket` and translator bridge to owned presentation data. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
+See [colony/codemap.md](colony/codemap.md) for the eleven `game.colony.*` modules. Driver/simulation code is renderer-independent; `SimFramePacket` and translator bridge to owned presentation data. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
 
 - `--smoke`: separate headless rendering-enabled Application, generated-cell offscreen readback.
-- `--load100`: sustained 100-agent driver + translator/GridPass workload with CSV timing and scripted pan checks.
-- `--time-trials`: deterministic CPU driver trials and CSV output; no renderer/translator.
-- Interactive `--profile*`: fixture setup and live timing; current options come from `Game.Config.*`.
+- `--profile100`: interactive 100-agent fixture for external profilers; `--exit-after S` bounds the run.
+- CSV timing, scripted profiling edits/pan, load/time-trial commands and game-local exception interception are retired. HAL profiler scopes and crash handling remain.
 
 ## Build and tests
 
-`CMakeLists.txt` registers twelve colony modules plus `game.config` and `game.display`, their implementations and `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. POST_BUILD stages shaders, textures and meshes when present.
+`CMakeLists.txt` registers eleven colony modules plus `game.config` and `game.display`, their implementations and `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. POST_BUILD stages shaders, textures and meshes when present.
 
 `game.tests` registers `GameConfigUnitTests` unless tests are explicitly disabled. `Game.Config.Tests.cpp` covers invocation compatibility, source precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and Keep/Revert. Engine test targets never depend on these game modules.

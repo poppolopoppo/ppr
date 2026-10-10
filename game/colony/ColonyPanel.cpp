@@ -1,7 +1,6 @@
 module;
 
 #include "Colony.Elements.h"
-#include "StageTiming.h"
 
 module game.colony.panel;
 
@@ -843,45 +842,7 @@ namespace pP::colony {
             }
         }
 
-        /// One timing table: a header, then only the stages that actually
-        /// ran (so a paused tab shows what ran and nothing else). Timed
-        /// stages print calls / mean / max / total in wall-clock us;
-        /// counter rows are classified by the shared `stageIsCounter` and
-        /// print counts only - they never carry microseconds (0 us by
-        /// construction), so an accumulated count can never read as time.
-        void drawStageRows_(const std::span<const StageStat> stats) {
-            ImGui::TextDisabled("%-24s %7s %8s %8s %9s", "stage", "calls", "mean us", "max us", "total us");
-            for (std::size_t index = 0u; index < stats.size(); ++index) {
-                const StageStat &stat = stats[index];
-                if (stat.m_calls == 0u) {
-                    continue;
-                }
-                const Stage stage = static_cast<Stage>(index);
-                const char *name = stageName(stage);
-                // Every row shares the "Colony." prefix; trim it for width.
-                if (std::strncmp(name, "Colony.", 7u) == 0) {
-                    name += 7u;
-                }
-                const auto calls = static_cast<unsigned long long>(stat.m_calls);
-                if (stageIsCounter(stage)) {
-                    ImGui::Text("%-24s %7llu counts", name, calls);
-                    continue;
-                }
-
-                const auto total = static_cast<unsigned long long>(stat.m_microseconds);
-                const auto worst = static_cast<unsigned long long>(stat.m_max_us);
-                const double mean_us = static_cast<double>(stat.m_microseconds) / static_cast<double>(stat.m_calls);
-                ImGui::Text("%-24s %7llu %8.1f %8llu %9llu", name, calls, mean_us, worst, total);
-            }
-        }
-
-        /// Performance section: four headed sections whose headers state
-        /// their own measurement boundary, then the two stage tables. Every
-        /// number comes from the view's bounded snapshot (nothing extra is
-        /// measured per frame, so the tab costs the same while paused or
-        /// under a profiling workload), no GPU figure exists anywhere (no
-        /// timestamp query is collected), and a row never implies CPU cost
-        /// unless its label says so.
+        /// Bounded performance and operational diagnostics for the current view.
         void drawPerformance_(const ColonyUiView &view) {
             const ColonyPerfView &perf = view.m_perf;
 
@@ -932,14 +893,7 @@ namespace pP::colony {
             ImGui::Text("Dig wait   %llu pending", static_cast<unsigned long long>(perf.m_dig_pending_est));
             ImGui::TextDisabled("Pending is issued minus applied - an upper bound, restarted by regen.");
 
-            ImGui::SeparatorText("Driver stages");
-            drawStageRows_(view.m_driver_stages);
 
-            ImGui::SeparatorText("Presentation stages (translator)");
-            drawStageRows_(view.m_presentation_stages);
-
-            ImGui::Spacing();
-            ImGui::TextDisabled("Wall-clock us for timed stages; counts for counters. Both tables reset on regen.");
         }
 
         /// Right side panel: section buttons, the persistent Inspector above

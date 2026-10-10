@@ -1,6 +1,5 @@
 #include "pP/Macros.h"
 #include "colony/Colony.Elements.h"
-#include "colony/StageTiming.h"
 
 import engine.app;
 import engine.core;
@@ -18,7 +17,6 @@ import game.colony.translator;
 import game.colony.panel;
 import game.colony.pathfinding;
 import game.colony.smoke;
-import game.colony.timetrials;
 import game.config;
 import game.display;
 
@@ -26,43 +24,8 @@ namespace demo {
     using namespace pP;
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
 
-    // Slice 6 scripted workloads (measurement fixtures only; every flag off
-    // preserves the production loop byte-identically). The edit table/period
-    // are read-only copies of the S2 wall-building values in TimeTrials.cpp
-    // (fixed 8x2 rock rects, period 30 frames); the trials runner itself is
-    // never invoked from here.
-    inline constexpr sim::GlobalCellPos kProfileWallRects[4] = {
-        {2000u, 2000u},
-        {2016u, 2000u},
-        {2000u, 2016u},
-        {2016u, 2016u},
-    };
-    inline constexpr u32 kProfileWallWidth = 8u;
-    inline constexpr u32 kProfileWallHeight = 2u;
-    inline constexpr u32 kProfileWallCells = kProfileWallWidth * kProfileWallHeight;
-    inline constexpr u32 kProfileEditPeriod = 30u;
-    // Pan route: world-unit deltas (1 world unit == 1 cell) applied every 60
-    // frames; the four steps sum to zero, so the route is bounded and stays
-    // in-world around the 2048,2048 start. Open-loop: concurrent user camera
-    // input is assumed absent during capture (a user pan between waypoints
-    // shifts the subsequent snap origin).
-    inline constexpr u32 kProfilePanPeriod = 60u;
-    const float3 kProfilePanDeltas[4] = {
-        float3{256.0f, 0.0f, 0.0f},
-        float3{0.0f, 256.0f, 0.0f},
-        float3{-256.0f, 0.0f, 0.0f},
-        float3{0.0f, -256.0f, 0.0f},
-    };
-
     class TurboLarbin final : public ApplicationEditor {
-        // P2 posture (deliberate): windowed Editor host — inherits the
-        // dedicated render lane and the build (client) / execute (lane)
-        // split. The colony translator still submits on main inside
-        // update(); moving game-owned translation onto the lane is a
-        // game-side follow-up (its cache stays render-confined either way,
-        // and snapshots stay in game/).
         colony::ColonyDriver m_driver{};
-        colony::ColonyTranslator m_translator{};
         TriangleBagHandle m_quad_bag{};
         MaterialHandle m_agent_material{};
         MaterialHandle m_path_material{};
@@ -99,31 +62,11 @@ namespace demo {
         bool m_driver_ready{false};
         bool m_debug_draw_ready{false};
         u32 m_agent_count{colony::kAgentCount};
-        bool m_profile_csv_active{false};
-        u64 m_profile_csv_remaining{0u};
-        u64 m_profile_csv_total{0u};
-        std::string m_profile_label{"live"};
-        std::vector<u64> m_profile_frame_us{};
-        u64 m_profile_backlog_frames{0u};
-        // Slice 6b (ora-25 entry telemetry): bounded raw update-body records
-        // capped at the requested frame count; samples past the cap count
-        // here so the CSV reports the shed instead of hiding it.
-        u64 m_profile_frame_dropped{0u};
-        // Slice 6 windows: first K frames run fully but are excluded from the
-        // frame vector and both stage tables (counted nowhere); the N-frame
-        // countdown below runs on measured (post-skip) frames only, so the
-        // run totals K + N frames. K = 0 preserves current behavior.
-        u64 m_profile_skip{0u};
-        u64 m_profile_frame_index{0u};
-        bool m_profile_edits{false};
-        bool m_profile_pan{false};
         // Bounded-run fixture: `--auto-exit S` (alias `--exit-after S`) exits
         // gracefully after S wall-clock seconds from the first update();
         // the start stamps lazily to avoid pre-initialize issues.
         std::optional<TimeDuration> m_auto_exit_seconds{};
-        // Non-owning view of the editor-owned pan controller (stashed at
-        // initialize, cleared before super shutdown); the scripted pan
-        // route snaps it with teleport so each waypoint lands exactly.
+        // Borrowed from the editor; released before editor shutdown.
         safe_ptr<PanCameraController> m_pan_controller{};
         // Tool gesture ownership (interaction contract items 2+5). Press
         // snapshots ownership (world vs UI/camera) with the active tool and
@@ -227,17 +170,7 @@ namespace demo {
         float m_frame_avg{0.0f};
         float m_frame_max{0.0f};
         u64 m_frame_count{0u};
-        // Bounded game UI lane split: main-lane (update-body wall time on
-        // the main thread) and render-lane (last completed lane execution
-        // on the worker, via RenderLane's display-only gauge) last values
-        // in ms. The inter-frame total above stays the cadence reference;
-        // avg/max/ring below are untouched. steady_clock reads only, no
-        // allocation. m_render_ms_last below remains the render-body wall
-        // time on main (handoff cost on the worker path, full execution
-        // through present on the inline path): it is never displayed as
-        // lane time — every readout sources render from laneExecuteMs_().
         float m_main_ms_last{0.0f};
-        float m_render_ms_last{0.0f};
 
         // Single source of truth for every render-lane readout (the
         // overlay below and the Performance tab): the worker-published
@@ -261,7 +194,7 @@ namespace demo {
         // window (nearest-rank; O(n log n), n <= 240). Sampling continues
         // while paused (frames still tick); sim step counters freeze
         // naturally in the driver. The ring never resets except by its own
-        // overwrite window; the CLI CSV accumulators are untouched.
+        // overwrite window.
         static constexpr std::size_t kFrameWindow = 240u;
         static constexpr u64 kFrameStatsEvery = 15u;
         static constexpr float kFrameBudgetMs = 1000.0f / 60.0f;
@@ -286,7 +219,7 @@ namespace demo {
         // engine.app must not link sim, so the sim-carrying packet lives
         // here). Single-use per frame; cleared after the overlay phase.
         std::optional<colony::SimFramePacket> m_sim_packet{};
-        // A present failure (or translator reset) invalidates the pass cache, so
+        // A present failure or world regeneration invalidates the pass cache, so
         // the next frame's packet must carry every resident chunk's cells.
         bool m_present_full_refresh{false};
         // A pass cache drop requested on main rides the next staged
@@ -314,11 +247,7 @@ namespace demo {
                         {"seed", seed},
                     });
                 const std::error_code error = m_driver.regenerate(seed);
-                // Translator state is main-side metadata only (its cached
-                // revisions live for panel/CSV reads); the pass cache drop
-                // rides the next staged payload's m_reset_caches onto the
-                // owner lane, and its full world seed flags into the same
-                // settlement envelope consumed above.
+                // Reset the render-owned pass cache through the next staged payload.
                 m_grid_reset_pending = true;
                 m_present_full_refresh = true;
                 return error;
@@ -388,13 +317,6 @@ namespace demo {
                     if (m_tool.m_accepted_click.has_value()) {
                         m_tool.m_visited.push_back(*m_tool.m_accepted_click);
                         m_tool.m_last_cell = m_tool.m_accepted_click;
-                        PPR_LOG(
-                            Demo, info, "tool accepted",
-                            {
-                                {"slot", "click"},
-                                {"x", m_tool.m_accepted_click->m_x},
-                                {"y", m_tool.m_accepted_click->m_y},
-                            });
                     }
                     return;
                 }
@@ -468,13 +390,6 @@ namespace demo {
                     m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
                 }
                 m_tool.m_drag_queue.push_back(*cell);
-                PPR_LOG(
-                    Demo, info, "tool accepted",
-                    {
-                        {"slot", "drag"},
-                        {"x", cell->m_x},
-                        {"y", cell->m_y},
-                    });
             } catch (...) {
                 retainInputError_(currentException_());
                 cancelToolGesture_();
@@ -947,11 +862,7 @@ namespace demo {
                         m_ui_state.m_regen_confirm_open = true;
                         break;
                     }
-                    // Deferred to the top of the next update(): regenerate +
-                    // translator.reset must run BEFORE that frame's
-                    // present/submit (the phase order the old R key had),
-                    // otherwise reset() clears the tiles this frame already
-                    // submitted and render() shows one blank terrain frame.
+                    // Regenerate before the next update stages the new world.
                     m_regen_pending = true;
                     break;
 
@@ -2049,7 +1960,7 @@ namespace demo {
             }
 
             // Observation only: samples/statistics never drive simulation,
-            // admission, or profiling-success decisions. Failed insertions do
+            // or admission decisions. Failed insertions do
             // not advance the ring; the previous statistics remain stale.
             // Sampling continues while paused - frames still tick; only the
             // sim step counters freeze, naturally, in the driver.
@@ -2106,12 +2017,12 @@ namespace demo {
                 m_frame_stats_frame = m_frame_count;
                 m_frame_stats_stale = false;
             } catch (...) {
+                // Best-effort diagnostic statistics retain their stale flag.
             }
         }
 
         [[nodiscard]] std::error_code drawPanel_() {
-            // The translator's count is submitted/resident, not frustum-visible.
-            // Plan the same chunk-sized tiles against the editor's current snapshot.
+            // Determine visible chunk tiles from the current camera snapshot.
             Array<GridTileSubmission> submissions{};
             submissions.reserve(sim::kChunkCount);
             const sim::ChunkGrid &grid = m_driver.grid();
@@ -2220,11 +2131,7 @@ namespace demo {
                         .m_sim_ms = sim_ms,
                         .m_paused = m_driver.paused(),
                         .m_speed = m_driver.speed(),
-                        // Present preparation stages from the owned packet (not
-                        // translator.submit), so the translator's submit
-                        // counter no longer advances: report the lane-published
-                        // staged tile count (the editor's settlement mirror),
-                        // which is the same staged set.
+                        // Read render-owned counts from completed lane results.
                         .m_submitted_chunks = renderDiagnostics().m_grid_staged_tiles,
                         .m_total_chunks = colony::ColonyTranslator::totalChunks(),
                         .m_staged_tiles = renderDiagnostics().m_grid_staged_tiles,
@@ -2252,8 +2159,6 @@ namespace demo {
                 .m_hovered_agent = m_hovered_agent,
                 .m_following = following,
                 .m_agent_needs = m_agent_needs_rows,
-                .m_driver_stages = std::span<const colony::StageStat>{m_driver.stageTimings().m_stats},
-                .m_presentation_stages = std::span<const colony::StageStat>{m_translator.stageTimings().m_stats},
             };
 
             // Display snapshot: the copied controller view (§5.1 requested
@@ -2322,52 +2227,6 @@ namespace demo {
             m_agent_count = count;
         }
 
-        /// Live CSV fixture: after N measured (post-skip) frames print the
-        /// driver+translator timing CSVs and exit(0). 0 disables. Live dt is
-        /// real-time, so frame/tick counts vary run to run; the CSV shapes
-        /// match the trials runner.
-        [[nodiscard]] std::error_code setProfileCsvFrames(const u64 frames) noexcept {
-            if (frames > std::numeric_limits<std::size_t>::max() or frames > m_profile_frame_us.max_size()) {
-                return std::make_error_code(std::errc::value_too_large);
-            }
-            try {
-                m_profile_frame_us.reserve(static_cast<std::size_t>(frames));
-            } catch (...) {
-                return currentException_();
-            }
-            m_profile_csv_active = frames > 0u;
-            m_profile_csv_remaining = frames;
-            m_profile_csv_total = frames;
-            m_profile_frame_us.clear();
-            m_profile_backlog_frames = 0u;
-            m_profile_frame_dropped = 0u;
-            m_profile_frame_index = 0u;
-            return {};
-        }
-
-        /// Skip window for the live CSV fixture: the first K frames run fully
-        /// but are excluded from the frame vector, the backlog count, and both
-        /// stage tables (the tables reset on window entry). 0 preserves
-        /// current behavior. The skip only shifts measurement; the edit/pan
-        /// schedules below always key off frame 0.
-        void setProfileSkip(const u64 frames) noexcept {
-            m_profile_skip = frames;
-        }
-
-        /// Scripted edit workload: every 30 frames alternate buildWall /
-        /// demolish on the rotating rock rects above (S2 schedule, frame 0
-        /// first), so edit-induced backlog lands inside measured windows.
-        void setProfileEdits(const bool enabled) noexcept {
-            m_profile_edits = enabled;
-        }
-
-        /// Scripted pan workload: every 60 frames snap the main camera along
-        /// the zero-sum waypoint route above (frame 0 first). Open-loop; see
-        /// the route note for the no-user-input assumption.
-        void setProfilePan(const bool enabled) noexcept {
-            m_profile_pan = enabled;
-        }
-
         /// Bounded run: exit gracefully after the given wall-clock seconds
         /// from the first update() (lazy start). Non-positive, NaN, and
         /// infinite values are rejected at the CLI; the setter stores as-is.
@@ -2386,139 +2245,6 @@ namespace demo {
         /// once in main(); runtime edits never touch it.
         void noteDisplayStartup(const config::Resolved<DisplaySettings> &baseline) {
             m_display_baseline = baseline;
-        }
-
-        /// Label attached to every profile-csv banner/frame line. Default "live".
-        void setProfileLabel(std::string label) {
-            m_profile_label = std::move(label);
-        }
-
-        static void printLiveTimingsCsv_(const colony::StageTimings &timings) {
-            std::println("stage,calls,total_us,mean_us,max_us");
-            for (std::size_t index = 0u; index < static_cast<std::size_t>(colony::Stage::Count); ++index) {
-                const colony::Stage stage = static_cast<colony::Stage>(index);
-                const colony::StageStat &stat = timings.m_stats[index];
-                const u64 calls = stat.m_calls;
-                const u64 total = stat.m_microseconds;
-                const double mean = calls > 0u ? static_cast<double>(total) / static_cast<double>(calls) : 0.0;
-                // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
-                // C3546 on this toolchain; output is byte-identical CSV.
-                std::printf(
-                    "%s,%llu,%llu,%.2f,%llu\n", colony::stageName(stage), static_cast<unsigned long long>(calls),
-                    static_cast<unsigned long long>(total), static_cast<double>(mean),
-                    static_cast<unsigned long long>(stat.m_max_us));
-            }
-        }
-
-        /// Active workload flags for the banners below (empty when every flag
-        /// is off, so default output stays byte-identical); keeps evidence
-        /// self-describing without touching the user label.
-        [[nodiscard]] std::string profileWorkloadSuffix_() const {
-            std::string suffix{};
-            if (m_profile_edits) {
-                suffix += " edits";
-            }
-            if (m_profile_pan) {
-                suffix += " pan";
-            }
-            if (m_profile_skip > 0u) {
-                suffix += pP::config::configFormat(" skip={}", m_profile_skip);
-            }
-            return suffix;
-        }
-
-        void printProfileCsv_() const {
-            const std::string workload = profileWorkloadSuffix_();
-            std::println(
-                stderr, "[profile-csv label={}{}] driver timings (live dt is real-time; frame counts vary)",
-                m_profile_label, workload);
-            printLiveTimingsCsv_(m_driver.stageTimings());
-            std::println(
-                stderr, "[profile-csv label={}{}] translator timings (live dt is real-time; frame counts vary)",
-                m_profile_label, workload);
-            printLiveTimingsCsv_(m_translator.stageTimings());
-            std::println(
-                stderr,
-                "[profile-csv label={}{}] update-body wall time "
-                "(NOT inter-frame/display cadence; live dt is real-time; frame counts vary)",
-                m_profile_label, workload);
-            printProfileFrameCsv_();
-            printProfileFrameRawCsv_();
-        }
-
-        void printProfileFrameRawCsv_() const {
-            // Raw per-frame update-body records in sample order (bounded to
-            // the requested frame count; shed samples count in
-            // m_profile_frame_dropped above, never silently). Printed once
-            // at export, never per-frame.
-            std::println("frame_sample_index,update_body_us");
-            for (std::size_t index = 0u; index < m_profile_frame_us.size(); ++index) {
-                // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
-                // C3546 on this toolchain; output is byte-identical CSV.
-                std::printf(
-                    "%llu,%llu\n", static_cast<unsigned long long>(index),
-                    static_cast<unsigned long long>(m_profile_frame_us[index]));
-            }
-        }
-
-        void printProfileFrameCsv_() const {
-            // Sorted copy percentiles (nearest-rank ceil); thresholds are
-            // 16.667ms / 33.333ms frame budgets; backlog counts frames ending
-            // with a non-empty collider queue.
-            const std::size_t count = m_profile_frame_us.size();
-            u64 p50 = 0u;
-            u64 p95 = 0u;
-            u64 p99 = 0u;
-            u64 p999 = 0u;
-            u64 max_us = 0u;
-            u64 over_16667 = 0u;
-            u64 over_33333 = 0u;
-            if (count > 0u) {
-                std::vector<u64> sorted = m_profile_frame_us;
-                std::sort(sorted.begin(), sorted.end());
-                const auto at_rank = [&sorted, count](const u64 percent) noexcept -> u64 {
-                    std::size_t index = (static_cast<std::size_t>(percent) * count + 99u) / 100u;
-                    index = index > 0u ? index - 1u : 0u;
-                    if (index >= count) {
-                        index = count - 1u;
-                    }
-                    return sorted[index];
-                };
-                const auto at_permill = [&sorted, count](const u64 permill) noexcept -> u64 {
-                    std::size_t index = (static_cast<std::size_t>(permill) * count + 999u) / 1000u;
-                    index = index > 0u ? index - 1u : 0u;
-                    if (index >= count) {
-                        index = count - 1u;
-                    }
-                    return sorted[index];
-                };
-                p50 = at_rank(50u);
-                p95 = at_rank(95u);
-                p99 = at_rank(99u);
-                p999 = at_permill(999u);
-                max_us = sorted[count - 1u];
-                for (const u64 value: sorted) {
-                    if (value > 16667u) {
-                        ++over_16667;
-                    }
-                    if (value > 33333u) {
-                        ++over_33333;
-                    }
-                }
-            }
-            std::println(
-                "frame_label,frames,p50_us,p95_us,p99_us,p999_us,max_us,over_16667,over_33333,backlog_frames,"
-                "raw_dropped");
-            // NOTE: see TimeTrials.cpp — printf dodges consteval _Format_checker
-            // C3546 on this toolchain; output is byte-identical CSV.
-            std::printf(
-                "%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", m_profile_label.c_str(),
-                static_cast<unsigned long long>(count), static_cast<unsigned long long>(p50),
-                static_cast<unsigned long long>(p95), static_cast<unsigned long long>(p99),
-                static_cast<unsigned long long>(p999), static_cast<unsigned long long>(max_us),
-                static_cast<unsigned long long>(over_16667), static_cast<unsigned long long>(over_33333),
-                static_cast<unsigned long long>(m_profile_backlog_frames),
-                static_cast<unsigned long long>(m_profile_frame_dropped));
         }
 
     protected:
@@ -2551,8 +2277,7 @@ namespace demo {
             camera_controller->setViewportSize(
                 float2{static_cast<float>(client.m_extent.x), static_cast<float>(client.m_extent.y)});
             camera_controller->translate(float3{2048.0f - half_width, 2048.0f - half_height, -0.5f}, true);
-            // Stash a non-owning view for the scripted pan route (the editor
-            // owns the controller after the move below).
+            // Borrow the controller for selection and follow controls.
             m_pan_controller.reset(camera_controller.get());
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, replaceMainCameraController(std::move(camera_controller), ECameraProjection::orthographic));
@@ -2560,11 +2285,7 @@ namespace demo {
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
 
-            // Phase: auto-exit. Bounded runs (`--auto-exit S`, alias
-            // `--exit-after S`) exit gracefully after S wall-clock seconds
-            // from the first update(); the start stamps lazily on first
-            // entry. Graceful requestExit, never std::exit — the same
-            // teardown rule as the CSV exit above.
+            // Bounded runs request normal shutdown through the application timer.
             if (m_auto_exit_seconds.has_value()) {
                 PPR_LOG(Demo, warning, "auto-exit timeout setup", {{"timeout_s", m_auto_exit_seconds->count()}});
 
@@ -3137,50 +2858,6 @@ namespace demo {
             return {};
         }
 
-        /// Issues one scripted edit period (S2 schedule by value): period p
-        /// builds (p even) or demolishes (p odd) on rect[(p / 2) % 4], with the
-        /// same grid-probe flip as the trials runner so every period performs
-        /// real cell changes. Progressive errands drain through the normal
-        /// tick budget; presentation flows through presentEdits below.
-        [[nodiscard]] std::error_code issueProfileEdit_(const u64 frame) {
-            const u32 period = static_cast<u32>(frame / kProfileEditPeriod);
-            const sim::GlobalCellPos origin = kProfileWallRects[(period / 2u) % 4u];
-            u32 rock = 0u;
-            for (u32 dy = 0u; dy < kProfileWallHeight; ++dy) {
-                for (u32 dx = 0u; dx < kProfileWallWidth; ++dx) {
-                    const auto cell = m_driver.grid().getCell({origin.m_x + dx, origin.m_y + dy});
-                    if (not cell) {
-                        return cell.error();
-                    }
-                    if (cell->m_element == colony::kElementRock) {
-                        ++rock;
-                    }
-                }
-            }
-            const bool base_build = period % 2u == 0u;
-            bool build = base_build;
-            if ((base_build and rock == kProfileWallCells) or (not base_build and rock == 0u)) {
-                build = not base_build;
-            }
-            if (build) {
-                const Expected<sim::Entity> wall = m_driver.buildWall(
-                    colony::Footprint{
-                        .m_min = origin,
-                        .m_width = kProfileWallWidth,
-                        .m_height = kProfileWallHeight,
-                        .m_element = colony::kElementRock});
-                if (not wall) {
-                    return wall.error();
-                }
-            } else {
-                const Expected<sim::Entity> teardown = m_driver.demolish(origin, kProfileWallWidth, kProfileWallHeight);
-                if (not teardown) {
-                    return teardown.error();
-                }
-            }
-            return {};
-        }
-
         // P2 consumption-deferred ack: fired once per frame result (lane
         // pump or inline execute). Only an applied grid frame acks the
         // driver's dirty set; a dropped or failed frame leaves its chunks
@@ -3255,10 +2932,8 @@ namespace demo {
             // Phase: regenerate. A confirmed regeneration runs at the very
             // head, ahead of every other phase: regen ends any held gesture
             // (accepted commands stay queued per policy and dig into the
-            // fresh world), drops the pin, then translator.invalidate clears
-            // the presentation state so this frame's payload re-uploads the
-            // new world. A failure returns here, exactly where the old path
-            // aborted the frame.
+            // fresh world), drops the pin, and schedules a full presentation
+            // refresh for the new world.
             if (m_regen_pending) {
                 m_regen_pending = false;
                 cancelToolGesture_();
@@ -3282,83 +2957,6 @@ namespace demo {
             // timing first, so this frame's Performance section reports the
             // dt this frame is about to run with.
             observeFrame_(dt);
-
-            // Phase: profile workload index. Counts every live-loop frame while
-            // any profiling workload is armed; all flags off leaves the counter
-            // at zero and every schedule below untouched (production default).
-            const bool profile_workload = m_profile_csv_active or m_profile_edits or m_profile_pan;
-            const u64 profile_frame = profile_workload ? m_profile_frame_index++ : 0u;
-            const bool profile_in_window = profile_frame >= m_profile_skip;
-            // Skip entry: reset both stage tables so spawn work drains out of
-            // the CSV tables; the frame vector/backlog below are gated by the
-            // same window. Skip 0 takes no reset (current behavior preserved).
-            if (profile_workload and m_profile_skip > 0u and profile_frame == m_profile_skip) {
-                m_driver.resetStageTimings();
-                m_translator.resetStageTimings();
-            }
-
-            // Phase: scripted pan. Teleport snap before the camera integrates
-            // so this frame's render uses the waypoint; open-loop per the
-            // route note (no user camera input during capture).
-            if (m_profile_pan and m_pan_controller and profile_frame % kProfilePanPeriod == 0u) {
-                const std::size_t pan_step = static_cast<std::size_t>((profile_frame / kProfilePanPeriod) % 4u);
-                const float3 eye = m_pan_controller->getPosition() + kProfilePanDeltas[pan_step];
-                m_pan_controller->translate(eye, true);
-            }
-
-            // Phase: live update-body wall time (`--profile-csv N` only,
-            // post-skip): wall time of this body plus end-of-frame collider
-            // backlog. This is update-body cost, NOT inter-frame/display
-            // cadence (display cadence is owned by PresentMon). Bounded to
-            // N entries; pre-window frames record nowhere; shed samples
-            // count in m_profile_frame_dropped, never silently.
-            const bool profile_sample = m_profile_csv_active and profile_in_window;
-            struct ProfileFrameScope {
-                std::vector<u64> *samples;
-                const u64 *cap;
-                u64 *backlog;
-                u64 *dropped;
-                const colony::ColonyDriver *driver;
-                std::chrono::steady_clock::time_point start;
-                bool armed;
-                void record() noexcept {
-                    if (not armed) {
-                        return;
-                    }
-                    armed = false;
-                    if (samples == nullptr or
-                        cap == nullptr or
-                        backlog == nullptr or
-                        dropped == nullptr or
-                        driver == nullptr) {
-                        return;
-                    }
-                    // Backlog accounting is independent of sample storage.
-                    if (driver->colliderPending() != 0u) {
-                        ++(*backlog);
-                    }
-                    try {
-                        const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-                        const u64 elapsed = static_cast<u64>(
-                            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
-                        if (samples->size() < static_cast<std::size_t>(*cap)) {
-                            samples->push_back(elapsed);
-                        } else {
-                            ++(*dropped);
-                        }
-                    } catch (...) {
-                        // Dropped is reported in CSV, never counted as collected.
-                        ++(*dropped);
-                    }
-                }
-                ~ProfileFrameScope() noexcept {
-                    record();
-                }
-            };
-            ProfileFrameScope profile_scope{
-                &m_profile_frame_us, &m_profile_csv_total, &m_profile_backlog_frames, &m_profile_frame_dropped,
-                &m_driver, profile_sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{},
-                profile_sample};
 
             // Phase: camera viewport. Follow client-extent changes before
             // input runs (Slice 2 deviation fixed); explicit no-op while the
@@ -3393,10 +2991,6 @@ namespace demo {
             // (click first, then drag cells); pop-then-issue so a failing
             // command cannot wedge the queue. A same-poll press/release
             // still digs exactly once; errors stay sticky and abort.
-            // digTotal moves only in applyDig, so the post-tick delta below
-            // attributes exactly this frame's tool activity.
-            const u32 dug_before = m_driver.digTotal();
-            const bool tool_active = m_tool.m_accepted_click.has_value() or not m_tool.m_drag_queue.empty();
             if (m_tool.m_accepted_click.has_value()) {
                 const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
                 m_tool.m_accepted_click.reset();
@@ -3434,16 +3028,6 @@ namespace demo {
                 ++m_dig_issued;
             }
 
-            // Phase: scripted edits. S2-matching alternating build/demolish
-            // (frame 0 first) ahead of the tick, so errand backlog accrues
-            // inside measured windows; failures are sticky like tool intent.
-            if (m_profile_edits and profile_frame % kProfileEditPeriod == 0u) {
-                if (const std::error_code error = issueProfileEdit_(profile_frame)) {
-                    m_input_error = error;
-                    return error;
-                }
-            }
-
             // Phase: simulate. Paused updates apply the pending tool intent with
             // zero runSystems; zero-tick frames keep the intent queued for the
             // next tick.
@@ -3452,20 +3036,9 @@ namespace demo {
             // P0 serial-explicit sim packet: owned copy of tick/epoch/
             // counters/chunks/chunk-cells captured after the tick, consumed
             // by the present + overlay phases below on this same thread. A
-            // translator reset (regeneration, or a previous present failure
-            // that emptied the pass cache) makes this a full-refresh packet
+            // regeneration or previous present failure makes this a full-refresh packet
             // carrying every resident chunk's cells.
             m_sim_packet = colony::makeSimFramePacket(getFrameIndex(), m_driver, m_present_full_refresh);
-
-            // Phase: tool progress. Silent when idle; a zero delta with
-            // activity means the cells were already vacuum (silent no-op).
-            if (tool_active) {
-                PPR_LOG(
-                    Demo, info, "tool progress",
-                    {
-                        {"dug_delta", m_sim_packet->m_dig_total - dug_before},
-                    });
-            }
 
             // Phase: present. Consume the owned packet on this same thread:
             // selectively ack exactly the captured present set (post-capture
@@ -3475,8 +3048,7 @@ namespace demo {
             // the frame presents or reports. Fail closed when the owned
             // packet is missing or incoherent (tick advanced or world
             // regenerated after capture): never present from unowned or
-            // stale state. A present failure resets the translator/pass
-            // pair, so the next frame re-uploads via a full-refresh packet.
+            // stale state. A present failure forces a full-refresh packet.
             if (not m_sim_packet or
                 not colony::isSimPacketCoherent(*m_sim_packet, m_driver.tickCount(), m_driver.worldGeneration())) {
                 return std::make_error_code(std::errc::state_not_recoverable);
@@ -3510,42 +3082,12 @@ namespace demo {
             // Single-use packet retired on this thread; next frame rebuilds.
             m_sim_packet.reset();
 
-            // Phase: live CSV profile. Inactive unless `--profile-csv N` set it;
-            // after N frames the driver+translator CSVs print and the process
-            // exits(0). Live dt is real-time, so frame counts vary run to run.
-            // NOTE: graceful requestExit, never std::exit — the latter skips
-            // inverse-of-setup teardown and traps in static destruction.
-            // The frame interval stops above so the dump itself is not timed.
-            profile_scope.record();
-            if (profile_sample) {
-                if (--m_profile_csv_remaining == 0u) {
-                    printProfileCsv_();
-                    m_profile_csv_active = false;
-                    requestExit();
-                }
-            }
-
             return {};
-        }
-
-        /// Lane split, render boundary: wall time of the render body on
-        /// main. Worker path: UI detach plus lane handoff (enqueue), so
-        /// this is handoff cost, never lane execution — intentionally NOT
-        /// displayed as render; every readout uses laneExecuteMs_().
-        /// Inline path (no lane owns the renderer): executeRenderWork_
-        /// runs here, so this IS lane execution through present. Two
-        /// steady_clock reads, no allocation; stamps on error returns too.
-        [[nodiscard]] std::error_code render() override {
-            const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-            const std::error_code error = super_t::render();
-            const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-            m_render_ms_last = std::chrono::duration<float, std::milli>(end - start).count();
-            return error;
         }
 
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
-            // B1': establish GPU quiescence BEFORE translator invalidate/driver shutdown below:
+            // Establish GPU quiescence before driver shutdown:
             // an UNKNOWN disposition fail-stops in super_t::shutdown() before
             // any further release.
             std::ignore = prepareGpuTeardown_();
@@ -3578,9 +3120,6 @@ namespace demo {
                 action.reset();
             }
             if (m_driver_ready) {
-                // Translator-state invalidate on main; the pass teardown
-                // itself releases on the lane during Application::shutdown.
-                m_translator.invalidate();
                 PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_driver.shutdown());
                 m_driver_ready = false;
             }
@@ -3591,219 +3130,6 @@ namespace demo {
         }
     };
 }
-
-#ifdef _WIN32
-// Debugger-less run support: OutputDebugString payloads (D3D12 validation)
-// and third-party legacy thread-naming raises are fatal without a debugger
-// (unhandled DBG_PRINTEXCEPTION_C / 0x406D1388 terminate the process). This
-// handler mirrors debugger behavior: log-and-continue for prints, swallow
-// thread-naming raises, and stack-dump genuine traps before death. Engine
-// behavior is unchanged when healthy; see Slice 6 notes for the allocator
-// abort this scaffolding diagnosed (TrianglePass ScratchPad overflow).
-namespace {
-    extern "C" {
-    __declspec(dllimport) void *__stdcall LoadLibraryA(const char *name);
-    __declspec(dllimport) void *__stdcall GetProcAddress(void *module, const char *name);
-    } // extern "C"
-    using DiagSigHandlerFn = void(__cdecl *)(int);
-    extern "C" __declspec(dllimport) DiagSigHandlerFn __cdecl signal(int sig, DiagSigHandlerFn handler);
-    extern "C" __declspec(dllimport) void __cdecl _exit(int status);
-
-    using DiagSymInitFn = int(__stdcall *)(void *, const char *, int);
-    using DiagSymFromAddrFn = int(__stdcall *)(void *, unsigned long long, unsigned long long *, void *);
-    using DiagCaptureFn = unsigned short(__stdcall *)(unsigned long, unsigned long, void **, unsigned long *);
-    using DiagAddVehFn = long(__stdcall *)(unsigned long, void *);
-
-    struct DiagSymInfo {
-        unsigned long SizeOfStruct;
-        unsigned long TypeIndex;
-        unsigned long long Reserved[2];
-        unsigned long Index;
-        unsigned long Size;
-        unsigned long long ModBase;
-        unsigned long Flags;
-        unsigned long long Value;
-        unsigned long long Address;
-        unsigned long Register;
-        unsigned long Scope;
-        unsigned long Tag;
-        int NameLen;
-        int MaxNameLen;
-        char Name[512];
-    };
-
-    void diagDumpStack(const char *reason, const unsigned long code) noexcept {
-        static bool entered = false;
-        if (entered) {
-            return;
-        }
-        entered = true;
-        std::fprintf(stderr, "[trap] %s code=%lu\n", reason, code);
-        void *kernel = LoadLibraryA("kernel32.dll");
-        DiagCaptureFn capture = nullptr;
-        if (kernel != nullptr) {
-            capture = reinterpret_cast<DiagCaptureFn>(GetProcAddress(kernel, "CaptureStackBackTrace"));
-        }
-        void *frames[40] = {};
-        unsigned long hash = 0u;
-        unsigned short taken = 0u;
-        if (capture != nullptr) {
-            taken = capture(0u, 40u, frames, &hash);
-        }
-        void *dbghelp = LoadLibraryA("Dbghelp.dll");
-        DiagSymFromAddrFn symAddr = nullptr;
-        bool sym_ok = false;
-        if (dbghelp != nullptr) {
-            const auto symInit = reinterpret_cast<DiagSymInitFn>(GetProcAddress(dbghelp, "SymInitialize"));
-            symAddr = reinterpret_cast<DiagSymFromAddrFn>(GetProcAddress(dbghelp, "SymFromAddr"));
-            if (symInit != nullptr) {
-                sym_ok = symInit(reinterpret_cast<void *>(-1), nullptr, 1) != 0;
-            }
-        }
-        for (unsigned short i = 0u; i < taken; ++i) {
-            const unsigned long long addr = reinterpret_cast<unsigned long long>(frames[i]);
-            if (symAddr != nullptr and sym_ok) {
-                DiagSymInfo info{};
-                info.SizeOfStruct = sizeof(DiagSymInfo);
-                info.MaxNameLen = 511;
-                unsigned long long disp = 0u;
-                if (symAddr(reinterpret_cast<void *>(-1), addr, &disp, &info) != 0) {
-                    std::fprintf(stderr, "  #%u 0x%llx %s+0x%llx\n", i, addr, info.Name, disp);
-                    continue;
-                }
-            }
-            std::fprintf(stderr, "  #%u 0x%llx\n", i, addr);
-        }
-        std::fprintf(stderr, "[trap] end\n");
-    }
-
-    void __cdecl diagSigAbrt(const int sig) noexcept {
-        diagDumpStack("SIGABRT", static_cast<unsigned long>(sig));
-        // Route through the fail-fast endpoint (not _exit) so WER
-        // LocalDumps captures a dump for the crash-diagnostics pipeline.
-        // RaiseFailFastException is safe here: it terminates without
-        // returning into the signal context.
-        pP::hal::fatalExit("sigabrt");
-    }
-
-    long __stdcall diagVeh(void *pointers) noexcept {
-        // EXCEPTION_POINTERS: [0] = record (ExceptionCode at +0, param count at
-        // +24, params at +32). For DBG_PRINTEXCEPTION_C, params are [len, string].
-        const void *record = *reinterpret_cast<void **>(pointers);
-        const char *bytes = static_cast<const char *>(record);
-        const unsigned long code = *reinterpret_cast<const unsigned long *>(bytes);
-        unsigned long count = 0u;
-        unsigned long long info0 = 0u;
-        const char *info1 = nullptr;
-        {
-            unsigned long n = 0u;
-            __try {
-                n = *reinterpret_cast<const unsigned long *>(bytes + 24);
-            } __except (1) {
-                n = 0u;
-            }
-            count = n > 4u ? 4u : n;
-            if (count > 0u) {
-                __try {
-                    info0 = *reinterpret_cast<const unsigned long long *>(bytes + 32);
-                } __except (1) {
-                    info0 = 0u;
-                }
-            }
-            if (count > 1u) {
-                __try {
-                    info1 = *reinterpret_cast<const char *const *>(bytes + 40);
-                } __except (1) {
-                    info1 = nullptr;
-                }
-            }
-        }
-        // NOTE: benign prints must NOT touch diagDumpStack (its once-guard is
-        // reserved for the real trap); otherwise a later SIGABRT exits silently.
-        // Same for 0x406D1388 legacy thread-naming: debuggers swallow it by
-        // protocol, and our own HAL only raises it under IsDebuggerPresent, so a
-        // third-party raise in a debugger-less run must be swallowed, not trapped.
-        if (code == 0x406D1388u) {
-            std::fprintf(stderr, "[dbgthread] swallowed legacy thread-name raise\n");
-            return -1; // EXCEPTION_CONTINUE_EXECUTION, as a debugger would
-        }
-        if (code == 0xE06D7363u and count >= 3u) {
-            // MSVC C++ exception: params are [magic, object, ThrowInfo*].
-            // Decode the first catchable type name WITHOUT touching the guard.
-            const void *throw_info = nullptr;
-            __try {
-                throw_info = *reinterpret_cast<void *const *>(bytes + 48);
-            } __except (1) {
-                throw_info = nullptr;
-            }
-            const char *type_name = nullptr;
-            if (throw_info != nullptr) {
-                __try {
-                    const char *ti = static_cast<const char *>(throw_info);
-                    const void *arr = *reinterpret_cast<void *const *>(ti + 16);
-                    int n = 0;
-                    if (arr != nullptr) {
-                        n = *reinterpret_cast<const int *>(arr);
-                    }
-                    if (n > 0) {
-                        const void *first = *reinterpret_cast<void *const *>(static_cast<const char *>(arr) + 8);
-                        if (first != nullptr) {
-                            const void *desc = *reinterpret_cast<void *const *>(static_cast<const char *>(first) + 16);
-                            if (desc != nullptr) {
-                                type_name = static_cast<const char *>(desc) + 16;
-                            }
-                        }
-                    }
-                } __except (1) {
-                    type_name = nullptr;
-                }
-            }
-            if (type_name != nullptr and type_name[0] != '\0') {
-                __try {
-                    std::fprintf(stderr, "[cppthrow] %s\n", type_name);
-                } __except (1) {
-                    std::fprintf(stderr, "[cppthrow] <unprintable>\n");
-                }
-            } else {
-                std::fprintf(stderr, "[cppthrow] <undecoded>\n");
-            }
-            return 0; // EXCEPTION_CONTINUE_SEARCH: normal unwind/terminate proceeds
-        }
-        if (code == 0x40010006u) {
-            // OutputDebugString payload: log it, then continue execution exactly
-            // as a debugger would (this raise is non-fatal by design).
-            if (info1 != nullptr) {
-                __try {
-                    std::fprintf(stderr, "[dbgprint len=%llu] %s\n", info0, info1);
-                } __except (1) {
-                    std::fprintf(stderr, "[dbgprint] <unreadable>\n");
-                }
-            } else {
-                std::fprintf(stderr, "[dbgprint] <no payload> params=%lu\n", count);
-            }
-            return -1; // EXCEPTION_CONTINUE_EXECUTION
-        }
-        diagDumpStack("VEH", code);
-        return 0; // EXCEPTION_CONTINUE_SEARCH
-    }
-
-    struct DiagTrapInstaller {
-        DiagTrapInstaller() noexcept {
-            signal(22, &diagSigAbrt); // SIGABRT
-            void *kernel = LoadLibraryA("kernel32.dll");
-            if (kernel != nullptr) {
-                const auto addVeh = reinterpret_cast<DiagAddVehFn>(
-                    GetProcAddress(kernel, "AddVectoredExceptionHandler"));
-                if (addVeh != nullptr) {
-                    addVeh(1u, reinterpret_cast<void *>(&diagVeh));
-                }
-            }
-        }
-    };
-
-    DiagTrapInstaller g_diag_trap{};
-} // namespace
-#endif
 
 int main(const int argc, char *argv[]) {
     const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};
@@ -3819,11 +3145,11 @@ int main(const int argc, char *argv[]) {
     if (auto overlay = pP::game::resolveDisplayOverlayPath()) {
         overlay_path = std::move(*overlay);
     } else {
-        std::println(stderr, "[display] picture-settings file unavailable: {}", overlay.error().message());
+        std::cerr << std::format("[display] picture-settings file unavailable: {}\n", overlay.error().message());
     }
     auto invocation = pP::game::resolveGameInvocationWithOverlay(argc, argv, overlay_path, diagnostics);
     if (not invocation) {
-        std::println(stderr, "{}", diagnostics.format());
+        std::cerr << diagnostics.format() << '\n';
         return pP::config::kExitInvalidUsage;
     }
     if (invocation->m_help_requested) {
@@ -3853,42 +3179,11 @@ int main(const int argc, char *argv[]) {
         pP::hal::disableSystemErrorReporting();
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
-    if (settings.m_command == pP::game::EGameCommand::load100) {
-        pP::hal::installDebugAssertHooks();
-        pP::hal::disableSystemErrorReporting();
-        const auto load = pP::colony::runLoad100();
-        if (not load) {
-            return load.error().value();
-        }
-        return 0;
-    }
-    if (settings.m_command == pP::game::EGameCommand::time_trials) {
-        pP::hal::installDebugAssertHooks();
-        pP::hal::disableSystemErrorReporting();
-        const auto trials = pP::colony::runTimeTrials();
-        if (not trials) {
-            return trials.error().value();
-        }
-        return 0;
-    }
-
     demo::TurboLarbin app("ppr", args);
-    // Invocation details (commands, profiling fixtures, exit policy) are
-    // declared in game/Game.Config.cppm; `--help` prints the generated
-    // reference. Slice 6 profiling fixture: deterministic 100-agent load
-    // for PIX captures. Production default stays 3; the interactive loop
-    // is identical.
+    // Optional larger workload for external profiler captures.
     if (settings.m_profile100) {
         app.setAgentCount(100u);
     }
-    if (const std::error_code error = app.setProfileCsvFrames(settings.m_profile_csv_frames)) {
-        std::fprintf(stderr, "[fatal] profiling setup failed: %s\n", error.message().c_str());
-        return error.value();
-    }
-    app.setProfileLabel(settings.m_profile_label);
-    app.setProfileSkip(settings.m_profile_skip);
-    app.setProfileEdits(settings.m_profile_edits);
-    app.setProfilePan(settings.m_profile_pan);
     if (settings.m_exit_after.has_value()) {
         app.setAutoExitSeconds(pP::TimeDuration{*settings.m_exit_after});
     }
@@ -3897,41 +3192,23 @@ int main(const int argc, char *argv[]) {
     // values the reset intent exposes with their provenance. Runtime edits
     // never touch it.
     app.noteDisplayStartup(invocation->m_display);
-    const std::string diag_crash = settings.m_diag_crash.value_or("");
-    // Legacy hand-rolled parser removed: invocation resolves in game/Game.Config.cppm.
-    if (not diag_crash.empty()) {
-        // TEST-ONLY armed crash (see declaration above): fire through the
-        // real fatal paths so WER LocalDumps captures a dump for the
-        // crash-diagnostics smoke test.
-        std::fprintf(stderr, "[diag-crash] armed mechanism '%s'\n", diag_crash.c_str());
-        if (diag_crash == "abort") {
-            std::abort();
-        }
-        if (diag_crash == "failfast") {
-            pP::hal::fatalExit("diag-crash");
-        }
-        std::fprintf(stderr, "[diag-crash] unknown mechanism '%s' (expected abort|failfast)\n", diag_crash.c_str());
-        return 2;
-    }
-    // Make run-loop failures visible: a bare .value() turns any loop error
-    // into a silent terminate (exit 3). Catch, print, then propagate.
+    // Report operational failures and preserve their exit status.
     try {
         const std::error_code run_error = app.run();
         if (run_error) {
-            std::fprintf(
-                stderr, "[fatal] app.run: %s (category=%s value=%d)\n", run_error.message().c_str(),
-                run_error.category().name(), run_error.value());
+            std::cerr << std::format(
+                "[fatal] app.run: {} (category={} value={})\n", run_error.message(), run_error.category().name(),
+                run_error.value());
         }
         return run_error.value();
     } catch (const std::exception &error) {
-        std::fprintf(stderr, "[fatal-ex] %s\n", error.what());
+        std::cerr << "[fatal-ex] " << error.what() << '\n';
         // Unexpected: anything escaping the app run that is not an ordinary
         // reported operational error enters the fail-fast endpoint so a WER
-        // dump is captured instead of an unexplained exit code. (stderr is
-        // unbuffered, so the line above is already emitted.)
+        // dump is captured instead of an unexplained exit code.
         pP::hal::fatalExit("unexpected-std-exception");
     } catch (...) {
-        std::fprintf(stderr, "[fatal-ex] unknown non-std exception\n");
+        std::cerr << "[fatal-ex] unknown non-std exception\n";
         pP::hal::fatalExit("unexpected-unknown-exception");
     }
 }

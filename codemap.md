@@ -15,8 +15,8 @@ A real-time C++23 engine built on C++20 modules, with nine production libraries.
 
 ## System Entry Points
 
-- [game/main.cpp](game/main.cpp): typed invocation and configuration resolution, startup validation, smoke/load/time-trial dispatch, or `demo::TurboLarbin` interactive client. `--help` is generated from current declarations. `app.run()` errors are printed and returned; exceptions escaping that boundary enter `hal::fatalExit`. See [game map](game/codemap.md).
-- [ColonySmoke.cpp](game/colony/ColonySmoke.cpp): separate headless GPU readback and sustained load hosts.
+- [game/main.cpp](game/main.cpp): typed invocation and configuration resolution, startup validation, smoke dispatch, or `demo::TurboLarbin` interactive client. `--help` is generated from current declarations. `app.run()` errors are printed and returned; exceptions escaping that boundary enter `hal::fatalExit`. See [game map](game/codemap.md).
+- [ColonySmoke.cpp](game/colony/ColonySmoke.cpp): headless GPU readback and simulation checks.
 - [CMakeLists.txt](CMakeLists.txt) and [CMakePresets.json](CMakePresets.json): target graph, global options and configure presets. `msvc-dev` is diagnostic/ASan; `msvc-live` is Debug Edit & Continue without sanitizers/cache; `msvc-rel` disables tests; `msvc-profile` inherits release and adds profiling/EMPHASIS logging. Hidden gcc presets do not support modules. See [cmake map](cmake/codemap.md) and [build-system](.opencode/skills/build-system/SKILL.md) for toolchain, dependency and execution procedures.
 - [include/pP/Macros.h](include/pP/Macros.h): public macro header for build detection, compiler attributes, assertions, logging, error propagation and RAII helpers. `PPR_LOGGING_LEVEL` selects the compiled severity threshold; `OFF` removes all severities. Runtime visibility and backpressure live in `Core.Logger.*`. Old successful runs and compiler-failure hypotheses do not establish current validation status.
 - [vcpkg.json](vcpkg.json) and [cmake/external](cmake/external/codemap.md): dependency manifest and package/CPM fallback wiring.

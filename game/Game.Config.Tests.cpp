@@ -54,37 +54,18 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(smoke.has_value());
         PPR_TEST_ASSERT(smoke->m_game.m_value.m_command == EGameCommand::smoke);
 
-        Diagnostics load_diagnostics{};
-        auto load = resolveCli({"--load100"}, load_diagnostics);
-        PPR_TEST_ASSERT(load.has_value());
-        PPR_TEST_ASSERT(load->m_game.m_value.m_command == EGameCommand::load100);
-
-        Diagnostics trials_diagnostics{};
-        auto trials = resolveCli({"--time-trials"}, trials_diagnostics);
-        PPR_TEST_ASSERT(trials.has_value());
-        PPR_TEST_ASSERT(trials->m_game.m_value.m_command == EGameCommand::time_trials);
-
         Diagnostics default_diagnostics{};
         auto interactive = resolveCli({}, default_diagnostics);
         PPR_TEST_ASSERT(interactive.has_value());
         PPR_TEST_ASSERT(interactive->m_game.m_value.m_command == EGameCommand::interactive);
     };
 
-    PPR_UNIT_TEST (conflicting_selectors_rejected_in_both_orders) {
-        Diagnostics first_diagnostics{};
-        const auto first = resolveCli({"--smoke", "--load100"}, first_diagnostics);
-        PPR_TEST_ASSERT(not first.has_value());
-        PPR_TEST_ASSERT(first.error() == make_error_code(EConfigErrc::conflicting_command));
-
-        Diagnostics second_diagnostics{};
-        const auto second = resolveCli({"--load100", "--smoke"}, second_diagnostics);
-        PPR_TEST_ASSERT(not second.has_value());
-        PPR_TEST_ASSERT(second.error() == make_error_code(EConfigErrc::conflicting_command));
-
-        Diagnostics third_diagnostics{};
-        const auto third = resolveCli({"--time-trials", "--smoke"}, third_diagnostics);
-        PPR_TEST_ASSERT(not third.has_value());
-        PPR_TEST_ASSERT(third.error() == make_error_code(EConfigErrc::conflicting_command));
+    PPR_UNIT_TEST (retired_workload_commands_rejected) {
+        for (const char *option:
+            {"--load100", "--time-trials", "--game.command=load100", "--game.command=time-trials"}) {
+            Diagnostics diagnostics{};
+            PPR_TEST_ASSERT(not resolveCli({option}, diagnostics).has_value());
+        }
     };
 
     PPR_UNIT_TEST (repeated_same_selector_is_idempotent) {
@@ -141,56 +122,44 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(not resolveCli({"--auto-exit=-3"}, negative_diagnostics).has_value());
     };
 
-    PPR_UNIT_TEST (legacy_profiling_value_forms) {
-        Diagnostics csv_space_diagnostics{};
-        auto csv_space = resolveCli({"--profile-csv", "10"}, csv_space_diagnostics);
-        PPR_TEST_ASSERT(csv_space.has_value());
-        PPR_TEST_ASSERT(csv_space->m_game.m_value.m_profile_csv_frames == 10u);
+    PPR_UNIT_TEST (retired_profiling_options_rejected) {
+        for (const char *option:
+            {"--profile-csv=10", "--profile-label=nightly", "--profile-skip=3", "--profile-edits", "--profile-pan",
+                "--game.profile_csv_frames=10", "--game.profile_label=nightly", "--game.profile_skip=3",
+                "--game.profile_edits", "--game.profile_pan"}) {
+            Diagnostics diagnostics{};
+            const auto result = resolveCli({option}, diagnostics);
+            PPR_TEST_ASSERT(not result.has_value());
+            PPR_TEST_ASSERT(result.error() == make_error_code(EConfigErrc::unknown_option));
+        }
+        for (const std::string_view property:
+            {"game.profile_csv_frames", "game.profile_label", "game.profile_skip", "game.profile_edits",
+                "game.profile_pan"}) {
+            Layer file{};
+            file.m_source = ESource::file;
+            file.m_origin = "settings.toml";
+            file.m_assignments.push_back(
+                Assignment{std::string{property}, "", SourceValue::text("1"), "settings.toml:1", 0u});
+            Diagnostics diagnostics{};
+            const CliResult cli{};
+            const auto result = resolveGameCli(cli, std::span<const Layer>{std::addressof(file), 1u}, diagnostics);
+            PPR_TEST_ASSERT(not result.has_value());
+            PPR_TEST_ASSERT(result.error() == make_error_code(EConfigErrc::unknown_property));
+        }
 
-        Diagnostics csv_equals_diagnostics{};
-        auto csv_equals = resolveCli({"--profile-csv=11"}, csv_equals_diagnostics);
-        PPR_TEST_ASSERT(csv_equals.has_value());
-        PPR_TEST_ASSERT(csv_equals->m_game.m_value.m_profile_csv_frames == 11u);
-
-        Diagnostics skip_diagnostics{};
-        auto skip = resolveCli({"--profile-skip", "3"}, skip_diagnostics);
-        PPR_TEST_ASSERT(skip.has_value());
-        PPR_TEST_ASSERT(skip->m_game.m_value.m_profile_skip == 3u);
-
-        Diagnostics label_space_diagnostics{};
-        auto label_space = resolveCli({"--profile-label", "nightly"}, label_space_diagnostics);
-        PPR_TEST_ASSERT(label_space.has_value());
-        PPR_TEST_ASSERT(label_space->m_game.m_value.m_profile_label == "nightly");
-
-        Diagnostics label_equals_diagnostics{};
-        auto label_equals = resolveCli({"--profile-label=canary"}, label_equals_diagnostics);
-        PPR_TEST_ASSERT(label_equals.has_value());
-        PPR_TEST_ASSERT(label_equals->m_game.m_value.m_profile_label == "canary");
+        const std::string help = gameHelpText();
+        for (const std::string_view option:
+            {"profile-csv", "profile-label", "profile-skip", "profile-edits", "profile-pan"}) {
+            PPR_TEST_ASSERT(help.find(option) == std::string::npos);
+        }
     };
 
-    PPR_UNIT_TEST (empty_profile_label_forms_preserved) {
-        Diagnostics inline_diagnostics{};
-        auto inline_empty = resolveCli({"--profile-label="}, inline_diagnostics);
-        PPR_TEST_ASSERT(inline_empty.has_value());
-        PPR_TEST_ASSERT(inline_empty->m_game.m_value.m_profile_label.empty());
-
-        Diagnostics separate_diagnostics{};
-        auto separate_empty = resolveCli({"--profile-label", ""}, separate_diagnostics);
-        PPR_TEST_ASSERT(separate_empty.has_value());
-        PPR_TEST_ASSERT(separate_empty->m_game.m_value.m_profile_label.empty());
-    };
-
-    PPR_UNIT_TEST (profiling_triggers_match_legacy) {
+    PPR_UNIT_TEST (profiling_defaults_and_explicit_override) {
         Diagnostics preset_diagnostics{};
         auto preset = resolveCli({"--profile100"}, preset_diagnostics);
         PPR_TEST_ASSERT(preset.has_value());
         PPR_TEST_ASSERT(preset->m_profiling);
         PPR_TEST_ASSERT(not preset->m_display.m_value.m_throttle_unfocused);
-
-        Diagnostics csv_diagnostics{};
-        auto csv = resolveCli({"--profile-csv", "4"}, csv_diagnostics);
-        PPR_TEST_ASSERT(csv.has_value());
-        PPR_TEST_ASSERT(csv->m_profiling);
 
         Diagnostics exit_diagnostics{};
         auto bounded = resolveCli({"--auto-exit", "5"}, exit_diagnostics);
@@ -202,27 +171,6 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(throttle.has_value());
         PPR_TEST_ASSERT(throttle->m_profiling);
         PPR_TEST_ASSERT(not throttle->m_display.m_value.m_throttle_unfocused);
-
-        // Content-only fixtures never selected profiling on their own.
-        Diagnostics label_diagnostics{};
-        auto label = resolveCli({"--profile-label", "x"}, label_diagnostics);
-        PPR_TEST_ASSERT(label.has_value());
-        PPR_TEST_ASSERT(not label->m_profiling);
-
-        Diagnostics edits_diagnostics{};
-        auto edits = resolveCli({"--profile-edits"}, edits_diagnostics);
-        PPR_TEST_ASSERT(edits.has_value());
-        PPR_TEST_ASSERT(not edits->m_profiling);
-
-        Diagnostics pan_diagnostics{};
-        auto pan = resolveCli({"--profile-pan"}, pan_diagnostics);
-        PPR_TEST_ASSERT(pan.has_value());
-        PPR_TEST_ASSERT(not pan->m_profiling);
-
-        Diagnostics skip_diagnostics{};
-        auto skip = resolveCli({"--profile-skip", "2"}, skip_diagnostics);
-        PPR_TEST_ASSERT(skip.has_value());
-        PPR_TEST_ASSERT(not skip->m_profiling);
 
         // An explicit display setting overrides the profiling default.
         Diagnostics override_diagnostics{};
@@ -271,20 +219,20 @@ namespace pP::game::tests::detail::compat {
         file_layer.m_source = ESource::file;
         file_layer.m_origin = "settings.toml";
         file_layer.m_assignments.push_back(
-            Assignment{"game.profile_csv_frames", "", SourceValue::integer(3), "settings.toml:1", 0u});
+            Assignment{"game.exit_after", "", SourceValue::floating(3.0), "settings.toml:1", 0u});
         file_layer.m_assignments.push_back(
             Assignment{"display.throttle_unfocused", "", SourceValue::boolean(true), "settings.toml:2", 1u});
 
         const CliSchema schema = gameCliSchema();
         Diagnostics parse_diagnostics{};
-        auto parsed = parseCliArgs(spell({"--profile-csv", "9"}), schema, parse_diagnostics);
+        auto parsed = parseCliArgs(spell({"--exit-after", "9"}), schema, parse_diagnostics);
         PPR_TEST_ASSERT(parsed.has_value());
 
         Diagnostics resolve_diagnostics{};
         const Layer *layers = std::addressof(file_layer);
         auto resolved = resolveGameCli(*parsed, std::span<const Layer>{layers, 1}, resolve_diagnostics);
         PPR_TEST_ASSERT(resolved.has_value());
-        PPR_TEST_ASSERT(resolved->m_game.m_value.m_profile_csv_frames == 9u);
+        PPR_TEST_ASSERT(resolved->m_game.m_value.m_exit_after == 9.0);
         PPR_TEST_ASSERT(resolved->m_display.m_value.m_throttle_unfocused);
 
         // File-only values apply when the CLI is silent.
@@ -294,7 +242,7 @@ namespace pP::game::tests::detail::compat {
         Diagnostics file_resolve_diagnostics{};
         auto file_only = resolveGameCli(*empty, std::span<const Layer>{layers, 1}, file_resolve_diagnostics);
         PPR_TEST_ASSERT(file_only.has_value());
-        PPR_TEST_ASSERT(file_only->m_game.m_value.m_profile_csv_frames == 3u);
+        PPR_TEST_ASSERT(file_only->m_game.m_value.m_exit_after == 3.0);
     };
 
     PPR_UNIT_TEST (display_canonical_options_resolve) {
@@ -450,26 +398,18 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(missing.error() == make_error_code(EConfigErrc::codec_error));
     };
 
-    PPR_UNIT_TEST (executable_boundary_rejects_conflicts) {
-        Diagnostics diagnostics{};
-        const auto conflicted = invoke({"ppr", "--smoke", "--load100"}, diagnostics);
-        PPR_TEST_ASSERT(not conflicted.has_value());
-        PPR_TEST_ASSERT(conflicted.error() == make_error_code(EConfigErrc::conflicting_command));
-
+    PPR_UNIT_TEST (executable_boundary_rejects_unknown_options) {
         Diagnostics unknown_diagnostics{};
         const auto unknown = invoke({"ppr", "--bogus"}, unknown_diagnostics);
         PPR_TEST_ASSERT(not unknown.has_value());
         PPR_TEST_ASSERT(unknown.error() == make_error_code(EConfigErrc::unknown_option));
     };
 
-    PPR_UNIT_TEST (diag_crash_forms) {
-        Diagnostics valid_diagnostics{};
-        auto valid = resolveCli({"--diag-crash=abort"}, valid_diagnostics);
-        PPR_TEST_ASSERT(valid.has_value());
-        PPR_TEST_ASSERT(valid->m_game.m_value.m_diag_crash == "abort");
-
-        Diagnostics invalid_diagnostics{};
-        PPR_TEST_ASSERT(not resolveCli({"--diag-crash=bogus"}, invalid_diagnostics).has_value());
+    PPR_UNIT_TEST (retired_crash_harness_rejected) {
+        Diagnostics diagnostics{};
+        const auto result = resolveCli({"--diag-crash=abort"}, diagnostics);
+        PPR_TEST_ASSERT(not result.has_value());
+        PPR_TEST_ASSERT(result.error() == make_error_code(EConfigErrc::unknown_option));
     };
 } // namespace pP::game::tests::detail::compat
 
@@ -477,14 +417,13 @@ namespace pP::game::tests {
     const UnitTest game_config = UnitTest::Named("game_config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::compat::selectors_pick_commands,
-            detail::compat::conflicting_selectors_rejected_in_both_orders,
+            detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,
             detail::compat::selector_explicit_values_rejected,
             detail::compat::legacy_duration_forms,
             detail::compat::zero_duration_rejected_even_when_shadowed,
-            detail::compat::legacy_profiling_value_forms,
-            detail::compat::empty_profile_label_forms_preserved,
-            detail::compat::profiling_triggers_match_legacy,
+            detail::compat::retired_profiling_options_rejected,
+            detail::compat::profiling_defaults_and_explicit_override,
             detail::compat::startup_booleans_resolve_both_ways,
             detail::compat::cli_overrides_lower_layers,
             detail::compat::display_canonical_options_resolve,
@@ -492,8 +431,8 @@ namespace pP::game::tests {
             detail::compat::display_cli_precedence_and_shadowed_validation,
             detail::compat::display_options_appear_in_generated_game_help,
             detail::compat::help_suppresses_without_reading_config,
-            detail::compat::executable_boundary_rejects_conflicts,
-            detail::compat::diag_crash_forms,
+            detail::compat::executable_boundary_rejects_unknown_options,
+            detail::compat::retired_crash_harness_rejected,
         });
     };
 

@@ -1,6 +1,6 @@
 # PPR Game Engine
 
-PPR is a real-time C++23 engine built with C++20 modules. Nine engine libraries support an interactive colony demo, headless GPU checks, and CPU simulation workloads. The engine is the foundation; the demo contains game-specific agents, pathfinding, digging, and building rather than a finished game.
+PPR is a real-time C++23 engine built with C++20 modules. Nine engine libraries support an interactive colony demo, headless GPU checks, and deterministic simulation. The engine is the foundation; the demo contains game-specific agents, pathfinding, digging, and building rather than a finished game.
 
 ## Start here
 
@@ -62,7 +62,7 @@ out\build\msvc-dev\game\app.game.exe --smoke
 
 The interactive demo presents a seeded 4096×4096-cell colony with agents, bounded pathfinding, dig/build/demolish tools, inspection, camera controls, and Colony/Performance/Display UI. It draws generated grid tiles and debug geometry; it does not load a committed Kenney fixture scene. Assets are staged beside the executable by `game/CMakeLists.txt`.
 
-`--smoke` runs offscreen GPU readback, `--load100` runs a sustained 100-agent GPU workload, and `--time-trials` runs deterministic CPU simulation trials. Startup/profile/display options are resolved through typed configuration; `--help` is generated from the current declarations. See [game/codemap.md](game/codemap.md) rather than copying an old flag list.
+`--smoke` runs offscreen GPU readback and simulation checks. For external profiling, `--profile100` selects a 100-agent fixture and `--exit-after S` bounds the run. Bespoke CSV timing, scripted profiling controls, load/time-trial commands, and game-local exception interception have been retired. Startup/profile/display options are resolved through typed configuration; `--help` is generated from the current declarations. See [game/codemap.md](game/codemap.md) rather than copying an old flag list.
 
 ## Tests
 

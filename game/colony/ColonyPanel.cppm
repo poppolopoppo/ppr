@@ -1,6 +1,5 @@
 module;
 
-#include "StageTiming.h"
 
 export module game.colony.panel;
 
@@ -235,22 +234,6 @@ export namespace pP::colony {
         const char *m_reason{""};
     };
 
-    /// Honest inter-frame timing for the Performance tab. The boundary is
-    /// the caller's update-loop dt (elapsed between update() calls); it is
-    /// never GPU time and is never presented as such. Averages/max are
-    /// cumulative since launch and labelled accordingly.
-    ///
-    /// Slice 6 stage units: counter rows record calls only (0us always);
-    /// every other row is wall-clock us. The designer prints counters as
-    /// COUNTS, never us. Classification verified against StageTiming.h
-    /// (CacheHit/CacheMiss/NeededCells/ChunksDrained are the counter rows).
-    [[nodiscard]] constexpr bool stageIsCounter(const Stage stage) noexcept {
-        return stage == Stage::CacheHit or
-               stage == Stage::CacheMiss or
-               stage == Stage::NeededCells or
-               stage == Stage::ChunksDrained;
-    }
-
     struct ColonyPerfView final {
         float m_frame_ms{};
         float m_avg_frame_ms{};
@@ -350,10 +333,6 @@ export namespace pP::colony {
         std::optional<u64> m_hovered_agent{};
         bool m_following{};
         std::span<const AgentNeedsRow> m_agent_needs{};
-        /// Stage tables (Stage::Count rows each; counter rows report calls
-        /// only and print no timings).
-        std::span<const StageStat> m_driver_stages{};
-        std::span<const StageStat> m_presentation_stages{};
     };
 
     /// Result of one panel frame: at most one intent, plus the request that

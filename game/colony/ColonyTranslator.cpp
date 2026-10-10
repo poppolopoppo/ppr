@@ -1,6 +1,5 @@
 module;
 #include "Colony.Elements.h"
-#include "StageTiming.h"
 
 module game.colony.translator;
 
@@ -79,7 +78,6 @@ namespace pP::colony {
 
     std::error_code ColonyTranslator::submit(const sim::ChunkGrid &grid, GridPass &pass) {
         const hal::ProfileScope scope_submit{"Colony.Submit"};
-        const StageTimer timer_submit{m_timings, Stage::Submit};
         Array<GridTileSubmission> tiles{};
         tiles.reserve(sim::kChunkCount);
         {
@@ -136,11 +134,4 @@ namespace pP::colony {
         return m_submitted_chunks;
     }
 
-    const StageTimings &ColonyTranslator::stageTimings() const noexcept {
-        return m_timings;
-    }
-
-    void ColonyTranslator::resetStageTimings() noexcept {
-        m_timings = StageTimings{};
-    }
 }

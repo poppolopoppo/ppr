@@ -32,13 +32,11 @@ namespace pP::game {
         }
 
         [[nodiscard]] config::OptionDecl valueOption(
-            const std::string_view canonical, const std::string_view legacy, const std::string_view description,
-            const bool preserve_empty = false) {
+            const std::string_view canonical, const std::string_view legacy, const std::string_view description) {
             config::OptionDecl option{};
             option.m_canonical = canonical;
             option.m_description = description;
             option.m_aliases.push_back(legacy);
-            option.m_preserve_empty_value = preserve_empty;
             return option;
         }
 
@@ -63,8 +61,6 @@ namespace pP::game {
             const config::CliResult &cli, config::Diagnostics &diagnostics) {
             constexpr std::string_view kAliases[][2] = {
                 {"smoke", "smoke"},
-                {"load100", "load100"},
-                {"time-trials", "time-trials"},
             };
             Array<std::string> seen{};
             for (const auto &assignment: cli.m_assignments) {
@@ -129,23 +125,6 @@ namespace pP::game {
         }
     } // namespace
 
-    [[nodiscard]] std::error_code GameSettings::validate(
-        const GameSettings &settings, config::Diagnostics &diagnostics) {
-        // Strict positivity of game.exit_after lives in its field domain
-        // (FloatDomain with exclusive minimum), so shadowed zero values fail
-        // like any other invalid assignment. Only cross-field relationships
-        // remain here.
-        if (settings.m_diag_crash.has_value() and
-            *settings.m_diag_crash != "abort" and
-            *settings.m_diag_crash != "failfast") {
-            diagnostics.add(
-                "resolve", "game.diag_crash", "expected abort|failfast",
-                config::make_error_code(config::EConfigErrc::cross_field_invalid), "diag-crash");
-            return config::make_error_code(config::EConfigErrc::cross_field_invalid);
-        }
-        return {};
-    }
-
     [[nodiscard]] config::CliSchema gameCliSchema() {
         config::CliSchema schema{};
         schema.m_program = "ppr";
@@ -155,40 +134,13 @@ namespace pP::game {
             schema.m_options, selectorOption("smoke", "smoke", "Run the colony smoke test (command selector)."));
         appendOption(
             schema.m_options,
-            selectorOption("load100", "load100", "Run the 100-agent sustained load fixture (command selector)."));
-        appendOption(
-            schema.m_options,
-            selectorOption("time-trials", "time-trials", "Run the deterministic timing trials (command selector)."));
-        appendOption(
-            schema.m_options,
             switchOption(
                 "game.profile100", "profile100", "100-agent profiling preset (also selects profiling defaults)."));
         appendOption(
             schema.m_options,
             valueOption(
-                "game.profile_csv_frames", "profile-csv", "Live CSV dump after N measured frames (0 disables)."));
-        appendOption(
-            schema.m_options,
-            valueOption(
-                "game.profile_label", "profile-label", "Label attached to every profile-csv banner/frame line.", true));
-        appendOption(
-            schema.m_options,
-            valueOption(
-                "game.profile_skip", "profile-skip", "Measured-window skip: first K frames run but are excluded."));
-        appendOption(
-            schema.m_options,
-            switchOption("game.profile_edits", "profile-edits", "Scripted S2 edit schedule inside measured windows."));
-        appendOption(
-            schema.m_options,
-            switchOption("game.profile_pan", "profile-pan", "Scripted camera route inside measured windows."));
-        appendOption(
-            schema.m_options,
-            valueOption(
                 "game.exit_after", "auto-exit", "Exit gracefully after S wall-clock seconds (alias: exit-after)."));
         schema.m_options.back().m_aliases.push_back("exit-after");
-        appendOption(
-            schema.m_options,
-            valueOption("game.diag_crash", "diag-crash", "TEST-ONLY armed crash mechanism (abort|failfast)."));
         appendOption(
             schema.m_options, valueOption("game.config", "config", "Explicit base configuration file (TOML)."));
 
@@ -216,10 +168,9 @@ namespace pP::game {
         const config::CliSchema schema = gameCliSchema();
         std::string text = config::generateHelp(schema, GameSettings{});
         text += "\nProfiling policy:\n"
-                "  --profile100, --profile-csv, --auto-exit/--exit-after, and --no-focus-throttle\n"
+                "  --profile100, --auto-exit/--exit-after, and --no-focus-throttle\n"
                 "  select profiling defaults (display.throttle_unfocused = false). An explicit\n"
-                "  display setting overrides the profiling default. --profile-edits, --profile-pan,\n"
-                "  --profile-label, and --profile-skip alone do not change throttling.\n"
+                "  display setting overrides the profiling default.\n"
                 "\nPicture settings file:\n"
                 "  The Display window's Save writes the acknowledged picture settings to\n"
                 "  user-settings.toml next to the executable (hand-edited files are never\n"
@@ -304,7 +255,6 @@ namespace pP::game {
         auto game = config::resolve<GameSettings>(
             std::span<const config::Layer>{game_layers.data(), game_layers.size()}, diagnostics);
         const bool profiling = game.has_value() and (game->m_value.m_profile100 or
-                                                        cliHas(cli, "game.profile_csv_frames") or
                                                         cliHas(cli, "game.exit_after") or
                                                         cliHas(cli, "display.throttle_unfocused"));
 

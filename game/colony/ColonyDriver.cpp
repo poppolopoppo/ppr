@@ -1,7 +1,6 @@
 module;
 
 #include "Colony.Elements.h"
-#include "StageTiming.h"
 
 module game.colony.driver;
 
@@ -151,10 +150,8 @@ namespace pP::colony {
         if (shutdown_error) [[unlikely]] {
             return shutdown_error;
         }
-        m_timings = StageTimings{};
 
         const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        const StageTimer timer_worldgen{m_timings, Stage::WorldGen};
         const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed});
         if (init_error) [[unlikely]] {
             // A failed generation must not expose a partially written world.
@@ -219,7 +216,6 @@ namespace pP::colony {
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_build{"Colony.Build"};
-                const StageTimer timer_build{m_timings, Stage::Build};
                 m_step_stage = "build";
                 Array<sim::ChunkPos> touched{};
                 advanceErrands(m_colony.grid(), registry, m_finder, touched, kErrandCellsPerTick);
@@ -232,7 +228,6 @@ namespace pP::colony {
             }
             const Expected<void> bound = m_steps.addSystem(*declared, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_pathfind{"Colony.Pathfind"};
-                const StageTimer timer_pathfind{m_timings, Stage::Pathfind};
                 m_step_stage = "pathfind";
                 stepPathfinding(m_colony.grid(), registry, m_finder, kExpansionsPerTick);
             });
@@ -243,7 +238,6 @@ namespace pP::colony {
             }
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_plan{"Colony.Plan"};
-                const StageTimer timer_plan{m_timings, Stage::Plan};
                 m_step_stage = "aiplan";
                 planAgent(m_colony.grid(), registry);
             });
@@ -292,7 +286,6 @@ namespace pP::colony {
         m_registry.clear();
         m_finder = Pathfinder{};
         clearToolState();
-        m_timings = StageTimings{};
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -325,7 +318,6 @@ namespace pP::colony {
         }
 
         const hal::ProfileScope scope_update{"Colony.Update"};
-        const StageTimer timer_update{m_timings, Stage::Update};
 
         const auto speed = static_cast<TimeSpan::rep>(m_speed);
         if (elapsed > TimeSpan::max() / speed) [[unlikely]] {
@@ -349,7 +341,6 @@ namespace pP::colony {
         // system failure aborts the tick count before it advances.
         for (u32 slice = 0u; slice < report->m_slices; ++slice) {
             const hal::ProfileScope scope_tick{"Colony.Tick"};
-            const StageTimer timer_tick{m_timings, Stage::Tick};
             const std::error_code system_error = m_steps.runSystems(m_registry);
             if (system_error) [[unlikely]] {
                 m_counts = pP::colony::pathCounts(m_registry);
@@ -367,7 +358,6 @@ namespace pP::colony {
 
         {
             const hal::ProfileScope scope_summary{"Colony.Summary"};
-            const StageTimer timer_summary{m_timings, Stage::Summary};
             m_tick_count += report->m_slices;
             m_counts = pP::colony::pathCounts(m_registry);
             m_errands = liveErrandCount(m_registry);
@@ -394,7 +384,6 @@ namespace pP::colony {
 
         {
             const hal::ProfileScope scope_tick{"Colony.Tick"};
-            const StageTimer timer_tick{m_timings, Stage::Tick};
             const std::error_code system_error = m_steps.runSystems(m_registry);
             if (system_error) [[unlikely]] {
                 return system_error;
@@ -431,9 +420,7 @@ namespace pP::colony {
         m_registry.clear();
         m_finder = Pathfinder{};
         clearToolState();
-        m_timings = StageTimings{};
         const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        const StageTimer timer_worldgen{m_timings, Stage::WorldGen};
         m_counts = PathCounts{};
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
@@ -501,13 +488,6 @@ namespace pP::colony {
         return static_cast<double>(m_tick_count) * milliseconds.count();
     }
 
-    const StageTimings &ColonyDriver::stageTimings() const noexcept {
-        return m_timings;
-    }
-
-    void ColonyDriver::resetStageTimings() noexcept {
-        m_timings = StageTimings{};
-    }
 
     bool ColonyDriver::paused() const noexcept {
         return m_paused;
@@ -616,7 +596,6 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::presentEdits(ColonyTranslator &translator) noexcept {
         const hal::ProfileScope scope_invalidate{"Colony.Presentation.Invalidate"};
-        const StageTimer timer_invalidate{m_timings, Stage::Invalidate};
         // Presentation owns m_present_dirty only; the collider sets drain in
         // stepPhysics so cleared collider entries always reach a rebuild.
         std::error_code first_error{};
@@ -654,7 +633,6 @@ namespace pP::colony {
 
     void ColonyDriver::applyToolEdits() noexcept {
         const hal::ProfileScope scope_tool{"Colony.Tool"};
-        const StageTimer timer_tool{m_timings, Stage::Tool};
         if (m_pending_digs.empty()) {
             return;
         }
@@ -912,7 +890,6 @@ namespace pP::colony {
 
     void ColonyDriver::moveAgents() noexcept {
         const hal::ProfileScope scope_move{"Colony.Move"};
-        const StageTimer timer_move{m_timings, Stage::Move};
         for (const auto &[entity, agent]: m_registry.view<Agent>()) {
             (void) agent;
             Intent intent{};
@@ -1025,7 +1002,6 @@ namespace pP::colony {
         m_step_stage = "scene-step";
         {
             const hal::ProfileScope scope_step{"Colony.Physics.Step"};
-            const StageTimer timer_step{m_timings, Stage::PhysicsStep};
             if (const std::error_code error = m_scene.step()) {
                 if (not m_step_error) {
                     m_step_error = error;
@@ -1037,7 +1013,6 @@ namespace pP::colony {
         m_step_stage = "mirror";
         {
             const hal::ProfileScope scope_mirror{"Colony.Physics.Mirror"};
-            const StageTimer timer_mirror{m_timings, Stage::Mirror};
             mirrorBodyStates();
         }
     }
@@ -1218,7 +1193,6 @@ namespace pP::colony {
     std::error_code ColonyDriver::rebuildChunks(
         std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, const u32 max) {
         const hal::ProfileScope scope_prepare{"Colony.Colliders.Prepare"};
-        const StageTimer timer_prepare{m_timings, Stage::CollidersPrepare};
 
         // Determinism invariant: every grid-cell write path fans out dirt
         // (advanceErrands `touched`, dig intents) and bumps `m_cover_gen`,
@@ -1234,13 +1208,11 @@ namespace pP::colony {
         }
         std::ranges::sort(
             sorted_needed, {}, [](const sim::ChunkPos pos) { return pos.m_y * sim::kChunksPerEdge + pos.m_x; });
-        m_timings.m_stats[(std::size_t) Stage::NeededCells].m_calls += static_cast<std::uint64_t>(sorted_needed.size());
         const bool hit = m_cache_valid and
                          m_cover_gen == m_cached_gen and
                          dirty.empty() and
                          std::ranges::equal(m_cached_needed, sorted_needed);
         if (hit) {
-            m_timings.m_stats[(std::size_t) Stage::CacheHit].m_calls += 1u;
             // Cache HIT: skip the coverage merge, sort, and per-chunk cell
             // copies entirely. The cached views already span every chunk the
             // drain can touch: empty dirt enqueues nothing, and the pending
@@ -1258,13 +1230,11 @@ namespace pP::colony {
             std::error_code rebuilt{};
             {
                 const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
-                const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
                 rebuilt = m_colliders.rebuildDirtyChunks(
                     m_scene, std::span<const physics::ColliderChunkView>{m_cached_views.data(), m_cached_views.size()},
                     std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge,
                     max, processed);
             }
-            m_timings.m_stats[(std::size_t) Stage::ChunksDrained].m_calls += processed;
             if (m_colliders.pendingCount() == 0u and not m_collider_covered.empty()) {
                 // H3a Slice 6: REMOVED gen bump — clearing removes views, and cached
                 // views stay a SUPERSET of what drain needs (pending==0 needs nothing).
@@ -1276,7 +1246,6 @@ namespace pP::colony {
             return rebuilt;
         }
 
-        m_timings.m_stats[(std::size_t) Stage::CacheMiss].m_calls += 1u;
         Array<sim::ChunkPos> listed{};
         Array<Array<u16>> pool{};
         Array<physics::ColliderChunkView> views{};
@@ -1351,13 +1320,11 @@ namespace pP::colony {
         std::error_code rebuilt{};
         {
             const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
-            const StageTimer timer_rebuild{m_timings, Stage::CollidersRebuild};
             rebuilt = m_colliders.rebuildDirtyChunks(
                 m_scene, std::span<const physics::ColliderChunkView>{views.data(), views.size()},
                 std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge, max,
                 processed);
         }
-        m_timings.m_stats[(std::size_t) Stage::ChunksDrained].m_calls += processed;
         // Store the prepared views for steady-state reuse; the stored
         // generation is the pre-drain value, so covered growth below forces
         // the next tick to re-prepare, while a gen-preserving clear keeps the
@@ -1405,7 +1372,6 @@ namespace pP::colony {
         // cached view may survive even though createAgentBodies re-prepares.
         invalidateColliderCache();
         clearToolState();
-        m_timings = StageTimings{};
         if (const std::error_code error = createAgentBodies()) {
             return error;
         }
@@ -1418,7 +1384,6 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::rebuildReplayColliders(const sim::Snapshot &snapshot) {
         clearToolState();
-        m_timings = StageTimings{};
         Array<sim::ChunkPos> dirty{};
         for (const sim::ChunkDelta &delta: snapshot.m_deltas) {
             const sim::ChunkPos pos{delta.m_chunk % sim::kChunksPerEdge, delta.m_chunk / sim::kChunksPerEdge};

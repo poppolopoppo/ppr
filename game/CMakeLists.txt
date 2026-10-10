@@ -14,7 +14,6 @@ target_sources(app.game
             colony/DigTool.cppm
             colony/Pathfinding.cppm
             colony/SimFramePacket.cppm
-            colony/TimeTrials.cppm
             colony/WorldGen.cppm
             Game.Config.cppm
             Game.Display.cppm
@@ -29,7 +28,6 @@ target_sources(app.game
         colony/DigTool.cpp
         colony/Pathfinding.cpp
         colony/SimFramePacket.cpp
-        colony/TimeTrials.cpp
         colony/WorldGen.cpp
         Game.Config.cpp
         Game.Display.cpp

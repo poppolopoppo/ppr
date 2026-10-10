@@ -6,8 +6,7 @@ import engine.core;
 import std;
 
 export namespace pP::game {
-    /// Game command selector. `--smoke`, `--load100`, and `--time-trials`
-    /// select a headless command; the default runs the interactive editor.
+    /// Game command selector. `--smoke` selects the headless smoke test; the default runs the interactive editor.
     /// Selectors are CLI-only fixed selections accepted in any position
     /// (first-position usage is preserved as a subset). Conflicting
     /// selectors (different commands) and explicit selector values are
@@ -15,32 +14,22 @@ export namespace pP::game {
     enum class EGameCommand : u8 {
         interactive,
         smoke,
-        load100,
-        time_trials,
     };
 
-    inline constexpr config::EnumDomain<EGameCommand, 4u> game_command_domain{{
+    inline constexpr config::EnumDomain<EGameCommand, 2u> game_command_domain{{
         config::EnumEntry<EGameCommand>{EGameCommand::interactive, "interactive"},
         config::EnumEntry<EGameCommand>{EGameCommand::smoke, "smoke"},
-        config::EnumEntry<EGameCommand>{EGameCommand::load100, "load100"},
-        config::EnumEntry<EGameCommand>{EGameCommand::time_trials, "time-trials"},
     }};
 
     /// Game-owned invocation settings: command selection, profiling fixtures,
-    /// bounded-run duration, CLI-only diagnostics, and the explicit config
+    /// bounded-run duration and the explicit config
     /// file path. Display pacing and RHI validation live in the engine.app
     /// schemas; this schema only declares the game.* bindings of the combined
     /// invocation CLI.
     struct GameSettings {
         EGameCommand m_command{EGameCommand::interactive};
         bool m_profile100{false};
-        u64 m_profile_csv_frames{0u};
-        std::string m_profile_label{"live"};
-        u64 m_profile_skip{0u};
-        bool m_profile_edits{false};
-        bool m_profile_pan{false};
         std::optional<double> m_exit_after{};
-        std::optional<std::string> m_diag_crash{};
         std::optional<std::string> m_config{};
 
         [[nodiscard]] static constexpr auto describe() {
@@ -59,47 +48,11 @@ export namespace pP::game {
                         EMutability::startup, ESource::cli, false},
                     boolean_domain),
                 field(
-                    &GameSettings::m_profile_csv_frames,
-                    Metadata{
-                        "game.profile_csv_frames", "Live CSV dump after N measured frames (0 disables)", "Profiling",
-                        EMutability::startup, ESource::all, false},
-                    any_domain),
-                field(
-                    &GameSettings::m_profile_label,
-                    Metadata{
-                        "game.profile_label", "Label attached to every profile-csv banner/frame line", "Profiling",
-                        EMutability::startup, ESource::all, false},
-                    StringDomain{1024u, true}),
-                field(
-                    &GameSettings::m_profile_skip,
-                    Metadata{
-                        "game.profile_skip", "Measured-window skip: first K frames run but are excluded", "Profiling",
-                        EMutability::startup, ESource::all, false},
-                    any_domain),
-                field(
-                    &GameSettings::m_profile_edits,
-                    Metadata{
-                        "game.profile_edits", "Scripted S2 edit schedule inside measured windows", "Profiling",
-                        EMutability::startup, ESource::all, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_profile_pan,
-                    Metadata{
-                        "game.profile_pan", "Scripted camera route inside measured windows", "Profiling",
-                        EMutability::startup, ESource::all, false},
-                    boolean_domain),
-                field(
                     &GameSettings::m_exit_after,
                     Metadata{
                         "game.exit_after", "Exit gracefully after S wall-clock seconds", "Run", EMutability::startup,
                         ESource::all, false},
                     FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
-                field(
-                    &GameSettings::m_diag_crash,
-                    Metadata{
-                        "game.diag_crash", "TEST-ONLY armed crash mechanism (abort|failfast)", "Diagnostics",
-                        EMutability::startup, ESource::cli, false},
-                    StringDomain{64u, true}),
                 field(
                     &GameSettings::m_config,
                     Metadata{
@@ -108,8 +61,6 @@ export namespace pP::game {
                     PathDomain{1024u, false}),
             };
         }
-
-        [[nodiscard]] static std::error_code validate(const GameSettings &settings, config::Diagnostics &diagnostics);
     };
 
     /// Fully resolved game invocation: typed settings per owning schema plus
@@ -132,7 +83,7 @@ export namespace pP::game {
 
     /// Named profiling-default layer: supplies display.throttle_unfocused =
     /// false at the lowest precedence so an explicit setting overrides it.
-    /// Selected by the legacy profiling triggers (see gameHelpText).
+    /// Selected by the profiling triggers described in gameHelpText.
     [[nodiscard]] config::Layer makeProfilingDefaults();
 
     /// Generated help text from option metadata plus the profiling policy.
