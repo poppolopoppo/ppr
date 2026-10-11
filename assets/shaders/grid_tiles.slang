@@ -4,10 +4,10 @@
 // view * projection with [0,1] depth, no transpose, no Y flip. No lighting,
 // no texturing, no GI inputs of any kind.
 struct GridFrame {
-    // Only m_view_projection is read by this shader. It is the unjittered
-    // view * projection uploaded by uploadFrameConstants_; jitter must never
-    // enter the frame upload or the pipeline key.
+    // Unjittered view * projection, followed by the per-slot visibility mode.
     float4x4 m_view_projection;
+    uint m_use_visible_ids;
+    uint3 m_padding;
 };
 
 // CPU mirror GridTilePayload: 32 B = 16 rect + 4 material + 4 base
@@ -30,6 +30,7 @@ struct GridTilePayload {
 // entry-point `uniform` parameters, as g_tile_base does below.
 ConstantBuffer<GridFrame> g_grid_frame;
 StructuredBuffer<GridTilePayload> g_tiles;
+StructuredBuffer<uint> g_visible_ids;
 // Chunk n occupies 8192 words at n*8192; low halfword = even cell,
 // high halfword = odd cell. Only read when payload flag bit 0 is set.
 StructuredBuffer<uint> g_cell_materials;
@@ -67,7 +68,8 @@ GridVertexOutput vertexGridMain(
     uint sv_vertex_id : SV_VertexID,
     uint sv_instance_id : SV_InstanceID,
     uniform uint g_tile_base) {
-    GridTilePayload tile = g_tiles[g_tile_base + sv_instance_id];
+    uint tile_id = (g_grid_frame.m_use_visible_ids != 0u) ? g_visible_ids[sv_instance_id] : sv_instance_id;
+    GridTilePayload tile = g_tiles[g_tile_base + tile_id];
     float2 min_xy = tile.m_rect.xy;
     float2 max_xy = tile.m_rect.zw;
     // Six non-indexed verts: two triangles over the tile rect. Rasterizer

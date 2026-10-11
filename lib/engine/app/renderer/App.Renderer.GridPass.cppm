@@ -127,13 +127,15 @@ export namespace pP {
         // same geometry the CPU-staged drawInstanced path draws.
         static constexpr u32 kGridTileVertexCount{6u};
 
-        // Per-frame constants: the unjittered view-projection only. Jitter
-        // must NEVER enter the pipeline key or the frame upload.
+        // Per-frame constants: unjittered view-projection and visibility lookup
+        // mode. Jitter never enters the pipeline key or frame upload.
         struct GridFrame {
             float4x4 m_view_projection{identity_v};
+            u32 m_use_visible_ids{};
+            std::array<u32, 3u> m_padding{};
         };
 
-        static_assert(sizeof(GridFrame) == 64u);
+        static_assert(sizeof(GridFrame) == 80u);
 
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
@@ -146,7 +148,7 @@ export namespace pP {
 
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
 
-        // The one draw path: plan (cull) -> resolve payloads (cache hit, or
+        // CPU reference draw path: plan (cull) -> resolve payloads (cache hit, or
         // stage cold from the submission) -> upload tile ring -> one
         // instanced draw (6 verts per quad, startInstanceLocation 0,
         // g_tile_base uniform carries the payload base because
@@ -160,11 +162,22 @@ export namespace pP {
         // drawInstanced path above keeps working untouched. Compaction is
         // pure CPU (compactIndirect, unit-testable without a device); the
         // encode binds the same pipeline/payloads and issues one drawIndirect
-        // over the compacted args. No compute-cull lane, no pipeline changes,
-        // no GI inputs of any kind.
+        // over the CPU-compacted args. Retained as a reference lane.
         [[nodiscard]] static Expected<Array<rhi::IndirectDrawArguments>> compactIndirect(const GridTilePlan &plan);
 
         [[nodiscard]] std::error_code renderIndirect(const DrawContext &draw_context);
+
+        // Production lane: reset/cull into per-slot IDs and one indirect draw
+        // record before the render pass, then consume them without CPU readback.
+        [[nodiscard]] std::error_code prepareGpuVisibility(const PreRenderContext &context);
+        [[nodiscard]] std::error_code renderGpuIndirect(const DrawContext &context);
+
+        // Test readback after the caller proves completion. Borrowed current-slot
+        // buffers remain owned by this pass; production never reads them on CPU.
+        [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> visibilityBuffersForTest() const noexcept {
+            const VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
+            return {slot.m_args.get(), slot.m_ids.get()};
+        }
 
         // Infallible teardown: clears staged submissions, tile cache, and
         // counters, then releases GPU objects; always returns success.
@@ -240,13 +253,14 @@ export namespace pP {
         [[nodiscard]] std::error_code applyStagedFrame(const GridStagedFrame &stage);
 
         // Call on the render thread BEFORE either render lane (never within a
-        // render-pass callback). Only dirty visible cell chunks are published.
+        // render-pass callback). The GPU lane requests all submitted dirty
+        // chunks so atlas readiness does not depend on CPU visibility.
         // The callback is the renderer-owned graphics-queue idle fence, called
         // exactly once before writing an atlas read by earlier GPU work; a
-        // clean/offscreen/flat-only frame never waits. Failure leaves chunks
+        // clean/flat-only frame never waits. Failure leaves chunks
         // dirty and both render lanes fail closed until a successful prepare.
         [[nodiscard]] std::error_code prepareCellUploads(
-            rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle);
+            rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle, bool all_tiles = false);
 
         // Cache probe: the cached payload for a live entry. Quiescent tiles
         // are served here without touching the GPU. Stale or never-uploaded
@@ -312,6 +326,9 @@ export namespace pP {
 
         std::error_code createShaderProgram_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        std::error_code createVisibilityPrograms_(
+            IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        std::error_code ensureVisibilityBuffers_(rhi::IDevice &device);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
@@ -368,6 +385,19 @@ export namespace pP {
         // the tint fragment entry. A signature change drops the cached
         // pipeline (and its persistent root object) alike.
         rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
+        struct VisibilityProgram {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_roots{};
+        };
+        struct VisibilitySlot {
+            rhi::ComPtr<rhi::IBuffer> m_ids{};
+            rhi::ComPtr<rhi::IBuffer> m_args{};
+        };
+        std::array<VisibilitySlot, kTileRingSize> m_visibility_slots{};
+        std::array<VisibilityProgram, 2u> m_visibility_programs{};
+        bool m_visibility_prepared{false};
+        bool m_visibility_has_cells{false};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
         std::optional<GridCachedPipeline> m_cached_pipeline;
 

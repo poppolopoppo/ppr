@@ -7,6 +7,12 @@ Slang shader assets for application render passes. Two live programs: `mesh_bind
 tinted or per-cell quads, one instance per visible chunk-sized tile). The former `triangle.slang`
 reference asset was deleted; `TrianglePass` and `GridPass` are the only loaders from this directory.
 
+`grid_visibility.slang` supplies GridPass compute reset and cull entries. It
+matches the CPU reference's conservative boxes and frustum planes, atomically
+appends at most 1024 visible IDs, and writes one indirect draw record. The tile
+vertex entry optionally resolves instances through those IDs. Reset, cull,
+barriers and drawing share one encoder and submission.
+
 ## Design
 
 - `mesh_bindless.slang` uses PPR's row-major, row-vector convention: transforms call

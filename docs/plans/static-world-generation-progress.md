@@ -150,3 +150,18 @@ The GPU regression passed in `out/worldgen-prerender-test.log` (3.98 s), checkin
 ordering, rejection without fence advancement, and retry. Format/style and
 independent Astra review passed. This is the compute integration boundary;
 GPU culling, catalog textures and transactional world GPU bundles remain pending.
+
+GPU visibility is implemented and used by the editor render lane. Reset and
+cull write bounded per-slot visible IDs and one indirect argument record, with
+explicit barriers and the existing completion-fenced slot governance. Empty
+frames reset the count. Direct/reference and GPU draws share authoritative
+submission bounds. Preparation uploads all submitted pending chunks before
+culling, including offscreen cells. The ASan application/app/asset build passed
+in `out/worldgen-gpu-cull-build6.log`. GPU IDs/arguments, 1024-entry capacity,
+edge/empty/offscreen cases, cached-geometry pixel parity and repeated teardown
+passed three shuffled loops in `out/worldgen-gpu-cull-test4.log` (8.87/8.35/8.81 s).
+All 26 frame-fence leaves passed in `out/worldgen-gpu-cull-fence-tests.log`
+(53.44 s). Format/style and independent Astra review passed. This does not
+complete stage 5: textures, shared rendered contours, metric/catalog transport,
+transactional GPU bundles and versioned atlas updates remain. The current
+atlas still uses global idle; its replacement is a required responsiveness gate.

@@ -41,6 +41,13 @@ namespace pP {
             const float half = std::max({half_x, half_y, 0.5f}) + GridPass::kGridCullEpsilon;
             return Box{float3{center_x, center_y, 0.0f}, half * 2.0f};
         }
+
+        void applySubmissionBounds_(GridTilePayload &payload, const GridTileRange &range) noexcept {
+            payload.m_rect[0] = static_cast<float>(range.m_min_x);
+            payload.m_rect[1] = static_cast<float>(range.m_min_y);
+            payload.m_rect[2] = static_cast<float>(range.m_max_x);
+            payload.m_rect[3] = static_cast<float>(range.m_max_y);
+        }
     }
 
     namespace fs = std::filesystem;
@@ -138,6 +145,7 @@ namespace pP {
 
         shader_state_started = true;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createShaderProgram_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createVisibilityPrograms_(shader_service, device, content_dir));
 
         m_ready = true;
         initialization_complete = true;
@@ -147,12 +155,14 @@ namespace pP {
     }
 
     std::error_code GridPass::update([[maybe_unused]] TimeSpan dt, const CameraSnapshot &camera_view) {
+        m_visibility_prepared = false;
         m_camera_view = camera_view;
 
         return default_value_v;
     }
 
     std::error_code GridPass::submitTiles(const std::span<const GridTileSubmission> submissions) {
+        m_visibility_prepared = false;
         // Pure CPU: staging needs no device, so device-free tests and the
         // colony translator can stage before (or without) initialize; only
         // render touches the GPU.
@@ -168,10 +178,12 @@ namespace pP {
     }
 
     void GridPass::clearTiles() noexcept {
+        m_visibility_prepared = false;
         m_submitted_tiles.clear();
     }
 
     void GridPass::clearCache() noexcept {
+        m_visibility_prepared = false;
         m_tile_cache.clear();
         m_cell_cache.clear();
         // Keep the atlas allocated: its previous contents may still be read
@@ -207,6 +219,7 @@ namespace pP {
     }
 
     Expected<u32> GridPass::requestUpload(const GridUploadRequest &request) {
+        m_visibility_prepared = false;
         // Pure CPU like submitTiles: the tile cache is pass-owned CPU data,
         // so quiescent tiles keep serving through device loss while
         // GPU-touching calls park.
@@ -312,23 +325,29 @@ namespace pP {
     }
 
     std::error_code GridPass::prepareCellUploads(
-        rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle) {
+        rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle, const bool all_tiles) {
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
-        const Expected<GridTilePlan> plan = planTiles(
-            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
-        if (not plan.has_value()) [[unlikely]] {
-            return plan.error();
-        }
-
         Array<u32> pending{};
-        for (const GridPlannedTile &tile: plan->m_tiles) {
-            const auto found = m_cell_cache.find(tile.m_chunk_id);
+        const auto append_pending = [&](const u32 chunk_id) {
+            const auto found = m_cell_cache.find(chunk_id);
             if (found != m_cell_cache.end() and
                 found->second.m_pending and
-                std::find(pending.begin(), pending.end(), tile.m_chunk_id) == pending.end()) {
-                pending.push_back(tile.m_chunk_id);
+                std::find(pending.begin(), pending.end(), chunk_id) == pending.end()) {
+                pending.push_back(chunk_id);
+            }
+        };
+        if (all_tiles) {
+            for (const GridTileSubmission &tile: m_submitted_tiles) {
+                append_pending(tile.m_chunk_id);
+            }
+        } else {
+            const Expected<GridTilePlan> plan = planTiles(
+                m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles});
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, plan ? std::error_code{} : plan.error());
+            for (const GridPlannedTile &tile: plan->m_tiles) {
+                append_pending(tile.m_chunk_id);
             }
         }
         if (pending.empty()) {
@@ -425,6 +444,7 @@ namespace pP {
     //            whole or the frame stays empty. A caller that needs
     //            whole-frame atomicity must discard the pass.
     std::error_code GridPass::render(const DrawContext &draw_context) {
+        m_visibility_prepared = false;
         const hal::ProfileScope scope{"App.Pass.Grid"};
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
@@ -449,6 +469,7 @@ namespace pP {
             return m_cell_cache.find(tile.m_chunk_id) != m_cell_cache.end();
         });
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(draw_context.m_device, has_cells));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(draw_context.m_device, false));
 
         // Resolve payloads: cache hits serve quiescent tiles, while a tile
         // with no cache entry yet stages cold straight from its submission so
@@ -458,6 +479,7 @@ namespace pP {
         for (const GridPlannedTile &tile: plan->m_tiles) {
             Expected<GridTilePayload> cached = resolveCached(tile.m_chunk_id);
             if (cached.has_value()) {
+                applySubmissionBounds_(*cached, tile.m_tile_range);
                 applyCellPayload_(*cached, tile.m_chunk_id);
                 payloads.push_back(*cached);
                 continue;
@@ -529,6 +551,9 @@ namespace pP {
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, shader_cursor["g_visible_ids"].setBinding(
+                          rhi::Binding(m_cell_dummy.get(), makeFullRange(m_cell_dummy.get()))));
 
         // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
         // startInstanceLocation never reaches the shader. The tile base rides
@@ -567,6 +592,7 @@ namespace pP {
     // MUST be verified by an MDI GPU readback parity test; do not infer parity
     // from the CPU-side args alone.
     std::error_code GridPass::renderIndirect(const DrawContext &draw_context) {
+        m_visibility_prepared = false;
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
@@ -588,6 +614,7 @@ namespace pP {
             return m_cell_cache.find(tile.m_chunk_id) != m_cell_cache.end();
         });
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(draw_context.m_device, has_cells));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(draw_context.m_device, false));
 
         Expected<Array<rhi::IndirectDrawArguments>> args = compactIndirect(*plan);
         if (not args.has_value()) [[unlikely]] {
@@ -602,6 +629,7 @@ namespace pP {
         for (const GridPlannedTile &tile: plan->m_tiles) {
             Expected<GridTilePayload> cached = resolveCached(tile.m_chunk_id);
             if (cached.has_value()) {
+                applySubmissionBounds_(*cached, tile.m_tile_range);
                 applyCellPayload_(*cached, tile.m_chunk_id);
                 payloads.push_back(*cached);
                 continue;
@@ -690,6 +718,9 @@ namespace pP {
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, shader_cursor["g_visible_ids"].setBinding(
+                          rhi::Binding(m_cell_dummy.get(), makeFullRange(m_cell_dummy.get()))));
 
         const u32 tile_base = 0u;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
@@ -1005,6 +1036,9 @@ namespace pP {
         m_ready = false;
 
         m_shader_program.setNull();
+        m_visibility_programs = {};
+        m_visibility_slots = {};
+        m_visibility_prepared = false;
         m_cell_atlas.setNull();
         m_cell_atlas_mapped = nullptr;
         m_cell_dummy.setNull();
@@ -1030,6 +1064,9 @@ namespace pP {
         m_cached_pipeline.reset();
         m_render_pipeline_key.reset();
         m_cell_atlas.setNull();
+        m_visibility_programs = {};
+        m_visibility_slots = {};
+        m_visibility_prepared = false;
         m_cell_atlas_mapped = nullptr;
         m_cell_dummy.setNull();
         for (auto it = m_cell_cache.begin(); it != m_cell_cache.end(); ++it) {
@@ -1076,6 +1113,196 @@ namespace pP {
             GridPass, device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
 
         return default_value_v;
+    }
+
+    std::error_code GridPass::createVisibilityPrograms_(
+        IShaderService &service, rhi::IDevice &device, const fs::path &content_dir) {
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            service.loadModuleFromFile(
+                content_dir / TEXT("shaders") / TEXT("grid_visibility.slang"), "grid_visibility", module.writeRef()));
+        std::array<VisibilityProgram, 2u> programs{};
+        const std::array<const char *, 2u> names{"resetVisibility", "cullVisibility"};
+        for (u32 index = 0u; index < programs.size(); ++index) {
+            shader::ComPtr<slang::IEntryPoint> entry;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, module->findEntryPointByName(names[index], entry.writeRef()));
+            slang::IComponentType *entries[]{entry.get()};
+            rhi::ShaderProgramDesc desc{};
+            desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            desc.slangGlobalScope = module.get();
+            desc.slangEntryPoints = entries;
+            desc.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            VisibilityProgram &program = programs[index];
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, device.createShaderProgram(desc, program.m_program.writeRef(), diagnostics.writeRef()));
+            rhi::ComputePipelineDesc pipeline{};
+            pipeline.program = program.m_program.get();
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createComputePipeline(pipeline, program.m_pipeline.writeRef()));
+            for (auto &root: program.m_roots) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, device.createRootShaderObject(program.m_program.get(), root.writeRef()));
+            }
+        }
+        m_visibility_programs = std::move(programs);
+        return {};
+    }
+
+    std::error_code GridPass::ensureVisibilityBuffers_(rhi::IDevice &device) {
+        if (m_visibility_slots[0].m_ids) {
+            return {};
+        }
+        std::array<VisibilitySlot, kTileRingSize> slots{};
+        for (VisibilitySlot &slot: slots) {
+            rhi::BufferDesc ids{};
+            ids.size = kGridTileCacheCapacity * sizeof(u32);
+            ids.elementSize = sizeof(u32);
+            ids.memoryType = rhi::MemoryType::DeviceLocal;
+            ids.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                static_cast<u32>(rhi::BufferUsage::CopySource));
+            ids.defaultState = rhi::ResourceState::UnorderedAccess;
+            ids.label = "grid GPU visible IDs";
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(ids, nullptr, slot.m_ids.writeRef()));
+            rhi::BufferDesc args = ids;
+            args.size = sizeof(rhi::IndirectDrawArguments);
+            args.elementSize = sizeof(rhi::IndirectDrawArguments);
+            args.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                static_cast<u32>(rhi::BufferUsage::IndirectArgument) |
+                static_cast<u32>(rhi::BufferUsage::CopySource));
+            args.label = "grid GPU draw arguments";
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(args, nullptr, slot.m_args.writeRef()));
+        }
+        m_visibility_slots = std::move(slots);
+        return {};
+    }
+
+    std::error_code GridPass::prepareGpuVisibility(const PreRenderContext &context) {
+        m_visibility_prepared = false;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_submitted_tiles.size() <= kGridTileCacheCapacity
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::no_buffer_space));
+        reclaimCompleted_(context.m_completed_fence_value);
+        Array<GridTilePayload> payloads;
+        payloads.reserve(m_submitted_tiles.size());
+        m_visibility_has_cells = false;
+        for (const GridTileSubmission &tile: m_submitted_tiles) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSubmission_(tile));
+            const auto cells = m_cell_cache.find(tile.m_chunk_id);
+            if (cells != m_cell_cache.end()) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, not cells->second.m_pending and m_cell_atlas != nullptr
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::operation_in_progress));
+                m_visibility_has_cells = true;
+            }
+            GridTilePayload payload{};
+            const auto cached = resolveCached(tile.m_chunk_id);
+            if (cached) {
+                payload = *cached;
+            } else {
+                payload.m_material = tile.m_material_id;
+            }
+            // Submission bounds are authoritative for both the reference cull
+            // and GPU geometry, including clean submissions with cached data.
+            applySubmissionBounds_(payload, tile.m_tile_range);
+            applyCellPayload_(payload, tile.m_chunk_id);
+            payloads.push_back(payload);
+        }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(context.m_device, false));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureVisibilityBuffers_(context.m_device));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, ensureTilePayloads_(
+                          context.m_device, std::max<u32>(1u, safe_narrowing(payloads.size())),
+                          context.m_completed_fence_value, context.m_wait_for_fence));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, selectSlot_(context.m_completed_fence_value, context.m_wait_for_fence));
+        if (not payloads.empty()) {
+            std::memcpy(
+                m_tile_payload_mapped[m_tile_ring_cursor], payloads.data(), payloads.size() * sizeof(GridTilePayload));
+        }
+
+        struct alignas(16) VisibilityFrame {
+            float m_planes[6][4]{};
+            u32 m_count{};
+            std::array<u32, 3u> m_padding{};
+        };
+        static_assert(sizeof(VisibilityFrame) == 112u);
+        VisibilityFrame frame{};
+        for (u32 plane = 0u; plane < 6u; ++plane) {
+            std::memcpy(
+                frame.m_planes[plane], m_camera_view.m_frustum.clip[plane].data(), sizeof(frame.m_planes[plane]));
+        }
+        frame.m_count = safe_narrowing(payloads.size());
+        VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
+        context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::UnorderedAccess);
+        context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::UnorderedAccess);
+        for (u32 phase = 0u; phase < 2u; ++phase) {
+            VisibilityProgram &program = m_visibility_programs[phase];
+            rhi::IShaderObject *const root = program.m_roots[m_tile_ring_cursor].get();
+            rhi::ShaderCursor cursor{root};
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_args"].setBinding(rhi::Binding(slot.m_args, makeFullRange(slot.m_args))));
+            if (phase == 1u) {
+                rhi::ShaderCursor constants{};
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_visibility"].getDereferenced(constants));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&frame, sizeof(frame)));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_visible_ids"].setBinding(rhi::Binding(slot.m_ids, makeFullRange(slot.m_ids))));
+                rhi::IBuffer *const tiles = m_tile_payloads[m_tile_ring_cursor].get();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_tiles"].setBinding(rhi::Binding(tiles, makeFullRange(tiles))));
+            }
+            rhi::IComputePassEncoder *const pass = context.m_encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            {
+                PPR_DEFER {
+                    pass->end();
+                };
+                pass->bindPipeline(program.m_pipeline, root);
+                pass->dispatchCompute(phase == 0u ? 1u : std::max(1u, (frame.m_count + 63u) / 64u), 1u, 1u);
+            }
+            context.m_encoder.globalBarrier();
+        }
+        context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::IndirectArgument);
+        context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::ShaderResource);
+        m_visibility_prepared = true;
+        return {};
+    }
+
+    std::error_code GridPass::renderGpuIndirect(const DrawContext &context) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            m_visibility_prepared ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+        m_visibility_prepared = false;
+        const auto cached = pipelineFor_(context.m_device, context.m_render_pipeline_key);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
+        rhi::IShaderObject *const root = (*cached)->m_slot_roots[m_tile_ring_cursor].get();
+        rhi::ShaderCursor cursor{root};
+        GridFrame frame{};
+        frame.m_view_projection = m_camera_view.m_view_projection;
+        frame.m_use_visible_ids = 1u;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, (*cached)->m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
+        const u32 base = 0u;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_tile_base"].setData(&base, sizeof(base)));
+        rhi::IBuffer *const tiles = m_tile_payloads[m_tile_ring_cursor].get();
+        VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
+        rhi::IBuffer *const cells = m_visibility_has_cells ? m_cell_atlas.get() : m_cell_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_tiles"].setBinding(rhi::Binding(tiles, makeFullRange(tiles))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_visible_ids"].setBinding(rhi::Binding(slot.m_ids, makeFullRange(slot.m_ids))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, makeFullRange(cells))));
+        context.m_pass.bindPipeline((*cached)->m_pipeline, root);
+        context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
+        return {};
     }
 
     std::error_code GridPass::uploadFrameConstants_(rhi::ShaderCursor &frame_cursor) {

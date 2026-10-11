@@ -1083,6 +1083,117 @@ namespace pP::tests::detail {
             pass.clearInstances();
         };
 
+        PPR_UNIT_TEST (grid_compute_visibility_matches_reference_and_draws) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            const GridTileSubmission cached_tile{
+                .m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 1u};
+            PPR_TEST_ASSERT(not grid.submitTiles(std::span{&cached_tile, 1u}));
+            GridTilePayload stale_geometry{};
+            stale_geometry.m_rect[0] = 2048.0f;
+            stale_geometry.m_rect[1] = 2048.0f;
+            stale_geometry.m_rect[2] = 2176.0f;
+            stale_geometry.m_rect[3] = 2176.0f;
+            stale_geometry.m_material = 1u;
+            PPR_TEST_ASSERT(grid.requestUpload(GridUploadRequest{0u, std::span{&stale_geometry, 1u}}).has_value());
+            const GridTileSubmission offscreen_cells{
+                .m_chunk_id = 528u, .m_tile_range = {2048, 2048, 2176, 2176}, .m_dirty_mask = 1u};
+            PPR_TEST_ASSERT(not grid.submitTiles(std::span{&offscreen_cells, 1u}));
+            GridTilePayload cell_payload{};
+            Array<u16> cell_materials;
+            cell_materials.resize(GridPass::kCellsPerChunk, 1u);
+            PPR_TEST_ASSERT(
+                grid.requestUpload(
+                        GridUploadRequest{528u, std::span{&cell_payload, 1u}, std::span<const u16>{cell_materials}})
+                    .has_value());
+            const std::array<GridTileSubmission, 3u> tiles{
+                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_material_id = 1u},
+                GridTileSubmission{.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_material_id = 2u},
+                GridTileSubmission{.m_chunk_id = 528u, .m_tile_range = {2048, 2048, 2176, 2176}, .m_material_id = 3u},
+            };
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            Array<GridTileSubmission> full_capacity;
+            for (u32 chunk = 0u; chunk < GridPass::kGridTileCacheCapacity; ++chunk) {
+                full_capacity.push_back(
+                    GridTileSubmission{.m_chunk_id = chunk, .m_tile_range = {0, 0, 128, 128}, .m_material_id = 1u});
+            }
+            // Mixed visibility, edge touch, all outside, all visible, and empty.
+            for (const u32 scenario: {0u, 1u, 2u, 3u, 4u, 5u, 0u}) {
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_origin = float3{scenario == 2u ? 3500.0f : 0.0f, 0.0f, 0.0f};
+                model.m_ortho_scale = scenario == 3u ? 64.0f : scenario == 0u ? 2.0f : 1.0f;
+                Camera camera;
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+                const auto snapshot = camera.getSnapshot();
+                const std::span<const GridTileSubmission> submitted =
+                    scenario == 4u   ? std::span<const GridTileSubmission>{}
+                    : scenario == 5u ? std::span<const GridTileSubmission>{full_capacity}
+                                     : std::span<const GridTileSubmission>{tiles};
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                PPR_TEST_ASSERT(not grid.submitTiles(submitted));
+                const auto reference = GridPass::planTiles(snapshot, submitted);
+                PPR_TEST_ASSERT(reference.has_value());
+                const auto wait_for_idle = [&]() { return renderer->waitOnHost(); };
+                PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle, true));
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"GPU culled grid", draw}}, {}, PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto [args_buffer, ids_buffer] = grid.visibilityBuffersForTest();
+                rhi::IndirectDrawArguments args{};
+                PPR_TEST_ASSERT(not make_error_code(device.readBuffer(args_buffer, 0u, sizeof(args), &args)));
+                PPR_TEST_ASSERT(args.vertexCountPerInstance == 6u);
+                PPR_TEST_ASSERT(args.startVertexLocation == 0u and args.startInstanceLocation == 0u);
+                PPR_TEST_ASSERT(args.instanceCount == reference->m_tiles.size());
+                Array<u32> actual;
+                actual.resize(args.instanceCount);
+                if (not actual.empty()) {
+                    PPR_TEST_ASSERT(not make_error_code(
+                        device.readBuffer(ids_buffer, 0u, actual.size() * sizeof(u32), actual.data())));
+                }
+                Array<u32> expected;
+                for (const auto &tile: reference->m_tiles) {
+                    expected.push_back(tile.m_submission_index);
+                }
+                std::ranges::sort(actual);
+                std::ranges::sort(expected);
+                PPR_TEST_ASSERT(std::ranges::equal(actual, expected));
+                if (scenario == 0u or scenario == 2u or scenario == 4u) {
+                    const auto pixels = readback_(device, targetRef_(target), 128u);
+                    PPR_TEST_ASSERT(pixels.has_value());
+                    const auto centre = gateTexel_(*pixels, 32u, 96u);
+                    std::println(
+                        "grid scenario={} visible={} centre={},{},{},{}", scenario, args.instanceCount, centre[0],
+                        centre[1], centre[2], centre[3]);
+                    if (scenario == 0u) {
+                        PPR_TEST_ASSERT(centre[0] > 160u and centre[1] < 80u);
+                        PPR_TEST_ASSERT(not renderer->renderToTexture(targetRef_(target), {DrawSubmission{grid}}));
+                        grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                        PPR_TEST_ASSERT(not renderer->waitOnHost());
+                        const auto direct_pixels = readback_(device, targetRef_(target), 128u);
+                        PPR_TEST_ASSERT(direct_pixels.has_value());
+                        PPR_TEST_ASSERT(gateTexel_(*direct_pixels, 32u, 96u) == centre);
+                    } else {
+                        PPR_TEST_ASSERT(centre[0] < 80u and centre[1] < 80u);
+                    }
+                }
+            }
+        };
+
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
@@ -1263,6 +1374,7 @@ namespace pP::tests {
             detail::Gate::render_resolves_msaa_color_attachment,
             detail::Gate::render_accepts_msaa_sample_counts,
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
+            detail::Gate::grid_compute_visibility_matches_reference_and_draws,
         });
     };
 

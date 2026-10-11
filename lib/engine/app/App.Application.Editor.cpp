@@ -1215,7 +1215,7 @@ namespace pP {
         {
             const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
             PPR_RETURN_ERROR_ON_FAIL(
-                Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle));
+                Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle, true));
         }
 
         // Detached UI submission, bound synchronously on this lane: the
@@ -1234,10 +1234,15 @@ namespace pP {
             ui_encode,
         };
 
+        const auto grid_prepare = [this](const PreRenderContext &context) {
+            return m_grid_pass->prepareGpuVisibility(context);
+        };
+        const auto grid_draw = [this](const DrawContext &context) { return m_grid_pass->renderGpuIndirect(context); };
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
                 .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
-                .m_draws = {DrawSubmission(*m_grid_pass), DrawSubmission(*m_triangle_pass)},
+                .m_draws = {DrawSubmission{"grid.gpu", grid_draw}, DrawSubmission(*m_triangle_pass)},
+                .m_prepare = PreRenderCallback{grid_prepare},
             },
             {
                 .m_surface_color =
