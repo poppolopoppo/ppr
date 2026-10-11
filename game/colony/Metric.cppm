@@ -49,4 +49,8 @@ export namespace pP::colony {
     [[nodiscard]] Expected<FineCellRect> constructionFootprint(ConstructionTile tile, TileExtent extent = {});
     // The incomplete final row/column cannot select a construction tile.
     [[nodiscard]] Expected<ConstructionTile> constructionTileOf(sim::GlobalCellPos position);
+    // Inclusive cursor/anchor selection becomes complete globally aligned tiles;
+    // the cursor side is clamped without moving the anchor tile.
+    [[nodiscard]] Expected<FineCellRect> constructionDragFootprint(
+        sim::GlobalCellPos anchor, sim::GlobalCellPos cursor, u32 max_fine_edge);
 }

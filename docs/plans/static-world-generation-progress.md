@@ -133,3 +133,12 @@ the real priority-routing consumed-release regression. Generated-session
 interactive publication and actual traversal remain acceptance work.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.
+
+Metric UI picking, actor selection, paths and cell/chunk overlays now convert
+fine cells to session metres. Construction drags snap to complete global 3-by-3
+tiles, preserve the anchor while clamping, and reject the incomplete edge tile.
+Prepared publication retires the old owner before fallible camera setup. The
+application build passed in `out/worldgen-picking-build2.log`, the game suite
+passed in `out/worldgen-picking-tests.log` (58.66 s), and independent Astra review
+passed. Interactive prepared publication and the GridPass metric/render seam
+remain pending with stage 5.

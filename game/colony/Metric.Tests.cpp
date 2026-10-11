@@ -68,6 +68,26 @@ namespace pP::game::tests::detail::metric {
         PPR_TEST_ASSERT(multi.has_value() and multi->m_begin.m_x == 3u and multi->m_end.m_y == 15u);
     };
 
+    PPR_UNIT_TEST (construction_drag_snaps_and_clamps_from_the_anchor_tile) {
+        const auto single = constructionDragFootprint({127u, 128u}, {128u, 126u}, 32u);
+        PPR_TEST_ASSERT(single.has_value());
+        PPR_TEST_ASSERT((single->m_begin == sim::GlobalCellPos{126u, 126u}));
+        PPR_TEST_ASSERT((single->m_end == sim::GlobalCellPos{129u, 129u}));
+        const auto forward = constructionDragFootprint({127u, 127u}, {500u, 500u}, 32u);
+        PPR_TEST_ASSERT(forward.has_value());
+        PPR_TEST_ASSERT((forward->m_begin == sim::GlobalCellPos{126u, 126u}));
+        PPR_TEST_ASSERT((forward->m_end == sim::GlobalCellPos{156u, 156u}));
+        const auto reverse = constructionDragFootprint({127u, 127u}, {0u, 0u}, 32u);
+        PPR_TEST_ASSERT(reverse.has_value());
+        PPR_TEST_ASSERT((reverse->m_begin == sim::GlobalCellPos{99u, 99u}));
+        PPR_TEST_ASSERT((reverse->m_end == sim::GlobalCellPos{129u, 129u}));
+        PPR_TEST_ASSERT(not constructionDragFootprint({4095u, 0u}, {0u, 0u}, 32u));
+        PPR_TEST_ASSERT(not constructionDragFootprint({0u, 0u}, {4095u, 0u}, 32u));
+        PPR_TEST_ASSERT(not constructionDragFootprint({0u, 0u}, {0u, 0u}, 2u));
+        const auto corner = constructionDragFootprint({4094u, 4094u}, {4094u, 4094u}, 32u);
+        PPR_TEST_ASSERT(corner.has_value() and corner->m_end.m_x == 4095u and corner->m_end.m_y == 4095u);
+    };
+
     PPR_UNIT_TEST (discrete_dimensions_volume_and_metric_identity) {
         for (u32 i = 1u; i <= sim::kWorldEdge; ++i) {
             const double metres = static_cast<double>(i) / kFineCellsPerMetre;
@@ -100,6 +120,7 @@ namespace pP::game::tests {
         _.recurse(
             {detail::metric::centres_and_half_open_boundaries,
                 detail::metric::construction_is_global_and_crosses_chunks,
+                detail::metric::construction_drag_snaps_and_clamps_from_the_anchor_tile,
                 detail::metric::discrete_dimensions_volume_and_metric_identity});
     };
     const UnitTest &gameMetricTests() noexcept {

@@ -17,6 +17,7 @@ import std;
 import game.colony.buildings;
 import game.colony.driver;
 import game.colony.content;
+import game.colony.metric;
 import game.colony.worldgen;
 
 import game.colony.sim_packet;
@@ -347,6 +348,16 @@ namespace demo {
                 not m_close_requested.load(std::memory_order_acquire)) {
                 auto candidate = m_world_job->publish();
                 m_driver.swap(candidate);
+                m_world_job->retire(std::move(candidate));
+                if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
+                    const float extent = static_cast<float>(colony::kWorldExtentMetres);
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
+                    const auto &start = prepared->generated().m_start;
+                    m_pan_controller->focusOn(
+                        float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
+                    m_pan_controller->resetInputState();
+                }
                 m_driver_ready = true;
                 m_world_published = true;
                 m_initial_presentation = true;
@@ -364,7 +375,6 @@ namespace demo {
                 m_grid_reset_pending = true;
                 m_present_full_refresh = true;
                 m_dig_issued = 0u;
-                m_world_job->retire(std::move(candidate));
             }
             if (not m_world_job->busy()) {
                 if (m_close_requested.load(std::memory_order_acquire)) {
@@ -629,6 +639,29 @@ namespace demo {
                 return;
             }
 
+            if (m_driver->preparedWorld() and m_ui_state.m_tool == colony::EColonyTool::build_wall) {
+                const auto print = colony::constructionDragFootprint(
+                    *m_tool.m_footprint_anchor, *cell, colony::kMaxFootprintEdge);
+                if (not print) {
+                    m_build_preview.m_reason = "incomplete construction tile at world edge";
+                    return;
+                }
+                m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
+                m_build_preview.m_min = print->m_begin;
+                m_build_preview.m_max = {print->m_end.m_x - 1u, print->m_end.m_y - 1u};
+                const u32 raw_width = std::max(cell->m_x / 3u, m_tool.m_footprint_anchor->m_x / 3u) -
+                                      std::min(cell->m_x / 3u, m_tool.m_footprint_anchor->m_x / 3u) +
+                                      1u;
+                const u32 raw_height = std::max(cell->m_y / 3u, m_tool.m_footprint_anchor->m_y / 3u) -
+                                       std::min(cell->m_y / 3u, m_tool.m_footprint_anchor->m_y / 3u) +
+                                       1u;
+                m_build_preview.m_clamped_x = raw_width > colony::kMaxFootprintEdge / 3u;
+                m_build_preview.m_clamped_y = raw_height > colony::kMaxFootprintEdge / 3u;
+                m_build_preview.m_clamped = m_build_preview.m_clamped_x or m_build_preview.m_clamped_y;
+                m_build_preview.m_reason = "";
+                return;
+            }
+
             const i64 anchor_x = static_cast<i64>(m_tool.m_footprint_anchor->m_x);
             const i64 anchor_y = static_cast<i64>(m_tool.m_footprint_anchor->m_y);
             const i64 cursor_x = static_cast<i64>(cell->m_x);
@@ -696,7 +729,6 @@ namespace demo {
             }
             if (not placed) {
                 const std::error_code error = placed.error();
-                retainInputError_(error);
                 PPR_LOG(
                     Demo, warning, "build order rejected",
                     {
@@ -760,6 +792,7 @@ namespace demo {
             CameraSnapshot m_snapshot{};
             float2 m_extent{zero_v}; // client px, == ImGui coords (see below)
             bool m_valid{false};
+            u32 m_cells_per_metre{1u};
 
             /// Continuous pick map, byte-identical to the old pickCell_
             /// body: client-local input normalizes in client space directly
@@ -798,12 +831,13 @@ namespace demo {
                 }
                 const bool inside_world = world->x >= 0.0f and
                                           world->y >= 0.0f and
-                                          world->x < static_cast<float>(sim::kWorldEdge) and
-                                          world->y < static_cast<float>(sim::kWorldEdge);
+                                          world->x < static_cast<float>(sim::kWorldEdge) / m_cells_per_metre and
+                                          world->y < static_cast<float>(sim::kWorldEdge) / m_cells_per_metre;
                 if (not inside_world) {
                     return std::nullopt;
                 }
-                return sim::GlobalCellPos{static_cast<u32>(world->x), static_cast<u32>(world->y)};
+                const auto cell = colony::metreToFineCell({world->x, world->y}, m_cells_per_metre);
+                return cell ? std::optional{*cell} : std::nullopt;
             }
 
             /// Exact inverse of pickContinuous on continuous coordinates:
@@ -857,6 +891,7 @@ namespace demo {
                 return map;
             }
             map.m_snapshot = camera->getSnapshot();
+            map.m_cells_per_metre = m_driver ? m_driver->cellsPerMetre() : 1u;
             map.m_extent = float2{static_cast<float>(extent.x), static_cast<float>(extent.y)};
             map.m_valid = true;
             return map;
@@ -864,6 +899,11 @@ namespace demo {
 
         [[nodiscard]] std::optional<sim::GlobalCellPos> pickCell_(const float2 cursor_client) const noexcept {
             return screenMap_().pickCell(cursor_client);
+        }
+
+        [[nodiscard]] float2 cellCentreWorld_(const sim::GlobalCellPos cell) const noexcept {
+            const float scale = static_cast<float>(m_driver->cellsPerMetre());
+            return float2{(static_cast<float>(cell.m_x) + 0.5f) / scale, (static_cast<float>(cell.m_y) + 0.5f) / scale};
         }
 
         void clearControlInput_() noexcept {
@@ -1954,7 +1994,7 @@ namespace demo {
             }
 
             // Cell-center world point against the submitted marker quads.
-            const float2 pointer{static_cast<float>(cell->m_x) + 0.5f, static_cast<float>(cell->m_y) + 0.5f};
+            const float2 pointer = cellCentreWorld_(*cell);
             if (const std::optional<u64> agent = pickAgent_(pointer)) {
                 if (m_selected_agent == agent) {
                     clearAgentSelection_();
@@ -2179,7 +2219,7 @@ namespace demo {
             // the lower key), so the hovered row and the row a click would
             // select can never disagree. Read-only: the summaries are
             // queried, never written.
-            const float2 marker_pointer{static_cast<float>(cell->m_x) + 0.5f, static_cast<float>(cell->m_y) + 0.5f};
+            const float2 marker_pointer = cellCentreWorld_(*cell);
             m_hovered_agent = pickAgent_(marker_pointer);
 
             // getCell reads a non-resident chunk back as vacuum, so the dig
@@ -2190,13 +2230,21 @@ namespace demo {
                 element = read->m_element;
             }
             m_hover.m_diggable = resident and element != colony::kElementVacuum;
+            if (const auto *const prepared = m_driver->preparedWorld(); prepared and element != 0u) {
+                const auto *const material = prepared->catalog().findMaterial(element);
+                m_hover.m_diggable = resident and
+                                     material and
+                                     material->m_representation == colony::EMaterialRepresentation::terrain and
+                                     material->m_phase == colony::EMaterialPhase::solid and
+                                     material->m_diggable.value_or(false);
+            }
             if (not m_tool.m_dig_armed) {
                 return;
             }
             if (not resident) {
                 m_hover.m_reason = "chunk not resident";
             } else if (not m_hover.m_diggable) {
-                m_hover.m_reason = "vacuum: nothing to dig";
+                m_hover.m_reason = element == 0u ? "vacuum: nothing to dig" : "protected terrain: cannot dig";
             }
         }
 
@@ -2628,21 +2676,22 @@ namespace demo {
         [[nodiscard]] std::error_code submitChunkBorder_(
             TrianglePass::TriangleStagedFrame &stage, const sim::ChunkPos chunk, const u32 expand,
             const MaterialHandle material) {
-            const float origin_x = static_cast<float>(chunk.m_x * sim::kChunkEdge);
-            const float origin_y = static_cast<float>(chunk.m_y * sim::kChunkEdge);
-            const float expand_f = static_cast<float>(expand);
+            const float cell_metres = 1.0f / m_driver->cellsPerMetre();
+            const float origin_x = static_cast<float>(chunk.m_x * sim::kChunkEdge) * cell_metres;
+            const float origin_y = static_cast<float>(chunk.m_y * sim::kChunkEdge) * cell_metres;
+            const float expand_f = static_cast<float>(expand) * cell_metres;
             const float min_x = origin_x - expand_f;
             const float min_y = origin_y - expand_f;
-            const float edge = static_cast<float>(sim::kChunkEdge) + expand_f * 2.0f;
+            const float edge = static_cast<float>(sim::kChunkEdge) * cell_metres + expand_f * 2.0f;
 
             // Four one-cell borders; staged snapshots are replayed by the
             // lane onto the pass (m_instances replaces any editor
             // scene-staged entries, like the old pass.clearInstances).
             const float4x4 edges[4] = {
-                debugModel_(min_x + edge * 0.5f, min_y + 0.5f, 0.0f, edge, 1.0f),
-                debugModel_(min_x + edge * 0.5f, min_y + edge - 0.5f, 0.0f, edge, 1.0f),
-                debugModel_(min_x + 0.5f, min_y + edge * 0.5f, 0.0f, 1.0f, edge),
-                debugModel_(min_x + edge - 0.5f, min_y + edge * 0.5f, 0.0f, 1.0f, edge),
+                debugModel_(min_x + edge * 0.5f, min_y + cell_metres * 0.5f, 0.0f, edge, cell_metres),
+                debugModel_(min_x + edge * 0.5f, min_y + edge - cell_metres * 0.5f, 0.0f, edge, cell_metres),
+                debugModel_(min_x + cell_metres * 0.5f, min_y + edge * 0.5f, 0.0f, cell_metres, edge),
+                debugModel_(min_x + edge - cell_metres * 0.5f, min_y + edge * 0.5f, 0.0f, cell_metres, edge),
             };
             for (const float4x4 &model: edges) {
                 stage.m_instances.push_back(
@@ -2731,9 +2780,10 @@ namespace demo {
         /// band, exactly as before.
         static void overlayCellBorder_(
             ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) {
+            const float h = 1.0f / map.m_cells_per_metre;
             overlayRectBorder_(
-                draw, map, static_cast<float>(cell.m_x) + 0.5f, static_cast<float>(cell.m_y) + 0.5f, 0.5f, 0.5f, 0.5f,
-                color);
+                draw, map, (static_cast<float>(cell.m_x) + 0.5f) * h, (static_cast<float>(cell.m_y) + 0.5f) * h,
+                0.5f * h, 0.5f * h, 0.5f * h, color);
         }
 
         /// Footprint preview in screen space: the inclusive min/max corners
@@ -2751,10 +2801,11 @@ namespace demo {
                 return;
             }
 
-            const float x0 = static_cast<float>(m_build_preview.m_min.m_x);
-            const float y0 = static_cast<float>(m_build_preview.m_min.m_y);
-            const float x1 = static_cast<float>(m_build_preview.m_max.m_x) + 1.0f;
-            const float y1 = static_cast<float>(m_build_preview.m_max.m_y) + 1.0f;
+            const float cell_metres = 1.0f / map.m_cells_per_metre;
+            const float x0 = static_cast<float>(m_build_preview.m_min.m_x) * cell_metres;
+            const float y0 = static_cast<float>(m_build_preview.m_min.m_y) * cell_metres;
+            const float x1 = (static_cast<float>(m_build_preview.m_max.m_x) + 1.0f) * cell_metres;
+            const float y1 = (static_cast<float>(m_build_preview.m_max.m_y) + 1.0f) * cell_metres;
             const float cx = (x0 + x1) * 0.5f;
             const float cy = (y0 + y1) * 0.5f;
             const float w = x1 - x0;
@@ -2816,8 +2867,8 @@ namespace demo {
             // the badged side is the one away from the anchored corner -
             // the side the clamp gave back. The strip reports the same cap
             // in words, so the badge never carries the meaning alone.
-            const bool cap_x = m_build_preview.m_clamped_x and (w == static_cast<float>(colony::kMaxFootprintEdge));
-            const bool cap_y = m_build_preview.m_clamped_y and (h == static_cast<float>(colony::kMaxFootprintEdge));
+            const bool cap_x = m_build_preview.m_clamped_x;
+            const bool cap_y = m_build_preview.m_clamped_y;
             if (not cap_x and not cap_y) {
                 return;
             }
@@ -2825,7 +2876,7 @@ namespace demo {
             const float badge = band * 1.8f;
             const float offset = band * 0.5f + gap + badge * 0.5f;
             if (cap_x) {
-                const bool cut_max_x = m_build_preview.m_anchor.m_x == m_build_preview.m_min.m_x;
+                const bool cut_max_x = m_build_preview.m_anchor.m_x < m_build_preview.m_min.m_x + 3u;
                 const float edge = cut_max_x ? x1 : x0;
                 const float dir = cut_max_x ? offset : -offset;
                 ImVec2 min{};
@@ -2837,7 +2888,7 @@ namespace demo {
                 }
             }
             if (cap_y) {
-                const bool cut_max_y = m_build_preview.m_anchor.m_y == m_build_preview.m_min.m_y;
+                const bool cut_max_y = m_build_preview.m_anchor.m_y < m_build_preview.m_min.m_y + 3u;
                 const float edge = cut_max_y ? y1 : y0;
                 const float dir = cut_max_y ? offset : -offset;
                 ImVec2 min{};
@@ -2966,6 +3017,7 @@ namespace demo {
             // old pass.clearInstances()/submitInstance() loop that ran on
             // main and raced the render lane's reads of the same pass state.
             TrianglePass::TriangleStagedFrame stage{};
+            const float cell_metres = 1.0f / m_driver->cellsPerMetre();
             if (not m_debug_draw_ready) {
                 submitTriangleStage(std::move(stage));
                 return {};
@@ -2989,10 +3041,10 @@ namespace demo {
             if (m_show_grid) {
                 const float grid_scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
                 const float grid_band = std::max(std::clamp(grid_scale * 1.5f, 0.25f, 0.75f) * 0.5f, 0.10f);
-                const float world_half = static_cast<float>(sim::kWorldEdge) * 0.5f;
+                const float world_half = static_cast<float>(sim::kWorldEdge) * cell_metres * 0.5f;
                 const float stroke = grid_band * 0.5f;
                 for (u32 line = 0u; line <= sim::kChunksPerEdge; ++line) {
-                    const float at = static_cast<float>(line * sim::kChunkEdge);
+                    const float at = static_cast<float>(line * sim::kChunkEdge) * cell_metres;
 
                     // Horizontal (y = at) and vertical (x = at) lines, each
                     // centred on the boundary and spanning the whole world.
@@ -3035,8 +3087,8 @@ namespace demo {
                 }
 
                 for (u32 point = 0u; point < path->m_count; ++point) {
-                    const float qx = static_cast<float>(path->m_pts[point].m_x) + 0.5f;
-                    const float qy = static_cast<float>(path->m_pts[point].m_y) + 0.5f;
+                    const float qx = (static_cast<float>(path->m_pts[point].m_x) + 0.5f) * cell_metres;
+                    const float qy = (static_cast<float>(path->m_pts[point].m_y) + 0.5f) * cell_metres;
                     const float dx = qx - px;
                     const float dy = qy - py;
                     const float length = std::sqrt(dx * dx + dy * dy);

@@ -95,6 +95,29 @@ namespace pP::colony {
                 (tile.m_y + extent.m_height) * kFineCellsPerConstructionTile}};
     }
 
+    Expected<FineCellRect> constructionDragFootprint(
+        const sim::GlobalCellPos anchor, const sim::GlobalCellPos cursor, const u32 max_fine_edge) {
+        if (max_fine_edge < kFineCellsPerConstructionTile) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::errc::invalid_argument);
+        }
+        const auto begin = constructionTileOf(anchor);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, begin);
+        const auto end = constructionTileOf(cursor);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, end);
+        constexpr u32 complete_tiles = sim::kWorldEdge / kFineCellsPerConstructionTile;
+        const i32 limit = static_cast<i32>(std::min(max_fine_edge / kFineCellsPerConstructionTile, complete_tiles));
+        const auto clamp_axis = [limit](const u32 origin, const u32 target) {
+            const i32 from = static_cast<i32>(origin);
+            return static_cast<u32>(std::clamp(static_cast<i32>(target), from - limit + 1, from + limit - 1));
+        };
+        const u32 x = clamp_axis(begin->m_x, end->m_x);
+        const u32 y = clamp_axis(begin->m_y, end->m_y);
+        const u32 left = std::min(begin->m_x, x);
+        const u32 bottom = std::min(begin->m_y, y);
+        return constructionFootprint(
+            {left, bottom}, {std::max(begin->m_x, x) - left + 1u, std::max(begin->m_y, y) - bottom + 1u});
+    }
+
     Expected<ConstructionTile> constructionTileOf(const sim::GlobalCellPos position) {
         if (not sim::isInsideWorld(position)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
