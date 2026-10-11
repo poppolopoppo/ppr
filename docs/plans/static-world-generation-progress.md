@@ -182,3 +182,16 @@ visibility IDs/pixels, CPU parity and shutdown/reinitialization. Format/style an
 independent Astra review passed. This transport increment does not complete the
 catalog GPU palette/textures, shared contours, persistent resident table,
 versioned atlas or transactional world publication requirements.
+
+The GPU lane now retains a bounded resident chunk table and completion-safe
+slot uploads. Clean camera changes reuse it; submission bounds/materials,
+residency, cached uploads and resource replacement invalidate it. Reference
+draws invalidate the shared slot they overwrite. Build passed in
+`out/worldgen-resident-table-build.log`; the GPU regression passed three shuffled
+loops in `out/worldgen-resident-table-gpu.log` (10.75/10.17/10.30 s), proving no
+table rebuild/upload after slot warmup and correct moved-bounds pixels. Grid
+pass and all 26 frame-fence leaves passed in
+`out/worldgen-resident-table-tests.log` (frame-fence group 42.42 s). Format/style
+and independent Astra review passed. This records work-count evidence, not a
+measured frame-time improvement or GPU-overlap claim. Versioned atlas and the
+remaining stage 5 resource/publication work are still pending.

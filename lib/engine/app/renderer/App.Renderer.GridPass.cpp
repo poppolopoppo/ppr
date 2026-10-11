@@ -174,6 +174,16 @@ namespace pP {
         for (const GridTileSubmission &submission: submissions) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSubmission_(submission));
         }
+        const bool unchanged = std::ranges::equal(
+            m_submitted_tiles, submissions, [](const GridTileSubmission &lhs, const GridTileSubmission &rhs) {
+                return lhs.m_chunk_id == rhs.m_chunk_id and
+                       lhs.m_material_id == rhs.m_material_id and
+                       lhs.m_tile_range.m_min_x == rhs.m_tile_range.m_min_x and
+                       lhs.m_tile_range.m_min_y == rhs.m_tile_range.m_min_y and
+                       lhs.m_tile_range.m_max_x == rhs.m_tile_range.m_max_x and
+                       lhs.m_tile_range.m_max_y == rhs.m_tile_range.m_max_y;
+            });
+        m_resident_table_stale = m_resident_table_stale or not unchanged;
         m_submitted_tiles.clear();
         m_submitted_tiles.reserve(submissions.size());
         for (const GridTileSubmission &submission: submissions) {
@@ -184,11 +194,13 @@ namespace pP {
 
     void GridPass::clearTiles() noexcept {
         m_visibility_prepared = false;
+        m_resident_table_stale = true;
         m_submitted_tiles.clear();
     }
 
     void GridPass::clearCache() noexcept {
         m_visibility_prepared = false;
+        m_resident_table_stale = true;
         m_tile_cache.clear();
         m_cell_cache.clear();
         // Keep the atlas allocated: its previous contents may still be read
@@ -303,6 +315,7 @@ namespace pP {
         }
 
         m_upload_count += uploaded;
+        m_resident_table_stale = true;
         if (has_cells) {
             m_cell_cache.insert_or_assign(request.m_chunk_id, GridCachedCells{std::move(packed), true});
         } else {
@@ -524,6 +537,8 @@ namespace pP {
         }
         std::memcpy(
             mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
+        // The reference lane shares storage with the persistent GPU table.
+        m_resident_table_uploaded[m_tile_ring_cursor] = false;
 
         draw_context.m_pass.setRenderState({
             .viewports = {draw_context.m_viewport},
@@ -679,6 +694,7 @@ namespace pP {
         }
         std::memcpy(
             mapped_payloads, payloads.data(), static_cast<std::size_t>(payloads.size()) * sizeof(GridTilePayload));
+        m_resident_table_uploaded[m_tile_ring_cursor] = false;
         std::memcpy(
             mapped_args, args->data(), static_cast<std::size_t>(args->size()) * sizeof(rhi::IndirectDrawArguments));
 
@@ -809,6 +825,7 @@ namespace pP {
     }
 
     void GridPass::releaseTilePayloads_(rhi::IDevice *const device) noexcept {
+        m_resident_table_uploaded.fill(false);
         for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
             if (m_tile_payloads[slot] == nullptr) {
                 m_tile_payload_mapped[slot] = nullptr;
@@ -1039,6 +1056,9 @@ namespace pP {
         m_atlas_serialization_count = 0u;
         m_atlas_write_count = 0u;
         m_cell_size_m = 1.0f;
+        m_resident_table.clear();
+        m_resident_table_build_count = 0u;
+        m_resident_table_upload_count = 0u;
         m_growth_wait_count = 0u;
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
@@ -1070,6 +1090,7 @@ namespace pP {
         // pass-owned caches). Slot values reset with the fence epoch.
         std::error_code first_err{};
         m_submitted_tiles.clear();
+        m_resident_table_stale = true;
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
         m_tile_slot_values.fill(kFenceValueNone);
@@ -1193,18 +1214,10 @@ namespace pP {
         return {};
     }
 
-    std::error_code GridPass::prepareGpuVisibility(const PreRenderContext &context) {
-        m_visibility_prepared = false;
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, m_submitted_tiles.size() <= kGridTileCacheCapacity
-                          ? std::error_code{}
-                          : std::make_error_code(std::errc::no_buffer_space));
-        reclaimCompleted_(context.m_completed_fence_value);
+    std::error_code GridPass::rebuildResidentTable_() {
         Array<GridTilePayload> payloads;
         payloads.reserve(m_submitted_tiles.size());
-        m_visibility_has_cells = false;
+        bool has_cells = false;
         for (const GridTileSubmission &tile: m_submitted_tiles) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSubmission_(tile));
             const auto cells = m_cell_cache.find(tile.m_chunk_id);
@@ -1213,7 +1226,7 @@ namespace pP {
                     GridPass, not cells->second.m_pending and m_cell_atlas != nullptr
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::operation_in_progress));
-                m_visibility_has_cells = true;
+                has_cells = true;
             }
             GridTilePayload payload{};
             const auto cached = resolveCached(tile.m_chunk_id);
@@ -1228,6 +1241,27 @@ namespace pP {
             applyCellPayload_(payload, tile.m_chunk_id);
             payloads.push_back(payload);
         }
+        m_resident_table = std::move(payloads);
+        m_visibility_has_cells = has_cells;
+        m_resident_table_stale = false;
+        m_resident_table_uploaded.fill(false);
+        ++m_resident_table_build_count;
+        return {};
+    }
+
+    std::error_code GridPass::prepareGpuVisibility(const PreRenderContext &context) {
+        m_visibility_prepared = false;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_submitted_tiles.size() <= kGridTileCacheCapacity
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::no_buffer_space));
+        reclaimCompleted_(context.m_completed_fence_value);
+        if (m_resident_table_stale) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, rebuildResidentTable_());
+        }
+        const auto &payloads = m_resident_table;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(context.m_device, false));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureVisibilityBuffers_(context.m_device));
         PPR_RETURN_ERROR_ON_FAIL(
@@ -1235,9 +1269,11 @@ namespace pP {
                           context.m_device, std::max<u32>(1u, safe_narrowing(payloads.size())),
                           context.m_completed_fence_value, context.m_wait_for_fence));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, selectSlot_(context.m_completed_fence_value, context.m_wait_for_fence));
-        if (not payloads.empty()) {
+        if (not payloads.empty() and not m_resident_table_uploaded[m_tile_ring_cursor]) {
             std::memcpy(
                 m_tile_payload_mapped[m_tile_ring_cursor], payloads.data(), payloads.size() * sizeof(GridTilePayload));
+            m_resident_table_uploaded[m_tile_ring_cursor] = true;
+            ++m_resident_table_upload_count;
         }
 
         struct alignas(16) VisibilityFrame {

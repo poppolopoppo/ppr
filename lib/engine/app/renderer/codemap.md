@@ -23,6 +23,12 @@ all apply that same scale; local atlas addressing stays in fine cells. Ordinary
 shutdown resets the metric for reuse. Catalog textures and GPU visual-resource
 publication remain separate acceptance work.
 
+The normal GPU lane retains its resident table until submissions or cached
+content change. Each completion-selected payload slot receives that version
+once; camera motion updates frame constants and visibility outputs. Reference
+draws invalidate shared slots they overwrite, and buffer replacement invalidates
+all slot uploads. Resident-table build/upload counters expose this work.
+
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),

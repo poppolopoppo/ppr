@@ -1201,6 +1201,47 @@ namespace pP::tests::detail {
                 }
             }
 
+            // Clean camera motion reuses the resident table after each safe
+            // ring slot has received it once. Atlas work remains quiescent.
+            const u64 table_builds = grid.residentTableBuildCount();
+            const u64 atlas_writes = grid.atlasWriteCount();
+            const u64 atlas_waits = grid.atlasSerializationCount();
+            for (u32 frame = 0u; frame < 6u; ++frame) {
+                CameraModel moving_model{};
+                moving_model.m_camera_mode = ECameraProjection::orthographic;
+                moving_model.m_origin = float3{static_cast<float>(frame), 0.0f, 0.0f};
+                Camera moving_camera;
+                moving_camera.updateModel(
+                    TimeSpan{}, moving_model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, moving_camera.getSnapshot()));
+                PPR_TEST_ASSERT(not grid.submitTiles(tiles));
+                const u64 uploads = grid.residentTableUploadCount();
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"persistent grid", draw}}, {}, PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(grid.residentTableBuildCount() == table_builds);
+                if (frame >= 3u) {
+                    PPR_TEST_ASSERT(grid.residentTableUploadCount() == uploads);
+                }
+            }
+            PPR_TEST_ASSERT(grid.atlasWriteCount() == atlas_writes);
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == atlas_waits);
+
+            // A clean submission can change bounds even with a cached payload.
+            auto moved_tiles = tiles;
+            moved_tiles[0u].m_tile_range = {3072, 0, 3200, 128};
+            PPR_TEST_ASSERT(not grid.submitTiles(moved_tiles));
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"moved resident grid", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            PPR_TEST_ASSERT(grid.residentTableBuildCount() == table_builds + 1u);
+            const auto moved_pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(moved_pixels.has_value());
+            const auto moved_texel = gateTexel_(*moved_pixels, 32u, 96u);
+            PPR_TEST_ASSERT(moved_texel[0] < 80u and moved_texel[1] < 80u);
+
             // A new legacy pass lifetime must not inherit the prepared metric.
             GridPass::GridStagedFrame metric_stage{};
             metric_stage.m_cell_size_m = 1.0f / 3.0f;

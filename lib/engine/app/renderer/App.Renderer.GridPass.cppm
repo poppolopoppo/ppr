@@ -299,6 +299,13 @@ export namespace pP {
         [[nodiscard]] u64 atlasWriteCount() const noexcept {
             return m_atlas_write_count;
         }
+
+        [[nodiscard]] u64 residentTableBuildCount() const noexcept {
+            return m_resident_table_build_count;
+        }
+        [[nodiscard]] u64 residentTableUploadCount() const noexcept {
+            return m_resident_table_upload_count;
+        }
         [[nodiscard]] u64 growthWaitCount() const noexcept {
             return m_growth_wait_count;
         }
@@ -382,6 +389,8 @@ export namespace pP {
 
         void applyCellPayload_(GridTilePayload &payload, u32 chunk_id) const noexcept;
 
+        [[nodiscard]] std::error_code rebuildResidentTable_();
+
         // Drops the whole payload ring without touching a device: unmap only
         // runs when one is supplied (the growth/replacement path), while
         // shutdown and device loss release still-mapped buffers as-is.
@@ -414,6 +423,11 @@ export namespace pP {
         bool m_visibility_prepared{false};
         bool m_visibility_has_cells{false};
         float m_cell_size_m{1.0f};
+        Array<GridTilePayload> m_resident_table{};
+        bool m_resident_table_stale{true};
+        std::array<bool, kTileRingSize> m_resident_table_uploaded{};
+        u64 m_resident_table_build_count{};
+        u64 m_resident_table_upload_count{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
         std::optional<GridCachedPipeline> m_cached_pipeline;
 
