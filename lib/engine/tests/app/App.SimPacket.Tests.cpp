@@ -27,6 +27,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (catalog_packet_preserves_identity_metric_and_owned_visuals) {
             colony::SimFramePacket packet{};
             packet.m_has_catalog = true;
+            packet.m_boundary_material_id = 16u;
             packet.m_cell_size_m = 1.0f / 3.0f;
             packet.m_content_fingerprint = 42u;
             packet.m_terrain_visuals.push_back({16u, 0x123456ffu, 2u, 2.0f});
@@ -42,6 +43,7 @@ namespace pP::tests::detail {
             GridPass::GridStagedFrame stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
             PPR_TEST_ASSERT(stage.m_has_catalog and stage.m_content_fingerprint == 42u);
+            PPR_TEST_ASSERT(stage.m_boundary_material_id == 16u);
             PPR_TEST_ASSERT(stage.m_cell_size_m == 1.0f / 3.0f);
             PPR_TEST_ASSERT(stage.m_uploads.size() == 1u);
             PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[0u] == 0u);
@@ -59,6 +61,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
             PPR_TEST_ASSERT(stage.m_uploads.empty() and stage.m_ack_chunk_ids.empty());
             packet.m_chunk_cells[0u].m_cells[1u].m_element = 16u;
+            packet.m_boundary_material_id = 32u;
+            PPR_TEST_ASSERT(
+                colony::buildGridStagedFrame(packet, stage) == std::make_error_code(std::errc::invalid_argument));
+            packet.m_boundary_material_id = 16u;
             packet.m_terrain_visuals[1u].m_material_id = 16u;
             PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
             packet.m_terrain_visuals[1u].m_material_id = 257u;

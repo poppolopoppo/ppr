@@ -92,3 +92,13 @@ each draw. `GridPass::initialize` follows the same chain for `<content_dir>/shad
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
+
+Catalog terrain uses the shared `engine.math` contour points and 16-case table,
+uploaded verbatim (8-byte points, 72-byte cases). The fragment shader reads four
+global samples through a completion-safe logical-chunk-to-physical-slot map,
+including diagonal neighbors, and evaluates filled triangles. Saddle components
+stay disconnected. The nearest occupied sample in that component selects the
+material, with global row-major ties; only actual boundary segments drive edge
+AA. Outside-world samples use the profile's validated wall material without
+forming atlas addresses. Each chunk draws only its nominal rectangle. Legacy
+explicit fixtures retain square cells. Texture shading remains pending.

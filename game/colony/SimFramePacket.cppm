@@ -31,6 +31,7 @@ export namespace pP::colony {
     struct SimFramePacket {
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
+        u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};
         Array<GridTerrainVisual> m_terrain_visuals{};
         u64 m_frame_id{};

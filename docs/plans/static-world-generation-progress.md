@@ -215,3 +215,21 @@ Formatting, semantic style and independent Astra review passed. This completes
 the pass-local atlas increment; gameplay/collider edit revision coherence,
 shared rendered contours, textures and transactional GPU world bundles remain
 required stage 5 work. No UI-cadence or total-memory acceptance claim is made.
+
+Catalog terrain now evaluates the exact engine.math contour table on the GPU,
+including disconnected saddle components, row-major material ties, neighbor
+samples across four-chunk seams, protected world-edge samples, and boundary-only
+antialiasing. Legacy fixtures retain square cells. Retained resident tables also
+retain their metric, contour mode and boundary material during deferred cohorts;
+all neighbor mappings remain pinned until their readers retire.
+The final ASan build passed in `out/worldgen-contour-build6.log`. All 59 focused
+app leaves passed in `out/worldgen-contour-tests.log`, explicit ABI checks passed
+in `out/worldgen-contour-abi.log`, and GameConfig passed in
+`out/worldgen-contour-game-tests.log` (59.04 s). Three final GPU contour loops
+passed in `out/worldgen-contour-final-gpu.log` (8.18/7.81/7.40 s); the broader
+visibility/cohort regression also passed three loops in
+`out/worldgen-contour-gpu2.log`. Saddle captures were inspected at
+`out/build/msvc-dev/lib/engine/tests/asset/temp_gate_fixtures/grid-contour-case-{5,10}.png`.
+Formatting, semantic style and independent Astra review passed. Textures,
+transactional candidate GPU bundles, diagnostic modes and gameplay/collider
+edit coherence remain stage 5 work; this increment does not claim those gates.

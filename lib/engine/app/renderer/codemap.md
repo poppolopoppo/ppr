@@ -298,3 +298,13 @@ all pending chunks so switching preparation APIs cannot pin both slot banks.
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`
+
+The shared contour surface is enabled for catalog sessions. GridPass uploads
+`math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;
+retained lookup slots, including diagonal neighbors absent from the compact draw
+table, stay pinned until the publication and reader-fence rules release them.
+Metric, contour mode and boundary material publish with the resident table.
+World replacement and deferred edits therefore keep the previous surface's
+shape/scale until replacement data is complete. GPU fixtures compare all 16
+cases and categorical material winners across four-chunk seams at both scales,
+plus antialiasing and protected world corners.

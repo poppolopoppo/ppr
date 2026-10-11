@@ -18,6 +18,7 @@ namespace pP::colony {
                 return;
             }
             packet.m_has_catalog = true;
+            packet.m_boundary_material_id = driver.boundaryMaterial();
             const auto &content = *catalog;
             PPR_ASSERT(content.contentFingerprint().has_value());
             packet.m_content_fingerprint = *content.contentFingerprint();
@@ -77,6 +78,13 @@ namespace pP::colony {
                                              : std::make_error_code(std::errc::invalid_argument));
                 }
             }
+            const bool boundary_known = std::ranges::any_of(
+                packet.m_terrain_visuals, [&packet](const GridTerrainVisual &visual) {
+                    return visual.m_material_id == packet.m_boundary_material_id;
+                });
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation,
+                boundary_known ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
             return {};
         }
         [[nodiscard]] GridTileRange tileRange(const sim::ChunkPos pos) noexcept {
@@ -230,6 +238,7 @@ namespace pP::colony {
         capturePresentation_(presentation, driver);
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
+        stage.m_boundary_material_id = presentation.m_boundary_material_id;
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
         if (m_frame or m_next_chunk == sim::kChunkCount) {
@@ -272,6 +281,7 @@ namespace pP::colony {
         }
         stage.m_cell_size_m = packet.m_cell_size_m;
         stage.m_has_catalog = packet.m_has_catalog;
+        stage.m_boundary_material_id = packet.m_boundary_material_id;
         stage.m_content_fingerprint = packet.m_content_fingerprint;
         stage.m_terrain_visuals = packet.m_terrain_visuals;
         // Owned payload only: no driver ack, no translator contact, and no

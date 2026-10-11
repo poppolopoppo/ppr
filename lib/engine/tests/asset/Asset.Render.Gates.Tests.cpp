@@ -1277,6 +1277,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(old_pixels.has_value());
             const auto old_texel = gateTexel_(*old_pixels, 32u, 96u);
             const u64 old_builds = grid.residentTableBuildCount();
+            GridPass::GridStagedFrame replacement_stage{};
+            replacement_stage.m_has_catalog = true;
+            replacement_stage.m_cell_size_m = 1.0f / 3.0f;
+            replacement_stage.m_tiles.assign(cohort_tiles.begin(), cohort_tiles.begin() + 2u);
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(replacement_stage));
             for (u32 chunk = 0u; chunk < 2u; ++chunk) {
                 PPR_TEST_ASSERT(queue_cells(chunk, 2u).has_value());
             }
@@ -1306,6 +1311,7 @@ namespace pP::tests::detail {
             const auto new_pixels = readback_(device, targetRef_(target), 128u);
             PPR_TEST_ASSERT(new_pixels.has_value());
             PPR_TEST_ASSERT(gateTexel_(*new_pixels, 32u, 96u) != old_texel);
+            PPR_TEST_ASSERT(gateTexel_(*new_pixels, 96u, 96u)[0u] < 80u);
             PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
 
             // Fill both physical generations. A conservative completion frontier
@@ -1386,6 +1392,196 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(legacy_pixels.has_value());
             const auto legacy_texel = gateTexel_(*legacy_pixels, 96u, 96u);
             PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
+        };
+
+        PPR_UNIT_TEST (grid_shared_contours_match_cpu_at_four_chunk_seams) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            const std::array<u32, 4u> chunks{0u, 1u, 33u, 32u};
+            const std::array<u16, 4u> materials{1u, 2u, 4u, 3u};
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_catalog = true;
+            for (const u32 chunk: chunks) {
+                const i32 x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 y = static_cast<i32>(chunk / 32u) * 128;
+                stage.m_tiles.push_back(
+                    GridTileSubmission{
+                        .m_chunk_id = chunk, .m_tile_range = {x, y, x + 128, y + 128}, .m_dirty_mask = 1u});
+            }
+            const auto points = math::contourPoints();
+            const auto cases = math::contourCases();
+            const auto cross = [](const math::ContourPoint a, const math::ContourPoint b,
+                                   const math::ContourPoint point) {
+                return (b.m_x - a.m_x) * (point.m_y - a.m_y) - (b.m_y - a.m_y) * (point.m_x - a.m_x);
+            };
+            for (const float metric: {1.0f, 1.0f / 3.0f}) {
+                stage.m_cell_size_m = metric;
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_origin = float3{127.5f * metric, 127.5f * metric, 0.0f};
+                model.m_ortho_scale = metric / 128.0f;
+                Camera camera;
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+                for (u32 mask = 0u; mask < 16u; ++mask) {
+                    for (u32 corner = 0u; corner < 4u; ++corner) {
+                        Array<u16> cells;
+                        cells.resize(GridPass::kCellsPerChunk, 0u);
+                        const u32 x = corner == 0u or corner == 3u ? 127u : 0u;
+                        const u32 y = corner < 2u ? 127u : 0u;
+                        cells[y * 128u + x] = (mask & (1u << corner)) != 0u ? materials[corner] : 0u;
+                        GridTilePayload payload{};
+                        const auto uploaded = grid.requestUpload(
+                            GridUploadRequest{chunks[corner], std::span{&payload, 1u}, std::span<const u16>{cells}});
+                        PPR_TEST_ASSERT(uploaded and *uploaded == 1u);
+                    }
+                    const auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 4u);
+                    PPR_TEST_ASSERT(published and *published);
+                    PPR_TEST_ASSERT(not renderer->renderToTexture(
+                        targetRef_(target), {DrawSubmission{"shared contour seam", draw}}, {},
+                        PreRenderCallback{prepare}));
+                    grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    const auto pixels = readback_(device, targetRef_(target), 128u);
+                    PPR_TEST_ASSERT(pixels.has_value());
+                    if (mask == 1u and metric == 1.0f) {
+                        const auto edge = gateTexel_(*pixels, 2u, 66u);
+                        PPR_TEST_ASSERT(edge[0u] > 90u and edge[0u] < 150u);
+                    }
+                    if (metric == 1.0f / 3.0f and (mask == 1u or mask == 5u or mask == 10u or mask == 15u)) {
+                        const auto directory = std::filesystem::current_path() / "temp_gate_fixtures";
+                        std::error_code error;
+                        std::filesystem::create_directories(directory, error);
+                        PPR_TEST_ASSERT(not error);
+                        const mango::image::Surface surface{
+                            128, 128,
+                            mango::image::Format(
+                                32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
+                            static_cast<u32>(pixels->m_row_pitch), pixels->m_bytes.data()};
+                        const auto path = directory / std::format("grid-contour-case-{}.png", mask);
+                        PPR_TEST_ASSERT(static_cast<bool>(surface.save(path.string())));
+                    }
+                    const auto &shape = cases[mask];
+                    for (u32 y = 2u; y < 128u; y += 5u) {
+                        for (u32 x = 2u; x < 128u; x += 5u) {
+                            const math::ContourPoint point{
+                                (static_cast<float>(x) + 0.5f) / 128.0f,
+                                1.0f - (static_cast<float>(y) + 0.5f) / 128.0f};
+                            bool near_edge = false;
+                            for (u32 edge = 0u; edge < shape.m_segment_count; ++edge) {
+                                const auto segment = shape.m_segments[edge];
+                                const auto a = points[segment.m_begin];
+                                const auto b = points[segment.m_end];
+                                const float dx = b.m_x - a.m_x;
+                                const float dy = b.m_y - a.m_y;
+                                const float t = std::clamp(
+                                    ((point.m_x - a.m_x) * dx + (point.m_y - a.m_y) * dy) / (dx * dx + dy * dy), 0.0f,
+                                    1.0f);
+                                const float ex = point.m_x - a.m_x - t * dx;
+                                const float ey = point.m_y - a.m_y - t * dy;
+                                near_edge = near_edge or ex * ex + ey * ey < 0.001f;
+                            }
+                            if (near_edge) {
+                                continue;
+                            }
+                            u32 component{};
+                            for (u32 triangle = 0u; triangle < shape.m_triangle_count; ++triangle) {
+                                const auto face = shape.m_triangles[triangle];
+                                if (cross(points[face.m_a], points[face.m_b], point) >= 0.0f and
+                                    cross(points[face.m_b], points[face.m_c], point) >= 0.0f and
+                                    cross(points[face.m_c], points[face.m_a], point) >= 0.0f) {
+                                    component = face.m_solid_corners;
+                                    break;
+                                }
+                            }
+                            u32 winner{};
+                            float closest = (std::numeric_limits<float>::max)();
+                            for (u32 corner = 0u; corner < 4u; ++corner) {
+                                if ((component & (1u << corner)) == 0u) {
+                                    continue;
+                                }
+                                const float dx = point.m_x - points[corner].m_x;
+                                const float dy = point.m_y - points[corner].m_y;
+                                const float distance = dx * dx + dy * dy;
+                                const bool before = points[corner].m_y < points[winner].m_y or
+                                                    (points[corner].m_y == points[winner].m_y and
+                                                        points[corner].m_x < points[winner].m_x);
+                                if (distance < closest or (distance == closest and before)) {
+                                    closest = distance;
+                                    winner = corner;
+                                }
+                            }
+                            const auto texel = gateTexel_(*pixels, x, y);
+                            const u32 material = materials[winner];
+                            for (u32 channel = 0u; channel < 3u; ++channel) {
+                                const i32 expected = component != 0u ? ((material & (1u << channel)) != 0u ? 217 : 38)
+                                                     : channel == 2u ? 51
+                                                                     : 25;
+                                PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[channel]) - expected) <= 2);
+                            }
+                        }
+                    }
+                }
+            }
+            // Protected samples beyond each world corner must not generate
+            // atlas addresses. Nominal rectangles still clip the actual draw.
+            for (const u32 chunk: {0u, 31u, 1023u, 992u}) {
+                GridPass::GridStagedFrame boundary_stage{};
+                boundary_stage.m_has_catalog = true;
+                const i32 min_x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 min_y = static_cast<i32>(chunk / 32u) * 128;
+                boundary_stage.m_tiles.push_back(
+                    GridTileSubmission{
+                        .m_chunk_id = chunk,
+                        .m_tile_range = {min_x, min_y, min_x + 128, min_y + 128},
+                        .m_dirty_mask = 1u});
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(boundary_stage));
+                Array<u16> cells;
+                cells.resize(GridPass::kCellsPerChunk, 1u);
+                GridTilePayload payload{};
+                const auto uploaded = grid.requestUpload(
+                    GridUploadRequest{chunk, std::span{&payload, 1u}, std::span<const u16>{cells}});
+                PPR_TEST_ASSERT(uploaded and *uploaded == 1u);
+                const auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 4u);
+                PPR_TEST_ASSERT(published and *published);
+                const bool left = chunk % 32u == 0u;
+                const bool bottom = chunk / 32u == 0u;
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_origin = float3{left ? -0.5f : 4095.5f, bottom ? -0.5f : 4095.5f, 0.0f};
+                model.m_ortho_scale = 1.0f / 128.0f;
+                Camera camera;
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"protected world corner", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto pixels = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                const auto inside = gateTexel_(*pixels, left ? 96u : 32u, bottom ? 32u : 96u);
+                const auto outside = gateTexel_(*pixels, left ? 32u : 96u, bottom ? 96u : 32u);
+                PPR_TEST_ASSERT(inside[0u] > 160u and inside[1u] < 80u);
+                PPR_TEST_ASSERT(outside[0u] < 80u and outside[1u] < 80u);
+            }
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
         };
 
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {
@@ -1569,6 +1765,7 @@ namespace pP::tests {
             detail::Gate::render_accepts_msaa_sample_counts,
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
+            detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
         });
     };
 

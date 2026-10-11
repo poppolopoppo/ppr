@@ -201,6 +201,7 @@ export namespace pP::colony {
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
         // Borrowed immutable catalog; absent for explicit legacy fixtures.
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
+        [[nodiscard]] u16 boundaryMaterial() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
 
         [[nodiscard]] std::error_code shutdown();

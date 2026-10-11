@@ -144,7 +144,8 @@ export namespace pP {
             float4x4 m_view_projection{identity_v};
             u32 m_use_visible_ids{};
             float m_cell_size_m{1.0f};
-            std::array<u32, 2u> m_padding{};
+            u32 m_surface_mode{};
+            u32 m_boundary_material_id{1u};
         };
 
         static_assert(sizeof(GridFrame) == 80u);
@@ -235,6 +236,7 @@ export namespace pP {
         struct GridStagedFrame {
             float m_cell_size_m{1.0f};
             bool m_has_catalog{false};
+            u32 m_boundary_material_id{1u};
             u64 m_content_fingerprint{};
             Array<GridTerrainVisual> m_terrain_visuals{};
             Array<GridTileSubmission> m_tiles{};
@@ -359,6 +361,8 @@ export namespace pP {
         std::error_code createVisibilityPrograms_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         std::error_code ensureVisibilityBuffers_(rhi::IDevice &device);
+        std::error_code ensureSurfaceBuffers_(rhi::IDevice &device);
+        std::error_code bindSurfaceBuffers_(rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
@@ -432,6 +436,17 @@ export namespace pP {
         std::array<VisibilitySlot, kTileRingSize> m_visibility_slots{};
         std::array<VisibilityProgram, 2u> m_visibility_programs{};
         bool m_visibility_prepared{false};
+        bool m_contours_enabled{false};
+        bool m_resident_contours_enabled{false};
+        float m_resident_cell_size_m{1.0f};
+        u32 m_boundary_material_id{1u};
+        u32 m_resident_boundary_material_id{1u};
+        rhi::ComPtr<rhi::IBuffer> m_contour_points{};
+        rhi::ComPtr<rhi::IBuffer> m_contour_cases{};
+        std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
+        std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
+        std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
+        std::array<u32, kGridTileCacheCapacity> m_resident_chunk_slots{};
         bool m_visibility_has_cells{false};
         float m_cell_size_m{1.0f};
         Array<GridTilePayload> m_resident_table{};

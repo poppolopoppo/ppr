@@ -2,13 +2,15 @@
 // tile. Row-major, row-vector convention: transforms call
 // mul(vector, matrix), never mul(matrix, vector). View-projection remains
 // view * projection with [0,1] depth, no transpose, no Y flip. No lighting,
-// no texturing, no GI inputs of any kind.
+// no texturing, no GI inputs of any kind. Catalog sessions use the shared
+// piecewise-linear contour surface; explicit legacy fixtures keep square cells.
 struct GridFrame {
     // Unjittered view * projection, followed by the per-slot visibility mode.
     float4x4 m_view_projection;
     uint m_use_visible_ids;
     float m_cell_size_m;
-    uint2 m_padding;
+    uint m_surface_mode;
+    uint m_boundary_material_id;
 };
 
 // CPU mirror GridTilePayload: 32 B = 16 rect + 4 material + 4 base
@@ -32,9 +34,25 @@ struct GridTilePayload {
 ConstantBuffer<GridFrame> g_grid_frame;
 StructuredBuffer<GridTilePayload> g_tiles;
 StructuredBuffer<uint> g_visible_ids;
-// Chunk n occupies 8192 words at n*8192; low halfword = even cell,
+// Physical slot n occupies 8192 words at n*8192; low halfword = even cell,
 // high halfword = odd cell. Only read when payload flag bit 0 is set.
 StructuredBuffer<uint> g_cell_materials;
+// Uploaded verbatim from engine.math; no separate shader case table.
+struct ContourTriangle {
+    uint m_a;
+    uint m_b;
+    uint m_c;
+    uint m_solid_corners;
+};
+struct ContourCase {
+    uint m_segment_count;
+    uint m_triangle_count;
+    uint2 m_segments[2];
+    ContourTriangle m_triangles[3];
+};
+StructuredBuffer<float2> g_contour_points;
+StructuredBuffer<ContourCase> g_contour_cases;
+StructuredBuffer<uint> g_chunk_slots;
 
 struct GridVertexOutput {
     float4 position : SV_Position;
@@ -42,6 +60,7 @@ struct GridVertexOutput {
     nointerpolation uint cell_word_base : TEXCOORD1;
     nointerpolation uint flags : TEXCOORD2;
     float2 local_cell : TEXCOORD0;
+    float2 fine_position : TEXCOORD3;
 };
 
 // Deterministic tint from the low 3 bits: the 8 corners of a dim/bright
@@ -98,13 +117,111 @@ GridVertexOutput vertexGridMain(
     output.cell_word_base = tile.m_cell_word_base;
     output.flags = tile.m_flags;
     output.local_cell = corner - min_xy;
+    output.fine_position = corner;
     return output;
+}
+
+// Global sample addressing includes diagonal neighbors. Outside samples are
+// protected solid and never form a buffer address. Missing inside residency is
+// empty during incremental candidate preparation.
+uint terrainSample(int2 sample) {
+    if (any(sample < int2(0)) || any(sample >= int2(4096))) {
+        return g_grid_frame.m_boundary_material_id;
+    }
+    uint2 cell = uint2(sample);
+    uint chunk = (cell.y / 128u) * 32u + cell.x / 128u;
+    uint slot = g_chunk_slots[chunk];
+    if (slot == 0xffffffffu) {
+        return 0u;
+    }
+    uint index = (cell.y % 128u) * 128u + cell.x % 128u;
+    uint packed = g_cell_materials[slot * 8192u + index / 2u];
+    return ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
+}
+
+float contourCross(float2 a, float2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+uint contourMaterial(float2 position, float width, out float coverage) {
+    int2 base = int2(floor(position - 0.5));
+    float2 point = position - (float2(base) + 0.5);
+    uint materials[4];
+    uint mask = 0u;
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        materials[corner] = terrainSample(base + int2(g_contour_points[corner]));
+        if (materials[corner] != 0u && materials[corner] != 0xffffu) {
+            mask |= 1u << corner;
+        }
+    }
+    ContourCase shape = g_contour_cases[mask];
+    uint component = 0u;
+    float best_triangle = -1.0e30;
+    for (uint index = 0u; index < shape.m_triangle_count; ++index) {
+        ContourTriangle triangle = shape.m_triangles[index];
+        float2 a = g_contour_points[triangle.m_a];
+        float2 b = g_contour_points[triangle.m_b];
+        float2 c = g_contour_points[triangle.m_c];
+        float signed_distance = min(
+            contourCross(b - a, point - a) / length(b - a),
+            min(contourCross(c - b, point - b) / length(c - b),
+                contourCross(a - c, point - c) / length(a - c)));
+        if (signed_distance > best_triangle) {
+            best_triangle = signed_distance;
+            component = triangle.m_solid_corners;
+        }
+    }
+    if (component == 0u) {
+        discard;
+    }
+    // AA uses only actual contour segments, never the internal fan edges.
+    // Coverage is the union of occupied components, independent of material.
+    float edge_distance = 1.0e30;
+    for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
+        uint2 segment = shape.m_segments[edge];
+        float2 a = g_contour_points[segment.x];
+        float2 delta = g_contour_points[segment.y] - a;
+        float t = saturate(dot(point - a, delta) / dot(delta, delta));
+        edge_distance = min(edge_distance, length(point - (a + t * delta)));
+    }
+    coverage = shape.m_segment_count == 0u ? 1.0 :
+        saturate(0.5 + (best_triangle >= 0.0 ? edge_distance : -edge_distance) / width);
+    if (coverage == 0.0) {
+        discard;
+    }
+    float closest = 1.0e30;
+    int2 winner = int2(4096);
+    uint material = 0u;
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        if ((component & (1u << corner)) == 0u) {
+            continue;
+        }
+        float2 delta = point - g_contour_points[corner];
+        float distance = dot(delta, delta);
+        int2 coordinate = base + int2(g_contour_points[corner]);
+        bool before = coordinate.y < winner.y ||
+            (coordinate.y == winner.y && coordinate.x < winner.x);
+        if (distance < closest || (distance == closest && before)) {
+            closest = distance;
+            winner = coordinate;
+            material = materials[corner];
+        }
+    }
+    return material;
 }
 
 [shader("fragment")]
 float4 fragmentGridMain(GridVertexOutput input) : SV_Target {
+    // Evaluate derivatives before coverage branches/discards so neighboring
+    // helper invocations still provide a defined edge width.
+    float width = max(length(fwidth(input.fine_position)), 1.0e-6);
     uint material = input.material;
     if ((input.flags & 1u) != 0u) {
+        if (g_grid_frame.m_surface_mode != 0u) {
+            float coverage;
+            material = contourMaterial(input.fine_position, width, coverage);
+            return float4(gridTint(material), coverage);
+        }
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
         uint2 cell = uint2(clamp(input.local_cell, float2(0.0), float2(127.999)));

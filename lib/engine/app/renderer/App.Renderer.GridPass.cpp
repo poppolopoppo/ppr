@@ -217,7 +217,18 @@ namespace pP {
             GridPass, (stage.m_cell_size_m == 1.0f or stage.m_cell_size_m == 1.0f / 3.0f)
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, stage.m_boundary_material_id > 0u and stage.m_boundary_material_id < 0xffffu
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        if (m_cell_size_m != stage.m_cell_size_m or
+            m_contours_enabled != stage.m_has_catalog or
+            m_boundary_material_id != stage.m_boundary_material_id) {
+            m_resident_table_stale = true;
+        }
         m_cell_size_m = stage.m_cell_size_m;
+        m_contours_enabled = stage.m_has_catalog;
+        m_boundary_material_id = stage.m_boundary_material_id;
         if (stage.m_reset_caches) {
             clearTiles();
             clearCache();
@@ -711,6 +722,7 @@ namespace pP {
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_cell_dummy.get(), makeFullRange(m_cell_dummy.get()))));
@@ -880,6 +892,7 @@ namespace pP {
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_cell_dummy.get(), makeFullRange(m_cell_dummy.get()))));
@@ -1098,7 +1111,13 @@ namespace pP {
 
         rhi::ColorTargetDesc color_target{};
         color_target.format = signature.colorFormats().front();
-        color_target.enableBlend = false;
+        color_target.enableBlend = true;
+        color_target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
+        color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+        color_target.color.op = rhi::BlendOp::Add;
+        color_target.alpha.srcFactor = rhi::BlendFactor::One;
+        color_target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+        color_target.alpha.op = rhi::BlendOp::Add;
 
         rhi::RenderPipelineDesc pipeline_desc{};
         pipeline_desc.program = m_shader_program.get();
@@ -1190,6 +1209,11 @@ namespace pP {
         m_atlas_serialization_count = 0u;
         m_atlas_write_count = 0u;
         m_cell_size_m = 1.0f;
+        m_contours_enabled = false;
+        m_resident_contours_enabled = false;
+        m_resident_cell_size_m = 1.0f;
+        m_boundary_material_id = 1u;
+        m_resident_boundary_material_id = 1u;
         m_cell_slot_values.fill(kFenceValueNone);
         m_resident_cell_slots.reset();
         m_atlas_deferred_count = 0u;
@@ -1213,6 +1237,11 @@ namespace pP {
         m_cell_atlas.setNull();
         m_cell_atlas_mapped = nullptr;
         m_cell_dummy.setNull();
+        m_contour_points.setNull();
+        m_contour_cases.setNull();
+        m_chunk_slot_buffers = {};
+        m_chunk_slot_mapped = {};
+        m_chunk_slot_uploaded.fill(false);
         releaseIndirectArgs_(nullptr);
         releaseTilePayloads_(nullptr);
         return first_err;
@@ -1247,6 +1276,11 @@ namespace pP {
         m_visibility_prepared = false;
         m_cell_atlas_mapped = nullptr;
         m_cell_dummy.setNull();
+        m_contour_points.setNull();
+        m_contour_cases.setNull();
+        m_chunk_slot_buffers = {};
+        m_chunk_slot_mapped = {};
+        m_chunk_slot_uploaded.fill(false);
         for (auto it = m_cell_cache.begin(); it != m_cell_cache.end(); ++it) {
             it->second.m_pending = true;
         }
@@ -1358,6 +1392,74 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::ensureSurfaceBuffers_(rhi::IDevice &device) {
+        if (m_contour_cases) {
+            return {};
+        }
+        static_assert(sizeof(math::ContourPoint) == 8u);
+        static_assert(sizeof(math::ContourTriangle) == 16u);
+        static_assert(sizeof(math::ContourCase) == 72u);
+        static_assert(PPR_OFFSETOF(math::ContourCase, m_segments) == 8u);
+        static_assert(PPR_OFFSETOF(math::ContourCase, m_triangles) == 24u);
+        rhi::ComPtr<rhi::IBuffer> points;
+        rhi::ComPtr<rhi::IBuffer> cases;
+        std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> maps{};
+        std::array<void *, kTileRingSize> mapped{};
+        rhi::BufferDesc desc{};
+        desc.memoryType = rhi::MemoryType::Upload;
+        desc.usage = rhi::BufferUsage::ShaderResource;
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.elementSize = sizeof(math::ContourPoint);
+        desc.size = math::contourPoints().size_bytes();
+        desc.label = "grid shared contour points";
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, math::contourPoints().data(), points.writeRef()));
+        desc.elementSize = sizeof(math::ContourCase);
+        desc.size = math::contourCases().size_bytes();
+        desc.label = "grid shared contour cases";
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, math::contourCases().data(), cases.writeRef()));
+        desc.elementSize = sizeof(u32);
+        desc.size = sizeof(u32) * kGridTileCacheCapacity;
+        desc.label = "grid logical chunk slots";
+        for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, maps[slot].writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(maps[slot], rhi::CpuAccessMode::Write, &mapped[slot]));
+        }
+        m_contour_points = std::move(points);
+        m_contour_cases = std::move(cases);
+        m_chunk_slot_buffers = std::move(maps);
+        m_chunk_slot_mapped = mapped;
+        return {};
+    }
+
+    std::error_code GridPass::bindSurfaceBuffers_(
+        rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table) {
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSurfaceBuffers_(device));
+        if (not retained_table or not m_chunk_slot_uploaded[m_tile_ring_cursor]) {
+            std::array<u32, kGridTileCacheCapacity> slots;
+            slots.fill(0xffffffffu);
+            if (retained_table) {
+                slots = m_resident_chunk_slots;
+            } else {
+                for (u32 chunk = 0u; chunk < kGridTileCacheCapacity; ++chunk) {
+                    if (m_cell_slots[chunk]) {
+                        slots[chunk] = *m_cell_slots[chunk];
+                    }
+                }
+            }
+            std::memcpy(m_chunk_slot_mapped[m_tile_ring_cursor], slots.data(), sizeof(slots));
+            m_chunk_slot_uploaded[m_tile_ring_cursor] = retained_table;
+        }
+        rhi::IBuffer *const map = m_chunk_slot_buffers[m_tile_ring_cursor].get();
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_chunk_slots"].setBinding(rhi::Binding(map, makeFullRange(map))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            cursor["g_contour_points"].setBinding(rhi::Binding(m_contour_points, makeFullRange(m_contour_points))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            cursor["g_contour_cases"].setBinding(rhi::Binding(m_contour_cases, makeFullRange(m_contour_cases))));
+        return {};
+    }
+
     std::error_code GridPass::rebuildResidentTable_() {
         Array<GridTilePayload> payloads;
         payloads.reserve(m_submitted_tiles.size());
@@ -1386,12 +1488,20 @@ namespace pP {
             payloads.push_back(payload);
         }
         m_resident_cell_slots.reset();
-        for (const auto &payload: payloads) {
-            if ((payload.m_flags & 1u) != 0u) {
-                m_resident_cell_slots.set(payload.m_cell_word_base / kCellWordsPerChunk);
+        m_resident_chunk_slots.fill(0xffffffffu);
+        for (u32 chunk = 0u; chunk < kGridTileCacheCapacity; ++chunk) {
+            if (m_cell_slots[chunk]) {
+                m_resident_chunk_slots[chunk] = *m_cell_slots[chunk];
+                // Fragments can read diagonal neighbors absent from the compact
+                // draw table. Pin the entire published lookup, not just draws.
+                m_resident_cell_slots.set(*m_cell_slots[chunk]);
             }
         }
+        m_chunk_slot_uploaded.fill(false);
         m_resident_table = std::move(payloads);
+        m_resident_cell_size_m = m_cell_size_m;
+        m_resident_contours_enabled = m_contours_enabled;
+        m_resident_boundary_material_id = m_boundary_material_id;
         m_visibility_has_cells = has_cells;
         m_resident_table_stale = false;
         m_resident_table_uploaded.fill(false);
@@ -1439,7 +1549,7 @@ namespace pP {
                 frame.m_planes[plane], m_camera_view.m_frustum.clip[plane].data(), sizeof(frame.m_planes[plane]));
         }
         frame.m_count = safe_narrowing(payloads.size());
-        frame.m_cell_size_m = m_cell_size_m;
+        frame.m_cell_size_m = m_resident_cell_size_m;
         VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::UnorderedAccess);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::UnorderedAccess);
@@ -1489,7 +1599,9 @@ namespace pP {
         GridFrame frame{};
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_use_visible_ids = 1u;
-        frame.m_cell_size_m = m_cell_size_m;
+        frame.m_surface_mode = m_resident_contours_enabled ? 1u : 0u;
+        frame.m_boundary_material_id = m_resident_boundary_material_id;
+        frame.m_cell_size_m = m_resident_cell_size_m;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*cached)->m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
         const u32 base = 0u;
@@ -1502,6 +1614,7 @@ namespace pP {
             GridPass, cursor["g_visible_ids"].setBinding(rhi::Binding(slot.m_ids, makeFullRange(slot.m_ids))));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, makeFullRange(cells))));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, true));
         context.m_pass.bindPipeline((*cached)->m_pipeline, root);
         context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
         return {};
@@ -1511,6 +1624,8 @@ namespace pP {
         GridFrame frame{};
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_cell_size_m = m_cell_size_m;
+        frame.m_surface_mode = m_contours_enabled ? 1u : 0u;
+        frame.m_boundary_material_id = m_boundary_material_id;
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));
 

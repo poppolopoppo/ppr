@@ -66,3 +66,8 @@ The interactive job/publication migration remains in progress. Generated-session
 tools resolve catalog terrain IDs: dig/demolition preserve protected material;
 construction validates complete globally aligned metre tiles, live actor overlap
 and pending reservations before recording progressive work.
+
+Presentation captures the validated profile's wall material as the protected
+outside-world sample ID. The driver exposes this numeric value alongside the
+borrowed catalog; owned packet/stage transport validates its terrain visual
+membership before rendering. No synthetic renderer material identity is needed.

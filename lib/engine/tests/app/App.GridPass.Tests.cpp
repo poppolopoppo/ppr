@@ -42,6 +42,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_view_projection) == 0u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_use_visible_ids) == 64u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_cell_size_m) == 68u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_surface_mode) == 72u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_boundary_material_id) == 76u);
+            PPR_TEST_ASSERT(sizeof(math::ContourPoint) == 8u);
+            PPR_TEST_ASSERT(sizeof(math::ContourTriangle) == 16u);
+            PPR_TEST_ASSERT(sizeof(math::ContourCase) == 72u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(math::ContourCase, m_segment_count) == 0u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(math::ContourCase, m_triangle_count) == 4u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(math::ContourCase, m_segments) == 8u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(math::ContourCase, m_triangles) == 24u);
 
             // Chunk-sized granularity: one tile per chunk, never a second
             // tiling system; the cache clamps at one entry per world chunk.

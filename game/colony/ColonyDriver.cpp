@@ -202,6 +202,16 @@ namespace pP::colony {
         return prepared ? &prepared->catalog() : nullptr;
     }
 
+    u16 ColonyDriver::boundaryMaterial() const noexcept {
+        const auto *const prepared = preparedWorld();
+        if (prepared == nullptr) {
+            return 1u;
+        }
+        const auto *const profile = prepared->catalog().findWorld(prepared->descriptor().m_profile);
+        PPR_ASSERT(profile != nullptr);
+        return profile->m_default_wall_material_id;
+    }
+
     u32 ColonyDriver::cellsPerMetre() const noexcept {
         return preparedWorld() ? kFineCellsPerMetre : 1u;
     }
