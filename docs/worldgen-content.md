@@ -498,3 +498,16 @@ than all full-resolution image buffers. These overviews help author geometry
 and distributions; they do not show albedo texturing or certify GPU contour,
 seam, traversal or frame-cadence acceptance. Those require separate GPU-rendered
 closeups and runtime checks.
+
+For actual textured GridPass closeups, explicitly opt into GPU initialization:
+
+```text
+app.game --validate-worldgen --worldgen-profile=frontier --worldgen-seed=42 --worldgen-gpu-output=<closeup-directory>
+```
+
+This separate offscreen diagnostic freezes the generated session, renders
+512-square start, chunk-seam, surface and texture views, and reads back RGB PPM
+images. `gpu-cameras.txt` records descriptor identity and exact metre cameras.
+It uses the real bindless terrain pass and blocks for GPU completion only in
+this diagnostic host. The ordinary validation/export command remains CPU-only.
+These images do not measure interactive loading or input responsiveness.

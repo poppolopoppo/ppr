@@ -35,6 +35,7 @@ target_sources(app.game
         colony/ColonyDriver.Edits.cpp
         colony/ColonyPanel.cpp
         colony/ColonySmoke.cpp
+        colony/WorldGen.Capture.cpp
         colony/ColonyTranslator.cpp
         colony/Content.cpp
         colony/Content.Pack.cpp

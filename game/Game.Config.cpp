@@ -141,6 +141,10 @@ namespace pP::game {
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
         appendOption(
             schema.m_options, valueOption(
+                                  "game.worldgen_gpu_output", "worldgen-gpu-output",
+                                  "Explicit GPU closeup capture with --validate-worldgen."));
+        appendOption(
+            schema.m_options, valueOption(
                                   "game.worldgen_output", "worldgen-output",
                                   "Export flat PPM diagnostics and report with --validate-worldgen."));
         appendOption(

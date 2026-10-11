@@ -477,3 +477,31 @@ distinct denser Hollows caves and sparse localized initial matter. Fine cave
 detail is visually busy at world-overview scale; closeup inspection remains
 necessary before accepting terrain tuning. GPU closeups and final acceptance
 are still open.
+
+### Actual GPU closeups (2026-10-11)
+
+The explicit `--worldgen-gpu-output` diagnostic renders a frozen authored driver
+through the real bindless GridPass into an offscreen target, then saves four
+512-square RGB readbacks and exact metre-camera/reproduction metadata. The
+blocking upload/completion path belongs only to this UI-free diagnostic host.
+It enforces GPU quiescence before resource release and honors explicit RHI
+validation settings. Ordinary pack validation/flat export still initializes no
+GPU. No simulation tick runs while these baseline images are captured.
+
+The Release build passes (out/worldgen-capture-release-build-v4.log), and all
+eight shipped-profile corpus cases pass in out/worldgen-gpu-acceptance. All 32
+readbacks decode at the expected resolution. Inspection of closeups.png and
+individual images shows readable flat start support, authored masonry repetition,
+varied cave contours and no visible crack at the sampled seam. This does not
+replace interactive actor traversal or all-seam automated coverage. Whole
+generation/capture commands took 29.93–45.87 seconds; process peak working set
+was 685330432–715431936 bytes and sampled private peak 821137408–855560192 bytes.
+These are separate runs, not a paired export/capture performance comparison,
+and do not measure dedicated GPU allocation or interactive active/candidate cost.
+
+Astra independent review passes. Format Check passes six touched C++ files;
+semantic style has zero blocking findings. Initial v1/v2 builds hit MSVC 14.51
+internal errors for a PreparedWorld member, and v3 for its by-value signature;
+the invocation boundary now passes the initialized driver plus camera/identity
+values. Logs retain these compiler failures. The final dev/ASan build and
+ten-entry matrix are running; stage-7 runtime/backend acceptance remains open.

@@ -1,5 +1,11 @@
 # game/colony/
 
+`WorldGen.Capture.cpp` implements the `game.colony.smoke` blocking GPU diagnostic
+entry point. The invocation boundary passes an exclusively owned initialized
+authored driver and reproduction/camera values; no simulation ticks run during
+offscreen capture. Actual GridPass RGB readbacks and camera manifests complement
+the flat CPU exports. This is separate from interactive candidate publication.
+
 ## Responsibility
 
 Game-owned colony simulation, tools, presentation translation and headless workloads. The default world is seeded and uses `engine.sim` geometry. Physics is coordinated by the game driver, not imported into sim or app.

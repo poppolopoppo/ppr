@@ -93,6 +93,29 @@ namespace demo {
             }
             std::println("Flat world diagnostics exported to {}", *settings.m_worldgen_output);
         }
+        if (settings.m_worldgen_gpu_output) {
+            const auto &descriptor = prepared->descriptor();
+            const auto start = world.m_start;
+            const auto identity = std::format(
+                "profile={} seed={:016x} fingerprint={:016x}\n", descriptor.m_profile, descriptor.m_seed,
+                descriptor.m_content_fingerprint);
+            auto driver = std::make_unique<colony::ColonyDriver>();
+            const auto init_error = driver->initPrepared(
+                {.m_seed = descriptor.m_seed, .m_agent_count = 1u, .m_world_generation = 1u}, std::move(*prepared));
+            if (init_error) {
+                // Preserve initialization failure while attempting partial driver cleanup.
+                PPR_LOG_WARNING_ON_FAIL(Demo, driver->shutdown());
+                std::cerr << "[worldgen] Capture session failed: " << init_error.message() << '\n';
+                return 1;
+            }
+            const auto error = colony::captureWorldGpuCloseups(
+                std::move(driver), start.m_spawn_x_m, start.m_floor_y_m, identity, *settings.m_worldgen_gpu_output);
+            if (error) {
+                std::cerr << "[worldgen] GPU capture failed: " << error.message() << '\n';
+                return 1;
+            }
+            std::println("GPU closeups exported to {}", *settings.m_worldgen_gpu_output);
+        }
         return 0;
     }
 
@@ -3861,7 +3884,7 @@ int runGame(const int argc, char *argv[]) try {
     const pP::DisplaySettings &display = invocation->m_display.m_value;
     const pP::StartupSettings &startup = invocation->m_startup.m_value;
 
-    if (settings.m_command == pP::game::EGameCommand::validate_worldgen) {
+    if (settings.m_command == pP::game::EGameCommand::validate_worldgen and not settings.m_worldgen_gpu_output) {
         return demo::runWorldgenValidation(settings);
     }
 
@@ -3876,6 +3899,10 @@ int runGame(const int argc, char *argv[]) try {
     if (const auto *origin = invocation->m_startup.find("startup.gpu_validation");
         origin != nullptr and origin->m_source != pP::config::ESource::none) {
         pP::IRhiService::get()->setGpuAssistedValidation(startup.m_gpu_validation);
+    }
+
+    if (settings.m_command == pP::game::EGameCommand::validate_worldgen) {
+        return demo::runWorldgenValidation(settings);
     }
 
     if (settings.m_command == pP::game::EGameCommand::smoke) {
