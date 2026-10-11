@@ -16,7 +16,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 |---|---|---|
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
 | `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
-| `game.colony.worldgen` | `WorldGen.cppm/.cpp` | Game-to-`sim::generate` wrapper |
+| `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
 | `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Normal interactive startup resolves these inputs on the world coordinator. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Actor, collider and renderer migration follows with generated sessions. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
@@ -103,3 +103,13 @@ Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` 
 
 
 `WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--validate-worldgen --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
+
+The retired seed-only hard-coded sim generator is now a game-owned explicit
+fixture in `WorldGen.Fixture.cpp`, registered alongside its matching regression
+group `WorldGen.Fixture.Tests.cpp`. `generateLegacyFixture`,
+`Colony::initLegacyFixture` and `ColonyDriver::initLegacyFixture` /
+`regenerateLegacyFixture` name this opt-in path. Normal sessions use authored
+`prepareWorld` and `initPrepared`. WorldJob requires a preparation callback;
+only the explicit 100-agent fixture selects `legacyFixturePrepare()`.
+Legacy pinned-hash/archetype tests moved with the fixture to game.tests; numeric
+recipe generation tests remain in engine.tests.sim without game imports.

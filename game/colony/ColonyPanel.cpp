@@ -510,7 +510,7 @@ namespace pP::colony {
                 ImGui::OpenPopup("Build tools");
             }
             if (ImGui::BeginPopup("Build tools")) {
-                if (ImGui::MenuItem("Rock wall")) {
+                if (ImGui::MenuItem("Wall")) {
                     intent = ColonyIntent{
                         .m_kind = EColonyIntent::select_tool, .m_arg = static_cast<u32>(EColonyTool::build_wall)};
                     ImGui::CloseCurrentPopup();
@@ -1106,8 +1106,7 @@ namespace pP::colony {
                 ImGui::Text("%-11s %s", toolName(tool), gestureText(tool));
             }
             ImGui::TextDisabled(
-                "%s opens the build menu (Rock wall, Demolish).",
-                boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
+                "%s opens the build menu (Wall, Demolish).", boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
 
             ImGui::Spacing();
             ImGui::SeparatorText("Keyboard");

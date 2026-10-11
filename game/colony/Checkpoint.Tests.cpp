@@ -107,7 +107,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not driver.grid().setCell({128u, 41u}, {16u, 310.0f}));
         const auto before = sim::capture(driver.grid(), 42u);
         ParallelScheduler chunks{"Checkpoint capture chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
         const auto address = restored->get();
         PPR_TEST_ASSERT(not job.requestCheckpoint(*restored));
         PPR_TEST_ASSERT(not *restored);

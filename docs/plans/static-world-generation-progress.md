@@ -578,3 +578,22 @@ and 49 selected game nodes (9.78 s / 7.32 s / 7.51 s), including malformed
 Logs: `out/worldgen-diagnostics-{build,core-tests,game-tests}-v3.log`.
 Format Check passed nine files; semantic style has zero blocking findings.
 The final phase-7 full matrix and runtime acceptance remain outstanding.
+
+## Explicit legacy fixture retirement
+
+The production sim module no longer exports the hard-coded generator. Its
+unchanged algorithm and six pinned-output/archetype/cancellation tests now live
+in game-owned `WorldGen.Fixture` sources. Fixture callers explicitly select
+`initLegacyFixture`, `regenerateLegacyFixture` or `WorldJob::legacyFixturePrepare`;
+ordinary authored startup cannot silently fall back to it. The fixture's default
+execution is now serial; explicit executors retain the drained parallel path.
+Authored wall tools use the profile's boundary material and the UI says Wall.
+
+Astra passed the independent read-only review. The 27-edge ASan build passed;
+three shuffled loops passed all 34 selected game nodes (127.31 / 122.90 /
+125.49 s) and 25 selected sim nodes (48.04 / 47.05 / 47.93 s). Packet tests
+also run three loops in the same serialized queue. Logs:
+`out/worldgen-fixture-{build,game-tests,sim-tests,app-tests}-v2.log`.
+Format Check passed 18 fixture C++ files; semantic style has zero blocking
+findings. The game-config CTest timeout is now 300 s to accommodate the six
+full-world regressions moved from sim into game.tests.

@@ -60,11 +60,8 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code exportWorldDiagnostics(
         const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,
         const std::filesystem::path &directory, const IContext *context = nullptr);
-    /// Thin wrapper over the sim-side deterministic generator
-    /// (`sim::generate`): game code submits work through this boundary and
-    /// never touches the generator internals. Infallible in practice — the
-    /// generator writes in-bounds cells with finite temperatures only — but
-    /// reports `error_code` to keep the operational boundary explicit.
-    [[nodiscard]] std::error_code generateWorld(
+    /// Explicit legacy smoke/many-agent fixture only; authored sessions use prepareWorld.
+    /// Kept game-owned so engine generation remains numeric-plan driven.
+    [[nodiscard]] std::error_code generateLegacyFixture(
         u64 seed, sim::ChunkGrid &grid, const sim::GenerationExecution *execution = nullptr);
 }

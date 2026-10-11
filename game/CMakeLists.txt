@@ -45,6 +45,7 @@ target_sources(app.game
         colony/SimFramePacket.cpp
         colony/SimFramePacket.Diagnostics.cpp
         colony/WorldGen.cpp
+        colony/WorldGen.Fixture.cpp
         colony/WorldGen.Plan.cpp
         colony/WorldGen.Export.cpp
         colony/WorldJob.cpp
@@ -155,6 +156,8 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/DigTool.cpp
             colony/Pathfinding.cpp
             colony/WorldGen.cpp
+            colony/WorldGen.Fixture.cpp
+            colony/WorldGen.Fixture.Tests.cpp
             colony/WorldGen.Plan.cpp
             colony/WorldGen.Export.cpp
             colony/SimFramePacket.cpp
@@ -188,7 +191,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
 
     set_tests_properties(GameConfigUnitTests
         PROPERTIES
-            TIMEOUT 120
+            TIMEOUT 300
             LABELS "unit;game"
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:game.tests>"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:game.tests>"

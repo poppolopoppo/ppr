@@ -1,17 +1,17 @@
 module;
 #include "pP/Macros.h"
 
-module engine.sim;
+module game.colony.worldgen;
 
-import :worldgen;
+import engine.sim;
 
-import :chunk_grid;
 
 import engine.core;
 
 import std;
 
-namespace pP::sim {
+namespace pP::colony {
+    using namespace sim;
     using pP::make_error_code;
     PPR_DEFINE_LOG_CATEGORY(WorldGeneration, info, none)
 
@@ -403,7 +403,10 @@ namespace pP::sim {
         }
     } // namespace WorldGen
 
-    std::error_code generate(const u64 seed, ChunkGrid &grid, const GenerationExecution &execution) {
+    std::error_code generateLegacyFixture(
+        const u64 seed, sim::ChunkGrid &grid, const sim::GenerationExecution *const requested_execution) {
+        const sim::GenerationExecution serial{};
+        const auto &execution = requested_execution != nullptr ? *requested_execution : serial;
         const hal::ProfileScope scope{"Sim.WorldGen.Generate"};
         PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
@@ -501,12 +504,5 @@ namespace pP::sim {
         return {};
     }
 
-    void generate(const u64 seed, ChunkGrid &grid) {
-        // Temporary compatibility boundary for existing headless fixtures;
-        // interactive callers inject their distinct background pool/context.
-        const auto error = generate(seed, grid, GenerationExecution{.m_pool = &parallel::foregroundPool()});
-        if (error) {
-            PPR_THROW(WorldGeneration, std::system_error(error));
-        }
-    }
 }
+

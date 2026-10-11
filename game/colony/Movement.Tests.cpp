@@ -16,7 +16,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (interactive_dig_holds_cells_bodies_and_ticks_until_complete_publication) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         driver.grid() = sim::ChunkGrid{};
         for (u32 x = 100u; x < 150u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
@@ -41,7 +41,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.editReadyForPresentation());
         driver.setPaused(true);
         PPR_TEST_ASSERT(driver.restoreBodies() == std::errc::device_or_resource_busy);
-        PPR_TEST_ASSERT(driver.regenerate(42u) == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(driver.regenerateLegacyFixture(42u) == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.digTotal() == 0u);
         PPR_TEST_ASSERT(driver.initialMatterBaselineValid());
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 1u);
@@ -87,7 +87,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (interactive_build_progress_is_frozen_and_teardown_cancels_candidate) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         driver.grid() = sim::ChunkGrid{};
         PPR_TEST_ASSERT(not driver.restoreBodies());
         driver.requireEditPublication();
@@ -113,7 +113,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
         PPR_TEST_ASSERT(not driver.shutdown());
         PPR_TEST_ASSERT(not driver.editPending());
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u));
         PPR_TEST_ASSERT(driver.tickCount() == 1u);
         PPR_TEST_ASSERT(not driver.shutdown());
@@ -121,7 +121,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (held_dig_owns_its_command_while_the_input_fifo_fills) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         driver.grid() = sim::ChunkGrid{};
         for (u32 x = 100u; x <= 102u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
@@ -155,7 +155,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (build_failure_retains_its_stage_through_later_tick_systems) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         const auto errand = driver.registry().create();
         driver.registry().emplace<BuildErrand>(errand, BuildErrand{Footprint{{30u, 30u}, 1u, 1u, 1u}, 0u, 2u});
         PPR_TEST_ASSERT(driver.update(TimeSpan{std::chrono::seconds{1}} / 60u) == std::errc::invalid_argument);
@@ -166,7 +166,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         driver.grid() = sim::ChunkGrid{};
         for (u32 x = 0u; x < 1024u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
@@ -240,7 +240,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (fixed_tick_control_bypasses_planning_and_clears_held_commands) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 2u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 2u}));
         driver.grid() = sim::ChunkGrid{};
         auto &registry = driver.registry();
         Array<sim::Entity> actors;
@@ -330,7 +330,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (movement_preserves_falling_momentum_and_restores_ladder_gravity) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 2u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 2u}));
         driver.grid() = sim::ChunkGrid{};
         auto &registry = driver.registry();
         Array<sim::Entity> actors;
@@ -389,7 +389,7 @@ namespace pP::game::tests::detail::movement {
 
     PPR_UNIT_TEST (restoration_releases_previous_terrain_chains) {
         ColonyDriver driver;
-        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         driver.grid() = sim::ChunkGrid{};
         for (u32 x = 40u; x < 70u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));

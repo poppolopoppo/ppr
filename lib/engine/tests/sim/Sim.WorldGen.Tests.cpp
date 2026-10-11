@@ -968,122 +968,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(completed.load() == 0u);
         };
 
-        PPR_UNIT_TEST (same_seed_generates_identical_grid) {
-            ChunkGrid first{};
-            ChunkGrid second{};
 
-            generate(1234567u, first);
-            generate(1234567u, second);
-
-            PPR_TEST_ASSERT(gridHash(first) == gridHash(second));
-
-            ChunkGrid other{};
-            generate(7654321u, other);
-
-            PPR_TEST_ASSERT(gridHash(first) != gridHash(other));
-        };
-
-        PPR_UNIT_TEST (regen_from_seed_reproduces_grid) {
-            ChunkGrid first{};
-            generate(424242u, first);
-
-            ChunkGrid fresh{};
-            PPR_TEST_ASSERT(not generate(424242u, fresh, GenerationExecution{}));
-
-            for (u32 chunk_y = 0u; chunk_y < kChunksPerEdge; ++chunk_y) {
-                for (u32 chunk_x = 0u; chunk_x < kChunksPerEdge; ++chunk_x) {
-                    const ChunkPos chunk{chunk_x, chunk_y};
-                    const auto expected = first.residentCells(chunk);
-                    const auto actual = fresh.residentCells(chunk);
-                    PPR_TEST_ASSERT(expected.has_value() and actual.has_value());
-                    PPR_TEST_ASSERT(std::ranges::equal(*expected, *actual));
-                }
-            }
-        };
-
-        PPR_UNIT_TEST (cancelled_generation_leaves_unstarted_grid_empty) {
-            ChunkGrid grid{};
-            const auto [context, cancel] = context::withCancel(context::background());
-            cancel();
-            std::atomic<u32> completed{};
-            const GenerationExecution execution{.m_context = context.get(), .m_completed_chunks = &completed};
-            PPR_TEST_ASSERT(generate(42u, grid, execution) == std::errc::operation_canceled);
-            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
-            PPR_TEST_ASSERT(completed.load() == 0u);
-        };
-
-        PPR_UNIT_TEST (fixed_seed_contains_every_archetype) {
-            ChunkGrid grid{};
-            generate(1234567u, grid);
-
-            std::array<u64, 8u> counts{};
-            bool cold_frost = false;
-            bool hot_pocket = false;
-            bool hot_vent = false;
-            bool mild_base = false;
-
-            for (u32 chunk_y = 0u; chunk_y < kChunksPerEdge; ++chunk_y) {
-                for (u32 chunk_x = 0u; chunk_x < kChunksPerEdge; ++chunk_x) {
-                    const auto cells = grid.residentCells(ChunkPos{chunk_x, chunk_y});
-                    PPR_TEST_ASSERT(cells.has_value());
-                    for (const Cell &cell: *cells) {
-                        if (cell.m_element < static_cast<u16>(counts.size())) {
-                            ++counts[cell.m_element];
-                        }
-                        const float temp = cell.m_temperature;
-                        PPR_TEST_ASSERT(std::isfinite(temp));
-                        if (cell.m_element == 2u and temp < 240.0f) {
-                            cold_frost = true;
-                        }
-                        if (cell.m_element == 3u and temp > 320.0f) {
-                            hot_pocket = true;
-                        }
-                        if (cell.m_element == 7u and temp > 380.0f) {
-                            hot_vent = true;
-                        }
-                        if (cell.m_element == 1u and temp >= 285.0f and temp <= 300.0f) {
-                            mild_base = true;
-                        }
-                    }
-                }
-            }
-
-            // Presence, not exact layout: geometric cores guarantee every
-            // archetype for any seed, so these minimums survive tuning.
-            PPR_TEST_ASSERT(counts[0] > 10000u);
-            PPR_TEST_ASSERT(counts[1] > counts[0]);
-            PPR_TEST_ASSERT(counts[2] > 100000u);
-            PPR_TEST_ASSERT(counts[3] > 10000u);
-            PPR_TEST_ASSERT(counts[4] > 5000u);
-            PPR_TEST_ASSERT(counts[5] > 10000u);
-            PPR_TEST_ASSERT(counts[6] > 100000u);
-            PPR_TEST_ASSERT(counts[7] > 100u);
-
-            PPR_TEST_ASSERT(cold_frost);
-            PPR_TEST_ASSERT(hot_pocket);
-            PPR_TEST_ASSERT(hot_vent);
-            PPR_TEST_ASSERT(mild_base);
-        };
-
-        PPR_UNIT_TEST (generation_marks_every_chunk_dirty) {
-            ChunkGrid grid{};
-            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
-            PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
-
-            generate(99u, grid);
-
-            PPR_TEST_ASSERT(grid.residentChunkCount() == kChunkCount);
-            PPR_TEST_ASSERT(grid.dirtyChunkCount() == kChunkCount);
-            PPR_TEST_ASSERT(grid.dirtyChunks().size() == kChunkCount);
-        };
-
-        PPR_UNIT_TEST (generation_content_pinned) {
-            ChunkGrid grid{};
-            generate(1234567u, grid);
-
-            constexpr u64 kPinnedHash = 12692632048894322839u;
-            PPR_TEST_ASSERT(gridHash(grid) == kPinnedHash);
-        };
     } // namespace WorldGen
 } // namespace pP::tests::detail
 
@@ -1111,14 +996,8 @@ namespace pP::tests {
             detail::WorldGen::start_validation_proves_supported_body_route_and_resource_components,
             detail::WorldGen::compiled_noise_samples_coordinate_limits_and_full_seed_domain,
             detail::WorldGen::noise_description_rejects_invalid_work_and_numeric_domains,
-            detail::WorldGen::same_seed_generates_identical_grid,
             detail::WorldGen::owned_terrain_replays_across_serial_and_parallel_execution,
             detail::WorldGen::owned_terrain_cancels_admitted_work_and_same_pool_worker_without_deadlock,
-            detail::WorldGen::regen_from_seed_reproduces_grid,
-            detail::WorldGen::fixed_seed_contains_every_archetype,
-            detail::WorldGen::generation_marks_every_chunk_dirty,
-            detail::WorldGen::generation_content_pinned,
-            detail::WorldGen::cancelled_generation_leaves_unstarted_grid_empty,
         });
     };
 

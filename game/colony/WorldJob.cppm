@@ -52,7 +52,8 @@ export namespace pP::colony {
         using Prepare = std23::move_only_function<Expected<std::unique_ptr<ColonyDriver>>(
             const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)>;
         using Capture = std23::move_only_function<std::error_code(const ColonyDriver &, const IContext &)>;
-        explicit WorldJob(ParallelScheduler &chunks);
+        /// Explicit legacy smoke/many-agent fixture; normal sessions supply authored preparation.
+        [[nodiscard]] static Prepare legacyFixturePrepare();
         WorldJob(ParallelScheduler &chunks, Prepare prepare);
         ~WorldJob() noexcept;
         WorldJob(const WorldJob &) = delete;

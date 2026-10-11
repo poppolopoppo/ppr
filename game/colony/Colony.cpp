@@ -33,11 +33,11 @@ namespace pP::colony {
         return m_initialized;
     }
 
-    std::error_code Colony::init(const ColonyDesc &desc, const sim::GenerationExecution *const execution) {
+    std::error_code Colony::initLegacyFixture(const ColonyDesc &desc, const sim::GenerationExecution *const execution) {
         m_initialized = false;
         m_prepared.reset();
         m_grid = sim::ChunkGrid{};
-        PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, generateWorld(desc.m_seed, m_grid, execution));
+        PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, generateLegacyFixture(desc.m_seed, m_grid, execution));
 
         m_initialized = true;
         return {};

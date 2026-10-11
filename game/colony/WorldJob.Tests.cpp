@@ -165,7 +165,7 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_returns_same_owner_after_queued_cancel) {
         ParallelScheduler chunks{"Frozen capture chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         std::atomic<u32> calls{};
@@ -189,7 +189,7 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_gate_preserves_exclusivity_and_returns_owner_on_failure) {
         ParallelScheduler chunks{"Frozen gated chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         std::latch entered{1};
@@ -232,7 +232,7 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_success_and_prepared_cancel_have_consistent_outcomes) {
         ParallelScheduler chunks{"Frozen completion chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         for (const bool cancel_ready: {false, true}) {
@@ -259,7 +259,7 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (preview_failure_and_queued_cancel_return_frozen_owner) {
         ParallelScheduler chunks{"Preview failure chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         for (const bool cancel_queued: {false, true}) {
@@ -297,7 +297,7 @@ namespace pP::game::tests::detail::world_job {
                 auto local = execution;
                 local.m_context = &gate;
                 auto driver = std::make_unique<ColonyDriver>();
-                const auto error = driver->init(request, &local);
+                const auto error = driver->initLegacyFixture(request, &local);
                 if (error) {
                     return std::unexpected{error};
                 }

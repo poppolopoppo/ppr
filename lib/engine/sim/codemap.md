@@ -103,19 +103,9 @@ ullptr`) and `mask` (empty). Components are
      resume Box2D solver caches.
    Reserve capacity is bounded by remaining payload bytes before allocation.
 
-- `:worldgen` holds `generate(seed, grid)`: deterministic offline world generation
-  over the fixed 4096x4096 grid into a caller-owned `ChunkGrid`. Pure in `(seed, grid)` —
-  self-contained splitmix64 cell hashing plus smoothstep-interpolated lattice noise are the
-  only entropy (core `randomNumberGenerator()` is hardware-seeded and `RngStream` is
-  snapshot-local, so neither is reused). Paints opaque `u16` element ids + temperatures in
-  seeded region masks (border ring, frozen band, pocket disc, reservoir lens, street-grid
-  district, vent discs over a temperate default) with unconditional geometric cores so every
-  archetype exists for any seed, then carves vacuum tunnels/shafts while sparing the border.
-  The 1024-chunk fill fans out on `parallel::foregroundPool` with `WaitGroup`
-  (Sim.WorldGen.cpp:399-432), not single-threaded.
-  Writes go through `setCells` for the fill and `setCell` for carving, so every chunk ends dirty and `capture`-ready. The sim never
-  names biomes; the numeric ids match the colony-owned `game/colony/Colony.Elements.h`
-  registry (vacuum 0, confirmed by the physics `!= 0u` solid test).
+- `:worldgen` declares borrowed execution dependencies and progress stages.
+  Numeric plans drive production generation; explicit legacy game fixtures live
+  outside this library.
 
 - `:worldgen.plan` owns validated numeric recipes, compiled fields and isolated
   integer random streams. Game content names and files stay outside sim.
@@ -163,8 +153,8 @@ snapshot.
   sim state, and both `app.game` and `engine.tests.sim` link PRIVATE `engine.physics`
   for their driver-owned scenes.
 - Build: `Sim.cppm`, `chunk_grid/Sim.ChunkGrid.cppm`, `ecs/Sim.Ecs.cppm`, `footprint/Sim.Footprint.cppm`, `tick/Sim.Tick.cppm`,
-  `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm` in `FILE_SET CXX_MODULES`; the matching `.cpp` files as PRIVATE
-  sources (`:footprint` has no `.cpp`; CMakeLists.txt:7-18, 5 `.cpp` files have `.cpp`);
+  `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm` in `FILE_SET CXX_MODULES`; their registered implementation `.cpp` files as PRIVATE
+  sources (`:footprint` and execution-only `:worldgen` have no `.cpp`);
   `setup_ppr_project(engine.sim INTERNAL_PUBLIC_DEPS engine.core engine.math)`.
 
 ## Key Files
@@ -179,13 +169,12 @@ snapshot.
 - `tick/Sim.Tick.cpp` — accumulator/policy math, fail-closed declaration + stable Kahn order.
 - `snapshot/Sim.Snapshot.cppm` — `sim::errc`, snapshot vocabulary (`BodyRecord`, `BodiesSection`), capture/apply/save/load plus exported `restore()`.
 - `snapshot/Sim.Snapshot.cpp` — error category, shared `validate()`, LE codec.
-- `worldgen/Sim.WorldGen.cppm` — `generate(seed, grid)` interface.
-- `worldgen/Sim.WorldGen.cpp` — seeded hash-noise regions + vacuum carving.
+- `worldgen/Sim.WorldGen.cppm` — execution/progress vocabulary.
 - `CMakeLists.txt` — `engine.sim` target registration (see Integration).
 
-World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. The current numeric recipe is retained until compiled data-driven generation replaces it.
+World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. Production uses compiled numeric recipes.
 
-The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. The legacy generator is not switched to this adapter yet; compiled content recipes remain pending.
+The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. Compiled numeric content recipes use this adapter.
 
 `captureFull(grid[, registry], seed, context)` is the additive full-residency
 capture boundary for an exclusively frozen world. It copies all resident chunks
@@ -194,3 +183,8 @@ ordinary `capture` remains a dirty-rectangle delta. Cancellation yields no parti
 snapshot. Game checkpoint identity stays outside sim.
 
 `ChunkGrid::captureChunk` and allocation-free `exchangeChunk` provide an owned per-chunk rollback/candidate seam, including residency and exact dirty/activity metadata. The caller excludes observation during exchange; ordinary writes remain monotonic in residency.
+
+Production generation accepts owned validated numeric plans. The former seed-only
+hard-coded generator and its archetype/pinned-hash tests now live in the game's
+explicit legacy fixture, outside engine.sim and engine.tests.sim. This preserves
+smoke/many-agent fixture coverage without an implicit normal generation fallback.

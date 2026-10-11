@@ -75,7 +75,7 @@ namespace pP::colony {
             if (failed or
                 driver->preparedWorld() != owner or
                 driver->tickCount() != 60u or
-                driver->regenerate(43u) != std::errc::operation_not_permitted) {
+                driver->regenerateLegacyFixture(43u) != std::errc::operation_not_permitted) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->restoreBodies());
@@ -137,7 +137,7 @@ namespace pP::colony {
         /// honest partial, and save→load→tick stability of path state.
         [[nodiscard]] Expected<PathCounts> checkPathfinding() {
             ColonyDriver driver{};
-            if (const std::error_code error = driver.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
@@ -327,7 +327,7 @@ namespace pP::colony {
         /// grid-delta snapshot round-trip, and demolition back to vacuum.
         [[nodiscard]] Expected<u32> checkBuildings() {
             ColonyDriver driver{};
-            if (const std::error_code error = driver.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
@@ -632,7 +632,7 @@ namespace pP::colony {
             };
 
             ColonyDriver driver{};
-            if (const std::error_code error = driver.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             driver.setPaused(true);
@@ -1780,7 +1780,7 @@ namespace pP::colony {
             // matching-seed driver with no reissue; it must stay rock while
             // the source consumes the intent on the next paused update.
             ColonyDriver still_rock{};
-            if (const std::error_code error = still_rock.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = still_rock.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             still_rock.setPaused(true);
@@ -1840,7 +1840,7 @@ namespace pP::colony {
             // dropped by the explicit Driver clears, so the next paused
             // update digs nothing.
             ColonyDriver cleared{};
-            if (const std::error_code error = cleared.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = cleared.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             cleared.setPaused(true);
@@ -1965,10 +1965,10 @@ namespace pP::colony {
             std::println(stderr, "SMOKE-DIG-STAGE D7");
             ColonyDriver twin_a{};
             ColonyDriver twin_b{};
-            if (const std::error_code error = twin_a.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = twin_a.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
-            if (const std::error_code error = twin_b.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = twin_b.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             twin_a.setPaused(true);
@@ -2254,10 +2254,10 @@ namespace pP::colony {
             }
             ColonyDriver third{};
             ColonyDriver fourth{};
-            if (const std::error_code error = third.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = third.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
-            if (const std::error_code error = fourth.init(ColonyDriverDesc{.m_seed = kSeed})) {
+            if (const std::error_code error = fourth.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
             if (const std::error_code error = sim::apply(third.grid(), *twin_loaded)) {
@@ -2412,7 +2412,8 @@ namespace pP::colony {
                 }
 
                 m_driver_started = true;
-                if (const std::error_code error = m_driver.init(ColonyDriverDesc{.m_seed = kSeed})) [[unlikely]] {
+                if (const std::error_code error = m_driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed}))
+                    [[unlikely]] {
                     return error;
                 }
 
@@ -2731,7 +2732,7 @@ namespace pP::colony {
 
         stage = "spawn";
         ColonyDriver first{};
-        if (const std::error_code error = first.init(ColonyDriverDesc{.m_seed = kSeed})) {
+        if (const std::error_code error = first.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
             return std::unexpected{error};
         }
         if (first.agentSummaries().size() != kAgentCount) {
@@ -2868,7 +2869,7 @@ namespace pP::colony {
         stage = "double";
         // Double-run equality: same seed, same wall, same ticks.
         ColonyDriver second{};
-        if (const std::error_code error = second.init(ColonyDriverDesc{.m_seed = kSeed})) {
+        if (const std::error_code error = second.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
             return std::unexpected{error};
         }
         sim::GlobalCellPos site2{sim::kWorldEdge, sim::kWorldEdge};
@@ -2960,7 +2961,7 @@ namespace pP::colony {
             return std::unexpected{loaded.error()};
         }
         ColonyDriver third{};
-        if (const std::error_code error = third.init(ColonyDriverDesc{.m_seed = kSeed})) {
+        if (const std::error_code error = third.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
             return std::unexpected{error};
         }
         stage = "replay-apply";
@@ -2991,7 +2992,7 @@ namespace pP::colony {
         // above remains the live-trajectory determinism proof.
         stage = "replay-fourth";
         ColonyDriver fourth{};
-        if (const std::error_code error = fourth.init(ColonyDriverDesc{.m_seed = kSeed})) {
+        if (const std::error_code error = fourth.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
             return std::unexpected{error};
         }
         if (const std::error_code error = sim::apply(fourth.grid(), *loaded)) {

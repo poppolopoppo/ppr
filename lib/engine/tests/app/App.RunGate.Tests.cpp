@@ -2998,7 +2998,7 @@ namespace pP::tests::detail {
             // GPU backpressure never loses sim time (5-slice clamp bounds a
             // single frame; the remainder stays in the defer backlog).
             colony::ColonyDriver lumped{};
-            PPR_TEST_ASSERT(not lumped.init(colony::ColonyDriverDesc{.m_seed = 424242u}));
+            PPR_TEST_ASSERT(not lumped.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 424242u}));
             PPR_DEFER {
                 std::ignore = lumped.shutdown();
             };
@@ -3007,7 +3007,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(lumped.tickCount() == tick_before + 3u);
 
             colony::ColonyDriver split{};
-            PPR_TEST_ASSERT(not split.init(colony::ColonyDriverDesc{.m_seed = 424242u}));
+            PPR_TEST_ASSERT(not split.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 424242u}));
             PPR_DEFER {
                 std::ignore = split.shutdown();
             };

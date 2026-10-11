@@ -26,7 +26,14 @@ namespace pP::colony {
         bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
     };
 
-    WorldJob::WorldJob(ParallelScheduler &chunks) : WorldJob(chunks, Prepare{}) {
+    WorldJob::Prepare WorldJob::legacyFixturePrepare() {
+        return [](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                   config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+            auto driver = std::make_unique<ColonyDriver>();
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, driver->initLegacyFixture(request, &execution));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, execution.m_context->error());
+            return driver;
+        };
     }
 
     WorldJob::WorldJob(ParallelScheduler &chunks, Prepare prepare)
@@ -34,15 +41,7 @@ namespace pP::colony {
           m_coordinator(
               "World coordinator", 1u, 4u * static_cast<std::size_t>(hal::page_granularity), context::background(),
               hal::EPriority::low) {
-        if (not m_prepare) {
-            m_prepare = [](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
-                            config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
-                auto driver = std::make_unique<ColonyDriver>();
-                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, driver->init(request, &execution));
-                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, execution.m_context->error());
-                return driver;
-            };
-        }
+        PPR_ASSERT(static_cast<bool>(m_prepare));
     }
     WorldJob::~WorldJob() noexcept {
         // The ordinary close path has already drained through update(). This

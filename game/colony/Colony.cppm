@@ -11,7 +11,7 @@ export namespace pP::colony {
     // colony lifecycle
     // ------------------------------------------------------------------
 
-    /// Typed world-generation input. The seed is the only degree of freedom:
+    /// Legacy fixture input. The seed is the only degree of freedom:
     /// grid dimensions are fixed by `engine.sim` (`kWorldEdge` = 4096).
     struct ColonyDesc {
         u64 m_seed{};
@@ -19,9 +19,8 @@ export namespace pP::colony {
         [[nodiscard]] constexpr bool operator==(const ColonyDesc &) const noexcept = default;
     };
 
-    /// RAII owner of the colony simulation grid. `init` runs the offline
-    /// deterministic generator into the owned grid; `shutdown` releases it.
-    /// Re-init regenerates from the new descriptor; `shutdown` is idempotent.
+    /// RAII owner of authored sessions or an explicitly requested legacy fixture.
+    /// install adopts authored output; shutdown releases either owner.
     class Colony {
     private:
         sim::ChunkGrid m_grid{}; // Explicit legacy fixtures only when no prepared world is installed.
@@ -50,7 +49,8 @@ export namespace pP::colony {
 
         [[nodiscard]] bool isInitialized() const noexcept;
 
-        [[nodiscard]] std::error_code init(const ColonyDesc &desc, const sim::GenerationExecution *execution = nullptr);
+        [[nodiscard]] std::error_code initLegacyFixture(
+            const ColonyDesc &desc, const sim::GenerationExecution *execution = nullptr);
 
         /// Adopts a validated candidate without rerunning generation.
         [[nodiscard]] std::error_code install(PreparedWorld world);

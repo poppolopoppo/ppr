@@ -23,7 +23,6 @@ target_sources(engine.sim
       ecs/Sim.Ecs.cpp
       tick/Sim.Tick.cpp
       snapshot/Sim.Snapshot.cpp
-      worldgen/Sim.WorldGen.cpp
       worldgen/Sim.WorldGen.Noise.cpp
       worldgen/Sim.WorldGen.Plan.cpp
       worldgen/Sim.WorldGen.Layout.cpp

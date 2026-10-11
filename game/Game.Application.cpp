@@ -1103,7 +1103,7 @@ namespace demo {
             if (is_wall) {
                 placed = m_driver->buildWall(
                     colony::Footprint{
-                        .m_min = min, .m_width = width, .m_height = height, .m_element = colony::kElementRock});
+                        .m_min = min, .m_width = width, .m_height = height, .m_element = m_driver->boundaryMaterial()});
             } else {
                 placed = m_driver->demolish(min, width, height);
             }
@@ -1117,7 +1117,7 @@ namespace demo {
                         {"error", error.value()},
                         {"category", error.category().name()},
                     });
-                postDisplayNotice_(is_wall ? "Rock wall order rejected" : "Demolish order rejected", error);
+                postDisplayNotice_(is_wall ? "Wall order rejected" : "Demolish order rejected", error);
                 return;
             }
 
@@ -1125,7 +1125,7 @@ namespace demo {
             // waits on Step/Resume (paused) or progresses on its own.
             // Progress after this is driver-side; this never polls errands.
             try {
-                m_status_scratch = std::string(is_wall ? "Rock wall " : "Demolish ") +
+                m_status_scratch = std::string(is_wall ? "Wall " : "Demolish ") +
                                    std::to_string(width) +
                                    "x" +
                                    std::to_string(height) +
@@ -2294,7 +2294,7 @@ namespace demo {
             switch (tool) {
                 case colony::EColonyTool::dig: setStatus_("Dig: click a cell to dig it, hold to drag."); break;
                 case colony::EColonyTool::build_wall:
-                    setStatus_("Rock wall: press and drag a rect, release to order.");
+                    setStatus_("Wall: press and drag a rect, release to order.");
                     break;
                 case colony::EColonyTool::demolish:
                     setStatus_("Demolish: press and drag a rect, release to order.");
@@ -2981,7 +2981,8 @@ namespace demo {
             const auto &clock = ITimerClock::steady();
             if (m_agent_count == 100u) {
                 // Explicit many-agent profiling fixture retains the numeric legacy recipe.
-                m_world_job = std::make_unique<colony::WorldJob>(parallel::backgroundPool());
+                m_world_job = std::make_unique<colony::WorldJob>(
+                    parallel::backgroundPool(), colony::WorldJob::legacyFixturePrepare());
             } else {
                 m_world_job = std::make_unique<colony::WorldJob>(
                     parallel::backgroundPool(),

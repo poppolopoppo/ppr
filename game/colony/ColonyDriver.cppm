@@ -219,8 +219,8 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code copyColliderChunk(sim::ChunkPos position, Array<u16> &occupancy) const;
 
     public:
-    public:
-        [[nodiscard]] std::error_code init(
+        /// Explicit legacy smoke/many-agent fixture; production uses initPrepared.
+        [[nodiscard]] std::error_code initLegacyFixture(
             const ColonyDriverDesc &desc, const sim::GenerationExecution *execution = nullptr);
 
         /// Adopts a complete generated owner at this driver's stable address.
@@ -275,12 +275,12 @@ export namespace pP::colony {
         /// Replaces the generated world, discarding tick and time backlog.
         /// Keeps the current spawn count, so a profiling load persists across
         /// regeneration.
-        [[nodiscard]] std::error_code regenerate(u64 seed);
+        [[nodiscard]] std::error_code regenerateLegacyFixture(u64 seed);
 
         /// Replaces the generated world with a spawn-count override (agent
         /// count; 0 fails closed to `kAgentCount`, above `kAgentCountMax`
         /// returns `value_too_large`). Snapshot/registration order untouched.
-        [[nodiscard]] std::error_code regenerate(u64 seed, u32 agent_count);
+        [[nodiscard]] std::error_code regenerateLegacyFixture(u64 seed, u32 agent_count);
 
         [[nodiscard]] const sim::ChunkGrid &grid() const noexcept;
 

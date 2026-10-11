@@ -139,7 +139,8 @@ namespace pP::colony {
         }
     }
 
-    std::error_code ColonyDriver::init(const ColonyDriverDesc &desc, const sim::GenerationExecution *const execution) {
+    std::error_code ColonyDriver::initLegacyFixture(
+        const ColonyDriverDesc &desc, const sim::GenerationExecution *const execution) {
         if (desc.m_tick_hz == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -159,7 +160,7 @@ namespace pP::colony {
         }
 
         const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed}, execution);
+        const std::error_code init_error = m_colony.initLegacyFixture(ColonyDesc{desc.m_seed}, execution);
         if (init_error) [[unlikely]] {
             // A failed generation must not expose a partially written world.
             (void) m_colony.shutdown();
@@ -566,7 +567,7 @@ namespace pP::colony {
         return {};
     }
 
-    std::error_code ColonyDriver::regenerate(const u64 seed) {
+    std::error_code ColonyDriver::regenerateLegacyFixture(const u64 seed) {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -599,7 +600,7 @@ namespace pP::colony {
             return shutdown_error;
         }
 
-        const std::error_code init_error = m_colony.init(ColonyDesc{seed});
+        const std::error_code init_error = m_colony.initLegacyFixture(ColonyDesc{seed});
         if (init_error) [[unlikely]] {
             (void) m_colony.shutdown();
             m_timestep.reset();
@@ -619,7 +620,7 @@ namespace pP::colony {
         return {};
     }
 
-    std::error_code ColonyDriver::regenerate(const u64 seed, const u32 agent_count) {
+    std::error_code ColonyDriver::regenerateLegacyFixture(const u64 seed, const u32 agent_count) {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -627,7 +628,7 @@ namespace pP::colony {
             return std::make_error_code(std::errc::value_too_large);
         }
         m_agent_count = agent_count == 0u ? kAgentCount : agent_count;
-        return regenerate(seed);
+        return regenerateLegacyFixture(seed);
     }
 
     sim::ChunkGrid &ColonyDriver::grid() noexcept {
