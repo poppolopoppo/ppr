@@ -3553,7 +3553,7 @@ namespace demo {
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
-            if (m_preview_pending and (not m_driver or not m_driver->editPending())) {
+            if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
                 const auto mode = *std::exchange(m_preview_pending, std::nullopt);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
             }

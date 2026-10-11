@@ -6,6 +6,7 @@ import engine.app;
 import engine.core;
 import engine.sim;
 import game.colony.driver;
+import game.colony.checkpoint;
 import std;
 
 export namespace pP::colony {
@@ -62,6 +63,10 @@ export namespace pP::colony {
         /// Transfers ownership only on success. Until takeCaptured(), all live
         /// inspection, ticks, tools and render acknowledgments must be deferred.
         [[nodiscard]] std::error_code requestCapture(std::unique_ptr<ColonyDriver> &frozen, Capture capture);
+        [[nodiscard]] std::error_code requestCheckpoint(std::unique_ptr<ColonyDriver> &frozen);
+        /// Move the owned result before releasing capture access. Encoding/I/O
+        /// must continue off-main using this value, never the live session.
+        [[nodiscard]] WorldCheckpoint takeCheckpoint();
         [[nodiscard]] std::error_code requestPreview(
             std::unique_ptr<ColonyDriver> &frozen, EGridDiagnosticMode mode, float temperature_min_k,
             float temperature_max_k);

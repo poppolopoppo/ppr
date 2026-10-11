@@ -99,6 +99,7 @@ export namespace pP::colony {
         u64 m_world_generation{0u};
         u64 m_tick_count{};
         u32 m_agent_count{kAgentCount};
+        u32 m_tick_hz{60u};
         u32 m_speed{1u};
         bool m_paused{false};
         bool m_initial_matter_baseline_valid{true};
@@ -163,7 +164,8 @@ export namespace pP::colony {
         std::error_code initPhysics();
 
         [[nodiscard]] std::error_code initializeRuntime(
-            const ColonyDriverDesc &desc, TimeSpan period, const sim::GenerationExecution *execution);
+            const ColonyDriverDesc &desc, TimeSpan period, const sim::GenerationExecution *execution,
+            const sim::Snapshot *restored = nullptr);
 
         void shutdownPhysics() noexcept;
         void collectColliderInterest(Array<sim::ChunkPos> &needed);
@@ -225,6 +227,14 @@ export namespace pP::colony {
         /// Prepared sessions start one controlled actor at the validated start.
         [[nodiscard]] std::error_code initPrepared(
             const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *execution = nullptr);
+        /// Initializes an unpublished checkpoint candidate without spawning actors.
+        [[nodiscard]] std::error_code initRestored(
+            const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot, u64 tick,
+            bool initial_matter_valid, std::optional<sim::Entity> controlled,
+            const sim::GenerationExecution *execution = nullptr);
+        [[nodiscard]] Expected<sim::Snapshot> captureFullWithBodies(const IContext *context = nullptr) const;
+        [[nodiscard]] u32 tickHz() const noexcept;
+        [[nodiscard]] bool captureReady() const noexcept;
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
         [[nodiscard]] bool initialMatterBaselineValid() const noexcept;
         // Borrowed immutable catalog; absent for explicit legacy fixtures.

@@ -55,6 +55,22 @@ namespace pP::colony {
         return PreparedWorld{std::move(catalog), descriptor, std::move(*world)};
     }
 
+    Expected<PreparedWorld> restorePreparedWorld(
+        ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, validateWorldMetric(descriptor.m_metric));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldPreparation, descriptor.m_pack_schema_version == 1u and
+                                      descriptor.m_generator_version == sim::kGeneratorAlgorithmVersion and
+                                      catalog.contentFingerprint() and
+                                      *catalog.contentFingerprint() == descriptor.m_content_fingerprint and
+                                      catalog.findWorld(descriptor.m_profile) and
+                                      world.m_plan.seed() == descriptor.m_seed and
+                                      world.m_plan.recipe().m_cell_size_m == kFineCellMetres
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::protocol_not_supported));
+        return PreparedWorld{std::move(catalog), std::move(descriptor), std::move(world)};
+    }
+
     std::error_code generateWorld(
         const u64 seed, sim::ChunkGrid &grid, const sim::GenerationExecution *const execution) {
         if (execution != nullptr) {

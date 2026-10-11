@@ -221,7 +221,8 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::initializeRuntime(
-        const ColonyDriverDesc &desc, const TimeSpan period, const sim::GenerationExecution *const execution) {
+        const ColonyDriverDesc &desc, const TimeSpan period, const sim::GenerationExecution *const execution,
+        const sim::Snapshot *const restored) {
         m_timestep.emplace(period, kMaxSlices, sim::EOverrunPolicy::clamp);
         if (const std::error_code error = registerColonyComponents(m_registry)) [[unlikely]] {
             (void) m_colony.shutdown();
@@ -376,7 +377,19 @@ namespace pP::colony {
         }
         m_agent_count = desc.m_agent_count == 0u ? kAgentCount : desc.m_agent_count;
         m_seed = desc.m_seed;
-        if (const std::error_code error = spawnColonyAgents(context)) [[unlikely]] {
+        m_tick_hz = desc.m_tick_hz;
+        if (restored) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, sim::restore(m_registry, *restored));
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, createAgentBodies(context));
+            for (const auto &record: restored->m_bodies.m_records) {
+                const auto body = std::ranges::find(m_bodies, record.m_entity, &AgentBody::m_entity);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    ColonyPreparation,
+                    body != m_bodies.end() ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+                PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, m_scene.setAwake(body->m_handle, record.m_awake));
+            }
+            refreshAgents();
+        } else if (const std::error_code error = spawnColonyAgents(context)) [[unlikely]] {
             (void) shutdown();
             return error;
         }

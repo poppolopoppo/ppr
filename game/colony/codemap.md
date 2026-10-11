@@ -91,3 +91,6 @@ worker payload cleanup. Callers must defer all live reads/writes/acks during the
 lease and restore prior pause state with neutral input.
 
 Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` owns per-chunk rollback candidates, suspended tick prefixes and bounded collider preparation; owned simulation packets overlay candidate cells only when colliders are ready. Matching complete render revision manifests settle the candidate before gameplay resumes. Paused tools and explicit single-step preserve held tick accounting. Headless numeric fixtures retain their synchronous edit path.
+
+
+`Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` / `Checkpoint.Validation.cpp` own the versioned game envelope, full frozen capture, explicit byte codec and fail-closed content/metadata/ECS validation. `ColonyDriver.Checkpoint.cpp` provides full body-aware capture and fresh candidate restoration. `WorldJob::requestCheckpoint` runs capture under the existing exclusive owner lease; encoding/I/O consume the owned result off-main. `Checkpoint.Tests.cpp` covers edited-world round trips, identity/metric rejection, malformed input and frozen full capture without dirty-state mutation. Raw sim snapshot v4 remains a separate low-level codec.

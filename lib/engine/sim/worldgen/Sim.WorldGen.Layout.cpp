@@ -174,6 +174,32 @@ namespace pP::sim {
         m_heads[index] = static_cast<i32>(m_sites.size());
         m_sites.push_back(site);
     }
+    Expected<BiomeLayout> restoreBiomeLayout(const GenerationPlan &plan, const std::span<const GenerationSite> sites) {
+        const auto &recipe = plan.recipe();
+        const double extent = kWorldEdge * recipe.m_cell_size_m;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldLayout, not sites.empty() and sites.size() <= kMaxGenerationSites
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &site: sites) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                WorldLayout, std::isfinite(site.m_x_m) and
+                                     std::isfinite(site.m_y_m) and
+                                     site.m_x_m >= 0.0 and
+                                     site.m_x_m <= extent and
+                                     site.m_y_m >= 0.0 and
+                                     site.m_y_m <= extent and
+                                     site.m_biome < recipe.m_biomes.size()
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::invalid_argument));
+        }
+        BiomeLayout layout{extent};
+        for (const auto &site: sites) {
+            layout.append(site);
+        }
+        return layout;
+    }
+
     std::span<const GenerationSite> BiomeLayout::sites() const noexcept {
         return m_sites;
     }

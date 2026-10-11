@@ -7,6 +7,7 @@ target_sources(app.game
             Game.Application.cppm
             colony/Agents.cppm
             colony/Buildings.cppm
+            colony/Checkpoint.cppm
             colony/Colony.cppm
             colony/ColonyDriver.cppm
             colony/ColonyPanel.cppm
@@ -25,8 +26,12 @@ target_sources(app.game
         Game.Application.cpp
         colony/Agents.cpp
         colony/Buildings.cpp
+        colony/Checkpoint.cpp
+        colony/Checkpoint.Codec.cpp
+        colony/Checkpoint.Validation.cpp
         colony/Colony.cpp
         colony/ColonyDriver.cpp
+        colony/ColonyDriver.Checkpoint.cpp
         colony/ColonyDriver.Edits.cpp
         colony/ColonyPanel.cpp
         colony/ColonySmoke.cpp
@@ -110,6 +115,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/Metric.cppm
                 colony/Agents.cppm
                 colony/Buildings.cppm
+                    colony/Checkpoint.cppm
                 colony/Colony.cppm
                 colony/ColonyDriver.cppm
                 colony/ColonyTranslator.cppm
@@ -131,13 +137,18 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Content.Features.Tests.cpp
             colony/Content.Worlds.Tests.cpp
             colony/Content.Pack.Tests.cpp
+            colony/Checkpoint.Tests.cpp
             colony/Metric.cpp
             colony/Metric.Tests.cpp
             colony/Agents.cpp
             colony/Buildings.cpp
+            colony/Checkpoint.cpp
+            colony/Checkpoint.Codec.cpp
+            colony/Checkpoint.Validation.cpp
             colony/Colony.cpp
             colony/ColonyDriver.cpp
-        colony/ColonyDriver.Edits.cpp
+            colony/ColonyDriver.Checkpoint.cpp
+            colony/ColonyDriver.Edits.cpp
             colony/ColonyTranslator.cpp
             colony/DigTool.cpp
             colony/Pathfinding.cpp

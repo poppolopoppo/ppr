@@ -38,6 +38,7 @@ export namespace pP::sim {
         explicit BiomeLayout(double extent_m);
         void append(GenerationSite site);
         friend Expected<BiomeLayout> compileBiomeLayout(const GenerationPlan &, const IContext *);
+        friend Expected<BiomeLayout> restoreBiomeLayout(const GenerationPlan &, std::span<const GenerationSite>);
 
     public:
         BiomeLayout(BiomeLayout &&) noexcept = default;
@@ -51,6 +52,9 @@ export namespace pP::sim {
     };
     [[nodiscard]] Expected<BiomeLayout> compileBiomeLayout(
         const GenerationPlan &plan, const IContext *context = nullptr);
+    /// Rebuilds only the derived spatial index from structurally validated saved sites.
+    [[nodiscard]] Expected<BiomeLayout> restoreBiomeLayout(
+        const GenerationPlan &plan, std::span<const GenerationSite> sites);
     /// Layout must have been compiled from this plan. Sample coordinates are
     /// finite world metres within kNoiseCoordinateLimitMetres on each axis.
     [[nodiscard]] u32 generationBiomeAt(

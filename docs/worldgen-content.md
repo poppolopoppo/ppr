@@ -1,6 +1,6 @@
 # World-generation content records
 
-The stage-2 numeric seam is `game.colony.metric`: three fine cells per metre,
+The shared numeric seam is `game.colony.metric`: three fine cells per metre,
 three by three samples per construction tile, one metre reference thickness.
 Cell centres are `(i + 0.5) / 3`; picking uses half-open cell intervals with
 canonical `i / 3` boundaries. Discrete authored lengths must equal a canonical
@@ -10,17 +10,14 @@ final row/column. `WorldMetric` rejects legacy scale/thickness values.
 
 The immutable `engine.math` contour table describes all sixteen centre-sampled
 dual-cell cases, midpoint crossings, CCW filled triangles and solid-left boundary
-segments. Diagonal solid components remain disconnected. Game, physics and GPU
-adapters will consume that same table during the later integration stages; adding
-these numeric seams alone does not migrate the current production world scale.
+segments. Diagonal solid components remain disconnected. Game, physics and GPU adapters consume the same table for the current production world.
 
 The first implementation slice provides `game.colony.content` and its pure
 `decodeMaterialCatalog(bytes, origin, diagnostics)` boundary. It returns an
 owned immutable candidate. A failed decode does not modify an earlier catalog.
 `std::bad_alloc` escapes to the executable's fatal exception boundary rather
 than becoming a recoverable catalog error.
-The interactive game still uses the legacy generator and element definitions;
-the complete pack loader described below is available for CPU validation, but runtime integration is pending.
+Normal interactive startup and New Game use the shipped authored pack through the asynchronous world coordinator. Explicit numeric many-agent fixtures remain available for tests and profiling.
 
 The decoder reuses `engine.core`'s TOML scalar codec and typed schema resolver.
 Its opt-in record mode rejects empty tables and literal dotted/empty key
@@ -347,8 +344,7 @@ Safety caps are 16 profiles per 1 MiB document, 64 biome choices, eight start
 resources and 128 rules per profile. Aggregate output controls allow at most
 4096 worms, 1024 feature instances and one room-connection rule per profile.
 Further numeric scratch/output bounds are enforced by the generation compiler.
-World-profile decoding is not yet the production generator or the full-pack
-identity/texture validator.
+World-profile decoding feeds the production numeric compiler; the complete-pack loader below validates identity and textures.
 
 ## Complete pack loading and CPU validation
 
@@ -380,8 +376,7 @@ fingerprint, so it cannot be mistaken for a validated pack.
 `assets/worldgen/default` ships twelve materials, four PPR biomes, five templates,
 and two profiles (`frontier` and `hollows`). The second profile changes region
 weights, cave density and vein/tunnel geometry. Seven original sRGB textures are
-included with provenance. World geometry and start guarantees still require the
-stage-3 generator; validation alone does not prove placement or traversal.
+included with provenance. The generator validates geometry and supported starting routes before candidate publication.
 
 Build `app.game` or `game.tests` to synchronize the build-owned `worldgen` tree,
 including deleted assets, without needing a C++ relink. Then run from any folder:
@@ -408,7 +403,7 @@ Timings and execution counters do not participate. Payload bytes exclude
 metadata, allocator overhead, scratch and the active predecessor, so they are
 not a peak-memory measurement.
 Diagnostic output is limited to 64 entries and bounded
-field lengths. The same loader is intended for the asynchronous runtime job.
+field lengths. The asynchronous runtime job uses the same loader.
 
 Stage 3 currently provides owned numeric plans, deterministic macro layout,
 bounded worm/room/feature geometry, chunk-local terrain rasterization and an
@@ -427,8 +422,43 @@ start contour validation permits at most 262,144 dual cells.
 Complete numeric results own the plan, layout, geometry, grid, start, matter
 and report; the injected clock affects timings only. Game factories bind that
 result to an owned catalog and immutable reproduction descriptor; Colony can
-adopt the complete owner without regenerating. Production job integration
-and full allocation/scratch accounting remain pending. The interactive job uses the
-legacy terrain recipe until the complete candidate can pass those validations.
+adopt the complete owner without regenerating. The production job builds and publishes this complete candidate. Full allocation/scratch accounting remains an acceptance measurement.
 Third-party dependency cleanup is deferred until all seven implementation stages
 are complete, as requested; it is not part of the remaining stage-3 work.
+
+
+## Full world checkpoints
+
+`game.colony.checkpoint` wraps the unchanged low-level sim snapshot v4 in a
+version-1 game envelope (`PPRWGEN1`). It stores the exact pack schema/generator
+version, profile, unsigned seed, content fingerprint and 3:1 metric, plus the
+sorted numeric-ID/material-key manifest (including reserved vacuum ID 0), biome
+sites, feature instances/segments/omissions, start/resource results, initial
+matter spans/fill heights and baseline validity, generation report, fixed tick
+and frequency, and controlled entity slot/generation. Fields are explicit
+little-endian integers and IEEE-754 doubles; strings/counts are length-prefixed.
+The complete encoded envelope is bounded at 256 MiB. This is an application
+checkpoint for the current component layouts, not an ABI migration facility.
+
+`WorldJob::requestCheckpoint` transfers the frozen driver at a completed tick
+boundary to the existing single coordinator. The owner must pause ticks/tools,
+mirror body state and defer all live access and acknowledgments while leased.
+The worker captures every resident chunk, including clean chunks, without
+changing dirty rectangles. Durable ECS/body state and awake flags are retained;
+Plan, PathReq and PathComp rows are discarded because they are derived work.
+The result owns its data. After preparation, move it with `takeCheckpoint`,
+return the identical session with `takeCaptured`, restore the prior pause state
+and clear held input. Encoding and file I/O must run off-main from the owned
+result. No production save UI, save slots or autosave are provided.
+
+Decoding rejects unsupported identity/metric, malformed/truncated/trailing
+bytes, excessive counts, unknown or particle terrain IDs, bad entity selection,
+invalid component layouts, unordered/overlapping matter spans and nonfinite
+metadata before constructing a candidate. Restore creates a fresh terrain grid
+from saved cells and reconstructs derived biome lookup, physics and presentation
+state; it never regenerates the terrain baseline. Tick and actor selection
+survive; held input and GPU descriptors do not. Body values survive, but Box2D
+solver/contact internals are rebuilt rather than promising bit-exact solver
+continuation. An edited world with invalidated initial matter remains loadable
+even when it no longer has its original reservoir containment or starting route;
+its preserved matter metadata is labelled an invalidated baseline, not live fluid.

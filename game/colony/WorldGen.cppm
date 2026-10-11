@@ -25,6 +25,7 @@ export namespace pP::colony {
         WorldDescriptor m_descriptor;
         sim::GeneratedWorld m_world;
         PreparedWorld(ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world);
+        friend Expected<PreparedWorld> restorePreparedWorld(ContentCatalog, WorldDescriptor, sim::GeneratedWorld);
         friend Expected<PreparedWorld> prepareWorld(
             ContentCatalog, std::string_view, u64, const ITimerClock &, const sim::GenerationExecution &);
 
@@ -45,6 +46,11 @@ export namespace pP::colony {
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         ContentCatalog catalog, std::string_view profile, u64 seed, const ITimerClock &clock,
         const sim::GenerationExecution &execution = {});
+
+    /// Checkpoint assembly seam: metadata/grid were fully validated by the game
+    /// envelope decoder; this verifies compatible descriptor/compiled-plan identity.
+    [[nodiscard]] Expected<PreparedWorld> restorePreparedWorld(
+        ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world);
 
     /// Resolves authoring references once into an owned, validated numeric plan.
     [[nodiscard]] Expected<sim::GenerationPlan> compileWorldPlan(

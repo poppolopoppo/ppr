@@ -423,3 +423,30 @@ Interactive sessions now hold an accepted edit outside the visible grid. Dig pre
 Already-admitted catch-up slices remain accounted for exactly once. Pausing holds them; one explicit Step completes one slice. Paused digs continue to work without ticking, and cannot incorrectly mark an unstarted tick prefix as executed. The in-flight dig owns its command independently of bounded FIFO overflow. New-game and preview requests defer during an edit, and restore/replay/reset APIs reject pending edits. Shutdown cancels the collider cohort before destroying its Scene. Independent review passes.
 
 Validation: dev/ASan affected-target build passed, followed by three shuffled game/movement loops (12 tests including parent groups; 25.77/24.71/24.00 s), out/worldgen-edit-integration-v3-build.log and out/worldgen-edit-integration-v3-tests.log. Expanded diagnostic GPU readback passes three loops in out/worldgen-edit-gpu-v4-tests.log; asset rebuild is out/worldgen-edit-gpu-v4-build.log. Format Check passes eleven files and semantic style reports zero blocking findings. The first movement run exposed an unintended change to existing best-effort failure-path physics (shuffle 000000005E85EE8C); that behavior was restored and all three loops rerun. The first GPU run rejected an overly strict black-background assertion (00000000969DDAB6); it now uses the existing clear-color threshold, with the partial/full publication assertions unchanged. Original failure logs are retained. Full matrix, measured cadence/resource costs and interactive/backend acceptance remain open, so stage 5 is not declared fully accepted.
+
+
+### Checkpoint envelope and frozen full capture (2026-10-11)
+
+The version-1 game envelope retains exact reproduction/content/metric identity,
+material manifest, authored metadata, full terrain/ECS/body state, completed tick,
+controlled entity and baseline validity. The raw sim v4 codec is unchanged.
+WorldJob captures through its existing exclusive frozen owner lease, and releases
+untaken/cancelled payloads on the coordinator. Restore validates all identity and
+bounded metadata before assembling a fresh unpublished session from saved cells;
+it does not regenerate edited terrain. Transient plans/paths and held input are
+removed. Derived colliders are rebuilt around actor interest, not for all 1024
+chunks; Box2D solver caches are not persisted.
+
+Validation: dev/ASan builds of app.game, game.tests and engine.tests.app pass
+(out/worldgen-checkpoint-build-v3.log and -v4.log). Checkpoint/world-job/movement
+coverage passes three shuffled loops (25 tests including groups;
+40.36/38.14/39.96 s), out/worldgen-checkpoint-tests-v3.log. The cancellation-cleanup
+delta passes checkpoint/world-job coverage in three loops in
+out/worldgen-checkpoint-tests-v4.log. Format Check passes sixteen files; semantic
+style has zero blocking findings. Astra independent review passes after fixing
+vacuum report rejection, optional-instance omission bounds, span ordering and
+coordinator cleanup. Earlier compile failures (missing offsetof macro, missing
+direct test-module imports) remain in v1/v2 build logs; no runtime failure was
+hidden. IDE inspection remains unavailable as previously recorded. Headless
+preview exports, final authoring cleanup and acceptance gates remain open; this
+is a validated stage-6 increment, not whole-plan completion.

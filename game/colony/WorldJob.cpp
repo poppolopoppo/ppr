@@ -21,6 +21,7 @@ namespace pP::colony {
         std::unique_ptr<ColonyDriver> m_candidate{};
         std::unique_ptr<ColonyDriver> m_retired{};
         std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
+        std::optional<WorldCheckpoint> m_checkpoint{};
         Capture m_capture{};
         bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
     };
@@ -78,6 +79,9 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             WorldJobs, m_next_id != 0u ? std::error_code{} : std::make_error_code(std::errc::value_too_large));
 
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldJobs,
+            frozen->captureReady() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         auto state = std::make_shared<State>();
         std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
         state->m_capture = std::move(capture);
@@ -150,6 +154,28 @@ namespace pP::colony {
         return {};
     }
 
+    std::error_code WorldJob::requestCheckpoint(std::unique_ptr<ColonyDriver> &frozen) {
+        PPR_RETURN_ERROR_ON_FAIL(WorldJobs, requestCapture(frozen, [](const ColonyDriver &, const IContext &) {
+            return std::error_code{};
+        }));
+        State *const state = m_job.get();
+        state->m_capture = [state](const ColonyDriver &driver, const IContext &context) {
+            const auto *const prepared = driver.preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldJobs, prepared ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            auto checkpoint = captureWorldCheckpoint(driver, prepared->generated(), &context);
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, checkpoint);
+            state->m_checkpoint.emplace(std::move(*checkpoint));
+            return std::error_code{};
+        };
+        return {};
+    }
+
+    WorldCheckpoint WorldJob::takeCheckpoint() {
+        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_view.m_error and m_job->m_checkpoint);
+        return std::move(*m_job->m_checkpoint);
+    }
+
     std::unique_ptr<ColonyDriver> WorldJob::takeCaptured(const bool retain_presentation) {
         PPR_ASSERT(m_job and m_job->m_is_capture and m_view.m_state == EWorldJobState::prepared);
         auto owner = std::move(m_job->m_candidate);
@@ -208,6 +234,7 @@ namespace pP::colony {
             [state](const IContext &) -> std::error_code {
                 std::error_code error{};
                 state->m_presentation.reset();
+                state->m_checkpoint.reset();
                 state->m_capture = {}; // Captured output owners are also disposed off-main.
                 if (state->m_candidate) {
                     PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, state->m_candidate->shutdown());
