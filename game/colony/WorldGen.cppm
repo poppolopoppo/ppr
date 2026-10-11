@@ -55,6 +55,11 @@ export namespace pP::colony {
     /// Resolves authoring references once into an owned, validated numeric plan.
     [[nodiscard]] Expected<sim::GenerationPlan> compileWorldPlan(
         const ContentCatalog &catalog, std::string_view profile, u64 seed);
+    /// Flat CPU diagnostics for an exclusively owned validated generated world.
+    /// Blocking: coordinator/headless caller only. Failure may leave partial files.
+    [[nodiscard]] std::error_code exportWorldDiagnostics(
+        const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,
+        const std::filesystem::path &directory, const IContext *context = nullptr);
     /// Thin wrapper over the sim-side deterministic generator
     /// (`sim::generate`): game code submits work through this boundary and
     /// never touches the generator internals. Infallible in practice — the

@@ -64,11 +64,12 @@ namespace pP::game::tests::detail::compat {
         Diagnostics diagnostics{};
         const auto command = resolveCli(
             {"--validate-worldgen", "--worldgen-root=pack", "--worldgen-profile=hollows",
-                "--worldgen-seed=18446744073709551615"},
+                "--worldgen-seed=18446744073709551615", "--worldgen-output=previews"},
             diagnostics);
         PPR_TEST_ASSERT(command.has_value());
         PPR_TEST_ASSERT(command->m_game.m_value.m_command == EGameCommand::validate_worldgen);
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_root == "pack");
+        PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_output == "previews");
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_profile == "hollows");
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
         for (const auto seed: {"--worldgen-seed=-1", "--worldgen-seed=18446744073709551616"}) {

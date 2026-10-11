@@ -152,6 +152,34 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not owner->shutdown());
     };
 
+    PPR_UNIT_TEST (diagnostic_export_rejects_cancellation_and_unwritable_directory) {
+        const auto catalog = loadCatalog();
+        auto restored = restoreWorldCheckpoint(loadCatalog(), editedCheckpoint(catalog), 2u);
+        PPR_TEST_ASSERT(restored.has_value());
+        const auto *const prepared = (*restored)->preparedWorld();
+        PPR_TEST_ASSERT(prepared != nullptr);
+        auto [capture_context, cancel] = context::withCancelClause(context::background());
+        cancel(std::make_error_code(std::errc::operation_canceled));
+        PPR_TEST_ASSERT(
+            exportWorldDiagnostics(catalog, prepared->generated(), prepared->descriptor(), {}, capture_context.get()) ==
+            std::errc::operation_canceled);
+        const auto path = hal::process::currentExecutablePath().parent_path() / "checkpoint-export-file-fixture";
+        PPR_TEST_ASSERT(not std::filesystem::exists(path));
+        PPR_DEFER {
+            // Best-effort removal of a test-owned file, also on assertion unwind.
+            std::error_code cleanup;
+            std::filesystem::remove(path, cleanup);
+        };
+        {
+            std::ofstream file{path, std::ios::binary};
+            file << "This regular file cannot be an output directory.";
+            PPR_TEST_ASSERT(file.good());
+        }
+        const auto error = exportWorldDiagnostics(catalog, prepared->generated(), prepared->descriptor(), path);
+        PPR_TEST_ASSERT(static_cast<bool>(error));
+        PPR_TEST_ASSERT(not (*restored)->shutdown());
+    };
+
     PPR_UNIT_TEST (malformed_identity_metric_counts_and_payload_are_rejected_before_restore) {
         const auto catalog = loadCatalog();
         const auto original = editedCheckpoint(catalog);
@@ -207,7 +235,8 @@ namespace pP::game::tests {
     const UnitTest checkpoint_tests = UnitTest::Named("checkpoint") / [](UnitTest::IRun &_) {
         using namespace detail::checkpoint;
         _.recurse(
-            {round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
+            {diagnostic_export_rejects_cancellation_and_unwritable_directory,
+                round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore});
     };
     const UnitTest &gameCheckpointTests() noexcept {

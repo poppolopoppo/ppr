@@ -84,6 +84,15 @@ namespace demo {
         for (u32 phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
             std::println("Phase {}: {:.6f} seconds", phase + 1u, time::seconds(world.m_report.m_phase_times[phase]));
         }
+        if (settings.m_worldgen_output) {
+            const auto error = colony::exportWorldDiagnostics(
+                content, world, prepared->descriptor(), *settings.m_worldgen_output);
+            if (error) {
+                std::cerr << "[worldgen] Diagnostic export failed: " << error.message() << '\n';
+                return 1;
+            }
+            std::println("Flat world diagnostics exported to {}", *settings.m_worldgen_output);
+        }
         return 0;
     }
 

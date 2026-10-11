@@ -34,6 +34,7 @@ export namespace pP::game {
         std::optional<double> m_exit_after{};
         std::optional<std::string> m_config{};
         std::optional<std::string> m_worldgen_root{};
+        std::optional<std::string> m_worldgen_output{};
         std::string m_worldgen_profile{"frontier"};
         u64 m_worldgen_seed{42u};
 
@@ -41,6 +42,12 @@ export namespace pP::game {
             using namespace config;
 
             return std::tuple{
+                field(
+                    &GameSettings::m_worldgen_output,
+                    Metadata{
+                        "game.worldgen_output", "Headless diagnostic export directory", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    PathDomain{1024u, false}),
                 field(
                     &GameSettings::m_worldgen_root,
                     Metadata{

@@ -94,3 +94,6 @@ Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` 
 
 
 `Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` / `Checkpoint.Validation.cpp` own the versioned game envelope, full frozen capture, explicit byte codec and fail-closed content/metadata/ECS validation. `ColonyDriver.Checkpoint.cpp` provides full body-aware capture and fresh candidate restoration. `WorldJob::requestCheckpoint` runs capture under the existing exclusive owner lease; encoding/I/O consume the owned result off-main. `Checkpoint.Tests.cpp` covers edited-world round trips, identity/metric rejection, malformed input and frozen full capture without dirty-state mutation. Raw sim snapshot v4 remains a separate low-level codec.
+
+
+`WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--validate-worldgen --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.

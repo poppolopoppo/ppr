@@ -462,3 +462,39 @@ solver/contact internals are rebuilt rather than promising bit-exact solver
 continuation. An edited world with invalidated initial matter remains loadable
 even when it no longer has its original reservoir containment or starting route;
 its preserved matter metadata is labelled an invalidated baseline, not live fluid.
+
+
+## Headless diagnostic exports
+
+After building `app.game`, run:
+
+```text
+app.game --validate-worldgen --worldgen-profile=frontier --worldgen-seed=42 --worldgen-output=<output-directory>
+```
+
+The headless command generates one exclusively owned world using the existing
+background pool, validates it, then streams four flat P6 PPM images:
+`material.ppm`, `biome.ppm`, `temperature.ppm`, and `initial-matter.ppm`. It also
+writes `report.json` (at most 1 MiB) and `reproduce.txt`. Use a separate output
+directory for each profile/seed. Existing named outputs are overwritten; an I/O
+error or cancellation is reported and may leave partial files. A successful
+report applies to that completed invocation only.
+
+Each image is 1024 by 1024 RGB, with +Y world top in the first row. A pixel
+averages all 16 fine samples in its 4 by 4 footprint rather than dropping thin
+features through point sampling. Material colors and biome colors come from the
+catalog; vacuum is black in material and temperature maps. The temperature ramp
+clamps 200..1000 K from blue through green to red. Biomes cover nominal empty
+cells too. Initial matter is the unsimulated generation baseline: colors are
+weighted by the shared contour's empty polygon area and clipped at the region's
+fill height. Black means no initial matter coverage. There is no simulated
+pressure, flow, equilibrium or live oxygen field in this image.
+
+The JSON report records descriptor/metric identity, hexadecimal seed/checksums,
+phase seconds, resident payload bytes, metadata counts, material counts, authored
+biome color legend and each initial region's material, density, volume, mass,
+fill height and span count. The bounded streaming writer retains rows rather
+than all full-resolution image buffers. These overviews help author geometry
+and distributions; they do not show albedo texturing or certify GPU contour,
+seam, traversal or frame-cadence acceptance. Those require separate GPU-rendered
+closeups and runtime checks.

@@ -54,6 +54,7 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Plan.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Export.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Pack.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp

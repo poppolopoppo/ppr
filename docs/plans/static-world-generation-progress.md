@@ -450,3 +450,30 @@ direct test-module imports) remain in v1/v2 build logs; no runtime failure was
 hidden. IDE inspection remains unavailable as previously recorded. Headless
 preview exports, final authoring cleanup and acceptance gates remain open; this
 is a validated stage-6 increment, not whole-plan completion.
+
+### Flat diagnostic exports (2026-10-11)
+
+`--validate-worldgen --worldgen-output=<directory>` exports four 1024-square
+P6 images, a bounded JSON report and reproduction identity. Material, biome,
+temperature and initial-matter previews average each four-by-four fine-cell
+block; temperature excludes vacuum and matter uses shared contour-clipped empty
+area. Biome colors come from the authored catalog. Output is an explicitly
+blocking CPU-only diagnostic, with cancellation and I/O errors propagated.
+
+Dev/ASan checkpoint/config coverage passed three loops (24 tests including
+groups; out/worldgen-export-tests-v1.log); dev and release builds passed.
+Independent Astra review and format Check passed; semantic checks have no
+blocking findings. Release corpus passed both profiles at seeds 0, 1, 42 and
+18446744073709551615. All eight reports sum to 16777216 terrain cells and all 32
+images decode at 1024 square. Artifacts and exact commands are under
+out/worldgen-acceptance; corpus-measurements.json records 28.35–52.37 seconds
+per whole generation/export command, 158793728–159150080 bytes peak working set
+and 182820864–183828480 bytes sampled peak private memory (100 ms sampling).
+These CPU-only measurements include export I/O and do not establish interactive
+cadence or GPU memory. Hardware is Ryzen 9 3950X, 64 GiB, RTX 2080, Windows 11.
+
+The overview contact sheet shows differentiated large material/biome regions,
+distinct denser Hollows caves and sparse localized initial matter. Fine cave
+detail is visually busy at world-overview scale; closeup inspection remains
+necessary before accepting terrain tuning. GPU closeups and final acceptance
+are still open.

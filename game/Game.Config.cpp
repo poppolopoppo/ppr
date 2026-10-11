@@ -140,6 +140,10 @@ namespace pP::game {
         appendOption(
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
         appendOption(
+            schema.m_options, valueOption(
+                                  "game.worldgen_output", "worldgen-output",
+                                  "Export flat PPM diagnostics and report with --validate-worldgen."));
+        appendOption(
             schema.m_options,
             valueOption("game.worldgen_profile", "worldgen-profile", "World profile key (default frontier)."));
         appendOption(

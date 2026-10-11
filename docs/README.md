@@ -15,6 +15,7 @@
 - [Render worker and payload boundary](../lib/engine/app/frame/codemap.md)
 - [Simulation](../lib/engine/sim/codemap.md) and [physics](../lib/engine/physics/codemap.md)
 - [Game integration](../game/codemap.md)
+- [World-generation content authoring, checkpoints and diagnostics](worldgen-content.md)
 - [Display control interface](../lib/engine/app/DisplayControls.md)
 - [Build configuration](../cmake/codemap.md) and [test scheduling](../codemap.md#test-infrastructure)
 
