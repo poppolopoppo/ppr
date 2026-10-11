@@ -228,6 +228,16 @@ namespace pP::sim {
         : m_plan(plan), m_layout(layout), m_geometry(geometry), m_segments(std::move(segments)),
           m_instances(std::move(instances)) {
     }
+    u64 GenerationRaster::indexPayloadBytes() const noexcept {
+        u64 bytes = (m_segments.capacity() + m_instances.capacity()) * sizeof(Array<u32>);
+        for (const auto &bucket: m_segments) {
+            bytes += bucket.capacity() * sizeof(u32);
+        }
+        for (const auto &bucket: m_instances) {
+            bytes += bucket.capacity() * sizeof(u32);
+        }
+        return bytes;
+    }
     Expected<Array<Cell>> GenerationRaster::chunk(const ChunkPos position, const IContext *const context) const {
         if (position.m_x >= kChunksPerEdge or position.m_y >= kChunksPerEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, std::errc::result_out_of_range);
@@ -247,8 +257,32 @@ namespace pP::sim {
     }
     namespace {
         [[nodiscard]] std::error_code rasterChunks(
-            const GenerationRaster &raster, ChunkGrid &grid, const GenerationExecution &execution) {
+            const GenerationRaster &raster, ChunkGrid &grid, const GenerationExecution &execution,
+            u64 *const known_scratch_peak) {
+            std::atomic<u32> active{}, peak{};
+            PPR_DEFER {
+                if (known_scratch_peak != nullptr) {
+                    *known_scratch_peak = std::max(
+                        *known_scratch_peak,
+                        raster.indexPayloadBytes() +
+                            static_cast<u64>(peak.load(std::memory_order_relaxed)) * kCellsPerChunk * sizeof(Cell));
+                }
+            };
             const auto fill = [&](const u32 c) -> std::error_code {
+                // One requested chunk payload per live task. Include the short
+                // handoff to grid ownership; this is a conservative task bound.
+                if (known_scratch_peak != nullptr) {
+                    const u32 count = active.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                    auto previous = peak.load(std::memory_order_relaxed);
+                    while (count > previous and
+                           not peak.compare_exchange_weak(previous, count, std::memory_order_relaxed)) {
+                    }
+                }
+                PPR_DEFER {
+                    if (known_scratch_peak != nullptr) {
+                        active.fetch_sub(1u, std::memory_order_relaxed);
+                    }
+                };
                 const ChunkPos position{c % kChunksPerEdge, c / kChunksPerEdge};
                 auto cells = raster.chunk(position, execution.m_context);
                 PPR_RETURN_ERROR_ON_FAIL(WorldRaster, cells);
@@ -327,7 +361,7 @@ namespace pP::sim {
     }
     Expected<ChunkGrid> rasterizeGenerationTerrain(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
-        const GenerationExecution &execution) {
+        const GenerationExecution &execution, u64 *const known_scratch_peak) {
         try {
             auto raster = compileGenerationRaster(plan, layout, geometry, execution.m_context);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, raster);
@@ -335,7 +369,7 @@ namespace pP::sim {
             if (execution.m_stage != nullptr) {
                 execution.m_stage->store(EGenerationStage::terrain, std::memory_order_release);
             }
-            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, rasterChunks(*raster, grid, execution));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, rasterChunks(*raster, grid, execution, known_scratch_peak));
             return grid;
         } catch (const std::bad_alloc &) {
             throw;

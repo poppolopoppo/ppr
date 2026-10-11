@@ -15,5 +15,6 @@ export namespace pP::sim {
     /// shared contour triangles, including the swept actor width. The spawn
     /// centre is placed on the reconstructed floor using the actual body height.
     [[nodiscard]] Expected<GenerationStart> validateGenerationStart(
-        const GenerationPlan &plan, const ChunkGrid &grid, const IContext *context = nullptr);
+        const GenerationPlan &plan, const ChunkGrid &grid, const IContext *context = nullptr,
+        u64 *known_scratch_peak = nullptr);
 }

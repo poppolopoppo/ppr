@@ -145,6 +145,9 @@ export namespace pP::sim {
 
     public:
         ChunkGrid();
+        /// Eager directories plus resident cell vector capacities. Excludes allocator overhead.
+        /// Caller excludes concurrent chunk writes.
+        [[nodiscard]] u64 retainedPayloadBytes() const noexcept;
 
         /// Owned chunk cells and exact dirty/activity/residency state. Used to
         /// prepare a local edit, restore its prior state, then publish by swap.

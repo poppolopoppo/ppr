@@ -100,12 +100,17 @@ namespace pP::sim {
         }
         [[nodiscard]] std::error_code features(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
-            const IContext *const context) {
+            const IContext *const context, u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
             geometry.m_instances.push_back(
                 {recipe.m_start_feature, kGenerationStartRule, 0u, static_cast<i32>(recipe.m_start_x_fine),
                     static_cast<i32>(recipe.m_start_y_fine), false});
             Array<u32> placements;
+            PPR_DEFER {
+                if (known_scratch_peak != nullptr) {
+                    *known_scratch_peak = std::max(*known_scratch_peak, placements.capacity() * sizeof(u32));
+                }
+            };
             for (u32 r = 0u; r < recipe.m_rules.size(); ++r) {
                 if (std::holds_alternative<GenerationPlacement>(recipe.m_rules[r].m_parameters)) {
                     placements.push_back(r);
@@ -219,7 +224,8 @@ namespace pP::sim {
             return {};
         }
         [[nodiscard]] std::error_code connections(
-            const GenerationPlan &plan, GenerationGeometry &geometry, const IContext *const context) {
+            const GenerationPlan &plan, GenerationGeometry &geometry, const IContext *const context,
+            u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
             if (std::ranges::none_of(recipe.m_rules, [](const auto &rule) {
                     return std::holds_alternative<GenerationConnection>(rule.m_parameters);
@@ -230,6 +236,11 @@ namespace pP::sim {
                 double m_x{}, m_y{};
             };
             Array<Anchor> anchors;
+            PPR_DEFER {
+                if (known_scratch_peak != nullptr) {
+                    *known_scratch_peak = std::max(*known_scratch_peak, anchors.capacity() * sizeof(Anchor));
+                }
+            };
             for (const auto &instance: geometry.m_instances) {
                 const auto &feature = recipe.m_features[instance.m_feature];
                 // Sealed-container protection takes precedence over room markers.
@@ -286,6 +297,14 @@ namespace pP::sim {
                     return node;
                 };
                 Array<Edge> skipped;
+                PPR_DEFER {
+                    if (known_scratch_peak != nullptr) {
+                        *known_scratch_peak = std::max(
+                            *known_scratch_peak, anchors.capacity() * sizeof(Anchor) +
+                                                     (edges.capacity() + skipped.capacity()) * sizeof(Edge) +
+                                                     parents.capacity() * sizeof(u32));
+                    }
+                };
                 for (const auto &edge: edges) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, canceled(context));
                     const u32 a = root(edge.m_a), b = root(edge.m_b);
@@ -313,12 +332,13 @@ namespace pP::sim {
         }
     }
     Expected<GenerationGeometry> compileGenerationGeometry(
-        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *const context) {
+        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *const context,
+        u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
         GenerationGeometry geometry;
-        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, features(plan, layout, geometry, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, features(plan, layout, geometry, context, known_scratch_peak));
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, worms(plan, layout, geometry, context));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, connections(plan, geometry, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, connections(plan, geometry, context, known_scratch_peak));
         return geometry;
     }
 }

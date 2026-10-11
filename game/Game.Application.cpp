@@ -139,6 +139,9 @@ namespace demo {
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
+        TimeSpan m_max_control_gap{};
+        TimeSpan m_max_render_work{};
+        std::optional<TimePoint> m_last_control_observed{};
         u64 m_control_polls{}, m_world_commands_observed{}, m_peak_background_outstanding{};
 
         [[nodiscard]] u32 observationPhase_() const noexcept {
@@ -172,6 +175,16 @@ namespace demo {
                     "[worldgen-observation] startup_to_loading_ack_ms={:.6f}",
                     time::seconds(*m_first_loading_observed - m_observation_start) * 1000.0);
             }
+            const auto &admission = frameAdmissionObservations();
+            std::println(
+                "[worldgen-observation] max_render_build_ms={:.6f}", time::seconds(m_max_render_work) * 1000.0);
+            std::println(
+                "[worldgen-admission] attempts={} skipped={} max_consecutive_skips={} max_controls_ms={:.6f} max_clock_ms={:.6f} max_probe_ms={:.6f} max_total_ms={:.6f} max_sleep_slice_ms={:.6f} max_sleep_overshoot_ms={:.6f} max_control_poll_gap_ms={:.6f}",
+                admission.m_attempts, admission.m_skipped, admission.m_max_consecutive_skips,
+                time::seconds(admission.m_max_controls) * 1000.0, time::seconds(admission.m_max_clock) * 1000.0,
+                time::seconds(admission.m_max_probe) * 1000.0, time::seconds(admission.m_max_total) * 1000.0,
+                time::seconds(admission.m_max_sleep_slice) * 1000.0,
+                time::seconds(admission.m_max_sleep_overshoot) * 1000.0, time::seconds(m_max_control_gap) * 1000.0);
             if (m_first_loading_observed and m_first_world_observed) {
                 std::println(
                     "[worldgen-observation] loading_ack_to_world_ack_ms={:.6f}",
@@ -2908,6 +2921,7 @@ namespace demo {
             m_observation_clock = &clock;
             m_observation_start = clock.now();
             m_worldgen_report = settings.m_worldgen_report;
+            enableFrameAdmissionObservations(m_worldgen_report);
             m_agent_count = 1u;
             m_worldgen_root = settings.m_worldgen_root
                                   ? *settings.m_worldgen_root
@@ -2943,8 +2957,23 @@ namespace demo {
         }
 
     protected:
+        [[nodiscard]] std::error_code render() override {
+            const auto begin = m_worldgen_report ? m_observation_clock->now() : TimePoint{};
+            PPR_DEFER {
+                if (m_worldgen_report) {
+                    m_max_render_work = std::max(m_max_render_work, m_observation_clock->now() - begin);
+                }
+            };
+            return super_t::render();
+        }
         [[nodiscard]] std::error_code serviceControls_() override {
-            const auto begin = m_observation_clock ? m_observation_clock->now() : TimePoint{};
+            const auto begin = m_worldgen_report ? m_observation_clock->now() : TimePoint{};
+            if (m_worldgen_report) {
+                if (m_last_control_observed) {
+                    m_max_control_gap = std::max(m_max_control_gap, begin - *m_last_control_observed);
+                }
+                m_last_control_observed = begin;
+            }
             PPR_DEFER {
                 if (m_worldgen_report) {
                     ++m_control_polls;

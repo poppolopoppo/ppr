@@ -457,6 +457,29 @@ namespace pP::sim {
         return m_seed;
     }
 
+    u64 GenerationPlan::retainedPayloadBytes() const noexcept {
+        u64 bytes = m_fields.capacity() * sizeof(NoiseField) +
+                    m_recipe.m_materials.capacity() * sizeof(GenerationMaterial) +
+                    m_recipe.m_fields.capacity() * sizeof(GenerationField) +
+                    m_recipe.m_biomes.capacity() * sizeof(GenerationBiome) +
+                    m_recipe.m_features.capacity() * sizeof(GenerationFeature) +
+                    m_recipe.m_constraints.capacity() * sizeof(GenerationBiomeConstraint) +
+                    m_recipe.m_rules.capacity() * sizeof(GenerationRule) +
+                    m_recipe.m_resources.capacity() * sizeof(GenerationResource);
+        for (const auto &biome: m_recipe.m_biomes) {
+            bytes += biome.m_bands.capacity() * sizeof(GenerationBand) +
+                     biome.m_deposits.capacity() * sizeof(GenerationDeposit);
+            for (const auto &band: biome.m_bands) {
+                bytes += band.m_choices.capacity() * sizeof(GenerationChoice);
+            }
+        }
+        for (const auto &feature: m_recipe.m_features) {
+            bytes += feature.m_operations.capacity() * sizeof(GenerationOperation) +
+                     feature.m_markers.capacity() * sizeof(GenerationMarker);
+        }
+        return bytes;
+    }
+
     std::error_code validateGenerationRecipe(const GenerationRecipe &recipe) {
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateCounts(recipe));
         if (not positive(recipe.m_cell_size_m, 1.0) or

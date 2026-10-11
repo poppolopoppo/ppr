@@ -189,6 +189,8 @@ export namespace pP::sim {
         [[nodiscard]] const GenerationRecipe &recipe() const noexcept;
         [[nodiscard]] std::span<const NoiseField> fields() const noexcept;
         [[nodiscard]] u64 seed() const noexcept;
+        /// Owned vector payload capacities; excludes opaque compiled-noise allocations.
+        [[nodiscard]] u64 retainedPayloadBytes() const noexcept;
     };
     [[nodiscard]] std::error_code validateGenerationRecipe(const GenerationRecipe &recipe);
     [[nodiscard]] Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe recipe, u64 seed);

@@ -172,6 +172,8 @@ namespace pP::colony {
             writer.u64value(checkpoint.m_report.m_terrain_checksum);
             writer.u64value(checkpoint.m_report.m_output_checksum);
             writer.u64value(checkpoint.m_report.m_grid_payload_bytes);
+            // Allocation observations describe the generating process/build,
+            // not durable world state. They are intentionally absent from v1.
         }
         void decodeMetadata(Reader &reader, WorldCheckpoint &checkpoint) {
             checkpoint.m_sites.resize(reader.count(sim::kMaxGenerationSites, 20u));

@@ -16,6 +16,17 @@ namespace pP::sim {
         m_payloads.resize(kChunkCount);
     }
 
+    u64 ChunkGrid::retainedPayloadBytes() const noexcept {
+        u64 bytes = m_states.capacity() * sizeof(ChunkState) +
+                    m_payloads.capacity() * sizeof(std::optional<Array<Cell>>);
+        for (const auto &payload: m_payloads) {
+            if (payload) {
+                bytes += payload->capacity() * sizeof(Cell);
+            }
+        }
+        return bytes;
+    }
+
     PPR_DEFINE_LOG_CATEGORY(GridEdits, info, none)
     using pP::make_error_code;
 

@@ -539,3 +539,29 @@ CLI commands. Nested schema collectors preserve the total omitted count when
 forwarding that prefix. The UI also bounds displayed text; source/texture byte
 limits are independent. Allocation failures still escape to the fatal application
 boundary after accepted worker tasks drain.
+
+## Generation memory observations
+
+Newly generated reports include `memory_accounting_available`,
+`retained_known_payload_bytes` and five `known_phase_scratch_bytes` values in
+layout/features/raster/matter/validation order. The world-generation panel shows
+these payload observations in MiB. Retained values cover the numeric recipe,
+spatial layout, resident grid, geometry, initial-matter spans, start-resource
+counts and material-count arrays, using owned vector capacities. Scratch values
+cover overlapping known temporary payloads; raster chunk buffers use a
+conservative live-task requested-payload bound after admitted tasks drain.
+
+These figures exclude allocator metadata, simultaneous old/new reallocation
+buffers, opaque noise and task allocations, thread stacks, content catalogs,
+physics and GPU storage. They are neither total allocations nor process peak
+memory. Record process peaks separately. These observations do not affect
+persistent checksums and are deliberately absent from checkpoint v1; restored
+checkpoints display allocation observations as unrecorded rather than zero cost.
+
+With `--worldgen-report`, admission observations also report attempted/skipped
+frames, maximum consecutive skips, maximum controls/clock/probe/total duration,
+pacer sleep-slice duration/overshoot and control-poll gap. The clock phase
+includes pacing and its event pumps; probe includes frame-credit/completion
+work. Durations include OS descheduling. They attribute the measured CPU path,
+not native input latency or GPU terrain execution. Ordinary runs leave this
+instrumentation disabled.

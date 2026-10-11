@@ -60,7 +60,14 @@ namespace pP::colony {
             for (u32 phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
                 result += std::format("{}{:.9f}", phase ? "," : "", time::seconds(world.m_report.m_phase_times[phase]));
             }
-            result += "],\n\"materials\":[";
+            result += std::format(
+                "],\n\"memory_accounting_available\":{},\"retained_known_payload_bytes\":{},\"known_phase_scratch_bytes\":[",
+                world.m_report.m_retained_known_payload_bytes != 0u, world.m_report.m_retained_known_payload_bytes);
+            for (u32 phase = 0u; phase < world.m_report.m_known_phase_scratch_bytes.size(); ++phase) {
+                result += std::format("{}{}", phase ? "," : "", world.m_report.m_known_phase_scratch_bytes[phase]);
+            }
+            result +=
+                "],\n\"memory_scope\":\"Known vector payload capacities and inline spatial heads; raster chunk buffers use a live-task requested-payload bound. Excludes allocator/reallocation overhead, opaque noise/task allocations and stacks. Not process peak memory.\",\n\"materials\":[";
             bool first = true;
             for (const auto count: world.m_report.m_material_counts) {
                 const auto *const material = catalog.findMaterial(count.m_material);

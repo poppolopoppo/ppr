@@ -37,7 +37,7 @@ export namespace pP::sim {
         double m_extent_m{};
         explicit BiomeLayout(double extent_m);
         void append(GenerationSite site);
-        friend Expected<BiomeLayout> compileBiomeLayout(const GenerationPlan &, const IContext *);
+        friend Expected<BiomeLayout> compileBiomeLayout(const GenerationPlan &, const IContext *, u64 *);
         friend Expected<BiomeLayout> restoreBiomeLayout(const GenerationPlan &, std::span<const GenerationSite>);
 
     public:
@@ -46,12 +46,14 @@ export namespace pP::sim {
         BiomeLayout(const BiomeLayout &) = delete;
         BiomeLayout &operator=(const BiomeLayout &) = delete;
         [[nodiscard]] std::span<const GenerationSite> sites() const noexcept;
+        /// Owned vector capacities and the inline spatial-bin head table.
+        [[nodiscard]] u64 retainedPayloadBytes() const noexcept;
         /// Finite positions may lie outside the world after domain warp, within
         /// twice kNoiseCoordinateLimitMetres on each axis.
         [[nodiscard]] u32 nearest(double x_m, double y_m) const noexcept;
     };
     [[nodiscard]] Expected<BiomeLayout> compileBiomeLayout(
-        const GenerationPlan &plan, const IContext *context = nullptr);
+        const GenerationPlan &plan, const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
     /// Rebuilds only the derived spatial index from structurally validated saved sites.
     [[nodiscard]] Expected<BiomeLayout> restoreBiomeLayout(
         const GenerationPlan &plan, std::span<const GenerationSite> sites);

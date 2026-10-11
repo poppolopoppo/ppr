@@ -1262,13 +1262,22 @@ namespace pP::tests::detail {
 
             [[nodiscard]] std::error_code serviceControls_() override {
                 ++m_control_polls;
+                if (m_on_controls) {
+                    m_on_controls();
+                }
                 return {};
             }
 
-            explicit SaturatingHarness(const std::string_view name, GpuTeardownFailureHandler handler = nullptr)
+            using Application::enableFrameAdmissionObservations;
+            using Application::frameAdmissionObservations;
+            std23::move_only_function<void()> m_on_controls{};
+
+            explicit SaturatingHarness(
+                const std::string_view name, GpuTeardownFailureHandler handler = nullptr,
+                const ITimerClock *const clock = nullptr)
                 : HarnessClock{}, ApplicationEditor(
                                       name, std::span<const char *const>{}, std::make_unique<ScriptedPlatform>(),
-                                      HarnessClock::m_clock, handler) {
+                                      clock ? *clock : HarnessClock::m_clock, handler) {
                 // SaturatingHarness drives GridPass/TrianglePass/Renderer
                 // from the test thread (scripted platform, offscreen
                 // target): the default render lane would make every direct
@@ -2769,6 +2778,52 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not phase.timedOut());
         };
 
+        PPR_UNIT_TEST (admission_observations_report_skips_with_explicit_time) {
+            struct ManualClock final : ITimerClock {
+                TimePoint m_now{};
+                TimePoint now() const noexcept override {
+                    return m_now;
+                }
+            } clock;
+            for (const bool enabled: {false, true}) {
+                SaturatingHarness harness{"AdmissionObservations", nullptr, &clock};
+                PPR_TEST_ASSERT(not harness.boot());
+                PPR_DEFER {
+                    std::ignore = harness.teardown();
+                };
+                harness.enableFrameAdmissionObservations(enabled);
+                harness.m_on_controls = [&] { clock.m_now += std::chrono::milliseconds{1}; };
+                auto &renderer = harness.getRenderer();
+                renderer.setTestHoldSweep(true);
+                harness.m_scripted->m_on_pump = [&](ScriptedPlatform &self, const u32 pump) {
+                    clock.m_now += std::chrono::milliseconds{10};
+                    if (pump == 5u) {
+                        renderer.setTestHoldSweep(false);
+                    }
+                    if (harness.m_updates >= 3u) {
+                        self.endRun();
+                    }
+                };
+                PPR_TEST_ASSERT(not harness.run());
+                PPR_TEST_ASSERT(not harness.m_scripted->m_watchdog_fired);
+                PPR_TEST_ASSERT(harness.m_updates == 3u);
+                const auto &observed = harness.frameAdmissionObservations();
+                if (enabled) {
+                    PPR_TEST_ASSERT(observed.m_attempts >= harness.m_updates + observed.m_skipped);
+                    PPR_TEST_ASSERT(observed.m_skipped > 0u);
+                    PPR_TEST_ASSERT(observed.m_max_consecutive_skips > 0u);
+                    PPR_TEST_ASSERT(observed.m_max_consecutive_skips <= observed.m_skipped);
+                    PPR_TEST_ASSERT(observed.m_max_controls == std::chrono::milliseconds{1});
+                    // Uncapped tick only reads this clock; native pumping is outside it.
+                    PPR_TEST_ASSERT(observed.m_max_clock == TimeSpan{});
+                    PPR_TEST_ASSERT(observed.m_max_total >= observed.m_max_clock);
+                } else {
+                    PPR_TEST_ASSERT(observed.m_attempts == 0u and observed.m_skipped == 0u);
+                    PPR_TEST_ASSERT(observed.m_max_total == TimeSpan{});
+                }
+            }
+        };
+
         PPR_UNIT_TEST (saturated_run_preserves_time_and_input) {
             // B2' admission + B3' saturation through real run(): 2 admitted
             // frames, K busy frames (collection grows, update/render/input-
@@ -3658,6 +3713,7 @@ namespace pP::tests {
             detail::RunGate::display_window_reenumeration_rejects_removed_monitor_before_apply,
             detail::RunGate::display_window_surface_failure_restores_native_geometry,
             detail::RunGate::display_window_stale_ack_cannot_publish_recreated_window,
+            detail::RunGate::admission_observations_report_skips_with_explicit_time,
             detail::RunGate::saturated_run_preserves_time_and_input,
             detail::RunGate::terminal_probe_runs_zero_client_work,
             detail::RunGate::first_error_precedence_clock_over_terminal,

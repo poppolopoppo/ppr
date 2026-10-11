@@ -75,7 +75,7 @@ namespace pP {
         ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv,
         std::unique_ptr<IPlatform> platform, const ITimerClock &clock,
         const GpuTeardownFailureHandler on_gpu_teardown_failure)
-        : m_application_clock(clock), m_pacer(clock), m_platform(std::move(platform)),
+        : m_application_clock(clock), m_pacer(clock), m_observation_clock(clock), m_platform(std::move(platform)),
           m_arguments(argv.begin(), argv.end()), m_name(name), m_domain(std::move(domain)),
           m_on_gpu_teardown_failure(on_gpu_teardown_failure) {
         PPR_ASSERT(m_platform != nullptr);
@@ -847,6 +847,33 @@ namespace pP {
     }
 
     std::error_code Application::admitClientFrame_(TimeSpan *out_delta_time, bool &out_skip) {
+        const auto begin = m_observe_admission ? m_observation_clock.now() : TimePoint{};
+        auto phase_begin = begin;
+        auto *phase_maximum = &m_admission_observations.m_max_controls;
+        const auto finish_phase = [&](TimeSpan &maximum) {
+            if (m_observe_admission) {
+                const auto now = m_observation_clock.now();
+                maximum = std::max(maximum, now - phase_begin);
+                phase_begin = now;
+            }
+        };
+        PPR_DEFER {
+            if (m_observe_admission) {
+                // Include a failed or throwing phase before the boundary propagates it.
+                finish_phase(*phase_maximum);
+                ++m_admission_observations.m_attempts;
+                m_admission_observations.m_max_total = std::max(
+                    m_admission_observations.m_max_total, m_observation_clock.now() - begin);
+                if (out_skip) {
+                    ++m_admission_observations.m_skipped;
+                    ++m_consecutive_admission_skips;
+                    m_admission_observations.m_max_consecutive_skips = std::max(
+                        m_admission_observations.m_max_consecutive_skips, m_consecutive_admission_skips);
+                } else {
+                    m_consecutive_admission_skips = 0u;
+                }
+            }
+        };
         // Single admission helper (deadline AND credit): the pacer deadline
         // half first, then the credit probe before any client work. The
         // ledger is the source of truth; pacer/lane signals are hints
@@ -854,9 +881,11 @@ namespace pP {
         // unexpected exceptions convert to error codes, never escape.
         out_skip = false;
         PPR_RETURN_ERROR_ON_FAIL(App, serviceControls_());
-        if (const std::error_code clock_err = advanceClock_(out_delta_time)) {
-            return clock_err;
-        }
+        finish_phase(m_admission_observations.m_max_controls);
+        phase_maximum = &m_admission_observations.m_max_clock;
+        PPR_RETURN_ERROR_ON_FAIL(App, advanceClock_(out_delta_time));
+        finish_phase(m_admission_observations.m_max_clock);
+        phase_maximum = &m_admission_observations.m_max_probe;
         std::error_code admission_err{};
         try {
             admission_err = probeFrameAdmissionPreUpdate_(out_skip);
@@ -1190,6 +1219,16 @@ namespace pP {
     }
 
     void Application::pacerSleepSlice_(const TimeSpan slice) noexcept {
+        const auto begin = m_observe_admission ? m_observation_clock.now() : TimePoint{};
+        PPR_DEFER {
+            if (m_observe_admission) {
+                const auto elapsed = m_observation_clock.now() - begin;
+                m_admission_observations.m_max_sleep_slice = std::max(
+                    m_admission_observations.m_max_sleep_slice, elapsed);
+                m_admission_observations.m_max_sleep_overshoot = std::max(
+                    m_admission_observations.m_max_sleep_overshoot, elapsed - slice);
+            }
+        };
         // Every pacer sleep slice pumps then waits natively so waits stay
         // event-driven. The incoming slice is a REQUESTED quantum
         // (FramePacer::kWakeQuantum, 2ms): best-effort, no wall-clock
@@ -1835,6 +1874,8 @@ namespace pP {
         // unsettled reservation records from the previous epoch are gone —
         // the teardown settle discarded them under a proven disposition.
         ++m_reservation_epoch;
+        m_admission_observations = {};
+        m_consecutive_admission_skips = 0u;
     }
 
     void Application::noteTeardownStage_(const char *stage) noexcept {

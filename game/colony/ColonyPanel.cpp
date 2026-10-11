@@ -699,6 +699,18 @@ namespace pP::colony {
             for (std::size_t index = 0u; index < phases.size(); ++index) {
                 ImGui::Text("%s: %.3f s", phases[index], time::seconds(world.m_report.m_phase_times[index]));
             }
+            if (world.m_report.m_retained_known_payload_bytes != 0u) {
+                ImGui::Text(
+                    "Known retained payload: %.2f MiB", world.m_report.m_retained_known_payload_bytes / 1048576.0);
+                for (std::size_t index = 0u; index < phases.size(); ++index) {
+                    ImGui::Text(
+                        "%s scratch: %.2f MiB", phases[index],
+                        world.m_report.m_known_phase_scratch_bytes[index] / 1048576.0);
+                }
+                ImGui::TextDisabled("Payload estimates; exclude allocator, task and stack overhead");
+            } else {
+                ImGui::TextDisabled("Allocation observations unrecorded (restored checkpoint)");
+            }
             ImGui::Text(
                 "Sites: %llu; features: %llu", static_cast<unsigned long long>(world.m_layout.sites().size()),
                 static_cast<unsigned long long>(world.m_geometry.m_instances.size()));

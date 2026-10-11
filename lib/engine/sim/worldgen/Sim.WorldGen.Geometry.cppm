@@ -28,5 +28,6 @@ export namespace pP::sim {
     /// Derives all nonlocal features, worms and room links before any chunk
     /// rasterization. Required placement exhaustion never silently omits work.
     [[nodiscard]] Expected<GenerationGeometry> compileGenerationGeometry(
-        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *context = nullptr);
+        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *context = nullptr,
+        u64 *known_scratch_peak = nullptr);
 }

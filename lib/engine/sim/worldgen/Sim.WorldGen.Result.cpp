@@ -37,10 +37,12 @@ namespace pP::sim {
         [[nodiscard]] Expected<GenerationReport> summarize(
             const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
             const ChunkGrid &grid, const InitialMatter &matter, const GenerationStart &start,
-            const GenerationExecution &execution) {
+            const GenerationExecution &execution, u64 &known_scratch_peak) {
             const auto &recipe = plan.recipe();
             Array<u8> terrain(65536u, 0u);
             Array<u64> counts(65536u, 0ull);
+            known_scratch_peak = std::max(
+                known_scratch_peak, terrain.capacity() * sizeof(u8) + counts.capacity() * sizeof(u64));
             terrain[0u] = 1u;
             for (const auto &material: recipe.m_materials) {
                 terrain[material.m_id] = material.m_terrain ? 1u : 0u;
@@ -150,6 +152,19 @@ namespace pP::sim {
                     report.m_material_counts.push_back({static_cast<u16>(id), counts[id]});
                 }
             }
+            report.m_retained_known_payload_bytes = plan.retainedPayloadBytes() +
+                                                    layout.retainedPayloadBytes() +
+                                                    grid.retainedPayloadBytes() +
+                                                    geometry.m_instances.capacity() * sizeof(GenerationInstance) +
+                                                    geometry.m_segments.capacity() * sizeof(GenerationSegment) +
+                                                    geometry.m_omitted_instances.capacity() * sizeof(u32) +
+                                                    matter.m_regions.capacity() * sizeof(InitialMatterRegion) +
+                                                    start.m_resource_fine_cells.capacity() * sizeof(u32) +
+                                                    report.m_material_counts.capacity() *
+                                                        sizeof(GenerationMaterialCount);
+            for (const auto &region: matter.m_regions) {
+                report.m_retained_known_payload_bytes += region.m_spans.capacity() * sizeof(InitialMatterSpan);
+            }
             return report;
         }
     }
@@ -157,6 +172,7 @@ namespace pP::sim {
         GenerationPlan plan, const ITimerClock &clock, const GenerationExecution &execution) {
         try {
             std::array<TimeSpan, 5u> timings;
+            std::array<u64, 5u> scratch{};
             auto beginning = clock.now();
             const auto finish = [&](const u32 phase) {
                 const auto end = clock.now();
@@ -168,26 +184,27 @@ namespace pP::sim {
                 execution.m_completed_chunks->store(0u, std::memory_order_relaxed);
             }
             stage(execution, EGenerationStage::layout);
-            auto layout = compileBiomeLayout(plan, execution.m_context);
+            auto layout = compileBiomeLayout(plan, execution.m_context, &scratch[0u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, layout);
             finish(0u);
-            auto geometry = compileGenerationGeometry(plan, *layout, execution.m_context);
+            auto geometry = compileGenerationGeometry(plan, *layout, execution.m_context, &scratch[1u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, geometry);
             finish(1u);
-            auto grid = rasterizeGenerationTerrain(plan, *layout, *geometry, execution);
+            auto grid = rasterizeGenerationTerrain(plan, *layout, *geometry, execution, &scratch[2u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, grid);
             finish(2u);
             stage(execution, EGenerationStage::initial_matter);
-            auto matter = resolveInitialMatter(plan, *geometry, *grid, execution.m_context);
+            auto matter = resolveInitialMatter(plan, *geometry, *grid, execution.m_context, &scratch[3u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, matter);
             finish(3u);
             stage(execution, EGenerationStage::validation);
-            auto start = validateGenerationStart(plan, *grid, execution.m_context);
+            auto start = validateGenerationStart(plan, *grid, execution.m_context, &scratch[4u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, start);
-            auto report = summarize(plan, *layout, *geometry, *grid, *matter, *start, execution);
+            auto report = summarize(plan, *layout, *geometry, *grid, *matter, *start, execution, scratch[4u]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, report);
             finish(4u);
             report->m_phase_times = timings;
+            report->m_known_phase_scratch_bytes = scratch;
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, canceled(execution));
             stage(execution, EGenerationStage::complete);
             return GeneratedWorld{

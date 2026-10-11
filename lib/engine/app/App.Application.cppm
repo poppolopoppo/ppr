@@ -34,6 +34,14 @@ export namespace pP {
         bool m_needs_user_interface: 1 {true};
     };
 
+    /// Opt-in CPU observations of the admission path, reset for each run.
+    /// Durations include descheduling; native waits are best-effort requests.
+    struct FrameAdmissionObservations {
+        u64 m_attempts{}, m_skipped{}, m_max_consecutive_skips{};
+        TimeSpan m_max_controls{}, m_max_clock{}, m_max_probe{}, m_max_total{};
+        TimeSpan m_max_sleep_slice{}, m_max_sleep_overshoot{};
+    };
+
     class Application : public safe_object {
         // One per admitted frame: epoch + frame identity, active flag, and
         // state machine (kLocal→kQueued→kSubmitted→ether release/quarantine).
@@ -241,6 +249,12 @@ export namespace pP {
         }
 
     protected:
+        void enableFrameAdmissionObservations(const bool enabled) noexcept {
+            m_observe_admission = enabled;
+        }
+        [[nodiscard]] const FrameAdmissionObservations &frameAdmissionObservations() const noexcept {
+            return m_admission_observations;
+        }
         /// Any-thread graceful-close deferral. Implementations only latch
         /// intent here; poll/drain owned work from the normal loop. Errors
         /// bypass deferral. Return false once normal teardown can proceed.
@@ -450,6 +464,10 @@ export namespace pP {
         std::unique_ptr<Renderer> m_renderer{};
         TimerManager m_application_clock{};
         FramePacer m_pacer{};
+        const ITimerClock &m_observation_clock;
+        FrameAdmissionObservations m_admission_observations{};
+        u64 m_consecutive_admission_skips{};
+        bool m_observe_admission{};
         u64 m_frame_index{0u};
         // Accumulated dt of capacity-busy skipped frames (B2a carry).
         TimeSpan m_pending_skipped_dt{};

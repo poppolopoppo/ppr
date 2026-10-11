@@ -21,6 +21,10 @@ export namespace pP::sim {
         std::array<TimeSpan, 5u> m_phase_times{};
         Array<GenerationMaterialCount> m_material_counts;
         u64 m_terrain_checksum{}, m_output_checksum{}, m_grid_payload_bytes{};
+        // Known vector payload capacities (raster chunk buffers use a live-task bound).
+        // Excludes allocator/reallocation overhead, opaque noise/task allocations and stacks.
+        std::array<u64, 5u> m_known_phase_scratch_bytes{};
+        u64 m_retained_known_payload_bytes{};
     };
     /// Entire numeric candidate, including inputs needed for later inspection.
     /// No catalog/parser storage or executor is borrowed by the result.

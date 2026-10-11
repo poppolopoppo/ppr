@@ -935,6 +935,14 @@ namespace pP::tests::detail {
                 serial->m_grid.residentChunkCount() == kChunkCount and serial->m_grid.dirtyChunkCount() == kChunkCount);
             PPR_TEST_ASSERT(
                 serial->m_report.m_grid_payload_bytes == static_cast<u64>(kWorldEdge) * kWorldEdge * sizeof(Cell));
+            PPR_TEST_ASSERT(serial->m_report.m_retained_known_payload_bytes > serial->m_report.m_grid_payload_bytes);
+            PPR_TEST_ASSERT(serial->m_plan.retainedPayloadBytes() > 0u);
+            PPR_TEST_ASSERT(serial->m_layout.retainedPayloadBytes() > 0u);
+            PPR_TEST_ASSERT(
+                serial->m_report.m_known_phase_scratch_bytes[2u] >= static_cast<u64>(kCellsPerChunk) * sizeof(Cell));
+            PPR_TEST_ASSERT(
+                serial->m_report.m_known_phase_scratch_bytes[3u] >= static_cast<u64>(kWorldEdge) * kWorldEdge / 8u);
+            PPR_TEST_ASSERT(serial->m_report.m_known_phase_scratch_bytes[4u] >= 65536u * (sizeof(u8) + sizeof(u64)));
             for (const auto duration: serial->m_report.m_phase_times) {
                 PPR_TEST_ASSERT(duration == std::chrono::milliseconds{1});
             }
@@ -955,6 +963,16 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(gridHash(serial->m_grid) == gridHash(parallel->m_grid));
             PPR_TEST_ASSERT(serial->m_report.m_terrain_checksum == parallel->m_report.m_terrain_checksum);
             PPR_TEST_ASSERT(serial->m_report.m_output_checksum == parallel->m_report.m_output_checksum);
+            PPR_TEST_ASSERT(
+                serial->m_report.m_retained_known_payload_bytes == parallel->m_report.m_retained_known_payload_bytes);
+            // Three workers plus coordinator fallback can own at most four
+            // chunk buffers; the serial observation includes one already.
+            PPR_TEST_ASSERT(
+                parallel->m_report.m_known_phase_scratch_bytes[2u] >= serial->m_report.m_known_phase_scratch_bytes[2u]);
+            PPR_TEST_ASSERT(
+                parallel->m_report.m_known_phase_scratch_bytes[2u] <=
+                serial->m_report.m_known_phase_scratch_bytes[2u] +
+                    3u * static_cast<u64>(kCellsPerChunk) * sizeof(Cell));
             PPR_TEST_ASSERT(serial->m_layout.sites().size() == parallel->m_layout.sites().size());
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();

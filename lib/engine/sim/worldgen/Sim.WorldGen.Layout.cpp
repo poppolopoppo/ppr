@@ -56,7 +56,7 @@ namespace pP::sim {
         // feasible assignment fail merely because of an early greedy choice.
         [[nodiscard]] std::error_code assignRequired(
             const GenerationRecipe &recipe, Array<GenerationSite> &sites, const double extent,
-            const IContext *const context) {
+            const IContext *const context, const u64 active_bytes, u64 *const known_scratch_peak) {
             struct Demand {
                 u32 m_constraint{}, m_eligible{};
                 u64 m_key{};
@@ -93,6 +93,17 @@ namespace pP::sim {
             Array<u8> seen(demands.size(), 0u);
             Array<u32> queue;
             queue.reserve(demands.size());
+            // These capacities only grow while the assignment arrays coexist.
+            PPR_DEFER {
+                if (known_scratch_peak != nullptr) {
+                    *known_scratch_peak = std::max(
+                        *known_scratch_peak, active_bytes +
+                                                 demands.capacity() * sizeof(Demand) +
+                                                 (owners.capacity() + parent.capacity()) * sizeof(i32) +
+                                                 seen.capacity() * sizeof(u8) +
+                                                 queue.capacity() * sizeof(u32));
+                }
+            };
             for (u32 d = 0u; d < demands.size(); ++d) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldLayout, canceled(context));
                 std::ranges::fill(parent, -1);
@@ -157,6 +168,9 @@ namespace pP::sim {
         m_heads.fill(-1);
         m_sites.reserve(kMaxGenerationSites);
         m_next.reserve(kMaxGenerationSites);
+    }
+    u64 BiomeLayout::retainedPayloadBytes() const noexcept {
+        return m_sites.capacity() * sizeof(GenerationSite) + m_next.capacity() * sizeof(i32) + sizeof(m_heads);
     }
     void BiomeLayout::append(const GenerationSite site) {
         const auto bin = [this](const double value) {
@@ -299,7 +313,8 @@ namespace pP::sim {
             .m_biome;
     }
 
-    Expected<BiomeLayout> compileBiomeLayout(const GenerationPlan &plan, const IContext *const context) {
+    Expected<BiomeLayout> compileBiomeLayout(
+        const GenerationPlan &plan, const IContext *const context, u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
         const auto &recipe = plan.recipe();
         const double cells_per_metre = 1.0 / recipe.m_cell_size_m;
@@ -344,7 +359,10 @@ namespace pP::sim {
         if (layout.m_sites.size() < recipe.m_min_sites) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, make_error_code(EGenerationErrc::constraints_exhausted));
         }
-        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, assignRequired(recipe, layout.m_sites, extent, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldLayout,
+            assignRequired(
+                recipe, layout.m_sites, extent, context, active.capacity() * sizeof(u32), known_scratch_peak));
         for (u32 s = 1u; s < layout.m_sites.size(); ++s) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
             auto &site = layout.m_sites[s];

@@ -59,7 +59,8 @@ namespace pP::sim {
         [[nodiscard]] Expected<u32> resourceCells(
             const GenerationRecipe &recipe, const GenerationResource &resource, const ChunkGrid &grid,
             const GenerationBounds bounds, const double spawn_x, const double spawn_y, const double floor_y,
-            const double route_left, const double route_right, const IContext *const context) {
+            const double route_left, const double route_right, const IContext *const context, const u64 contour_bytes,
+            u64 *const known_scratch_peak) {
             const auto &marker = recipe.m_features[recipe.m_start_feature].m_markers[resource.m_marker];
             const i32 seed_x = static_cast<i32>(recipe.m_start_x_fine) + marker.m_x;
             const i32 seed_y = static_cast<i32>(recipe.m_start_y_fine) + marker.m_y;
@@ -76,6 +77,13 @@ namespace pP::sim {
             const auto height = static_cast<u32>(bounds.m_max_y - bounds.m_min_y);
             Array<u64> visited((width * height + 63u) / 64u, 0ull);
             Array<GlobalCellPos> queue;
+            PPR_DEFER {
+                if (known_scratch_peak != nullptr) {
+                    *known_scratch_peak = std::max(
+                        *known_scratch_peak,
+                        contour_bytes + visited.capacity() * sizeof(u64) + queue.capacity() * sizeof(GlobalCellPos));
+                }
+            };
             const auto append = [&](const i32 x, const i32 y) {
                 const auto index = static_cast<u32>(y - bounds.m_min_y) * width + static_cast<u32>(x - bounds.m_min_x);
                 const u64 bit = 1ull << (index % 64u);
@@ -117,7 +125,8 @@ namespace pP::sim {
         }
     }
     Expected<GenerationStart> validateGenerationStart(
-        const GenerationPlan &plan, const ChunkGrid &grid, const IContext *const context) {
+        const GenerationPlan &plan, const ChunkGrid &grid, const IContext *const context,
+        u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldStart, canceled(context));
         const auto &recipe = plan.recipe();
         const auto &feature = recipe.m_features[recipe.m_start_feature];
@@ -146,6 +155,13 @@ namespace pP::sim {
         route_right += half_width;
         Array<Support> supports;
         Array<Triangle> triangles;
+        PPR_DEFER {
+            if (known_scratch_peak != nullptr) {
+                *known_scratch_peak = std::max(
+                    *known_scratch_peak,
+                    supports.capacity() * sizeof(Support) + triangles.capacity() * sizeof(Triangle));
+            }
+        };
         const auto points = math::contourPoints();
         const auto cases = math::contourCases();
         constexpr std::array<std::pair<i32, i32>, 4u> corners{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
@@ -220,7 +236,8 @@ namespace pP::sim {
         GenerationStart result{spawn_x / scale, spawn_y / scale, *floor / scale};
         for (const auto &resource: recipe.m_resources) {
             auto count = resourceCells(
-                recipe, resource, grid, bounds, spawn_x, spawn_y, *floor, route_left, route_right, context);
+                recipe, resource, grid, bounds, spawn_x, spawn_y, *floor, route_left, route_right, context,
+                supports.capacity() * sizeof(Support) + triangles.capacity() * sizeof(Triangle), known_scratch_peak);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldStart, count);
             result.m_resource_fine_cells.push_back(*count);
         }

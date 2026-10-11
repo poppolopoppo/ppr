@@ -36,5 +36,5 @@ export namespace pP::sim {
     /// the grid. All scratch and output are owned by this invocation/result.
     [[nodiscard]] Expected<InitialMatter> resolveInitialMatter(
         const GenerationPlan &plan, const GenerationGeometry &geometry, const ChunkGrid &grid,
-        const IContext *context = nullptr);
+        const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
 }

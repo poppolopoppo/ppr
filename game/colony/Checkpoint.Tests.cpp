@@ -83,11 +83,17 @@ namespace pP::game::tests::detail::checkpoint {
     PPR_UNIT_TEST (round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture) {
         const auto catalog = loadCatalog();
         auto checkpoint = editedCheckpoint(catalog);
+        checkpoint.m_report.m_retained_known_payload_bytes = 123456u;
+        checkpoint.m_report.m_known_phase_scratch_bytes.fill(654321u);
         PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
         const auto bytes = encodeWorldCheckpoint(checkpoint, catalog);
         PPR_TEST_ASSERT(bytes.has_value());
         auto decoded = decodeWorldCheckpoint(*bytes, catalog);
         PPR_TEST_ASSERT(decoded.has_value());
+        PPR_TEST_ASSERT(decoded->m_report.m_retained_known_payload_bytes == 0u);
+        PPR_TEST_ASSERT(std::ranges::all_of(decoded->m_report.m_known_phase_scratch_bytes, [](const u64 bytes) {
+            return bytes == 0u;
+        }));
         PPR_TEST_ASSERT(decoded->m_descriptor == checkpoint.m_descriptor);
         PPR_TEST_ASSERT(decoded->m_snapshot == checkpoint.m_snapshot);
         auto restored = restoreWorldCheckpoint(loadCatalog(), std::move(*decoded), 17u);

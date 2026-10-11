@@ -40,3 +40,8 @@ For source additions, register the interface and matching implementation in `CMa
 
 Graceful close can be deferred through the application hook before latching exit. Nonblocking control servicing runs independently of client frame admission and in pacer slices, allowing derived owners to drain asynchronous work without advancing gameplay. GLFW asks for main-window exit before marking it closed or notifying listeners; a deferred exit preserves the live window. Render results explicitly distinguish successful presentation from accepted submission and applied staging.
 
+
+Application admission observations are opt-in and reset with the run epoch.
+They borrow the already injected clock, retain only fixed-size counters/maxima,
+and distinguish pacing/event pumping from frame-credit probes. Disabled runs
+perform no additional observation clock reads.

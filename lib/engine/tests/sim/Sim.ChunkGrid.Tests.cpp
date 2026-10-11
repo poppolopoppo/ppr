@@ -87,6 +87,23 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT((*cells)[2u * kChunkEdge + 1u] == (Cell{5u, 300.0f}));
         };
 
+        PPR_UNIT_TEST (retained_payload_tracks_residency_without_counting_capture_owners) {
+            ChunkGrid grid{};
+            const u64 empty_bytes = grid.retainedPayloadBytes();
+            PPR_TEST_ASSERT(empty_bytes > 0u);
+            PPR_TEST_ASSERT(not grid.setCell({1u, 2u}, {17u, 293.0f}));
+            const u64 resident_bytes = grid.retainedPayloadBytes();
+            PPR_TEST_ASSERT(resident_bytes >= empty_bytes + static_cast<u64>(kCellsPerChunk) * sizeof(Cell));
+            auto capture = grid.captureChunk({0u, 0u});
+            PPR_TEST_ASSERT(capture.has_value());
+            PPR_TEST_ASSERT(grid.retainedPayloadBytes() == resident_bytes);
+            grid.clearAllDirty();
+            PPR_TEST_ASSERT(grid.retainedPayloadBytes() == resident_bytes);
+            PPR_TEST_ASSERT(not grid.setCell({129u, 2u}, {17u, 293.0f}));
+            PPR_TEST_ASSERT(
+                grid.retainedPayloadBytes() >= resident_bytes + static_cast<u64>(kCellsPerChunk) * sizeof(Cell));
+        };
+
         PPR_UNIT_TEST (rejects_invalid_cells) {
             ChunkGrid grid{};
 
@@ -417,6 +434,7 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest chunk_grid = UnitTest::Named("chunk_grid") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::Grid::retained_payload_tracks_residency_without_counting_capture_owners,
             detail::Grid::world_geometry_constants,
             detail::Grid::coordinate_conversions,
             detail::Grid::write_then_read_cell,

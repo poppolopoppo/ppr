@@ -597,3 +597,29 @@ also run three loops in the same serialized queue. Logs:
 Format Check passed 18 fixture C++ files; semantic style has zero blocking
 findings. The game-config CTest timeout is now 300 s to accommodate the six
 full-world regressions moved from sim into game.tests.
+
+## Known generation payload and admission observations
+
+Generation reports now record retained numeric/container payload capacities and
+five phase scratch observations. Raster scratch uses a conservative live-task
+chunk-buffer bound after all accepted work drains. The UI and JSON explicitly
+exclude allocator/reallocation overhead, opaque noise/task storage, stacks,
+content, physics and GPU storage; these are not process peak measurements.
+Checkpoint v1 omits build/process observations and restored reports label them
+unrecorded. Checksums remain independent of timing and allocation observations.
+
+Opt-in admission counters separate controls, pacing/clock and credit probes,
+including failing/throwing phases, skip streaks and requested sleep overshoot.
+The game also reports control-poll gaps and full main-lane render/build duration.
+The shared injected clock remains explicit; disabled admission instrumentation
+performs no observation reads. Existing exact-dt tests retain their clock.
+
+Astra passed after fixing failed-phase timing and the uncapped manual-clock test.
+The 270-edge all-target ASan build passed. Three shuffled loops passed all 45
+selected sim nodes (50.08 / 50.90 / 52.69 s), four app nodes (65.05 / 66.95 /
+63.15 s), and five checkpoint nodes (9.90 / 8.32 / 9.15 s). Coverage includes
+owned payload boundaries, serial/parallel checksums and raster scratch bounds,
+disabled/enabled scripted admission and checkpoint observation omission.
+Logs: `out/worldgen-accounting-{build,sim-tests,app-tests,game-tests}-v1.log`.
+Format Check passed 26 files; semantic style has zero blocking findings.
+Release runtime measurement and the final full matrix remain pending.

@@ -27,6 +27,7 @@ export namespace pP::sim {
         GenerationRaster(const GenerationRaster &) = delete;
         GenerationRaster &operator=(const GenerationRaster &) = delete;
         [[nodiscard]] Expected<Array<Cell>> chunk(ChunkPos position, const IContext *context = nullptr) const;
+        [[nodiscard]] u64 indexPayloadBytes() const noexcept;
     };
     [[nodiscard]] Expected<GenerationRaster> compileGenerationRaster(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
@@ -36,5 +37,5 @@ export namespace pP::sim {
     /// The returned grid owns all chunk payloads; no live world is mutated.
     [[nodiscard]] Expected<ChunkGrid> rasterizeGenerationTerrain(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
-        const GenerationExecution &execution = {});
+        const GenerationExecution &execution = {}, u64 *known_scratch_peak = nullptr);
 }

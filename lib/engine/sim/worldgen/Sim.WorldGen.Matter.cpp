@@ -126,7 +126,7 @@ namespace pP::sim {
         }
         [[nodiscard]] Expected<Array<u32>> component(
             const ChunkGrid &grid, const GenerationBounds bounds, const GlobalCellPos seed, InitialMatter &result,
-            const IContext *const context) {
+            const IContext *const context, const u64 assigned_bytes, u64 *const known_scratch_peak) {
             const auto width = static_cast<u32>(bounds.m_max_x - bounds.m_min_x);
             const auto height = static_cast<u32>(bounds.m_max_y - bounds.m_min_y);
             Array<u64> visited((width * height + 63u) / 64u, 0ull);
@@ -182,6 +182,11 @@ namespace pP::sim {
             }
             result.m_largest_component = std::max(result.m_largest_component, static_cast<u32>(queue.size()));
             std::ranges::sort(queue);
+            if (known_scratch_peak != nullptr) {
+                *known_scratch_peak = std::max(
+                    *known_scratch_peak,
+                    assigned_bytes + visited.capacity() * sizeof(u64) + queue.capacity() * sizeof(u32));
+            }
             return queue;
         }
         [[nodiscard]] std::error_code emit(
@@ -273,11 +278,14 @@ namespace pP::sim {
     }
     Expected<InitialMatter> resolveInitialMatter(
         const GenerationPlan &plan, const GenerationGeometry &geometry, const ChunkGrid &grid,
-        const IContext *const context) {
+        const IContext *const context, u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldMatter, canceled(context));
         InitialMatter result;
         const auto &recipe = plan.recipe();
         Array<u64> assigned(kWorldEdge * kWorldEdge / 64u, 0ull);
+        if (known_scratch_peak != nullptr) {
+            *known_scratch_peak = std::max(*known_scratch_peak, assigned.capacity() * sizeof(u64));
+        }
         // Non-gas rules resolve their authored precedence first. Gas is the
         // remainder of those assignments, retaining authored order among gases.
         for (const bool gas: {false, true}) {
@@ -316,7 +324,7 @@ namespace pP::sim {
                         grid,
                         {static_cast<i32>(left), static_cast<i32>(bottom), static_cast<i32>(right),
                             static_cast<i32>(top)},
-                        seed, result, context);
+                        seed, result, context, assigned.capacity() * sizeof(u64), known_scratch_peak);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(WorldMatter, cells);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         WorldMatter, emit(plan, rule, *fill, instance, *cells, grid, assigned, result, context));
