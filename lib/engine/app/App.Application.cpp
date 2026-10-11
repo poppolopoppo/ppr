@@ -1948,6 +1948,8 @@ namespace pP {
                 if (m_display_controller.pending() and not m_wait_pump_error) {
                     m_wait_pump_error = std::make_error_code(std::errc::state_not_recoverable);
                 }
+            } catch (const std::bad_alloc &) {
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 if (not m_wait_pump_error) {
                     m_wait_pump_error = std::make_error_code(std::errc::state_not_recoverable);

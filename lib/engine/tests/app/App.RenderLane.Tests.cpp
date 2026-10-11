@@ -1,5 +1,6 @@
 module;
 #include "pP/UnitTest.h"
+#include <cstdlib>
 
 module engine.tests.app;
 
@@ -522,6 +523,76 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(wakes.load(std::memory_order_acquire) >= 1u);
         };
 
+        PPR_UNIT_TEST (allocation_failure_child_fatal) {
+            std::string mode;
+#ifdef _WIN32
+            char *stored = nullptr;
+            if (::_dupenv_s(&stored, nullptr, "PPR_RENDER_LANE_FATAL_ARMED") == 0 and stored != nullptr) {
+                mode = stored;
+            }
+            std::free(stored);
+#else
+            if (const char *const stored = std::getenv("PPR_RENDER_LANE_FATAL_ARMED")) {
+                mode = stored;
+            }
+#endif
+            if (mode != "init" and mode != "execute") {
+                return;
+            }
+            hal::disableSystemErrorReporting();
+            const auto marker = std::filesystem::temp_directory_path() / ("ppr-render-lane-fatal-" + mode + ".txt");
+            std::binary_semaphore entered{0};
+            const auto fail = [&]() -> std::error_code {
+                {
+                    std::ofstream file{marker};
+                    file << "entered";
+                }
+                entered.release();
+                throw std::bad_alloc{};
+            };
+            RenderLane lane;
+            std::ignore = lane.start(
+                [&]() -> std::error_code { return mode == "init" ? fail() : std::error_code{}; },
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code { return fail(); }, {}, {});
+            std::ignore = lane.submitFrame(makeRequest(1u));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            lane.requestStop();
+            std::ignore = lane.join();
+            std::ofstream file{marker, std::ios::app};
+            file << "returned";
+        };
+
+        PPR_UNIT_TEST (allocation_failure_never_becomes_recoverable_lane_error) {
+            const auto executable = hal::process::currentExecutablePath();
+            for (const char *const mode: {"init", "execute"}) {
+                const auto marker = std::filesystem::temp_directory_path() /
+                                    ("ppr-render-lane-fatal-" + std::string{mode} + ".txt");
+                std::error_code cleanup;
+                std::filesystem::remove(marker, cleanup);
+                PPR_TEST_ASSERT(not cleanup);
+                const auto arm = [](const char *const value) {
+#ifdef _WIN32
+                    PPR_TEST_ASSERT(::_putenv_s("PPR_RENDER_LANE_FATAL_ARMED", value) == 0);
+#else
+                    PPR_TEST_ASSERT(::setenv("PPR_RENDER_LANE_FATAL_ARMED", value, 1) == 0);
+#endif
+                };
+                arm(mode);
+                PPR_DEFER {
+                    arm("");
+                    std::filesystem::remove(marker, cleanup);
+                };
+                const std::vector<std::string> args{
+                    "--child-run", "--run-test", "app/render_lane/allocation_failure_child_fatal"};
+                const int exit_code = hal::process::spawnAndWait(executable, args);
+                PPR_TEST_ASSERT(exit_code != 0);
+                std::ifstream file{marker};
+                std::string observed;
+                file >> observed;
+                PPR_TEST_ASSERT(observed == "entered");
+            }
+        };
+
         PPR_UNIT_TEST (throwing_init_reports_mapped_error_and_joins_worker) {
             const std::error_code errors[]{
                 std::make_error_code(std::errc::not_enough_memory), std::make_error_code(std::errc::permission_denied),
@@ -532,7 +603,7 @@ namespace pP::tests::detail {
                 const std::error_code error = lane.start(
                     [kind]() -> std::error_code {
                         if (kind == 0u) {
-                            throw std::bad_alloc{};
+                            throw std::system_error{std::make_error_code(std::errc::not_enough_memory)};
                         }
                         if (kind == 1u) {
                             throw std::system_error{std::make_error_code(std::errc::permission_denied)};
@@ -575,7 +646,7 @@ namespace pP::tests::detail {
                     throw std::system_error{first};
                 }
                 if (pumps == 2u) {
-                    throw std::bad_alloc{};
+                    throw std::runtime_error{"callback failure"};
                 }
                 if (not released) {
                     released = true;
@@ -617,7 +688,7 @@ namespace pP::tests::detail {
                 lane.setWaitPump([&] {
                     ++replacement_calls;
                     if (replacement_calls == 1u) {
-                        throw std::bad_alloc{};
+                        throw std::runtime_error{"callback failure"};
                     }
                     if (not released) {
                         released = true;
@@ -699,7 +770,7 @@ namespace pP::tests::detail {
                 },
                 [&] {
                     wakes.fetch_add(1u, std::memory_order_relaxed);
-                    throw std::bad_alloc{};
+                    throw std::runtime_error{"callback failure"};
                 }));
             PPR_DEFER {
                 lane.requestStop();
@@ -1236,6 +1307,8 @@ namespace pP::tests {
             detail::RenderLaneGate::pacer_seam_posted_wake_wins,
             detail::RenderLaneGate::pacer_seam_real_thread_wake,
             detail::RenderLaneGate::lane_exit_wakeup_joins_promptly,
+            detail::RenderLaneGate::allocation_failure_child_fatal,
+            detail::RenderLaneGate::allocation_failure_never_becomes_recoverable_lane_error,
             detail::RenderLaneGate::throwing_init_reports_mapped_error_and_joins_worker,
             detail::RenderLaneGate::throwing_wait_pump_restored_and_first_terminal_error_retained,
             detail::RenderLaneGate::throwing_wait_pump_keeps_installed_replacement,

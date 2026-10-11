@@ -42,8 +42,7 @@ namespace pP {
         // milestone (m_submit_value via the fence); this is the CPU-consumption
         // sideband. Allocating (the ack arrays copy) and therefore NOT
         // noexcept: allocation failure throws bad_alloc to the existing
-        // executor/teardown boundaries, which convert it to
-        // not_enough_memory — never terminate.
+        // executor/teardown boundaries, which treat allocation failure as fatal.
         void stampGridEcho(const GridPass::GridStagedFrame &stage, RenderFrameResult &result) {
             result.m_grid_reset_caches = stage.m_reset_caches;
             result.m_grid_full_refresh = stage.m_full_refresh;
@@ -602,9 +601,7 @@ namespace pP {
                     PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->notifyDeviceLost());
                 }
             } catch (const std::bad_alloc &) {
-                if (not first_err) {
-                    first_err = std::make_error_code(std::errc::not_enough_memory);
-                }
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 if (not first_err) {
                     first_err = std::make_error_code(std::errc::state_not_recoverable);
@@ -615,9 +612,7 @@ namespace pP {
                     PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->releaseScene(m_uploaded_scene));
                 }
             } catch (const std::bad_alloc &) {
-                if (not first_err) {
-                    first_err = std::make_error_code(std::errc::not_enough_memory);
-                }
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 if (not first_err) {
                     first_err = std::make_error_code(std::errc::state_not_recoverable);
@@ -628,9 +623,7 @@ namespace pP {
                     PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->shutdown());
                 }
             } catch (const std::bad_alloc &) {
-                if (not first_err) {
-                    first_err = std::make_error_code(std::errc::not_enough_memory);
-                }
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 if (not first_err) {
                     first_err = std::make_error_code(std::errc::state_not_recoverable);
@@ -999,12 +992,7 @@ namespace pP {
             try {
                 stampGridEcho(m_grid_stage, transient);
             } catch (const std::bad_alloc &) {
-                // OOM while echoing the manifest: still settle the slot
-                // (never shed a credit) with the OOM error and no manifest,
-                // mirroring the lane drain fallback.
-                transient.m_error = std::make_error_code(std::errc::not_enough_memory);
-                onLaneFrameConsumed_(transient);
-                return transient.m_error;
+                throw; // The run boundary drains accepted work before fatal propagation.
             } catch (...) {
                 transient.m_error = std::make_error_code(std::errc::state_not_recoverable);
                 onLaneFrameConsumed_(transient);
@@ -1021,7 +1009,7 @@ namespace pP {
                 request.m_grid_stage = std::move(m_grid_stage);
                 request.m_triangle_stage = std::move(m_triangle_stage);
             } catch (const std::bad_alloc &) {
-                return std::make_error_code(std::errc::not_enough_memory);
+                throw; // The run boundary drains accepted work before fatal propagation.
             } catch (...) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
@@ -1043,14 +1031,7 @@ namespace pP {
             try {
                 stampGridEcho(request.m_grid_stage, dropped_or_failed);
             } catch (const std::bad_alloc &) {
-                // Same OOM-settle rule as the no-target path above: the
-                // slot still settles (manifest-less) so the credit never
-                // sheds; the error travels with the settlement and the
-                // return value.
-                dropped_or_failed.m_dropped = true;
-                dropped_or_failed.m_error = std::make_error_code(std::errc::not_enough_memory);
-                onLaneFrameConsumed_(dropped_or_failed);
-                return dropped_or_failed.m_error;
+                throw; // The run boundary drains accepted work before fatal propagation.
             } catch (...) {
                 dropped_or_failed.m_dropped = true;
                 dropped_or_failed.m_error = std::make_error_code(std::errc::state_not_recoverable);
@@ -1095,7 +1076,7 @@ namespace pP {
             inline_request.m_grid_stage = std::move(m_grid_stage);
             inline_request.m_triangle_stage = std::move(m_triangle_stage);
         } catch (const std::bad_alloc &) {
-            return std::make_error_code(std::errc::not_enough_memory);
+            throw; // The run boundary drains accepted work before fatal propagation.
         } catch (...) {
             return std::make_error_code(std::errc::state_not_recoverable);
         }
@@ -1111,10 +1092,7 @@ namespace pP {
         try {
             stampGridEcho(inline_request.m_grid_stage, inline_result);
         } catch (const std::bad_alloc &) {
-            inline_result.m_dropped = true;
-            inline_result.m_error = std::make_error_code(std::errc::not_enough_memory);
-            onLaneFrameConsumed_(inline_result);
-            return inline_result.m_error;
+            throw; // The run boundary drains accepted work before fatal propagation.
         } catch (...) {
             inline_result.m_dropped = true;
             inline_result.m_error = std::make_error_code(std::errc::state_not_recoverable);
@@ -1125,7 +1103,7 @@ namespace pP {
         try {
             inline_err = executeRenderWork_(inline_request, inline_result);
         } catch (const std::bad_alloc &) {
-            inline_err = std::make_error_code(std::errc::not_enough_memory);
+            throw; // The run boundary drains accepted work before fatal propagation.
         } catch (...) {
             inline_err = std::make_error_code(std::errc::state_not_recoverable);
         }

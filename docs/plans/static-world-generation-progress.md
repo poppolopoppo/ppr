@@ -623,3 +623,19 @@ disabled/enabled scripted admission and checkpoint observation omission.
 Logs: `out/worldgen-accounting-{build,sim-tests,app-tests,game-tests}-v1.log`.
 Format Check passed 26 files; semantic style has zero blocking findings.
 Release runtime measurement and the final full matrix remain pending.
+
+## Fatal allocation boundaries and subprocess proof
+
+Render-lane and editor packaging allocation failures now reach the fatal boundary;
+main-thread failures rethrow through the run-loop drain guard. Ordinary exceptions
+remain visible recoverable errors. Unknown exceptions no longer masquerade as an
+allocation failure. Two armed subprocess cases prove that allocation exceptions
+from lane initialization and frame execution cannot return recoverable results;
+the execution case waits for entry before allowing shutdown cancellation.
+
+Independent Astra review passed. The 16-edge MSVC dev/ASan build and current
+Release game build passed. All 28 render-lane nodes passed three shuffled loops
+(23.49, 9.44, 8.87 seconds), including both fatal subprocess modes, in
+`out/worldgen-fatal-app-tests-v1.log`. Formatting Check passed four files and
+touched semantic style reported no blocking findings. The final complete matrix
+and current msvc-live gate remain outstanding.

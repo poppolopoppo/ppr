@@ -43,7 +43,7 @@ namespace pP {
             try {
                 throw;
             } catch (const std::bad_alloc &) {
-                return std::make_error_code(std::errc::not_enough_memory);
+                hal::fatalExit("allocation-failure");
             } catch (const std::system_error &error) {
                 return error.code();
             } catch (...) {
@@ -160,6 +160,8 @@ namespace pP {
         std::error_code init_err{};
         try {
             init_err = init_done.get();
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             init_err = terminalError();
             if (not init_err) {
@@ -274,12 +276,14 @@ namespace pP {
         try {
             new (reserved->data()) std::shared_ptr<const RenderFrameRequest>(
                 std::make_shared<const RenderFrameRequest>(std::move(request)));
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             m_frames->producerDiscard(*reserved);
             m_queued_frames.fetch_sub(1u, std::memory_order_acq_rel);
-            const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
+            const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
 
-            return oom;
+            return error;
         }
         m_frames->producerSubmit(*reserved);
         m_submitted_count.fetch_add(1u, std::memory_order_acq_rel);
@@ -378,6 +382,8 @@ namespace pP {
                     if (reclaimed) {
                         m_sync_condition.notify_all();
                     }
+                } catch (const std::bad_alloc &) {
+                    hal::fatalExit("allocation-failure");
                 } catch (...) {
                     // Timeout is already latched. Failed reclaim proves nothing; a false execution ack
                     // grants no permission to release captures or storage behind potentially running work.
@@ -419,14 +425,16 @@ namespace pP {
         try {
             stash.push_back(std::move(result));
             m_results_stashed.fetch_add(1u, std::memory_order_acq_rel);
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
-            // Last-resort OOM: counting is NOT settlement. Durably stop
+            // Unexpected stash failure: counting is NOT settlement. Durably stop
             // admission and fail visibly — a silently shed settlement would
             // leave the owner's ledger charged forever.
             m_results_stashed.fetch_add(1u, std::memory_order_acq_rel);
-            const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
-            noteFirstError_(oom);
-            setTerminal_(oom);
+            const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
+            noteFirstError_(error);
+            setTerminal_(error);
         }
     }
 
@@ -488,12 +496,14 @@ namespace pP {
                         first_err = record_err;
                     }
                 }
+            } catch (const std::bad_alloc &) {
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 failed = true;
                 if (not first_err) {
-                    first_err = std::make_error_code(std::errc::not_enough_memory);
+                    first_err = std::make_error_code(std::errc::state_not_recoverable);
                 }
-                // An output-allocation failure is an unrecoverable
+                // An unexpected output failure is an unrecoverable
                 // transport outcome: durably stop admission so the owner
                 // never treats a destroyed settlement as accounted-for —
                 // and keep draining: destruction must not depend on
@@ -528,11 +538,13 @@ namespace pP {
                         out.push_back(std::move(pending));
                     }
                     ++moved;
+                } catch (const std::bad_alloc &) {
+                    hal::fatalExit("allocation-failure");
                 } catch (...) {
                     failed = true;
                     ++moved;
                     if (not first_err) {
-                        first_err = std::make_error_code(std::errc::not_enough_memory);
+                        first_err = std::make_error_code(std::errc::state_not_recoverable);
                     }
                     noteFirstError_(first_err);
                     setTerminal_(first_err);
@@ -628,14 +640,16 @@ namespace pP {
                                     .m_grid_ack_revisions = request->m_grid_stage.m_ack_revisions,
                                 };
                                 postResult_(std::move(dropped));
+                            } catch (const std::bad_alloc &) {
+                                hal::fatalExit("allocation-failure");
                             } catch (...) {
-                                // Manifest copy failed (OOM): still settle the
+                                // Unexpected manifest-copy failure: still settle the
                                 // slot (never shed a credit), but durably stop
                                 // admission — the owner must not ack what it
                                 // cannot verify.
-                                const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
-                                noteFirstError_(oom);
-                                setTerminal_(oom);
+                                const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
+                                noteFirstError_(error);
+                                setTerminal_(error);
                                 static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
                                 postResult_(
                                     RenderFrameResult{
@@ -657,11 +671,7 @@ namespace pP {
             publish_drain_ack_(handoff_ran);
             return handoff_err;
         } catch (const std::bad_alloc &) {
-            const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
-            noteFirstError_(oom);
-            setTerminal_(oom);
-            publish_drain_ack_(false);
-            return oom;
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             const std::error_code err{std::make_error_code(std::errc::state_not_recoverable)};
             noteFirstError_(err);
@@ -763,6 +773,8 @@ namespace pP {
         if (wake != nullptr) {
             try {
                 (*wake)();
+            } catch (const std::bad_alloc &) {
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 // Wake is only a hint: terminal/error latches and queued results remain durable.
                 // Owner waits recheck those truths on bounded pump slices even when this hint is lost.
@@ -783,7 +795,7 @@ namespace pP {
         try {
             result = operation();
         } catch (const std::bad_alloc &) {
-            result = std::make_error_code(std::errc::not_enough_memory);
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             result = std::make_error_code(std::errc::state_not_recoverable);
         }
@@ -850,7 +862,7 @@ namespace pP {
                 try {
                     result.m_error = (*executor)(*holder, result);
                 } catch (const std::bad_alloc &) {
-                    result.m_error = std::make_error_code(std::errc::not_enough_memory);
+                    hal::fatalExit("allocation-failure");
                 } catch (...) {
                     result.m_error = std::make_error_code(std::errc::state_not_recoverable);
                 }
@@ -864,7 +876,7 @@ namespace pP {
                     result.m_grid_ack_chunk_ids = holder->m_grid_stage.m_ack_chunk_ids;
                     result.m_grid_ack_revisions = holder->m_grid_stage.m_ack_revisions;
                 } catch (const std::bad_alloc &) {
-                    result.m_error = std::make_error_code(std::errc::not_enough_memory);
+                    hal::fatalExit("allocation-failure");
                 } catch (...) {
                     result.m_error = std::make_error_code(std::errc::state_not_recoverable);
                 }
@@ -904,6 +916,8 @@ namespace pP {
             if (sweep != nullptr) {
                 sweep_err = (*sweep)(outstanding);
             }
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             sweep_err = std::make_error_code(std::errc::state_not_recoverable);
         }
@@ -960,7 +974,7 @@ namespace pP {
                             result.m_error = std::make_error_code(std::errc::not_connected);
                         }
                     } catch (const std::bad_alloc &) {
-                        std::terminate(); // Allocation failure is fatal, never a recoverable candidate error.
+                        hal::fatalExit("allocation-failure");
                     } catch (const std::system_error &error) {
                         result.m_error = error.code() ? error.code()
                                                       : std::make_error_code(std::errc::state_not_recoverable);
@@ -1010,7 +1024,7 @@ namespace pP {
                             result.m_error = std::make_error_code(std::errc::not_connected);
                         }
                     } catch (const std::bad_alloc &) {
-                        result.m_error = std::make_error_code(std::errc::not_enough_memory);
+                        hal::fatalExit("allocation-failure");
                     } catch (...) {
                         result.m_error = std::make_error_code(std::errc::state_not_recoverable);
                     }
@@ -1062,6 +1076,8 @@ namespace pP {
             if (sweep != nullptr) {
                 sweep_err = (*sweep)(outstanding);
             }
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             sweep_err = std::make_error_code(std::errc::state_not_recoverable);
         }
@@ -1256,12 +1272,14 @@ namespace pP {
                         .m_grid_ack_revisions = request->m_grid_stage.m_ack_revisions,
                     };
                     postResult_(std::move(dropped));
+                } catch (const std::bad_alloc &) {
+                    hal::fatalExit("allocation-failure");
                 } catch (...) {
-                    // Manifest copy failed (OOM): still settle the slot
+                    // Unexpected manifest-copy failure: still settle the slot
                     // (never shed a credit), but durably stop admission.
-                    const std::error_code oom{std::make_error_code(std::errc::not_enough_memory)};
-                    noteFirstError_(oom);
-                    setTerminal_(oom);
+                    const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
+                    noteFirstError_(error);
+                    setTerminal_(error);
                     static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
                     postResult_(
                         RenderFrameResult{
@@ -1294,6 +1312,8 @@ namespace pP {
                     noteFirstError_(final_sweep_err);
                 }
             }
+        } catch (const std::bad_alloc &) {
+            hal::fatalExit("allocation-failure");
         } catch (...) {
             const std::error_code err = std::make_error_code(std::errc::state_not_recoverable);
             const int value = genericErrcValue_(err);
