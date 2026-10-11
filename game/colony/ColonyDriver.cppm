@@ -78,6 +78,8 @@ export namespace pP::colony {
         u32 m_agent_count{kAgentCount};
         u32 m_speed{1u};
         bool m_paused{false};
+        std::optional<sim::Entity> m_controlled{};
+        PlayerCommand m_player_command{};
         sim::Registry m_registry{};
         sim::StepRegistry m_steps{};
         Pathfinder m_finder{};
@@ -193,6 +195,11 @@ export namespace pP::colony {
         void setPaused(bool paused) noexcept;
 
         void togglePaused() noexcept;
+
+        [[nodiscard]] std::error_code assignControl(std::optional<sim::Entity> entity);
+        [[nodiscard]] std::optional<sim::Entity> controlledEntity() const noexcept;
+        [[nodiscard]] std::error_code setPlayerCommand(PlayerCommand command) noexcept;
+        void clearPlayerCommand() noexcept;
 
         /// Only valid while initialized and paused; runs exactly one tick.
         [[nodiscard]] std::error_code stepOne() noexcept;

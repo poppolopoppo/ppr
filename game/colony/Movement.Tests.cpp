@@ -12,6 +12,77 @@ import std;
 namespace pP::game::tests::detail::movement {
     using namespace colony;
 
+    PPR_UNIT_TEST (fixed_tick_control_bypasses_planning_and_clears_held_commands) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 2u}));
+        driver.grid() = sim::ChunkGrid{};
+        auto &registry = driver.registry();
+        Array<sim::Entity> actors;
+        for (const auto &[entity, agent]: registry.view<Agent>()) {
+            (void) agent;
+            actors.push_back(entity);
+            *registry.get<sim::BodyState>(entity) = {50.5f + actors.size() * 10.0f, 50.5f};
+            registry.get<Agent>(entity)->m_spawn = {80u, 50u};
+        }
+        PPR_TEST_ASSERT(actors.size() == 2u);
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        PPR_TEST_ASSERT(not driver.assignControl(actors[0u]));
+        PPR_TEST_ASSERT(driver.controlledEntity() == actors[0u]);
+        const auto tick = TimeSpan{std::chrono::seconds{1}} / 60u;
+        const auto controlled = actors[0u];
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_x > 0.0f);
+        PPR_TEST_ASSERT(not registry.get<Plan>(controlled) and not registry.get<PathReq>(controlled));
+        PPR_TEST_ASSERT(registry.get<Plan>(actors[1u]) != nullptr);
+        for (u32 slice = 0u; slice < 20u; ++slice) {
+            PPR_TEST_ASSERT(not driver.update(tick));
+        }
+        const auto *const path = registry.get<PathComp>(actors[1u]);
+        PPR_TEST_ASSERT(path != nullptr and path->m_count > 0u and path->m_cursor > 0u);
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(actors[1u])->m_velocity_x > 0.0f);
+        const auto falling = registry.get<sim::BodyState>(controlled)->m_velocity_y;
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({-1, 0}));
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_x < 0.0f);
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y < falling);
+        PPR_TEST_ASSERT(driver.setPlayerCommand({2, 0}) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(driver.assignControl(registry.create()) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(driver.controlledEntity() == controlled);
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+        PPR_TEST_ASSERT(not driver.stepOne());
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_x == 0.0f);
+        driver.setPaused(false);
+
+        const auto ladder = registry.create();
+        registry.emplace<BuildErrand>(
+            ladder,
+            BuildErrand{
+                .m_print = {.m_min = {40u, 40u}, .m_width = 60u, .m_height = 30u, .m_solid = false, .m_ladder = true}});
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({0, -1}));
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y == -kAgentSpeed);
+        driver.clearPlayerCommand();
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y == 0.0f);
+        PPR_TEST_ASSERT(registry.remove<BuildErrand>(ladder));
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y < 0.0f);
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_x == 0.0f);
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({-1, 0}));
+        PPR_TEST_ASSERT(not driver.assignControl(actors[1u]));
+        PPR_TEST_ASSERT(not driver.update(tick));
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(actors[1u])->m_velocity_x == 0.0f);
+        PPR_TEST_ASSERT(not driver.assignControl(std::nullopt));
+        PPR_TEST_ASSERT(driver.setPlayerCommand({1, 0}) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(not driver.shutdown());
+        PPR_TEST_ASSERT(not driver.controlledEntity());
+    };
+
     PPR_UNIT_TEST (unplanned_actor_is_idle_but_missing_required_state_fails) {
         sim::Registry registry;
         PPR_TEST_ASSERT(not registerColonyComponents(registry));
@@ -120,7 +191,8 @@ namespace pP::game::tests::detail::movement {
 namespace pP::game::tests {
     const UnitTest movement = UnitTest::Named("movement") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::movement::unplanned_actor_is_idle_but_missing_required_state_fails,
+            {detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,
+                detail::movement::unplanned_actor_is_idle_but_missing_required_state_fails,
                 detail::movement::movement_preserves_falling_momentum_and_restores_ladder_gravity,
                 detail::movement::restoration_releases_previous_terrain_chains});
     };

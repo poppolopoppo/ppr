@@ -246,8 +246,11 @@ namespace pP::colony {
         return {};
     }
 
-    void planAgent(const sim::ChunkGrid &grid, sim::Registry &registry) {
+    void planAgent(const sim::ChunkGrid &grid, sim::Registry &registry, const std::optional<sim::Entity> controlled) {
         for (const auto &[entity, agent]: registry.view<Agent>()) {
+            if (controlled == entity) {
+                continue;
+            }
             const Needs *needs = registry.get<Needs>(entity);
             const sim::BodyState *pose = registry.get<sim::BodyState>(entity);
             if (needs == nullptr or pose == nullptr) {
@@ -284,6 +287,26 @@ namespace pP::colony {
             (void) registry.remove<PathComp>(entity);
             return;
         }
+    }
+
+    std::error_code playerIntent(
+        const sim::Registry &registry, const sim::Entity entity, const PlayerCommand command, Intent &intent) {
+        intent = {};
+        const auto *const agent = registry.get<Agent>(entity);
+        const auto *const pose = registry.get<sim::BodyState>(entity);
+        if (not agent or
+            not pose or
+            not registry.get<Needs>(entity) or
+            command.m_horizontal < -1 or
+            command.m_horizontal > 1 or
+            command.m_vertical < -1 or
+            command.m_vertical > 1) {
+            PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
+        }
+        intent.m_velocity_x = command.m_horizontal * agent->m_speed;
+        intent.m_climbing = onLadder(registry, pose->m_x, pose->m_y);
+        intent.m_velocity_y = intent.m_climbing ? command.m_vertical * agent->m_speed : 0.0f;
+        return {};
     }
 
     std::error_code agentIntent(sim::Registry &registry, const sim::Entity entity, Intent &intent) {

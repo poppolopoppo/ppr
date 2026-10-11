@@ -84,6 +84,12 @@ export namespace pP::colony {
         bool m_climbing{false};
     };
 
+    /// Held fixed-tick input. Each axis is -1, 0 or 1; there is no jump.
+    struct PlayerCommand {
+        i8 m_horizontal{};
+        i8 m_vertical{};
+    };
+
     /// Panel-safe per-agent row (driver caches these per tick).
     struct AgentSummary {
         /// Stable identity: Agent::m_key = (generation<<32)|index, dealt
@@ -124,7 +130,11 @@ export namespace pP::colony {
     /// Plans the first agent (slot order) needing a plan: none, or desired
     /// goal/site differing from the current Plan. Issues or refreshes the
     /// agent's own PathReq; the pathfind step solves it.
-    void planAgent(const sim::ChunkGrid &grid, sim::Registry &registry);
+    void planAgent(
+        const sim::ChunkGrid &grid, sim::Registry &registry, std::optional<sim::Entity> controlled = std::nullopt);
+
+    [[nodiscard]] std::error_code playerIntent(
+        const sim::Registry &registry, sim::Entity entity, PlayerCommand command, Intent &intent);
 
     /// Advances one agent's waypoint cursor and resolves velocity (ladder
     /// zones climb). Mutates only PathComp.m_cursor / Needs / Plan progress.

@@ -241,7 +241,7 @@ namespace pP::colony {
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_plan{"Colony.Plan"};
                 m_step_stage = "aiplan";
-                planAgent(m_colony.grid(), registry);
+                planAgent(m_colony.grid(), registry, m_controlled);
             });
             if (not bound_plan) [[unlikely]] {
                 (void) m_colony.shutdown();
@@ -290,6 +290,8 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::shutdown() {
+        m_controlled.reset();
+        clearPlayerCommand();
         m_timestep.reset();
         shutdownPhysics();
         m_registry.clear();
@@ -377,10 +379,56 @@ namespace pP::colony {
 
     void ColonyDriver::setPaused(const bool paused) noexcept {
         m_paused = paused;
+        clearPlayerCommand();
     }
 
     void ColonyDriver::togglePaused() noexcept {
-        m_paused = not m_paused;
+        setPaused(not m_paused);
+    }
+
+    std::error_code ColonyDriver::assignControl(const std::optional<sim::Entity> entity) {
+        if (not m_timestep) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
+        }
+        if (entity) {
+            Intent intent{};
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, playerIntent(m_registry, *entity, {}, intent));
+            const auto slot = entity->m_index;
+            if (slot >= m_body_by_slot.size() or
+                m_body_by_slot[slot] == none_v or
+                m_body_by_slot[slot] >= m_bodies.size() or
+                m_bodies[m_body_by_slot[slot]].m_entity != *entity) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
+            }
+            (void) m_registry.remove<Plan>(*entity);
+            (void) m_registry.remove<PathReq>(*entity);
+            (void) m_registry.remove<PathComp>(*entity);
+        }
+        m_controlled = entity;
+        clearPlayerCommand();
+        return {};
+    }
+
+    std::optional<sim::Entity> ColonyDriver::controlledEntity() const noexcept {
+        return m_controlled;
+    }
+
+    std::error_code ColonyDriver::setPlayerCommand(const PlayerCommand command) noexcept {
+        if (not m_timestep or not m_controlled) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
+        }
+        if (command.m_horizontal < -1 or
+            command.m_horizontal > 1 or
+            command.m_vertical < -1 or
+            command.m_vertical > 1) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
+        }
+        m_player_command = m_paused ? PlayerCommand{} : command;
+        return {};
+    }
+
+    void ColonyDriver::clearPlayerCommand() noexcept {
+        m_player_command = {};
     }
 
     std::error_code ColonyDriver::stepOne() noexcept {
@@ -422,6 +470,8 @@ namespace pP::colony {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 
+        m_controlled.reset();
+        clearPlayerCommand();
         m_timestep->reset();
         m_tick_count = 0u;
         m_seed = 0u;
@@ -902,7 +952,9 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::moveAgent(const sim::Entity entity) noexcept {
         Intent intent{};
-        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, agentIntent(m_registry, entity, intent));
+        const auto resolved = m_controlled == entity ? playerIntent(m_registry, entity, m_player_command, intent)
+                                                     : agentIntent(m_registry, entity, intent);
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, resolved);
 
         const u32 slot = entity.m_index;
         const bool indexed = slot < m_body_by_slot.size() and m_body_by_slot[slot] != none_v;
@@ -1363,6 +1415,7 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::restoreBodies() {
+        clearPlayerCommand();
         if (not m_physics_ready) {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
