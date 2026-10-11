@@ -292,8 +292,13 @@ namespace pP::colony {
         Plan *plan = registry.get<Plan>(entity);
         const sim::BodyState *pose = registry.get<sim::BodyState>(entity);
         Needs *needs = registry.get<Needs>(entity);
-        if (agent == nullptr or plan == nullptr or pose == nullptr or needs == nullptr) {
-            return std::make_error_code(std::errc::invalid_argument);
+        if (agent == nullptr or pose == nullptr or needs == nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
+        }
+        // Planning is budgeted across actors. An actor not yet assigned a
+        // plan is idle, rather than a failed movement request.
+        if (plan == nullptr) {
+            return {};
         }
 
         if (plan->m_pc >= plan->m_action_count) {

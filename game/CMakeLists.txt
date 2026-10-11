@@ -141,6 +141,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/WorldGen.Plan.cpp
             colony/WorldJob.cpp
             colony/WorldJob.Tests.cpp
+            colony/Movement.Tests.cpp
         )
 
     setup_ppr_project(game.tests

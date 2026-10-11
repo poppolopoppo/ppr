@@ -146,6 +146,8 @@ export namespace pP::colony {
 
         void moveAgents() noexcept;
 
+        [[nodiscard]] std::error_code moveAgent(sim::Entity entity) noexcept;
+
         void stepPhysics() noexcept;
 
         void mirrorBodyStates() noexcept;

@@ -33,7 +33,8 @@ released, including when an allocation exception must be rethrown.
 ## Outstanding plan work
 
 Stage 3 still needs the catalog/session integration into the interactive job,
-complete generation allocation/scratch accounting and the shipped seed corpus.
+complete generation allocation/scratch accounting. The shipped seed corpus now
+passes; visual inspection/export remains outstanding.
 The current interactive candidate uses the legacy recipe.
 
 Stage 4 needs metric migration of actors, colliders, picking/tools and construction,
@@ -70,12 +71,22 @@ geometry 0.007015 s, raster 382.642785 s, matter 0.048924 s, final validation/ha
 3.502982 s. Terrain checksum `6463df966ba72c4e`, output `23e8a7f54c511a28`;
 64 sites, 17 features, 8 matter regions, 120 spans, 134217728 grid-payload bytes.
 These are Debug ASan observations on the recorded Ryzen 9 3950X/64 GiB machine;
-they do not establish release performance. Hollows and the full corpus remain pending.
+they do not establish release performance. The later Release corpus is recorded below.
 The prepared-owner and nearest-ring increment passed the affected suites in
 `out/worldgen-session-tests2.log` (sim 66.40 s, game 39.58 s), format/style checks
 and Astra's read-only review. Build evidence is `out/worldgen-session-build3.log`.
 MSVC 14.51 emitted an internal compiler error for imported inline lifecycle
 instantiations; defining PreparedWorld/Colony lifecycle members out of line
 resolved it while retaining ordinary RAII ownership.
+The Release application build passed in `out/worldgen-release-build.log`.
+All eight full-world corpus cases passed in `out/worldgen-corpus-rel/`: Frontier
+and Hollows at seeds 0, 1, 42 and maximum u64. Observed elapsed times were
+21.45–47.26 seconds; this single corpus is correctness evidence, not a paired
+performance comparison. Frontier 42 retained terrain `6463df966ba72c4e` and
+output `23e8a7f54c511a28`, matching the earlier ASan baseline.
+The checked physics velocity/gravity API passed the affected ASan simulation
+suite (67.16 s), including sleeping-body tiny-velocity, stale-handle and gravity
+transition checks (`out/worldgen-locomotion-tests.log`); committed as `9e4de13`.
+Stable driver locomotion and restore lifecycle regression work is in progress.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.

@@ -8,11 +8,12 @@ target_sources(engine.tests.app
             # F1 game-payload tests compile the colony subset directly: the
             # sim-carrying packet lives in game/ (engine.app must not link
             # sim/physics), so its unit tests ship with the modules, not via
-            # a link to the app.game executable. WorldGen is included as a
-            # leaf (core/sim deps only, already linked); Panel, Smoke and
-            # TimeTrials stay out (unneeded here; smoke stays self-hosted).
+            # a link to the app.game executable. Include the owned worldgen
+            # catalog/metric closure; Panel and Smoke stay self-hosted.
             ${CMAKE_SOURCE_DIR}/game/colony/Colony.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cppm
+            ${CMAKE_SOURCE_DIR}/game/colony/Content.cppm
+            ${CMAKE_SOURCE_DIR}/game/colony/Metric.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/DigTool.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/Pathfinding.cppm
@@ -52,6 +53,10 @@ target_sources(engine.tests.app
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Plan.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.Pack.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/DigTool.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Pathfinding.cpp
@@ -62,7 +67,7 @@ target_sources(engine.tests.app
     )
 
 setup_ppr_project(engine.tests.app
-    INTERNAL_PUBLIC_DEPS engine.app engine.sim engine.tests
+    INTERNAL_PUBLIC_DEPS engine.app engine.sim engine.image engine.tests
     EXTERNAL_SYSTEM_PRIVATE_DEPS glfw
 )
 

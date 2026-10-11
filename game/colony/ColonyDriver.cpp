@@ -258,7 +258,9 @@ namespace pP::colony {
                 return bound_move.error();
             }
             const Expected<void> bound_physics = m_steps.addSystem(*physics, [this](sim::Registry &) {
-                m_step_stage = "physics";
+                if (not m_step_error) {
+                    m_step_stage = "physics";
+                }
                 stepPhysics();
             });
             if (not bound_physics) [[unlikely]] {
@@ -898,80 +900,41 @@ namespace pP::colony {
         }
     }
 
-    void ColonyDriver::moveAgents() noexcept {
-        const hal::ProfileScope scope_move{"Colony.Move"};
-        for (const auto &[entity, agent]: m_registry.view<Agent>()) {
-            (void) agent;
-            Intent intent{};
-            if (const std::error_code error = agentIntent(m_registry, entity, intent)) {
-                (void) error;
-                continue;
-            }
+    std::error_code ColonyDriver::moveAgent(const sim::Entity entity) noexcept {
+        Intent intent{};
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, agentIntent(m_registry, entity, intent));
 
-            const u32 slot = entity.m_index;
-            bool known = slot < m_body_by_slot.size() and m_body_by_slot[slot] != none_v;
-            const u32 entry = known ? m_body_by_slot[slot] : 0u;
-            known = known and m_bodies[entry].m_entity == entity;
-            if (known and
-                m_bodies[entry].m_velocity_x == intent.m_velocity_x and
-                m_bodies[entry].m_velocity_y == intent.m_velocity_y) {
-                continue;
-            }
-
-            const sim::BodyState *pose = m_registry.get<sim::BodyState>(entity);
-            const sim::BodyDefinition *definition = m_registry.get<sim::BodyDefinition>(entity);
-            const Agent *identity = m_registry.get<Agent>(entity);
-            if (pose == nullptr or definition == nullptr or identity == nullptr) {
-                if (not m_step_error) {
-                    m_step_error = std::make_error_code(std::errc::invalid_argument);
-                }
-                continue;
-            }
-
-            if (known) {
-                if (const std::error_code error = m_scene.destroyBody(m_bodies[entry].m_handle)) {
-                    if (not m_step_error) {
-                        m_step_error = error;
-                    }
-                    continue;
-                }
-            }
-            const u64 key = identity->m_key;
-            const physics::BodyDefinition body = mirrorDefinition(
-                *pose, *definition, intent.m_velocity_x, intent.m_velocity_y);
-            const u64 keys[1] = {key};
-            const physics::BodyDefinition bodies[1] = {body};
-            physics::BodyHandle made[1] = {};
-
-            if (const std::error_code error = m_scene.createBodies(
-                    std::span<const u64>{keys, 1u}, std::span<const physics::BodyDefinition>{bodies, 1u},
-                    std::span<physics::BodyHandle>{made, 1u})) {
-                if (not m_step_error) {
-                    m_step_error = error;
-                }
-                continue;
-            }
-
-            if (known) {
-                m_bodies[entry].m_handle = made[0u];
-                m_bodies[entry].m_velocity_x = intent.m_velocity_x;
-                m_bodies[entry].m_velocity_y = intent.m_velocity_y;
-            } else {
-                m_bodies.push_back(
-                    AgentBody{
-                        .m_entity = entity,
-                        .m_key = key,
-                        .m_handle = made[0u],
-                        .m_velocity_x = intent.m_velocity_x,
-                        .m_velocity_y = intent.m_velocity_y});
-                if (m_body_by_slot.size() < m_registry.slotCount()) {
-                    m_body_by_slot.resize(m_registry.slotCount(), none_v);
-                }
-                m_body_by_slot[slot] = safe_narrowing(m_bodies.size() - 1u);
-            }
+        const u32 slot = entity.m_index;
+        const bool indexed = slot < m_body_by_slot.size() and m_body_by_slot[slot] != none_v;
+        const u32 entry = indexed ? m_body_by_slot[slot] : 0u;
+        if (not indexed or entry >= m_bodies.size() or m_bodies[entry].m_entity != entity) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
+        AgentBody &body = m_bodies[entry];
+        const auto state = m_scene.state(body.m_handle);
+        if (not state) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, state.error());
+        }
+
+        // Horizontal locomotion preserves falling momentum. Ladder intent
+        // owns vertical speed only while gravity is explicitly disabled.
+        const float velocity_y = intent.m_climbing ? intent.m_velocity_y : state->m_velocity_y;
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, m_scene.setGravityEnabled(body.m_handle, not intent.m_climbing));
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, m_scene.setLinearVelocity(body.m_handle, intent.m_velocity_x, velocity_y));
+        body.m_velocity_x = intent.m_velocity_x;
+        body.m_velocity_y = velocity_y;
+        return {};
     }
 
+    void ColonyDriver::moveAgents() noexcept {
+        const hal::ProfileScope scope_move{"Colony.Move"};
+        // Finish independent actors while retaining the first tick failure.
+        for (const auto &[entity, agent]: m_registry.view<Agent>()) {
+            (void) agent;
+            PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, moveAgent(entity));
+        }
+    }
     void ColonyDriver::mirrorBodyStates() noexcept {
         for (const AgentBody &entry: m_bodies) {
             const auto state = m_scene.state(entry.m_handle);
@@ -998,7 +961,9 @@ namespace pP::colony {
         }
         Array<sim::ChunkPos> needed{};
         agentNeighbourhood(m_registry, needed);
-        m_step_stage = "colliders";
+        if (not m_step_error) {
+            m_step_stage = "colliders";
+        }
         if (const std::error_code error = rebuildChunks(m_collider_dirty, needed, kColliderBudget)) {
             if (not m_step_error) {
                 m_step_error = error;
@@ -1009,7 +974,9 @@ namespace pP::colony {
         // Split ownership: m_collider_dirty drains here on success only, so a
         // failed rebuild retains it for retry; presentEdits never touches it.
         m_collider_dirty = Array<sim::ChunkPos>{};
-        m_step_stage = "scene-step";
+        if (not m_step_error) {
+            m_step_stage = "scene-step";
+        }
         {
             const hal::ProfileScope scope_step{"Colony.Physics.Step"};
             if (const std::error_code error = m_scene.step()) {
@@ -1020,7 +987,9 @@ namespace pP::colony {
             }
         }
 
-        m_step_stage = "mirror";
+        if (not m_step_error) {
+            m_step_stage = "mirror";
+        }
         {
             const hal::ProfileScope scope_mirror{"Colony.Physics.Mirror"};
             mirrorBodyStates();
@@ -1397,12 +1366,10 @@ namespace pP::colony {
         if (not m_physics_ready) {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
-        (void) m_scene.clear();
-        m_colliders = physics::ChunkColliders{};
-        m_collider_covered = Array<sim::ChunkPos>{};
-        // Restores always invalidate: transient colliders are gone, so no
-        // cached view may survive even though createAgentBodies re-prepares.
-        invalidateColliderCache();
+        // Scene::clear preserves terrain chains. Recreate the disposable
+        // physics world before releasing its collider handle owner.
+        shutdownPhysics();
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, initPhysics());
         clearToolState();
         if (const std::error_code error = createAgentBodies()) {
             return error;
