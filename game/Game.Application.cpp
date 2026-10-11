@@ -132,6 +132,11 @@ namespace demo {
         std::array<std::unique_ptr<InputAction>, kActionCount> m_actions{};
         std::unique_ptr<InputMapping> m_colony_mapping{};
         std::unique_ptr<InputMapping> m_tool_mapping{};
+        std::unique_ptr<InputMapping> m_control_mapping{};
+        std::array<std::unique_ptr<InputAction>, 4u> m_control_actions{};
+        std::array<bool, 4u> m_control_held{};
+        bool m_control_enabled{false};
+        bool m_window_focused{true};
         std::array<colony::ColonyShortcut, kColonyKeyActions> m_shortcut_rows{};
         std::error_code m_input_error{};
         bool m_driver_ready{false};
@@ -313,6 +318,7 @@ namespace demo {
                               .m_agent_count = m_agent_count,
                               .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u}));
             m_requested_seed = seed;
+            clearControlInput_();
             m_pause_before_job = m_driver and m_driver->paused();
             if (m_driver) {
                 m_driver->setPaused(true);
@@ -860,6 +866,50 @@ namespace demo {
             return screenMap_().pickCell(cursor_client);
         }
 
+        void clearControlInput_() noexcept {
+            m_control_held.fill(false);
+            if (m_driver) {
+                m_driver->clearPlayerCommand();
+            }
+        }
+
+        void refreshControlInput_() noexcept {
+            const bool was_enabled = m_control_enabled;
+            m_control_enabled = m_driver and
+                                m_driver->controlledEntity().has_value() and
+                                not m_driver->paused() and
+                                not m_world_modal and
+                                m_window_focused and
+                                not ImGui::GetIO().WantCaptureKeyboard;
+            if (m_control_enabled and not was_enabled and m_pan_controller) {
+                // A key released after this ownership handoff is consumed here;
+                // retire camera rates established while gameplay was paused.
+                m_pan_controller->resetInputState();
+            }
+            if (not m_control_enabled) {
+                clearControlInput_();
+            }
+            for (auto &action: m_control_actions) {
+                if (action) {
+                    action->setConsumeInput(m_control_enabled);
+                }
+            }
+        }
+
+        void controlKey_(const std::size_t index, const bool held) noexcept {
+            // A pause shortcut and direction press can share one native poll.
+            refreshControlInput_();
+            if (not m_control_enabled) {
+                clearControlInput_();
+                return;
+            }
+            m_control_held[index] = held;
+            const colony::PlayerCommand command{
+                static_cast<i8>(static_cast<int>(m_control_held[1u]) - static_cast<int>(m_control_held[0u])),
+                static_cast<i8>(static_cast<int>(m_control_held[2u]) - static_cast<int>(m_control_held[3u]))};
+            retainInputError_(m_driver->setPlayerCommand(command));
+        }
+
         void initializeInput_() {
             m_colony_mapping = std::make_unique<InputMapping>("colony_input_mapping");
 
@@ -1018,14 +1068,33 @@ namespace demo {
             getMainPlayer()->getListener().addInputMapping(
                 m_tool_mapping, static_cast<int>(EInputMappingPriority::camera) - 1);
 
+            // The controlled actor owns WASD while gameplay accepts commands.
+            // Arrow keys and mouse retain camera navigation. Opposing held keys
+            // cancel; completed events remove only their own direction.
+            m_control_mapping = std::make_unique<InputMapping>("colony_control_mapping");
+            const std::array keys{InputKey::a, InputKey::d, InputKey::w, InputKey::s};
+            for (std::size_t index = 0u; index < keys.size(); ++index) {
+                auto &action = m_control_actions[index];
+                action = std::make_unique<InputAction>("ColonyMove", EInputValueType::digital, EInputActionFlags::none);
+                action->setStarted(
+                    [this, index](const InputActionEvent &, const InputKey &) noexcept { controlKey_(index, true); });
+                action->setCompleted(
+                    [this, index](const InputActionEvent &, const InputKey &) noexcept { controlKey_(index, false); });
+                m_control_mapping->mapInputKey(SharedInputAction(action.get()), keys[index]);
+            }
+            getMainPlayer()->getListener().addInputMapping(
+                m_control_mapping, static_cast<int>(EInputMappingPriority::camera) - 1);
+
             // Focus loss cancels the transient gesture only (the accepted
             // queue survives). Ownership: the member owns the callable, the
             // broadcast holds only a view, the handle is reset first in
             // shutdown(). Absent service leaves it unwired.
             if (const safe_ptr<IWindowService> windows = getServices().tryGet<IWindowService>(); windows.isValid()) {
                 m_on_window_focused = [this](const Window &, const bool focused) noexcept -> std::error_code {
+                    m_window_focused = focused;
                     if (not focused) {
                         cancelToolGesture_();
+                        clearControlInput_();
                     }
                     return default_value_v;
                 };
@@ -1044,7 +1113,10 @@ namespace demo {
                 return;
             }
             switch (intent.m_kind) {
-                case colony::EColonyIntent::pause_toggle: m_driver->togglePaused(); break;
+                case colony::EColonyIntent::pause_toggle:
+                    clearControlInput_();
+                    m_driver->togglePaused();
+                    break;
 
                 case colony::EColonyIntent::step:
                     if (not m_driver->paused()) {
@@ -3143,7 +3215,9 @@ namespace demo {
             // Input poll, camera, pass updates, and UI run in super; pass encode
             // and present run in render(), after this body, so the submits below
             // still land in the same frame's render.
+            refreshControlInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
+            refreshControlInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
             if (not m_driver) {
                 submitGridStage(GridPass::GridStagedFrame{});
@@ -3303,6 +3377,16 @@ namespace demo {
             // settles through the lane drain in super shutdown below.
             cancelDisplaySession_();
             m_focus_handle.reset();
+            clearControlInput_();
+            if (m_control_mapping) {
+                if (not getMainPlayer()->getListener().removeInputMapping(*m_control_mapping)) {
+                    PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, std::errc::not_connected);
+                }
+                m_control_mapping.reset();
+            }
+            for (auto &action: m_control_actions) {
+                action.reset();
+            }
             if (m_tool_mapping) {
                 if (not getMainPlayer()->getListener().removeInputMapping(*m_tool_mapping) and not first_error) {
                     first_error = make_error_code(std::errc::not_connected);

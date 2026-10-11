@@ -125,6 +125,11 @@ suites in `out/worldgen-tools-tests.log` (90.92 s / 62.83 s), format/style gates
 and Astra review. Tests cover nonlegacy IDs, protected demolition, particle/unknown
 ID preflight, cross-chunk tiles, actor overlap, reservations, progressive budgets
 and preservation of the original failing tick stage. Direct UI input wiring is
-the next application increment.
+implemented at the application boundary: WASD held commands, opposing-key
+cancellation, focus/UI/pause/new-game clearing and camera-rate retirement at
+ownership handoff. The application build passed in `out/worldgen-input-build2.log`;
+all 58 camera tests passed (13.74 s) in `out/worldgen-input-camera.log`, including
+the real priority-routing consumed-release regression. Generated-session
+interactive publication and actual traversal remain acceptance work.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.

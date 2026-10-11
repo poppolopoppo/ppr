@@ -562,6 +562,34 @@ namespace pP::tests::detail {
 
     // Focus/device-disconnect path: resetInputState clears retained per-key
     // rates and transient impulses, so held keys stop moving the camera.
+    PPR_UNIT_TEST (camera_key_handoff_retires_rate_before_consumed_release) {
+        PanCameraController controller;
+        controller.setPositionInertia(100000.0f);
+        InputMapping camera_mapping{"CameraHandoff"};
+        controller.provideInputActionKeyMappings(camera_mapping);
+        InputAction gameplay{"GameplayHandoff", EInputValueType::digital, EInputActionFlags::none};
+        InputMapping gameplay_mapping{"GameplayHandoff"};
+        gameplay_mapping.mapInputKey(SharedInputAction{&gameplay}, InputKey::d);
+        InputListener listener;
+        listener.addInputMapping(SharedInputMapping{&gameplay_mapping}, 0);
+        listener.addInputMapping(SharedInputMapping{&camera_mapping}, 1);
+        const InputMessage press{
+            InputKey::d, InputValue{InputDigital{true}}, InputDeviceID{0u}, EInputMessageEvent::pressed};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, press);
+        CameraModel model{};
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        const auto position = model.m_origin;
+        PPR_TEST_ASSERT(position.x > 0.0f);
+
+        gameplay.setConsumeInput(true);
+        controller.resetInputState();
+        const InputMessage release{
+            InputKey::d, InputValue{InputDigital{false}}, InputDeviceID{0u}, EInputMessageEvent::released};
+        (void) listener.postKeyEvent(std::chrono::milliseconds{1}, release);
+        controller.updateCameraModel(std::chrono::milliseconds{16}, model);
+        PPR_TEST_ASSERT(distance(model.m_origin, position) < kEps);
+    };
+
     PPR_UNIT_TEST (free_camera_reset_clears_held_key) {
         FreeCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
@@ -1665,6 +1693,7 @@ namespace pP::tests {
             detail::camera_mouse_wheel_impulses,
             detail::free_camera_gamepad_rate,
             detail::free_camera_reset_clears_held_key,
+            detail::camera_key_handoff_retires_rate_before_consumed_release,
             detail::free_camera_fov_wheel_transient,
             detail::free_camera_look_at_target,
             detail::free_camera_look_at_heading_pitch,

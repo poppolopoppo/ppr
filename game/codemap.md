@@ -21,6 +21,11 @@
 
 Controls and panel intents are declared in `Game.Application.cpp` and `colony/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, Performance and Display UI. Regeneration is confirmed and deferred to an update boundary.
 
+When the session has a controlled actor, WASD supplies held fixed-tick commands
+ahead of camera input. Opposing directions cancel. Focus loss, UI keyboard capture,
+pause and new-game requests clear the command. Camera input rates reset when
+gameplay retakes key ownership; arrows and mouse remain camera controls.
+
 ## Colony modules and workloads
 
 See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` modules. Driver/simulation code is renderer-independent; `SimFramePacket` and translator bridge to owned presentation data. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
