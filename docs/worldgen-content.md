@@ -371,10 +371,28 @@ therefore preserves identity. The generator version and metric convention belong
 separately in the world descriptor. The material-only decoder returns no complete
 fingerprint, so it cannot be mistaken for a validated pack.
 
-`assets/worldgen/default` ships twelve materials, four PPR biomes, five templates,
+`assets/worldgen/default` ships seventeen materials (twelve terrain and five initial-matter types), seven PPR biomes, seven templates,
 and two profiles (`frontier` and `hollows`). The second profile changes region
-weights, cave density and vein/tunnel geometry. Seven original sRGB textures are
+weights, cave density and vein/tunnel geometry. Twelve original sRGB textures are
 included with provenance. The generator validates geometry and supported starting routes before candidate publication.
+
+Both profiles include the original Hearth, Rime, Lode and Ember regions plus:
+
+| Biome | Terrain and exploration |
+|---|---|
+| Crystal karst | Layered limestone and clay, amethyst deposits, wider caves and sealed crystal geodes. |
+| Salt shelves | Sandstone, rock salt and deeper ice/basalt, fissures and abandoned salt galleries connected to the room network. |
+| Sulfur chambers | Deep obsidian and sulfur with scattered crystal, hotter temperatures and denser cavern walls. |
+
+The new regions require at least one biome site in each profile. Their mineral
+lenses use the existing threshold-deposit rules. Non-start landmarks are optional
+and may be omitted when bounded placement attempts cannot find an eligible,
+non-conflicting location. Frontier retains denser terrain; Hollows opens more
+cave space. Landing geometry and the guaranteed sandstone/copper starting
+resources remain the same. All five added terrain materials are diggable, with
+their own repeating albedo textures and sparse catalog IDs. They add terrain and
+exploration variety; material processing and live fluids remain outside this
+content pack's behavior.
 
 Build `app.game` or `game.tests` to synchronize the build-owned `worldgen` tree,
 including deleted assets, without needing a C++ relink. Then run from any folder:

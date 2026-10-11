@@ -26,4 +26,4 @@ Runtime asset root for the demo. Shader sources that `engine.shader` compiles at
 - `textures/` — shared runtime textures (see `textures/PROVENANCE.md`; no binary fixtures committed yet).
 - `meshes/` — static GLB/gltf fixtures, including 16 staged Kenney colony assets under `meshes/kenney_colony/`.
 
-worldgen/default contains the versioned twelve-material, four-biome, five-template, two-profile PPR pack and seven original textures. game/CMakeLists.txt stages this tree on every explicit game/test build, including data-only edits/deletions; CPU --validate-worldgen validates the deployed copy.
+worldgen/default contains the versioned seventeen-material, seven-biome, seven-template, two-profile PPR pack and twelve original textures. game/CMakeLists.txt stages this tree on every explicit game/test build, including data-only edits/deletions; CPU --validate-worldgen validates the deployed copy.

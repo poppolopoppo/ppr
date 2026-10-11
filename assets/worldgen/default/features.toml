@@ -166,3 +166,71 @@ height_fine = 30
 role = "inert"
 x_fine = 18
 y_fine = 18
+
+
+[features.crystal_geode]
+display_name = "Amethyst geode"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 48
+reservation_max_y_fine = 36
+[features.crystal_geode.operations.shell]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 0
+y_fine = 0
+width_fine = 48
+height_fine = 36
+material = "crystal"
+[features.crystal_geode.operations.interior]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 4
+y_fine = 4
+width_fine = 40
+height_fine = 28
+[features.crystal_geode.markers.anchor]
+role = "sealed_pocket"
+x_fine = 24
+y_fine = 18
+
+[features.mine_gallery]
+display_name = "Abandoned salt gallery"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 72
+reservation_max_y_fine = 30
+[features.mine_gallery.operations.shell]
+order = 10
+action = "paint"
+shape = "rectangle"
+x_fine = 0
+y_fine = 0
+width_fine = 72
+height_fine = 30
+material = "masonry"
+[features.mine_gallery.operations.interior]
+order = 20
+action = "carve"
+shape = "rectangle"
+x_fine = 3
+y_fine = 6
+width_fine = 66
+height_fine = 21
+[features.mine_gallery.markers.anchor]
+role = "traversal_room"
+x_fine = 36
+y_fine = 15
+[features.mine_gallery.operations.salt_seam]
+order = 30
+action = "paint"
+shape = "rectangle"
+x_fine = 6
+y_fine = 3
+width_fine = 60
+height_fine = 3
+material = "salt"

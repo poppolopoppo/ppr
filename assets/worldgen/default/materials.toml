@@ -117,3 +117,60 @@ representation = "particle"
 color_rgba = "8F8B83FF"
 reference_density_kg_m3 = 1700.0
 
+
+# Additional geology uses stable sparse IDs; existing IDs remain unchanged.
+
+[materials.clay]
+numeric_id = 65
+display_name = "Clay"
+phase = "solid"
+representation = "terrain"
+color_rgba = "A86D4AFF"
+albedo_texture = "textures/clay.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 1800.0
+
+[materials.limestone]
+numeric_id = 97
+display_name = "Limestone"
+phase = "solid"
+representation = "terrain"
+color_rgba = "C9C5ADFF"
+albedo_texture = "textures/limestone.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 2600.0
+
+[materials.salt]
+numeric_id = 160
+display_name = "Rock salt"
+phase = "solid"
+representation = "terrain"
+color_rgba = "F5E9D6FF"
+albedo_texture = "textures/salt.png"
+texture_period_m = 1.0
+diggable = true
+reference_density_kg_m3 = 2160.0
+
+[materials.sulfur]
+numeric_id = 193
+display_name = "Sulfur"
+phase = "solid"
+representation = "terrain"
+color_rgba = "E3C74FFF"
+albedo_texture = "textures/sulfur.png"
+texture_period_m = 1.0
+diggable = true
+reference_density_kg_m3 = 2070.0
+
+[materials.crystal]
+numeric_id = 385
+display_name = "Amethyst"
+phase = "solid"
+representation = "terrain"
+color_rgba = "B69BE8FF"
+albedo_texture = "textures/crystal.png"
+texture_period_m = 1.0
+diggable = true
+reference_density_kg_m3 = 2650.0

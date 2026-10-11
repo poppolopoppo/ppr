@@ -214,7 +214,7 @@ threshold_max = 1.0
         const auto texture = std::ranges::find(
             catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
         PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
-        PPR_TEST_ASSERT(catalog->textures().size() == 8u and catalog->contentFingerprint() != 0x857b3878fe9f3470ull);
+        PPR_TEST_ASSERT(catalog->textures().size() == 13u and catalog->contentFingerprint() != 0x52892cac0e92ceedull);
 
         const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(plan.has_value());
@@ -267,14 +267,21 @@ threshold_max = 1.0
         }
         PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(catalog->packId() == "ppr_frontier");
-        PPR_TEST_ASSERT(catalog->materials().size() == 12u and catalog->textures().size() == 7u);
-        PPR_TEST_ASSERT(catalog->biomes().size() == 4u and catalog->features().size() == 5u);
+        PPR_TEST_ASSERT(catalog->materials().size() == 17u and catalog->textures().size() == 12u);
+        PPR_TEST_ASSERT(catalog->biomes().size() == 7u and catalog->features().size() == 7u);
         PPR_TEST_ASSERT(catalog->worlds().size() == 2u and catalog->fields().size() == 7u);
         PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x857b3878fe9f3470ull);
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x52892cac0e92ceedull);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
+        for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
+            const auto *const material = catalog->findMaterial(key);
+            PPR_TEST_ASSERT(material != nullptr);
+            PPR_TEST_ASSERT(material->m_representation == EMaterialRepresentation::terrain);
+            PPR_TEST_ASSERT(material->m_diggable == true);
+            PPR_TEST_ASSERT(material->m_albedo_texture.has_value());
+        }
         for (const auto &texture: catalog->textures()) {
             PPR_TEST_ASSERT(texture.m_image.m_width == 64u and texture.m_image.m_height == 64u);
             PPR_TEST_ASSERT(texture.m_image.m_storage.isOwned());
@@ -303,12 +310,13 @@ threshold_max = 1.0
         auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         PPR_TEST_ASSERT(not compileWorldPlan(*catalog, "unknown", 42u));
+        std::array<bool, 7u> seen_features{};
         for (const auto profile: {"frontier", "hollows"}) {
             for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
                 auto plan = compileWorldPlan(*catalog, profile, seed);
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(plan->seed() == seed);
-                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 12u);
+                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 17u);
                 PPR_TEST_ASSERT(plan->fields().size() == 7u);
                 PPR_TEST_ASSERT(plan->recipe().m_boundary_material == 257u);
                 PPR_TEST_ASSERT(plan->recipe().m_cell_size_m == 1.0 / 3.0);
@@ -317,9 +325,17 @@ threshold_max = 1.0
                 PPR_TEST_ASSERT(layout->sites().size() >= plan->recipe().m_min_sites);
                 auto geometry = sim::compileGenerationGeometry(*plan, *layout);
                 PPR_TEST_ASSERT(geometry.has_value());
-                PPR_TEST_ASSERT(geometry->m_instances.size() >= 5u);
+                PPR_TEST_ASSERT(not geometry->m_instances.empty());
+                PPR_TEST_ASSERT(geometry->m_instances.front().m_rule == sim::kGenerationStartRule);
+                PPR_TEST_ASSERT(
+                    std::ranges::count(
+                        geometry->m_instances, sim::kGenerationStartRule, &sim::GenerationInstance::m_rule) == 1);
+                for (const auto &instance: geometry->m_instances) {
+                    PPR_TEST_ASSERT(instance.m_feature < seen_features.size());
+                    seen_features[instance.m_feature] = true;
+                }
                 PPR_TEST_ASSERT(not geometry->m_segments.empty());
-                std::array<u32, 4u> counts{};
+                std::array<u32, 7u> counts{};
                 for (const auto &site: layout->sites()) {
                     ++counts[site.m_biome];
                 }
@@ -328,6 +344,9 @@ threshold_max = 1.0
                 }
             }
         }
+        // Optional landmarks need not all fit one world, but the fixed seed set
+        // must exercise every shipped template, including the new landmarks.
+        PPR_TEST_ASSERT(std::ranges::all_of(seen_features, [](const bool seen) { return seen; }));
         auto owned = [&] {
             auto temporary = fixture.load(diagnostics);
             PPR_TEST_ASSERT(temporary.has_value());
@@ -387,7 +406,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog.has_value());
         auto changed = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(changed.has_value());
-        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 13u);
+        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 18u);
         PPR_TEST_ASSERT(baseline->recipe().m_rules.size() == changed->recipe().m_rules.size());
         for (std::size_t i = 0u; i < baseline->recipe().m_rules.size(); ++i) {
             PPR_TEST_ASSERT(baseline->recipe().m_rules[i].m_key == changed->recipe().m_rules[i].m_key);

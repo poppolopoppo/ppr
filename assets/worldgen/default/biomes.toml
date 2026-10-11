@@ -156,3 +156,140 @@ depth_max_normalized = 1.0
 threshold_min = -0.65
 threshold_max = -0.3
 
+
+# Distinct geology and temperatures, using the existing composition/ore fields.
+
+[biomes.karst]
+display_name = "Crystal karst"
+preview_color_rgba = "B8A4D2FF"
+temperature_base_k = 286.0
+temperature_variation_k = 8.0
+temperature_field = "temperature"
+[biomes.karst.composition.upper]
+order = 10
+depth_min_normalized = 0.00
+depth_max_normalized = 0.42
+field = "composition"
+[biomes.karst.composition.upper.materials.limestone]
+material = "limestone"
+weight = 6.0
+[biomes.karst.composition.upper.materials.clay]
+material = "clay"
+weight = 2.0
+[biomes.karst.composition.upper.materials.basalt]
+material = "basalt"
+weight = 1.0
+[biomes.karst.composition.lower]
+order = 20
+depth_min_normalized = 0.42
+depth_max_normalized = 1.00
+field = "composition"
+[biomes.karst.composition.lower.materials.limestone]
+material = "limestone"
+weight = 6.0
+[biomes.karst.composition.lower.materials.crystal]
+material = "crystal"
+weight = 1.0
+[biomes.karst.composition.lower.materials.iron]
+material = "iron"
+weight = 1.0
+[biomes.karst.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "crystal"
+host_material = "limestone"
+depth_min_normalized = 0.35
+depth_max_normalized = 1.00
+threshold_min = -0.65
+threshold_max = -0.3
+
+[biomes.saltworks]
+display_name = "Salt shelves"
+preview_color_rgba = "D5C7A1FF"
+temperature_base_k = 268.0
+temperature_variation_k = 7.0
+temperature_field = "temperature"
+[biomes.saltworks.composition.upper]
+order = 10
+depth_min_normalized = 0.00
+depth_max_normalized = 0.42
+field = "composition"
+[biomes.saltworks.composition.upper.materials.sandstone]
+material = "sandstone"
+weight = 4.0
+[biomes.saltworks.composition.upper.materials.salt]
+material = "salt"
+weight = 3.0
+[biomes.saltworks.composition.upper.materials.clay]
+material = "clay"
+weight = 1.0
+[biomes.saltworks.composition.lower]
+order = 20
+depth_min_normalized = 0.42
+depth_max_normalized = 1.00
+field = "composition"
+[biomes.saltworks.composition.lower.materials.basalt]
+material = "basalt"
+weight = 4.0
+[biomes.saltworks.composition.lower.materials.salt]
+material = "salt"
+weight = 3.0
+[biomes.saltworks.composition.lower.materials.ice]
+material = "ice"
+weight = 1.0
+[biomes.saltworks.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "salt"
+host_material = "sandstone"
+depth_min_normalized = 0.00
+depth_max_normalized = 0.65
+threshold_min = -0.65
+threshold_max = -0.3
+
+[biomes.fumaroles]
+display_name = "Sulfur chambers"
+preview_color_rgba = "C9AB43FF"
+temperature_base_k = 372.0
+temperature_variation_k = 18.0
+temperature_field = "temperature"
+[biomes.fumaroles.composition.upper]
+order = 10
+depth_min_normalized = 0.00
+depth_max_normalized = 0.42
+field = "composition"
+[biomes.fumaroles.composition.upper.materials.obsidian]
+material = "obsidian"
+weight = 5.0
+[biomes.fumaroles.composition.upper.materials.sulfur]
+material = "sulfur"
+weight = 2.0
+[biomes.fumaroles.composition.upper.materials.basalt]
+material = "basalt"
+weight = 1.0
+[biomes.fumaroles.composition.lower]
+order = 20
+depth_min_normalized = 0.42
+depth_max_normalized = 1.00
+field = "composition"
+[biomes.fumaroles.composition.lower.materials.obsidian]
+material = "obsidian"
+weight = 5.0
+[biomes.fumaroles.composition.lower.materials.sulfur]
+material = "sulfur"
+weight = 2.0
+[biomes.fumaroles.composition.lower.materials.crystal]
+material = "crystal"
+weight = 1.0
+[biomes.fumaroles.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "sulfur"
+host_material = "obsidian"
+depth_min_normalized = 0.20
+depth_max_normalized = 1.00
+threshold_min = -0.65
+threshold_max = -0.3
