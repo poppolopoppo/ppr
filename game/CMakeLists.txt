@@ -114,6 +114,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/DigTool.cppm
                 colony/Pathfinding.cppm
                 colony/WorldGen.cppm
+                colony/SimFramePacket.cppm
                 colony/WorldJob.cppm
         PRIVATE
             Game.Config.cpp
@@ -139,6 +140,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Pathfinding.cpp
             colony/WorldGen.cpp
             colony/WorldGen.Plan.cpp
+            colony/SimFramePacket.cpp
             colony/WorldJob.cpp
             colony/WorldJob.Tests.cpp
             colony/Movement.Tests.cpp

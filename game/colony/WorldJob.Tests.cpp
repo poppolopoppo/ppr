@@ -2,6 +2,7 @@ module;
 #include "pP/UnitTest.h"
 
 module game.tests;
+import engine.app;
 import engine.core;
 import engine.sim;
 import game.colony.driver;
@@ -62,7 +63,8 @@ namespace pP::game::tests::detail::world_job {
         std::atomic<u32> calls{};
         WorldJob job{
             chunks,
-            [&](const ColonyDriverDesc &, const sim::GenerationExecution &) -> Expected<std::unique_ptr<ColonyDriver>> {
+            [&](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
                 calls.fetch_add(1u);
                 return std::make_unique<ColonyDriver>();
             }};
@@ -83,6 +85,10 @@ namespace pP::game::tests::detail::world_job {
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
+        PPR_TEST_ASSERT(job.presentation().m_uploads.empty());
+        job.commitPublication();
+        job.cancel(); // An accepted activation must finish CPU publication even during close.
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
         auto candidate = job.publish();
         PPR_TEST_ASSERT(candidate != nullptr);
         job.retire(std::move(candidate));
@@ -101,8 +107,8 @@ namespace pP::game::tests::detail::world_job {
         bool released = false;
         WorldJob job{
             chunks,
-            [&](const ColonyDriverDesc &,
-                const sim::GenerationExecution &execution) -> Expected<std::unique_ptr<ColonyDriver>> {
+            [&](const ColonyDriverDesc &, const sim::GenerationExecution &execution,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
                 entered.count_down();
                 release.wait();
                 cancellation_observed.store(execution.m_context->error() == std::errc::operation_canceled);
@@ -138,8 +144,8 @@ namespace pP::game::tests::detail::world_job {
         bool released = false;
         WorldJob job{
             chunks,
-            [&](const ColonyDriverDesc &request,
-                const sim::GenerationExecution &execution) -> Expected<std::unique_ptr<ColonyDriver>> {
+            [&](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
                 PreparationGate gate{*execution.m_context, *execution.m_stage, entered, release};
                 auto local = execution;
                 local.m_context = &gate;
@@ -169,13 +175,36 @@ namespace pP::game::tests::detail::world_job {
         PPR_TEST_ASSERT(not job.shutdown());
     };
 
+    PPR_UNIT_TEST (candidate_graphics_failure_retires_cpu_owner_and_preserves_failure) {
+        ParallelScheduler chunks{"World graphics failure chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)
+                -> Expected<std::unique_ptr<ColonyDriver>> { return std::make_unique<ColonyDriver>(); }};
+        PPR_TEST_ASSERT(not job.request(ColonyDriverDesc{.m_world_generation = 1u}));
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
+        PPR_TEST_ASSERT(job.presentation().m_tiles.empty());
+        job.discardPrepared(std::make_error_code(std::errc::io_error));
+        settle(job);
+        PPR_TEST_ASSERT(not job.busy());
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::failed);
+        PPR_TEST_ASSERT(job.view().m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(not job.shutdown());
+    };
+
     PPR_UNIT_TEST (failure_is_retained_and_ready_candidate_can_still_be_cancelled) {
         ParallelScheduler chunks{"World failure test chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
         bool fail = true;
         WorldJob job{
             chunks,
-            [&](const ColonyDriverDesc &, const sim::GenerationExecution &) -> Expected<std::unique_ptr<ColonyDriver>> {
+            [&](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<ColonyDriver>> {
                 if (fail) {
+                    diagnostics.add(
+                        "materials.toml", "terrain.albedo", "Missing authored texture",
+                        std::make_error_code(std::errc::io_error));
                     return std::unexpected{std::make_error_code(std::errc::io_error)};
                 }
                 return std::make_unique<ColonyDriver>();
@@ -185,6 +214,8 @@ namespace pP::game::tests::detail::world_job {
         settle(job);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::failed);
         PPR_TEST_ASSERT(job.view().m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(job.diagnosticText().find("materials.toml") != std::string_view::npos);
+        PPR_TEST_ASSERT(job.diagnosticText().find("terrain.albedo") != std::string_view::npos);
         fail = false; // Prior work has drained; no concurrent access.
         PPR_TEST_ASSERT(not job.request(ColonyDriverDesc{.m_world_generation = 1u}));
         PPR_TEST_ASSERT(not job.update(true));
@@ -205,6 +236,7 @@ namespace pP::game::tests {
             detail::world_job::gated_worker_keeps_control_polling_and_cancellation_live,
             detail::world_job::cancel_during_real_physics_preparation_discards_candidate,
             detail::world_job::failure_is_retained_and_ready_candidate_can_still_be_cancelled,
+            detail::world_job::candidate_graphics_failure_retires_cpu_owner_and_preserves_failure,
         });
     };
     const UnitTest &gameWorldJobTests() noexcept {

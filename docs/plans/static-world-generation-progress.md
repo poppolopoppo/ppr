@@ -302,3 +302,37 @@ All 52 app control/fence leaves passed three shuffled loops in
 review passed. This increment supplies the transport; normal authored startup
 and the game-side publication handshake remain in the following integration.
 The complete ten-entry matrix and backend/UI/memory gates remain stage 7 work.
+
+Normal interactive startup now forwards the resolved root/profile/full-u64 seed
+into one coordinator-owned authored prepareWorld factory. The 100-agent profiling
+fixture remains explicit legacy generation. Physics and the complete owned u16
+presentation capture finish off-main before candidate graphics admission. The
+main lane moves at most eight chunk upload owners per admitted update, retaining
+unadmitted commands for retry. GPU readiness precedes matching activation;
+activation acknowledgment then publishes the CPU session and resets gameplay.
+The previously paused session remains intact before that boundary. Close settles
+an admitted activation before disposal, and Retry waits for the complete CPU/GPU
+transaction. Candidate dirty revisions are acknowledged only after activation;
+ordinary stale-generation frames cannot overwrite the newly active terrain.
+Large presentation/candidate/old-session disposal remains coordinator work.
+
+WorldJob retains bounded authored diagnostic text across cleanup; initial failure
+renders the details and offers Retry/Quit, while retained-world failures log them
+once before completion. The coordinator tests verify cancellation, committed
+publication, graphics failure retirement, and retained file/field diagnostics.
+The ASan application/game-test build passed 57 edges in
+`out/worldgen-integration-build.log`; world-job suites passed three shuffled loops
+in `out/worldgen-integration-tests.log` (6.04/5.18/4.33 s). Format Check, semantic
+style and independent Astra review passed. Initial vcpkg compiler detection
+stalled before compilation (`out/worldgen-integration-vcpkg-stalled.log`); configure
+reused the installed dependency set with VCPKG_MANIFEST_INSTALL=OFF, with no
+manifest/dependency edits. Restore dependency installation before a dependency
+change. Full authored interactive publication/cadence still requires runtime
+validation. Inspector/diagnostic modes, edit/collider coherence, checkpoint/full
+capture/restore/exports and the stage 7 matrix remain outstanding; this increment
+does not complete those requirements.
+
+The ASan interactive missing-root run passed normal timed close (exit 0) and
+reported the exact pack path/field in `out/worldgen-integration-invalid-runtime.log`.
+This establishes responsive failure/cleanup control flow, not measured cadence
+or visual inspection. A release authored-success run is queued separately.

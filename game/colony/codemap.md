@@ -11,7 +11,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
 | `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp` | Game-to-`sim::generate` wrapper |
-| `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Runtime generator integration remains pending. |
+| `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Normal interactive startup resolves these inputs on the world coordinator. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Actor, collider and renderer migration follows with generated sessions. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
@@ -62,7 +62,7 @@ overload loads the catalog on its calling worker. `Colony::install` adopts this
 owner without rerasterizing, while `grid()` preserves the existing edit boundary.
 `ColonyDriver::initPrepared` adopts it into an isolated candidate with metre-scale
 shared-contour collision and exactly one controlled actor at its validated start.
-The interactive job/publication migration remains in progress. Generated-session
+The interactive job captures candidate presentation off-main and publishes only after matching GPU activation. Generated-session
 tools resolve catalog terrain IDs: dig/demolition preserve protected material;
 construction validates complete globally aligned metre tiles, live actor overlap
 and pending reservations before recording progressive work.
@@ -76,5 +76,5 @@ Terrain presentation now carries owned decoded albedo images alongside numeric
 visual records. GridPass resolves source texture indices through a per-world
 BindlessTextureCache, samples with world-space periods and linearized authored
 tints, and retains canceled upload owners through a covering graphics fence.
-The normal asynchronous game job still needs its candidate publication handshake;
-this pass-local implementation does not yet change normal startup to the pack.
+The normal asynchronous game job uses the candidate publication handshake and
+configured authored pack. The explicit many-agent profiling fixture stays legacy.

@@ -2,6 +2,7 @@ module;
 
 export module game.application:world_job;
 
+import engine.app;
 import engine.core;
 import engine.sim;
 import game.colony.driver;
@@ -47,7 +48,7 @@ export namespace pP::colony {
     class WorldJob final {
     public:
         using Prepare = std23::move_only_function<Expected<std::unique_ptr<ColonyDriver>>(
-            const ColonyDriverDesc &, const sim::GenerationExecution &)>;
+            const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)>;
         explicit WorldJob(ParallelScheduler &chunks);
         WorldJob(ParallelScheduler &chunks, Prepare prepare);
         ~WorldJob() noexcept;
@@ -60,9 +61,16 @@ export namespace pP::colony {
         /// withheld until a successful loading-screen presentation is observed.
         [[nodiscard]] std::error_code update(bool loading_presented);
         [[nodiscard]] WorldJobView view() const noexcept;
+        [[nodiscard]] std::string_view diagnosticText() const noexcept;
         [[nodiscard]] bool busy() const noexcept;
         /// Call only in prepared state, after the final cancellation check.
         [[nodiscard]] std::unique_ptr<ColonyDriver> publish();
+        /// Exclusive main-lane access only after preparation; the job retains
+        /// ownership so cancellation/disposal releases large payloads off-main.
+        [[nodiscard]] GridPass::GridStagedFrame &presentation();
+        /// The accepted GPU activation makes publication irrevocable.
+        void commitPublication();
+        void discardPrepared(std::error_code error);
         /// Transfers the detached old session for coordinator-side disposal.
         /// It remains retained on queue-full and admission retries in update.
         void retire(std::unique_ptr<ColonyDriver> old);
@@ -78,9 +86,11 @@ export namespace pP::colony {
         std::shared_ptr<State> m_job{};
         std::future<std::error_code> m_task{};
         WorldJobView m_view{};
+        std::string m_diagnostic_text{};
         u64 m_next_id{1u};
         bool m_cleanup_pending{};
         bool m_cancelled{};
+        bool m_publication_committed{};
         [[nodiscard]] std::error_code admitCleanup_();
     };
 

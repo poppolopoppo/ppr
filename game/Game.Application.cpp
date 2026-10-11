@@ -101,7 +101,20 @@ namespace demo {
         bool m_pause_before_job{};
         colony::WorldJobView m_world_view{};
         u64 m_consumed_terminal_job{};
-        u64 m_requested_seed{1234567u};
+        u64 m_requested_seed{42u};
+        std::filesystem::path m_worldgen_root{};
+        std::string m_worldgen_profile{"frontier"};
+        std::shared_ptr<const GridWorldCommand> m_world_command{};
+        std::optional<GridWorldResult> m_world_result{};
+        u64 m_world_sequence{};
+        u64 m_candidate_generation{};
+        u64 m_candidate_fingerprint{};
+        std::size_t m_candidate_next_chunk{};
+        bool m_world_command_waiting{};
+        bool m_candidate_begun{};
+        bool m_candidate_ready{};
+        bool m_candidate_activated{};
+        bool m_candidate_cancel_needed{};
         TriangleBagHandle m_quad_bag{};
         MaterialHandle m_agent_material{};
         MaterialHandle m_path_material{};
@@ -313,12 +326,23 @@ namespace demo {
 
         [[nodiscard]] std::error_code requestWorld_(const u64 seed) {
             PPR_RETURN_ERROR_ON_FAIL(
+                Demo, not m_world_command and not m_world_result and not m_candidate_cancel_needed
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::device_or_resource_busy));
+            PPR_RETURN_ERROR_ON_FAIL(
                 Demo, m_world_job->request(
                           colony::ColonyDriverDesc{
                               .m_seed = seed,
                               .m_agent_count = m_agent_count,
                               .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u}));
             m_requested_seed = seed;
+            m_candidate_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u;
+            m_candidate_fingerprint = 0u;
+            m_candidate_next_chunk = 0u;
+            m_candidate_begun = false;
+            m_candidate_cancel_needed = false;
+            m_candidate_ready = false;
+            m_candidate_activated = false;
             clearControlInput_();
             m_pause_before_job = m_driver and m_driver->paused();
             if (m_driver) {
@@ -336,16 +360,110 @@ namespace demo {
             return {};
         }
 
-        [[nodiscard]] std::error_code advanceWorldJob_() {
-            if (m_close_requested.load(std::memory_order_acquire)) {
+        [[nodiscard]] bool activationPending_() const noexcept {
+            return m_world_command_waiting and
+                   m_world_command and
+                   m_world_command->m_kind == EGridWorldCommand::activate;
+        }
+
+        void queueWorldCommand_(const EGridWorldCommand kind) {
+            PPR_ASSERT(not m_world_command);
+            PPR_ASSERT(m_world_sequence != std::numeric_limits<u64>::max());
+            auto command = std::make_shared<GridWorldCommand>();
+            command->m_kind = kind;
+            command->m_sequence = ++m_world_sequence;
+            command->m_job_id = m_world_view.m_id;
+            command->m_world_generation = m_candidate_generation;
+            command->m_content_fingerprint = m_candidate_fingerprint;
+            if (kind == EGridWorldCommand::begin) {
+                auto &source = m_world_job->presentation();
+                auto &header = command->m_stage;
+                header.m_cell_size_m = source.m_cell_size_m;
+                header.m_has_catalog = source.m_has_catalog;
+                header.m_boundary_material_id = source.m_boundary_material_id;
+                header.m_content_fingerprint = source.m_content_fingerprint;
+                header.m_terrain_visuals = source.m_terrain_visuals;
+                header.m_terrain_images = source.m_terrain_images;
+                header.m_tiles = source.m_tiles;
+                command->m_final_batch = source.m_uploads.empty();
+            } else if (kind == EGridWorldCommand::append) {
+                auto &source = m_world_job->presentation();
+                const auto end = std::min(source.m_uploads.size(), m_candidate_next_chunk + 8u);
+                command->m_stage.m_uploads.reserve(end - m_candidate_next_chunk);
+                while (m_candidate_next_chunk < end) {
+                    command->m_stage.m_uploads.push_back(std::move(source.m_uploads[m_candidate_next_chunk++]));
+                }
+                command->m_final_batch = end == source.m_uploads.size();
+            }
+            m_world_command = std::move(command);
+        }
+
+        [[nodiscard]] std::error_code submitWorldCommand_() {
+            if (not m_world_command or m_world_command_waiting) {
+                return {};
+            }
+            // Set before dispatch: inline execution can synchronously return an acknowledgment.
+            m_world_command_waiting = true;
+            const auto error = submitGridWorld(m_world_command);
+            if (error) {
+                m_world_command_waiting = false;
+                if (error == std::errc::device_or_resource_busy) {
+                    return {}; // Retain the owned batch for non-waiting admission retry.
+                }
+                PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code advanceWorldJob_(const bool allow_preparation = true) {
+            if (m_world_result) {
+                const auto result = *std::exchange(m_world_result, std::nullopt);
+                m_world_command_waiting = false;
+                if (result.m_kind == EGridWorldCommand::begin and
+                    result.m_error == std::errc::device_or_resource_busy) {
+                    // Retirement is expected absence of admission, not failed generation.
+                } else {
+                    m_world_command.reset();
+                    if (result.m_error) {
+                        if (result.m_kind == EGridWorldCommand::activate or
+                            result.m_kind == EGridWorldCommand::cancel) {
+                            PPR_RETURN_ERROR_ON_FAIL(Demo, result.m_error);
+                        }
+                        m_candidate_cancel_needed = true;
+                        if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
+                            m_world_job->discardPrepared(result.m_error);
+                        }
+                    } else {
+                        switch (result.m_kind) {
+                            case EGridWorldCommand::begin: m_candidate_begun = true; break;
+                            case EGridWorldCommand::append:
+                            case EGridWorldCommand::advance: m_candidate_ready = result.m_ready; break;
+                            case EGridWorldCommand::activate:
+                                m_candidate_activated = true;
+                                m_candidate_begun = false;
+                                break;
+                            case EGridWorldCommand::cancel:
+                                m_candidate_begun = false;
+                                m_candidate_cancel_needed = false;
+                                break;
+                        }
+                    }
+                }
+            }
+            // Once activation is admitted, settle its acknowledgment before close/cancel.
+            // It is the transaction's irreversible publication boundary.
+            if (m_close_requested.load(std::memory_order_acquire) and
+                not activationPending_() and
+                not m_candidate_activated) {
                 m_regen_pending = false;
                 m_world_job->cancel();
             }
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented));
             const auto view = m_world_job->view();
             m_world_view = view;
-            if (view.m_state == colony::EWorldJobState::prepared and
-                not m_close_requested.load(std::memory_order_acquire)) {
+            if (m_candidate_activated and not m_world_published) {
+                m_world_job->commitPublication();
+                auto &presentation = m_world_job->presentation();
                 auto candidate = m_world_job->publish();
                 m_driver.swap(candidate);
                 m_world_job->retire(std::move(candidate));
@@ -358,9 +476,22 @@ namespace demo {
                         float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
                     m_pan_controller->resetInputState();
                 }
+                PPR_LOG(
+                    Demo, info, "new game published",
+                    {{"seed", m_driver->seed()}, {"generation", m_driver->worldGeneration()},
+                        {"content_fingerprint", m_candidate_fingerprint}});
                 m_driver_ready = true;
                 m_world_published = true;
-                m_initial_presentation = true;
+                m_initial_presentation = false;
+                Array<colony::ColonyDriver::DirtyChunk> acknowledged{};
+                acknowledged.reserve(presentation.m_ack_chunk_ids.size());
+                for (std::size_t index = 0u; index < presentation.m_ack_chunk_ids.size(); ++index) {
+                    const u32 id = presentation.m_ack_chunk_ids[index];
+                    acknowledged.push_back(
+                        {sim::ChunkPos{id % sim::kChunksPerEdge, id / sim::kChunksPerEdge},
+                            presentation.m_ack_revisions[index]});
+                }
+                m_driver->ackPresentChunks(acknowledged);
                 m_initial_graphics = {};
                 // A successful request starts a fresh session. Display settings
                 // belong to the application; gameplay tools and inspection do not.
@@ -372,11 +503,38 @@ namespace demo {
                 m_ui_state.m_notice = {};
                 m_ui_state.m_instruction = "Inspect: click a cell to pin it in the Inspector.";
                 m_hover = {};
-                m_grid_reset_pending = true;
-                m_present_full_refresh = true;
+                m_grid_reset_pending = false;
+                m_present_full_refresh = false;
                 m_dig_issued = 0u;
             }
-            if (not m_world_job->busy()) {
+
+            const bool prepared = view.m_state == colony::EWorldJobState::prepared;
+            if (not prepared and not m_world_published and not activationPending_()) {
+                if (m_world_command and
+                    not m_world_command_waiting and
+                    m_world_command->m_kind != EGridWorldCommand::cancel) {
+                    m_world_command.reset();
+                }
+                m_candidate_cancel_needed = m_candidate_cancel_needed or m_candidate_begun;
+            }
+            if (not m_world_command) {
+                if (m_candidate_cancel_needed) {
+                    queueWorldCommand_(EGridWorldCommand::cancel);
+                } else if (prepared and not m_world_published and allow_preparation) {
+                    auto &source = m_world_job->presentation();
+                    m_candidate_fingerprint = source.m_content_fingerprint;
+                    if (not m_candidate_begun) {
+                        queueWorldCommand_(EGridWorldCommand::begin);
+                    } else if (m_candidate_next_chunk < source.m_uploads.size()) {
+                        queueWorldCommand_(EGridWorldCommand::append);
+                    } else {
+                        queueWorldCommand_(
+                            m_candidate_ready ? EGridWorldCommand::activate : EGridWorldCommand::advance);
+                    }
+                }
+            }
+            PPR_RETURN_ERROR_ON_FAIL(Demo, submitWorldCommand_());
+            if (not m_world_job->busy() and not m_world_command and not m_candidate_cancel_needed) {
                 if (m_close_requested.load(std::memory_order_acquire)) {
                     if (m_driver) {
                         cancelToolGesture_();
@@ -421,8 +579,11 @@ namespace demo {
             if (ImGui::BeginPopupModal("Generating terrain", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 const auto view = m_world_view;
                 const bool closing = m_close_requested.load(std::memory_order_acquire);
-                const bool terminal = view.m_state == colony::EWorldJobState::failed or
-                                      view.m_state == colony::EWorldJobState::cancelled;
+                const bool terminal = not m_world_command and
+                                      not m_world_result and
+                                      not m_candidate_cancel_needed and
+                                      (view.m_state == colony::EWorldJobState::failed or
+                                          view.m_state == colony::EWorldJobState::cancelled);
                 const char *label = "Queued";
                 switch (view.m_stage) {
                     case colony::EWorldJobStage::queued: break;
@@ -444,11 +605,19 @@ namespace demo {
                 } else if (m_world_published) {
                     label = "Preparing graphics: waiting for world presentation";
                 }
+                if (view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
+                    label = activationPending_() ? "Activating new session"
+                            : m_candidate_ready  ? "Terrain ready"
+                                                 : "Preparing candidate graphics";
+                }
                 ImGui::TextUnformatted(label);
-                if (m_world_published) {
+                if (view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
                     ImGui::ProgressBar(
-                        static_cast<float>(m_initial_graphics.completedChunks()) / static_cast<float>(sim::kChunkCount),
-                        ImVec2{380.0f, 0.0f}, "Graphics preparation");
+                        static_cast<float>(m_candidate_next_chunk) / static_cast<float>(sim::kChunkCount),
+                        ImVec2{380.0f, 0.0f}, "Terrain batches staged");
+                }
+                if (m_world_published) {
+                    ImGui::ProgressBar(1.0f, ImVec2{380.0f, 0.0f}, "Graphics preparation");
                 }
                 ImGui::Text("Current stage %u/7", static_cast<unsigned>(view.m_stage) + 1u);
                 if (view.m_total != 0u and not m_world_published) {
@@ -461,6 +630,12 @@ namespace demo {
                 }
                 if (view.m_error) {
                     ImGui::TextWrapped("%s", view.m_error.message().c_str());
+                    const auto diagnostic = m_world_job->diagnosticText();
+                    if (not diagnostic.empty()) {
+                        ImGui::PushTextWrapPos(380.0f);
+                        ImGui::TextUnformatted(diagnostic.data(), diagnostic.data() + diagnostic.size());
+                        ImGui::PopTextWrapPos();
+                    }
                 }
                 if (terminal and not closing) {
                     if (ImGui::Button("Retry")) {
@@ -470,7 +645,10 @@ namespace demo {
                     if (ImGui::Button("Quit")) {
                         requestExit();
                     }
-                } else if (not closing and not m_world_published and ImGui::Button("Cancel")) {
+                } else if (not closing and
+                           not m_world_published and
+                           not activationPending_() and
+                           ImGui::Button("Cancel")) {
                     m_world_job->cancel();
                 }
                 ImGui::EndPopup();
@@ -2518,6 +2696,15 @@ namespace demo {
         using super_t = ApplicationEditor;
         using super_t::super_t;
 
+        void setWorldgenSettings(const game::GameSettings &settings) {
+            m_agent_count = 1u;
+            m_worldgen_root = settings.m_worldgen_root
+                                  ? *settings.m_worldgen_root
+                                  : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
+            m_worldgen_profile = settings.m_worldgen_profile;
+            m_requested_seed = settings.m_worldgen_seed;
+        }
+
         /// Profiling fixture override (agent count for the driver spawn path).
         /// Defaults to the production count; `--profile100` sets 100.
         void setAgentCount(const u32 count) noexcept {
@@ -2546,10 +2733,18 @@ namespace demo {
 
     protected:
         [[nodiscard]] std::error_code serviceControls_() override {
-            if (m_close_requested.load(std::memory_order_acquire)) {
-                return advanceWorldJob_();
+            return m_world_job ? advanceWorldJob_(false) : std::error_code{};
+        }
+
+        void onGridWorldCompleted_(const GridWorldResult &result) override {
+            if (m_world_command and
+                m_world_command_waiting and
+                result.m_sequence == m_world_command->m_sequence and
+                result.m_job_id == m_world_command->m_job_id and
+                result.m_world_generation == m_candidate_generation and
+                result.m_content_fingerprint == m_world_command->m_content_fingerprint) {
+                m_world_result = result;
             }
-            return {};
         }
 
         [[nodiscard]] bool deferGracefulExit_() const noexcept override {
@@ -2562,11 +2757,30 @@ namespace demo {
 
         [[nodiscard]] std::error_code initialize() override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::initialize());
-            m_world_job = std::make_unique<colony::WorldJob>(parallel::backgroundPool());
+            const auto &clock = ITimerClock::steady();
+            if (m_agent_count == 100u) {
+                // Explicit many-agent profiling fixture retains the numeric legacy recipe.
+                m_world_job = std::make_unique<colony::WorldJob>(parallel::backgroundPool());
+            } else {
+                m_world_job = std::make_unique<colony::WorldJob>(
+                    parallel::backgroundPool(),
+                    [root = m_worldgen_root, profile = m_worldgen_profile, &clock](
+                        const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                        config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<colony::ColonyDriver>> {
+                        auto prepared = colony::prepareWorld(
+                            root, profile, request.m_seed, clock, diagnostics, execution);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
+                        auto driver = std::make_unique<colony::ColonyDriver>();
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(
+                            Demo, driver->initPrepared(request, std::move(*prepared), &execution));
+                        return driver;
+                    });
+            }
             m_close_requested.store(false, std::memory_order_release);
             m_defer_close.store(true, std::memory_order_release);
             m_loading_presented = false;
-            PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(1234567u));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
 
             auto camera_controller = std::make_unique<PanCameraController>();
             constexpr float ortho_scale = 0.5f;
@@ -3522,6 +3736,7 @@ int runGame(const int argc, char *argv[]) try {
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);
+    app.setWorldgenSettings(settings);
     // Optional larger workload for external profiler captures.
     if (settings.m_profile100) {
         app.setAgentCount(100u);

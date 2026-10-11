@@ -4,18 +4,22 @@ module;
 
 module game.application;
 import :world_job;
+import game.colony.sim_packet;
 import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldJobs, info, none)
     struct WorldJob::State {
         ColonyDriverDesc m_request{};
+        config::Diagnostics m_diagnostics{};
+        std::string m_diagnostic_text{};
         SharedContext m_context{};
         context::CancelClauseFunc m_cancel{};
         std::atomic<sim::EGenerationStage> m_stage{sim::EGenerationStage::layout};
         std::atomic<u32> m_completed{};
         std::unique_ptr<ColonyDriver> m_candidate{};
         std::unique_ptr<ColonyDriver> m_retired{};
+        std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
     };
 
     WorldJob::WorldJob(ParallelScheduler &chunks) : WorldJob(chunks, Prepare{}) {
@@ -27,8 +31,8 @@ namespace pP::colony {
               "World coordinator", 1u, 4u * static_cast<std::size_t>(hal::page_granularity), context::background(),
               hal::EPriority::low) {
         if (not m_prepare) {
-            m_prepare = [](const ColonyDriverDesc &request,
-                            const sim::GenerationExecution &execution) -> Expected<std::unique_ptr<ColonyDriver>> {
+            m_prepare = [](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                            config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
                 auto driver = std::make_unique<ColonyDriver>();
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, driver->init(request, &execution));
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, execution.m_context->error());
@@ -49,11 +53,13 @@ namespace pP::colony {
         if (m_next_id == 0u or request.m_world_generation == 0u) {
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::value_too_large);
         }
+        m_diagnostic_text.clear();
         m_job = std::make_shared<State>();
         m_job->m_request = request;
         std::tie(m_job->m_context, m_job->m_cancel) = context::withCancelClause(context::background());
         m_view = WorldJobView{.m_id = m_next_id++, .m_state = EWorldJobState::queued};
         m_cancelled = false;
+        m_publication_committed = false;
         return {};
     }
 
@@ -62,7 +68,7 @@ namespace pP::colony {
     }
 
     void WorldJob::cancel() noexcept {
-        if (m_job and m_view.m_state != EWorldJobState::retiring) {
+        if (m_job and not m_publication_committed and m_view.m_state != EWorldJobState::retiring) {
             m_cancelled = true;
             m_job->m_cancel(std::make_error_code(std::errc::operation_canceled));
         }
@@ -90,11 +96,16 @@ namespace pP::colony {
         return result;
     }
 
+    std::string_view WorldJob::diagnosticText() const noexcept {
+        return m_diagnostic_text;
+    }
+
     std::error_code WorldJob::admitCleanup_() {
         const auto state = m_job;
         auto task = m_coordinator.schedule(
             [state](const IContext &) -> std::error_code {
                 std::error_code error{};
+                state->m_presentation.reset();
                 if (state->m_candidate) {
                     PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, state->m_candidate->shutdown());
                     state->m_candidate.reset();
@@ -140,9 +151,24 @@ namespace pP::colony {
                         .m_completed_chunks = &state->m_completed,
                         .m_stage = &state->m_stage};
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
-                    auto candidate = m_prepare(state->m_request, execution);
+                    auto candidate = m_prepare(state->m_request, execution, state->m_diagnostics);
+                    if (not candidate) {
+                        state->m_diagnostic_text = state->m_diagnostics.format();
+                        if (state->m_diagnostic_text.size() > 64u * 1024u) {
+                            state->m_diagnostic_text.resize(64u * 1024u);
+                            state->m_diagnostic_text += "\nFurther diagnostics omitted.";
+                        }
+                        if (not state->m_diagnostic_text.empty()) {
+                            PPR_LOG(
+                                WorldJobs, error, "world content preparation failed",
+                                {{"diagnostics", state->m_diagnostic_text}});
+                        }
+                    }
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, candidate);
                     state->m_candidate = std::move(*candidate);
+                    auto presentation = captureWorldPresentation(*state->m_candidate, execution.m_context);
+                    PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
+                    state->m_presentation = std::make_unique<GridPass::GridStagedFrame>(std::move(*presentation));
                     return {};
                 },
                 std::nullopt, ParallelScheduler::drop_if_full);
@@ -163,6 +189,7 @@ namespace pP::colony {
                                                   : EWorldJobState::succeeded;
                 return {};
             }
+            m_diagnostic_text = std::move(m_job->m_diagnostic_text);
             m_view.m_error = error;
             if (error or m_cancelled) {
                 m_view.m_state = EWorldJobState::retiring;
@@ -183,6 +210,24 @@ namespace pP::colony {
     std::unique_ptr<ColonyDriver> WorldJob::publish() {
         PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_cancelled);
         return std::move(m_job->m_candidate);
+    }
+
+    GridPass::GridStagedFrame &WorldJob::presentation() {
+        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and m_job->m_presentation);
+        return *m_job->m_presentation;
+    }
+
+    void WorldJob::commitPublication() {
+        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_cancelled);
+        m_publication_committed = true;
+    }
+
+    void WorldJob::discardPrepared(const std::error_code error) {
+        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_publication_committed and error);
+        m_view.m_error = error;
+        m_view.m_state = EWorldJobState::retiring;
+        m_view.m_stage = EWorldJobStage::retiring;
+        m_cleanup_pending = true;
     }
 
     void WorldJob::retire(std::unique_ptr<ColonyDriver> old) {
