@@ -197,6 +197,10 @@ namespace pP::colony {
         return m_colony.preparedWorld();
     }
 
+    bool ColonyDriver::initialMatterBaselineValid() const noexcept {
+        return m_initial_matter_baseline_valid;
+    }
+
     const ContentCatalog *ColonyDriver::contentCatalog() const noexcept {
         const auto *const prepared = preparedWorld();
         return prepared ? &prepared->catalog() : nullptr;
@@ -378,6 +382,7 @@ namespace pP::colony {
         m_agent_count = kAgentCount;
         m_speed = 1u;
         m_paused = false;
+        m_initial_matter_baseline_valid = true;
         return error;
     }
 
@@ -885,6 +890,8 @@ namespace pP::colony {
         if (touched.empty()) {
             return;
         }
+        // Initial matter describes the generated geometry, never a live solver.
+        m_initial_matter_baseline_valid = false;
         // New dirt means grid cells changed, so any cached views are stale.
         invalidateColliderCache();
         m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};

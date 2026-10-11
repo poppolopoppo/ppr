@@ -80,6 +80,7 @@ export namespace pP::colony {
         u32 m_agent_count{kAgentCount};
         u32 m_speed{1u};
         bool m_paused{false};
+        bool m_initial_matter_baseline_valid{true};
         std::optional<sim::Entity> m_controlled{};
         PlayerCommand m_player_command{};
         sim::Registry m_registry{};
@@ -199,6 +200,7 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code initPrepared(
             const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *execution = nullptr);
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
+        [[nodiscard]] bool initialMatterBaselineValid() const noexcept;
         // Borrowed immutable catalog; absent for explicit legacy fixtures.
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u16 boundaryMaterial() const noexcept;

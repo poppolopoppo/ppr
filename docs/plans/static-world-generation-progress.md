@@ -336,3 +336,21 @@ The ASan interactive missing-root run passed normal timed close (exit 0) and
 reported the exact pack path/field in `out/worldgen-integration-invalid-runtime.log`.
 This establishes responsive failure/cleanup control flow, not measured cadence
 or visual inspection. A release authored-success run is queued separately.
+
+The Inspector now resolves terrain names from the active catalog and shows the
+sampled biome, authored feature footprints, and initial-matter material,
+temperature, density and global fill height with an explicit unsimulated label.
+Successful terrain changes invalidate the baseline preview; no-op digging keeps
+it valid. Nearest-actor inspection measures metres. Generation details expose
+pack/profile/seed, content identity, metric, phase times and metadata counts;
+reload uses the existing confirmed asynchronous new-game transaction.
+
+The ASan application/app/game build passed in `out/worldgen-inspector-build.log`.
+All 21 sim-packet leaves passed three shuffled loops in
+`out/worldgen-inspector-tests.log` (52.68/53.90/54.35 s), including no-op versus
+actual edit invalidation. Format Check, touched semantic style and independent
+Astra review passed. The earlier Release authored run exited cleanly after
+150 seconds (`out/worldgen-integration-valid-runtime.log`), but its compiled
+logging threshold filters publication messages; this is not proof of visual
+publication or measured UI cadence. Diagnostic modes, coherent edit/collider
+publication, checkpoint capture/restore/exports and final acceptance remain open.

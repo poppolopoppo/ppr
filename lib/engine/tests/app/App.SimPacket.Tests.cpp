@@ -265,11 +265,17 @@ namespace pP::tests::detail {
             // clears it to vacuum, element 0.)
             PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
             driver.setPaused(true);
+            PPR_TEST_ASSERT(driver.initialMatterBaselineValid());
+            PPR_TEST_ASSERT(not driver.grid().setCell({11u, 11u}, sim::Cell{}));
+            PPR_TEST_ASSERT(not driver.requestDig({11u, 11u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+            PPR_TEST_ASSERT(driver.initialMatterBaselineValid()); // An empty dig changes no baseline geometry.
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
             PPR_TEST_ASSERT(driver.lastEditChunks().size() == 1u);
             PPR_TEST_ASSERT(driver.lastEditChunks()[0u] == sim::ChunkPos{0u, 0u});
             PPR_TEST_ASSERT(driver.digTotal() == 1u);
+            PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
 
             // Real capture: residency, the present chunk, and its cells.
             colony::SimFramePacket packet = colony::makeSimFramePacket(9u, driver);

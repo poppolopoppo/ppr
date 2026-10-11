@@ -10,6 +10,8 @@ import engine.core;
 import engine.sim;
 import game.colony.agents;
 import game.colony.driver;
+import game.colony.content;
+import game.colony.worldgen;
 import game.display;
 import std;
 
@@ -200,14 +202,23 @@ namespace pP::colony {
         }
 
         /// "Cell x, y · element · temperature" with honest absent states.
-        void drawCellLine(const CellRead &cell) {
+        void drawCellLine(const ColonyDriver &driver, const CellRead &cell) {
             ImGui::Text("Cell %u, %u", cell.m_pos.m_x, cell.m_pos.m_y);
             ImGui::SameLine();
             if (not cell.m_resident or not cell.m_has_cell) {
                 ImGui::TextDisabled("(chunk not resident)");
                 return;
             }
-            ImGui::TextDisabled("· %s", elementName(cell.m_element));
+            const auto *const catalog = driver.contentCatalog();
+            if (catalog == nullptr) {
+                ImGui::TextDisabled("· %s", elementName(cell.m_element));
+            } else if (cell.m_element == 0u) {
+                ImGui::TextDisabled("· Empty terrain");
+            } else if (const auto *const material = catalog->findMaterial(cell.m_element)) {
+                ImGui::TextDisabled("· %s (ID %u)", material->m_display_name.c_str(), cell.m_element);
+            } else {
+                ImGui::TextDisabled("· Invalid terrain material ID %u", cell.m_element);
+            }
             if (cell.m_element != kElementVacuum) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("· %.1f K", cell.m_temperature);
@@ -227,7 +238,7 @@ namespace pP::colony {
 
             bool wrote_row = false;
             if (view.m_hover.m_world) {
-                drawCellLine(readCell(driver.grid(), view.m_hover.m_target));
+                drawCellLine(driver, readCell(driver.grid(), view.m_hover.m_target));
                 wrote_row = true;
                 if (view.m_hover.m_reason[0] != '\0') {
                     ImGui::SameLine();
@@ -250,7 +261,7 @@ namespace pP::colony {
                 ImGui::Text("Pinned:");
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
-                drawCellLine(readCell(driver.grid(), *state.m_pinned));
+                drawCellLine(driver, readCell(driver.grid(), *state.m_pinned));
             }
 
             if (state.m_notice.visible()) {
@@ -552,7 +563,9 @@ namespace pP::colony {
         /// Persistent Inspector: Hovering vs Pinned header, coordinates,
         /// element, temperature, pin/unpin, the Focus control, the selected
         /// colonist's stable key with its follow state, and the nearest
-        /// colonist within 8 cells with honest empty states.
+        /// colonist within 8 metres with honest empty states.
+        void drawGeneratedCellMetadata_(const ColonyDriver &driver, sim::GlobalCellPos target);
+
         void drawInspector_(
             const ColonyDriver &driver, const ColonyUiView &view, ColonyUiState &state,
             std::optional<ColonyIntent> &intent) {
@@ -577,7 +590,8 @@ namespace pP::colony {
             }
 
             if (target) {
-                drawCellLine(readCell(driver.grid(), *target));
+                drawCellLine(driver, readCell(driver.grid(), *target));
+                drawGeneratedCellMetadata_(driver, *target);
             } else {
                 ImGui::TextDisabled("No cell under the pointer.");
             }
@@ -633,10 +647,10 @@ namespace pP::colony {
                 return;
             }
 
-            // Nearest colonist within 8 cells of the inspected cell.
+            // Nearest colonist within 8 metres of the inspected cell.
             ImGui::Spacing();
-            const float target_x = static_cast<float>(target->m_x) + 0.5f;
-            const float target_y = static_cast<float>(target->m_y) + 0.5f;
+            const float target_x = (static_cast<float>(target->m_x) + 0.5f) / driver.cellsPerMetre();
+            const float target_y = (static_cast<float>(target->m_y) + 0.5f) / driver.cellsPerMetre();
             std::optional<std::size_t> nearest{};
             float nearest_d2 = 8.0f * 8.0f;
             const std::span<const AgentSummary> agents = driver.agentSummaries();
@@ -651,7 +665,7 @@ namespace pP::colony {
             }
 
             if (not nearest.has_value()) {
-                ImGui::TextDisabled("No colonist within 8 cells.");
+                ImGui::TextDisabled("No colonist within 8 m.");
                 return;
             }
 
@@ -663,6 +677,91 @@ namespace pP::colony {
                 ImGui::TextDisabled("Plan  idle (no plan)");
             }
             ImGui::TextDisabled("A-number is the key's low 32 bits; selection holds the whole 64-bit key.");
+        }
+
+        void drawWorldGeneration_(const ColonyDriver &driver, std::optional<ColonyIntent> &intent) {
+            const auto *const prepared = driver.preparedWorld();
+            if (prepared == nullptr or not ImGui::CollapsingHeader("World generation")) {
+                return;
+            }
+            const auto &descriptor = prepared->descriptor();
+            const auto &world = prepared->generated();
+            const auto pack = prepared->catalog().packId();
+            ImGui::Text("Pack: %.*s", static_cast<int>(pack.size()), pack.data());
+            ImGui::Text("Profile: %s", descriptor.m_profile.c_str());
+            ImGui::Text("Seed: %016llx", static_cast<unsigned long long>(descriptor.m_seed));
+            ImGui::Text("Generator: %u", descriptor.m_generator_version);
+            ImGui::Text("Content: %016llx", static_cast<unsigned long long>(descriptor.m_content_fingerprint));
+            ImGui::TextDisabled("3 fine cells/metre; reference thickness 1 m");
+            constexpr std::array<const char *, 5u> phases{
+                "Layout", "Features", "Raster", "Initial matter", "Validation"};
+            for (std::size_t index = 0u; index < phases.size(); ++index) {
+                ImGui::Text("%s: %.3f s", phases[index], time::seconds(world.m_report.m_phase_times[index]));
+            }
+            ImGui::Text(
+                "Sites: %llu; features: %llu", static_cast<unsigned long long>(world.m_layout.sites().size()),
+                static_cast<unsigned long long>(world.m_geometry.m_instances.size()));
+            ImGui::Text(
+                "Initial matter regions: %llu", static_cast<unsigned long long>(world.m_matter.m_regions.size()));
+            ImGui::TextDisabled(
+                driver.initialMatterBaselineValid() ? "Initial matter: unsimulated baseline"
+                                                    : "Initial matter preview invalidated by terrain edits");
+            if (ImGui::Button("Reload content and start new game")) {
+                intent = ColonyIntent{.m_kind = EColonyIntent::regenerate};
+            }
+        }
+
+        void drawGeneratedCellMetadata_(const ColonyDriver &driver, const sim::GlobalCellPos target) {
+            const auto *const prepared = driver.preparedWorld();
+            if (prepared == nullptr) {
+                return;
+            }
+            const auto &world = prepared->generated();
+            const auto &catalog = prepared->catalog();
+            const auto &recipe = world.m_plan.recipe();
+            const double x_m = (static_cast<double>(target.m_x) + 0.5) * recipe.m_cell_size_m;
+            const double y_m = (static_cast<double>(target.m_y) + 0.5) * recipe.m_cell_size_m;
+            const u32 biome = sim::generationBiomeAt(world.m_plan, world.m_layout, x_m, y_m);
+            if (biome < catalog.biomes().size()) {
+                ImGui::Text("Biome: %s", catalog.biomes()[biome].m_display_name.c_str());
+            }
+            for (const auto &instance: world.m_geometry.m_instances) {
+                if (instance.m_feature >= recipe.m_features.size() or instance.m_feature >= catalog.features().size()) {
+                    continue;
+                }
+                const auto bounds = recipe.m_features[instance.m_feature].m_bounds;
+                const i64 x = static_cast<i64>(target.m_x) - instance.m_origin_x;
+                const i64 y = static_cast<i64>(target.m_y) - instance.m_origin_y;
+                if (x >= bounds.m_min_x and x < bounds.m_max_x and y >= bounds.m_min_y and y < bounds.m_max_y) {
+                    ImGui::Text("Feature footprint: %s", catalog.features()[instance.m_feature].m_display_name.c_str());
+                }
+            }
+            if (not driver.initialMatterBaselineValid()) {
+                ImGui::TextDisabled("Initial matter baseline hidden: terrain edited");
+                return;
+            }
+            // Emitted spans are sorted by row then X. Inspect one point without
+            // walking the whole world or the potentially million-span baseline.
+            for (const auto &region: world.m_matter.m_regions) {
+                const auto found = std::lower_bound(
+                    region.m_spans.begin(), region.m_spans.end(), target,
+                    [](const sim::InitialMatterSpan &span, const sim::GlobalCellPos cell) {
+                        return span.m_y < cell.m_y or (span.m_y == cell.m_y and span.m_end_x <= cell.m_x);
+                    });
+                if (found == region.m_spans.end() or found->m_y != target.m_y or target.m_x < found->m_begin_x) {
+                    continue;
+                }
+                if (const auto *const material = catalog.findMaterial(region.m_material)) {
+                    ImGui::Text("Initial matter (unsimulated): %s", material->m_display_name.c_str());
+                    ImGui::Text("Initial temperature: %.1f K", region.m_temperature_k);
+                    ImGui::Text("Initial density: %.3f kg/m3", region.m_bulk_density_kg_m3);
+                    if (region.m_fill_height_m) {
+                        ImGui::Text("Baseline fill height: %.3f m", *region.m_fill_height_m);
+                    }
+                }
+                return; // The baseline format assigns at most one material per span cell.
+            }
+            ImGui::TextDisabled("No initial matter assigned here");
         }
 
         /// Colony section: the Slice 1/2 counters, then the colonist list —
@@ -926,6 +1025,7 @@ namespace pP::colony {
             if (state.m_tab == EColonyPanelTab::performance) {
                 drawPerformance_(view);
             } else {
+                drawWorldGeneration_(driver, intent);
                 drawColonySection_(driver, view, shortcuts, state, intent);
             }
             ImGui::EndChild();

@@ -78,3 +78,8 @@ BindlessTextureCache, samples with world-space periods and linearized authored
 tints, and retains canceled upload owners through a covering graphics fence.
 The normal asynchronous game job uses the candidate publication handshake and
 configured authored pack. The explicit many-agent profiling fixture stays legacy.
+Inspector terrain names use the active catalog; biome and feature footprint
+queries use prepared generation metadata. Initial matter is explicitly baseline,
+unsimulated metadata and is hidden after a successful terrain change. The
+Generation panel reports descriptor, metric and phase counters and reloads via
+the confirmed new-game path. Actor inspection distances are in metres.
