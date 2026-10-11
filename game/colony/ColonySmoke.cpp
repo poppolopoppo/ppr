@@ -18,6 +18,9 @@ import game.colony.digtool;
 import game.colony.driver;
 import game.colony.pathfinding;
 import game.colony.translator;
+import game.colony.worldgen;
+import game.colony.metric;
+import game.colony.content;
 import std;
 
 namespace pP::colony {
@@ -27,6 +30,67 @@ namespace pP::colony {
         constexpr u64 kSeed = 1234567u;
         constexpr u32 kExtent = 256u;
         constexpr u32 kCenter = kExtent / 2u;
+
+        [[nodiscard]] std::error_code checkPreparedSession() {
+            const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+            config::Diagnostics diagnostics{};
+            auto &pool = parallel::backgroundPool();
+            auto prepared = prepareWorld(root, "frontier", 42u, ITimerClock::steady(), diagnostics, {.m_pool = &pool});
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, prepared);
+            const auto terrain_checksum = prepared->generated().m_report.m_terrain_checksum;
+            const auto start = prepared->generated().m_start;
+            const auto resident = prepared->grid().residentCells({15u, 23u});
+            if (not resident) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            const auto *const payload = resident->data();
+            auto driver = std::make_unique<ColonyDriver>();
+            PPR_RETURN_ERROR_ON_FAIL(
+                ColonySmoke, driver->initPrepared(
+                                 {.m_seed = 42u, .m_agent_count = 1u, .m_world_generation = 7u}, std::move(*prepared)));
+            const auto actor = driver->controlledEntity();
+            if (not actor or
+                driver->cellsPerMetre() != 3u or
+                driver->worldGeneration() != 7u or
+                driver->agentSummaries().size() != 1u or
+                driver->grid().residentCells({15u, 23u})->data() != payload) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            // Adoption must preserve the complete owner and payload, including
+            // its validated start, rather than rerasterizing or copying the grid.
+            const auto *const owner = driver->preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->setPlayerCommand({1, 0}));
+            for (u32 tick = 0u; tick < 60u; ++tick) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->update(TimeSpan{std::chrono::seconds{1}} / 60u));
+            }
+            const auto *const pose = driver->registry().get<sim::BodyState>(*actor);
+            if (not pose or
+                pose->m_x <= start.m_spawn_x_m + 0.2 or
+                std::abs(pose->m_y - start.m_floor_y_m - 0.9) > 0.1 or
+                driver->registry().get<Plan>(*actor) or
+                driver->registry().get<PathReq>(*actor)) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            const auto failed = prepareWorld(owner->catalog(), "unknown", 42u, ITimerClock::steady());
+            if (failed or
+                driver->preparedWorld() != owner or
+                driver->tickCount() != 60u or
+                driver->regenerate(43u) != std::errc::operation_not_permitted) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->restoreBodies());
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->update(TimeSpan{std::chrono::seconds{1}} / 60u));
+            if (driver->registry().get<sim::BodyState>(*actor)->m_velocity_x != 0.0f) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->shutdown());
+            if (driver->preparedWorld() or driver->controlledEntity()) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            std::println(
+                "SMOKE-PREPARED profile=frontier seed=42 terrain={:016x} ticks=61 result=PASS", terrain_checksum);
+            return {};
+        }
 
         [[nodiscard]] Expected<sim::GlobalCellPos> findCoreCell(const sim::ChunkGrid &grid) {
             // Choose an actual generated temperate cell rather than assuming
@@ -2994,6 +3058,8 @@ namespace pP::colony {
         }
         // Stage entries go to stderr (unbuffered): on abort/exception the
         // last entered stage survives, which buffered stdout would lose.
+        std::println(stderr, "SMOKE-STAGE prepared-session");
+        PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, checkPreparedSession());
         std::println(stderr, "SMOKE-STAGE pathfinding");
         const auto paths = checkPathfinding();
         if (not paths) {
@@ -3041,7 +3107,7 @@ namespace pP::colony {
         } catch (const std::invalid_argument &) {
             result = std::make_error_code(std::errc::invalid_argument);
         } catch (const std::bad_alloc &) {
-            result = std::make_error_code(std::errc::not_enough_memory);
+            PPR_RETHROW(ColonySmoke);
         } catch (...) {
             result = std::make_error_code(std::errc::state_not_recoverable);
         }

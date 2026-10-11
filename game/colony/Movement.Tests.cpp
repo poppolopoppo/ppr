@@ -14,6 +14,36 @@ import std;
 namespace pP::game::tests::detail::movement {
     using namespace colony;
 
+    PPR_UNIT_TEST (moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        driver.grid() = sim::ChunkGrid{};
+        for (u32 x = 0u; x < 1024u; ++x) {
+            PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
+        }
+        auto &registry = driver.registry();
+        sim::Entity actor{};
+        for (const auto &[entity, agent]: registry.view<Agent>()) {
+            (void) agent;
+            actor = entity;
+        }
+        registry.get<Agent>(actor)->m_speed = 300.0f;
+        *registry.get<sim::BodyState>(actor) = {100.0f, 42.0f};
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        PPR_TEST_ASSERT(not driver.assignControl(actor));
+        driver.grid().clearAllDirty();
+        PPR_TEST_ASSERT(driver.chainCount({4u, 0u}) == 0u);
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+        for (u32 tick = 0u; tick < 80u; ++tick) {
+            PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u));
+        }
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(actor)->m_x > 450.0f);
+        PPR_TEST_ASSERT(registry.get<sim::BodyState>(actor)->m_y > 41.0f);
+        PPR_TEST_ASSERT(driver.chainCount({4u, 0u}) > 0u);
+        PPR_TEST_ASSERT(driver.chainCount({0u, 0u}) == 0u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
     PPR_UNIT_TEST (metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body) {
         sim::Registry registry;
         sim::ChunkGrid grid;
@@ -235,7 +265,8 @@ namespace pP::game::tests::detail::movement {
 namespace pP::game::tests {
     const UnitTest movement = UnitTest::Named("movement") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::movement::metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body,
+            {detail::movement::moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners,
+                detail::movement::metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body,
                 detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,
                 detail::movement::unplanned_actor_is_idle_but_missing_required_state_fails,
                 detail::movement::movement_preserves_falling_momentum_and_restores_ladder_gravity,

@@ -10,6 +10,7 @@ import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
 import game.colony.translator;
+import game.colony.worldgen;
 
 import std;
 
@@ -138,6 +139,9 @@ export namespace pP::colony {
     private:
         std::error_code initPhysics();
 
+        [[nodiscard]] std::error_code initializeRuntime(
+            const ColonyDriverDesc &desc, TimeSpan period, const sim::GenerationExecution *execution);
+
         void shutdownPhysics() noexcept;
 
         std::error_code spawnColonyAgents(const IContext *context = nullptr);
@@ -177,15 +181,24 @@ export namespace pP::colony {
         /// verbatim. Returns false when the full preparation must run instead
         /// (empty history, inconsistent sizes, or out-of-range input); outputs
         /// are untouched on false. Reuse proof lives on the definition.
-        [[nodiscard]] bool buildColliderViewsDelta(
+        [[nodiscard]] Expected<bool> buildColliderViewsDelta(
             std::span<const sim::ChunkPos> sorted_needed, std::span<const sim::ChunkPos> dirty,
             Array<sim::ChunkPos> &listed_out, Array<Array<u16>> &pool_out,
             Array<physics::ColliderChunkView> &views_out);
+
+        [[nodiscard]] std::error_code copyColliderChunk(sim::ChunkPos position, Array<u16> &occupancy) const;
 
     public:
     public:
         [[nodiscard]] std::error_code init(
             const ColonyDriverDesc &desc, const sim::GenerationExecution *execution = nullptr);
+
+        /// Adopts a complete generated owner at this driver's stable address.
+        /// Prepared sessions start one controlled actor at the validated start.
+        [[nodiscard]] std::error_code initPrepared(
+            const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *execution = nullptr);
+        [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
+        [[nodiscard]] u32 cellsPerMetre() const noexcept;
 
         [[nodiscard]] std::error_code shutdown();
 
