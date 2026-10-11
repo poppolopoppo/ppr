@@ -47,16 +47,21 @@ barriers and drawing share one encoder and submission.
   `[shader("fragment")] fragmentMain`. The name is `vertexIndirectMain`, not `vertexMain`; the C++
   looks it up by string.
 - `grid_tiles.slang` shares the row-major, row-vector convention (`mul(world, m_view_projection)`,
-  `view * projection`, `[0,1]` depth, no transpose/Y flip) on the z = 0 plane; no lighting, texturing,
-  or GI inputs. `ConstantBuffer<GridFrame> g_grid_frame` carries only the unjittered `m_view_projection`.
+  `view * projection`, `[0,1]` depth, no transpose/Y flip) on the z = 0 plane. Its
+  `ConstantBuffer<GridFrame> g_grid_frame` carries the unjittered matrix, visibility
+  lookup flag, cell metric, surface/diagnostic mode and boundary material ID.
 - `grid_tiles.slang` draws six non-indexed verts (two triangles) per tile rect from
   `StructuredBuffer<GridTilePayload> g_tiles` (CPU-mirrored 32 B: rect + material + cell-word base +
-  flags + pad); rasterizer culling is off. The per-draw base is entry-point `uniform uint g_tile_base`
-  for the same globalParams-overlap reason as the mesh shader.
+  flags + pad); rasterizer culling is off. Payload tables begin at zero; the
+  vertex entry has no ordinary-data parameter. GPU draws resolve compact visible
+  IDs, and reference indirect draws use their instance offsets. Removing the
+  former always-zero tile-base parameter avoids a second entry-point push-constant
+  range on Vulkan alongside the fragment sampler handle.
 - `grid_tiles.slang` per-cell lane: when payload flag bit 0 is set, the fragment resolves the cell
   through packed `StructuredBuffer<uint> g_cell_materials` (8192 words per chunk, halfword per cell,
-  `0xFFFF` discards); otherwise the payload material is used. Tint is deterministic from the low 3
-  material bits (8 dim/bright cube corners), with no palette table or texture.
+  `0xFFFF` discards); otherwise the payload material is used. Catalog terrain
+  resolves bindless textures and metre-period UVs; diagnostic modes use an owned
+  palette. The low-three-bit tint remains only for explicit legacy fixtures.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
@@ -71,8 +76,8 @@ barriers and drawing share one encoder and submission.
 `fragmentMain` linked into the pass-owned program and pipeline variants; `ShaderCursor` binds frame
 data, the structured buffers, the `g_payload_base` per draw group, and the descriptor heap before
 each draw. `GridPass::initialize` follows the same chain for `<content_dir>/shaders/grid_tiles.slang`
-(`vertexGridMain` + `fragmentGridMain`), binding `g_grid_frame`, `g_tiles`, `g_cell_materials`, and the
-`g_tile_base` per draw group.
+(`vertexGridMain` + `fragmentGridMain`), binding frame constants, tile/cell and
+contour/diagnostic buffers, and the bindless texture heap/shared sampler.
 
 ## Integration
 

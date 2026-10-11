@@ -124,7 +124,8 @@ namespace pP::tests::detail {
             desc.mipCount = 1u;
             desc.format = rhi::Format::RGBA8Unorm;
             desc.memoryType = rhi::MemoryType::DeviceLocal;
-            desc.usage = rhi::TextureUsage::RenderTarget;
+            desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
             desc.defaultState = rhi::ResourceState::RenderTarget;
             desc.label = "gate render target";
             rhi::ComPtr<rhi::ITexture> target{};
@@ -149,7 +150,8 @@ namespace pP::tests::detail {
             desc.format = rhi::Format::RGBA8Unorm;
             desc.sampleCount = sample_count;
             desc.memoryType = rhi::MemoryType::DeviceLocal;
-            desc.usage = rhi::TextureUsage::RenderTarget;
+            desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
             desc.defaultState = rhi::ResourceState::RenderTarget;
             desc.label = label;
             rhi::ComPtr<rhi::ITexture> target{};
@@ -1340,6 +1342,9 @@ namespace pP::tests::detail {
                     PreRenderCallback{prepare}));
                 grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
+                // The host wait proves GPU completion; refresh the renderer's
+                // observed fence before testing physical-slot reuse.
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
             }
             for (u32 chunk = 0u; chunk < GridPass::kGridTileCacheCapacity; ++chunk) {
                 PPR_TEST_ASSERT(queue_cells(chunk, 3u).has_value());
@@ -1422,6 +1427,7 @@ namespace pP::tests::detail {
                     targetRef_(target), {DrawSubmission{"candidate world", draw}}, {}, PreRenderCallback{prepare}));
                 grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
                 const auto pixels = readback_(device, targetRef_(target), 128u);
                 PPR_TEST_ASSERT(pixels.has_value());
                 return *pixels;

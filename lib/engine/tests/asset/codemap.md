@@ -19,3 +19,13 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 There are no separate `tier-cpu` / `tier-gpu` CTest registrations or `ppr_asset_tier` helper in current CMake. Run the full entry with `ctest --test-dir out/build/<preset> -R EngineAssetUnitTests --output-on-failure`. For focused CPU/GPU groups, invoke the executable with the shared runner's `--run-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
 
 See [root test policy](../../../../codemap.md#test-infrastructure) for machine exclusivity, required asset gates and loop selection.
+
+For explicit Vulkan readbacks, set the test-only environment variable
+`PPR_ASSET_TEST_VULKAN=1` in the serialized build shell, invoke the existing
+`asset/render/gates` filters in a fresh process, then clear the variable. The
+shared fixture initializes Vulkan before booting its headless application and
+asserts the actual device type. The ordinary invocation keeps its existing default
+backend. Invalid values and initialization/readback failures fail the tests;
+the runner has no skip result, so unavailable Vulkan/bindless support must be
+reported separately rather than counted as passing coverage. Private-application
+quarantine tests do not use this shared-fixture override.

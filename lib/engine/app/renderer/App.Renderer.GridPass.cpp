@@ -1170,13 +1170,6 @@ namespace pP {
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_world.m_cell_dummy.get(), makeFullRange(m_world.m_cell_dummy.get()))));
 
-        // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
-        // startInstanceLocation never reaches the shader. The tile base rides
-        // the vertex entry's uniform param instead and the draw starts at
-        // instance 0; binding both would double-count the offset.
-        const u32 tile_base = 0u;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
-
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_tiles"].setBinding(rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
         rhi::IBuffer *const cell_buffer = has_cells ? m_world.m_cell_atlas.get() : m_world.m_cell_dummy.get();
@@ -1202,8 +1195,7 @@ namespace pP {
     // encodes zero draws and returns before any m_pass call.
     //
     // Offset discipline: payloads compact in plan order from slot 0 and
-    // g_tile_base stays 0 for the whole call — the uniform cannot vary per
-    // draw inside one indirect call — so each arg carries its tile's
+    // each arg carries its tile's
     // first-payload offset as startInstanceLocation instead. Whether the
     // shader receives that offset as SV_InstanceID is backend-dependent and
     // MUST be verified by an MDI GPU readback parity test; do not infer parity
@@ -1332,7 +1324,7 @@ namespace pP {
         }
 
         // Same bindings as the CPU path: this frame's slot root rebound
-        // as-is, the frame constants, g_tile_base 0 (per-draw bases ride the
+        // as-is, the frame constants (per-draw bases ride the
         // args, see above), and the payload buffer.
         draw_context.m_pass.bindPipeline(pipeline, root_object);
         rhi::ShaderCursor shader_cursor{root_object};
@@ -1342,9 +1334,6 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_world.m_cell_dummy.get(), makeFullRange(m_world.m_cell_dummy.get()))));
-
-        const u32 tile_base = 0u;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, shader_cursor["g_tile_base"].setData(&tile_base, sizeof(tile_base)));
 
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_tiles"].setBinding(rhi::Binding(payload_buffer, makeFullRange(payload_buffer))));
@@ -1853,11 +1842,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, grid_shader->findEntryPointByName("fragmentGridMain", fragment_ep.writeRef()));
 
-        // One program: the tile-indexed vertex entry reads
-        // g_tiles[g_tile_base + SV_InstanceID]. The draw's tile base arrives
-        // as that entry's `uniform uint g_tile_base` parameter, bound per draw
-        // via shader_cursor["g_tile_base"].setData(...), and never through
-        // the draw arguments.
+        // One zero-based payload table. The GPU lane resolves visible IDs;
+        // reference draws use their instance IDs directly.
         slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
 
         rhi::ShaderProgramDesc program_desc{};
@@ -2266,8 +2252,6 @@ namespace pP {
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*cached)->m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
-        const u32 base = 0u;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_tile_base"].setData(&base, sizeof(base)));
         rhi::IBuffer *const tiles = m_tile_payloads[m_tile_ring_cursor].get();
         VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
         rhi::IBuffer *const cells = m_world.m_visibility_has_cells ? m_world.m_cell_atlas.get()

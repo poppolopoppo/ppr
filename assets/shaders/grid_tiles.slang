@@ -29,8 +29,7 @@ struct GridTilePayload {
 // Global scope carries NO ordinary data: a ConstantBuffer nested beside
 // $Globals ordinary data is misbound (D3D12SerializeRootSignature then
 // reports the generated globalParams b0 overlapping g_grid_frame b1), which
-// fails program creation. Per-draw ordinary values must therefore arrive as
-// entry-point `uniform` parameters, as g_tile_base does below.
+// fails program creation. Frame values belong in the explicit constant buffer.
 ConstantBuffer<GridFrame> g_grid_frame;
 StructuredBuffer<GridTilePayload> g_tiles;
 StructuredBuffer<uint> g_visible_ids;
@@ -106,23 +105,15 @@ float3 gridTint(uint material) {
     return float3(red, green, blue);
 }
 
-// g_tile_base is an entry-point `uniform` (not a global) because
-// global-scope ordinary data makes D3D12SerializeRootSignature fail with an
-// overlapping globalParams/g_grid_frame CBV. C++ binds it by the flat
-// cursor["g_tile_base"].setData(&base, sizeof(base)); it is plain data, so
-// it needs no getDereferenced (unlike g_grid_frame).
-//
-// The direct instanced lane starts at instance 0 and binds this 4-byte base
-// to the first payload. The indirect lane supplies startInstanceLocation in
-// each argument; its SV_InstanceID behavior still needs GPU parity tests on
-// every backend, not an assumption from the argument values.
+// Every payload table begins at zero. GPU visibility supplies compact indices;
+// the reference indirect lane supplies instance offsets in its draw arguments.
+// No vertex ordinary-data range is needed alongside the fragment sampler handle.
 [shader("vertex")]
 GridVertexOutput vertexGridMain(
     uint sv_vertex_id : SV_VertexID,
-    uint sv_instance_id : SV_InstanceID,
-    uniform uint g_tile_base) {
+    uint sv_instance_id : SV_InstanceID) {
     uint tile_id = (g_grid_frame.m_use_visible_ids != 0u) ? g_visible_ids[sv_instance_id] : sv_instance_id;
-    GridTilePayload tile = g_tiles[g_tile_base + tile_id];
+    GridTilePayload tile = g_tiles[tile_id];
     float2 min_xy = tile.m_rect.xy;
     float2 max_xy = tile.m_rect.zw;
     // Six non-indexed verts: two triangles over the tile rect. Rasterizer

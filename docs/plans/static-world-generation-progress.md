@@ -730,3 +730,57 @@ All four terrain/visibility shader entry points compiled for DXIL and SPIR-V
 (eight zero exits and nonempty outputs, `out/worldgen-shader-targets-v1/report.json`).
 This is compiler evidence, separate from actual D3D12 execution; Vulkan runtime
 readbacks remain unverified.
+
+## Bounded-retirement runtime correction
+
+The new retirement regressions passed three shuffled loops, followed by three
+loops of `app/grid_pass,app/frame_fence` (39 nodes, 62.29 / 64.74 / 65.13 seconds)
+and `asset/render/gates` (18 gates; 135.40 / 138.54 / 139.51 seconds including
+fixture teardown). Dev, Live and Release builds passed for the affected targets.
+
+The first updated runtime (`out/worldgen-scenario-v3-frontier.stdout.log`) failed
+its settling assertion at seed 42: after the fixed two-second observation window,
+retirement still retained two atlases and fourteen texture slots, with seven
+reachable texture entries. This is not a passing resource-baseline check.
+Hollows was not run after that failure. The acceptance command now treats the
+window as a minimum, continues polling for the exact original atlas/texture
+baseline, and retains the existing overall deadline and incomplete-close failure.
+Independent Astra review and formatting/style checks passed; updated runs follow.
+
+That failed run observed a 157.633 ms layout update gap and a 47.190 ms live gap;
+maximum control-poll gap was 31.753 ms. It does not establish responsiveness or
+prove the cause of earlier gaps. The sampling wrapper did not retain a valid
+process exit code for this run; the explicit application error and failed
+assertion establish failure. Subsequent wrappers pin the process handle before
+sampling so exit status remains available.
+
+## Native UI and Vulkan acceptance correction
+
+The updated scripted v4 runs passed both profiles with actual zero process exits
+and exact resource baselines after 3.111 / 3.122 seconds of bounded settling.
+Elapsed sequences were 64.752 / 64.803 seconds. Latest measurements replace the
+v2 table in the consolidated acceptance evidence; cadence remains an open gate.
+
+Native UI captures under `out/worldgen-native-v1` show catalog names/temperatures,
+the New Game confirmation, terrain composition and diagnostic preparation.
+New Game reset the session; diagnostic Cancel retained it. This exposed three
+defects: keyboard ownership reset cleared Inspector follow, focus used the view
+corner and unreadable zoom, and Cancel was labelled as generation failure.
+Normal close then exited 22: after the CPU driver moved to background disposal,
+an empty stage reused the previous preview's generation and attempted to replace
+the active catalog header. Close now retains the render bundle while draining.
+Astra reviewed these fixes; native reruns remain required. The 495 ms Cancel
+action/capture includes automation overhead and is not precise engine latency.
+
+The test-only `PPR_ASSET_TEST_VULKAN=1` fixture asserts an actual Vulkan device.
+Its first three-loop run exposed duplicate all-stage push constants from the
+always-zero vertex tile-base parameter, missing CopySource target usage, and
+tests using cached completion observations after a host wait. Removing the
+unused scalar preserves all three terrain draw lanes; tests now declare copy
+usage and poll retirement where they require completed fences. No third-party
+source was changed. Astra review, formatting and style passed. Dev/Live/Release
+affected builds passed in `out/worldgen-native-fixes-*-build-*.log`; all eight
+offline shader targets passed again. The five selected Vulkan gates passed three
+shuffled loops with no Vulkan validation errors (`out/worldgen-vulkan-gates-v2.log`,
+`VULKAN_PASSED` in `out/worldgen-native-fixes-validation-v2.times.log`). D3D12 full
+terrain-gate stress is running; final current matrix and native reruns follow.

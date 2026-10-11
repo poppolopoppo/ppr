@@ -11,6 +11,7 @@ import engine.shader;
 import std;
 
 namespace pP::tests::detail::SharedGpu {
+    PPR_DEFINE_LOG_CATEGORY(AssetGpuFixture, info, none);
     // One headless rendering application shared by every GPU leaf in a group.
     // Plain Application never creates a window; Renderer::renderToTexture and
     // device readback are surface-free, so the window/input services are dead
@@ -29,7 +30,35 @@ namespace pP::tests::detail::SharedGpu {
         }
 
         [[nodiscard]] std::error_code boot() {
-            return Application::initialize();
+            const auto vulkan = config::getenvLookup("PPR_ASSET_TEST_VULKAN");
+            if (not vulkan) {
+                return Application::initialize();
+            }
+            PPR_RETURN_ERROR_ON_FAIL(
+                AssetGpuFixture,
+                *vulkan == "1" ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+            // Test-only backend selection. Application preserves an initialized
+            // device; its ordinary teardown owns both services after boot.
+            const auto shader_service = IShaderService::get();
+            const auto rhi_service = IRhiService::get();
+            bool success = false;
+            PPR_DEFER {
+                if (not success) {
+                    // Initialization failure/exception already carries the first
+                    // error. Attempt both idempotent service rollbacks as well.
+                    std::error_code cleanup_error{};
+                    PPR_RETAIN_ERROR_ON_FAIL(AssetGpuFixture, cleanup_error, rhi_service->shutdown());
+                    PPR_RETAIN_ERROR_ON_FAIL(AssetGpuFixture, cleanup_error, shader_service->shutdown());
+                }
+            };
+            PPR_RETURN_ERROR_ON_FAIL(AssetGpuFixture, shader_service->initialize());
+            PPR_RETURN_ERROR_ON_FAIL(
+                AssetGpuFixture, rhi_service->initialize(rhi::DeviceType::Vulkan, *shader_service));
+            PPR_TEST_ASSERT(rhi_service->getDevice().getDeviceType() == rhi::DeviceType::Vulkan);
+            PPR_RETURN_ERROR_ON_FAIL(AssetGpuFixture, Application::initialize());
+            success = true;
+            return {};
         }
         [[nodiscard]] std::error_code teardown() {
             return Application::shutdown();

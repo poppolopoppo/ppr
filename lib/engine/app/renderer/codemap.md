@@ -22,6 +22,12 @@ prepared worlds. CPU reference culling, GPU visibility, and vertex positions
 all apply that same scale; local atlas addressing stays in fine cells. Ordinary
 shutdown resets the metric for reuse. Catalog images and GPU visual resources publish with the owned world candidate.
 
+Grid payload tables are zero-based. The vertex entry uses visible-ID indirection
+or its instance ID directly; it has no per-draw scalar uniform. This keeps the
+fragment sampler handle as the terrain program's only entry-point ordinary-data
+range and avoids duplicate all-stage push-constant ranges on the current Vulkan
+backend. CPU reference and GPU-driven lanes share the same shader.
+
 The normal GPU lane retains its resident table until submissions or cached
 content change. Each completion-selected payload slot receives that version
 once; camera motion updates frame constants and visibility outputs. Reference

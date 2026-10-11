@@ -24,7 +24,11 @@ Controls and panel intents are declared in `Game.Application.cpp` and `colony/Co
 When the session has a controlled actor, WASD supplies held fixed-tick commands
 ahead of camera input. Opposing directions cancel. Focus loss, UI keyboard capture,
 pause and new-game requests clear the command. Camera input rates reset when
-gameplay retakes key ownership; arrows and mouse remain camera controls.
+gameplay retakes key ownership while preserving Inspector follow; arrows and
+mouse remain camera controls. Focus centers the metre-sized actor at inspection
+zoom and refreshes the viewport offset on resize. Cancellation restores the old
+session with a neutral status. Asynchronous close keeps the active render bundle
+while the worker disposes the CPU session, rather than applying an empty catalog.
 
 ## Colony modules and workloads
 

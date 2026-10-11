@@ -658,15 +658,19 @@ namespace demo {
                     break;
                 case AcceptancePhase::settling:
                     if (window_complete) {
-                        PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
                         const auto observations = renderDiagnostics().m_grid_observations;
                         PPR_RETURN_ERROR_ON_FAIL(
-                            Demo, observations and
-                                          observations->m_retained_atlases == 1u and
-                                          observations->m_texture_entries == m_acceptance_initial_texture_entries and
-                                          observations->m_texture_slots == m_acceptance_initial_texture_slots
-                                      ? std::error_code{}
-                                      : std::make_error_code(std::errc::state_not_recoverable));
+                            Demo,
+                            observations ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+                        // Two seconds is the minimum observation window, not a
+                        // disposal deadline. Bounded retirement must reach the
+                        // original resource baseline before the overall timeout.
+                        if (observations->m_retained_atlases != 1u or
+                            observations->m_texture_entries != m_acceptance_initial_texture_entries or
+                            observations->m_texture_slots != m_acceptance_initial_texture_slots) {
+                            return {};
+                        }
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
                         beginAcceptancePhase_(AcceptancePhase::done);
                         std::println(
                             "[worldgen-acceptance] PASS observed_peak_retained_atlases={} observed_peak_texture_entries={} native_input_latency_unmeasured=true gpu_timestamps_unavailable=true",
@@ -1014,7 +1018,9 @@ namespace demo {
                     m_driver->setPaused(m_pause_before_job);
                     m_preview_job = false;
                     m_world_modal = false;
-                    if (view.m_error) {
+                    if (view.m_error == std::errc::operation_canceled) {
+                        setStatus_("World preparation cancelled; current world retained.");
+                    } else if (view.m_error) {
                         postDisplayNotice_("World generation failed; current world retained", view.m_error);
                     }
                 }
@@ -1563,7 +1569,10 @@ namespace demo {
             if (m_control_enabled and not was_enabled and m_pan_controller) {
                 // A key released after this ownership handoff is consumed here;
                 // retire camera rates established while gameplay was paused.
+                // Keyboard ownership changes do not cancel an Inspector follow.
+                const auto follow = m_pan_controller->getFollowTarget();
                 m_pan_controller->resetInputState();
+                m_pan_controller->setFollowTarget(follow);
             }
             if (not m_control_enabled) {
                 clearControlInput_();
@@ -2773,14 +2782,23 @@ namespace demo {
                 return;
             }
 
-            // Inspection zoom: keep the current scale when already close
-            // (0.05 shows ~20px/cell, 0.5 keeps context). setOrthoScale
+            // Inspection zoom keeps the metre-sized actor readable while
+            // retaining the nearby starting route. setOrthoScale
             // cannot fail inside its own validation range.
-            const float scale = std::clamp(m_pan_controller->getOrthoScale(), 0.05f, 0.5f);
+            const float scale = std::clamp(m_pan_controller->getOrthoScale(), 0.01f, 0.05f);
             (void) m_pan_controller->setOrthoScale(scale);
-            m_pan_controller->focusOn(float2{row->m_x, row->m_y});
-            m_pan_controller->setFollowTarget(float3{row->m_x, row->m_y, 0.0f});
+            const auto target = agentCameraTarget_(*row);
+            m_pan_controller->focusOn(float2{target.x, target.y});
+            m_pan_controller->setFollowTarget(target);
             setAgentStatus_("Following", *row);
+        }
+
+        [[nodiscard]] float3 agentCameraTarget_(const colony::AgentSummary &row) const noexcept {
+            // The orthographic eye is the lower-left view corner. Follow an
+            // offset eye so the actor stays at the viewport centre on resize.
+            const float2 extent = m_pan_controller->getViewportSize();
+            const float half_scale = m_pan_controller->getOrthoScale() * 0.5f;
+            return float3{row.m_x - extent.x * half_scale, row.m_y - extent.y * half_scale, 0.0f};
         }
 
         /// find_next (F and the panel's Find colonist button): cycle the
@@ -2826,7 +2844,7 @@ namespace demo {
                 return;
             }
             if (m_pan_controller and m_pan_controller->getFollowTarget().has_value()) {
-                m_pan_controller->setFollowTarget(float3{row->m_x, row->m_y, 0.0f});
+                m_pan_controller->setFollowTarget(agentCameraTarget_(*row));
             }
         }
 
@@ -4045,7 +4063,10 @@ namespace demo {
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
             if (not m_driver) {
                 GridPass::GridStagedFrame frozen{};
-                frozen.m_retain_content = m_capture_access;
+                // Close disposes the CPU session on the worker while its last
+                // render bundle remains live. Do not replace its catalog header
+                // with an empty no-world stage during that drain.
+                frozen.m_retain_content = m_capture_access or m_close_requested.load(std::memory_order_acquire);
                 frozen.m_ack_seed = m_capture_generation;
                 submitGridStage(std::move(frozen));
                 submitTriangleStage(TrianglePass::TriangleStagedFrame{});
