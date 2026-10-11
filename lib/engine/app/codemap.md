@@ -45,3 +45,6 @@ Application admission observations are opt-in and reset with the run epoch.
 They borrow the already injected clock, retain only fixed-size counters/maxima,
 and distinguish pacing/event pumping from frame-credit probes. Disabled runs
 perform no additional observation clock reads.
+The last admitted interval also accumulates repeated skipped attempts, native
+busy waits and completion servicing. Main snapshots and resets it before the
+next virtual update; its outstanding-reservation peak is sampled at attempts.

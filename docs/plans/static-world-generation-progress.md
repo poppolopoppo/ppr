@@ -52,8 +52,11 @@ and explicit legacy fixture retirement are implemented and reviewed.
 The bounded real runtime acceptance sequence and its resource observations passed
 for both shipped profiles. Remaining work includes final current build/test gates
 and documentation reconciliation.
-Interactive traversal and Inspector UI interaction, native input/Cancel latency,
-progress-modal phase captures and a saved GPU profiler capture remain unverified.
+Native Inspector/extension readouts, progress-modal phase captures, both Cancel
+paths and normal close passed the v2/v3 checks below. A ready-world four-frame
+PIX GPU capture is saved with limited replay counters. Held-input traversal,
+precise native input/Cancel latency, worker utilization, true queue depth and
+precise GPU-memory measurements remain unverified.
 Observed loading/live gaps remain an acceptance concern; the latest attribution
 narrows the paths but does not explain every long interval. Process-memory
 samples remain separate from generation-owned payload accounting.
@@ -882,5 +885,20 @@ PASS (53.037 / 53.072 seconds). Peak working sets were 1,039,466,496 /
 1,037,742,080 bytes. Repeated queued gaps of about 137 ms and cross-phase
 retiring/live gaps of 51-69 ms remain unresolved. The low preceding update,
 sampled executor and admission-probe durations do not establish a cause.
-The current twelve-entry CTest matrix is running alone in the serialized queue;
-see the acceptance evidence for the v6 metrics and their limits.
+The twelve-entry CTest matrix passed all entries in 969.71 seconds on the
+467cc13 binaries (`out/worldgen-final-matrix-v3.log`); PPR_TEST_LOOPS remains 1.
+See the acceptance evidence for the v6 metrics and their limits.
+
+A subsequent opt-in telemetry increment accumulates admission attempts and
+skipped native waits/completion service until the next admitted update. It
+records observed skip categories and sampled reservation occupancy beside each
+maximum update gap. Format/style checks and Astra source review of the deterministic clock
+regression passed. Dev/Live all-six and Release app.game builds passed in
+174.87 seconds; both focused leaves passed all three shuffled loops in
+156.33 seconds. Both isolated v7 profile runs exited zero with acceptance PASS
+(51.772 / 53.031 seconds). The approximately 137 ms startup gaps contain seven
+credit retries, while replacement gaps of 51.728 / 68.182 ms contain two/three.
+Accumulated admission pacing and native busy waits account for those intervals;
+busy completion service is below 0.011 ms. Retry pacing is the next focused
+investigation. No new responsiveness
+fix is claimed from this measurement alone.

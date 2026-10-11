@@ -34,9 +34,18 @@ export namespace pP {
         bool m_needs_user_interface: 1 {true};
     };
 
+    /// Main-thread admission work since the preceding admitted update.
+    /// Includes repeated skipped iterations; durations include descheduling.
+    struct FrameAdmissionInterval {
+        u64 m_skipped{}, m_suspended_skips{}, m_credit_skips{}, m_other_skips{};
+        u64 m_sampled_peak_outstanding{};
+        TimeSpan m_admission{}, m_busy_wait{}, m_busy_service{};
+    };
+
     /// Opt-in CPU observations of the admission path, reset for each run.
     /// Durations include descheduling; native waits are best-effort requests.
     struct FrameAdmissionObservations {
+        FrameAdmissionInterval m_last_interval{};
         u64 m_attempts{}, m_skipped{}, m_max_consecutive_skips{};
         TimeSpan m_max_controls{}, m_max_clock{}, m_max_probe{}, m_max_total{};
         TimeSpan m_max_sleep_slice{}, m_max_sleep_overshoot{};

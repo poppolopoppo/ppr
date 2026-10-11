@@ -602,6 +602,8 @@ namespace pP {
 
         PPR_LOG(App, emphasis, "🏁 run application loop");
 
+        FrameAdmissionInterval admission_interval{};
+
         // Run-loop invariant (A1 lesson): terminate on stable state — the
         // graceful-exit latch or the latched cancel error — never on the
         // consumable event pulse alone. run() reports the same stable error.
@@ -617,9 +619,16 @@ namespace pP {
             // render work on this path.
             TimeSpan dt{};
             bool admitted_skip = false;
+            const auto admission_begin = m_observe_admission ? m_observation_clock.now() : TimePoint{};
             {
                 const hal::ProfileScope scope_clock{"App.Frame.Clock"};
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, admitClientFrame_(&dt, admitted_skip));
+            }
+            if (m_observe_admission) {
+                admission_interval.m_admission += m_observation_clock.now() - admission_begin;
+                admission_interval.m_sampled_peak_outstanding = std::max(
+                    admission_interval.m_sampled_peak_outstanding,
+                    static_cast<u64>(m_frame_reservations.outstanding()));
             }
 
             if (first_err or isExitRequested()) {
@@ -656,6 +665,18 @@ namespace pP {
                 // skipped frame), latches a collection failure, and finishes
                 // the iteration.
                 if (admitted_skip) {
+                    auto busy_begin = m_observe_admission ? m_observation_clock.now() : TimePoint{};
+                    if (m_observe_admission) {
+                        ++admission_interval.m_skipped;
+                        const auto outstanding = m_frame_reservations.outstanding();
+                        if (m_display_controller.admissionSuspended()) {
+                            ++admission_interval.m_suspended_skips;
+                        } else if (outstanding >= kMaxOutstandingFrames) {
+                            ++admission_interval.m_credit_skips;
+                        } else {
+                            ++admission_interval.m_other_skips;
+                        }
+                    }
                     noteSkippedFrameDt(dt);
                     if (m_platform) {
                         // Single collection per busy frame through the
@@ -671,6 +692,11 @@ namespace pP {
                         // retained, never ignored.
                         PPR_RETAIN_ERROR_ON_FAIL(
                             App, first_err, m_platform->waitNativeEvents(FramePacer::kWakeQuantum));
+                    }
+                    if (m_observe_admission) {
+                        const auto now = m_observation_clock.now();
+                        admission_interval.m_busy_wait += now - busy_begin;
+                        busy_begin = now;
                     }
                     // Recheck completions so a credit freed during the wait
                     // is observed before the next probe: lane drain plus
@@ -695,6 +721,9 @@ namespace pP {
                         m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
                     }
                     reconcileSubmittedReservations_();
+                    if (m_observe_admission) {
+                        admission_interval.m_busy_service += m_observation_clock.now() - busy_begin;
+                    }
                     if (first_err) [[unlikely]] {
                         m_request_exit(first_err);
                     }
@@ -707,6 +736,10 @@ namespace pP {
                 // fixed-step sim observes preserved elapsed time.
                 const TimeSpan carry = claimSkippedFrameDt();
                 const TimeSpan effective_dt = dt + carry;
+                if (m_observe_admission) {
+                    m_admission_observations.m_last_interval = admission_interval;
+                    admission_interval = {};
+                }
                 std::error_code update_err{};
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};

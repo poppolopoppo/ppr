@@ -2817,9 +2817,22 @@ namespace pP::tests::detail {
                     // Uncapped tick only reads this clock; native pumping is outside it.
                     PPR_TEST_ASSERT(observed.m_max_clock == TimeSpan{});
                     PPR_TEST_ASSERT(observed.m_max_total >= observed.m_max_clock);
+                    const auto &interval = observed.m_last_interval;
+                    PPR_TEST_ASSERT(interval.m_skipped > 0u);
+                    PPR_TEST_ASSERT(interval.m_skipped <= observed.m_skipped);
+                    PPR_TEST_ASSERT(
+                        interval.m_suspended_skips + interval.m_credit_skips + interval.m_other_skips ==
+                        interval.m_skipped);
+                    // The explicit clock advances once in controls for each
+                    // attempt, and once in native collection for each skip.
+                    PPR_TEST_ASSERT(interval.m_admission == (interval.m_skipped + 1u) * std::chrono::milliseconds{1});
+                    PPR_TEST_ASSERT(interval.m_busy_wait == interval.m_skipped * std::chrono::milliseconds{10});
+                    PPR_TEST_ASSERT(interval.m_busy_service == TimeSpan{});
                 } else {
                     PPR_TEST_ASSERT(observed.m_attempts == 0u and observed.m_skipped == 0u);
                     PPR_TEST_ASSERT(observed.m_max_total == TimeSpan{});
+                    PPR_TEST_ASSERT(observed.m_last_interval.m_skipped == 0u);
+                    PPR_TEST_ASSERT(observed.m_last_interval.m_admission == TimeSpan{});
                 }
             }
         };

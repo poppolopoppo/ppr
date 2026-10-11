@@ -134,6 +134,7 @@ namespace demo {
             TimeSpan m_gap_previous_update_work{};
             u32 m_gap_previous_phase{};
             u64 m_gap_last_lane_execute_us{}, m_max_sampled_lane_execute_us{};
+            FrameAdmissionInterval m_gap_admission{};
         };
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
         const ITimerClock *m_observation_clock{};
@@ -200,6 +201,7 @@ namespace demo {
                     sample.m_gap_previous_phase = m_last_update_phase;
                     sample.m_gap_previous_update_work = m_last_update_work;
                     sample.m_gap_last_lane_execute_us = last_lane_execute_us;
+                    sample.m_gap_admission = frameAdmissionObservations().m_last_interval;
                 }
             }
             m_last_update_observed = now;
@@ -252,6 +254,13 @@ namespace demo {
                         names[phase], names[sample.m_gap_previous_phase],
                         time::seconds(sample.m_gap_previous_update_work) * 1000.0, sample.m_gap_last_lane_execute_us,
                         sample.m_max_sampled_lane_execute_us);
+                    const auto &interval = sample.m_gap_admission;
+                    std::println(
+                        "[worldgen-gap-admission] phase={} skipped={} suspended_skips={} credit_skips={} other_skips={} sampled_peak_outstanding={} admission_ms={:.6f} busy_wait_ms={:.6f} busy_service_ms={:.6f}",
+                        names[phase], interval.m_skipped, interval.m_suspended_skips, interval.m_credit_skips,
+                        interval.m_other_skips, interval.m_sampled_peak_outstanding,
+                        time::seconds(interval.m_admission) * 1000.0, time::seconds(interval.m_busy_wait) * 1000.0,
+                        time::seconds(interval.m_busy_service) * 1000.0);
                 }
             }
             std::println(

@@ -12,7 +12,7 @@ gaps and the unverified gates below prevent a completion claim.
 
 Windows 11, Ryzen 9 3950X, 64 GiB RAM, RTX 2080; MSVC 14.51/VS 18 Insiders,
 Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `e1448af`
-plus reviewed gap-context telemetry (v6). The v4 table below is retained as a
+plus reviewed admission-interval telemetry (v7). The v4 table below is retained as a
 historical comparison; current observations are appended below.
 The two profile cases ran sequentially without another build/test workload:
 
@@ -232,3 +232,44 @@ executor gauge; the Hollows retiring gap followed a 0.174 ms update with a
 callback drain as the large blocking interval in these runs. Lane sweeping and
 credit waiting are not attributed by these gauges. The repeated long gaps
 remain unresolved; acceptance is still open.
+
+The complete twelve-entry dev/ASan CTest matrix passed on the 467cc13 binaries
+in 969.71 seconds (`out/worldgen-final-matrix-v3.log` and its times/list logs).
+`PPR_TEST_LOOPS=1` remains configured. The subsequent admission-interval
+telemetry increment passed separate build, focused test and runtime
+validation; the matrix does not yet cover that increment.
+
+## Accumulated admission observations (v7)
+
+Dev/Live six-target builds and Release app.game passed in 174.87 seconds;
+the two focused admission/time-preservation leaves passed all three shuffled
+loops in 156.33 seconds. Both subsequent isolated profile runs exited zero
+with acceptance PASS. Evidence: `out/worldgen-interval-validation-v1.times.log`,
+`out/worldgen-interval-tests-v1.log`,
+`out/worldgen-scenario-v7-{frontier,hollows}.stdout.log`, and
+`out/worldgen-scenario-memory-v7.json`.
+
+| Observation | Frontier | Hollows |
+|---|---:|---:|
+| Whole sequence, seconds | 51.772 | 53.031 |
+| Peak working set, bytes | 1,076,482,048 | 1,033,826,304 |
+| Sampled private peak, bytes | 1,285,476,352 | 1,256,620,032 |
+| Queued update gap, ms | 137.323 | 137.303 |
+| Queued credit retries | 7 | 7 |
+| Queued accumulated admission, ms | 120.094 | 119.461 |
+| Queued accumulated native busy wait, ms | 16.967 | 17.703 |
+| Replacement update gap, ms | 51.728 | 68.182 |
+| Replacement credit retries | 2 | 3 |
+| Replacement accumulated admission, ms | 46.144 | 62.535 |
+| Replacement accumulated native busy wait, ms | 5.415 | 5.315 |
+
+Replacement maxima land in retiring for Frontier and live after retiring for
+Hollows. Every retry at those maxima observed the two-reservation credit bound;
+none observed display suspension. Busy completion service was below 0.011 ms
+for these intervals. This attributes the main-thread elapsed intervals to
+repeated admission/pacing and native busy waits, without identifying the
+underlying reason reservation credits remained occupied. Both profiles settled to one
+atlas/seven texture entries/seven slots, with observed peaks of two atlases and
+fourteen texture entries. Stationary/pan windows retained zero atlas uploads,
+serialization or growth waits. A focused review of retry pacing is underway;
+no responsiveness fix or complete acceptance is claimed yet.
