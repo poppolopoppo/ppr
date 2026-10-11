@@ -122,9 +122,32 @@ namespace pP {
 
     static safe_ptr<GlfwWindow> g_glfw_window{};
 
+    void GlfwWindow::NativeWaitDeleter::operator()(void *const handle) const noexcept {
+#ifdef _WIN32
+        // Best-effort RAII fallback for partial initialization. Normal shutdown
+        // releases explicitly so a failed close reaches its retained error.
+        if (not ::CloseHandle(handle)) {
+            PPR_LOG(
+                GlfwWindow, error, "failed to close native wait timer",
+                {{"error", static_cast<u32>(::GetLastError())}});
+        }
+#else
+        std::ignore = handle;
+#endif
+    }
+
     std::error_code GlfwWindow::initialize(const Application &app) {
         g_glfw_window.reset(this);
 
+#ifdef _WIN32
+        const HANDLE timer = ::CreateWaitableTimerExW(
+            nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (timer == nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GlfwWindow, std::error_code{static_cast<int>(::GetLastError()), std::system_category()});
+        }
+        m_wait_timer.reset(timer);
+#endif
         PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, initializeMonitors_());
 
         m_application.reset(std::addressof(app));
@@ -149,6 +172,12 @@ namespace pP {
 
         std::error_code first_err{};
 
+#ifdef _WIN32
+        if (m_wait_timer and not ::CloseHandle(m_wait_timer.release())) {
+            PPR_RETAIN_ERROR_ON_FAIL(
+                GlfwWindow, first_err, std::error_code{static_cast<int>(::GetLastError()), std::system_category()});
+        }
+#endif
         for (const std::unique_ptr<Window> &window: m_windows) {
             PPR_RETAIN_ERROR_ON_FAIL(GlfwWindow, first_err, m_when_window_destroyed(*window));
 
@@ -304,8 +333,33 @@ namespace pP {
         if (wait > kMaxWait) {
             wait = kMaxWait;
         }
+#ifdef _WIN32
+        PPR_RETURN_ERROR_ON_FAIL(
+            GlfwWindow, m_wait_timer ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        using TimerTick = std::chrono::duration<i64, std::ratio<1, 10'000'000>>;
+        LARGE_INTEGER due{};
+        due.QuadPart = -std::chrono::ceil<TimerTick>(wait).count();
+        const HANDLE timer = m_wait_timer.get();
+        if (not ::SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0)) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GlfwWindow, std::error_code{static_cast<int>(::GetLastError()), std::system_category()});
+        }
+        // A GLFW empty event is a native message too. Wake for queued/new input
+        // as well as the timer, then let GLFW dispatch its ordinary callbacks.
+        const DWORD outcome = ::MsgWaitForMultipleObjectsEx(1u, &timer, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (outcome == WAIT_FAILED) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GlfwWindow, std::error_code{static_cast<int>(::GetLastError()), std::system_category()});
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GlfwWindow, outcome == WAIT_OBJECT_0 or outcome == WAIT_OBJECT_0 + 1u
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::state_not_recoverable));
+        ::glfwPollEvents();
+#else
         const double wait_seconds = wait.count();
         ::glfwWaitEventsTimeout(wait_seconds > 0.0 ? wait_seconds : 1e-6);
+#endif
         return default_value_v;
     }
 

@@ -136,9 +136,47 @@ process-memory observations and does not establish total peak memory.
   targets lacked CopySource usage, and two tests used a stale observed completion
   fence after a host wait. These are corrected in PPR code/tests; third-party
   source is unchanged. Dev, Live and Release affected builds passed. D3D12
-  three-loop regression is in progress; current full matrix remains required.
+  three-loop full terrain-gate regression passed (`out/worldgen-native-fixes-d3d-gates-v1.log`); current full matrix remains required.
   Current IDE inspection is unavailable because
   the CLion router transport failed during discovery.
 
 Third-party cleanup remains deferred until plan implementation is finished, per
 the user. No new fork or private library patch is authorized.
+
+## Native-wait follow-up observations (v5)
+
+The Windows native wait and cleanup follow-up passed dev/Live all-six builds,
+Release app.game and three shuffled real GLFW player-service loops. Both v5
+profile runtime sequences exited zero with acceptance PASS. Logs are
+`out/worldgen-scenario-v5-{frontier,hollows}.stdout.log`; commands and memory are
+in `out/worldgen-scenario-memory-v5.json`. This follow-up supersedes v4 as the
+latest runtime run; the table above retains the earlier comparison sample.
+
+| v5 observation | Frontier | Hollows |
+|---|---:|---:|
+| Whole sequence, seconds | 52.823 | 52.631 |
+| Maximum live update gap, ms | 18.918 | 19.644 |
+| Maximum control-poll gap, ms | 12.917 | 11.791 |
+| Maximum requested-wait overshoot, ms | 9.530 | 4.785 |
+| Retiring-labelled presentation-ack gap, ms | 67.607 | 68.166 |
+| Startup to first loading acknowledgment, ms | 2,003.004 | 1,803.003 |
+| Loading to first world acknowledgment, ms | 7,309.802 | 7,434.051 |
+| Presented seam edit, ms | 102.867 | 103.662 |
+| Resource settling, seconds | 2.156 | 2.158 |
+| Peak working set, bytes | 1,077,645,312 | 1,046,110,208 |
+| Sampled private peak, bytes | 1,261,740,032 | 1,265,029,120 |
+
+Both stationary and pan/zoom windows encoded 118 draws / 236 dispatches with
+zero atlas writes/bytes, serialization, growth waits or table rebuilds/uploads.
+All replacements returned to one atlas, seven texture entries and seven slots.
+This is one corresponding run per profile, not a repeated paired performance
+study. Cross-stage intervals are assigned to their newly observed endpoint
+phase, so the retiring-labelled maxima do not establish a destruction cost.
+Frontier also observed a 272.166 ms queued interval. Responsiveness remains open.
+
+Native v2 (`out/worldgen-native-v2`) verified persistent follow, the extension
+material's Inspector name/ID, diagnostic Cancel with retained session/neutral
+notice, and normal close with actual zero exit. It did not establish walking or
+body/contact correspondence. The New Game Cancel attempt hit the computer-use
+input guard and is not a pass. Duplicate bars and an invalid stage ordinal were
+observed; their UI correction remains pending. See the progress log for details.

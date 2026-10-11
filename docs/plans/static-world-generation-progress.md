@@ -784,3 +784,60 @@ offline shader targets passed again. The five selected Vulkan gates passed three
 shuffled loops with no Vulkan validation errors (`out/worldgen-vulkan-gates-v2.log`,
 `VULKAN_PASSED` in `out/worldgen-native-fixes-validation-v2.times.log`). D3D12 full
 terrain-gate stress is running; final current matrix and native reruns follow.
+
+## Native timed-wait experiment
+
+The complete D3D12 terrain gate group passed all three shuffled loops on
+`901b75b` (`out/worldgen-native-fixes-d3d-gates-v1.log`), finishing at
+22:07:34 local time. The selected Vulkan gates had already passed three loops.
+
+The v4 pacing observation included roughly 16 ms of requested-wait overshoot.
+A focused Windows experiment replaces GLFW's coarse timed wait with an owned
+high-resolution waitable timer and a simultaneous native-message wait. Posted
+GLFW events still wake it; non-Windows implementations retain GLFW's timed wait.
+The application still owns absolute deadlines and scheduling may overshoot.
+A public-boundary smoke test covers polling, positive waits, posted wake events
+and two service lifetimes without asserting scheduler timing.
+
+Astra's initial review found rollback assuming registration after failed timer
+creation, and platform shutdown discarding its retained error. Both corrections
+are integrated and the focused re-review passed. Rollback now unregisters only
+published services, attempts all owned cleanup and reports rollback failure
+without replacing the initialization error. Normal shutdown propagates the
+first retained error after independent cleanup. Formatting/style checks passed.
+Native acquisition/close failure paths were reviewed, not fault-injected.
+The serialized dev/Live/Release builds, repeated app checks and v5 profile
+comparison are running; no pacing improvement is claimed before those results.
+
+The native wait experiment built all six dev/Live executables and Release
+app.game. An initial build rejected a Win32 DWORD logger field; explicitly
+converting it to the engine's u32 field type corrected the diagnostic without
+changing wait behavior. The broad scripted-platform repetition was deliberately
+interrupted, not counted as a pass. The real GLFW player-service group passed
+three shuffled loops (`out/worldgen-native-wait-app-tests-v2.log`).
+
+Both v5 scripted profiles exited zero with acceptance PASS:
+`out/worldgen-scenario-v5-{frontier,hollows}.stdout.log` and
+`out/worldgen-scenario-memory-v5.json`. Elapsed sequences were 52.823 / 52.631 s;
+live maximum update gaps were 18.918 / 19.644 ms versus v4's 32.998 / 47.859 ms.
+These are single corresponding runs, not a repeated paired performance study.
+Retiring-labelled presentation-ack gaps remain 67.607 / 68.166 ms; phase labels
+attribute cross-transition intervals to their endpoint and do not establish
+that destruction caused the delay. The first queued interval also reached
+272.166 ms in Frontier. Acceptance remains open pending attribution/correction.
+
+Native v2 used the existing ID-60000 extension pack. Captures under
+`out/worldgen-native-v2` show persistent Inspector follow, Violet ore name/ID,
+terrain composition, candidate graphics, and diagnostic cancellation retaining
+the same session with a neutral notice. Normal close exited zero
+(`out/worldgen-native-v2-result.json`), with a 935,321,600-byte peak working set
+and 1,149,448,192-byte sampled private peak. Key taps did not establish walking;
+body-contact correspondence and native traversal remain open. A New Game reset
+succeeded; its attempted Cancel was blocked by the computer-use input guard and
+is not counted as a cancellation pass. Diagnostic Cancel action/capture took
+1,852 ms including automation transport, not precise engine input latency.
+
+The user reported duplicate progress bars. Native preparation also displayed
+"stage 8/7". A focused modal correction follows this validated increment.
+Historical proposal supersession notes and the authoring-guide link were checked
+and already exist in all three affected historical documents / docs index.

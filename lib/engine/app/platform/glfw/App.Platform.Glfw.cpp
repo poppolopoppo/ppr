@@ -121,7 +121,9 @@ namespace pP {
         bool success = false;
         PPR_DEFER {
             if (not success) [[unlikely]] {
-                std::ignore = shutdown(app);
+                // Preserve the triggering initialization error; report any
+                // independent rollback failure without replacing it.
+                PPR_LOG_WARNING_ON_FAIL(GlfwPlatform, shutdown(app));
             }
         };
 
@@ -168,25 +170,33 @@ namespace pP {
 
         std::error_code first_err{};
         if (m_player_service) {
-            PPR_VERIFY(app_services.erase<IPlayerService>(*m_player_service));
+            // A failed initialization may leave ownership before registration.
+            if (app_services.tryGet<IPlayerService>() == m_player_service.get()) {
+                PPR_VERIFY(app_services.erase<IPlayerService>(*m_player_service));
+            }
             PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_player_service->shutdown());
             m_player_service.reset();
         }
 
         if (m_input_service) {
-            PPR_VERIFY(app_services.erase<IInputService>(*m_input_service));
+            if (app_services.tryGet<IInputService>() == m_input_service.get()) {
+                PPR_VERIFY(app_services.erase<IInputService>(*m_input_service));
+            }
             PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_input_service->shutdown());
             m_input_service.reset();
         }
 
         if (m_window_service) {
-            PPR_VERIFY(app_services.erase<IWindowService>(*m_window_service));
+            if (app_services.tryGet<IWindowService>() == m_window_service.get()) {
+                PPR_VERIFY(app_services.erase<IWindowService>(*m_window_service));
+            }
             PPR_RETAIN_ERROR_ON_FAIL(GlfwPlatform, first_err, m_window_service->shutdown());
             m_window_service.reset();
         }
 
         ::glfwTerminate();
         ::glfwSetErrorCallback(nullptr);
+        PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, first_err);
         return default_value_v;
     }
 

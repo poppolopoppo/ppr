@@ -18,6 +18,11 @@ export namespace pP {
     using SharedApplication = safe_ptr<const Application>;
 
     class GlfwWindow final : public IWindowService {
+        struct NativeWaitDeleter {
+            void operator()(void *handle) const noexcept;
+        };
+        std::unique_ptr<void, NativeWaitDeleter> m_wait_timer{};
+
         [[nodiscard]] std::error_code initializeMonitors_();
 
     public:
@@ -57,10 +62,10 @@ export namespace pP {
 
         [[nodiscard]] std::error_code waitEvents() override;
 
-        // Timed native wait: glfwWaitEventsTimeout with a clamped positive
-        // bound (GLFW averages sleeps, never overshoots the deadline by
-        // more than a scheduling quantum). Woken early by postEmptyEvent
-        // from any thread (credit return, exit, config change).
+        // Timed native wait with a clamped positive bound. Windows uses a
+        // high-resolution timer plus its message queue; other GLFW backends
+        // use glfwWaitEventsTimeout. Scheduling can still overshoot. Woken
+        // early by postEmptyEvent from any thread (credit return/exit/config).
         [[nodiscard]] std::error_code waitEventsTimeout(TimeSpan timeout) override;
 
         // Any-thread wakeup for the timed wait above. The ONLY platform

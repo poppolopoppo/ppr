@@ -85,6 +85,27 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(input->removePlayer(keyboard_id) == default_value_v);
     };
 
+    PPR_UNIT_TEST (native_window_wait_accepts_timeout_and_posted_wake) {
+        // Two independent service lifetimes exercise native wait ownership
+        // without making assertions about scheduler timing.
+        for (u32 lifetime = 0u; lifetime != 2u; ++lifetime) {
+            PlayerServiceWindowedTestApp test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not test_app.teardown());
+            };
+            const safe_ptr<IWindowService> windows = test_app.getServices().get<IWindowService>();
+            PPR_TEST_ASSERT(windows.get() != nullptr);
+            PPR_TEST_ASSERT(not windows->pollEvents());
+            PPR_TEST_ASSERT(not windows->waitEventsTimeout(TimeSpan{}));
+            PPR_TEST_ASSERT(not windows->waitEventsTimeout(std::chrono::milliseconds{1}));
+
+            windows->postEmptyEvent();
+            PPR_TEST_ASSERT(not windows->waitEventsTimeout(std::chrono::milliseconds{50}));
+            PPR_TEST_ASSERT(not windows->pollEvents());
+        }
+    };
+
     PPR_UNIT_TEST (gamepad_player_creation) {
         PlayerServiceTestApp test_app{};
         PPR_TEST_ASSERT(test_app.boot() == default_value_v);
@@ -189,6 +210,7 @@ namespace pP::tests {
     const UnitTest player_service = UnitTest::Named("player_service") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::player_service_keyboard_and_gamepad,
+            detail::native_window_wait_accepts_timeout_and_posted_wake,
             detail::gamepad_player_creation,
             detail::remove_nonexistent_player_returns_false,
             detail::get_or_create_keyboard_is_idempotent,
