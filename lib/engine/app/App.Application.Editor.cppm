@@ -146,6 +146,7 @@ export namespace pP {
         // The derived client reads this mirror — never the live pass
         // counters once the lane owns them.
         struct RenderDiagnostics {
+            std::optional<GridPassObservations> m_grid_observations{};
             u32 m_grid_staged_tiles{0u};
             u32 m_grid_cached_tiles{0u};
             // Frame's retirement sweep outcome (CPU-side retirement
@@ -158,6 +159,9 @@ export namespace pP {
             // independent of present verdict).
             FenceCompletionValue m_last_submit_value{kFenceValueNone};
         };
+        void enableGridObservations(const bool enabled) noexcept {
+            m_observe_grid = enabled;
+        }
         [[nodiscard]] RenderDiagnostics renderDiagnostics() const noexcept {
             return m_diagnostics;
         }
@@ -175,6 +179,7 @@ export namespace pP {
         }
 
     private:
+        bool m_observe_grid{false};
         [[nodiscard]] std::error_code executeGridWorld_(const GridWorldCommand &command, GridWorldResult &result);
         RenderDiagnostics m_diagnostics{};
 

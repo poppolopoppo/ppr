@@ -39,6 +39,7 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_output{};
         std::optional<std::string> m_worldgen_gpu_output{};
         bool m_worldgen_report{};
+        bool m_worldgen_acceptance{};
         std::string m_worldgen_profile{"frontier"};
         u64 m_worldgen_seed{42u};
 
@@ -46,6 +47,12 @@ export namespace pP::game {
             using namespace config;
 
             return std::tuple{
+                field(
+                    &GameSettings::m_worldgen_acceptance,
+                    Metadata{
+                        "game.worldgen_acceptance", "Run the bounded interactive world-generation acceptance sequence",
+                        "World generation", EMutability::startup, ESource::all, false},
+                    boolean_domain),
                 field(
                     &GameSettings::m_worldgen_report,
                     Metadata{

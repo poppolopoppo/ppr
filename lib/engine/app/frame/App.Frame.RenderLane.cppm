@@ -83,6 +83,7 @@ export namespace pP {
     using GridWorldExecutor = std23::move_only_function<void(const GridWorldCommand &, GridWorldResult &)>;
 
     struct RenderFrameRequest {
+        bool m_observe_grid{false};
         std::shared_ptr<const FramePacket> m_packet{};
         DetachedUiDrawData m_ui{};
         GridPass::GridStagedFrame m_grid_stage{};
@@ -116,6 +117,7 @@ export namespace pP {
     // independent of present (a submitted value travels with the fence
     // until completion; a dropped frame carries m_dropped and no value).
     struct RenderFrameResult {
+        std::optional<GridPassObservations> m_grid_observations{};
         // Distinct control completion on the existing reliable result stream.
         // When set, this record has NO frame/reservation/staging settlement.
         // Main must dispatch it before frame accounting, even while admission

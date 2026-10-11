@@ -136,6 +136,23 @@ export namespace pP {
         Array<GridPlannedTile> m_tiles{};
     };
 
+    // Owner-lane snapshot. Counts describe encoded commands and retained terrain
+    // resources, not GPU completion, driver allocation size or total VRAM.
+    struct GridPassObservations {
+        u64 m_draw_commands{};
+        u64 m_dispatch_commands{};
+        u64 m_atlas_uploaded_bytes{};
+        u64 m_atlas_writes{};
+        u64 m_atlas_serializations{};
+        u64 m_atlas_deferrals{};
+        u64 m_growth_waits{};
+        u64 m_table_builds{};
+        u64 m_table_uploads{};
+        u64 m_texture_entries{};
+        u64 m_texture_slots{};
+        u32 m_retained_atlases{};
+    };
+
     class GridPass {
     public:
         // Chunk-sized tiles: one tile per chunk over the 32x32-chunk grid of
@@ -331,6 +348,7 @@ export namespace pP {
             return m_world.m_world_generation;
         }
         [[nodiscard]] u32 retainedAtlasCountForTest() const noexcept;
+        [[nodiscard]] GridPassObservations observations() const noexcept;
         [[nodiscard]] u64 atlasDeferredCount() const noexcept {
             return m_atlas_deferred_count;
         }
@@ -510,6 +528,8 @@ export namespace pP {
 
 
         std::array<bool, kTileRingSize> m_resident_table_uploaded{};
+        u64 m_draw_commands{};
+        u64 m_dispatch_commands{};
         u64 m_resident_table_build_count{};
         u64 m_resident_table_upload_count{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;

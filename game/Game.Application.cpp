@@ -135,6 +135,35 @@ namespace demo {
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
         const ITimerClock *m_observation_clock{};
         bool m_worldgen_report{};
+        bool m_worldgen_acceptance{};
+        enum class AcceptancePhase : u8 {
+            initial,
+            stationary,
+            pan,
+            seam,
+            biome,
+            textured,
+            reload_one,
+            reload_two,
+            settling,
+            done
+        };
+        AcceptancePhase m_acceptance_phase{AcceptancePhase::initial};
+        TimePoint m_acceptance_phase_start{};
+        u64 m_acceptance_presentations{};
+        u64 m_acceptance_phase_presentations{};
+        u64 m_acceptance_initial_seed{};
+        u32 m_acceptance_dig_before{};
+        sim::GlobalCellPos m_acceptance_seam{};
+        GridPassObservations m_acceptance_baseline{};
+        u32 m_acceptance_peak_atlases{};
+        u64 m_acceptance_peak_textures{};
+        bool m_acceptance_warming{};
+        bool m_acceptance_seam_presented{};
+        u64 m_acceptance_initial_texture_entries{};
+        u64 m_acceptance_initial_texture_slots{};
+        float m_acceptance_scale{};
+        float2 m_acceptance_center{zero_v};
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
@@ -432,6 +461,223 @@ namespace demo {
         bool m_capture_access{};
         u64 m_capture_generation{};
         std::array<u64, sim::kChunkCount> m_capture_ack_revisions{};
+
+        void beginAcceptancePhase_(const AcceptancePhase phase) {
+            m_acceptance_phase = phase;
+            m_acceptance_phase_start = m_observation_clock->now();
+            m_acceptance_phase_presentations = m_acceptance_presentations;
+            m_acceptance_baseline = renderDiagnostics().m_grid_observations.value_or(GridPassObservations{});
+            std::println("[worldgen-acceptance] begin_phase={}", static_cast<u32>(phase));
+        }
+
+        [[nodiscard]] std::error_code reportAcceptancePhase_() {
+            const auto snapshot = renderDiagnostics().m_grid_observations;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, snapshot ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+            const auto &now = *snapshot;
+            std::println(
+                "[worldgen-acceptance] phase={} elapsed_ms={:.6f} presented_acks={} draws={} dispatches={} atlas_bytes={} atlas_writes={} serializations={} deferrals={} growth_waits={} table_builds={} table_uploads={} retained_atlases={} texture_entries={} texture_slots={}",
+                static_cast<u32>(m_acceptance_phase),
+                time::seconds(m_observation_clock->now() - m_acceptance_phase_start) * 1000.0,
+                m_acceptance_presentations - m_acceptance_phase_presentations,
+                now.m_draw_commands - m_acceptance_baseline.m_draw_commands,
+                now.m_dispatch_commands - m_acceptance_baseline.m_dispatch_commands,
+                now.m_atlas_uploaded_bytes - m_acceptance_baseline.m_atlas_uploaded_bytes,
+                now.m_atlas_writes - m_acceptance_baseline.m_atlas_writes,
+                now.m_atlas_serializations - m_acceptance_baseline.m_atlas_serializations,
+                now.m_atlas_deferrals - m_acceptance_baseline.m_atlas_deferrals,
+                now.m_growth_waits - m_acceptance_baseline.m_growth_waits,
+                now.m_table_builds - m_acceptance_baseline.m_table_builds,
+                now.m_table_uploads - m_acceptance_baseline.m_table_uploads, now.m_retained_atlases,
+                now.m_texture_entries, now.m_texture_slots);
+            if (m_acceptance_phase == AcceptancePhase::stationary or m_acceptance_phase == AcceptancePhase::pan) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, now.m_atlas_uploaded_bytes == m_acceptance_baseline.m_atlas_uploaded_bytes and
+                                  now.m_atlas_writes == m_acceptance_baseline.m_atlas_writes and
+                                  now.m_atlas_serializations == m_acceptance_baseline.m_atlas_serializations and
+                                  now.m_table_builds == m_acceptance_baseline.m_table_builds and
+                                  now.m_table_uploads == m_acceptance_baseline.m_table_uploads and
+                                  now.m_draw_commands > m_acceptance_baseline.m_draw_commands and
+                                  now.m_dispatch_commands > m_acceptance_baseline.m_dispatch_commands
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::state_not_recoverable));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code startAcceptanceSeam_() {
+            const auto *const prepared = m_driver->preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, prepared ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+            const auto &start = prepared->generated().m_start;
+            const auto start_x = static_cast<u32>(start.m_spawn_x_m * m_driver->cellsPerMetre());
+            const auto floor_y = static_cast<u32>(start.m_floor_y_m * m_driver->cellsPerMetre());
+            // Search a bounded neighborhood below the start for two diggable
+            // cells on opposite sides of one real chunk seam. Never edit the grid directly.
+            for (u32 offset = 0u; offset < 4u; ++offset) {
+                const u32 seam = (start_x / sim::kChunkEdge + 1u + offset) * sim::kChunkEdge;
+                if (seam >= sim::kWorldEdge) {
+                    break;
+                }
+                for (u32 depth = 1u; depth <= 256u and depth < floor_y; ++depth) {
+                    const sim::GlobalCellPos target{seam - 1u, floor_y - depth};
+                    const auto a = m_driver->grid().getCell(target);
+                    const auto b = m_driver->grid().getCell({seam, target.m_y});
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, a ? std::error_code{} : a.error());
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, b ? std::error_code{} : b.error());
+                    const auto *const ma = prepared->catalog().findMaterial(a->m_element);
+                    const auto *const mb = prepared->catalog().findMaterial(b->m_element);
+                    if (ma and mb and ma->m_diggable.value_or(false) and mb->m_diggable.value_or(false)) {
+                        m_acceptance_seam = target;
+                        m_acceptance_dig_before = m_driver->digTotal();
+                        m_driver->setPaused(true);
+                        m_pan_controller->focusOn(
+                            float2{
+                                static_cast<float>(seam) / m_driver->cellsPerMetre(),
+                                static_cast<float>(target.m_y) / m_driver->cellsPerMetre()});
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->requestDig(target, 2u, 1u));
+                        beginAcceptancePhase_(AcceptancePhase::seam);
+                        return {};
+                    }
+                }
+            }
+            PPR_RETURN_ERROR_ON_FAIL(Demo, std::make_error_code(std::errc::no_message_available));
+            return {}; // The propagation macro above returns for this nonzero error.
+        }
+
+        [[nodiscard]] std::error_code advanceAcceptance_() {
+            if (not m_worldgen_acceptance or m_acceptance_phase == AcceptancePhase::done) {
+                return {};
+            }
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, m_observation_clock->now() - m_observation_start < std::chrono::seconds{600}
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::timed_out));
+            const bool ready = m_driver and
+                               m_driver_ready and
+                               not m_world_modal and
+                               m_world_published and
+                               m_world_frame_presented and
+                               not m_world_job->busy() and
+                               not m_world_command and
+                               not m_world_result;
+            if (not ready) {
+                return {};
+            }
+            const bool window_complete = m_observation_clock->now() - m_acceptance_phase_start >=
+                                             std::chrono::seconds{2} and
+                                         m_acceptance_presentations - m_acceptance_phase_presentations >= 64u;
+            switch (m_acceptance_phase) {
+                case AcceptancePhase::initial: {
+                    // Warm every completion-selected slot before measuring a quiet camera.
+                    if (not m_acceptance_warming) {
+                        m_acceptance_warming = true;
+                        m_acceptance_phase_presentations = m_acceptance_presentations;
+                        return {};
+                    }
+                    if (m_acceptance_presentations - m_acceptance_phase_presentations < 96u) {
+                        return {};
+                    }
+                    m_driver->setPaused(true);
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo,
+                        m_driver->preparedWorld() ? std::error_code{} : std::make_error_code(std::errc::not_supported));
+                    const auto initial_resources = renderDiagnostics().m_grid_observations;
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo,
+                        initial_resources ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+                    m_acceptance_initial_texture_entries = initial_resources->m_texture_entries;
+                    m_acceptance_initial_texture_slots = initial_resources->m_texture_slots;
+                    m_acceptance_scale = m_pan_controller->getOrthoScale();
+                    m_acceptance_center = float2{
+                        static_cast<float>(m_driver->preparedWorld()->generated().m_start.m_spawn_x_m),
+                        static_cast<float>(m_driver->preparedWorld()->generated().m_start.m_spawn_y_m)};
+                    beginAcceptancePhase_(AcceptancePhase::stationary);
+                    break;
+                }
+                case AcceptancePhase::stationary:
+                    if (window_complete) {
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                        beginAcceptancePhase_(AcceptancePhase::pan);
+                    }
+                    break;
+                case AcceptancePhase::pan: {
+                    const float t = static_cast<float>(
+                        time::seconds(m_observation_clock->now() - m_acceptance_phase_start));
+                    m_pan_controller->focusOn(
+                        m_acceptance_center + float2{20.0f * std::sin(t * 3.0f), 10.0f * std::sin(t * 2.0f)});
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo,
+                        m_pan_controller->setOrthoScale(m_acceptance_scale * (1.0f + 0.25f * std::sin(t * 4.0f))));
+                    if (window_complete) {
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, startAcceptanceSeam_());
+                    }
+                    break;
+                }
+                case AcceptancePhase::seam:
+                    if (not m_acceptance_seam_presented or
+                        m_driver->editPending() or
+                        m_driver->digTotal() == m_acceptance_dig_before) {
+                        return {};
+                    }
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo, m_driver->digTotal() == m_acceptance_dig_before + 2u and
+                                      m_driver->grid().getCell(m_acceptance_seam)->m_element == 0u and
+                                      m_driver->grid()
+                                              .getCell({m_acceptance_seam.m_x + 1u, m_acceptance_seam.m_y})
+                                              ->m_element == 0u
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::state_not_recoverable));
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                    beginAcceptancePhase_(AcceptancePhase::biome);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(EGridDiagnosticMode::biome));
+                    break;
+                case AcceptancePhase::biome:
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                    beginAcceptancePhase_(AcceptancePhase::textured);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(EGridDiagnosticMode::textured));
+                    break;
+                case AcceptancePhase::textured:
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                    beginAcceptancePhase_(AcceptancePhase::reload_one);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(1u));
+                    break;
+                case AcceptancePhase::reload_one:
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                    beginAcceptancePhase_(AcceptancePhase::reload_two);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_acceptance_initial_seed));
+                    break;
+                case AcceptancePhase::reload_two:
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo, m_driver->digTotal() == 0u and m_driver->controlledEntity().has_value()
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::state_not_recoverable));
+                    beginAcceptancePhase_(AcceptancePhase::settling);
+                    break;
+                case AcceptancePhase::settling:
+                    if (window_complete) {
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
+                        const auto observations = renderDiagnostics().m_grid_observations;
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Demo, observations and
+                                          observations->m_retained_atlases == 1u and
+                                          observations->m_texture_entries == m_acceptance_initial_texture_entries and
+                                          observations->m_texture_slots == m_acceptance_initial_texture_slots
+                                      ? std::error_code{}
+                                      : std::make_error_code(std::errc::state_not_recoverable));
+                        beginAcceptancePhase_(AcceptancePhase::done);
+                        std::println(
+                            "[worldgen-acceptance] PASS observed_peak_retained_atlases={} observed_peak_texture_entries={} native_input_latency_unmeasured=true gpu_timestamps_unavailable=true",
+                            m_acceptance_peak_atlases, m_acceptance_peak_textures);
+                        requestExit();
+                    }
+                    break;
+                case AcceptancePhase::done: break;
+            }
+            return {};
+        }
 
         [[nodiscard]] std::error_code requestPreview_(const EGridDiagnosticMode mode) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -2718,7 +2964,7 @@ namespace demo {
             m_performance_widget.observe(frame_ms, laneExecuteMs_());
         }
 
-        [[nodiscard]] std::error_code drawPanel_() {
+        [[nodiscard]] std::error_code drawPanel_(const std::span<const sim::ChunkPos> edits) {
             // Determine visible chunk tiles from the current camera snapshot.
             Array<GridTileSubmission> submissions{};
             submissions.reserve(sim::kChunkCount);
@@ -2749,14 +2995,9 @@ namespace demo {
             // Slice 1 uses exactly one tile per chunk, so these counts coincide.
             const u32 visible = safe_narrowing(plan->m_tiles.size());
             const colony::PathCounts paths = m_driver->pathCounts();
-            // Owned render payload: overlay/panel chunk reads consume the
-            // sim packet's copies (fail closed when absent), never live
-            // driver state, so post-capture mutation cannot alter reporting.
-            if (not m_sim_packet) {
-                return std::make_error_code(std::errc::state_not_recoverable);
-            }
-            const std::span<const sim::ChunkPos> edits{
-                m_sim_packet->m_present_chunks.data(), m_sim_packet->m_present_chunks.size()};
+            // The caller supplies the owned publication summary. While an edit
+            // prepares, no candidate chunks have published and this view is empty;
+            // the remaining panel reads describe the still-committed session.
 
             // Slice 4 read-outs gathered for the panel: live needs keyed by
             // stable agent key, and the follow flag taken from the one
@@ -2920,7 +3161,10 @@ namespace demo {
         void setWorldgenSettings(const game::GameSettings &settings, const ITimerClock &clock) {
             m_observation_clock = &clock;
             m_observation_start = clock.now();
-            m_worldgen_report = settings.m_worldgen_report;
+            m_worldgen_acceptance = settings.m_worldgen_acceptance;
+            m_acceptance_initial_seed = settings.m_worldgen_seed;
+            m_worldgen_report = settings.m_worldgen_report or m_worldgen_acceptance;
+            enableGridObservations(m_worldgen_report);
             enableFrameAdmissionObservations(m_worldgen_report);
             m_agent_count = 1u;
             m_worldgen_root = settings.m_worldgen_root
@@ -2928,6 +3172,10 @@ namespace demo {
                                   : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
             m_worldgen_profile = settings.m_worldgen_profile;
             m_requested_seed = settings.m_worldgen_seed;
+        }
+
+        [[nodiscard]] bool acceptanceComplete() const noexcept {
+            return not m_worldgen_acceptance or m_acceptance_phase == AcceptancePhase::done;
         }
 
         /// Profiling fixture override (agent count for the driver spawn path).
@@ -3620,6 +3868,15 @@ namespace demo {
             if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
                 return;
             }
+            if (m_worldgen_acceptance and result.m_presented and not result.m_error and not result.m_dropped) {
+                ++m_acceptance_presentations;
+            }
+            if (result.m_grid_observations) {
+                m_acceptance_peak_atlases = std::max(
+                    m_acceptance_peak_atlases, result.m_grid_observations->m_retained_atlases);
+                m_acceptance_peak_textures = std::max(
+                    m_acceptance_peak_textures, result.m_grid_observations->m_texture_entries);
+            }
             if (m_worldgen_report and result.m_presented and not result.m_error and not result.m_dropped) {
                 const auto now = m_observation_clock->now();
                 auto &sample = m_worldgen_observations[observationPhase_()];
@@ -3699,6 +3956,13 @@ namespace demo {
                         return;
                     }
                     m_driver->ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{ack});
+                    if (m_worldgen_acceptance and
+                        m_acceptance_phase == AcceptancePhase::seam and
+                        result.m_presented and
+                        not m_driver->editPending() and
+                        m_driver->digTotal() == m_acceptance_dig_before + 2u) {
+                        m_acceptance_seam_presented = true;
+                    }
                     if (result.m_grid_full_refresh) {
                         m_present_full_refresh = false;
                     }
@@ -3731,6 +3995,7 @@ namespace demo {
                 }
             };
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
+            PPR_RETURN_ERROR_ON_FAIL(Demo, advanceAcceptance_());
             if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
                 const auto mode = *std::exchange(m_preview_pending, std::nullopt);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
@@ -3868,7 +4133,7 @@ namespace demo {
                 frozen.m_ack_seed = m_driver->worldGeneration();
                 submitGridStage(std::move(frozen));
                 PPR_RETURN_ERROR_ON_FAIL(Demo, pollDisplaySession_(std::chrono::duration<float>(dt).count()));
-                PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
+                PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_({}));
                 return {};
             }
             m_sim_packet = colony::makeSimFramePacket(getFrameIndex(), *m_driver, m_present_full_refresh);
@@ -3915,7 +4180,10 @@ namespace demo {
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitDebugInstances_());
             drawWorldModal_();
             if (not m_world_modal) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, drawPanel_(
+                              std::span<const sim::ChunkPos>{
+                                  m_sim_packet->m_present_chunks.data(), m_sim_packet->m_present_chunks.size()}));
             }
             // Single-use packet retired on this thread; next frame rebuilds.
             m_sim_packet.reset();
@@ -4076,6 +4344,10 @@ int runGame(const int argc, char *argv[]) try {
             std::cerr << std::format(
                 "[fatal] app.run: {} (category={} value={})\n", run_error.message(), run_error.category().name(),
                 run_error.value());
+        }
+        if (not run_error and not app.acceptanceComplete()) {
+            std::cerr << "[worldgen-acceptance] INCOMPLETE: shutdown preceded sequence completion\n";
+            return 1;
         }
         return run_error.value();
     } catch (const std::exception &error) {

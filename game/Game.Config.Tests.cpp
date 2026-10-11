@@ -85,6 +85,22 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(gameHelpText().find("validate-worldgen") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (worldgen_acceptance_is_explicit_and_interactive_only) {
+        Diagnostics diagnostics;
+        const auto invocation = resolveCli(
+            {"--worldgen-acceptance", "--worldgen-seed=18446744073709551615"}, diagnostics);
+        PPR_TEST_ASSERT(invocation and invocation->m_game.m_value.m_worldgen_acceptance);
+        PPR_TEST_ASSERT(invocation->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
+        Diagnostics disabled;
+        const auto off = resolveCli({"--worldgen-acceptance=false"}, disabled);
+        PPR_TEST_ASSERT(off and not off->m_game.m_value.m_worldgen_acceptance);
+        for (const auto *const selector: {"--smoke", "--validate-worldgen", "--profile100"}) {
+            Diagnostics invalid;
+            PPR_TEST_ASSERT(not resolveCli({selector, "--worldgen-acceptance"}, invalid));
+            PPR_TEST_ASSERT(invalid.hasErrors());
+        }
+    };
+
     PPR_UNIT_TEST (worldgen_preview_is_distinct_and_requires_explicit_output) {
         Diagnostics diagnostics{};
         const auto preview = resolveCli(
@@ -473,6 +489,7 @@ namespace pP::game::tests {
             detail::compat::selectors_pick_commands,
             detail::compat::worldgen_validation_invocation,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
+            detail::compat::worldgen_acceptance_is_explicit_and_interactive_only,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,
             detail::compat::selector_explicit_values_rejected,

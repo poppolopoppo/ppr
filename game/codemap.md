@@ -43,7 +43,7 @@ See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` module
 The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Admission and readiness polling do not wait. Cancel/failure preserves the old paused session and restores its previous pause state once; success replaces the whole session. Old/cancelled sessions are disposed on the coordinator. Ordinary close defers the exit latch and drains through control servicing, including when frame admission is busy. The modal remains until the replacement frame is actually presented. Normal startup loads the configured authored pack/profile/seed on the coordinator; the explicit 100-agent profile retains its legacy fixture. The coordinator captures owned terrain uploads before readiness. Independent render controls admit a metadata header and at most eight chunks per admitted update, then prepare and activate the candidate. Only matching activation publishes the CPU session; admitted activation settles before close. Cancellation and Retry include both CPU cleanup and outstanding GPU controls. The modal remains through the first replacement presentation. End-to-end responsiveness remains an acceptance gate.
 
 
-`--validate-worldgen --worldgen-output=<directory>` additionally exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. The game checkpoint envelope is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged.
+`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. The game checkpoint envelope is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged.
 
 `--worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
 UI-free frozen diagnostic host after generation. `colony/WorldGen.Capture.cpp`
@@ -51,3 +51,11 @@ uses the real GridPass, offscreen render targets and GPU readback for metre-base
 start/seam/surface/texture closeups. Blocking upload/completion is restricted to
 this host; GPU quiescence is enforced before releasing resources. Explicit RHI
 validation settings apply before initialization. See [authoring diagnostics](../docs/worldgen-content.md).
+
+The opt-in `--worldgen-acceptance` command is an interactive production-path
+acceptance sequence owned by TurboLarbin: stationary/pan/zoom, a presented seam
+edit, preview switches and two acknowledged New Games with resource retirement.
+It requires authored sessions and reports incomplete shutdown as failure. See
+[worldgen authoring and diagnostics](../docs/worldgen-content.md) for scope and
+measurement limits. `--worldgen-report` mirrors render-owner observations through
+frame results; neither option reads worker-owned pass state from main.

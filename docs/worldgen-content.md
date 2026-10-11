@@ -565,3 +565,30 @@ includes pacing and its event pumps; probe includes frame-credit/completion
 work. Durations include OS descheduling. They attribute the measured CPU path,
 not native input latency or GPU terrain execution. Ordinary runs leave this
 instrumentation disabled.
+
+## Bounded interactive acceptance command
+
+Run `app.game --worldgen-acceptance --worldgen-profile=frontier --worldgen-seed=42`
+(and repeat with `hollows`) on the desired backend. It enables the cadence report,
+waits for current-world presentation and warms the completion-selected slots,
+then measures stationary and moving/zooming cameras, a real two-cell chunk-seam
+dig through the publication transaction, biome/textured preview switches, and two
+New Games (seed 1, then the requested seed). It waits for final retirement and
+exits. An optional `--exit-after=300` bounds the process; early close or timeout
+is failure, never an acceptance pass. Acceptance excludes `--profile100`.
+
+The scenario checks that camera changes upload no terrain or resident tables,
+that actual terrain draw/compute commands were encoded, that a successful frame
+presents the settled seam edit, and that retained atlas/texture counts return to
+the initial settled baseline after reloads. Fixed-size render-owner snapshots
+cross the existing frame-result transport; main never reads live pass counters.
+Printed deltas count encoded commands, not GPU completion. Texture slots include
+per-world high-water cache slots; observed resource peaks sample acknowledged
+frames and can miss a transient between them. They are not driver memory or
+precise total VRAM measurements.
+
+This scripted production-path exercise does not prove native keyboard/mouse or
+Cancel latency, Inspector interaction, actor traversal, scanout cadence or GPU
+terrain time. Those require separate interaction/capture evidence. A scenario
+PASS covers only its explicit checks; the complete milestone acceptance gates
+remain those in the implementation prompt.

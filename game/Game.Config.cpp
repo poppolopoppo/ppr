@@ -148,6 +148,11 @@ namespace pP::game {
                                   "worldgen-preview", "worldgen-preview",
                                   "Generate diagnostic exports without gameplay; requires an output directory."));
         appendOption(
+            schema.m_options,
+            switchOption(
+                "game.worldgen_acceptance", "worldgen-acceptance",
+                "Exercise camera, seam edit, previews and two New Games; report and exit, fail if incomplete."));
+        appendOption(
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
         appendOption(
             schema.m_options, switchOption(
@@ -324,6 +329,15 @@ namespace pP::game {
                 "invocation", "game.command",
                 "--worldgen-preview requires --worldgen-output or --worldgen-gpu-output; GPU capture requires the preview selector",
                 error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (settings.m_worldgen_acceptance and
+            (settings.m_command != EGameCommand::interactive or settings.m_profile100)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.worldgen_acceptance",
+                "Acceptance requires an authored interactive session without --profile100", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 

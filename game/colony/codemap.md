@@ -18,7 +18,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
 | `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Normal interactive startup resolves these inputs on the world coordinator. |
-| `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Actor, collider and renderer migration follows with generated sessions. |
+| `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
 | `game.colony.buildings` | `Buildings.cppm/.cpp` | Footprints, progressive build/demolition errands, component registration |
@@ -102,7 +102,7 @@ Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` 
 `Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` / `Checkpoint.Validation.cpp` own the versioned game envelope, full frozen capture, explicit byte codec and fail-closed content/metadata/ECS validation. `ColonyDriver.Checkpoint.cpp` provides full body-aware capture and fresh candidate restoration. `WorldJob::requestCheckpoint` runs capture under the existing exclusive owner lease; encoding/I/O consume the owned result off-main. `Checkpoint.Tests.cpp` covers edited-world round trips, identity/metric rejection, malformed input and frozen full capture without dirty-state mutation. Raw sim snapshot v4 remains a separate low-level codec.
 
 
-`WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--validate-worldgen --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
+`WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--worldgen-preview --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
 
 The retired seed-only hard-coded sim generator is now a game-owned explicit
 fixture in `WorldGen.Fixture.cpp`, registered alongside its matching regression
@@ -113,3 +113,10 @@ group `WorldGen.Fixture.Tests.cpp`. `generateLegacyFixture`,
 only the explicit 100-agent fixture selects `legacyFixturePrepare()`.
 Legacy pinned-hash/archetype tests moved with the fixture to game.tests; numeric
 recipe generation tests remain in engine.tests.sim without game imports.
+
+`WorldGen.Capture.cpp` belongs to `game.colony.worldgen` and provides the explicit
+frozen GPU diagnostic host; `game.colony.smoke` remains the separate smoke path.
+The distinct `--worldgen-preview` selector requires explicit CPU/GPU output;
+the older validate-plus-CPU-output form remains compatible. See
+[authoring and diagnostics](../../docs/worldgen-content.md) for current commands,
+checkpoint semantics and retained/scratch memory accounting limits.

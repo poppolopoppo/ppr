@@ -20,8 +20,7 @@ Grid staged frames carry owned catalog visuals and an explicit cell metric.
 Supported scales are one metre for legacy fixtures and one third metre for
 prepared worlds. CPU reference culling, GPU visibility, and vertex positions
 all apply that same scale; local atlas addressing stays in fine cells. Ordinary
-shutdown resets the metric for reuse. Catalog textures and GPU visual-resource
-publication remain separate acceptance work.
+shutdown resets the metric for reuse. Catalog images and GPU visual resources publish with the owned world candidate.
 
 The normal GPU lane retains its resident table until submissions or cached
 content change. Each completion-selected payload slot receives that version
@@ -45,7 +44,8 @@ content identities. At most active+candidate or active+retiring owners exist.
 The previous owner remains until its last reader, deferred pipeline roots and
 completed cached root bindings retire. Completion-safe roots are recreated
 lazily; unfinished active roots are retained. Cancellation never activates a
-candidate. Normal game candidate transport and catalog textures remain pending.
+candidate. Normal game transport uses independent world controls and each world
+owns its catalog texture cache through completion-safe retirement.
 
 ## Design
 
@@ -226,7 +226,7 @@ candidate. Normal game candidate transport and catalog textures remain pending.
   resident set resets its instance count to zero. IDs are bounded to 1024; CPU
   reference draw lanes remain available. All draw lanes take geometry bounds
   from the current submission, including cache hits. Production atlas readiness
-  covers all submitted dirty chunks; versioned atlas slots remain pending.
+  covers all submitted dirty chunks; versioned atlas slots publish complete cohorts.
 - **GridPass per-cell extension:** `GridUploadRequest::m_cell_materials` is an optional borrowed span of exactly
   16384 row-major u16 entries (0xffff transparent); empty retains flat tiles. Cell requests require a valid
   chunk ID and its exact 128x128 chunk rect, even on clean/no-op requests. Dirty requests pack pairs into
@@ -324,3 +324,9 @@ One pass sampler/fallback is shared. Candidate texture preparation is bounded to
 one admitted 2048-square RGBA image per update; canceled uploads remain retained
 until a subsequent accepted frame fence covers initialization. Coordinator-side
 capture produces owned u16 cell uploads without copying full simulation cells.
+
+Opt-in `GridPassObservations` snapshots are captured only on the render owner and
+carried by value in the existing frame result. The editor mirrors them for game
+acceptance reports. They count encoded GPU terrain draw/dispatch commands, atlas
+publication/table work, retained atlases and live per-world texture entries/slots;
+they do not assert GPU completion, total driver allocation or total VRAM.

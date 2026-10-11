@@ -937,6 +937,7 @@ namespace pP {
             return;
         }
         Application::onLaneFrameConsumed_(result);
+        m_diagnostics.m_grid_observations = result.m_grid_observations;
         m_diagnostics.m_grid_staged_tiles = result.m_grid_staged_tiles;
         m_diagnostics.m_grid_cached_tiles = result.m_grid_cached_tiles;
         m_diagnostics.m_last_sweep_error = result.m_sweep_error;
@@ -1003,6 +1004,7 @@ namespace pP {
         }
         if (renderLaneOwnsRenderer_()) {
             RenderFrameRequest request{};
+            request.m_observe_grid = m_observe_grid;
             try {
                 request.m_packet = std::make_shared<const FramePacket>(packet);
                 request.m_ui = std::move(detached);
@@ -1070,6 +1072,7 @@ namespace pP {
 
         // Inline reference: build the same request, then apply on main.
         RenderFrameRequest inline_request{};
+        inline_request.m_observe_grid = m_observe_grid;
         try {
             inline_request.m_packet = std::make_shared<const FramePacket>(packet);
             inline_request.m_ui = std::move(detached);
@@ -1193,6 +1196,11 @@ namespace pP {
     std::error_code ApplicationEditor::executeRenderWork_(
         const RenderFrameRequest &request, RenderFrameResult &out_result) {
         Renderer &renderer = getRenderer();
+        PPR_DEFER {
+            if (request.m_observe_grid and m_grid_pass) {
+                out_result.m_grid_observations = m_grid_pass->observations();
+            }
+        };
         const FramePacket &packet = *request.m_packet;
         const DetachedUiDrawData &ui = request.m_ui;
         const GridPass::GridStagedFrame &grid_stage = request.m_grid_stage;

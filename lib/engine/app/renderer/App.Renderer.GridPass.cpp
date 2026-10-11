@@ -1586,6 +1586,35 @@ namespace pP {
         return {};
     }
 
+    GridPassObservations GridPass::observations() const noexcept {
+        GridPassObservations out{
+            .m_draw_commands = m_draw_commands,
+            .m_dispatch_commands = m_dispatch_commands,
+            .m_atlas_uploaded_bytes = m_atlas_uploaded_bytes,
+            .m_atlas_writes = m_atlas_write_count,
+            .m_atlas_serializations = m_atlas_serialization_count,
+            .m_atlas_deferrals = m_atlas_deferred_count,
+            .m_growth_waits = m_growth_wait_count,
+            .m_table_builds = m_resident_table_build_count,
+            .m_table_uploads = m_resident_table_upload_count,
+            .m_retained_atlases = retainedAtlasCountForTest(),
+        };
+        const auto count_textures = [&](const WorldResources &world) {
+            if (world.m_texture_cache) {
+                out.m_texture_entries += world.m_texture_cache->entryCount();
+                out.m_texture_slots += world.m_texture_cache->textureUsed();
+            }
+        };
+        count_textures(m_world);
+        if (m_candidate_world) {
+            count_textures(*m_candidate_world);
+        }
+        if (m_retiring_world) {
+            count_textures(*m_retiring_world);
+        }
+        return out;
+    }
+
     u32 GridPass::retainedAtlasCountForTest() const noexcept {
         std::array<const rhi::IBuffer *, 6u> atlases{};
         u32 count = 0u;
@@ -1666,6 +1695,8 @@ namespace pP {
         m_atlas_deferred_count = 0u;
         m_atlas_uploaded_bytes = 0u;
         m_world.m_resident_table.clear();
+        m_draw_commands = 0u;
+        m_dispatch_commands = 0u;
         m_resident_table_build_count = 0u;
         m_resident_table_upload_count = 0u;
         m_growth_wait_count = 0u;
@@ -2167,6 +2198,7 @@ namespace pP {
                 };
                 pass->bindPipeline(program.m_pipeline, root);
                 pass->dispatchCompute(phase == 0u ? 1u : std::max(1u, (frame.m_count + 63u) / 64u), 1u, 1u);
+                ++m_dispatch_commands;
             }
             context.m_encoder.globalBarrier();
         }
@@ -2213,6 +2245,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, true));
         context.m_pass.bindPipeline((*cached)->m_pipeline, root);
         context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
+        ++m_draw_commands;
         return {};
     }
 

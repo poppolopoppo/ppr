@@ -80,3 +80,8 @@ or dirty acknowledgments and work without an admitted frame. Each world command
 yields to queued frame work; shutdown drains accepted commands as canceled.
 ApplicationEditor routes these commands to GridPass on the owner lane and ignores
 ordinary terrain stages belonging to a superseded active generation.
+
+Opt-in grid observation requests carry a boolean into the owner-lane executor;
+fixed-size counter/resource values return with frame results and are mirrored
+only after the normal epoch check. No callback or borrowed pass pointer crosses
+back to main for observations. Disabled requests do not sample the pass.

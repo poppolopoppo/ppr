@@ -41,14 +41,18 @@ are chronological evidence; earlier descriptions of pending integration are
 historical and are superseded by later increments.
 
 Stage 7 remains open. The eight profile/seed CPU and GPU capture cases passed;
-32 overview images and 32 textured closeups decoded and were inspected. Remaining
-work is generation scratch/payload accounting, measured interactive loading and
-publication cadence, data-only material extension through runtime/presentation,
-final build/test gates, and a final audit of retired production assumptions.
-Cancellation/header retirement and the distinct preview selector are being
-validated in the next increment. Actual interactive traversal, modal/cancel
-latency and a saved GPU profiler capture are not yet verified. Process-memory
-samples are retained separately from generation-owned payload accounting.
+32 overview images and 32 textured closeups decoded and were inspected. Known
+generation scratch/payload accounting, the data-only material extension through
+CPU/GPU presentation, cancellation/header retirement, distinct preview command
+and explicit legacy fixture retirement are implemented and reviewed.
+
+Remaining work is the bounded real runtime acceptance sequence and its resource
+observations, final current build/test gates and documentation reconciliation.
+Interactive traversal and Inspector UI interaction, native input/Cancel latency,
+progress-modal phase captures and a saved GPU profiler capture remain unverified.
+Observed loading/live gaps remain an acceptance concern; the latest attribution
+narrows the paths but does not explain every long interval. Process-memory
+samples remain separate from generation-owned payload accounting.
 
 Third-party dependency cleanup follows completion of all seven stages, per the
 user's instruction. No further private library patch/fork is authorized.
@@ -639,3 +643,55 @@ Release game build passed. All 28 render-lane nodes passed three shuffled loops
 `out/worldgen-fatal-app-tests-v1.log`. Formatting Check passed four files and
 touched semantic style reported no blocking findings. The final complete matrix
 and current msvc-live gate remain outstanding.
+
+## Production runtime sequence and held-edit UI fix
+
+`--worldgen-acceptance` now runs a bounded explicit production-path sequence:
+current-world presentation/warmup, stationary camera, pan/zoom, a two-cell seam
+dig with successful presentation witness, biome/textured previews, two New Games,
+and final atlas/texture retirement. It rejects legacy `--profile100`; early close
+and timeout fail. Fixed-size owner-lane snapshots measure encoded draw/dispatch
+commands and terrain/cache work without cross-thread pass reads. Quiet-camera
+checks require actual GPU command encoding and zero atlas/table work. Final
+texture entries/slots must match the settled initial baseline.
+
+The first actual run exposed a production UI bug: collider preparation retained
+the committed world but called a panel helper requiring a missing single-use sim
+packet. The panel now accepts an explicit publication-summary span; pending edits
+supply an empty unpublished summary and ordinary frames supply packet-owned rows.
+This preserves live UI while collider preparation proceeds. Astra passed the
+correction and complete sequence scope; the CLI regression covers the legacy
+combination. Nine-edge dev/ASan and five-edge Release rebuilds passed. All 22
+selected game-config nodes passed three loops (0.398 / 0.373 / 0.384 s).
+Format Check passed nine files; semantic style has zero blocking findings.
+
+Both Release/D3D12 shipped profiles, seed 42, passed the full sequence in
+`out/worldgen-scenario-v2-{frontier,hollows}.stdout.log`. Stationary and pan
+windows encoded 81–83 draws and twice as many dispatches, with zero terrain/table
+uploads, writes, serializations or growth waits. The presented seam edit uploaded
+65,536 bytes, one atlas publication and one resident-table build, settling in
+141.580 / 156.418 ms. Each preview/New Game uploaded 33,554,432 bytes; every case
+returned to one atlas and seven live texture entries/slots. Observed snapshot
+peaks were two atlases and fourteen live texture entries. Whole-process peaks
+including active+candidate and repeated replacement were 1,010,188,288 /
+1,014,214,656 working-set bytes; 100 ms sampled private peaks were 1,225,273,344 /
+1,232,449,536 bytes. Exact commands and process observations are in
+`out/worldgen-scenario-memory-v2.json`.
+
+These resource/command checks do not establish responsiveness. Frontier observed
+205.286 ms maximum live update gap and 210.627 ms retiring presentation-ack gap;
+Hollows observed 77.219 / 64.457 ms respectively. Control-poll gaps stayed near
+32 ms against configured 60 Hz/16.667 ms pacing. Independent maxima and phase
+boundary attribution do not prove the cause; these remain explicit acceptance
+concerns. Native input/Cancel latency, worker utilization/true queue depth, actor
+traversal, Inspector interaction and saved GPU profiler capture remain unverified.
+No existing scheduler API separates running work from true queued tasks.
+
+Fresh CPU seed-42 reports are in `out/worldgen-memory-acceptance/{frontier,hollows}-42`:
+retained known payloads 134,451,392 / 134,572,880 bytes; maximum known phase
+scratch 2,101,584 bytes in both. Raster scratch observations were 2,020,712 /
+2,037,092 bytes. Whole-process CPU peaks were 159,088,640 / 159,354,880 working-set
+and 183,623,680 / 183,898,112 sampled private bytes. Current checksums match the
+retained corpus. Accounting excludes opaque allocations, allocator overhead,
+reallocation overlap, stacks, content/physics/GPU storage and is not total memory.
+Full final matrix, current msvc-live build and remaining manual gates are pending.
