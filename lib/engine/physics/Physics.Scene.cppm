@@ -172,6 +172,11 @@ export namespace pP::physics {
 
         [[nodiscard]] std::error_code setAwake(BodyHandle handle, bool awake) noexcept;
 
+        /// Updates an existing movable body; identity, shapes and contacts survive.
+        [[nodiscard]] std::error_code setLinearVelocity(BodyHandle handle, float x_m_per_s, float y_m_per_s) noexcept;
+        /// Dynamic-body locomotion switches between ordinary gravity and climbing.
+        [[nodiscard]] std::error_code setGravityEnabled(BodyHandle handle, bool enabled) noexcept;
+
         [[nodiscard]] std::expected<bool, std::error_code> isAwake(BodyHandle handle) const noexcept;
 
         [[nodiscard]] std::expected<BodyState, std::error_code> state(BodyHandle handle) const noexcept;

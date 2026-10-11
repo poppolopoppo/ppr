@@ -576,6 +576,45 @@ namespace pP::physics {
         return b2Body_IsAwake(entry->m_body);
     }
 
+    std::error_code Scene::setLinearVelocity(
+        const BodyHandle handle, const float x_m_per_s, const float y_m_per_s) noexcept {
+        if (not m_runtime) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, error(std::errc::operation_not_permitted));
+        }
+        Runtime::Entry *const entry = m_runtime->find(handle);
+        if (entry == nullptr or not std::isfinite(x_m_per_s) or not std::isfinite(y_m_per_s)) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, error(std::errc::invalid_argument));
+        }
+        if (b2Body_GetType(entry->m_body) == b2_staticBody) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, error(std::errc::invalid_argument));
+        }
+
+        // Box2D tests squared length when waking; tiny finite velocities can
+        // underflow that test even though the requested velocity is nonzero.
+        if ((x_m_per_s != 0.0f or y_m_per_s != 0.0f) and not b2Body_IsAwake(entry->m_body)) {
+            b2Body_SetAwake(entry->m_body, true);
+        }
+        b2Body_SetLinearVelocity(entry->m_body, {x_m_per_s, y_m_per_s});
+        return {};
+    }
+
+    std::error_code Scene::setGravityEnabled(const BodyHandle handle, const bool enabled) noexcept {
+        if (not m_runtime) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, error(std::errc::operation_not_permitted));
+        }
+        Runtime::Entry *const entry = m_runtime->find(handle);
+        if (entry == nullptr or b2Body_GetType(entry->m_body) != b2_dynamicBody) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, error(std::errc::invalid_argument));
+        }
+
+        const float scale = enabled ? 1.0f : 0.0f;
+        if (b2Body_GetGravityScale(entry->m_body) != scale) {
+            b2Body_SetGravityScale(entry->m_body, scale);
+            b2Body_SetAwake(entry->m_body, true);
+        }
+        return {};
+    }
+
     std::expected<BodyState, std::error_code> Scene::state(const BodyHandle handle) const noexcept {
         if (not m_runtime) {
             return std::unexpected{error(std::errc::operation_not_permitted)};

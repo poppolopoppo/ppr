@@ -10,6 +10,66 @@ import std;
 
 namespace pP::tests::detail {
     namespace PhysicsSuite {
+        PPR_UNIT_TEST (checked_locomotion_preserves_body_identity_and_controls_gravity) {
+            physics::Scene scene;
+            PPR_TEST_ASSERT(scene.setLinearVelocity({}, 1.0f, 0.0f) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.setGravityEnabled({}, false) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            const std::array<u64, 2u> entities{17u, 18u};
+            std::array<physics::BodyDefinition, 2u> definitions{};
+            definitions[0u].m_motion = physics::EMotion::dynamic;
+            definitions[0u].m_y = 10.0f;
+            definitions[1u].m_x = 100.0f;
+            std::array<physics::BodyHandle, 2u> handles{};
+            PPR_TEST_ASSERT(not scene.createBodies(entities, definitions, handles));
+            const auto original = handles[0u];
+            PPR_TEST_ASSERT(not scene.setLinearVelocity(original, 2.0f, 3.0f));
+            auto state = scene.state(original);
+            PPR_TEST_ASSERT(state and state->m_velocity_x == 2.0f and state->m_velocity_y == 3.0f);
+            PPR_TEST_ASSERT(
+                scene.setLinearVelocity(original, std::numeric_limits<float>::quiet_NaN(), 0.0f) ==
+                std::errc::invalid_argument);
+            PPR_TEST_ASSERT(scene.state(original) == state);
+            PPR_TEST_ASSERT(
+                scene.setLinearVelocity(original, 0.0f, std::numeric_limits<float>::infinity()) ==
+                std::errc::invalid_argument);
+            PPR_TEST_ASSERT(scene.state(original) == state);
+            PPR_TEST_ASSERT(scene.setLinearVelocity(handles[1u], 1.0f, 0.0f) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(scene.setGravityEnabled(handles[1u], false) == std::errc::invalid_argument);
+
+            PPR_TEST_ASSERT(not scene.setLinearVelocity(original, -2.0f, 0.0f));
+            PPR_TEST_ASSERT(not scene.setGravityEnabled(original, false));
+            PPR_TEST_ASSERT(not scene.step());
+            state = scene.state(original);
+            PPR_TEST_ASSERT(state and state->m_velocity_x == -2.0f and state->m_velocity_y == 0.0f);
+            PPR_TEST_ASSERT(state->m_y == 10.0f);
+            PPR_TEST_ASSERT(not scene.setLinearVelocity(original, 0.0f, 0.0f));
+            for (u32 tick = 0u; tick < 180u; ++tick) {
+                PPR_TEST_ASSERT(not scene.step());
+            }
+            PPR_TEST_ASSERT(scene.isAwake(original).has_value() and not *scene.isAwake(original));
+            PPR_TEST_ASSERT(not scene.setGravityEnabled(original, false));
+            PPR_TEST_ASSERT(not *scene.isAwake(original));
+            PPR_TEST_ASSERT(not scene.setLinearVelocity(original, 1.0e-30f, 0.0f));
+            PPR_TEST_ASSERT(*scene.isAwake(original));
+            PPR_TEST_ASSERT(scene.state(original)->m_velocity_x == 1.0e-30f);
+            PPR_TEST_ASSERT(not scene.setAwake(original, false));
+            PPR_TEST_ASSERT(not scene.setGravityEnabled(original, true));
+            PPR_TEST_ASSERT(scene.isAwake(original).has_value() and *scene.isAwake(original));
+            PPR_TEST_ASSERT(not scene.step());
+            state = scene.state(original);
+            PPR_TEST_ASSERT(state and state->m_y < 10.0f and state->m_velocity_y < 0.0f);
+
+            PPR_TEST_ASSERT(not scene.destroyBody(original));
+            PPR_TEST_ASSERT(not scene.createBodies(
+                std::span{entities}.first(1u), std::span{definitions}.first(1u), std::span{handles}.first(1u)));
+            PPR_TEST_ASSERT(handles[0u] != original);
+            PPR_TEST_ASSERT(scene.setLinearVelocity(original, 0.0f, 0.0f) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(scene.setGravityEnabled(original, false) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not scene.shutdown());
+            PPR_TEST_ASSERT(scene.setLinearVelocity(handles[0u], 0.0f, 0.0f) == std::errc::operation_not_permitted);
+        };
+
         PPR_UNIT_TEST (fixed_replay_produces_identical_body_states) {
             physics::Scene first;
             physics::Scene second;
@@ -551,6 +611,7 @@ namespace pP::tests {
     const UnitTest physics = UnitTest::Named("physics") / [](UnitTest::IRun &_) -> void {
         _.recurse(
             {detail::PhysicsSuite::fixed_replay_produces_identical_body_states,
+                detail::PhysicsSuite::checked_locomotion_preserves_body_identity_and_controls_gravity,
                 detail::PhysicsSuite::quiescent_dynamic_body_sleeps_and_explicitly_wakes,
                 detail::PhysicsSuite::destroy_and_reset_invalidate_handles_without_aliasing,
                 detail::PhysicsSuite::dig_and_build_replace_chunk_boundaries,
