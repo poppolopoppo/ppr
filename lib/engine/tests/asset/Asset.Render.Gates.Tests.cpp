@@ -1844,25 +1844,31 @@ namespace pP::tests::detail {
                                     break;
                                 }
                             }
-                            u32 winner{};
-                            float closest = (std::numeric_limits<float>::max)();
-                            for (u32 corner = 0u; corner < 4u; ++corner) {
-                                if ((component & (1u << corner)) == 0u) {
-                                    continue;
-                                }
-                                const float dx = point.m_x - points[corner].m_x;
-                                const float dy = point.m_y - points[corner].m_y;
-                                const float distance = dx * dx + dy * dy;
-                                const bool before = points[corner].m_y < points[winner].m_y or
-                                                    (points[corner].m_y == points[winner].m_y and
-                                                        points[corner].m_x < points[winner].m_x);
-                                if (distance < closest or (distance == closest and before)) {
-                                    closest = distance;
-                                    winner = corner;
+                            u32 dominant{};
+                            for (const u32 corner: {0u, 1u, 3u, 2u}) {
+                                if ((component & (1u << corner)) != 0u) {
+                                    dominant = corner;
+                                    break;
                                 }
                             }
+                            u32 material = materials[dominant];
+                            // Distinct labels use midpoint-cut corner islands;
+                            // the spatially first label fills the remaining junction.
+                            for (u32 corner = 0u; corner < 4u; ++corner) {
+                                if ((component & (1u << corner)) == 0u or corner == dominant) {
+                                    continue;
+                                }
+                                const float distance = std::abs(point.m_x - points[corner].m_x) +
+                                                       std::abs(point.m_y - points[corner].m_y);
+                                near_edge = near_edge or std::abs(distance - 0.5f) < 0.03f;
+                                if (distance < 0.5f) {
+                                    material = materials[corner];
+                                }
+                            }
+                            if (near_edge) {
+                                continue;
+                            }
                             const auto texel = gateTexel_(*pixels, x, y);
-                            const u32 material = materials[winner];
                             for (u32 channel = 0u; channel < 3u; ++channel) {
                                 const i32 expected = component != 0u ? ((material & (1u << channel)) != 0u ? 217 : 38)
                                                      : channel == 2u ? 51
@@ -1917,6 +1923,146 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(outside[0u] < 80u and outside[1u] < 80u);
             }
             PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
+        };
+
+        PPR_UNIT_TEST (grid_material_contours_partition_solid_chunk_seams) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            const std::array<u32, 4u> chunks{0u, 1u, 33u, 32u};
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            for (const u32 chunk: chunks) {
+                const i32 x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 y = static_cast<i32>(chunk / 32u) * 128;
+                stage.m_tiles.push_back(
+                    GridTileSubmission{
+                        .m_chunk_id = chunk, .m_tile_range = {x, y, x + 128, y + 128}, .m_dirty_mask = 1u});
+            }
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{127.5f / 3.0f, 127.5f / 3.0f, 0.0f};
+            model.m_ortho_scale = 1.0f / (3.0f * 128.0f);
+            Camera camera;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+
+            struct MaterialCase {
+                std::array<u16, 4u> m_ids;
+                u32 m_dominant_corner;
+            };
+            Array<MaterialCase> fixtures;
+            for (u32 mask = 0u; mask < 16u; ++mask) {
+                MaterialCase fixture{};
+                u32 count{};
+                for (u32 corner = 0u; corner < 4u; ++corner) {
+                    fixture.m_ids[corner] = (mask & (1u << corner)) != 0u ? 1u : 2u;
+                    count += (mask >> corner) & 1u;
+                }
+                // A strict majority wins; a two/two tie uses the bottom-left label.
+                const u16 dominant = count > 2u ? 1u : count < 2u ? 2u : fixture.m_ids[0u];
+                for (u32 corner = 0u; corner < 4u; ++corner) {
+                    if (fixture.m_ids[corner] == dominant) {
+                        fixture.m_dominant_corner = corner;
+                        break;
+                    }
+                }
+                fixtures.push_back(fixture);
+            }
+            fixtures.push_back({{1u, 1u, 2u, 4u}, 0u});
+            fixtures.push_back({{1u, 2u, 1u, 4u}, 0u});
+            fixtures.push_back({{1u, 2u, 4u, 3u}, 0u});
+            fixtures.push_back({{1u, 2u, 3u, 2u}, 1u});
+            fixtures.push_back({{60001u, 65530u, 60004u, 60003u}, 0u});
+            fixtures.push_back({{65530u, 60001u, 65530u, 60001u}, 0u});
+
+            // Independent analytic polygons: midpoint cuts, no shader/table oracle.
+            const auto contains = [](const u32 mask, const float x, const float y) {
+                if (mask == 3u) {
+                    return y <= 0.5f;
+                }
+                if (mask == 6u) {
+                    return x >= 0.5f;
+                }
+                if (mask == 12u) {
+                    return y >= 0.5f;
+                }
+                if (mask == 9u) {
+                    return x <= 0.5f;
+                }
+                return ((mask & 1u) != 0u and x + y <= 0.5f) or
+                       ((mask & 2u) != 0u and 1.0f - x + y <= 0.5f) or
+                       ((mask & 4u) != 0u and 2.0f - x - y <= 0.5f) or
+                       ((mask & 8u) != 0u and x + 1.0f - y <= 0.5f);
+            };
+            for (const auto &fixture: fixtures) {
+                for (u32 corner = 0u; corner < 4u; ++corner) {
+                    Array<u16> cells;
+                    cells.resize(GridPass::kCellsPerChunk, 0u);
+                    const u32 x = corner == 0u or corner == 3u ? 127u : 0u;
+                    const u32 y = corner < 2u ? 127u : 0u;
+                    cells[y * 128u + x] = fixture.m_ids[corner];
+                    GridTilePayload payload{};
+                    const auto uploaded = grid.requestUpload(
+                        GridUploadRequest{chunks[corner], std::span{&payload, 1u}, std::span<const u16>{cells}});
+                    PPR_TEST_ASSERT(uploaded and *uploaded == 1u);
+                }
+                const auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 4u);
+                PPR_TEST_ASSERT(published and *published);
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"material contour seam", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto pixels = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                for (u32 y = 2u; y < 128u; y += 5u) {
+                    for (u32 x = 2u; x < 128u; x += 5u) {
+                        const float px = (static_cast<float>(x) + 0.5f) / 128.0f;
+                        const float py = 1.0f - (static_cast<float>(y) + 0.5f) / 128.0f;
+                        // Avoid exact raster/contour ties, including metric roundoff.
+                        if (std::min(
+                                {std::abs(px - 0.5f), std::abs(py - 0.5f), std::abs(px + py - 0.5f),
+                                    std::abs(px + py - 1.5f), std::abs(px - py - 0.5f), std::abs(py - px - 0.5f)}) <
+                            0.02f) {
+                            continue;
+                        }
+                        u16 material = fixture.m_ids[fixture.m_dominant_corner];
+                        for (u32 corner = 0u; corner < 4u; ++corner) {
+                            const u16 candidate = fixture.m_ids[corner];
+                            if (candidate == fixture.m_ids[fixture.m_dominant_corner]) {
+                                continue;
+                            }
+                            u32 mask{};
+                            for (u32 other = 0u; other < 4u; ++other) {
+                                mask |= fixture.m_ids[other] == candidate ? 1u << other : 0u;
+                            }
+                            if (contains(mask, px, py)) {
+                                material = candidate;
+                            }
+                        }
+                        const auto texel = gateTexel_(*pixels, x, y);
+                        for (u32 channel = 0u; channel < 3u; ++channel) {
+                            const i32 expected = (material & (1u << channel)) != 0u ? 217 : 38;
+                            PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[channel]) - expected) <= 2);
+                        }
+                    }
+                }
+            }
         };
 
         PPR_UNIT_TEST (grid_catalog_textures_use_sparse_ids_and_world_uvs) {
@@ -2229,6 +2375,7 @@ namespace pP::tests {
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
+            detail::Gate::grid_material_contours_partition_solid_chunk_seams,
             detail::Gate::grid_catalog_textures_use_sparse_ids_and_world_uvs,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
             detail::Gate::grid_diagnostics_cover_empty_biomes_and_preserve_terrain_modes,

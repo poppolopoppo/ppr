@@ -167,6 +167,66 @@ float contourCross(float2 a, float2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
+bool contourContains(uint mask, float2 point) {
+    ContourCase shape = g_contour_cases[mask];
+    for (uint index = 0u; index < shape.m_triangle_count; ++index) {
+        ContourTriangle triangle = shape.m_triangles[index];
+        float2 a = g_contour_points[triangle.m_a];
+        float2 b = g_contour_points[triangle.m_b];
+        float2 c = g_contour_points[triangle.m_c];
+        if (contourCross(b - a, point - a) >= 0.0 &&
+            contourCross(c - b, point - b) >= 0.0 &&
+            contourCross(a - c, point - c) >= 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint componentMaterial(float2 point, uint materials[4], uint component) {
+    uint masks[4] = {0u, 0u, 0u, 0u};
+    uint visited = 0u;
+    uint dominant = 0u;
+    uint largest = 0u;
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        if ((component & (1u << corner)) == 0u || (visited & (1u << corner)) != 0u) {
+            continue;
+        }
+        uint mask = 0u;
+        for (uint other = 0u; other < 4u; ++other) {
+            if ((component & (1u << other)) != 0u && materials[corner] == materials[other]) {
+                mask |= 1u << other;
+            }
+        }
+        if (mask == component) {
+            return materials[corner];
+        }
+        masks[corner] = mask;
+        visited |= mask;
+        uint count = countbits(mask);
+        float2 coordinate = g_contour_points[corner];
+        float2 previous = g_contour_points[dominant];
+        bool before = coordinate.y < previous.y ||
+            (coordinate.y == previous.y && coordinate.x < previous.x);
+        if (count > largest || (count == largest && before)) {
+            largest = count;
+            dominant = corner;
+        }
+    }
+    // Minority labels use the shared marching-square polygons. The dominant
+    // label fills their complement, including the centre at 3/4-label junctions.
+    // Equal counts prefer the lower-y/lower-x sample, never the numeric ID.
+    // In a fully occupied alternating saddle this connects the dominant label;
+    // keeping both labels disconnected would leave an unpainted centre.
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        if (masks[corner] != 0u && materials[corner] != materials[dominant] &&
+            contourContains(masks[corner], point)) {
+            return materials[corner];
+        }
+    }
+    return materials[dominant];
+}
+
 uint contourMaterial(float2 position, float width, out float coverage, out int2 winner) {
     winner = int2(4096);
     int2 base = int2(floor(position - 0.5));
@@ -216,9 +276,9 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
         return 0u;
     }
     float closest = 1.0e30;
-    uint material = 0u;
+    uint material = componentMaterial(point, materials, component);
     for (uint corner = 0u; corner < 4u; ++corner) {
-        if ((component & (1u << corner)) == 0u) {
+        if ((component & (1u << corner)) == 0u || materials[corner] != material) {
             continue;
         }
         float2 delta = point - g_contour_points[corner];
@@ -229,7 +289,6 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
         if (distance < closest || (distance == closest && before)) {
             closest = distance;
             winner = coordinate;
-            material = materials[corner];
         }
     }
     return material;

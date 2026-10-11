@@ -62,6 +62,15 @@ barriers and drawing share one encoder and submission.
   `0xFFFF` discards); otherwise the payload material is used. Catalog terrain
   resolves bindless textures and metre-period UVs; diagnostic modes use an owned
   palette. The low-three-bit tint remains only for explicit legacy fixtures.
+- Catalog contours partition solid materials through the shared marching-square
+  case table as well as clipping solid/empty coverage. Within each occupied
+  component, minority labels use their midpoint-cut polygons; the most frequent
+  label fills the complement. Count ties prefer the lower-y/lower-x sample,
+  independently of material IDs. This deliberately connects that label through
+  fully solid alternating saddles and fills multi-material junctions without holes.
+  Diagnostic sample selection stays within the chosen material. Uniform-material
+  components take a fast path; mixed components test at most three minority masks,
+  with no additional texture samples, uploads or draw calls.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
