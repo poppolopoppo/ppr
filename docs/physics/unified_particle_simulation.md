@@ -1,5 +1,13 @@
 # Adaptive Unified Particle Matter Framework
 
+> **Static-world milestone supersession (October 2026):** The adopted
+> [world-generation plan](../plans/static-world-generation-implementation-prompt.md)
+> supplies immutable static collider terrain plus contour-clipped initial-matter
+> spans with volume/mass and reference thickness. Those spans are unsimulated
+> baseline inputs, invalidated by terrain edits. This particle framework remains
+> future work; it does not authorize putting gas/liquid/granular IDs in static
+> terrain or promising live matter behavior in the current milestone.
+
 > **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
 
 ## Implementation specification for coding agents

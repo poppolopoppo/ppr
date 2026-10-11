@@ -1,5 +1,13 @@
 # AwayTeam Clone — Architecture (Implementation Contract)
 
+> **Static-world milestone supersession (October 2026):** The adopted
+> [world-generation plan](../plans/static-world-generation-implementation-prompt.md)
+> and [authoring guide](../worldgen-content.md) define the current authored static
+> terrain milestone: three fine cells per metre, textured shared contours and one
+> controlled actor. Gas/liquid/granular records are unsimulated initialization
+> metadata; particle simulation, structural pressure and survival remain future
+> work. Older cell-fluid assumptions below do not override that boundary.
+
 > **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
 
 > Scope: commercial-grade clone of Klei's **Away Team** (reference game ID 2168390 —

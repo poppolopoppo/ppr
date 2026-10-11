@@ -1,5 +1,12 @@
 # Away Team — Gameplay Loop + Mechanics + Inventory (Clone Spec)
 
+> **Static-world milestone supersession (October 2026):** Current scope follows
+> the [adopted world-generation plan](../plans/static-world-generation-implementation-prompt.md):
+> authored static terrain and direct control at three fine cells per metre.
+> Initial gas/liquid/granular metadata is labelled unsimulated. The fluid,
+> structural-pressure and survival mechanics described below remain proposals;
+> see the [authoring guide](../worldgen-content.md) for the implemented data boundary.
+
 > **Document scope:** Design/proposal record, not a current implementation inventory or repository-wide instruction. Apply its task-specific requirements only when the active task explicitly adopts this design. Verify implementation claims against source/CMake and the current [documentation guide](../README.md); historical paths, counts and phase status may be stale.
 
 > Title correction: **Away Team** (Steam 2168390), Klei. Not "Away-Team" / "AwayTeam".
