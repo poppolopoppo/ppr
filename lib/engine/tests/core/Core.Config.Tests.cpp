@@ -146,6 +146,41 @@ namespace pP::tests::detail::cfg {
         return layer;
     }
 
+    PPR_UNIT_TEST (bounded_diagnostics_preserve_failure_count_and_clear_contract) {
+        Diagnostics diagnostics{2u};
+        for (u32 index = 0u; index < 5u; ++index) {
+            diagnostics.add(
+                "pack.toml:2", "materials.bad", "Invalid material", make_error_code(EConfigErrc::codec_error));
+        }
+        PPR_TEST_ASSERT(diagnostics.hasErrors() and diagnostics.size() == 5u);
+        PPR_TEST_ASSERT(diagnostics.entries().size() == 2u and diagnostics.omittedCount() == 3u);
+        PPR_TEST_ASSERT(diagnostics.format().find("3 further diagnostics omitted") != std::string::npos);
+        diagnostics.clear();
+        PPR_TEST_ASSERT(not diagnostics.hasErrors() and diagnostics.size() == 0u and diagnostics.omittedCount() == 0u);
+        for (u32 index = 0u; index < 3u; ++index) {
+            diagnostics.add("", "", "Bad value", make_error_code(EConfigErrc::out_of_range));
+        }
+        PPR_TEST_ASSERT(diagnostics.entries().size() == 2u and diagnostics.omittedCount() == 1u);
+
+        Diagnostics no_records{0u};
+        const auto layer = singleLayer(ESource::cli, "perf.cap_hz", SourceValue::text("invalid"));
+        const auto result = resolve<PerfSettings>(std::span{&layer, 1u}, no_records);
+        PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::invalid_integer));
+        PPR_TEST_ASSERT(no_records.entries().empty() and no_records.hasErrors() and no_records.size() != 0u);
+        no_records.clear();
+        no_records.addOmitted((std::numeric_limits<std::size_t>::max)());
+        no_records.addOmitted(1u);
+        PPR_TEST_ASSERT(no_records.hasErrors());
+        PPR_TEST_ASSERT(no_records.size() == (std::numeric_limits<std::size_t>::max)());
+        PPR_TEST_ASSERT(no_records.omittedCount() == no_records.size());
+        PPR_TEST_ASSERT(no_records.hasErrorsSince(no_records.size()));
+        PPR_TEST_ASSERT(not validateSchema<PerfSettings>(no_records));
+        PPR_TEST_ASSERT(not validateEnvironmentSchema<PerfSettings>(no_records));
+        PPR_TEST_ASSERT(not validateCliSchema<PerfSettings>(CliSchema{}, no_records));
+        no_records.clear();
+        PPR_TEST_ASSERT(validateSchema<PerfSettings>(no_records).has_value());
+    };
+
     PPR_UNIT_TEST (defaults_resolve) {
         Diagnostics diagnostics{};
         const auto result = resolve<PerfSettings>(std::span<const Layer>{}, diagnostics);
@@ -653,6 +688,7 @@ namespace pP::tests {
     const UnitTest config = UnitTest::Named("config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::cfg::defaults_resolve,
+            detail::cfg::bounded_diagnostics_preserve_failure_count_and_clear_contract,
             detail::cfg::precedence_across_layers,
             detail::cfg::source_subsets_are_valid,
             detail::cfg::last_assignment_wins_within_layer,

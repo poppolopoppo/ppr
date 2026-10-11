@@ -173,8 +173,15 @@ namespace pP::config {
         }
     }
 
+    Diagnostics::Diagnostics(const std::size_t max_entries) noexcept : m_max_entries(max_entries) {
+    }
+
     void Diagnostics::add(
         std::string location, std::string property, std::string message, std::error_code code, std::string alias) {
+        addOmitted(1u);
+        if (m_entries.size() >= m_max_entries) {
+            return;
+        }
         m_entries.push_back(
             Diagnostic{
                 std::move(location),
@@ -183,6 +190,11 @@ namespace pP::config {
                 std::move(message),
                 code,
             });
+    }
+
+    void Diagnostics::addOmitted(const std::size_t count) noexcept {
+        const auto available = (std::numeric_limits<std::size_t>::max)() - m_total_count;
+        m_total_count += std::min(count, available);
     }
 
     [[nodiscard]] std::string Diagnostics::format() const {
@@ -204,6 +216,9 @@ namespace pP::config {
                 result += configFormat(" [{}]", entry.m_code.message());
             }
             result += '\n';
+        }
+        if (omittedCount() != 0u) {
+            result += configFormat("{} further diagnostics omitted (record limit reached).\n", omittedCount());
         }
         return result;
     }

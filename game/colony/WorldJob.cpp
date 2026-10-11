@@ -12,7 +12,7 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldJobs, info, none)
     struct WorldJob::State {
         ColonyDriverDesc m_request{};
-        config::Diagnostics m_diagnostics{};
+        config::Diagnostics m_diagnostics{64u};
         std::string m_diagnostic_text{};
         SharedContext m_context{};
         context::CancelClauseFunc m_cancel{};

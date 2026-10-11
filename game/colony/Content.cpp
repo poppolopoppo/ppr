@@ -716,6 +716,7 @@ namespace pP::colony {
                     diagnostic.m_location, std::string{prefix} + diagnostic.m_property, diagnostic.m_message,
                     diagnostic.m_code, diagnostic.m_alias);
             }
+            to.addOmitted(from.omittedCount());
         }
 
         [[nodiscard]] std::string_view fieldLocation(
@@ -728,7 +729,7 @@ namespace pP::colony {
         [[nodiscard]] Expected<Record> resolveRecord(
             const Document &document, const std::span<const std::string_view> required, const std::string_view origin,
             Diagnostics &diagnostics, const std::string_view prefix) {
-            Diagnostics local{};
+            Diagnostics local{64u};
             const auto presence = requireFields(document, origin, local, required);
             if (presence) {
                 appendDiagnostics(diagnostics, local, prefix);
@@ -1862,15 +1863,11 @@ namespace pP::colony {
 
         ContentCatalog catalog{};
         for (const auto &[key, group]: *groups) {
-            Diagnostics local{};
+            Diagnostics local{64u};
             auto material = compileMaterial(key, group, origin, local);
             // Resolution uses local schema names. Restore the complete authored
             // key on every diagnostic before propagating its original error.
-            for (const auto &diagnostic: local.entries()) {
-                diagnostics.add(
-                    diagnostic.m_location, "materials." + key + "." + diagnostic.m_property, diagnostic.m_message,
-                    diagnostic.m_code, diagnostic.m_alias);
-            }
+            appendDiagnostics(diagnostics, local, "materials." + key + ".");
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, material);
             if (const auto *const previous = catalog.findMaterial(material->m_numeric_id)) {
                 const auto id = std::ranges::find(group.m_entries, "numeric_id", &Entry::m_key);
@@ -1976,13 +1973,9 @@ namespace pP::colony {
         Array<FieldDefinition> fields{};
         fields.reserve(groups->size());
         for (const auto &[key, group]: *groups) {
-            Diagnostics local{};
+            Diagnostics local{64u};
             auto field = compileField(key, group, origin, local);
-            for (const auto &diagnostic: local.entries()) {
-                diagnostics.add(
-                    diagnostic.m_location, "fields." + key + "." + diagnostic.m_property, diagnostic.m_message,
-                    diagnostic.m_code, diagnostic.m_alias);
-            }
+            appendDiagnostics(diagnostics, local, "fields." + key + ".");
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, field);
             fields.push_back(std::move(*field));
         }

@@ -368,6 +368,31 @@ frequency_per_metre = 0.125
         PPR_TEST_ASSERT(not decodeMaterialCatalog(source, "quoted.toml", diagnostics).has_value());
     };
 
+    PPR_UNIT_TEST (excess_diagnostics_remain_bounded_and_reject_content) {
+        std::string extras{};
+        for (u32 i = 0u; i < 200u; ++i) {
+            extras += "unknown_" + std::to_string(i) + " = 1\n";
+        }
+        config::Diagnostics forwarded{};
+        const auto material = decodeMaterialCatalog("schema_version = 1\n" + rock + extras, "many.toml", forwarded);
+        PPR_TEST_ASSERT(not material and forwarded.hasErrors());
+        PPR_TEST_ASSERT(forwarded.entries().size() == 64u);
+        PPR_TEST_ASSERT(forwarded.size() == 200u and forwarded.omittedCount() == 136u);
+        PPR_TEST_ASSERT(forwarded.entries().front().m_property.starts_with("materials.sandstone."));
+        PPR_TEST_ASSERT(forwarded.format().find("136 further diagnostics omitted") != std::string::npos);
+
+        config::Diagnostics capped{2u};
+        const auto fields = decodeFieldDefinitions(
+            "schema_version = 1\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n" + extras,
+            "many-fields.toml", capped);
+        PPR_TEST_ASSERT(not fields and capped.hasErrors());
+        PPR_TEST_ASSERT(capped.entries().size() == 2u and capped.size() == 200u and capped.omittedCount() == 198u);
+        PPR_TEST_ASSERT(capped.entries().front().m_property.starts_with("fields.caves."));
+        // A full collector must still reject a later invalid record.
+        const auto repeated = decodeMaterialCatalog("schema_version = 1\n" + rock + extras, "again.toml", capped);
+        PPR_TEST_ASSERT(not repeated and capped.entries().size() == 2u and capped.size() == 400u);
+    };
+
     PPR_UNIT_TEST (allocation_failure_reaches_fatal_boundary) {
         const std::string source = "schema_version = 1\n" + rock;
         config::Diagnostics diagnostics{};
@@ -399,6 +424,7 @@ namespace pP::game::tests {
                 detail::content::typed_fields_are_owned_sorted_and_compile_to_noise,
                 detail::content::field_required_values_and_numeric_limits_are_enforced,
                 detail::content::field_optional_controls_accept_finite_inclusive_endpoints,
+                detail::content::excess_diagnostics_remain_bounded_and_reject_content,
                 detail::content::allocation_failure_reaches_fatal_boundary});
     };
     const UnitTest &gameContentTests() noexcept {

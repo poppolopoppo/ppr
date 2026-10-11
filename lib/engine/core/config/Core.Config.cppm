@@ -427,16 +427,22 @@ export namespace pP::config {
 
     class Diagnostics {
         Array<Diagnostic> m_entries{};
+        std::size_t m_max_entries{(std::numeric_limits<std::size_t>::max)()};
+        std::size_t m_total_count{};
 
     public:
         Diagnostics() = default;
+        /// Retain the first max_entries records; counting and failure remain visible after the cap.
+        explicit Diagnostics(std::size_t max_entries) noexcept;
 
         void add(
             std::string location, std::string property, std::string message, std::error_code code,
             std::string alias = {});
+        /// Preserve failure multiplicity when forwarding an already capped collector.
+        void addOmitted(std::size_t count) noexcept;
 
         [[nodiscard]] bool hasErrors() const noexcept {
-            return not m_entries.empty();
+            return m_total_count != 0u;
         }
 
         [[nodiscard]] const Array<Diagnostic> &entries() const noexcept {
@@ -444,11 +450,21 @@ export namespace pP::config {
         }
 
         [[nodiscard]] std::size_t size() const noexcept {
-            return m_entries.size();
+            return m_total_count;
+        }
+
+        [[nodiscard]] std::size_t omittedCount() const noexcept {
+            return m_total_count - m_entries.size();
+        }
+
+        /// A saturated counter cannot prove absence of additional errors; fail closed until clear().
+        [[nodiscard]] bool hasErrorsSince(const std::size_t before) const noexcept {
+            return m_total_count != before or m_total_count == (std::numeric_limits<std::size_t>::max)();
         }
 
         void clear() {
             m_entries.clear();
+            m_total_count = 0u;
         }
 
         [[nodiscard]] std::string format() const;
@@ -986,7 +1002,7 @@ export namespace pP::config {
             }
         }
 
-        if (diagnostics.size() != before) {
+        if (diagnostics.hasErrorsSince(before)) {
             return std::unexpected{make_error_code(EConfigErrc::schema_invalid)};
         }
         return Expected<void>{};

@@ -533,3 +533,9 @@ The offscreen GPU manifest additionally records CPU submission duration, host
 completion wait and existing atlas/resident-table counters. Host completion wait
 is not isolated GPU terrain cost. The diagnostic host is frozen and blocking;
 its numbers do not certify interactive responsiveness.
+
+Content diagnostics retain the first 64 records in production loading jobs and
+CLI commands. Nested schema collectors preserve the total omitted count when
+forwarding that prefix. The UI also bounds displayed text; source/texture byte
+limits are independent. Allocation failures still escape to the fatal application
+boundary after accepted worker tasks drain.

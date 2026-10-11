@@ -560,3 +560,21 @@ Commands and memory: `out/worldgen-interactive-memory-v1.json`; reports:
 `out/worldgen-interactive-hollows.stdout.log`. These startup runs do not measure
 active-plus-candidate reload memory or native input latency. Format Check passed
 five telemetry C++ files; semantic style has zero blocking findings.
+
+## Bounded content diagnostics
+
+Production job/CLI collectors and temporary content-schema collectors now retain
+at most 64 records each. Failure counts survive truncation and nested forwarding;
+formatted/UI/CLI diagnostics expose omissions. Defaults remain uncapped for
+existing callers. A saturated total fails closed in schema, environment and CLI
+validation until clear(), so a full collector cannot turn malformed input into
+success. Bad allocation remains fatal.
+
+Astra passed after correcting nested omission multiplicity and saturated-count
+validation. The final 410-edge ASan build passed, followed by three shuffled
+loops of all 64 selected core configuration nodes (2.01 s / 0.699 s / 1.80 s)
+and 49 selected game nodes (9.78 s / 7.32 s / 7.51 s), including malformed
+200-field content, exact nested omission counts and world-job lifetime paths.
+Logs: `out/worldgen-diagnostics-{build,core-tests,game-tests}-v3.log`.
+Format Check passed nine files; semantic style has zero blocking findings.
+The final phase-7 full matrix and runtime acceptance remain outstanding.

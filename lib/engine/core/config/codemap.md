@@ -64,3 +64,9 @@ settings and game invocation/display modules for current consumers.
 - `Core.Config.Cli.cppm/.cpp` — CLI tokenization, bindings, help
 - `Core.Config.Environment.cppm/.cpp` — env-name mapping, injected lookup
 - `Core.Config.File.cppm/.cpp` — document, codec seam, TOML subset
+
+`Diagnostics(max_entries)` bounds retained records while `size()` counts all
+reported failures, including omissions. `entries()` is the retained prefix;
+`clear()` resets counts and preserves the cap. World generation uses a 64-record
+cap at the job/CLI boundary and in schema-resolution temporaries. Source byte
+limits still apply independently; this is not an exact diagnostic-byte budget.

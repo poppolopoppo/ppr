@@ -108,7 +108,7 @@ export namespace pP::config {
             }
         }
 
-        if (diagnostics.size() != before) {
+        if (diagnostics.hasErrorsSince(before)) {
             return std::unexpected{make_error_code(EConfigErrc::schema_invalid)};
         }
         return Expected<void>{};

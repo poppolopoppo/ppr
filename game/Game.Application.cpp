@@ -42,19 +42,17 @@ namespace demo {
             const auto executable = pP::hal::process::currentExecutablePath();
             root = executable.parent_path() / "worldgen" / "default";
         }
-        pP::config::Diagnostics content_diagnostics{};
+        pP::config::Diagnostics content_diagnostics{64u};
         auto catalog = pP::colony::loadContentCatalog(root, content_diagnostics);
         if (not catalog) {
             std::cerr << "[worldgen] " << catalog.error().message() << '\n';
-            std::size_t count = 0u;
             for (const auto &entry: content_diagnostics.entries()) {
-                if (count++ == 64u) {
-                    std::cerr << "[worldgen] Further diagnostics omitted\n";
-                    break;
-                }
                 std::cerr << std::string_view{entry.m_location}.substr(0u, 1024u) << ": "
                           << std::string_view{entry.m_property}.substr(0u, 256u) << ": "
                           << std::string_view{entry.m_message}.substr(0u, 1024u) << '\n';
+            }
+            if (content_diagnostics.omittedCount() != 0u) {
+                std::cerr << "[worldgen] " << content_diagnostics.omittedCount() << " further diagnostics omitted\n";
             }
             return 1;
         }
