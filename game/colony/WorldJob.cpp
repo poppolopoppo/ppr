@@ -20,6 +20,8 @@ namespace pP::colony {
         std::unique_ptr<ColonyDriver> m_candidate{};
         std::unique_ptr<ColonyDriver> m_retired{};
         std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
+        Capture m_capture{};
+        bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
     };
 
     WorldJob::WorldJob(ParallelScheduler &chunks) : WorldJob(chunks, Prepare{}) {
@@ -67,16 +69,86 @@ namespace pP::colony {
         return m_job != nullptr;
     }
 
+    std::error_code WorldJob::requestCapture(std::unique_ptr<ColonyDriver> &frozen, Capture capture) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldJobs, busy() ? std::make_error_code(std::errc::device_or_resource_busy) : std::error_code{});
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldJobs, frozen and capture ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldJobs, m_next_id != 0u ? std::error_code{} : std::make_error_code(std::errc::value_too_large));
+
+        auto state = std::make_shared<State>();
+        std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
+        state->m_capture = std::move(capture);
+        state->m_is_capture = true;
+        state->m_candidate = std::move(frozen);
+        m_job = std::move(state);
+        m_view = WorldJobView{
+            .m_id = m_next_id++, .m_state = EWorldJobState::queued, .m_stage = EWorldJobStage::capturing};
+        m_diagnostic_text.clear();
+        m_cancelled = false;
+        m_publication_committed = false;
+        return {};
+    }
+
+    std::error_code WorldJob::updateCapture_(const bool loading_presented) {
+        if (m_view.m_state == EWorldJobState::queued) {
+            if (m_cancelled) {
+                m_view.m_error = std::make_error_code(std::errc::operation_canceled);
+                m_view.m_state = EWorldJobState::prepared;
+                return {};
+            }
+            if (not loading_presented) {
+                return {};
+            }
+            const auto state = m_job;
+            auto task = m_coordinator.schedule(
+                [state](const IContext &) -> std::error_code {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
+                    PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_capture(*state->m_candidate, *state->m_context));
+                    PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
+                    return {};
+                },
+                std::nullopt, ParallelScheduler::drop_if_full);
+            if (not task and task.error() == make_error_code(RawChannel::error_full)) {
+                return {}; // Keep exclusive ownership and retry without waiting.
+            }
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, task);
+            m_task = std::move(*task);
+            m_view.m_state = EWorldJobState::generating;
+        }
+        if (m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
+            m_view.m_error = m_task.get(); // Ready; allocation exceptions remain fatal.
+            if (m_cancelled) {
+                m_view.m_error = std::make_error_code(std::errc::operation_canceled);
+            }
+            m_view.m_state = EWorldJobState::prepared;
+        }
+        return {};
+    }
+
+    std::unique_ptr<ColonyDriver> WorldJob::takeCaptured() {
+        PPR_ASSERT(m_job and m_job->m_is_capture and m_view.m_state == EWorldJobState::prepared);
+        auto owner = std::move(m_job->m_candidate);
+        m_view.m_state = EWorldJobState::retiring;
+        m_view.m_stage = EWorldJobStage::retiring;
+        m_cleanup_pending = true;
+        return owner;
+    }
+
     void WorldJob::cancel() noexcept {
         if (m_job and not m_publication_committed and m_view.m_state != EWorldJobState::retiring) {
             m_cancelled = true;
             m_job->m_cancel(std::make_error_code(std::errc::operation_canceled));
+            if (m_job->m_is_capture and m_view.m_state == EWorldJobState::prepared) {
+                m_view.m_error = std::make_error_code(std::errc::operation_canceled);
+            }
         }
     }
 
     WorldJobView WorldJob::view() const noexcept {
         auto result = m_view;
-        if (m_job and result.m_state == EWorldJobState::generating) {
+        if (m_job and not m_job->m_is_capture and result.m_state == EWorldJobState::generating) {
             switch (m_job->m_stage.load(std::memory_order_acquire)) {
                 case sim::EGenerationStage::layout: result.m_stage = EWorldJobStage::layout; break;
                 case sim::EGenerationStage::terrain:
@@ -90,7 +162,10 @@ namespace pP::colony {
                 case sim::EGenerationStage::complete: result.m_stage = EWorldJobStage::physics; break;
             }
         }
-        if (m_cancelled and m_job and result.m_state != EWorldJobState::retiring) {
+        if (m_cancelled and
+            m_job and
+            result.m_state != EWorldJobState::retiring and
+            (not m_job->m_is_capture or result.m_state != EWorldJobState::prepared)) {
             result.m_state = EWorldJobState::cancelling;
         }
         return result;
@@ -106,6 +181,7 @@ namespace pP::colony {
             [state](const IContext &) -> std::error_code {
                 std::error_code error{};
                 state->m_presentation.reset();
+                state->m_capture = {}; // Captured output owners are also disposed off-main.
                 if (state->m_candidate) {
                     PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, state->m_candidate->shutdown());
                     state->m_candidate.reset();
@@ -132,6 +208,9 @@ namespace pP::colony {
         }
         if (m_cleanup_pending) {
             return admitCleanup_();
+        }
+        if (m_job->m_is_capture and m_view.m_state != EWorldJobState::retiring) {
+            return updateCapture_(loading_presented);
         }
         if (m_view.m_state == EWorldJobState::queued) {
             if (m_cancelled) {

@@ -109,6 +109,13 @@ export namespace pP::sim {
     /// Captures dirty grid chunks and the complete ECS slot/column state.
     [[nodiscard]] Snapshot capture(const ChunkGrid &grid, const Registry &registry, u64 seed);
 
+    /// Copies every resident chunk in row-major order without changing dirt.
+    /// The caller grants exclusive access to frozen grid/ECS state throughout.
+    /// Cancellation is checked between chunks; no partial snapshot is returned.
+    [[nodiscard]] Expected<Snapshot> captureFull(const ChunkGrid &grid, u64 seed, const IContext *context = nullptr);
+    [[nodiscard]] Expected<Snapshot> captureFull(
+        const ChunkGrid &grid, const Registry &registry, u64 seed, const IContext *context = nullptr);
+
     /// Validates the whole snapshot first and mutates `grid` only when every
     /// delta is well-formed; a rejected snapshot leaves the grid untouched.
     /// `apply` MERGES the deltas into the target: chunks absent from the

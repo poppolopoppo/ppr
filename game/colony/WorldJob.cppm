@@ -29,7 +29,8 @@ export namespace pP::colony {
         validation,
         physics,
         publishing,
-        retiring
+        retiring,
+        capturing
     };
 
     struct WorldJobView {
@@ -49,6 +50,7 @@ export namespace pP::colony {
     public:
         using Prepare = std23::move_only_function<Expected<std::unique_ptr<ColonyDriver>>(
             const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)>;
+        using Capture = std23::move_only_function<std::error_code(const ColonyDriver &, const IContext &)>;
         explicit WorldJob(ParallelScheduler &chunks);
         WorldJob(ParallelScheduler &chunks, Prepare prepare);
         ~WorldJob() noexcept;
@@ -56,6 +58,13 @@ export namespace pP::colony {
         WorldJob &operator=(const WorldJob &) = delete;
 
         [[nodiscard]] std::error_code request(ColonyDriverDesc request);
+        /// Caller freezes at a completed tick and mirrors Scene state first.
+        /// Transfers ownership only on success. Until takeCaptured(), all live
+        /// inspection, ticks, tools and render acknowledgments must be deferred.
+        [[nodiscard]] std::error_code requestCapture(std::unique_ptr<ColonyDriver> &frozen, Capture capture);
+        /// Returns the frozen owner after success, failure or cancellation.
+        /// The caller restores pause state and neutral input before resuming.
+        [[nodiscard]] std::unique_ptr<ColonyDriver> takeCaptured();
         void cancel() noexcept;
         /// Non-waiting admission and readiness polling. Initial admission is
         /// withheld until a successful loading-screen presentation is observed.
@@ -92,6 +101,7 @@ export namespace pP::colony {
         bool m_cancelled{};
         bool m_publication_committed{};
         [[nodiscard]] std::error_code admitCleanup_();
+        [[nodiscard]] std::error_code updateCapture_(bool loading_presented);
     };
 
 }

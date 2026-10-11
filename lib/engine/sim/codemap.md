@@ -186,3 +186,9 @@ snapshot.
 World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. The current numeric recipe is retained until compiled data-driven generation replaces it.
 
 The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. The legacy generator is not switched to this adapter yet; compiled content recipes remain pending.
+
+`captureFull(grid[, registry], seed, context)` is the additive full-residency
+capture boundary for an exclusively frozen world. It copies all resident chunks
+row-major, keeps dirt unchanged and preserves the existing v4 ECS/body format;
+ordinary `capture` remains a dirty-rectangle delta. Cancellation yields no partial
+snapshot. Game checkpoint identity stays outside sim.

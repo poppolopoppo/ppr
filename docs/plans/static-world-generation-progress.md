@@ -354,3 +354,23 @@ Astra review passed. The earlier Release authored run exited cleanly after
 logging threshold filters publication messages; this is not proof of visual
 publication or measured UI cadence. Diagnostic modes, coherent edit/collider
 publication, checkpoint capture/restore/exports and final acceptance remain open.
+
+The existing WorldJob coordinator now also accepts exclusive frozen-session
+captures. Admission transfers the stable driver owner; queued, running and ready
+operations remain pollable/cancellable, block another job, and return the owner
+on success, recoverable failure or cancellation before worker-side payload
+cleanup. A prepared cancellation consistently exposes operation_canceled.
+Job kind is immutable so cleanup never races callback inspection. Interactive
+freeze/ack deferral and diagnostic output are the next integration, not implied
+by this foundation.
+
+The additive sim::captureFull API copies every resident chunk in row-major order,
+leaves dirty rectangles untouched, preserves ECS/body sections and checks
+cancellation between chunks. It retains the v4 codec and ordinary dirty capture.
+ASan build passed 88 edges in `out/worldgen-capture-build.log`; snapshot suites
+passed three shuffled loops (139.2/133.9/129.5 ms) in
+`out/worldgen-capture-sim-tests.log`, and world-job suites passed three loops
+(4.38/4.77/5.39 s) in `out/worldgen-capture-job-tests.log`. Format/style and
+independent Astra review passed after correcting a cleanup race, test
+registration and ready-cancellation consistency. IDE inspection remains
+unavailable from the earlier timed-out inspection attempt; no new pass claimed.

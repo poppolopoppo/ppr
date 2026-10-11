@@ -117,6 +117,58 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(*loaded == snapshot);
         };
 
+        PPR_UNIT_TEST (full_capture_includes_clean_residents_without_changing_dirty_rects) {
+            ChunkGrid grid{};
+            const GlobalCellPos clean{130u, 259u};
+            const GlobalCellPos dirty{2u, 3u};
+            PPR_TEST_ASSERT(not grid.setCell(clean, Cell{257u, 280.5f}));
+            grid.clearAllDirty();
+            PPR_TEST_ASSERT(not grid.setCell(dirty, Cell{9u, 315.25f}));
+            const auto before = capture(grid, 42u);
+            const auto full = captureFull(grid, 42u);
+            PPR_TEST_ASSERT(full.has_value());
+            PPR_TEST_ASSERT(full->m_deltas.size() == 2u);
+            PPR_TEST_ASSERT(full->m_deltas[0].m_chunk == 0u);
+            PPR_TEST_ASSERT(full->m_deltas[1].m_chunk == chunkIndexOf(chunkOf(clean)));
+            for (const auto &delta: full->m_deltas) {
+                PPR_TEST_ASSERT(delta.m_x == 0u and delta.m_y == 0u);
+                PPR_TEST_ASSERT(delta.m_width == kChunkEdge and delta.m_height == kChunkEdge);
+                PPR_TEST_ASSERT(delta.m_cells.size() == kCellsPerChunk);
+            }
+            PPR_TEST_ASSERT(capture(grid, 42u) == before);
+            const auto bytes = save(*full);
+            PPR_TEST_ASSERT(bytes.has_value());
+            const auto decoded = load(*bytes);
+            PPR_TEST_ASSERT(decoded.has_value());
+            PPR_TEST_ASSERT(*decoded == *full);
+            ChunkGrid restored{};
+            PPR_TEST_ASSERT(not apply(restored, *decoded));
+            PPR_TEST_ASSERT(restored.getCell(clean).value() == (Cell{257u, 280.5f}));
+            PPR_TEST_ASSERT(restored.getCell(dirty).value() == (Cell{9u, 315.25f}));
+        };
+
+        PPR_UNIT_TEST (full_capture_preserves_ecs_bodies_and_rejects_cancellation) {
+            ChunkGrid grid{};
+            grid.markDirty(ChunkPos{1u, 2u});
+            grid.clearAllDirty();
+            Registry registry{};
+            PPR_TEST_ASSERT(registry.registerComponent<BodyState>().has_value());
+            const auto actor = registry.create();
+            registry.emplace(actor, BodyState{.m_x = 10.0f, .m_y = 20.0f, .m_velocity_x = 1.5f});
+            const auto expected = capture(grid, registry, 7u);
+            const auto full = captureFull(grid, registry, 7u);
+            PPR_TEST_ASSERT(full.has_value());
+            PPR_TEST_ASSERT(full->m_ecs == expected.m_ecs);
+            PPR_TEST_ASSERT(full->m_bodies == expected.m_bodies);
+            PPR_TEST_ASSERT(full->m_deltas.size() == 1u);
+            auto [context, cancel] = context::withCancel(context::background());
+            cancel();
+            const auto rejected = captureFull(grid, registry, 7u, context.get());
+            PPR_TEST_ASSERT(not rejected.has_value());
+            PPR_TEST_ASSERT(rejected.error() == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(grid.dirtyChunkCount() == 0u);
+        };
+
         PPR_UNIT_TEST (save_load_round_trip) {
             constexpr u64 kSeed = 0x0123456789ABCDEFull;
             const Snapshot snapshot = singleCellSnapshot(GlobalCellPos{3u, 4u}, Cell{11u, 271.5f}, kSeed);
@@ -713,6 +765,8 @@ namespace pP::tests {
             detail::SnapshotSuite::capture_orders_two_dirty_chunks_row_major,
             detail::SnapshotSuite::capture_of_marked_dirty_chunk_is_zero_filled,
             detail::SnapshotSuite::capture_of_clean_grid_is_empty,
+            detail::SnapshotSuite::full_capture_includes_clean_residents_without_changing_dirty_rects,
+            detail::SnapshotSuite::full_capture_preserves_ecs_bodies_and_rejects_cancellation,
             detail::SnapshotSuite::save_load_round_trip,
             detail::SnapshotSuite::save_load_round_trip_with_deltas_and_streams,
             detail::SnapshotSuite::byte_layout_is_stable,

@@ -14,6 +14,7 @@ import engine.math;
 import std;
 
 namespace pP::sim {
+    PPR_DEFINE_LOG_CATEGORY(SnapshotLog, info, none)
     // ------------------------------------------------------------------
     // snapshot error category
     // ------------------------------------------------------------------
@@ -287,25 +288,62 @@ namespace pP::sim {
         return snapshot;
     }
 
+    namespace {
+        void captureRegistry(Snapshot &snapshot, const Registry &registry) {
+            snapshot.m_ecs = registry.dump();
+            // MSVC C1001 ICEs on const-View and const Registry::get<BodyState> across partitions;
+            // traverse the already-dumped column instead of instantiating either.
+            const auto body_id = registry.componentId<BodyState>();
+            if (body_id.has_value()) {
+                const EcsColumnData &column = snapshot.m_ecs.m_columns[*body_id];
+                for (std::size_t row = 0u; row < column.m_owners.size(); ++row) {
+                    BodyState state{};
+                    PPR_ASSERT(column.m_stride == sizeof(BodyState));
+                    std::memcpy(&state, column.m_bytes.data() + row * column.m_stride, column.m_stride);
+                    snapshot.m_bodies.m_records.push_back({column.m_owners[row], state, true});
+                }
+            }
+            std::ranges::sort(snapshot.m_bodies.m_records, [](const BodyRecord &left, const BodyRecord &right) {
+                return left.m_entity.m_index < right.m_entity.m_index;
+            });
+        }
+    }
+
     Snapshot capture(const ChunkGrid &grid, const Registry &registry, const u64 seed) {
         const hal::ProfileScope scope{"Sim.Snapshot.Capture"};
         Snapshot snapshot = capture(grid, seed);
-        snapshot.m_ecs = registry.dump();
-        // MSVC C1001 ICEs on const-View and const Registry::get<BodyState> across partitions;
-        // traverse the already-dumped column instead of instantiating either.
-        const auto body_id = registry.componentId<BodyState>();
-        if (body_id.has_value()) {
-            const EcsColumnData &column = snapshot.m_ecs.m_columns[*body_id];
-            for (std::size_t row = 0u; row < column.m_owners.size(); ++row) {
-                BodyState state{};
-                PPR_ASSERT(column.m_stride == sizeof(BodyState));
-                std::memcpy(&state, column.m_bytes.data() + row * column.m_stride, column.m_stride);
-                snapshot.m_bodies.m_records.push_back({column.m_owners[row], state, true});
+        captureRegistry(snapshot, registry);
+        return snapshot;
+    }
+
+    Expected<Snapshot> captureFull(const ChunkGrid &grid, const u64 seed, const IContext *const context) {
+        using pP::make_error_code;
+        const hal::ProfileScope scope{"Sim.Snapshot.CaptureFull"};
+        Snapshot snapshot{};
+        snapshot.m_seed = seed;
+        snapshot.m_deltas.reserve(grid.residentChunkCount());
+        for (u32 index = 0u; index < kChunkCount; ++index) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, context ? context->error() : std::error_code{});
+            const ChunkPos chunk{index % kChunksPerEdge, index / kChunksPerEdge};
+            const auto cells = grid.residentCells(chunk);
+            if (not cells) {
+                continue;
             }
+            ChunkDelta delta{.m_chunk = index, .m_width = kChunkEdge, .m_height = kChunkEdge};
+            delta.m_cells.assign(cells->begin(), cells->end());
+            snapshot.m_deltas.push_back(std::move(delta));
         }
-        std::ranges::sort(snapshot.m_bodies.m_records, [](const BodyRecord &left, const BodyRecord &right) {
-            return left.m_entity.m_index < right.m_entity.m_index;
-        });
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, context ? context->error() : std::error_code{});
+        return snapshot;
+    }
+
+    Expected<Snapshot> captureFull(
+        const ChunkGrid &grid, const Registry &registry, const u64 seed, const IContext *const context) {
+        using pP::make_error_code;
+        auto snapshot = captureFull(grid, seed, context);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, snapshot);
+        captureRegistry(*snapshot, registry);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, context ? context->error() : std::error_code{});
         return snapshot;
     }
 

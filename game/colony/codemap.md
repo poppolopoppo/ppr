@@ -83,3 +83,9 @@ queries use prepared generation metadata. Initial matter is explicitly baseline,
 unsimulated metadata and is hidden after a successful terrain change. The
 Generation panel reports descriptor, metric and phase counters and reloads via
 the confirmed new-game path. Actor inspection distances are in metres.
+
+WorldJob also grants exclusive frozen-session capture through the same single
+coordinator/job bound. The caller pauses/mirrors state and transfers the stable
+driver owner; takeCaptured returns it for every recoverable outcome before
+worker payload cleanup. Callers must defer all live reads/writes/acks during the
+lease and restore prior pause state with neutral input.
