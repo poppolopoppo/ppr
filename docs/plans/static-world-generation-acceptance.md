@@ -99,10 +99,15 @@ process-memory observations and does not establish total peak memory.
 
 ## Remaining validation
 
-- Current twelve-entry dev/ASan CTest matrix, focused three-loop lifetime/render
-  checks and the current MSVC Live build are running in the serialized queue.
+- The twelve-entry dev/ASan CTest matrix passed at `427a2fc` in 905.78 seconds
+  (`out/worldgen-final-matrix-v2.log`). Repeated app/render-lane and asset/render gates passed three loops each.
+  The fresh MSVC Live build passed all six executable targets in 221.77 seconds.
   Current dev and Release builds and the earlier three-loop affected suites
   passed; see the progress log for exact revisions and logs.
+- A reviewed follow-up bounds retired render-world payload disposal. Its new
+  GPU regressions passed three shuffled loops; broader repeated gates and runtime
+  measurements continue. The preceding
+  matrix tested the prior binaries.
 - Actual single-dupe traversal, Inspector/material-extension interaction,
   native input/Cancel latency and progress-modal phase captures remain open.
   The installed Windows Computer Use helper now lists native windows; interaction
@@ -110,8 +115,10 @@ process-memory observations and does not establish total peak memory.
 - Saved GPU profiler capture, GPU terrain time, precise GPU-memory peak, worker
   utilization and true scheduler queue depth remain unmeasured. Existing scheduler
   outstanding-work counts combine queued and executing work.
-- Available-backend/shader gates must be reported individually; D3D12 evidence
-  does not establish portability. Current IDE inspection is unavailable because
+- All four terrain/visibility entry points compiled for DXIL and SPIR-V
+  (`out/worldgen-shader-targets-v1/report.json`, eight zero exits). Runtime
+  D3D12 evidence does not establish Vulkan execution or portability.
+  Current IDE inspection is unavailable because
   the CLion router transport failed during discovery.
 
 Third-party cleanup remains deferred until plan implementation is finished, per

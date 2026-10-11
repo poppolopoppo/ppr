@@ -148,6 +148,8 @@ export namespace pP {
         u64 m_growth_waits{};
         u64 m_table_builds{};
         u64 m_table_uploads{};
+        u64 m_retirement_steps{};
+        u64 m_retired_chunk_blocks{};
         u64 m_texture_entries{};
         u64 m_texture_slots{};
         u32 m_retained_atlases{};
@@ -530,6 +532,8 @@ export namespace pP {
         std::array<bool, kTileRingSize> m_resident_table_uploaded{};
         u64 m_draw_commands{};
         u64 m_dispatch_commands{};
+        u64 m_retirement_steps{};
+        u64 m_retired_chunk_blocks{};
         u64 m_resident_table_build_count{};
         u64 m_resident_table_upload_count{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
@@ -625,7 +629,10 @@ export namespace pP {
             Array<image::ImageAsset> m_terrain_images{};
             std::unique_ptr<BindlessTextureCache> m_texture_cache{};
             Array<u32> m_texture_slots{};
+            Array<TextureHandle> m_texture_handles{};
             u32 m_image_cursor{};
+            u32 m_retirement_diagnostic_cursor{};
+            bool m_retirement_roots_detached{};
             rhi::ComPtr<rhi::IBuffer> m_terrain_palette{};
             u64 m_job_id{};
             u64 m_world_generation{};

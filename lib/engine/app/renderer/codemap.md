@@ -46,6 +46,11 @@ completed cached root bindings retire. Completion-safe roots are recreated
 lazily; unfinished active roots are retained. Cancellation never activates a
 candidate. Normal game transport uses independent world controls and each world
 owns its catalog texture cache through completion-safe retirement.
+After completion, retirement releases at most eight combined terrain/diagnostic
+chunk blocks, one uploaded texture reference and one source image per service
+step. It detaches completed roots once and keeps candidate admission blocked
+until disposal finishes. The final fixed number of GPU-object releases remains
+on the render owner; shutdown/device-loss epoch resets discard old cache handles.
 
 ## Design
 

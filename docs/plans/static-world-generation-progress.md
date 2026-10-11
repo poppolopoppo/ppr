@@ -698,4 +698,35 @@ scratch 2,101,584 bytes in both. Raster scratch observations were 2,020,712 /
 and 183,623,680 / 183,898,112 sampled private bytes. Current checksums match the
 retained corpus. Accounting excludes opaque allocations, allocator overhead,
 reallocation overlap, stacks, content/physics/GPU storage and is not total memory.
-Full final matrix, current msvc-live build and remaining manual gates are pending.
+The following final-matrix section records subsequent build/test results; manual gates remain pending.
+
+## Final matrix and bounded retirement follow-up
+
+The twelve-entry MSVC dev/ASan CTest matrix passed at runtime revision `427a2fc`
+in 905.78 seconds (`out/worldgen-final-matrix-v2.log`). This includes both new
+CPU-only shipped-profile validators. The serialized queue continues with the
+focused retirement regressions. The preceding app/render-lane and asset/render
+gates each passed three loops. The fresh MSVC Live build passed all six executable
+targets in 221.77 seconds using MSVC 14.51.36231.
+
+Independent source review identified whole retired-world destruction on the
+render owner as an unsliced disposal operation. This is a concrete bound violation,
+not evidence that it caused the recorded presentation gap. The follow-up retains
+the fence/admission guards while releasing at most eight combined terrain and
+diagnostic chunk blocks, one uploaded texture reference and one source image per
+service step. Matching cancellation also retires never-uploaded CPU candidates.
+Completed roots detach once per owner; cache epoch resets clear upload handles.
+The final fixed number of GPU-object releases remains an opaque driver operation.
+
+Behavioral GPU regressions cover bounded disposal with continued old-world draws
+and textured shutdown/device-loss epoch replacement before old-world redraw.
+Independent Astra review and Format Check passed; semantic style has no blocking
+findings. The current dev build passed in 57.67 seconds; GPU regression execution
+passed all three shuffled loops (51.25 / 55.42 / 55.17 seconds including fixture teardown).
+Broader repeated app/asset gates continue in the serialized queue. Updated runtime measurements
+remain pending; the preceding matrix tested the prior binaries.
+
+All four terrain/visibility shader entry points compiled for DXIL and SPIR-V
+(eight zero exits and nonempty outputs, `out/worldgen-shader-targets-v1/report.json`).
+This is compiler evidence, separate from actual D3D12 execution; Vulkan runtime
+readbacks remain unverified.

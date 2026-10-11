@@ -588,14 +588,10 @@ namespace pP {
 
     void GridPass::cancelWorldCandidate(const u64 job_id) noexcept {
         if (m_candidate_world and m_candidate_world->m_job_id == job_id) {
-            if (m_candidate_world->m_texture_cache) {
-                PPR_ASSERT(not m_retiring_world);
-                // createTexture can submit asynchronous initialization. Keep
-                // the canceled owner until a subsequent frame fence covers it.
-                m_retiring_world = std::move(m_candidate_world);
-            } else {
-                m_candidate_world.reset();
-            }
+            PPR_ASSERT(not m_retiring_world);
+            // Even an unprepared header owns decoded images and chunk payloads.
+            // Dispose it incrementally; submitted initialization also needs its fence.
+            m_retiring_world = std::move(m_candidate_world);
         }
     }
 
@@ -985,7 +981,7 @@ namespace pP {
             // Shader bindings own resources too. Drop completed roots before
             // releasing the retired bundle or admitting another candidate.
             // Active roots with unfinished readers remain untouched.
-            if (m_cached_pipeline) {
+            if (not m_retiring_world->m_retirement_roots_detached and m_cached_pipeline) {
                 for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
                     if (slotFenceComplete(completed, m_tile_slot_values[slot])) {
                         m_cached_pipeline->m_slot_frame_cursors[slot] = {};
@@ -994,7 +990,40 @@ namespace pP {
                     }
                 }
             }
-            m_retiring_world.reset();
+            auto &retiring = *m_retiring_world;
+            ++m_retirement_steps;
+            u32 remaining_blocks = 8u;
+            while (remaining_blocks != 0u and not retiring.m_cell_cache.empty()) {
+                // Tail erasure never shifts the surviving flat-map payloads.
+                retiring.m_cell_cache.erase(std::prev(retiring.m_cell_cache.end()));
+                --remaining_blocks;
+                ++m_retired_chunk_blocks;
+            }
+            while (remaining_blocks != 0u and retiring.m_retirement_diagnostic_cursor < kGridTileCacheCapacity) {
+                auto &words = retiring.m_diagnostic_words[retiring.m_retirement_diagnostic_cursor++];
+                if (words.capacity() != 0u) {
+                    Array<u32>{}.swap(words);
+                    --remaining_blocks;
+                    ++m_retired_chunk_blocks;
+                }
+            }
+            m_retiring_world->m_retirement_roots_detached = true;
+            if (not retiring.m_texture_handles.empty()) {
+                // Handles preserve upload/dedup refcounts until the last reader.
+                PPR_VERIFY(not retiring.m_texture_cache->release(retiring.m_texture_handles.back()));
+                retiring.m_texture_handles.pop_back();
+            }
+            if (not retiring.m_terrain_images.empty()) {
+                retiring.m_terrain_images.pop_back();
+            }
+            if (retiring.m_cell_cache.empty() and
+                retiring.m_retirement_diagnostic_cursor == kGridTileCacheCapacity and
+                retiring.m_texture_handles.empty() and
+                retiring.m_terrain_images.empty()) {
+                // Only metadata and a fixed number of GPU objects remain.
+                // Admission remains blocked until these owning releases finish.
+                m_retiring_world.reset();
+            }
         }
     }
 
@@ -1597,6 +1626,8 @@ namespace pP {
             .m_growth_waits = m_growth_wait_count,
             .m_table_builds = m_resident_table_build_count,
             .m_table_uploads = m_resident_table_upload_count,
+            .m_retirement_steps = m_retirement_steps,
+            .m_retired_chunk_blocks = m_retired_chunk_blocks,
             .m_retained_atlases = retainedAtlasCountForTest(),
         };
         const auto count_textures = [&](const WorldResources &world) {
@@ -1697,6 +1728,8 @@ namespace pP {
         m_world.m_resident_table.clear();
         m_draw_commands = 0u;
         m_dispatch_commands = 0u;
+        m_retirement_steps = 0u;
+        m_retired_chunk_blocks = 0u;
         m_resident_table_build_count = 0u;
         m_resident_table_upload_count = 0u;
         m_growth_wait_count = 0u;
@@ -1712,6 +1745,7 @@ namespace pP {
             m_world.m_texture_cache.reset();
         }
         m_world.m_texture_slots.clear();
+        m_world.m_texture_handles.clear();
         m_world.m_image_cursor = 0u;
         m_terrain_sampler.setNull();
         m_terrain_fallback_view.setNull();
@@ -1775,6 +1809,7 @@ namespace pP {
             m_world.m_texture_cache.reset();
         }
         m_world.m_texture_slots.clear();
+        m_world.m_texture_handles.clear();
         m_world.m_image_cursor = 0u;
         m_terrain_sampler.setNull();
         m_terrain_fallback_view.setNull();
@@ -2005,6 +2040,7 @@ namespace pP {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, texture);
             const auto slot = m_world.m_texture_cache->residentIndex(*texture);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, slot);
+            m_world.m_texture_handles.push_back(*texture);
             m_world.m_texture_slots[m_world.m_image_cursor] = slot->m_value;
         }
         if (m_world.m_image_cursor != m_world.m_terrain_images.size()) {

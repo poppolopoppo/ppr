@@ -1677,6 +1677,50 @@ namespace pP::tests::detail {
                 grid.cancelWorldCandidate(13u);
                 PPR_TEST_ASSERT(render() == after);
             }
+
+            // A cancelled, never-uploaded candidate still owns large CPU blocks.
+            // Retirement must yield between bounded batches and keep the old draw live.
+            GridPass::GridStagedFrame header{};
+            header.m_content_fingerprint = 77u;
+            header.m_diagnostic_mode = EGridDiagnosticMode::biome;
+            header.m_diagnostic_revision = 14u;
+            header.m_diagnostic_palette.push_back({.m_color_rgba = 0xffffffffu});
+            for (u32 chunk = 0u; chunk < 32u; ++chunk) {
+                const i32 x = static_cast<i32>(chunk * 128u);
+                header.m_tiles.push_back(
+                    GridTileSubmission{.m_chunk_id = chunk, .m_tile_range = {x, 0, x + 128, 128}, .m_dirty_mask = 1u});
+            }
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(14u, 24u, header, false));
+            for (u32 first = 0u; first < 32u; first += 8u) {
+                Array<GridPass::GridStagedUpload> batch;
+                for (u32 chunk = first; chunk < first + 8u; ++chunk) {
+                    GridPass::GridStagedUpload row{};
+                    row.m_chunk_id = chunk;
+                    row.m_cell_materials.resize(GridPass::kCellsPerChunk, 1u);
+                    row.m_diagnostic_indices.resize(GridPass::kCellsPerChunk, 0u);
+                    batch.push_back(std::move(row));
+                }
+                PPR_TEST_ASSERT(not grid.appendWorldCandidate(14u, 24u, batch, first == 24u));
+            }
+            grid.cancelWorldCandidate(14u);
+            const auto retirement_before = grid.observations();
+            PPR_TEST_ASSERT(not grid.worldCandidateAdmissionReady(renderer->completedFenceValue()));
+            const auto first_step = grid.observations();
+            PPR_TEST_ASSERT(first_step.m_retirement_steps == retirement_before.m_retirement_steps + 1u);
+            PPR_TEST_ASSERT(first_step.m_retired_chunk_blocks == retirement_before.m_retired_chunk_blocks + 8u);
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(15u, 25u, candidate) == std::errc::device_or_resource_busy);
+            bool retired = false;
+            for (u32 frame = 0u; frame < 32u and not retired; ++frame) {
+                PPR_TEST_ASSERT(render() == after);
+                retired = grid.worldCandidateAdmissionReady(renderer->completedFenceValue());
+                const auto observed = grid.observations();
+                PPR_TEST_ASSERT(
+                    observed.m_retired_chunk_blocks - retirement_before.m_retired_chunk_blocks <=
+                    8u * (observed.m_retirement_steps - retirement_before.m_retirement_steps));
+            }
+            PPR_TEST_ASSERT(retired);
+            PPR_TEST_ASSERT(
+                grid.observations().m_retired_chunk_blocks == retirement_before.m_retired_chunk_blocks + 64u);
         };
 
         PPR_UNIT_TEST (grid_shared_contours_match_cpu_at_four_chunk_seams) {
@@ -1972,6 +2016,29 @@ namespace pP::tests::detail {
             auto changed = stage;
             changed.m_terrain_visuals[1u].m_color_rgba = 0xffffffffu;
             PPR_TEST_ASSERT(grid.applyStagedFrame(changed) == std::errc::invalid_argument);
+
+            // Epoch reset discards cache handles even when decoded images survive.
+            // Replace before redrawing the old world to exercise that null-cache seam.
+            for (const bool device_loss: {false, true}) {
+                PPR_TEST_ASSERT(not (device_loss ? grid.notifyDeviceLost() : grid.shutdown()));
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+                const u64 job = device_loss ? 31u : 30u;
+                PPR_TEST_ASSERT(not grid.stageWorldCandidate(job, job, stage));
+                const auto replacement = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
+                PPR_TEST_ASSERT(replacement and *replacement);
+                PPR_TEST_ASSERT(not grid.activateWorldCandidate(job, job, 42u));
+                PPR_TEST_ASSERT(grid.worldCandidateAdmissionReady(renderer->completedFenceValue()));
+                PPR_TEST_ASSERT(grid.observations().m_texture_entries == 1u);
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"textured epoch replacement", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto restored = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(restored.has_value());
+                PPR_TEST_ASSERT(gateTexel_(*restored, 64u, 64u) == gateTexel_(*pixels, 64u, 64u));
+            }
         };
 
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {

@@ -61,7 +61,7 @@ checks are repeated.
   gates and review. Record why focused groups prove the affected claim.
 - **Local phase completion:** run one loop of all affected suites.
   Cross-cutting app/render-lane changes, including Phase 4, require the full
-  ten-entry matrix, including asset.
+  twelve-entry matrix, including asset and both shipped-profile validators.
 - **Pre-merge CI:** run the full matrix for one loop plus the platform/build
   matrix from `build-system`.
 - **Nightly stress:** run the full ASan matrix with three same-process
